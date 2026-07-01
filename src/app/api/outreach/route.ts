@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runSafety } from "@/lib/agents";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { getSession } from "@/lib/session";
+import { sbInsert } from "@/lib/runtime-config";
 
 // Screen an outbound custom message through the safety agent, then dispatch it
 // via the official WhatsApp Cloud API (or return a compliant wa.me link).
@@ -24,5 +25,17 @@ export async function POST(req: Request) {
   }
 
   const result = await sendWhatsApp(String(to), String(message));
+
+  // Best-effort log for the admin communication vault (no-op without Supabase).
+  await sbInsert("whatsapp_messages", [
+    {
+      to_number: String(to),
+      body: String(message),
+      type: "text",
+      direction: "outbound",
+      raw: { channel: result.channel, sender: session.email, ok: result.ok },
+    },
+  ]);
+
   return NextResponse.json({ allowed: true, delivery: result });
 }

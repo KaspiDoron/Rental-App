@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { listKeys, setKey } from "@/lib/config";
+import { listKeys, setKey, persistenceEnabled } from "@/lib/config";
 
 export async function GET() {
   const session = getSession();
   if (!session?.isAdmin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  return NextResponse.json({ keys: listKeys() });
+  return NextResponse.json({
+    keys: await listKeys(),
+    persistent: persistenceEnabled(),
+  });
 }
 
 export async function POST(req: Request) {
@@ -19,9 +22,12 @@ export async function POST(req: Request) {
   if (!name) {
     return NextResponse.json({ error: "name required" }, { status: 400 });
   }
-  const updated = setKey(String(name), String(value ?? ""));
+  const updated = await setKey(String(name), String(value ?? ""));
   if (!updated) {
-    return NextResponse.json({ error: "Unknown key" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Unknown or read-only key" },
+      { status: 400 }
+    );
   }
   // Only ever return the masked view — never echo the raw secret back.
   return NextResponse.json({ key: updated });

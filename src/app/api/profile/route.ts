@@ -13,5 +13,5 @@ export async function POST(req: Request) {
     );
   }
   const rfq = await runProfiler(text, durationDays);
-  return NextResponse.json({ rfq, aiEnabled: aiEnabled() });
+  return NextResponse.json({ rfq, aiEnabled: await aiEnabled() });
 }

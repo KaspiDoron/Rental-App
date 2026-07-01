@@ -5,6 +5,7 @@
 // functional in demo mode. Providers are tried in preference order.
 
 import "server-only";
+import { getConfig } from "./runtime-config";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -17,36 +18,44 @@ interface ProviderConfig {
   model: string;
 }
 
-function providers(): ProviderConfig[] {
+async function providers(): Promise<ProviderConfig[]> {
+  const [groq, openrouter, cerebras, gemini, pref] = await Promise.all([
+    getConfig("GROQ_TOKEN"),
+    getConfig("OPENROUTER_TOKEN"),
+    getConfig("CEREBRAS_TOKEN"),
+    getConfig("GEMINI_TOKEN"),
+    getConfig("AI_PROVIDER"),
+  ]);
+
   const all: ProviderConfig[] = [
     {
       name: "groq",
-      token: process.env.GROQ_TOKEN,
+      token: groq,
       endpoint: "https://api.groq.com/openai/v1/chat/completions",
       model: "llama-3.3-70b-versatile",
     },
     {
       name: "openrouter",
-      token: process.env.OPENROUTER_TOKEN,
+      token: openrouter,
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       model: "meta-llama/llama-3.1-8b-instruct",
     },
     {
       name: "cerebras",
-      token: process.env.CEREBRAS_TOKEN,
+      token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
       model: "llama3.1-8b",
     },
     {
       name: "gemini",
-      token: process.env.GEMINI_TOKEN,
+      token: gemini,
       endpoint:
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
       model: "gemini-1.5-flash",
     },
   ];
 
-  const preferred = (process.env.AI_PROVIDER || "").toLowerCase();
+  const preferred = (pref || "").toLowerCase();
   const withKeys = all.filter((p) => p.token);
   withKeys.sort((a, b) =>
     a.name === preferred ? -1 : b.name === preferred ? 1 : 0
@@ -55,8 +64,8 @@ function providers(): ProviderConfig[] {
 }
 
 /** True when at least one real provider key is configured. */
-export function aiEnabled(): boolean {
-  return providers().length > 0;
+export async function aiEnabled(): Promise<boolean> {
+  return (await providers()).length > 0;
 }
 
 async function callOpenAICompatible(
@@ -114,7 +123,7 @@ async function callGemini(
  * Returns null when no provider is configured (caller should fall back to mock).
  */
 export async function chat(messages: ChatMessage[]): Promise<string | null> {
-  const list = providers();
+  const list = await providers();
   if (list.length === 0) return null;
 
   for (const cfg of list) {

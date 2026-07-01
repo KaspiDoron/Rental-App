@@ -10,6 +10,7 @@ interface KeyInfo {
   configured: boolean;
   masked: string;
   scope: string;
+  editable: boolean;
 }
 interface UserRecord {
   email: string;
@@ -26,6 +27,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
+  const [persistent, setPersistent] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -36,7 +38,9 @@ export default function AdminPage() {
       }
       setAuthorized(true);
       setAnalytics(await a.json());
-      setKeys((await (await fetch("/api/admin/config")).json()).keys ?? []);
+      const cfg = await (await fetch("/api/admin/config")).json();
+      setKeys(cfg.keys ?? []);
+      setPersistent(Boolean(cfg.persistent));
       setUsers((await (await fetch("/api/admin/users")).json()).users ?? []);
     })().catch(() => setAuthorized(false));
   }, []);
@@ -160,11 +164,28 @@ export default function AdminPage() {
 
       {tab === "keys" && (
         <div className="space-y-3">
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+          <div
+            className={`rounded-xl border p-3 text-[12px] ${
+              persistent
+                ? "border-savings/30 bg-savings/10 text-savings-bright"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+            }`}
+          >
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
-            Secret values are never sent to the browser — only a masked
-            fingerprint. Updates here apply a runtime override for this instance;
-            the source of truth stays your host&apos;s encrypted env vars.
+            {persistent ? (
+              <>
+                Persistence is <b>on</b> — edits are encrypted and saved to
+                Supabase, take effect within ~30s, and survive restarts. Secret
+                values are never sent to the browser (masked fingerprint only).
+              </>
+            ) : (
+              <>
+                <b>Demo persistence:</b> Supabase isn&apos;t connected, so edits
+                apply to this instance only and reset on restart. Set the
+                Supabase env vars to make the vault durable. Secrets are never
+                sent to the browser.
+              </>
+            )}
           </div>
           {keys.map((k) => (
             <div key={k.name} className="surface rounded-2xl p-4">
@@ -190,23 +211,29 @@ export default function AdminPage() {
               <div className="mt-2 font-mono text-[12px] text-slate-400">
                 {k.masked}
               </div>
-              <div className="mt-2 flex gap-2">
-                <input
-                  type="password"
-                  placeholder="Set / rotate value"
-                  value={editing[k.name] ?? ""}
-                  onChange={(e) =>
-                    setEditing((ed) => ({ ...ed, [k.name]: e.target.value }))
-                  }
-                  className="flex-1 rounded-lg border border-slate-700/50 bg-ink/60 p-2 text-[12px] text-white focus:border-savings/50 focus:outline-none"
-                />
-                <button
-                  onClick={() => saveKey(k.name)}
-                  className="rounded-lg bg-savings px-3 py-2 text-[12px] font-semibold text-ink hover:bg-savings-bright"
-                >
-                  {saved === k.name ? "Saved" : "Apply"}
-                </button>
-              </div>
+              {k.editable ? (
+                <div className="mt-2 flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="Set / rotate value"
+                    value={editing[k.name] ?? ""}
+                    onChange={(e) =>
+                      setEditing((ed) => ({ ...ed, [k.name]: e.target.value }))
+                    }
+                    className="flex-1 rounded-lg border border-slate-700/50 bg-ink/60 p-2 text-[12px] text-white focus:border-savings/50 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => saveKey(k.name)}
+                    className="rounded-lg bg-savings px-3 py-2 text-[12px] font-semibold text-ink hover:bg-savings-bright"
+                  >
+                    {saved === k.name ? "Saved" : "Apply"}
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2 text-[11px] text-slate-500">
+                  Bootstrap secret — set via host environment variables only.
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -6,6 +6,7 @@
 // themselves — no scraping, no unsolicited bulk blasting.
 
 import "server-only";
+import { getConfig } from "./runtime-config";
 
 export interface SendResult {
   channel: "cloud-api" | "click-to-chat";
@@ -15,10 +16,12 @@ export interface SendResult {
   error?: string;
 }
 
-export function whatsappConfigured(): boolean {
-  return Boolean(
-    process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID
-  );
+export async function whatsappConfigured(): Promise<boolean> {
+  const [token, phoneId] = await Promise.all([
+    getConfig("WHATSAPP_ACCESS_TOKEN"),
+    getConfig("WHATSAPP_PHONE_NUMBER_ID"),
+  ]);
+  return Boolean(token && phoneId);
 }
 
 function clickToChat(to: string, message: string): SendResult {
@@ -31,10 +34,11 @@ export async function sendWhatsApp(
   to: string,
   message: string
 ): Promise<SendResult> {
-  if (!whatsappConfigured()) return clickToChat(to, message);
-
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const [token, phoneId] = await Promise.all([
+    getConfig("WHATSAPP_ACCESS_TOKEN"),
+    getConfig("WHATSAPP_PHONE_NUMBER_ID"),
+  ]);
+  if (!token || !phoneId) return clickToChat(to, message);
 
   try {
     const res = await fetch(

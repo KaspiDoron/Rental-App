@@ -1,12 +1,13 @@
-// Admin configuration surface.
+// Admin configuration surface (Key Vault).
 //
 // SECURITY: secret values are NEVER sent to the browser. The admin panel only
 // ever receives a masked fingerprint (last 4 chars) and a configured/missing
-// status. Runtime overrides set here live in a server-only in-memory map for
-// the current instance; the source of truth for production remains the host's
-// encrypted environment variables.
+// status. Values set here are persisted via runtime-config (Supabase, encrypted
+// at rest) when Supabase is configured, so they survive serverless restarts and
+// take effect at the next request without a redeploy.
 
 import "server-only";
+import { getConfig, setConfig, supabaseConfigured } from "./runtime-config";
 
 export interface KeyInfo {
   name: string;
@@ -14,34 +15,29 @@ export interface KeyInfo {
   configured: boolean;
   masked: string;
   scope: "ai" | "data" | "messaging" | "auth";
+  editable: boolean;
 }
 
-const KEYS: { name: string; label: string; scope: KeyInfo["scope"] }[] = [
-  { name: "GROQ_TOKEN", label: "Groq Gateway", scope: "ai" },
-  { name: "GEMINI_TOKEN", label: "Gemini Gateway", scope: "ai" },
-  { name: "OPENROUTER_TOKEN", label: "OpenRouter Gateway", scope: "ai" },
-  { name: "CEREBRAS_TOKEN", label: "Cerebras Gateway", scope: "ai" },
-  { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data" },
-  { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data" },
-  { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token", scope: "messaging" },
-  { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID", scope: "messaging" },
-  { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth" },
+// Keys that can be set from the admin panel at runtime. Bootstrap secrets
+// (Supabase connection, SESSION_SECRET) are intentionally env-only.
+const KEYS: {
+  name: string;
+  label: string;
+  scope: KeyInfo["scope"];
+  editable: boolean;
+}[] = [
+  { name: "GROQ_TOKEN", label: "Groq Gateway", scope: "ai", editable: true },
+  { name: "GEMINI_TOKEN", label: "Gemini Gateway", scope: "ai", editable: true },
+  { name: "OPENROUTER_TOKEN", label: "OpenRouter Gateway", scope: "ai", editable: true },
+  { name: "CEREBRAS_TOKEN", label: "Cerebras Gateway", scope: "ai", editable: true },
+  { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
+  { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token", scope: "messaging", editable: true },
+  { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID", scope: "messaging", editable: true },
+  { name: "WHATSAPP_VERIFY_TOKEN", label: "WhatsApp Webhook Verify Token", scope: "messaging", editable: true },
+  { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
+  { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
+  { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },
 ];
-
-declare global {
-  // eslint-disable-next-line no-var
-  var __wheeldeal_overrides__: Map<string, string> | undefined;
-}
-
-function overrides() {
-  if (!globalThis.__wheeldeal_overrides__)
-    globalThis.__wheeldeal_overrides__ = new Map();
-  return globalThis.__wheeldeal_overrides__;
-}
-
-function valueOf(name: string): string | undefined {
-  return overrides().get(name) ?? process.env[name];
-}
 
 function mask(v?: string): string {
   if (!v) return "— not set —";
@@ -49,31 +45,42 @@ function mask(v?: string): string {
   return `${"•".repeat(Math.min(20, v.length - 4))}${v.slice(-4)}`;
 }
 
-/** Masked, browser-safe view of every managed credential. */
-export function listKeys(): KeyInfo[] {
-  return KEYS.map((k) => {
-    const v = valueOf(k.name);
-    return {
-      name: k.name,
-      label: k.label,
-      scope: k.scope,
-      configured: Boolean(v),
-      masked: mask(v),
-    };
-  });
+/** True when runtime edits will persist (Supabase configured). */
+export function persistenceEnabled(): boolean {
+  return supabaseConfigured();
 }
 
-/** Apply a runtime override for the current server instance. Returns masked. */
-export function setKey(name: string, value: string): KeyInfo | null {
+/** Masked, browser-safe view of every managed credential. */
+export async function listKeys(): Promise<KeyInfo[]> {
+  return Promise.all(
+    KEYS.map(async (k) => {
+      const v = await getConfig(k.name);
+      return {
+        name: k.name,
+        label: k.label,
+        scope: k.scope,
+        editable: k.editable,
+        configured: Boolean(v),
+        masked: mask(v),
+      };
+    })
+  );
+}
+
+/** Apply a runtime override. Returns the masked view (never the raw secret). */
+export async function setKey(
+  name: string,
+  value: string
+): Promise<KeyInfo | null> {
   const meta = KEYS.find((k) => k.name === name);
-  if (!meta) return null;
-  if (value) overrides().set(name, value);
-  else overrides().delete(name);
-  const v = valueOf(name);
+  if (!meta || !meta.editable) return null;
+  await setConfig(name, value);
+  const v = await getConfig(name);
   return {
     name,
     label: meta.label,
     scope: meta.scope,
+    editable: meta.editable,
     configured: Boolean(v),
     masked: mask(v),
   };
