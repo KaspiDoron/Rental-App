@@ -21,7 +21,7 @@ export function haversineKm(
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
 }
 
-/** Deterministically scatter a point within a radius — used to seed demo vendors. */
+/** Deterministically scatter a point within a radius - used to seed demo vendors. */
 export function scatter(
   origin: { lat: number; lng: number },
   seed: number,

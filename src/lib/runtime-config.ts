@@ -1,8 +1,8 @@
 // Runtime configuration store.
 //
 // Integration secrets (LLM tokens, WhatsApp credentials) can be set two ways:
-//   1. Host environment variables (process.env) — the bootstrap / source of truth.
-//   2. The admin Key Vault — persisted to Supabase, encrypted at rest, and read
+//   1. Host environment variables (process.env) - the bootstrap / source of truth.
+//   2. The admin Key Vault - persisted to Supabase, encrypted at rest, and read
 //      back here at request time. This is what makes "paste a key in the admin
 //      panel and it takes effect" work on serverless hosts like Vercel, where
 //      per-instance memory resets and the app cannot write its own env vars.

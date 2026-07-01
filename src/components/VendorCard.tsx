@@ -178,7 +178,7 @@ export function VendorCard({
       ) : (
         <div className="mt-3 flex items-center gap-2 text-[12px] text-slate-500">
           {vendor.stage === "no-response" ? (
-            "No reply yet — we'll keep the line open."
+            "No reply yet - we'll keep the line open."
           ) : (
             <>
               <span className="h-2 w-24 rounded-full skeleton" />

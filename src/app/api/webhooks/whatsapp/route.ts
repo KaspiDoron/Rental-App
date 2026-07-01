@@ -1,8 +1,8 @@
 // Official Meta WhatsApp Cloud API webhook.
 //
-// GET  — verification handshake. Meta calls this with hub.verify_token; we echo
+// GET  - verification handshake. Meta calls this with hub.verify_token; we echo
 //        hub.challenge when the token matches WHATSAPP_VERIFY_TOKEN.
-// POST — inbound events. We persist vendor replies to Supabase (whatsapp_messages)
+// POST - inbound events. We persist vendor replies to Supabase (whatsapp_messages)
 //        so the Bargaining agents can pick up and continue negotiations.
 //
 // Configure the callback URL in Meta as: https://<your-domain>/api/webhooks/whatsapp
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     }
     if (rows.length) await sbInsert("whatsapp_messages", rows);
   } catch {
-    // Never fail the webhook — Meta retries and will disable a flaky endpoint.
+    // Never fail the webhook - Meta retries and will disable a flaky endpoint.
   }
 
   // Meta requires a fast 200 acknowledgement.

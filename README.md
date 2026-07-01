@@ -3,7 +3,7 @@
 **Hyper-local vehicle rental savings & negotiation engine.** Describe the ride
 you want in plain English; WheelDeal's AI agent ecosystem finds partner rental
 vendors near your hotel, sends structured RFQs, negotiates the price down in
-real time, and locks in the cheapest deal — all from your phone.
+real time, and locks in the cheapest deal - all from your phone.
 
 > Built mobile-first, on 100% zero-cost tiers (Next.js on Vercel · OpenStreetMap
 > · Supabase-ready · free-tier LLM gateways). Runs fully in **demo mode** with
@@ -17,7 +17,7 @@ real time, and locks in the cheapest deal — all from your phone.
   with a phone mount, under 20,000 km, 3 days"_ into a clean, vendor-ready
   inquiry.
 - **Agent ecosystem:** Profiler · Adaptive Bargaining · **Market-Rate Analyst**
-  · **Vendor Sentiment** · Safety Guardrail — each degrades gracefully to a
+  · **Vendor Sentiment** · Safety Guardrail - each degrades gracefully to a
   deterministic heuristic when no LLM key is set.
 - **Continuous Learning Engine.** Every negotiation updates a shared tactic
   playbook (win-rates + average discount), so the agents "step up" stronger
@@ -36,18 +36,18 @@ real time, and locks in the cheapest deal — all from your phone.
 ## 🔐 Compliance & security
 
 - Outreach uses the **official Meta WhatsApp Cloud API** to **opted-in partner
-  vendors** — no scraping, no unsolicited bulk blasting. With no WhatsApp keys,
+  vendors** - no scraping, no unsolicited bulk blasting. With no WhatsApp keys,
   it produces compliant **click-to-chat (`wa.me`)** links instead.
 - Agents **identify themselves as automated procurement assistants** to vendors.
 - **Secrets never reach the browser.** All keys are read from `process.env`
   server-side; the admin key panel shows only a masked fingerprint. `.env*` is
-  gitignored — no credentials are committed to this repo.
+  gitignored - no credentials are committed to this repo.
 
 ## 🚀 Quick start (local)
 
 ```bash
 npm install
-cp .env.example .env.local   # optional — app runs in demo mode without it
+cp .env.example .env.local   # optional - app runs in demo mode without it
 npm run dev                  # http://localhost:3000
 ```
 

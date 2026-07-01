@@ -29,6 +29,6 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  // Only ever return the masked view — never echo the raw secret back.
+  // Only ever return the masked view - never echo the raw secret back.
   return NextResponse.json({ key: updated });
 }

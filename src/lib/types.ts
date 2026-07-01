@@ -29,7 +29,7 @@ export type TrackerStage =
 
 export interface Offer {
   pricePerDay: number;
-  // The vendor's opening/list rate before the agent negotiated — savings basis.
+  // The vendor's opening/list rate before the agent negotiated - savings basis.
   listPricePerDay: number;
   currency: string;
   totalPrice: number;
@@ -62,7 +62,7 @@ export interface NegotiationTactic {
   id: string;
   label: string;
   script: string;
-  // Learning stats — updated by the Continuous Learning Engine.
+  // Learning stats - updated by the Continuous Learning Engine.
   uses: number;
   wins: number;
   avgDiscountPct: number;

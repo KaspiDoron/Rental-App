@@ -1,9 +1,9 @@
 -- =============================================================================
--- WheelDeal — Supabase schema
+-- WheelDeal - Supabase schema
 -- =============================================================================
 -- Run this once in your Supabase project: SQL Editor → paste → Run.
 -- Only the service role (used server-side by the app) touches these tables, so
--- Row Level Security is enabled with NO public policies — the anon key can read
+-- Row Level Security is enabled with NO public policies - the anon key can read
 -- nothing here. Secrets are additionally encrypted at the app layer before they
 -- are ever written to app_config.
 -- =============================================================================
@@ -80,6 +80,30 @@ create table if not exists public.bookings (
   created_at   timestamptz not null default now()
 );
 
+-- ---- Feedback (triaged) -----------------------------------------------------
+create table if not exists public.feedback (
+  id             bigint generated always as identity primary key,
+  category       text,
+  body           text not null,
+  reporter_email text,
+  is_real_issue  boolean default false,
+  severity       text,
+  summary        text,
+  triage_reason  text,
+  image_count    int default 0,
+  created_at     timestamptz not null default now()
+);
+create index if not exists feedback_created_idx on public.feedback (created_at desc);
+
+-- ---- Billing events (Stripe webhook) ----------------------------------------
+create table if not exists public.billing_events (
+  id              bigint generated always as identity primary key,
+  stripe_event_id text,
+  type            text,
+  verified        boolean default false,
+  created_at      timestamptz not null default now()
+);
+
 -- ---- Lock everything to the service role ------------------------------------
 alter table public.app_config       enable row level security;
 alter table public.whatsapp_messages enable row level security;
@@ -87,5 +111,7 @@ alter table public.app_users        enable row level security;
 alter table public.agent_tactics    enable row level security;
 alter table public.vendors          enable row level security;
 alter table public.bookings         enable row level security;
+alter table public.feedback         enable row level security;
+alter table public.billing_events   enable row level security;
 -- No policies are created on purpose: the anon/public key gets zero access;
 -- the server uses the service role key, which bypasses RLS.

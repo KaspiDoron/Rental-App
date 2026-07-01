@@ -14,7 +14,7 @@ export interface KeyInfo {
   label: string;
   configured: boolean;
   masked: string;
-  scope: "ai" | "data" | "messaging" | "auth";
+  scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth";
   editable: boolean;
 }
 
@@ -34,13 +34,17 @@ const KEYS: {
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token", scope: "messaging", editable: true },
   { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID", scope: "messaging", editable: true },
   { name: "WHATSAPP_VERIFY_TOKEN", label: "WhatsApp Webhook Verify Token", scope: "messaging", editable: true },
+  { name: "RESEND_API_KEY", label: "Resend Email API Key", scope: "email", editable: true },
+  { name: "FEEDBACK_FROM_EMAIL", label: "Feedback From Address", scope: "email", editable: true },
+  { name: "STRIPE_SECRET_KEY", label: "Stripe Secret Key", scope: "billing", editable: true },
+  { name: "STRIPE_WEBHOOK_SECRET", label: "Stripe Webhook Secret", scope: "billing", editable: true },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
   { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },
 ];
 
 function mask(v?: string): string {
-  if (!v) return "— not set —";
+  if (!v) return "- not set -";
   if (v.length <= 6) return "••••";
   return `${"•".repeat(Math.min(20, v.length - 4))}${v.slice(-4)}`;
 }

@@ -2,8 +2,8 @@
 //
 // Production wiring would send a magic link via email (Supabase Auth / Resend).
 // For a zero-setup demo we issue a signed session as soon as an email is
-// submitted. The cookie is an HMAC-signed token — it cannot be forged without
-// SESSION_SECRET — and admin status is derived from the ADMIN_EMAILS allowlist,
+// submitted. The cookie is an HMAC-signed token - it cannot be forged without
+// SESSION_SECRET - and admin status is derived from the ADMIN_EMAILS allowlist,
 // never from client input.
 
 import "server-only";

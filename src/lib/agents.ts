@@ -14,7 +14,7 @@ import type {
 import { getTactics, recordOutcome } from "./memory";
 
 // ---------------------------------------------------------------------------
-// Profiler Agent — free text → structured, vendor-ready RFQ
+// Profiler Agent - free text → structured, vendor-ready RFQ
 // ---------------------------------------------------------------------------
 
 export async function runProfiler(
@@ -140,7 +140,7 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Safety Guardrail Agent — filters outbound custom messages
+// Safety Guardrail Agent - filters outbound custom messages
 // ---------------------------------------------------------------------------
 
 export interface SafetyVerdict {
@@ -208,7 +208,7 @@ export function negotiateRound(
   round: number
 ): { offer: Offer; tacticId: string; won: boolean } {
   const tactics = getTactics();
-  // "Step up" the tactic as rounds progress — later rounds use stronger plays.
+  // "Step up" the tactic as rounds progress - later rounds use stronger plays.
   const tactic = tactics[Math.min(round, tactics.length - 1)] ?? tactics[0];
 
   const marketRate = marketRateFor(vendor, rfq); // Market-Rate Analyst
@@ -246,7 +246,7 @@ export function negotiateRound(
   return { offer, tacticId: tactic.id, won };
 }
 
-/** Market-Rate Analyst Agent — estimates a fair local rate for the spec. */
+/** Market-Rate Analyst Agent - estimates a fair local rate for the spec. */
 export function marketRateFor(vendor: Vendor, rfq: StructuredRFQ): number {
   const classBase =
     rfq.vehicleClass === "car" ? 32 : rfq.vehicleClass === "motorbike" ? 16 : 11;
@@ -255,7 +255,7 @@ export function marketRateFor(vendor: Vendor, rfq: StructuredRFQ): number {
   return Math.round((classBase + ccBump) * durationDiscount);
 }
 
-/** Vendor Sentiment Agent — infers responsiveness/warmth as a 0..1 score. */
+/** Vendor Sentiment Agent - infers responsiveness/warmth as a 0..1 score. */
 export function sentimentFor(vendor: Vendor, round: number): number {
   const base = (vendor.rating - 3.5) / 1.4; // rating → 0..1-ish
   const warmth = Math.min(1, Math.max(0.1, base + round * 0.08));
@@ -273,7 +273,95 @@ function vendorReply(
     insurance ? "basic insurance included" : null,
   ].filter(Boolean);
   const tail = extras.length ? ` (${extras.join(", ")})` : "";
-  return `Best we can do is $${price}/day${tail}. Ready when you are! — ${vendor.name}`;
+  return `Best we can do is $${price}/day${tail}. Ready when you are! - ${vendor.name}`;
+}
+
+// ---------------------------------------------------------------------------
+// Feedback Triage Agent - keeps real bugs, filters spam before it emails staff
+// ---------------------------------------------------------------------------
+
+export interface FeedbackVerdict {
+  isRealIssue: boolean;
+  severity: "low" | "medium" | "high";
+  summary: string;
+  reason: string;
+}
+
+const NOISE = [
+  /^(hi|hey|hello|test+|asdf|qwerty|lol|nice|cool|great app|love it)\b/i,
+  /(buy followers|crypto|casino|loan|seo services|http:\/\/|https:\/\/)/i,
+];
+
+export async function triageFeedback(
+  category: string,
+  text: string
+): Promise<FeedbackVerdict> {
+  const trimmed = text.trim();
+
+  // Cheap local screen: too short or obvious noise/marketing.
+  const tooShort = trimmed.length < 12;
+  const noise = NOISE.some((rx) => rx.test(trimmed));
+
+  const system =
+    "You triage product feedback for a rental app. Decide if a submission is a " +
+    "GENUINE bug or usability flaw worth a developer's time, versus spam, praise, " +
+    "gibberish, or vague noise. Reply ONLY as JSON: " +
+    '{ "isRealIssue": boolean, "severity": "low"|"medium"|"high", ' +
+    '"summary": string, "reason": string }. summary is a one-line issue title.';
+
+  const llm = await chat([
+    { role: "system", content: system },
+    { role: "user", content: `Category: ${category}\nFeedback: ${trimmed}` },
+  ]);
+
+  if (llm) {
+    const v = extractJson<FeedbackVerdict>(llm);
+    if (v && typeof v.isRealIssue === "boolean") return v;
+  }
+
+  // Heuristic fallback.
+  if (tooShort || noise) {
+    return {
+      isRealIssue: false,
+      severity: "low",
+      summary: trimmed.slice(0, 60) || "empty",
+      reason: tooShort ? "Too short to be actionable." : "Looks like spam or noise.",
+    };
+  }
+  const hasSignal =
+    /(bug|crash|error|broken|doesn'?t|not work|can'?t|fail|freeze|wrong|slow|missing|blank|stuck|glitch|typo|overlap|cut ?off)/i.test(
+      trimmed
+    );
+  return {
+    isRealIssue: hasSignal,
+    severity: /(crash|broken|can'?t|fail|freeze|stuck)/i.test(trimmed)
+      ? "high"
+      : "medium",
+    summary: trimmed.slice(0, 60),
+    reason: hasSignal
+      ? "Contains a concrete problem description."
+      : "No concrete issue detected; queued for review.",
+  };
+}
+
+/** Feedback Writer Agent - turns rough notes into a clear report. */
+export async function writeFeedback(
+  category: string,
+  notes: string
+): Promise<string> {
+  const system =
+    "You help a user write a clear, concise product bug/feedback report. Given " +
+    "their rough notes and a category, return 2-4 sentences describing the issue, " +
+    "steps to reproduce if implied, and expected vs actual behaviour. Plain text only.";
+  const llm = await chat([
+    { role: "system", content: system },
+    { role: "user", content: `Category: ${category}\nNotes: ${notes}` },
+  ]);
+  if (llm) return llm.trim();
+
+  // Fallback: lightly structure the raw notes.
+  const n = notes.trim();
+  return `[${category}] ${n}${/[.!?]$/.test(n) ? "" : "."} Expected the app to behave correctly; please investigate.`;
 }
 
 /** Final spec-verification message the agent sends before locking a booking. */

@@ -4,6 +4,15 @@ import { useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
+interface Plan {
+  id: string;
+  name: string;
+  blurb: string;
+  amount: number;
+  features: string[];
+  highlight?: boolean;
+}
+
 interface KeyInfo {
   name: string;
   label: string;
@@ -21,13 +30,18 @@ interface UserRecord {
 
 export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
-  const [tab, setTab] = useState<"analytics" | "keys" | "users">("analytics");
+  const [tab, setTab] = useState<"analytics" | "keys" | "users" | "billing">(
+    "analytics"
+  );
   const [analytics, setAnalytics] = useState<AnalyticsSnapshot | null>(null);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [stripeOn, setStripeOn] = useState(false);
+  const [billingMsg, setBillingMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -42,6 +56,9 @@ export default function AdminPage() {
       setKeys(cfg.keys ?? []);
       setPersistent(Boolean(cfg.persistent));
       setUsers((await (await fetch("/api/admin/users")).json()).users ?? []);
+      const bill = await (await fetch("/api/billing/checkout")).json();
+      setPlans(bill.plans ?? []);
+      setStripeOn(Boolean(bill.configured));
     })().catch(() => setAuthorized(false));
   }, []);
 
@@ -58,6 +75,21 @@ export default function AdminPage() {
       setEditing((e) => ({ ...e, [name]: "" }));
       setSaved(name);
       setTimeout(() => setSaved(null), 1500);
+    }
+  }
+
+  async function subscribe(planId: string) {
+    setBillingMsg(null);
+    const res = await fetch("/api/billing/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planId }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      setBillingMsg(data.error ?? "Stripe is not configured yet.");
     }
   }
 
@@ -96,15 +128,21 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong mb-4 flex gap-1 rounded-xl p-1">
-        {(["analytics", "keys", "users"] as const).map((t) => (
+        {(["analytics", "keys", "users", "billing"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`flex-1 rounded-lg py-2 text-[13px] font-medium capitalize transition ${
+            className={`flex-1 rounded-lg py-2 text-[12px] font-medium capitalize transition ${
               tab === t ? "bg-savings text-ink" : "text-slate-300 hover:bg-slate-700/30"
             }`}
           >
-            {t === "keys" ? "Key vault" : t === "users" ? "User access" : "Analytics"}
+            {t === "keys"
+              ? "Keys"
+              : t === "users"
+              ? "Users"
+              : t === "billing"
+              ? "Billing"
+              : "Analytics"}
           </button>
         ))}
       </div>
@@ -127,12 +165,12 @@ export default function AdminPage() {
           <div className="surface rounded-2xl p-4">
             <div className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-white">
               <Icon name="spark" className="h-4 w-4 text-savings" /> Agent memory
-              — negotiation playbook
+              - negotiation playbook
             </div>
             <p className="mb-3 text-[12px] text-slate-500">
               Best performer:{" "}
               <span className="text-savings-bright">
-                {analytics.bestTactic ?? "—"}
+                {analytics.bestTactic ?? "-"}
               </span>
             </p>
             <div className="space-y-2">
@@ -174,7 +212,7 @@ export default function AdminPage() {
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
             {persistent ? (
               <>
-                Persistence is <b>on</b> — edits are encrypted and saved to
+                Persistence is <b>on</b> - edits are encrypted and saved to
                 Supabase, take effect within ~30s, and survive restarts. Secret
                 values are never sent to the browser (masked fingerprint only).
               </>
@@ -231,7 +269,7 @@ export default function AdminPage() {
                 </div>
               ) : (
                 <div className="mt-2 text-[11px] text-slate-500">
-                  Bootstrap secret — set via host environment variables only.
+                  Bootstrap secret - set via host environment variables only.
                 </div>
               )}
             </div>
@@ -269,6 +307,79 @@ export default function AdminPage() {
               >
                 {u.status === "active" ? "Block" : "Unblock"}
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "billing" && (
+        <div className="space-y-3">
+          <div
+            className={`rounded-xl border p-3 text-[12px] ${
+              stripeOn
+                ? "border-savings/30 bg-savings/10 text-savings-bright"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+            }`}
+          >
+            <Icon name="card" className="mr-1 inline h-4 w-4" />
+            {stripeOn
+              ? "Stripe is connected. Checkout runs against live Stripe."
+              : "Billing preview. Add STRIPE_SECRET_KEY in the Key vault to enable real Checkout. This section is visible to management only."}
+          </div>
+          {billingMsg && (
+            <div className="rounded-lg bg-rose-500/10 p-2 text-[12px] text-rose-300">
+              {billingMsg}
+            </div>
+          )}
+          {plans.map((p) => (
+            <div
+              key={p.id}
+              className={`surface rounded-2xl p-4 ${
+                p.highlight ? "brand-ring" : ""
+              }`}
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] font-bold text-white">
+                      {p.name}
+                    </span>
+                    {p.highlight && (
+                      <span className="rounded-full bg-savings/15 px-2 py-0.5 text-[10px] font-semibold text-savings-bright">
+                        Popular
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[12px] text-slate-400">{p.blurb}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xl font-bold text-white">
+                    {p.amount === 0 ? "Free" : `$${(p.amount / 100).toFixed(0)}`}
+                  </div>
+                  {p.amount > 0 && (
+                    <div className="text-[10px] text-slate-500">/month</div>
+                  )}
+                </div>
+              </div>
+              <ul className="mt-2 space-y-1">
+                {p.features.map((f) => (
+                  <li
+                    key={f}
+                    className="flex items-center gap-1.5 text-[12px] text-slate-300"
+                  >
+                    <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              {p.amount > 0 && (
+                <button
+                  onClick={() => subscribe(p.id)}
+                  className="btn-primary mt-3 w-full rounded-xl py-2.5 text-[13px]"
+                >
+                  Subscribe with Stripe
+                </button>
+              )}
             </div>
           ))}
         </div>

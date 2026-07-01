@@ -93,7 +93,7 @@ export function BookingSheet({
               onClick={() => setStep("schedule")}
               className="mt-4 w-full rounded-xl bg-savings py-2.5 text-sm font-semibold text-ink hover:bg-savings-bright"
             >
-              Specs match — continue
+              Specs match - continue
             </button>
           </div>
         )}
@@ -172,8 +172,8 @@ export function BookingSheet({
                 {(date || tomorrow)} at {time}
               </span>
               {mode === "hotel-delivery"
-                ? " — delivered to your hotel lobby."
-                : " — pickup in store."}
+                ? " - delivered to your hotel lobby."
+                : " - pickup in store."}
             </p>
             <p className="mt-2 text-[12px] text-slate-500">
               The agent has notified the vendor via the WhatsApp Cloud API and

@@ -15,6 +15,9 @@ import { Filters, DEFAULT_FILTERS, type FilterState } from "@/components/Filters
 import { VendorCard } from "@/components/VendorCard";
 import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
+import { TabBar } from "@/components/TabBar";
+import { FeedbackModal } from "@/components/FeedbackModal";
+import { BrandMark } from "@/components/BrandMark";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -46,7 +49,21 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
   const [aiOn, setAiOn] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  function selectTab(tab: "home" | "map" | "account") {
+    if (tab === "home") {
+      setView("list");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else if (tab === "map") {
+      setView("map");
+    } else {
+      if (!session) window.location.href = "/login";
+      else if (session.isAdmin) window.location.href = "/admin";
+      else window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -94,7 +111,7 @@ export default function Home() {
       ];
       stages.forEach(([stage, ms]) => schedule(() => patchVendor(vendor.id, { stage }), ms));
 
-      // A couple of low-rated vendors stay silent — realistic funnel drop-off.
+      // A couple of low-rated vendors stay silent - realistic funnel drop-off.
       const silent = vendor.rating < 3.8 && i % 3 === 0;
       if (silent) {
         schedule(() => patchVendor(vendor.id, { stage: "no-response" }), base + 2600);
@@ -219,16 +236,14 @@ export default function Home() {
   );
 
   return (
-    <main className="mx-auto min-h-screen max-w-md px-4 pb-28 pt-5 sm:max-w-lg">
+    <main className="mx-auto min-h-[100dvh] max-w-md px-4 pb-32 pt-safe sm:max-w-lg">
       {/* Header */}
-      <header className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-savings/15">
-            <Icon name="bolt" className="h-5 w-5 text-savings-bright" />
-          </div>
+      <header className="mb-4 flex items-center justify-between pt-1">
+        <div className="flex items-center gap-2.5">
+          <BrandMark size={38} rounded={11} className="brand-ring rounded-[11px]" />
           <div>
-            <h1 className="text-lg font-extrabold leading-none tracking-tight text-white">
-              Wheel<span className="text-savings-bright">Deal</span>
+            <h1 className="text-[19px] font-extrabold leading-none tracking-tight text-white">
+              Wheel<span className="brand-text">Deal</span>
             </h1>
             <p className="text-[11px] text-slate-500">
               Cheapest local rides, negotiated for you
@@ -251,7 +266,7 @@ export default function Home() {
           ) : (
             <a
               href="/login"
-              className="rounded-lg bg-savings px-3 py-1.5 text-[12px] font-semibold text-ink"
+              className="btn-primary rounded-lg px-3 py-1.5 text-[12px]"
             >
               Sign in
             </a>
@@ -455,7 +470,7 @@ export default function Home() {
           <Icon name="bolt" className="mx-auto mb-2 h-8 w-8 text-slate-700" />
           <p className="text-sm">
             Describe your ideal ride and deploy the agents. They&apos;ll ping
-            every partner vendor near your stay and negotiate the price down —
+            every partner vendor near your stay and negotiate the price down -
             live.
           </p>
         </div>
@@ -473,6 +488,19 @@ export default function Home() {
         Outreach uses the official WhatsApp Cloud API to opted-in partner
         vendors. Agents identify themselves as automated procurement assistants.
       </footer>
+
+      <TabBar
+        active={view === "map" ? "map" : "home"}
+        onSelect={selectTab}
+        onFeedback={() => setFeedbackOpen(true)}
+      />
+
+      {feedbackOpen && (
+        <FeedbackModal
+          email={session?.email}
+          onClose={() => setFeedbackOpen(false)}
+        />
+      )}
     </main>
   );
 }

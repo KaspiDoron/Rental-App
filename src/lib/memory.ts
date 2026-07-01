@@ -1,4 +1,4 @@
-// Continuous Learning Engine — shared negotiation-tactic memory.
+// Continuous Learning Engine - shared negotiation-tactic memory.
 //
 // In production this table lives in Supabase so learning accumulates across all
 // users and server instances. Here we keep a process-level singleton that seeds
@@ -22,7 +22,7 @@ const STARTER: NegotiationTactic[] = [
     id: "competitor-beat",
     label: "Beat the competitor",
     script:
-      "I've been quoted {rival}/day for a similar {vehicle} nearby — if you can beat it I'll book with you right now.",
+      "I've been quoted {rival}/day for a similar {vehicle} nearby - if you can beat it I'll book with you right now.",
     uses: 18,
     wins: 12,
     avgDiscountPct: 14,
@@ -79,7 +79,7 @@ function score(t: NegotiationTactic): number {
   return winRate * 0.6 + (t.avgDiscountPct / 20) * 0.4;
 }
 
-/** Record the outcome of using a tactic — the core learning update. */
+/** Record the outcome of using a tactic - the core learning update. */
 export function recordOutcome(
   tacticId: string,
   won: boolean,

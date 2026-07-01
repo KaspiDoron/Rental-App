@@ -3,7 +3,7 @@
 // When WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID are configured, outbound
 // messages go through the Graph API to opted-in partner vendors. Otherwise we
 // return a compliant click-to-chat (wa.me) deep link the user can send
-// themselves — no scraping, no unsolicited bulk blasting.
+// themselves - no scraping, no unsolicited bulk blasting.
 
 import "server-only";
 import { getConfig } from "./runtime-config";
