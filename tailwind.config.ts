@@ -1,24 +1,34 @@
 import type { Config } from "tailwindcss";
 
+// Semantic tokens are CSS variables set in globals.css, so light (default,
+// playful white-gray) and dark (gray palette) themes swap without class churn.
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        ink: {
-          DEFAULT: "#0b1220",
-          soft: "#111b2e",
-          muted: "#1b2942",
+        base: "var(--bg)",
+        card: "var(--card)",
+        card2: "var(--card2)",
+        strong: "var(--text)",
+        soft: "var(--muted)",
+        faint: "var(--faint)",
+        line: "var(--line)",
+        brandblue: {
+          DEFAULT: "var(--blue)",
+          strong: "var(--blue-strong)",
+          soft: "var(--blue-soft)",
         },
-        savings: {
-          DEFAULT: "#10b981",
-          bright: "#34d399",
-          deep: "#059669",
-        },
-        gold: "#f5c451",
+        brandred: { DEFAULT: "var(--red)", soft: "var(--red-soft)" },
+        brandyellow: { DEFAULT: "var(--yellow)", soft: "var(--yellow-soft)" },
+        savings: { DEFAULT: "var(--green)", soft: "var(--green-soft)" },
       },
       fontFamily: {
-        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        sans: ["var(--font-body)"],
+        display: ["var(--font-display)"],
+      },
+      borderRadius: {
+        blob: "1.4rem",
       },
       keyframes: {
         "pulse-ring": {
@@ -30,12 +40,14 @@ const config: Config = {
           "50%": { transform: "scale(1.18)" },
           "100%": { transform: "scale(1)" },
         },
-        shimmer: {
-          "100%": { transform: "translateX(100%)" },
-        },
+        shimmer: { "100%": { transform: "translateX(100%)" } },
         "slide-up": {
-          "0%": { transform: "translateY(12px)", opacity: "0" },
+          "0%": { transform: "translateY(14px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        wiggle: {
+          "0%,100%": { transform: "rotate(-2deg)" },
+          "50%": { transform: "rotate(2deg)" },
         },
       },
       animation: {
@@ -43,6 +55,7 @@ const config: Config = {
         "count-pop": "count-pop 0.4s ease-out",
         shimmer: "shimmer 1.6s infinite",
         "slide-up": "slide-up 0.35s ease-out both",
+        wiggle: "wiggle 1.6s ease-in-out infinite",
       },
     },
   },

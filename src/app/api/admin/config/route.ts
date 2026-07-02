@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { requireManagement } from "@/lib/session";
 import { listKeys, setKey, persistenceEnabled } from "@/lib/config";
 
 export async function GET() {
-  const session = getSession();
-  if (!session?.isAdmin) {
+  const session = await requireManagement();
+  if (!session) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   return NextResponse.json({
@@ -14,8 +14,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const session = getSession();
-  if (!session?.isAdmin) {
+  const session = await requireManagement();
+  if (!session) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const { name, value } = await req.json().catch(() => ({}));

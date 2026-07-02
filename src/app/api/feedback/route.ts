@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   }
 
   // Escalate real issues to management by email (no-op without RESEND_API_KEY).
-  const to = adminEmails();
+  const to = await adminEmails();
   const emailResult = await sendEmail({
     to,
     subject: `[WheelDeal ${verdict.severity.toUpperCase()}] ${verdict.summary}`,

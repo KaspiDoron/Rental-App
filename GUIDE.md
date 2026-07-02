@@ -38,7 +38,8 @@ This lets you paste all other keys inside the app and have them stick.
    | `SUPABASE_SERVICE_ROLE_KEY` | the service_role key |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the anon key |
    | `SESSION_SECRET` | a long random string (see below) |
-   | `ADMIN_EMAILS` | `doron@pristivo.com` |
+   | `OWNER_EMAIL` | `kaspidoron@gmail.com` (the owner - full control) |
+   | `ADMIN_EMAILS` | `kaspidoron@gmail.com,doron@pristivo.com` |
 4. Make a `SESSION_SECRET`: on a Mac/Linux terminal run `openssl rand -hex 32`
    and paste the result. (Set it once and never change it - it protects your
    saved keys.)
@@ -46,13 +47,47 @@ This lets you paste all other keys inside the app and have them stick.
    `supabase/schema.sql` from this repo, and click **Run**.
 6. Back in Vercel, **Redeploy** so the new variables load.
 
-Now sign in to your live app with `doron@pristivo.com`, open **Admin -> Keys**,
-and you'll see a green "Persistence is on" banner. Anything you paste here is
-saved securely.
+Now sign in to your live app with `kaspidoron@gmail.com` (the owner signs in
+with email only - no phone or terms needed), open **Admin -> Keys**, and you'll
+see a green "Persistence is on" banner. Anything you paste here is saved
+securely.
 
 ---
 
-## 3. Turn on the AI agents
+## 3. Turn on the real map data (Google Maps - highly recommended)
+
+This switches the app from demo vendors to REAL rental places, precise
+addresses, and real Google reviews.
+
+1. Go to **console.cloud.google.com** -> create a project (free).
+2. Open **APIs & Services -> Library** and enable these 3 APIs:
+   - **Places API**
+   - **Geocoding API**
+   - (optional) **Maps JavaScript API**
+3. Open **APIs & Services -> Credentials -> Create credentials -> API key**.
+   Copy the key.
+4. Google asks for a billing card, but gives a large free monthly usage credit -
+   normal app usage stays free.
+5. In your app: **Admin -> Keys -> Google Maps API Key** -> paste -> Apply.
+
+Done - searches now return real rental businesses near the hotel, with photos,
+open-now status, phone-based WhatsApp links and live Google reviews.
+
+## 3b. Turn on "Continue with Google" sign-in
+
+1. In the same Google Cloud project: **APIs & Services -> OAuth consent
+   screen** -> External -> fill the 3 required fields -> Save.
+2. **Credentials -> Create credentials -> OAuth client ID -> Web application**.
+3. Under **Authorized JavaScript origins** add your live URL
+   (e.g. `https://rental-app-xxxx.vercel.app`).
+4. Copy the **Client ID** (ends with `.apps.googleusercontent.com`).
+5. In your app: **Admin -> Keys -> Google OAuth Client ID** -> paste -> Apply.
+
+The "Continue with Google" button now appears on the sign-in page.
+
+---
+
+## 4. Turn on the AI agents
 
 You can paste these in **Admin -> Keys** (recommended) or add them in Vercel.
 
@@ -64,7 +99,7 @@ Without these the app still runs using built-in smart fallbacks.
 
 ---
 
-## 4. Turn on WhatsApp (official Meta Cloud API)
+## 5. Turn on WhatsApp (official Meta Cloud API)
 
 This is optional. Without it, the app opens normal `wa.me` chat links instead.
 
@@ -86,7 +121,7 @@ This is optional. Without it, the app opens normal `wa.me` chat links instead.
 
 ---
 
-## 5. Turn on feedback emails (Resend)
+## 6. Turn on feedback emails (Resend)
 
 So real bug reports from users land in your inbox (spam is filtered out by AI).
 
@@ -102,7 +137,7 @@ genuine bugs get emailed to `ADMIN_EMAILS`; everything is also logged in Supabas
 
 ---
 
-## 6. Turn on payments (Stripe - preview for now)
+## 7. Turn on payments (Stripe - preview for now)
 
 Visible only to management (Admin -> Billing).
 
@@ -116,9 +151,11 @@ Visible only to management (Admin -> Billing).
 ## Quick reference: where each key goes
 
 - **Vercel env vars (once):** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`, `ADMIN_EMAILS`.
-- **Admin -> Keys (in-app, any time):** all `GROQ/GEMINI/OPENROUTER/CEREBRAS`
-  tokens, `AI_PROVIDER`, all `WHATSAPP_*`, `RESEND_API_KEY`,
-  `FEEDBACK_FROM_EMAIL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`, `OWNER_EMAIL`,
+  `ADMIN_EMAILS`.
+- **Admin -> Keys (in-app, any time):** `GOOGLE_MAPS_API_KEY`,
+  `GOOGLE_OAUTH_CLIENT_ID`, all `GROQ/GEMINI/OPENROUTER/CEREBRAS` tokens,
+  `AI_PROVIDER`, all `WHATSAPP_*`, `RESEND_API_KEY`, `FEEDBACK_FROM_EMAIL`,
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
 Always use freshly rotated keys - never ones that were shared in plain text.

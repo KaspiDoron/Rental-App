@@ -2,11 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =============================================================================
+   WheelDeal theme system
+   Light (default): playful, clean, organic white-gray with blue / red / yellow.
+   Dark: same brand hues, brighter, on a gray palette (no blue-black).
+============================================================================= */
+
 :root {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  --font-body: "Nunito", ui-rounded, "SF Pro Rounded", system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-display: "Baloo 2", var(--font-body);
+
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --card2: #eef1f6;
+  --text: #212837;
+  --muted: #5a6577;
+  --faint: #939cad;
+  --line: #e2e7ef;
+
+  --blue: #2f6fed;
+  --blue-strong: #1d5cd6;
+  --blue-soft: #e3ecff;
+  --red: #ef4444;
+  --red-soft: #ffe6e4;
+  --yellow: #ffb703;
+  --yellow-soft: #fff3d1;
+  --green: #16a34a;
+  --green-soft: #ddf5e4;
+
+  --shadow: 0 6px 24px -12px rgba(33, 40, 55, 0.18);
+
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+[data-theme="dark"] {
+  --bg: #17191d;
+  --card: #212429;
+  --card2: #2a2e34;
+  --text: #f3f5f8;
+  --muted: #aab2bf;
+  --faint: #7d8695;
+  --line: #33383f;
+
+  --blue: #6ea2ff;
+  --blue-strong: #8ab4ff;
+  --blue-soft: #253654;
+  --red: #ff8078;
+  --red-soft: #46282a;
+  --yellow: #ffd166;
+  --yellow-soft: #453a1c;
+  --green: #4ade80;
+  --green-soft: #1d3b2a;
+
+  --shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -20,164 +70,137 @@ body {
 }
 
 body {
-  color: #e8eef7;
-  background:
-    radial-gradient(1100px 560px at 50% -8%, rgba(16, 185, 129, 0.16), transparent 60%),
-    radial-gradient(820px 480px at 92% 4%, rgba(34, 211, 238, 0.1), transparent 55%),
-    radial-gradient(700px 700px at 4% 100%, rgba(163, 230, 53, 0.06), transparent 60%),
-    #070b13;
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  font-family: var(--font-sans);
   overscroll-behavior-y: none;
 }
 
-/* App shell -- fills the device, respects notches, no bounce */
-.app-shell {
-  min-height: 100dvh;
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
 }
 
-/* Prevent iOS input zoom: keep font-size >= 16px on form controls */
-input,
-textarea,
-select {
+/* Keep form controls >= 16px so iOS never zooms on focus */
+input, textarea, select, button {
   font-size: 16px;
+  font-family: var(--font-body);
 }
 
-/* ---- Surfaces --------------------------------------------------------------*/
+.app-shell { min-height: 100dvh; }
+
+/* ---- Surfaces ---------------------------------------------------------- */
 .surface {
-  background: linear-gradient(180deg, rgba(27, 41, 66, 0.66), rgba(15, 24, 42, 0.72));
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
-    0 10px 30px -18px rgba(0, 0, 0, 0.7);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
-
 .surface-strong {
-  background: linear-gradient(180deg, rgba(30, 46, 74, 0.94), rgba(14, 23, 40, 0.96));
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 20px 60px -24px rgba(0, 0, 0, 0.8);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 60px -24px rgba(0, 0, 0, 0.35);
 }
 
-/* Brand gradient helpers */
-.brand-gradient {
-  background-image: linear-gradient(120deg, #059669 0%, #10b981 45%, #22d3ee 100%);
-}
-.brand-text {
-  background-image: linear-gradient(120deg, #34d399 0%, #22d3ee 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.brand-ring {
-  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.35),
-    0 8px 30px -10px rgba(16, 185, 129, 0.5);
+/* Sticky section top bar (respects the notch / status bar) */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: calc(var(--safe-top) + 6px);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-bottom: 1px solid var(--line);
 }
 
-/* Primary button with sheen + press feedback */
+/* Bottom global navigation */
+.tabbar {
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+/* ---- Buttons: visible, pressable, hoverable ---------------------------- */
+.btn {
+  transition: transform 0.12s ease, background-color 0.15s ease,
+    color 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  min-height: 44px;
+}
+.btn:active { transform: scale(0.96); }
+.btn-sm { min-height: 36px; }
+
 .btn-primary {
-  position: relative;
-  overflow: hidden;
-  background-image: linear-gradient(120deg, #10b981, #22d3ee);
-  color: #04120c;
-  font-weight: 700;
-  transition: transform 0.12s ease, filter 0.2s ease;
+  background: var(--blue);
+  color: #ffffff;
+  font-weight: 800;
+  box-shadow: 0 6px 18px -8px var(--blue);
 }
-.btn-primary:active {
-  transform: scale(0.975);
-  filter: brightness(1.05);
-}
-.btn-primary::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    rgba(255, 255, 255, 0.28) 50%,
-    transparent 80%
-  );
-  transform: translateX(-120%);
-}
-.btn-primary:hover::after {
-  animation: sheen 0.9s ease;
-}
-@keyframes sheen {
-  100% {
-    transform: translateX(120%);
-  }
-}
+.btn-primary:hover { background: var(--blue-strong); }
 
-/* Skeleton shimmer */
+.btn-danger { background: var(--red); color: #fff; font-weight: 700; }
+.btn-danger:hover { filter: brightness(0.94); }
+
+.btn-sun { background: var(--yellow); color: #4a3300; font-weight: 800; }
+.btn-sun:hover { filter: brightness(0.96); }
+
+.btn-ghost {
+  background: transparent;
+  border: 1.5px solid var(--line);
+  color: var(--muted);
+  font-weight: 700;
+}
+.btn-ghost:hover { background: var(--card2); color: var(--text); }
+
+.chip {
+  transition: transform 0.12s ease, background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease;
+}
+.chip:active { transform: scale(0.94); }
+
+/* ---- Bits --------------------------------------------------------------- */
 .skeleton {
   position: relative;
   overflow: hidden;
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--card2);
 }
 .skeleton::after {
   content: "";
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
   animation: shimmer 1.6s infinite;
 }
-
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+[data-theme="dark"] .skeleton::after {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
 }
 
-/* Safe-area padding utilities */
-.pt-safe {
-  padding-top: calc(var(--safe-top) + 0.5rem);
-}
-.pb-safe {
-  padding-bottom: calc(var(--safe-bottom) + 0.5rem);
-}
-.bottom-safe {
-  bottom: var(--safe-bottom);
-}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* Bottom navigation (native-app feel) */
-.tabbar {
-  background: linear-gradient(180deg, rgba(11, 18, 32, 0.7), rgba(4, 7, 13, 0.92));
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-}
+.pt-safe { padding-top: calc(var(--safe-top) + 0.5rem); }
+.pb-safe { padding-bottom: calc(var(--safe-bottom) + 0.5rem); }
 
-/* Leaflet dark tuning */
+/* ---- Map (Google-like default cartography via CARTO Voyager) ------------ */
 .leaflet-container {
-  background: #0b1220 !important;
-  font-family: var(--font-sans);
+  background: #e8ecef !important;
+  font-family: var(--font-body);
+  z-index: 0; /* never above navigation bars */
 }
-.leaflet-tile {
-  filter: brightness(0.75) saturate(0.9) hue-rotate(180deg) invert(0.94);
-}
+.leaflet-pane, .leaflet-top, .leaflet-bottom { z-index: 0 !important; }
 .leaflet-control-attribution {
-  background: rgba(7, 11, 19, 0.7) !important;
-  color: #64748b !important;
+  background: rgba(255, 255, 255, 0.75) !important;
+  color: #6b7280 !important;
+  font-size: 10px !important;
 }
-.leaflet-control-attribution a {
-  color: #94a3b8 !important;
-}
+.leaflet-control-attribution a { color: #4b5563 !important; }
 
-.tabular {
-  font-variant-numeric: tabular-nums;
-}
+.tabular { font-variant-numeric: tabular-nums; }
 
-/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

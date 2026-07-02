@@ -5,9 +5,9 @@ export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 export const alt = "WheelDeal - cheapest local rides, negotiated for you";
 
-// Rich social preview card (Open Graph / shared everywhere).
+// Social preview card: playful, clean, blue / red / yellow on white-gray.
 export default function OgImage() {
-  const badge = `data:image/svg+xml;base64,${Buffer.from(markSvg(220)).toString(
+  const badge = `data:image/svg+xml;base64,${Buffer.from(markSvg(240)).toString(
     "base64"
   )}`;
 
@@ -20,52 +20,55 @@ export default function OgImage() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          padding: "72px",
-          background:
-            "linear-gradient(135deg, #04070d 0%, #0b1220 55%, #06231d 100%)",
+          padding: "70px",
+          background: "linear-gradient(150deg, #ffffff 0%, #f4f6f9 60%, #e8eefb 100%)",
           fontFamily: "sans-serif",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "28px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "30px" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img width={132} height={132} src={badge} alt="" />
+          <img width={150} height={150} src={badge} alt="" />
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <div style={{ fontSize: 68, fontWeight: 800, color: "white", letterSpacing: -1 }}>
-              WheelDeal
+            <div style={{ display: "flex", fontSize: 72, fontWeight: 800, color: BRAND.ink, letterSpacing: -1 }}>
+              Wheel<span style={{ color: BRAND.blue }}>Deal</span>
             </div>
-            <div style={{ fontSize: 28, color: BRAND.mint, fontWeight: 600 }}>
+            <div style={{ fontSize: 30, color: BRAND.red, fontWeight: 700 }}>
               Rental savings & negotiation engine
             </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <div style={{ fontSize: 52, color: "white", fontWeight: 700, lineHeight: 1.15 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontSize: 52, color: BRAND.ink, fontWeight: 700, lineHeight: 1.15 }}>
             AI agents find and negotiate the
           </div>
-          <div style={{ fontSize: 52, fontWeight: 800, lineHeight: 1.15, color: BRAND.mint }}>
-            cheapest car & motorbike rentals near you.
+          <div style={{ fontSize: 52, fontWeight: 800, lineHeight: 1.15, color: BRAND.blue }}>
+            cheapest rides near your hotel.
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 16 }}>
-          {["Live negotiation", "Map + list", "Smart bargain", "Zero-cost"].map(
-            (chip) => (
-              <div
-                key={chip}
-                style={{
-                  fontSize: 26,
-                  color: "#cbd5e1",
-                  border: "1px solid rgba(148,163,184,0.35)",
-                  borderRadius: 999,
-                  padding: "10px 26px",
-                  display: "flex",
-                }}
-              >
-                {chip}
-              </div>
-            )
-          )}
+          {[
+            ["Live negotiation", BRAND.blue],
+            ["Real map & reviews", BRAND.green],
+            ["Smart bargain", BRAND.red],
+            ["80% off launch", BRAND.yellow],
+          ].map(([chip, color]) => (
+            <div
+              key={chip}
+              style={{
+                fontSize: 26,
+                fontWeight: 700,
+                color: "#ffffff",
+                background: color,
+                borderRadius: 999,
+                padding: "12px 28px",
+                display: "flex",
+              }}
+            >
+              {chip}
+            </div>
+          ))}
         </div>
       </div>
     ),

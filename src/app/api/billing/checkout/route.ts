@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { createCheckoutSession, PLANS } from "@/lib/stripe";
+import { createCheckoutSession, stripeConfigured, PLANS } from "@/lib/stripe";
 
-// Management-only: start a Stripe Checkout Session.
+// Start a Stripe Checkout Session (any signed-in user can upgrade).
 export async function POST(req: Request) {
-  const session = getSession();
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
   const { planId } = await req.json().catch(() => ({}));
   const origin = new URL(req.url).origin;
@@ -20,14 +20,11 @@ export async function POST(req: Request) {
   return NextResponse.json({ url: result.url });
 }
 
+// Plan catalogue (no secrets - safe for any signed-in user).
 export async function GET() {
-  const session = getSession();
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
-  const { stripeConfigured } = await import("@/lib/stripe");
-  return NextResponse.json({
-    plans: PLANS,
-    configured: await stripeConfigured(),
-  });
+  return NextResponse.json({ plans: PLANS, configured: await stripeConfigured() });
 }

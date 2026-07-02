@@ -52,21 +52,46 @@ export function supabaseConfigured(): boolean {
   return supabase() !== null;
 }
 
+/** Read rows from a Supabase table via the service role. [] if unset. */
+export async function sbSelect<T = Record<string, unknown>>(
+  table: string,
+  query = "select=*&limit=50"
+): Promise<T[]> {
+  const conn = supabase();
+  if (!conn) return [];
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}?${query}`, {
+      headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as T[];
+  } catch {
+    return [];
+  }
+}
+
 /** Insert rows into a Supabase table via the service role. No-op if unset. */
 export async function sbInsert(
   table: string,
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
+  onConflict?: string
 ): Promise<boolean> {
   const conn = supabase();
   if (!conn || rows.length === 0) return false;
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}`, {
+    const url = onConflict
+      ? `${conn.url}/rest/v1/${table}?on_conflict=${onConflict}`
+      : `${conn.url}/rest/v1/${table}`;
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         apikey: conn.key,
         Authorization: `Bearer ${conn.key}`,
         "Content-Type": "application/json",
-        Prefer: "return=minimal",
+        Prefer: onConflict
+          ? "return=minimal,resolution=merge-duplicates"
+          : "return=minimal",
       },
       body: JSON.stringify(rows),
     });

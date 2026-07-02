@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
+import { vehicleLabel } from "@/lib/labels";
+import { Modal } from "./Modal";
 import { Icon } from "./icons";
 
 type Step = "verify" | "schedule" | "confirmed";
@@ -24,7 +26,6 @@ export function BookingSheet({
   const [time, setTime] = useState("10:00");
 
   useEffect(() => {
-    // Ask the agent to run a final spec verification with the vendor.
     let alive = true;
     fetch("/api/negotiate", {
       method: "POST",
@@ -41,153 +42,163 @@ export function BookingSheet({
 
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
+  async function confirm() {
+    setStep("confirmed");
+    // Persist the booking (saved to the database when Supabase is connected).
+    fetch("/api/bookings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vendorId: vendor.id,
+        vendorName: vendor.name,
+        pricePerDay: vendor.offer?.pricePerDay ?? 0,
+        totalPrice: vendor.offer?.totalPrice ?? 0,
+        fulfillment: mode,
+        scheduledAt: `${date || tomorrow}T${time}:00Z`,
+      }),
+    }).catch(() => {});
+  }
+
   return (
-    <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
-      <div className="surface-strong w-full max-w-md rounded-t-3xl p-5 sm:rounded-3xl animate-slide-up">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white">
-            {step === "confirmed" ? "Booking confirmed" : "Lock your deal"}
-          </h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
-            ✕
-          </button>
-        </div>
+    <Modal onClose={onClose}>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-extrabold text-strong">
+          {step === "confirmed" ? "Booking confirmed 🎉" : "Lock your deal"}
+        </h2>
+        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+          ✕
+        </button>
+      </div>
 
-        <div className="mb-4 rounded-xl bg-ink/50 p-3 text-sm">
-          <div className="font-semibold text-white">{vendor.name}</div>
-          {vendor.offer && (
-            <div className="text-slate-400">
-              ${vendor.offer.pricePerDay}/day · ${vendor.offer.totalPrice} total
-            </div>
-          )}
-        </div>
-
-        {step === "verify" && (
-          <div>
-            <div className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-savings">
-              <Icon name="check" className="h-4 w-4" /> Agent spec verification
-            </div>
-            <div className="rounded-xl border border-slate-700/40 bg-ink/40 p-3 text-[13px] text-slate-300">
-              {verification || "Requesting confirmation from the vendor…"}
-            </div>
-            <div className="mt-2 space-y-1 text-[12px] text-slate-400">
-              <div className="flex items-center gap-1.5">
-                <Icon name="check" className="h-3.5 w-3.5 text-savings" />
-                {rfq?.vehicleClass}
-                {rfq?.engineSizeCc ? ` · ${rfq.engineSizeCc}cc` : ""}
-              </div>
-              {rfq?.maxMileageKm && (
-                <div className="flex items-center gap-1.5">
-                  <Icon name="check" className="h-3.5 w-3.5 text-savings" />
-                  under {rfq.maxMileageKm.toLocaleString()} km
-                </div>
-              )}
-              {rfq?.accessories.map((a) => (
-                <div key={a} className="flex items-center gap-1.5">
-                  <Icon name="check" className="h-3.5 w-3.5 text-savings" />
-                  {a}
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={() => setStep("schedule")}
-              className="mt-4 w-full rounded-xl bg-savings py-2.5 text-sm font-semibold text-ink hover:bg-savings-bright"
-            >
-              Specs match - continue
-            </button>
-          </div>
-        )}
-
-        {step === "schedule" && (
-          <div>
-            <div className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-slate-300">
-              <Icon name="calendar" className="h-4 w-4 text-savings" /> Pickup or
-              delivery
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                disabled={!vendor.fulfillment.includes("hotel-delivery")}
-                onClick={() => setMode("hotel-delivery")}
-                className={`rounded-xl border p-3 text-left text-sm transition disabled:opacity-40 ${
-                  mode === "hotel-delivery"
-                    ? "border-savings bg-savings/10 text-white"
-                    : "border-slate-700/50 text-slate-300"
-                }`}
-              >
-                <div className="font-semibold">Hotel delivery</div>
-                <div className="text-[11px] text-slate-400">To your lobby</div>
-              </button>
-              <button
-                onClick={() => setMode("in-store")}
-                className={`rounded-xl border p-3 text-left text-sm transition ${
-                  mode === "in-store"
-                    ? "border-savings bg-savings/10 text-white"
-                    : "border-slate-700/50 text-slate-300"
-                }`}
-              >
-                <div className="font-semibold">In-store pickup</div>
-                <div className="text-[11px] text-slate-400">At the shop</div>
-              </button>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <label className="text-[12px] text-slate-400">
-                Date
-                <input
-                  type="date"
-                  min={tomorrow}
-                  value={date || tomorrow}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700/50 bg-ink/60 p-2 text-sm text-white [color-scheme:dark]"
-                />
-              </label>
-              <label className="text-[12px] text-slate-400">
-                Time
-                <input
-                  type="time"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700/50 bg-ink/60 p-2 text-sm text-white [color-scheme:dark]"
-                />
-              </label>
-            </div>
-
-            <button
-              onClick={() => setStep("confirmed")}
-              className="mt-4 w-full rounded-xl bg-savings py-2.5 text-sm font-semibold text-ink hover:bg-savings-bright"
-            >
-              Confirm booking
-            </button>
-          </div>
-        )}
-
-        {step === "confirmed" && (
-          <div className="text-center">
-            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-savings/15">
-              <Icon name="check" className="h-8 w-8 text-savings-bright" />
-            </div>
-            <p className="text-sm text-slate-300">
-              {vendor.name} is confirmed for{" "}
-              <span className="font-semibold text-white">
-                {(date || tomorrow)} at {time}
-              </span>
-              {mode === "hotel-delivery"
-                ? " - delivered to your hotel lobby."
-                : " - pickup in store."}
-            </p>
-            <p className="mt-2 text-[12px] text-slate-500">
-              The agent has notified the vendor via the WhatsApp Cloud API and
-              logged the agreement.
-            </p>
-            <button
-              onClick={onClose}
-              className="mt-4 w-full rounded-xl bg-slate-100/95 py-2.5 text-sm font-semibold text-ink"
-            >
-              Done
-            </button>
+      <div className="mb-4 rounded-2xl bg-card2 p-3 text-sm">
+        <div className="font-extrabold text-strong">{vendor.name}</div>
+        {vendor.offer && (
+          <div className="text-soft">
+            ${vendor.offer.pricePerDay}/day · ${vendor.offer.totalPrice} total
           </div>
         )}
       </div>
-    </div>
+
+      {step === "verify" && (
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-[12px] font-extrabold text-savings">
+            <Icon name="check" className="h-4 w-4" /> Agent spec verification
+          </div>
+          <div className="rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-soft">
+            {verification || "Requesting confirmation from the vendor..."}
+          </div>
+          <div className="mt-2 space-y-1 text-[12px] text-soft">
+            <div className="flex items-center gap-1.5">
+              <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+              {rfq ? vehicleLabel(rfq.vehicleClass) : ""}
+              {rfq?.engineSizeCc ? ` · ${rfq.engineSizeCc}cc` : ""}
+            </div>
+            {rfq?.maxMileageKm && (
+              <div className="flex items-center gap-1.5">
+                <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+                under {rfq.maxMileageKm.toLocaleString()} km
+              </div>
+            )}
+            {rfq?.accessories.map((a) => (
+              <div key={a} className="flex items-center gap-1.5">
+                <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+                {a}
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => setStep("schedule")}
+            className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
+          >
+            Specs match - continue
+          </button>
+        </div>
+      )}
+
+      {step === "schedule" && (
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-[12px] font-extrabold text-soft">
+            <Icon name="calendar" className="h-4 w-4 text-brandblue" /> Pickup or delivery
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              disabled={!vendor.fulfillment.includes("hotel-delivery")}
+              onClick={() => setMode("hotel-delivery")}
+              className={`btn chip rounded-2xl border-2 p-3 text-left text-sm disabled:opacity-40 ${
+                mode === "hotel-delivery"
+                  ? "border-brandblue bg-brandblue-soft text-strong"
+                  : "border-line text-soft"
+              }`}
+            >
+              <div className="font-extrabold">Hotel delivery</div>
+              <div className="text-[11px] text-faint">To your lobby</div>
+            </button>
+            <button
+              onClick={() => setMode("in-store")}
+              className={`btn chip rounded-2xl border-2 p-3 text-left text-sm ${
+                mode === "in-store"
+                  ? "border-brandblue bg-brandblue-soft text-strong"
+                  : "border-line text-soft"
+              }`}
+            >
+              <div className="font-extrabold">In-store pickup</div>
+              <div className="text-[11px] text-faint">At the shop</div>
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <label className="text-[12px] font-bold text-soft">
+              Date
+              <input
+                type="date"
+                min={tomorrow}
+                value={date || tomorrow}
+                onChange={(e) => setDate(e.target.value)}
+                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-sm text-strong"
+              />
+            </label>
+            <label className="text-[12px] font-bold text-soft">
+              Time
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-sm text-strong"
+              />
+            </label>
+          </div>
+
+          <button onClick={confirm} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">
+            Confirm booking
+          </button>
+        </div>
+      )}
+
+      {step === "confirmed" && (
+        <div className="text-center">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-savings-soft">
+            <Icon name="check" className="h-8 w-8 text-savings" />
+          </div>
+          <p className="text-sm text-soft">
+            {vendor.name} is confirmed for{" "}
+            <span className="font-extrabold text-strong">
+              {date || tomorrow} at {time}
+            </span>
+            {mode === "hotel-delivery"
+              ? " - delivered to your hotel lobby."
+              : " - pickup in store."}
+          </p>
+          <p className="mt-2 text-[12px] text-faint">
+            The agent notified the vendor and saved the booking to your profile.
+          </p>
+          <button
+            onClick={onClose}
+            className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
+          >
+            Done
+          </button>
+        </div>
+      )}
+    </Modal>
   );
 }

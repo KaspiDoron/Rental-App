@@ -119,12 +119,20 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
   return rfq;
 }
 
+function vehicleTerm(v: VehicleClass): string {
+  return v === "scooter"
+    ? "automatic scooter"
+    : v === "motorbike"
+    ? "manual motorcycle"
+    : "car";
+}
+
 function buildMessage(rfq: StructuredRFQ, raw: string): string {
   const parts: string[] = [];
   parts.push(
     "Hello! I'm WheelDeal's automated procurement assistant messaging on behalf of a traveller."
   );
-  const spec: string[] = [`a ${rfq.vehicleClass}`];
+  const spec: string[] = [`a ${vehicleTerm(rfq.vehicleClass)}`];
   if (rfq.engineSizeCc) spec.push(`${rfq.engineSizeCc}cc`);
   if (rfq.transmission !== "any") spec.push(rfq.transmission);
   if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
@@ -236,6 +244,8 @@ export function negotiateRound(
     includesInsurance,
     includesDelivery,
     round,
+    verified: false,
+    simulated: true,
     message: vendorReply(vendor, pricePerDay, includesDelivery, includesInsurance),
   };
 
@@ -274,6 +284,107 @@ function vendorReply(
   ].filter(Boolean);
   const tail = extras.length ? ` (${extras.join(", ")})` : "";
   return `Best we can do is $${price}/day${tail}. Ready when you are! - ${vendor.name}`;
+}
+
+// ---------------------------------------------------------------------------
+// Offer Extraction Agent - reads vendor replies (text AND price-list images),
+// and never passes a price to the user unless it is certain the price matches
+// the exact requested vehicle. When unsure it produces a clarification message
+// for the vendor instead.
+// ---------------------------------------------------------------------------
+
+export interface ExtractedOffer {
+  found: boolean;
+  pricePerDay?: number;
+  currency?: string;
+  vehicleDescription?: string;
+  matchesSpec: boolean;
+  confidence: "high" | "medium" | "low";
+  clarifyMessage?: string;
+}
+
+export async function extractOffer(
+  rfq: StructuredRFQ,
+  text: string,
+  images: { mime: string; base64: string }[] = []
+): Promise<ExtractedOffer> {
+  const { chatVision } = await import("./ai");
+  const spec = `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
+    rfq.vehicleClass === "scooter"
+      ? "automatic scooter"
+      : rfq.vehicleClass === "motorbike"
+      ? "manual motorcycle"
+      : "car"
+  }${rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""}`;
+
+  const system =
+    "You extract rental price offers from a vendor's reply (text and/or a photo " +
+    "of a price list). The traveller asked for: " +
+    spec +
+    ". Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
+    '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
+    '"confidence": "high"|"medium"|"low", "clarifyMessage": string }. ' +
+    "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
+    "vehicle. If anything is unclear, set confidence low and write a short, " +
+    "polite clarifyMessage asking the vendor to confirm the exact vehicle and " +
+    "daily price.";
+
+  // Vision path (handles price-list photos) when Gemini is available.
+  if (images.length > 0) {
+    const out = await chatVision(system, text || "See attached price list.", images);
+    if (out) {
+      const parsed = extractJson<ExtractedOffer>(out);
+      if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
+    }
+    return {
+      found: false,
+      matchesSpec: false,
+      confidence: "low",
+      clarifyMessage: `Thanks for the photo! Could you confirm in text the daily price for the ${spec}? Just want to be sure we quote the right vehicle.`,
+    };
+  }
+
+  // Text path via any configured LLM.
+  const llm = await chat([
+    { role: "system", content: system },
+    { role: "user", content: text },
+  ]);
+  if (llm) {
+    const parsed = extractJson<ExtractedOffer>(llm);
+    if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
+  }
+
+  // Heuristic fallback: find a price, but never auto-verify it.
+  const m = text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i);
+  if (m) {
+    return {
+      found: true,
+      pricePerDay: parseFloat(m[1].replace(/,/g, "")),
+      currency: "USD",
+      matchesSpec: false,
+      confidence: "medium",
+      clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
+    };
+  }
+  return {
+    found: false,
+    matchesSpec: false,
+    confidence: "low",
+    clarifyMessage: `Could you share your best daily price for the ${spec}? Thank you!`,
+  };
+}
+
+function normalizeExtraction(e: ExtractedOffer, spec: string): ExtractedOffer {
+  const conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+  const verifiedEnough = e.found && e.matchesSpec && conf === "high";
+  return {
+    ...e,
+    confidence: conf,
+    clarifyMessage: verifiedEnough
+      ? undefined
+      : e.clarifyMessage ||
+        `Thanks! Could you confirm the exact daily price for the ${spec}?`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +478,7 @@ export async function writeFeedback(
 /** Final spec-verification message the agent sends before locking a booking. */
 export function verificationMessage(rfq: StructuredRFQ): string {
   const checks = [
-    `${rfq.vehicleClass}${rfq.engineSizeCc ? ` (${rfq.engineSizeCc}cc)` : ""}`,
+    `${vehicleTerm(rfq.vehicleClass)}${rfq.engineSizeCc ? ` (${rfq.engineSizeCc}cc)` : ""}`,
     rfq.transmission !== "any" ? rfq.transmission : null,
     rfq.maxMileageKm ? `under ${rfq.maxMileageKm.toLocaleString()} km` : null,
     ...rfq.accessories,

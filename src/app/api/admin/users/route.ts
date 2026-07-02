@@ -1,24 +1,44 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { requireManagement, setAdmin, adminEmails, isOwner } from "@/lib/session";
 import { listUsers, setUserStatus } from "@/lib/access";
 
+async function payload() {
+  const admins = await adminEmails();
+  return {
+    users: listUsers().map((u) => ({
+      ...u,
+      role: isOwner(u.email) ? "owner" : admins.includes(u.email) ? "admin" : "user",
+    })),
+    admins,
+  };
+}
+
 export async function GET() {
-  const session = getSession();
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  return NextResponse.json({ users: listUsers() });
+  const session = await requireManagement();
+  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  return NextResponse.json(await payload());
 }
 
 export async function POST(req: Request) {
-  const session = getSession();
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const session = await requireManagement();
+  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const { email, action, status } = await req.json().catch(() => ({}));
+  if (!email) return NextResponse.json({ error: "email required" }, { status: 400 });
+
+  if (action === "promote" || action === "demote") {
+    // Only management may manage management; the owner can never be demoted.
+    if (isOwner(String(email)) && action === "demote") {
+      return NextResponse.json({ error: "The owner cannot be demoted." }, { status: 400 });
+    }
+    await setAdmin(String(email), action === "promote");
+  } else if (status === "active" || status === "blocked") {
+    if (isOwner(String(email))) {
+      return NextResponse.json({ error: "The owner cannot be blocked." }, { status: 400 });
+    }
+    setUserStatus(String(email), status);
+  } else {
+    return NextResponse.json({ error: "Provide an action or status." }, { status: 400 });
   }
-  const { email, status } = await req.json().catch(() => ({}));
-  if (!email || !["active", "blocked"].includes(status)) {
-    return NextResponse.json({ error: "email and valid status required" }, { status: 400 });
-  }
-  setUserStatus(String(email), status);
-  return NextResponse.json({ users: listUsers() });
+  return NextResponse.json(await payload());
 }

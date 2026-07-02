@@ -3,6 +3,7 @@
 export type VehicleClass = "car" | "motorbike" | "scooter";
 export type Transmission = "automatic" | "manual" | "any";
 export type Fulfillment = "hotel-delivery" | "in-store" | "any";
+export type Role = "owner" | "admin" | "user";
 
 export interface StructuredRFQ {
   vehicleClass: VehicleClass;
@@ -37,6 +38,10 @@ export interface Offer {
   includesDelivery: boolean;
   message: string;
   round: number;
+  // True only after the agent has confirmed the exact vehicle + price with the
+  // vendor. Simulated (demo) offers are marked so the UI can label them.
+  verified: boolean;
+  simulated: boolean;
 }
 
 export interface Vendor {
@@ -48,14 +53,28 @@ export interface Vendor {
   reviews: number;
   vehicleClasses: VehicleClass[];
   fulfillment: Fulfillment[];
-  whatsapp: string; // E.164, opted-in partner vendor
-  basePricePerDay: number; // internal seed used by the negotiation simulator
+  whatsapp: string; // E.164, opted-in partner vendor ("" when unknown yet)
+  basePricePerDay: number; // internal seed used by the demo simulator only
   partner: boolean;
+  demo: boolean; // true = seeded demo vendor, false = real Google Places result
+  placeId?: string;
+  address?: string;
+  openNow?: boolean;
+  photoUrl?: string;
+  priceLevel?: number;
   distanceKm?: number;
   // live state (client-side)
   stage?: TrackerStage;
   offer?: Offer;
   sentiment?: number; // 0..1 from the Sentiment agent
+}
+
+export interface VendorReview {
+  author: string;
+  rating: number;
+  text: string;
+  timeAgo: string;
+  timestamp: number;
 }
 
 export interface NegotiationTactic {
@@ -79,6 +98,6 @@ export interface AnalyticsSnapshot {
 
 export interface Session {
   email: string;
-  isAdmin: boolean;
+  role: Role;
   issuedAt: number;
 }

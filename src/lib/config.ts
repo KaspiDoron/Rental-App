@@ -14,7 +14,7 @@ export interface KeyInfo {
   label: string;
   configured: boolean;
   masked: string;
-  scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth";
+  scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth" | "maps";
   editable: boolean;
 }
 
@@ -34,6 +34,8 @@ const KEYS: {
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token", scope: "messaging", editable: true },
   { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID", scope: "messaging", editable: true },
   { name: "WHATSAPP_VERIFY_TOKEN", label: "WhatsApp Webhook Verify Token", scope: "messaging", editable: true },
+  { name: "GOOGLE_MAPS_API_KEY", label: "Google Maps API Key", scope: "maps", editable: true },
+  { name: "GOOGLE_OAUTH_CLIENT_ID", label: "Google OAuth Client ID", scope: "auth", editable: true },
   { name: "RESEND_API_KEY", label: "Resend Email API Key", scope: "email", editable: true },
   { name: "FEEDBACK_FROM_EMAIL", label: "Feedback From Address", scope: "email", editable: true },
   { name: "STRIPE_SECRET_KEY", label: "Stripe Secret Key", scope: "billing", editable: true },

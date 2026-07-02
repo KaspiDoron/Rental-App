@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { Modal } from "./Modal";
 import { Icon } from "./icons";
 
 const CATEGORIES = [
@@ -115,146 +116,143 @@ export function FeedbackModal({
   const done = status.s === "accepted" || status.s === "filtered";
 
   return (
-    <div className="fixed inset-0 z-[1200] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
-      <div className="surface-strong max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl p-5 pb-safe sm:rounded-3xl animate-slide-up">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-savings/15">
-              <Icon name="chat" className="h-4 w-4 text-savings-bright" />
-            </div>
-            <h2 className="text-lg font-bold text-white">Send feedback</h2>
+    <Modal onClose={onClose}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-brandblue-soft">
+            <Icon name="chat" className="h-4 w-4 text-brandblue" />
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="Close">
-            ✕
+          <h2 className="text-lg font-extrabold text-strong">Send feedback</h2>
+        </div>
+        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+          ✕
+        </button>
+      </div>
+
+      {!done ? (
+        <>
+          <p className="mb-3 text-[12px] text-soft">
+            Found a bug or rough edge? Our assistant filters real issues through
+            to the team, so genuine reports never get lost in noise.
+          </p>
+
+          <div className="no-scrollbar mb-3 flex gap-2 overflow-x-auto">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setCategory(c.id)}
+                className={`chip whitespace-nowrap rounded-full border-2 px-3 py-1.5 text-[12px] font-bold ${
+                  category === c.id
+                    ? "border-brandblue bg-brandblue text-white"
+                    : "border-line bg-card text-soft"
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={4}
+            maxLength={4000}
+            placeholder="What happened? Steps to reproduce, what you expected..."
+            className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+          />
+
+          <div className="mt-2 flex items-center justify-between">
+            <button
+              onClick={assist}
+              disabled={assisting || !text.trim()}
+              className="btn btn-sm chip inline-flex items-center gap-1.5 rounded-xl border-2 border-brandred/30 bg-brandred-soft px-2.5 py-1.5 text-[12px] font-bold text-brandred disabled:opacity-50"
+            >
+              <Icon name="spark" className="h-3.5 w-3.5" />
+              {assisting ? "Writing..." : "Write it for me"}
+            </button>
+            <span className="text-[11px] text-faint">{text.length}/4000</span>
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-1.5 text-[12px] font-bold text-soft">
+              Screenshots ({images.length}/{MAX_IMAGES})
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {images.map((img, i) => (
+                <div key={i} className="relative h-16 w-16 overflow-hidden rounded-xl border-2 border-line">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={img.dataUrl} alt="" className="h-full w-full object-cover" />
+                  <button
+                    onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
+                    className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center bg-black/60 text-[11px] text-white"
+                    aria-label="Remove image"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {images.length < MAX_IMAGES && (
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="btn flex h-16 w-16 items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
+                  aria-label="Add screenshot"
+                >
+                  <Icon name="plus" className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => addFiles(e.target.files)}
+            />
+          </div>
+
+          {status.s === "error" && (
+            <p className="mt-2 text-[12px] font-semibold text-brandred">{status.msg}</p>
+          )}
+
+          <button
+            onClick={submit}
+            disabled={status.s === "sending" || text.trim().length < 3}
+            className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
+          >
+            {status.s === "sending" ? "Sending..." : "Submit feedback"}
+          </button>
+        </>
+      ) : (
+        <div className="py-6 text-center">
+          <div
+            className={`mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full ${
+              status.s === "accepted" ? "bg-savings-soft" : "bg-brandyellow-soft"
+            }`}
+          >
+            <Icon
+              name={status.s === "accepted" ? "check" : "shield"}
+              className={`h-8 w-8 ${
+                status.s === "accepted" ? "text-savings" : "text-brandyellow"
+              }`}
+            />
+          </div>
+          {status.s === "accepted" ? (
+            <>
+              <p className="text-sm font-extrabold text-strong">Thanks - this one is on us.</p>
+              <p className="mt-1 text-[13px] text-soft">
+                Verified as a real issue
+                {status.emailed ? " and emailed to the team." : " and logged for the team."}
+              </p>
+            </>
+          ) : (
+            <p className="text-[13px] text-soft">{status.reason}</p>
+          )}
+          <button onClick={onClose} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">
+            Done
           </button>
         </div>
-
-        {!done ? (
-          <>
-            <p className="mb-3 text-[12px] text-slate-400">
-              Found a bug or rough edge? Our assistant filters real issues through
-              to the team, so genuine reports never get lost in noise.
-            </p>
-
-            <div className="no-scrollbar mb-3 flex gap-2 overflow-x-auto">
-              {CATEGORIES.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setCategory(c.id)}
-                  className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition ${
-                    category === c.id
-                      ? "border-savings/50 bg-savings/15 text-savings-bright"
-                      : "border-slate-700/50 bg-ink/40 text-slate-300"
-                  }`}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={4}
-              maxLength={4000}
-              placeholder="What happened? Steps to reproduce, what you expected..."
-              className="w-full resize-none rounded-xl border border-slate-700/50 bg-ink/60 p-3 text-sm text-white placeholder:text-slate-600 focus:border-savings/50 focus:outline-none"
-            />
-
-            <div className="mt-2 flex items-center justify-between">
-              <button
-                onClick={assist}
-                disabled={assisting || !text.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/25 bg-violet-500/10 px-2.5 py-1.5 text-[12px] font-medium text-violet-200 disabled:opacity-50"
-              >
-                <Icon name="spark" className="h-3.5 w-3.5" />
-                {assisting ? "Writing..." : "Write it for me"}
-              </button>
-              <span className="text-[11px] text-slate-500">{text.length}/4000</span>
-            </div>
-
-            {/* Image attachments */}
-            <div className="mt-3">
-              <div className="mb-1.5 flex items-center justify-between text-[12px] text-slate-400">
-                <span>Screenshots ({images.length}/{MAX_IMAGES})</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {images.map((img, i) => (
-                  <div key={i} className="relative h-16 w-16 overflow-hidden rounded-lg border border-slate-700/50">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={img.dataUrl} alt="" className="h-full w-full object-cover" />
-                    <button
-                      onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
-                      className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center bg-black/60 text-[11px] text-white"
-                      aria-label="Remove image"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                {images.length < MAX_IMAGES && (
-                  <button
-                    onClick={() => fileRef.current?.click()}
-                    className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-slate-600/60 text-slate-400 hover:bg-slate-700/20"
-                    aria-label="Add screenshot"
-                  >
-                    <Icon name="plus" className="h-5 w-5" />
-                  </button>
-                )}
-              </div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(e) => addFiles(e.target.files)}
-              />
-            </div>
-
-            {status.s === "error" && (
-              <p className="mt-2 text-[12px] text-rose-300">{status.msg}</p>
-            )}
-
-            <button
-              onClick={submit}
-              disabled={status.s === "sending" || text.trim().length < 3}
-              className="btn-primary mt-4 w-full rounded-xl py-3 text-sm disabled:opacity-60"
-            >
-              {status.s === "sending" ? "Sending..." : "Submit feedback"}
-            </button>
-          </>
-        ) : (
-          <div className="py-6 text-center">
-            <div
-              className={`mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full ${
-                status.s === "accepted" ? "bg-savings/15" : "bg-amber-500/15"
-              }`}
-            >
-              <Icon
-                name={status.s === "accepted" ? "check" : "shield"}
-                className={`h-8 w-8 ${status.s === "accepted" ? "text-savings-bright" : "text-amber-300"}`}
-              />
-            </div>
-            {status.s === "accepted" ? (
-              <>
-                <p className="text-sm font-semibold text-white">Thanks - this one is on us.</p>
-                <p className="mt-1 text-[13px] text-slate-400">
-                  Verified as a real issue{status.emailed ? " and emailed to the team" : " and logged for the team"}.
-                </p>
-              </>
-            ) : (
-              <p className="text-[13px] text-slate-300">{status.reason}</p>
-            )}
-            <button
-              onClick={onClose}
-              className="mt-4 w-full rounded-xl bg-slate-100/95 py-2.5 text-sm font-semibold text-ink"
-            >
-              Done
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }

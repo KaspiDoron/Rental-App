@@ -140,6 +140,49 @@ export async function chat(messages: ChatMessage[]): Promise<string | null> {
   return null;
 }
 
+/**
+ * Vision chat: text + images (data URLs or raw base64+mime). Uses Gemini when
+ * available (best free-tier vision); returns null when no vision provider is
+ * configured so callers fall back to a low-confidence heuristic.
+ */
+export async function chatVision(
+  system: string,
+  userText: string,
+  images: { mime: string; base64: string }[]
+): Promise<string | null> {
+  const key = await getConfig("GEMINI_TOKEN");
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: userText },
+                ...images.map((img) => ({
+                  inline_data: { mime_type: img.mime, data: img.base64 },
+                })),
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+        }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Extract the first JSON object from an LLM response, tolerating code fences. */
 export function extractJson<T>(text: string): T | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);

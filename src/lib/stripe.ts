@@ -1,9 +1,9 @@
-// Stripe billing (management-only) via the REST API - no SDK dependency.
+// Stripe billing via the REST API - no SDK dependency.
 //
-// This is the initial scaffold: real Checkout Sessions are created when
-// STRIPE_SECRET_KEY is configured (env or admin Key Vault). Subscription
-// lifecycle / entitlements are stubbed for a later pass. Prices are defined
-// inline so no Stripe dashboard setup is needed to see Checkout working.
+// Plans bill every 3 MONTHS (quarterly) and carry a limited-time launch
+// discount of 80% off the list price. Real Checkout Sessions are created when
+// STRIPE_SECRET_KEY is configured (env or admin Key Vault); the full
+// subscription lifecycle lands in a later pass.
 
 import "server-only";
 import { getConfig } from "./runtime-config";
@@ -12,51 +12,69 @@ export interface Plan {
   id: string;
   name: string;
   blurb: string;
-  amount: number; // cents / month
+  listAmount: number; // cents per 3 months, before discount
+  amount: number; // cents per 3 months, launch price actually charged
+  discountPct: number;
   features: string[];
   highlight?: boolean;
 }
 
+const LAUNCH_DISCOUNT = 0.8; // 80% off, limited-time opening offer
+
+function plan(
+  id: string,
+  name: string,
+  blurb: string,
+  listAmount: number,
+  features: string[],
+  highlight?: boolean
+): Plan {
+  return {
+    id,
+    name,
+    blurb,
+    listAmount,
+    amount: Math.round(listAmount * (1 - LAUNCH_DISCOUNT)),
+    discountPct: LAUNCH_DISCOUNT * 100,
+    features,
+    highlight,
+  };
+}
+
 export const PLANS: Plan[] = [
-  {
-    id: "starter",
-    name: "Starter",
-    blurb: "For occasional trips",
-    amount: 0,
-    features: ["Live agent search", "Map + list", "Up to 10 vendors / run"],
-  },
-  {
-    id: "pro",
-    name: "Pro Traveller",
-    blurb: "Best for frequent travellers",
-    amount: 900,
-    features: [
-      "Unlimited vendors / run",
+  plan("starter", "Starter", "For occasional trips", 0, [
+    "Live agent search",
+    "Map + list",
+    "Up to 10 vendors per run",
+  ]),
+  plan(
+    "pro",
+    "Pro Traveller",
+    "Best for frequent travellers",
+    2700,
+    [
+      "100% ad-free experience",
+      "Unlimited vendors per run",
       "Priority negotiation agents",
       "Saved trips & alerts",
       "Advanced filters",
     ],
-    highlight: true,
-  },
-  {
-    id: "fleet",
-    name: "Fleet / Business",
-    blurb: "Teams & partners",
-    amount: 4900,
-    features: [
-      "Team seats",
-      "API access",
-      "Vendor CRM",
-      "Dedicated support",
-    ],
-  },
+    true
+  ),
+  plan("fleet", "Fleet / Business", "Teams & partners", 14700, [
+    "100% ad-free experience",
+    "Team seats",
+    "API access",
+    "Vendor CRM",
+    "Dedicated support",
+  ]),
 ];
 
 export async function stripeConfigured(): Promise<boolean> {
   return Boolean(await getConfig("STRIPE_SECRET_KEY"));
 }
 
-/** Create a Checkout Session for a subscription plan. */
+/** Create a quarterly-subscription Checkout Session at the launch price. */
 export async function createCheckoutSession(
   planId: string,
   origin: string
@@ -64,21 +82,21 @@ export async function createCheckoutSession(
   const key = await getConfig("STRIPE_SECRET_KEY");
   if (!key) return { configured: false, error: "Stripe is not configured yet." };
 
-  const plan = PLANS.find((p) => p.id === planId);
-  if (!plan || plan.amount === 0) {
+  const p = PLANS.find((x) => x.id === planId);
+  if (!p || p.amount === 0) {
     return { configured: true, error: "Choose a paid plan." };
   }
 
-  // Stripe expects application/x-www-form-urlencoded with bracketed keys.
   const form = new URLSearchParams({
     mode: "subscription",
     "line_items[0][quantity]": "1",
     "line_items[0][price_data][currency]": "usd",
     "line_items[0][price_data][recurring][interval]": "month",
-    "line_items[0][price_data][unit_amount]": String(plan.amount),
-    "line_items[0][price_data][product_data][name]": `WheelDeal ${plan.name}`,
-    success_url: `${origin}/admin?billing=success`,
-    cancel_url: `${origin}/admin?billing=cancelled`,
+    "line_items[0][price_data][recurring][interval_count]": "3",
+    "line_items[0][price_data][unit_amount]": String(p.amount),
+    "line_items[0][price_data][product_data][name]": `WheelDeal ${p.name} (launch offer, billed every 3 months)`,
+    success_url: `${origin}/?billing=success`,
+    cancel_url: `${origin}/?billing=cancelled`,
   });
 
   try {

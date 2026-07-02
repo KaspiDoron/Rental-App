@@ -7,7 +7,7 @@ import { sbInsert } from "@/lib/runtime-config";
 // Screen an outbound custom message through the safety agent, then dispatch it
 // via the official WhatsApp Cloud API (or return a compliant wa.me link).
 export async function POST(req: Request) {
-  const session = getSession();
+  const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Sign in to message vendors." }, { status: 401 });
   }

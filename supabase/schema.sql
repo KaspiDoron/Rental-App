@@ -32,12 +32,45 @@ create table if not exists public.whatsapp_messages (
 create index if not exists whatsapp_messages_received_idx
   on public.whatsapp_messages (received_at desc);
 
--- ---- App users (access control) ---------------------------------------------
+-- ---- App users (access control + signup details) -----------------------------
 create table if not exists public.app_users (
-  email      text primary key,
-  status     text not null default 'active' check (status in ('active','blocked')),
-  added_at   timestamptz not null default now(),
-  last_seen  timestamptz not null default now()
+  email             text primary key,
+  phone             text,
+  name              text,
+  provider          text default 'email',
+  status            text not null default 'active' check (status in ('active','blocked')),
+  terms_accepted_at timestamptz,
+  added_at          timestamptz not null default now(),
+  last_seen         timestamptz not null default now()
+);
+
+-- ---- Search history (agent memory) -------------------------------------------
+create table if not exists public.searches (
+  id            bigint generated always as identity primary key,
+  user_email    text,
+  query_text    text,
+  lat           double precision,
+  lng           double precision,
+  radius_km     numeric,
+  vehicle_class text,
+  source        text,
+  results       int,
+  created_at    timestamptz not null default now()
+);
+
+-- ---- Offers (real + simulated, flagged) ---------------------------------------
+create table if not exists public.offers (
+  id                 bigint generated always as identity primary key,
+  user_email         text,
+  vendor_id          text,
+  vendor_name        text,
+  price_per_day      numeric,
+  list_price_per_day numeric,
+  currency           text default 'USD',
+  round              int default 0,
+  simulated          boolean default true,
+  verified           boolean default false,
+  created_at         timestamptz not null default now()
 );
 
 -- ---- Agent learning memory (negotiation playbook) ---------------------------
@@ -72,6 +105,7 @@ create table if not exists public.bookings (
   id           bigint generated always as identity primary key,
   user_email   text,
   vendor_id    text,
+  vendor_name  text,
   price_per_day numeric,
   total_price  numeric,
   fulfillment  text,
@@ -113,5 +147,7 @@ alter table public.vendors          enable row level security;
 alter table public.bookings         enable row level security;
 alter table public.feedback         enable row level security;
 alter table public.billing_events   enable row level security;
+alter table public.searches         enable row level security;
+alter table public.offers           enable row level security;
 -- No policies are created on purpose: the anon/public key gets zero access;
 -- the server uses the service role key, which bypasses RLS.

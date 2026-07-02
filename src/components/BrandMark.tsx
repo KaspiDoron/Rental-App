@@ -1,13 +1,12 @@
-// The WheelDeal mark (half motorbike / half car) as an inline React SVG.
+// The WheelDeal mark (emoji-style half scooter / half car) as inline SVG.
+// Transparent background so it sits on any surface.
 
 export function BrandMark({
   size = 40,
   className = "",
-  rounded = 12,
 }: {
   size?: number;
   className?: string;
-  rounded?: number;
 }) {
   return (
     <svg
@@ -18,39 +17,44 @@ export function BrandMark({
       aria-label="WheelDeal"
       role="img"
     >
-      <defs>
-        <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#059669" />
-          <stop offset="0.55" stopColor="#10b981" />
-          <stop offset="1" stopColor="#22d3ee" />
-        </linearGradient>
-        <radialGradient id="bm-glow" cx="0.3" cy="0.2" r="0.9">
-          <stop offset="0" stopColor="#a3e635" stopOpacity="0.55" />
-          <stop offset="1" stopColor="#10b981" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <rect width="512" height="512" rx={rounded * (512 / size)} fill="url(#bm-g)" />
-      <rect width="512" height="512" rx={rounded * (512 / size)} fill="url(#bm-glow)" />
-      <g
-        fill="none"
-        stroke="#ffffff"
-        strokeWidth="20"
-        strokeLinecap="round"
+      <ellipse cx="258" cy="434" rx="196" ry="20" fill="#212837" opacity="0.1" />
+      <path
+        d="M256 214 L336 214 C346 190 368 174 396 174 C424 174 446 190 456 214 L462 214 C482 214 496 230 496 250 L496 342 C496 360 482 372 464 372 L256 372 Z"
+        fill="#2f6fed"
+      />
+      <path d="M256 322 L496 322 L496 342 C496 360 482 372 464 372 L256 372 Z" fill="#1d5cd6" />
+      <path d="M352 224 C360 204 376 192 396 192 C416 192 432 204 440 224 L444 252 L348 252 Z" fill="#dceaff" />
+      <path d="M352 224 C360 204 376 192 396 192 L396 252 L348 252 Z" fill="#ffffff" opacity="0.55" />
+      <rect x="404" y="272" width="40" height="12" rx="6" fill="#1d5cd6" />
+      <rect x="482" y="252" width="14" height="26" rx="7" fill="#ffb703" />
+      <path
+        d="M256 214 L214 214 C186 214 166 232 156 258 L136 316 L136 344 C136 360 148 372 164 372 L256 372 Z"
+        fill="#ef4444"
+      />
+      <path d="M256 322 L136 322 L136 344 C136 360 148 372 164 372 L256 372 Z" fill="#d13434" />
+      <path d="M196 236 L156 156 L136 156" fill="none" stroke="#ef4444" strokeWidth="26" strokeLinecap="round" />
+      <circle cx="128" cy="156" r="16" fill="#212837" />
+      <rect x="118" y="120" width="20" height="18" rx="9" fill="#212837" />
+      <circle cx="150" cy="262" r="18" fill="#ffb703" />
+      <circle cx="144" cy="256" r="7" fill="#fff3d1" />
+      <path
+        d="M262 196 L234 268 L258 268 L246 330 L286 250 L262 250 L278 196 Z"
+        fill="#ffb703"
+        stroke="#e79b00"
+        strokeWidth="4"
         strokeLinejoin="round"
-      >
-        <circle cx="120" cy="360" r="52" />
-        <circle cx="120" cy="360" r="10" fill="#ffffff" />
-        <path d="M120 360 L176 270 L250 270" />
-        <path d="M176 270 L150 210 L210 210" />
-        <path d="M250 270 C232 320 210 340 176 350" />
-        <path d="M250 270 L286 232" />
-        <line x1="256" y1="150" x2="256" y2="410" stroke="#a3e635" strokeWidth="8" opacity="0.5" />
-        <path d="M300 372 L308 320 C312 300 326 292 344 292 L438 292 C456 292 470 302 476 320 L486 360" />
-        <path d="M330 292 L352 250 L430 250 L452 292" />
-        <path d="M300 372 L486 372" />
-        <circle cx="356" cy="384" r="30" fill="#070b13" />
-        <circle cx="446" cy="384" r="30" fill="#070b13" />
+      />
+      <g>
+        <circle cx="150" cy="384" r="58" fill="#212837" />
+        <circle cx="150" cy="384" r="34" fill="#eef1f6" />
+        <circle cx="150" cy="384" r="12" fill="#ffb703" />
       </g>
+      <g>
+        <circle cx="392" cy="384" r="58" fill="#212837" />
+        <circle cx="392" cy="384" r="34" fill="#eef1f6" />
+        <circle cx="392" cy="384" r="12" fill="#2f6fed" />
+      </g>
+      <path d="M96 84 L104 104 L124 112 L104 120 L96 140 L88 120 L68 112 L88 104 Z" fill="#ffb703" />
     </svg>
   );
 }

@@ -62,6 +62,7 @@ export function seedVendors(origin: { lat: number; lng: number }): Vendor[] {
       whatsapp: `+100000000${(i + 10).toString().padStart(2, "0")}`,
       basePricePerDay: 14 + ((i * 7) % 46), // 14..59
       partner: true,
+      demo: true,
     } satisfies Vendor;
   });
 }

@@ -1,60 +1,63 @@
-// Central brand system: colours + the WheelDeal mark (half motorbike / half car).
-// Kept framework-agnostic (plain strings) so it can power React components,
-// static SVG files, and next/og raster generation from a single source.
+// Central brand system. Playful palette: blue / red / yellow on clean
+// white-gray. The mark is an emoji-style mashup: front half automatic scooter
+// (red), rear half car (blue), savings bolt on the seam. Transparent background.
 
 export const BRAND = {
   name: "WheelDeal",
   tagline: "Cheapest local rides, negotiated for you",
-  bg: "#070b13",
-  bgSoft: "#0b1220",
-  emerald: "#10b981",
-  mint: "#34d399",
-  teal: "#22d3ee",
-  lime: "#a3e635",
-  gold: "#f5c451",
-  ink: "#04070d",
+  bgLight: "#f4f6f9",
+  bgDark: "#17191d",
+  blue: "#2f6fed",
+  blueStrong: "#1d5cd6",
+  red: "#ef4444",
+  yellow: "#ffb703",
+  green: "#16a34a",
+  ink: "#212837",
 };
 
-/**
- * The mark artwork on a transparent background, viewBox 0 0 512 512.
- * Left half: motorbike silhouette. Right half: car silhouette. A soft divider
- * of light sits on the seam so the two halves read as one badge.
- */
+/** The mark artwork (transparent bg), viewBox 0 0 512 512. */
 export const MARK_ARTWORK = `
-<g fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
-  <!-- motorbike (left) -->
-  <circle cx="120" cy="360" r="52" />
-  <circle cx="120" cy="360" r="10" fill="#ffffff" />
-  <path d="M120 360 L176 270 L250 270" />
-  <path d="M176 270 L150 210 L210 210" />
-  <path d="M250 270 C232 320 210 340 176 350" />
-  <path d="M250 270 L286 232" />
-  <!-- seam glow -->
-  <line x1="256" y1="150" x2="256" y2="410" stroke="#a3e635" stroke-width="8" opacity="0.5" />
-  <!-- car (right) -->
-  <path d="M300 372 L308 320 C312 300 326 292 344 292 L438 292 C456 292 470 302 476 320 L486 360" />
-  <path d="M330 292 L352 250 L430 250 L452 292" />
-  <path d="M300 372 L486 372" />
-  <circle cx="356" cy="384" r="30" fill="#070b13" />
-  <circle cx="446" cy="384" r="30" fill="#070b13" />
-</g>`;
+  <ellipse cx="258" cy="434" rx="196" ry="20" fill="#212837" opacity="0.10"/>
+  <path d="M256 214 L336 214 C346 190 368 174 396 174 C424 174 446 190 456 214 L462 214 C482 214 496 230 496 250 L496 342 C496 360 482 372 464 372 L256 372 Z" fill="#2f6fed"/>
+  <path d="M256 322 L496 322 L496 342 C496 360 482 372 464 372 L256 372 Z" fill="#1d5cd6"/>
+  <path d="M352 224 C360 204 376 192 396 192 C416 192 432 204 440 224 L444 252 L348 252 Z" fill="#dceaff"/>
+  <path d="M352 224 C360 204 376 192 396 192 L396 252 L348 252 Z" fill="#ffffff" opacity="0.55"/>
+  <rect x="404" y="272" width="40" height="12" rx="6" fill="#1d5cd6"/>
+  <rect x="482" y="252" width="14" height="26" rx="7" fill="#ffb703"/>
+  <path d="M256 214 L214 214 C186 214 166 232 156 258 L136 316 L136 344 C136 360 148 372 164 372 L256 372 Z" fill="#ef4444"/>
+  <path d="M256 322 L136 322 L136 344 C136 360 148 372 164 372 L256 372 Z" fill="#d13434"/>
+  <path d="M196 236 L156 156 L136 156" fill="none" stroke="#ef4444" stroke-width="26" stroke-linecap="round"/>
+  <circle cx="128" cy="156" r="16" fill="#212837"/>
+  <rect x="118" y="120" width="20" height="18" rx="9" fill="#212837"/>
+  <circle cx="150" cy="262" r="18" fill="#ffb703"/>
+  <circle cx="144" cy="256" r="7" fill="#fff3d1"/>
+  <path d="M262 196 L234 268 L258 268 L246 330 L286 250 L262 250 L278 196 Z" fill="#ffb703" stroke="#e79b00" stroke-width="4" stroke-linejoin="round"/>
+  <g>
+    <circle cx="150" cy="384" r="58" fill="#212837"/>
+    <circle cx="150" cy="384" r="34" fill="#eef1f6"/>
+    <circle cx="150" cy="384" r="12" fill="#ffb703"/>
+    <rect x="146" y="352" width="8" height="24" rx="4" fill="#c3cad6"/>
+    <rect x="146" y="392" width="8" height="24" rx="4" fill="#c3cad6"/>
+    <rect x="118" y="380" width="24" height="8" rx="4" fill="#c3cad6"/>
+    <rect x="158" y="380" width="24" height="8" rx="4" fill="#c3cad6"/>
+  </g>
+  <g>
+    <circle cx="392" cy="384" r="58" fill="#212837"/>
+    <circle cx="392" cy="384" r="34" fill="#eef1f6"/>
+    <circle cx="392" cy="384" r="12" fill="#2f6fed"/>
+    <rect x="388" y="352" width="8" height="24" rx="4" fill="#c3cad6"/>
+    <rect x="388" y="392" width="8" height="24" rx="4" fill="#c3cad6"/>
+    <rect x="360" y="380" width="24" height="8" rx="4" fill="#c3cad6"/>
+    <rect x="400" y="380" width="24" height="8" rx="4" fill="#c3cad6"/>
+  </g>
+  <path d="M96 84 L104 104 L124 112 L104 120 L96 140 L88 120 L68 112 L88 104 Z" fill="#ffb703"/>
+  <path d="M420 92 L426 106 L440 112 L426 118 L420 132 L414 118 L400 112 L414 106 Z" fill="#ef4444" opacity="0.85"/>
+  <circle cx="352" cy="64" r="10" fill="#2f6fed" opacity="0.8"/>`;
 
-/** Full badge SVG string: rounded square, brand gradient, mark centred. */
-export function markSvg(size = 512): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="wd-g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#059669"/>
-      <stop offset="0.55" stop-color="#10b981"/>
-      <stop offset="1" stop-color="#22d3ee"/>
-    </linearGradient>
-    <radialGradient id="wd-glow" cx="0.3" cy="0.2" r="0.9">
-      <stop offset="0" stop-color="#a3e635" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="512" height="512" rx="116" fill="url(#wd-g)"/>
-  <rect width="512" height="512" rx="116" fill="url(#wd-glow)"/>
-  ${MARK_ARTWORK}
-</svg>`;
+/** Full SVG. `bg` paints a rounded backdrop (iOS icons need one); omit for transparent. */
+export function markSvg(size = 512, bg?: string): string {
+  const backdrop = bg
+    ? `<rect width="512" height="512" rx="116" fill="${bg}"/>`
+    : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 512 512">${backdrop}${MARK_ARTWORK}</svg>`;
 }

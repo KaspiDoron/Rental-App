@@ -1,10 +1,17 @@
-// Access-control store for the admin "User Entry Panel".
+// User registry / access control.
 //
-// Process-level singleton in demo mode; a Supabase `app_users` table in prod.
+// Signups are stored in-memory per instance and mirrored to Supabase
+// (app_users) when configured, so every registration is durably saved.
 
-interface UserRecord {
+import { sbInsert } from "./runtime-config";
+
+export interface UserRecord {
   email: string;
+  phone?: string;
+  name?: string;
+  provider: "email" | "google";
   status: "active" | "blocked";
+  termsAcceptedAt?: number;
   addedAt: number;
   lastSeen: number;
 }
@@ -21,20 +28,63 @@ function store() {
   return globalThis.__wheeldeal_users__;
 }
 
+export function getUser(email: string): UserRecord | undefined {
+  return store().get(email.toLowerCase());
+}
+
+export async function registerUser(u: {
+  email: string;
+  phone?: string;
+  name?: string;
+  provider: "email" | "google";
+  acceptedTerms: boolean;
+}): Promise<UserRecord> {
+  const key = u.email.toLowerCase();
+  const now = Date.now();
+  const existing = store().get(key);
+  const rec: UserRecord = existing
+    ? {
+        ...existing,
+        phone: u.phone || existing.phone,
+        name: u.name || existing.name,
+        lastSeen: now,
+      }
+    : {
+        email: key,
+        phone: u.phone,
+        name: u.name,
+        provider: u.provider,
+        status: "active",
+        termsAcceptedAt: u.acceptedTerms ? now : undefined,
+        addedAt: now,
+        lastSeen: now,
+      };
+  store().set(key, rec);
+
+  // Durable mirror (no-op without Supabase). Everything is saved.
+  await sbInsert(
+    "app_users",
+    [
+    {
+      email: rec.email,
+      phone: rec.phone ?? null,
+      name: rec.name ?? null,
+      provider: rec.provider,
+      status: rec.status,
+      terms_accepted_at: rec.termsAcceptedAt
+        ? new Date(rec.termsAcceptedAt).toISOString()
+        : null,
+      last_seen: new Date(now).toISOString(),
+    },
+    ],
+    "email"
+  );
+  return rec;
+}
+
 export function touchUser(email: string) {
-  const s = store();
-  const key = email.toLowerCase();
-  const existing = s.get(key);
-  if (existing) {
-    existing.lastSeen = Date.now();
-  } else {
-    s.set(key, {
-      email: key,
-      status: "active",
-      addedAt: Date.now(),
-      lastSeen: Date.now(),
-    });
-  }
+  const rec = store().get(email.toLowerCase());
+  if (rec) rec.lastSeen = Date.now();
 }
 
 export function isBlocked(email: string): boolean {
@@ -46,13 +96,13 @@ export function listUsers(): UserRecord[] {
 }
 
 export function setUserStatus(email: string, status: "active" | "blocked") {
-  const s = store();
   const key = email.toLowerCase();
-  const rec = s.get(key);
+  const rec = store().get(key);
   if (rec) rec.status = status;
   else
-    s.set(key, {
+    store().set(key, {
       email: key,
+      provider: "email",
       status,
       addedAt: Date.now(),
       lastSeen: Date.now(),
