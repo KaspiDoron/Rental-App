@@ -96,8 +96,12 @@ export interface AnalyticsSnapshot {
   tactics: NegotiationTactic[];
 }
 
+export type PlanId = "free" | "pro" | "business";
+
 export interface Session {
   email: string;
   role: Role;
+  // Owner and management are automatically Business, free of charge.
+  plan: PlanId;
   issuedAt: number;
 }

@@ -144,7 +144,7 @@ async function loadOverrides(): Promise<Record<string, string>> {
   const conn = supabase();
   if (!conn) return s.mem;
 
-  if (s.cache && s.cache.exp > Date.now()) return s.cache.data;
+  if (s.cache && s.cache.exp > Date.now()) return { ...s.cache.data, ...s.mem };
   try {
     const res = await fetch(
       `${conn.url}/rest/v1/app_config?select=key,value`,
@@ -164,9 +164,10 @@ async function loadOverrides(): Promise<Record<string, string>> {
       if (plain) data[row.key] = plain;
     }
     s.cache = { data, exp: Date.now() + CACHE_TTL_MS };
-    return data;
+    // In-memory overrides (e.g. saved while Supabase was unreachable) win.
+    return { ...data, ...s.mem };
   } catch {
-    return s.cache?.data ?? {};
+    return { ...(s.cache?.data ?? {}), ...s.mem };
   }
 }
 
@@ -176,8 +177,14 @@ export async function getConfig(name: string): Promise<string | undefined> {
   return overrides[name] ?? process.env[name];
 }
 
-/** Persist (or clear) a runtime override. */
-export async function setConfig(name: string, value: string): Promise<void> {
+/**
+ * Persist (or clear) a runtime override. Returns a clear error message when
+ * durable persistence fails, so the admin UI never fails silently.
+ */
+export async function setConfig(
+  name: string,
+  value: string
+): Promise<{ ok: boolean; persistent: boolean; error?: string }> {
   const s = state();
   const conn = supabase();
 
@@ -185,30 +192,56 @@ export async function setConfig(name: string, value: string): Promise<void> {
     if (value) s.mem[name] = value;
     else delete s.mem[name];
     s.cache = null;
-    return;
+    return {
+      ok: true,
+      persistent: false,
+      error:
+        "Saved for this session only: Supabase is not connected (set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Vercel), so the value will reset on the next deploy/restart.",
+    };
   }
 
-  if (value) {
-    await fetch(`${conn.url}/rest/v1/app_config`, {
-      method: "POST",
-      headers: {
-        apikey: conn.key,
-        Authorization: `Bearer ${conn.key}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      },
-      body: JSON.stringify([
-        { key: name, value: encrypt(value), updated_at: new Date().toISOString() },
-      ]),
-    });
-  } else {
-    await fetch(
-      `${conn.url}/rest/v1/app_config?key=eq.${encodeURIComponent(name)}`,
-      {
-        method: "DELETE",
-        headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
-      }
-    );
+  try {
+    let res: Response;
+    if (value) {
+      res = await fetch(`${conn.url}/rest/v1/app_config?on_conflict=key`, {
+        method: "POST",
+        headers: {
+          apikey: conn.key,
+          Authorization: `Bearer ${conn.key}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal,resolution=merge-duplicates",
+        },
+        body: JSON.stringify([
+          { key: name, value: encrypt(value), updated_at: new Date().toISOString() },
+        ]),
+      });
+    } else {
+      res = await fetch(
+        `${conn.url}/rest/v1/app_config?key=eq.${encodeURIComponent(name)}`,
+        {
+          method: "DELETE",
+          headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+        }
+      );
+    }
+    s.cache = null;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      const hint = /relation .*app_config.* does not exist|404/.test(detail + res.status)
+        ? "The app_config table is missing - run supabase/schema.sql in the Supabase SQL Editor."
+        : detail.slice(0, 180);
+      // Keep an in-memory copy so it at least works right now.
+      if (value) s.mem[name] = value;
+      return { ok: false, persistent: false, error: `Could not save to Supabase (${res.status}). ${hint}` };
+    }
+    return { ok: true, persistent: true };
+  } catch (e) {
+    if (value) s.mem[name] = value;
+    s.cache = null;
+    return {
+      ok: false,
+      persistent: false,
+      error: `Could not reach Supabase: ${e instanceof Error ? e.message : "network error"}`,
+    };
   }
-  s.cache = null;
 }

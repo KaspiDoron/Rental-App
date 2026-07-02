@@ -18,16 +18,15 @@ interface ProviderConfig {
   model: string;
 }
 
-async function providers(): Promise<ProviderConfig[]> {
-  const [groq, openrouter, cerebras, gemini, pref] = await Promise.all([
+async function allProviders(): Promise<ProviderConfig[]> {
+  const [groq, openrouter, cerebras, gemini] = await Promise.all([
     getConfig("GROQ_TOKEN"),
     getConfig("OPENROUTER_TOKEN"),
     getConfig("CEREBRAS_TOKEN"),
     getConfig("GEMINI_TOKEN"),
-    getConfig("AI_PROVIDER"),
   ]);
 
-  const all: ProviderConfig[] = [
+  return [
     {
       name: "groq",
       token: groq,
@@ -54,8 +53,12 @@ async function providers(): Promise<ProviderConfig[]> {
       model: "gemini-1.5-flash",
     },
   ];
+}
 
-  const preferred = (pref || "").toLowerCase();
+/** Configured providers, preferred one first (automatic failover order). */
+async function providers(): Promise<ProviderConfig[]> {
+  const all = await allProviders();
+  const preferred = ((await getConfig("AI_PROVIDER")) || "").toLowerCase();
   const withKeys = all.filter((p) => p.token);
   withKeys.sort((a, b) =>
     a.name === preferred ? -1 : b.name === preferred ? 1 : 0
@@ -68,10 +71,77 @@ export async function aiEnabled(): Promise<boolean> {
   return (await providers()).length > 0;
 }
 
+// ---- usage accounting (per provider, per instance + durable log) ------------
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wheeldeal_ai_usage__:
+    | Record<string, { requests: number; tokens: number; failures: number }>
+    | undefined;
+}
+
+function usageStore() {
+  if (!globalThis.__wheeldeal_ai_usage__) globalThis.__wheeldeal_ai_usage__ = {};
+  return globalThis.__wheeldeal_ai_usage__;
+}
+
+async function recordUsage(provider: string, tokens: number, failed = false) {
+  const s = usageStore();
+  if (!s[provider]) s[provider] = { requests: 0, tokens: 0, failures: 0 };
+  s[provider].requests += 1;
+  s[provider].tokens += tokens;
+  if (failed) s[provider].failures += 1;
+  const { sbInsert } = await import("./runtime-config");
+  sbInsert("ai_usage", [{ provider, tokens, failed }]).catch(() => {});
+}
+
+/** Live status of every AI provider: configured, our usage, remote quota. */
+export async function aiStatus() {
+  const list = await allProviders();
+  const preferred = ((await getConfig("AI_PROVIDER")) || "").toLowerCase();
+  const s = usageStore();
+
+  return Promise.all(
+    list.map(async (p) => {
+      let remaining: string | null = null;
+      // OpenRouter is the only free gateway exposing a clean quota endpoint.
+      if (p.name === "openrouter" && p.token) {
+        try {
+          const res = await fetch("https://openrouter.ai/api/v1/key", {
+            headers: { Authorization: `Bearer ${p.token}` },
+            cache: "no-store",
+          });
+          const d = await res.json();
+          if (res.ok && d?.data) {
+            const used = d.data.usage ?? 0;
+            const limit = d.data.limit;
+            remaining =
+              limit === null || limit === undefined
+                ? `$${Number(used).toFixed(4)} used (no hard limit)`
+                : `$${(limit - used).toFixed(2)} of $${limit} left`;
+          }
+        } catch {
+          /* leave unknown */
+        }
+      }
+      return {
+        name: p.name,
+        model: p.model,
+        configured: Boolean(p.token),
+        preferred: p.name === preferred,
+        requests: s[p.name]?.requests ?? 0,
+        tokensUsed: s[p.name]?.tokens ?? 0,
+        failures: s[p.name]?.failures ?? 0,
+        remaining, // null = the provider does not expose remaining quota
+      };
+    })
+  );
+}
+
 async function callOpenAICompatible(
   cfg: ProviderConfig,
   messages: ChatMessage[]
-): Promise<string> {
+): Promise<{ text: string; tokens: number }> {
   const res = await fetch(cfg.endpoint, {
     method: "POST",
     headers: {
@@ -87,13 +157,16 @@ async function callOpenAICompatible(
   });
   if (!res.ok) throw new Error(`${cfg.name} ${res.status}`);
   const data = await res.json();
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
+  return {
+    text: data.choices?.[0]?.message?.content?.trim() ?? "",
+    tokens: data.usage?.total_tokens ?? 0,
+  };
 }
 
 async function callGemini(
   cfg: ProviderConfig,
   messages: ChatMessage[]
-): Promise<string> {
+): Promise<{ text: string; tokens: number }> {
   const system = messages.find((m) => m.role === "system")?.content ?? "";
   const contents = messages
     .filter((m) => m.role !== "system")
@@ -113,9 +186,10 @@ async function callGemini(
   });
   if (!res.ok) throw new Error(`gemini ${res.status}`);
   const data = await res.json();
-  return (
-    data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? ""
-  );
+  return {
+    text: data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "",
+    tokens: data.usageMetadata?.totalTokenCount ?? 0,
+  };
 }
 
 /**
@@ -128,13 +202,15 @@ export async function chat(messages: ChatMessage[]): Promise<string | null> {
 
   for (const cfg of list) {
     try {
-      const text =
+      const { text, tokens } =
         cfg.name === "gemini"
           ? await callGemini(cfg, messages)
           : await callOpenAICompatible(cfg, messages);
+      await recordUsage(cfg.name, tokens);
       if (text) return text;
     } catch {
-      // try the next provider
+      // Automatic failover: log the failure and try the next provider.
+      await recordUsage(cfg.name, 0, true);
     }
   }
   return null;

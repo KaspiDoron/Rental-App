@@ -24,5 +24,36 @@ export async function POST(req: Request) {
     String(body.text ?? ""),
     images
   );
+
+  // Everything is saved: raw reply + extraction outcome feed agent memory.
+  const { sbInsert } = await import("@/lib/runtime-config");
+  await sbInsert("vendor_replies", [
+    {
+      user_email: session.email,
+      vendor_id: String(body.vendorId ?? ""),
+      vendor_name: String(body.vendorName ?? ""),
+      reply_text: String(body.text ?? "").slice(0, 4000),
+      image_count: images.length,
+      found: result.found,
+      price_per_day: result.pricePerDay ?? null,
+      matches_spec: result.matchesSpec,
+      confidence: result.confidence,
+    },
+  ]);
+  if (result.found && result.pricePerDay) {
+    await sbInsert("offers", [
+      {
+        user_email: session.email,
+        vendor_id: String(body.vendorId ?? ""),
+        vendor_name: String(body.vendorName ?? ""),
+        price_per_day: result.pricePerDay,
+        list_price_per_day: body.firstQuote ?? result.pricePerDay,
+        currency: result.currency ?? "USD",
+        round: Number(body.round ?? 0),
+        simulated: false,
+        verified: result.matchesSpec && result.confidence === "high",
+      },
+    ]);
+  }
   return NextResponse.json(result);
 }

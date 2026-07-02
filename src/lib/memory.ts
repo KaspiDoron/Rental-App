@@ -102,6 +102,40 @@ export function recordRun(offers: number, cycleSeconds: number) {
   s.cycleSecTotal += cycleSeconds;
 }
 
+// ---- Owner-taught training examples (real bargaining transcripts) ------------
+
+export interface TrainingExample {
+  id: number;
+  text: string;
+  note?: string;
+  addedAt: number;
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wheeldeal_training__: TrainingExample[] | undefined;
+}
+
+function trainingStore() {
+  if (!globalThis.__wheeldeal_training__) globalThis.__wheeldeal_training__ = [];
+  return globalThis.__wheeldeal_training__;
+}
+
+export function addTraining(text: string, note?: string): TrainingExample {
+  const ex: TrainingExample = {
+    id: Date.now(),
+    text: text.slice(0, 4000),
+    note,
+    addedAt: Date.now(),
+  };
+  trainingStore().push(ex);
+  return ex;
+}
+
+export function listTraining(): TrainingExample[] {
+  return [...trainingStore()].sort((a, b) => b.addedAt - a.addedAt);
+}
+
 export function analytics() {
   const s = store();
   const ranked = getTactics();

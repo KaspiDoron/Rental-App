@@ -1,15 +1,15 @@
 // Stripe billing via the REST API - no SDK dependency.
 //
-// Plans bill every 3 MONTHS (quarterly) and carry a limited-time launch
-// discount of 80% off the list price. Real Checkout Sessions are created when
-// STRIPE_SECRET_KEY is configured (env or admin Key Vault); the full
-// subscription lifecycle lands in a later pass.
+// Plans bill every 3 MONTHS (quarterly) with an 80% limited-time launch
+// discount. Owner and management hold the Business plan automatically, free.
 
 import "server-only";
 import { getConfig } from "./runtime-config";
 
+export type PlanId = "free" | "pro" | "business";
+
 export interface Plan {
-  id: string;
+  id: PlanId;
   name: string;
   blurb: string;
   listAmount: number; // cents per 3 months, before discount
@@ -19,10 +19,10 @@ export interface Plan {
   highlight?: boolean;
 }
 
-const LAUNCH_DISCOUNT = 0.8; // 80% off, limited-time opening offer
+const LAUNCH_DISCOUNT = 0.8;
 
 function plan(
-  id: string,
+  id: PlanId,
   name: string,
   blurb: string,
   listAmount: number,
@@ -42,10 +42,10 @@ function plan(
 }
 
 export const PLANS: Plan[] = [
-  plan("starter", "Starter", "For occasional trips", 0, [
+  plan("free", "Free", "Start saving today", 0, [
     "Live agent search",
     "Map + list",
-    "Up to 10 vendors per run",
+    "Same-day pickup scheduling only",
   ]),
   plan(
     "pro",
@@ -54,21 +54,27 @@ export const PLANS: Plan[] = [
     2700,
     [
       "100% ad-free experience",
-      "Unlimited vendors per run",
       "Priority negotiation agents",
-      "Saved trips & alerts",
-      "Advanced filters",
+      "Saved trips",
+      "Full order history",
+      "AI order-status assistant while searching",
+      "Schedule pickups for future days",
     ],
     true
   ),
-  plan("fleet", "Fleet / Business", "Teams & partners", 14700, [
-    "100% ad-free experience",
-    "Team seats",
-    "API access",
-    "Vendor CRM",
-    "Dedicated support",
+  plan("business", "Business", "Teams & heavy travellers", 14700, [
+    "Everything in Pro",
+    "Advanced AI negotiation strategies",
+    "Multi-city trip planning",
+    "Price-drop alerts",
+    "Expense-ready booking receipts",
+    "Team seats & priority support",
   ]),
 ];
+
+export function planById(id: string | undefined): Plan {
+  return PLANS.find((p) => p.id === id) ?? PLANS[0];
+}
 
 export async function stripeConfigured(): Promise<boolean> {
   return Boolean(await getConfig("STRIPE_SECRET_KEY"));
@@ -77,7 +83,8 @@ export async function stripeConfigured(): Promise<boolean> {
 /** Create a quarterly-subscription Checkout Session at the launch price. */
 export async function createCheckoutSession(
   planId: string,
-  origin: string
+  origin: string,
+  email?: string
 ): Promise<{ url?: string; error?: string; configured: boolean }> {
   const key = await getConfig("STRIPE_SECRET_KEY");
   if (!key) return { configured: false, error: "Stripe is not configured yet." };
@@ -95,8 +102,9 @@ export async function createCheckoutSession(
     "line_items[0][price_data][recurring][interval_count]": "3",
     "line_items[0][price_data][unit_amount]": String(p.amount),
     "line_items[0][price_data][product_data][name]": `WheelDeal ${p.name} (launch offer, billed every 3 months)`,
-    success_url: `${origin}/?billing=success`,
+    success_url: `${origin}/?billing=success&plan=${p.id}`,
     cancel_url: `${origin}/?billing=cancelled`,
+    ...(email ? { customer_email: email } : {}),
   });
 
   try {

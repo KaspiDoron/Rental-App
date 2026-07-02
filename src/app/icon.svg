@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<g transform="translate(-26,0)">
   <!-- WheelDeal mark: front half automatic scooter (red), rear half car (blue),
        emoji-style flat shading, transparent background -->
   <ellipse cx="258" cy="434" rx="196" ry="20" fill="#212837" opacity="0.10"/>
@@ -51,4 +52,5 @@
   <path d="M96 84 L104 104 L124 112 L104 120 L96 140 L88 120 L68 112 L88 104 Z" fill="#ffb703"/>
   <path d="M420 92 L426 106 L440 112 L426 118 L420 132 L414 118 L400 112 L414 106 Z" fill="#ef4444" opacity="0.85"/>
   <circle cx="352" cy="64" r="10" fill="#2f6fed" opacity="0.8"/>
+</g>
 </svg>

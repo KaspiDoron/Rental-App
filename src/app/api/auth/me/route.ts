@@ -13,6 +13,9 @@ export async function GET() {
           phone: profile.phone ?? null,
           name: profile.name ?? null,
           provider: profile.provider,
+          plan: session?.plan ?? profile.plan,
+          mustChangePassword: Boolean(profile.mustChangePassword),
+          hasPassword: Boolean(profile.passwordHash),
         }
       : null,
   });

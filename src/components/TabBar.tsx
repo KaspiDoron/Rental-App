@@ -2,11 +2,10 @@
 
 import { Icon } from "./icons";
 
-type Tab = "home" | "map" | "profile";
+type Tab = "home" | "map" | "profile" | "feedback";
 
-// Global bottom navigation. Primary destination is Search ("Looking for...");
-// feedback is a single small side action, never primary. The upgrade chip
-// floats just above the bar.
+// Global bottom navigation: a perfectly centred 4-slot grid. The primary
+// destination is "Looking for..."; Feedback lives as the last, quiet slot.
 export function TabBar({
   active,
   onSelect,
@@ -14,34 +13,18 @@ export function TabBar({
   onUpgrade,
   showUpgrade,
 }: {
-  active: Tab;
-  onSelect: (t: Tab) => void;
+  active: Exclude<Tab, "feedback">;
+  onSelect: (t: Exclude<Tab, "feedback">) => void;
   onFeedback: () => void;
   onUpgrade: () => void;
   showUpgrade: boolean;
 }) {
-  const item = (tab: Tab, icon: string, label: string, primary = false) => {
-    const on = active === tab;
-    return (
-      <button
-        onClick={() => onSelect(tab)}
-        className={`btn btn-sm flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 ${
-          on ? "text-brandblue" : "text-faint hover:text-soft"
-        }`}
-      >
-        <span
-          className={`flex items-center justify-center rounded-2xl transition ${
-            primary
-              ? `${on ? "bg-brandblue text-white" : "bg-brandblue-soft text-brandblue"} h-9 w-14`
-              : "h-9 w-9"
-          }`}
-        >
-          <Icon name={icon} className="h-[22px] w-[22px]" />
-        </span>
-        <span className={`text-[10px] font-bold ${on ? "text-brandblue" : ""}`}>{label}</span>
-      </button>
-    );
-  };
+  const items: { id: Tab; icon: string; label: string }[] = [
+    { id: "home", icon: "bolt", label: "Looking for..." },
+    { id: "map", icon: "map", label: "Map" },
+    { id: "profile", icon: "user", label: "Profile" },
+    { id: "feedback", icon: "chat", label: "Feedback" },
+  ];
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-50">
@@ -56,20 +39,39 @@ export function TabBar({
         </div>
       )}
       <nav className="tabbar pb-safe">
-        <div className="mx-auto flex max-w-md items-center gap-1 px-4 pt-1.5">
-          {item("home", "bolt", "Looking for...", true)}
-          {item("map", "map", "Map")}
-          {item("profile", "user", "Profile")}
-          <button
-            onClick={onFeedback}
-            aria-label="Send feedback"
-            className="btn btn-sm flex w-12 flex-col items-center gap-0.5 rounded-xl py-1.5 text-faint hover:text-soft"
-          >
-            <span className="flex h-9 w-9 items-center justify-center">
-              <Icon name="chat" className="h-[19px] w-[19px]" />
-            </span>
-            <span className="text-[9px] font-bold">Feedback</span>
-          </button>
+        <div className="mx-auto grid max-w-md grid-cols-4 px-2 pt-1.5">
+          {items.map((it) => {
+            const on = active === it.id;
+            const isFeedback = it.id === "feedback";
+            return (
+              <button
+                key={it.id}
+                onClick={() =>
+                  isFeedback ? onFeedback() : onSelect(it.id as Exclude<Tab, "feedback">)
+                }
+                className="btn btn-sm flex flex-col items-center justify-center gap-1 rounded-2xl py-1.5"
+              >
+                <span
+                  className={`flex h-8 w-14 items-center justify-center rounded-full transition-all duration-200 ${
+                    on
+                      ? "bg-brandblue text-white shadow-md"
+                      : isFeedback
+                      ? "text-faint"
+                      : "text-faint hover:bg-card2 hover:text-soft"
+                  }`}
+                >
+                  <Icon name={it.icon} className={isFeedback ? "h-[18px] w-[18px]" : "h-[20px] w-[20px]"} />
+                </span>
+                <span
+                  className={`max-w-full truncate text-[10px] font-extrabold ${
+                    on ? "text-brandblue" : "text-faint"
+                  }`}
+                >
+                  {it.label}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </nav>
     </div>

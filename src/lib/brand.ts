@@ -15,8 +15,9 @@ export const BRAND = {
   ink: "#212837",
 };
 
-/** The mark artwork (transparent bg), viewBox 0 0 512 512. */
+/** The mark artwork (transparent bg), viewBox 0 0 512 512, optically centred. */
 export const MARK_ARTWORK = `
+<g transform="translate(-26,0)">
   <ellipse cx="258" cy="434" rx="196" ry="20" fill="#212837" opacity="0.10"/>
   <path d="M256 214 L336 214 C346 190 368 174 396 174 C424 174 446 190 456 214 L462 214 C482 214 496 230 496 250 L496 342 C496 360 482 372 464 372 L256 372 Z" fill="#2f6fed"/>
   <path d="M256 322 L496 322 L496 342 C496 360 482 372 464 372 L256 372 Z" fill="#1d5cd6"/>
@@ -52,7 +53,8 @@ export const MARK_ARTWORK = `
   </g>
   <path d="M96 84 L104 104 L124 112 L104 120 L96 140 L88 120 L68 112 L88 104 Z" fill="#ffb703"/>
   <path d="M420 92 L426 106 L440 112 L426 118 L420 132 L414 118 L400 112 L414 106 Z" fill="#ef4444" opacity="0.85"/>
-  <circle cx="352" cy="64" r="10" fill="#2f6fed" opacity="0.8"/>`;
+  <circle cx="352" cy="64" r="10" fill="#2f6fed" opacity="0.8"/>
+</g>`;
 
 /** Full SVG. `bg` paints a rounded backdrop (iOS icons need one); omit for transparent. */
 export function markSvg(size = 512, bg?: string): string {

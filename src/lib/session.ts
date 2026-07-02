@@ -111,11 +111,16 @@ function decode(token: string | undefined): { email: string; issuedAt: number } 
   }
 }
 
-/** Current session with a freshly-derived role, or null. */
+/** Current session with a freshly-derived role and plan, or null. */
 export async function getSession(): Promise<Session | null> {
   const raw = decode(cookies().get(COOKIE)?.value);
   if (!raw?.email) return null;
-  return { email: raw.email, issuedAt: raw.issuedAt, role: await roleFor(raw.email) };
+  const role = await roleFor(raw.email);
+  // Management holds the Business plan automatically, free of charge.
+  const { getUser } = await import("./access");
+  const plan =
+    role !== "user" ? "business" : getUser(raw.email)?.plan ?? "free";
+  return { email: raw.email, issuedAt: raw.issuedAt, role, plan };
 }
 
 /** True for owner or admin. */

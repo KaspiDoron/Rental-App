@@ -48,6 +48,7 @@ export async function POST(req: Request) {
   }
 
   const existing = getUser(email);
+  const isNew = !existing;
   if (!existing && !isOwner(email)) {
     if (!phone || !PHONE_RX.test(phone) || !acceptTerms) {
       // Client should collect phone + terms, then re-post with the credential.
@@ -62,5 +63,9 @@ export async function POST(req: Request) {
 
   setSessionCookie(email);
   const session = await getSession();
-  return NextResponse.json({ ok: true, session });
+  const { sbInsert } = await import("@/lib/runtime-config");
+  await sbInsert("auth_events", [
+    { email, event: isNew ? "signup" : "login", provider: "google" },
+  ]);
+  return NextResponse.json({ ok: true, session, isNew });
 }

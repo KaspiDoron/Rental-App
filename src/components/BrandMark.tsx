@@ -17,6 +17,7 @@ export function BrandMark({
       aria-label="WheelDeal"
       role="img"
     >
+      <g transform="translate(-26,0)">
       <ellipse cx="258" cy="434" rx="196" ry="20" fill="#212837" opacity="0.1" />
       <path
         d="M256 214 L336 214 C346 190 368 174 396 174 C424 174 446 190 456 214 L462 214 C482 214 496 230 496 250 L496 342 C496 360 482 372 464 372 L256 372 Z"
@@ -55,6 +56,7 @@ export function BrandMark({
         <circle cx="392" cy="384" r="12" fill="#2f6fed" />
       </g>
       <path d="M96 84 L104 104 L124 112 L104 120 L96 140 L88 120 L68 112 L88 104 Z" fill="#ffb703" />
+      </g>
     </svg>
   );
 }

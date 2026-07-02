@@ -26,6 +26,10 @@ export default function ProfilePage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [prefs, setPrefs] = useState({ currency: "USD", homeCity: "", ride: "scooter" });
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNext, setPwNext] = useState("");
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [mustChangePw, setMustChangePw] = useState(false);
 
   // Owner assistant chat
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -43,6 +47,8 @@ export default function ProfilePage() {
         }
         setSession(d.session);
         setProfile(d.profile);
+        const urlPw = new URLSearchParams(window.location.search).get("pw") === "1";
+        if (d.profile?.mustChangePassword || urlPw) setMustChangePw(true);
       })
       .catch(() => {});
     fetch("/api/bookings")
@@ -141,7 +147,11 @@ export default function ProfilePage() {
                   : "bg-savings-soft text-savings"
               }`}
             >
-              {isOwner ? "OWNER" : isMgmt ? "ADMIN" : "TRAVELLER"}
+              {isOwner
+                ? "OWNER"
+                : isMgmt
+                ? "ADMIN · BUSINESS"
+                : (session?.plan ?? "free").toUpperCase()}
             </span>
           </div>
         </section>
@@ -223,6 +233,71 @@ export default function ProfilePage() {
             <Icon name="chevron" className="h-4 w-4 text-faint" />
           </a>
         )}
+
+        {/* Password */}
+        <section
+          className={`surface rounded-blob p-4 ${
+            mustChangePw ? "border-2 !border-brandred" : ""
+          }`}
+        >
+          <div className="mb-2 text-[13px] font-extrabold text-strong">
+            {mustChangePw ? "⚠️ Change your temporary password now" : "Change password"}
+          </div>
+          {mustChangePw && (
+            <p className="mb-2 rounded-2xl bg-brandred-soft p-2.5 text-[12px] font-bold text-brandred">
+              You logged in with a temporary password. Set a new one before
+              doing anything else.
+            </p>
+          )}
+          {!mustChangePw && (
+            <input
+              type="password"
+              value={pwCurrent}
+              onChange={(e) => setPwCurrent(e.target.value)}
+              placeholder="Current password"
+              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+            />
+          )}
+          <input
+            type="password"
+            value={pwNext}
+            onChange={(e) => setPwNext(e.target.value)}
+            placeholder="New password (6+ characters)"
+            className="w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+          />
+          {pwMsg && (
+            <p
+              className={`mt-2 text-[12px] font-bold ${
+                pwMsg.ok ? "text-savings" : "text-brandred"
+              }`}
+            >
+              {pwMsg.text}
+            </p>
+          )}
+          <button
+            onClick={async () => {
+              setPwMsg(null);
+              const res = await fetch("/api/auth/password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ current: pwCurrent, next: pwNext }),
+              });
+              const d = await res.json();
+              if (res.ok) {
+                setPwMsg({ ok: true, text: "Password updated ✓" });
+                setPwCurrent("");
+                setPwNext("");
+                setMustChangePw(false);
+              } else {
+                setPwMsg({ ok: false, text: d.error ?? "Could not update." });
+              }
+            }}
+            disabled={pwNext.length < 6}
+            className="btn btn-primary mt-2 w-full rounded-2xl py-2.5 text-sm disabled:opacity-60"
+          >
+            Update password
+          </button>
+        </section>
 
         {/* Appearance */}
         <section className="surface rounded-blob p-4">

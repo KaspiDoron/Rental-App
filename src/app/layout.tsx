@@ -38,6 +38,18 @@ export const metadata: Metadata = {
   },
   twitter: { card: "summary_large_image", title, description },
   robots: { index: true, follow: true },
+  alternates: { canonical: "/" },
+  category: "travel",
+  generator: "WheelDeal",
+  referrer: "origin-when-cross-origin",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/apple-icon", sizes: "180x180", type: "image/png" }],
+  },
+  other: {
+    "msapplication-TileColor": "#2f6fed",
+    "apple-mobile-web-app-title": "WheelDeal",
+  },
 };
 
 export const viewport: Viewport = {

@@ -3,7 +3,7 @@
 import { useCallbackRef } from "@/components/useCallbackRef";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Vendor, StructuredRFQ, Session, TrackerStage } from "@/lib/types";
+import type { Vendor, StructuredRFQ, Session, TrackerStage, Offer } from "@/lib/types";
 import { vehicleLabel } from "@/lib/labels";
 import { Icon } from "@/components/icons";
 import { Filters, DEFAULT_FILTERS, type FilterState } from "@/components/Filters";
@@ -16,11 +16,18 @@ import { BrandMark } from "@/components/BrandMark";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
+import { PasteReplyModal } from "@/components/PasteReplyModal";
+import { BargainDraftModal } from "@/components/BargainDraftModal";
+import { Onboarding } from "@/components/Onboarding";
+import { AdBanner } from "@/components/AdBanner";
+import { LoadingDots } from "@/components/LoadingDots";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center text-faint">Loading map...</div>
+    <div className="flex h-full items-center justify-center">
+      <LoadingDots label="Loading map" />
+    </div>
   ),
 });
 
@@ -51,45 +58,79 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
   const [reviewsVendor, setReviewsVendor] = useState<Vendor | null>(null);
+  const [replyVendor, setReplyVendor] = useState<Vendor | null>(null);
+  const [bargainVendor, setBargainVendor] = useState<Vendor | null>(null);
   const [aiOn, setAiOn] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d.session) window.location.href = "/login";
-        else setSession(d.session);
-      })
-      .catch(() => {});
+    // Middleware already gates unauthenticated visitors; here we just load the
+    // session (with one retry - never cached).
+    const loadMe = async (attempt = 0) => {
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        const d = await r.json();
+        if (d.session) setSession(d.session);
+        else if (attempt < 2) setTimeout(() => loadMe(attempt + 1), 700);
+        else window.location.href = "/login";
+      } catch {
+        if (attempt < 2) setTimeout(() => loadMe(attempt + 1), 700);
+      }
+    };
+    loadMe();
+
+    const params = new URLSearchParams(window.location.search);
+    // First-run walkthrough (or explicitly requested with ?welcome=1).
+    try {
+      if (params.get("welcome") === "1" || !localStorage.getItem("wd_onboarded")) {
+        setOnboarding(true);
+      }
+    } catch {}
+    // Returning from Stripe Checkout.
+    const plan = params.get("plan");
+    if (params.get("billing") === "success" && plan) {
+      fetch("/api/billing/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      }).then(() => window.history.replaceState({}, "", "/"));
+    }
+
     return () => timers.current.forEach(clearTimeout);
   }, []);
+
+  // Default the search to the phone's location once signed in (covered by the
+  // Terms of Use the user accepted at signup).
+  useEffect(() => {
+    if (!session) return;
+    navigator.geolocation?.getCurrentPosition(
+      (pos) =>
+        setOrigin({
+          label: "My current location",
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        }),
+      () => {}
+    );
+  }, [session]);
 
   const patchVendor = useCallbackRef((id: string, patch: Partial<Vendor>) => {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   });
 
-  async function fetchOffer(vendor: Vendor, round: number, activeRfq: StructuredRFQ) {
+  async function fetchEstimate(vendor: Vendor, activeRfq: StructuredRFQ) {
     const res = await fetch("/api/negotiate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vendor, rfq: activeRfq, round }),
+      body: JSON.stringify({ vendor, rfq: activeRfq, round: 0 }),
     });
     if (!res.ok) return;
     const data = await res.json();
     if (data.marketRate) setMarketRate(data.marketRate);
-    if (data.pending) {
-      // Real vendor: no invented price - we wait for the actual reply.
-      patchVendor(vendor.id, { stage: "awaiting-response", sentiment: data.sentiment });
-      return;
-    }
-    patchVendor(vendor.id, {
-      stage: "offer-received",
-      offer: data.offer,
-      sentiment: data.sentiment,
-    });
+    patchVendor(vendor.id, { stage: "awaiting-response", sentiment: data.sentiment });
   }
 
   function runFunnel(list: Vendor[], activeRfq: StructuredRFQ) {
@@ -99,31 +140,15 @@ export default function Home() {
       timers.current.push(setTimeout(fn, ms));
 
     list.forEach((vendor, i) => {
-      const base = i * 220;
+      const base = i * 200;
       const stages: [TrackerStage, number][] = [
         ["locating-contact", base + 300],
         ["rfq-sent", base + 800],
-        ["awaiting-response", base + 1300],
       ];
       stages.forEach(([stage, ms]) => schedule(() => patchVendor(vendor.id, { stage }), ms));
-
-      if (!vendor.demo) {
-        // Real vendors: fetch the market ESTIMATE only; real offers come from
-        // actual replies once the RFQ is sent on WhatsApp.
-        schedule(() => fetchOffer({ ...vendor }, 0, activeRfq), base + 1500);
-        return;
-      }
-
-      const silent = vendor.rating < 3.8 && i % 3 === 0;
-      if (silent) {
-        schedule(() => patchVendor(vendor.id, { stage: "no-response" }), base + 2600);
-        return;
-      }
-      schedule(() => patchVendor(vendor.id, { stage: "negotiating" }), base + 1900);
-      schedule(() => fetchOffer({ ...vendor }, 0, activeRfq), base + 2700);
+      schedule(() => fetchEstimate({ ...vendor }, activeRfq), base + 1300);
     });
-
-    schedule(() => setPhase("done"), list.length * 220 + 3200);
+    schedule(() => setPhase("done"), list.length * 200 + 1800);
   }
 
   async function startSearch() {
@@ -147,8 +172,7 @@ export default function Home() {
     }
     setRfq(pData.rfq);
     setAiOn(Boolean(pData.aiEnabled));
-    // The filter follows the request: searching for a motorcycle never shows
-    // car chips as the active filter.
+    // The active filter always follows the requested vehicle class.
     setFilters({ ...DEFAULT_FILTERS, vehicleClass: pData.rfq.vehicleClass });
 
     const vRes = await fetch("/api/vendors", {
@@ -172,26 +196,8 @@ export default function Home() {
     runFunnel(list, pData.rfq);
   }
 
-  async function bargain(vendorId: string) {
-    const vendor = vendors.find((v) => v.id === vendorId);
-    if (!vendor || !vendor.offer) return;
-    patchVendor(vendorId, { stage: "negotiating" });
-    const nextRound = vendor.offer.round + 1;
-    const res = await fetch("/api/negotiate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vendor, rfq, round: nextRound }),
-    });
-    const data = await res.json();
-    setTimeout(() => {
-      if (data.offer) {
-        patchVendor(vendorId, {
-          stage: "offer-received",
-          offer: data.offer,
-          sentiment: data.sentiment,
-        });
-      }
-    }, 650);
+  function applyOffer(vendorId: string, offer: Offer) {
+    patchVendor(vendorId, { stage: "offer-received", offer });
   }
 
   async function customMessage(vendorId: string, message: string) {
@@ -242,9 +248,10 @@ export default function Home() {
     [vendors]
   );
 
+  const paidPlan = session ? session.plan !== "free" : false;
+
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-36 sm:max-w-lg">
-      {/* Section top bar */}
       <div className="topbar">
         <div className="flex items-center justify-between px-4 pb-2.5">
           <div className="flex items-center gap-2">
@@ -258,18 +265,26 @@ export default function Home() {
               </p>
             </div>
           </div>
-          <span
-            className={`rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
-              aiOn ? "bg-savings-soft text-savings" : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
-            }`}
-          >
-            {aiOn ? "AI online" : "Demo AI"}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {session && session.plan !== "free" && (
+              <span className="rounded-full bg-brandblue px-2 py-1 text-[10px] font-extrabold uppercase text-white">
+                {session.plan}
+              </span>
+            )}
+            <span
+              className={`rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
+                aiOn
+                  ? "bg-savings-soft text-savings"
+                  : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+              }`}
+            >
+              {aiOn ? "AI online" : "Demo AI"}
+            </span>
+          </div>
         </div>
       </div>
 
       <div className="px-4">
-        {/* Search panel */}
         <section className="surface mt-4 rounded-blob p-4">
           <label className="text-[12px] font-extrabold text-soft">Looking for...</label>
           <textarea
@@ -310,38 +325,49 @@ export default function Home() {
           <button
             onClick={startSearch}
             disabled={phase === "profiling" || phase === "running"}
-            className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-60"
+            className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
             {phase === "profiling" ? (
-              "Structuring your request..."
+              <LoadingDots light label="Structuring your request" />
             ) : phase === "running" ? (
-              "Agents working..."
+              <LoadingDots light label="Agents contacting shops" />
             ) : (
               <>
                 <Icon name="bolt" className="h-5 w-5" /> Find my deal
               </>
             )}
           </button>
+          {session?.plan === "free" && (
+            <p className="mt-2 text-center text-[11px] font-bold text-faint">
+              Free plan: pickups can be scheduled for today only.{" "}
+              <button onClick={() => setUpgradeOpen(true)} className="text-brandblue underline">
+                Upgrade
+              </button>
+            </p>
+          )}
         </section>
 
-        {/* Data source banner */}
         {source === "demo" && (
           <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow animate-slide-up">
-            You&apos;re seeing demo vendors. Add a Google Maps key (Admin → Keys) to
-            search real rental places, prices and reviews.
+            Demo vendor list. Add a Google Maps key (Admin → Keys) to search real
+            rental shops. Prices are never invented either way - shops must reply.
           </div>
         )}
         {source === "google" && (
           <div className="mt-3 rounded-2xl bg-savings-soft p-3 text-[12px] font-bold text-savings animate-slide-up">
-            ✓ Real rental places near your stay, live from Google Maps.
+            ✓ Real rental shops near your stay, live from Google Maps.
           </div>
         )}
 
-        {/* RFQ summary */}
         {rfq && (
           <div className="surface mt-3 rounded-blob p-3 text-[12px] animate-slide-up">
             <div className="mb-1 flex items-center gap-1.5 font-extrabold text-brandblue">
               <Icon name="spark" className="h-3.5 w-3.5" /> Structured request
+              {session && session.plan !== "free" && phase === "running" && (
+                <span className="ml-auto font-bold text-faint">
+                  <LoadingDots label="Order status: contacting shops" />
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap gap-1.5">
               <Tag>{vehicleLabel(rfq.vehicleClass)}</Tag>
@@ -356,14 +382,13 @@ export default function Home() {
           </div>
         )}
 
-        {/* Live stats */}
         {vendors.length > 0 && (
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <Stat label="Places found" value={vendors.length} />
+            <Stat label="Shops found" value={vendors.length} />
             <Stat label="Offers in" value={offersIn} accent />
             <div className="surface rounded-blob p-3 text-center">
               <div className="text-[10px] font-extrabold uppercase tracking-wide text-savings">
-                Savings
+                Bargained
               </div>
               <div className="text-lg font-extrabold text-savings">
                 $<AnimatedNumber value={Math.round(totalSavings)} />
@@ -372,11 +397,10 @@ export default function Home() {
           </div>
         )}
 
-        {/* Best-deal banner */}
         {cheapest?.offer && (
           <div className="mt-3 flex items-center justify-between rounded-blob border-2 border-savings bg-savings-soft p-3 animate-slide-up">
             <div className="text-[12px]">
-              <div className="font-bold text-soft">Cheapest right now</div>
+              <div className="font-bold text-soft">Cheapest confirmed price</div>
               <div className="font-extrabold text-strong">{cheapest.name}</div>
             </div>
             <div className="text-right">
@@ -394,7 +418,8 @@ export default function Home() {
           </div>
         )}
 
-        {/* View toggle + filters */}
+        <AdBanner plan={session?.plan} />
+
         {vendors.length > 0 && (
           <>
             <div className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1">
@@ -406,16 +431,11 @@ export default function Home() {
               </ToggleBtn>
             </div>
             <div className="mt-3">
-              <Filters
-                filters={filters}
-                onChange={setFilters}
-                availableClasses={availableClasses}
-              />
+              <Filters filters={filters} onChange={setFilters} availableClasses={availableClasses} />
             </div>
           </>
         )}
 
-        {/* Results */}
         {view === "map" && vendors.length > 0 ? (
           <div className="relative z-0 mt-3 h-[58vh] overflow-hidden rounded-blob border-2 border-line">
             <MapView
@@ -424,6 +444,10 @@ export default function Home() {
               vendors={filtered}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              onOpenVendor={(v) => {
+                setView("list");
+                setSelectedId(v.id);
+              }}
             />
           </div>
         ) : (
@@ -434,15 +458,17 @@ export default function Home() {
                 vendor={v}
                 rfq={rfq}
                 marketRate={marketRate}
-                onBargain={bargain}
+                plan={session?.plan}
                 onBook={setBookingVendor}
-                onCustomMessage={customMessage}
                 onReviews={setReviewsVendor}
+                onReply={setReplyVendor}
+                onBargain={setBargainVendor}
+                onCustomMessage={customMessage}
               />
             ))}
             {phase === "running" && filtered.length < vendors.length && (
-              <div className="surface rounded-blob p-4 text-center text-[12px] font-bold text-faint">
-                More agents reporting in...
+              <div className="surface flex justify-center rounded-blob p-4">
+                <LoadingDots label="More agents reporting in" />
               </div>
             )}
           </div>
@@ -450,28 +476,55 @@ export default function Home() {
 
         {vendors.length === 0 && phase === "idle" && (
           <div className="mt-10 text-center">
-            <div className="mx-auto mb-3 w-fit opacity-90">
+            <div className="mx-auto mb-3 w-fit opacity-90 animate-slide-up">
               <BrandMark size={72} />
             </div>
             <p className="mx-auto max-w-[280px] text-sm text-soft">
               Tell us what you want to ride and where you&apos;re staying - the
-              agents will find every rental place around you and chase the best
-              price.
+              agents will find every rental shop around you and help you chase
+              the best price.
             </p>
           </div>
         )}
       </div>
 
       {bookingVendor && (
-        <BookingSheet vendor={bookingVendor} rfq={rfq} onClose={() => setBookingVendor(null)} />
+        <BookingSheet
+          vendor={bookingVendor}
+          rfq={rfq}
+          plan={session?.plan}
+          onClose={() => setBookingVendor(null)}
+        />
       )}
-      {reviewsVendor && (
-        <ReviewsSheet vendor={reviewsVendor} onClose={() => setReviewsVendor(null)} />
+      {reviewsVendor && <ReviewsSheet vendor={reviewsVendor} onClose={() => setReviewsVendor(null)} />}
+      {replyVendor && rfq && (
+        <PasteReplyModal
+          vendor={replyVendor}
+          rfq={rfq}
+          round={replyVendor.offer ? replyVendor.offer.round + 1 : 0}
+          firstQuote={replyVendor.offer?.listPricePerDay}
+          onOffer={(offer) => applyOffer(replyVendor.id, offer)}
+          onClose={() => setReplyVendor(null)}
+        />
       )}
-      {feedbackOpen && (
-        <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />
+      {bargainVendor && rfq && (
+        <BargainDraftModal
+          vendor={bargainVendor}
+          rfq={rfq}
+          region={origin.label}
+          round={bargainVendor.offer ? bargainVendor.offer.round + 1 : 0}
+          currentPricePerDay={bargainVendor.offer?.pricePerDay}
+          rivalPricePerDay={
+            cheapest && cheapest.id !== bargainVendor.id
+              ? cheapest.offer?.pricePerDay
+              : undefined
+          }
+          onClose={() => setBargainVendor(null)}
+        />
       )}
+      {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
+      {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
 
       <TabBar
         active={view === "map" ? "map" : "home"}
@@ -485,7 +538,7 @@ export default function Home() {
         }}
         onFeedback={() => setFeedbackOpen(true)}
         onUpgrade={() => setUpgradeOpen(true)}
-        showUpgrade={!upgradeOpen}
+        showUpgrade={!upgradeOpen && !paidPlan && !onboarding}
       />
     </main>
   );

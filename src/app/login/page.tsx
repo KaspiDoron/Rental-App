@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { TermsModal } from "@/components/TermsModal";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
+import { CountryPhoneInput } from "@/components/CountryPhoneInput";
+import { LoadingDots } from "@/components/LoadingDots";
 import { Icon } from "@/components/icons";
 
 declare global {
@@ -12,22 +14,25 @@ declare global {
   }
 }
 
+type Mode = "login" | "signup";
+
 export default function LoginPage() {
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [acceptTerms, setAcceptTerms] = useState(false);
-  const [needsSignup, setNeedsSignup] = useState(false);
   const [googleCredential, setGoogleCredential] = useState<string | null>(null);
   const [googleName, setGoogleName] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [showTerms, setShowTerms] = useState(false);
   const [step, setStep] = useState<"auth" | "plans">("auth");
   const [plans, setPlans] = useState<PlanView[]>([]);
   const googleDiv = useRef<HTMLDivElement>(null);
 
-  // Google OAuth (Google Identity Services) - renders only when a client id
-  // is configured in the Key Vault / env.
+  // Google OAuth button (renders when a client id is configured).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -56,7 +61,7 @@ export default function LoginPage() {
           text: "continue_with",
         });
       } catch {
-        /* Google button simply doesn't render */
+        /* button simply doesn't render */
       }
     })();
     return () => {
@@ -65,48 +70,52 @@ export default function LoginPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function finish(session: any) {
-    // Show the launch-offer plan card once during signup, then enter the app.
-    try {
-      const res = await fetch("/api/billing/checkout");
-      const d = await res.json();
-      const paid = (d.plans ?? []).filter((p: PlanView) => p.amount > 0);
-      if (paid.length && session?.role === "user") {
-        setPlans(paid);
-        setStep("plans");
-        return;
-      }
-    } catch {
-      /* skip plans */
+  function enterApp(session: any, opts?: { welcome?: boolean; changePw?: boolean }) {
+    if (opts?.changePw) {
+      window.location.href = "/profile?pw=1";
+      return;
     }
-    enterApp(session);
+    const base = session?.role && session.role !== "user" ? "/admin" : "/";
+    window.location.href = opts?.welcome ? `${base}?welcome=1` : base;
   }
 
-  function enterApp(session: any) {
-    window.location.href = session?.role && session.role !== "user" ? "/admin" : "/";
+  async function afterAuth(data: any, isNew: boolean) {
+    if (data.mustChangePassword) {
+      enterApp(data.session, { changePw: true });
+      return;
+    }
+    if (isNew && data.session?.role === "user") {
+      try {
+        const res = await fetch("/api/billing/checkout");
+        const d = await res.json();
+        const paid = (d.plans ?? []).filter((p: PlanView) => p.amount > 0);
+        if (paid.length) {
+          setPlans(paid);
+          setStep("plans");
+          return;
+        }
+      } catch {}
+    }
+    enterApp(data.session, { welcome: isNew });
   }
 
-  async function submitEmail(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("loading");
     setError("");
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, phone, acceptTerms }),
+      body: JSON.stringify({ mode, email, password, phone, acceptTerms }),
     });
     const data = await res.json();
-    if (data.needsSignup && !data.error) {
-      setNeedsSignup(true);
-      setStatus("idle");
-      return;
-    }
     if (!res.ok) {
       setStatus("error");
-      setError(data.error ?? "Sign-in failed.");
+      setError(data.error ?? "Something went wrong.");
+      if (data.needsSignup) setMode("signup");
       return;
     }
-    await finish(data.session);
+    await afterAuth(data, mode === "signup");
   }
 
   async function submitGoogle(credential: string, withProfile = false) {
@@ -124,8 +133,9 @@ export default function LoginPage() {
       setGoogleCredential(credential);
       setGoogleName(data.name ?? "");
       setEmail(data.email ?? "");
-      setNeedsSignup(true);
+      setMode("signup");
       setStatus("idle");
+      setNotice("Almost there - add your phone and accept the terms.");
       return;
     }
     if (!res.ok) {
@@ -133,24 +143,47 @@ export default function LoginPage() {
       setError(data.error ?? "Google sign-in failed.");
       return;
     }
-    await finish(data.session);
+    await afterAuth(data, Boolean(data.isNew));
   }
 
-  async function completeGoogleSignup(e: React.FormEvent) {
-    e.preventDefault();
-    if (!googleCredential) return;
-    await submitGoogle(googleCredential, true);
+  async function forgot() {
+    if (!email) {
+      setError("Type your email above first, then tap Forgot password.");
+      setStatus("error");
+      return;
+    }
+    setStatus("loading");
+    setError("");
+    const res = await fetch("/api/auth/forgot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    setStatus("idle");
+    if (!res.ok) setError(data.error ?? "Could not send the email.");
+    else setNotice(data.message);
+  }
+
+  async function devLogin(persona: string) {
+    setStatus("loading");
+    const res = await fetch("/api/auth/dev", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona }),
+    });
+    const data = await res.json();
+    if (res.ok) enterApp(data.session);
+    else setStatus("idle");
   }
 
   if (step === "plans") {
     return (
       <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
         <div className="mb-4 text-center">
-          <h1 className="font-display text-2xl font-extrabold text-strong">
-            Welcome aboard! 🎉
-          </h1>
+          <h1 className="font-display text-2xl font-extrabold text-strong">Welcome aboard! 🎉</h1>
           <p className="mt-1 text-sm font-bold text-brandred">
-            One-time opening offer: 80% off Pro, billed every 3 months
+            One-time opening offer: 80% off, billed every 3 months
           </p>
         </div>
         <div className="space-y-3">
@@ -166,13 +199,13 @@ export default function LoginPage() {
                 });
                 const d = await res.json();
                 if (d.url) window.location.href = d.url;
-                else enterApp({ role: "user" });
+                else window.location.href = "/?welcome=1";
               }}
             />
           ))}
         </div>
         <button
-          onClick={() => enterApp({ role: "user" })}
+          onClick={() => (window.location.href = "/?welcome=1")}
           className="btn btn-ghost mx-auto mt-4 rounded-2xl px-6 py-2.5 text-sm"
         >
           Maybe later - start saving
@@ -183,24 +216,43 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
-      <div className="mb-6 text-center">
-        <div className="mx-auto mb-2 w-fit">
-          <BrandMark size={84} />
+      {/* Hero */}
+      <div className="mb-5 text-center">
+        <div className="mx-auto mb-2 w-fit animate-slide-up">
+          <BrandMark size={92} />
         </div>
         <h1 className="font-display text-3xl font-extrabold text-strong">
           Wheel<span className="text-brandblue">Deal</span>
         </h1>
-        <p className="mt-1 text-sm text-soft">
-          {needsSignup
-            ? "One quick step and you're in."
-            : "Sign in or create your account to start saving."}
+        <p className="mx-auto mt-1 max-w-[280px] text-sm text-soft">
+          AI agents hunt the cheapest scooter, motorcycle and car rentals around
+          your hotel - and bargain for you.
         </p>
+        <div className="mx-auto mt-2 w-fit rounded-full bg-brandblue-soft px-3 py-1 text-[11px] font-extrabold text-brandblue">
+          🔐 Sign in or create an account to enter
+        </div>
       </div>
 
-      <form
-        onSubmit={googleCredential ? completeGoogleSignup : submitEmail}
-        className="surface rounded-blob p-5"
-      >
+      {/* Mode switch */}
+      <div className="surface-strong mb-3 flex gap-1 rounded-2xl p-1">
+        {(["login", "signup"] as Mode[]).map((m) => (
+          <button
+            key={m}
+            onClick={() => {
+              setMode(m);
+              setError("");
+              setNotice("");
+            }}
+            className={`btn btn-sm flex-1 rounded-xl py-2.5 text-[13px] font-extrabold ${
+              mode === m ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
+            }`}
+          >
+            {m === "login" ? "Log in" : "Sign up"}
+          </button>
+        ))}
+      </div>
+
+      <form onSubmit={submit} className="surface rounded-blob p-5">
         {googleCredential ? (
           <div className="mb-3 flex items-center gap-2 rounded-2xl bg-brandblue-soft p-3 text-[13px] font-bold text-brandblue">
             <Icon name="check" className="h-4 w-4" />
@@ -220,19 +272,40 @@ export default function LoginPage() {
           </>
         )}
 
-        {needsSignup && (
+        {!googleCredential && (
+          <>
+            <label className="mt-3 block text-[12px] font-extrabold text-soft">
+              Password
+            </label>
+            <input
+              type="password"
+              required
+              minLength={mode === "signup" ? 6 : 1}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === "signup" ? "Choose a password (6+ chars)" : "Your password"}
+              className="mt-1 w-full rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+            />
+            {mode === "login" && (
+              <button
+                type="button"
+                onClick={forgot}
+                className="btn mt-1 text-[12px] font-extrabold text-brandblue"
+              >
+                Forgot password?
+              </button>
+            )}
+          </>
+        )}
+
+        {mode === "signup" && (
           <>
             <label className="mt-3 block text-[12px] font-extrabold text-soft">
               Phone number
             </label>
-            <input
-              type="tel"
-              required
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+62 812 345 678"
-              className="mt-1 w-full rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            />
+            <div className="mt-1">
+              <CountryPhoneInput value={phone} onChange={setPhone} />
+            </div>
             <label className="mt-3 flex items-start gap-2.5 text-[13px] text-soft">
               <input
                 type="checkbox"
@@ -249,12 +322,19 @@ export default function LoginPage() {
                   className="font-extrabold text-brandblue underline"
                 >
                   Terms of Use
-                </button>
+                </button>{" "}
+                and to the app using my phone&apos;s location to find rental
+                shops near me.
               </span>
             </label>
           </>
         )}
 
+        {notice && (
+          <p className="mt-2 rounded-xl bg-savings-soft p-2 text-[12px] font-bold text-savings">
+            {notice}
+          </p>
+        )}
         {status === "error" && (
           <p className="mt-2 text-[12px] font-bold text-brandred">{error}</p>
         )}
@@ -264,11 +344,15 @@ export default function LoginPage() {
           disabled={status === "loading"}
           className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
         >
-          {status === "loading"
-            ? "One moment..."
-            : needsSignup
-            ? "Create my account"
-            : "Continue"}
+          {status === "loading" ? (
+            <LoadingDots light label="One moment" />
+          ) : googleCredential ? (
+            "Create my account"
+          ) : mode === "login" ? (
+            "Log in"
+          ) : (
+            "Create my account"
+          )}
         </button>
 
         {!googleCredential && (
@@ -285,6 +369,30 @@ export default function LoginPage() {
           Secure signed session. Your details are stored safely.
         </p>
       </form>
+
+      {/* TEMPORARY dev entries - removed before public launch */}
+      <div className="mt-4">
+        <p className="mb-1.5 text-center text-[10px] font-extrabold uppercase tracking-wide text-faint">
+          Dev quick entry (temporary)
+        </p>
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {[
+            ["owner", "👑 Dev owner"],
+            ["manager", "🛡 Dev manager"],
+            ["free", "🙂 Dev user free"],
+            ["pro", "⭐ Dev user pro"],
+            ["business", "💼 Dev user business"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => devLogin(id)}
+              className="btn btn-sm chip rounded-full border-2 border-dashed border-line bg-card px-3 py-1.5 text-[11px] font-bold text-faint hover:border-brandblue hover:text-brandblue"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </main>

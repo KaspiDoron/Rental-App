@@ -57,7 +57,9 @@ export async function POST(req: Request) {
     "database snapshot provided. Be sharp, concise and proactive: lead with what " +
     "needs immediate attention (high-severity feedback, blocked funnels, missing " +
     "keys, negotiation performance), give concrete numbers, and propose next " +
-    "actions. Plain text, short paragraphs or tight bullet lists.\n\nOPERATIONAL DATA:\n" +
+    "actions. STRICT FORMAT: plain conversational text only - never use " +
+    "markdown, asterisks, backticks, hashes or any special formatting " +
+    "characters; use simple dashes for lists.\n\nOPERATIONAL DATA:\n" +
     context;
 
   const history: ChatMessage[] = [
@@ -72,7 +74,10 @@ export async function POST(req: Request) {
   }
 
   const reply = await chat(history);
-  if (reply) return NextResponse.json({ reply });
+  if (reply) {
+    const { sanitizeAiText } = await import("@/lib/text");
+    return NextResponse.json({ reply: sanitizeAiText(reply) });
+  }
 
   // Deterministic fallback briefing when no LLM key is configured.
   const urgent = (feedback as any[]).filter((f) => f.is_real_issue && f.severity === "high");

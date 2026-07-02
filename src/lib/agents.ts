@@ -201,59 +201,84 @@ export async function runSafety(message: string): Promise<SafetyVerdict> {
 }
 
 // ---------------------------------------------------------------------------
-// Bargaining, Market-Analyst & Sentiment Agents (negotiation simulator)
+// Adaptive Bargaining Agent - composes real negotiation messages to SEND to
+// the vendor. It never invents a price: prices come only from vendor replies.
+// It learns from the shared tactic playbook and from real bargaining
+// transcripts the owner teaches it, and it matches its English level to the
+// region (simple, clear English for regions where English is a second
+// language; natural fluent English elsewhere). Output is always plain text.
 // ---------------------------------------------------------------------------
 
-/**
- * Simulate a negotiation round for a vendor. In production the agent would
- * exchange messages via the WhatsApp Cloud API; here we model the vendor's
- * price response as a function of their base rate, rating, the round number,
- * and the learned tactic in play. Returns the resulting offer.
- */
-export function negotiateRound(
-  vendor: Vendor,
-  rfq: StructuredRFQ,
-  round: number
-): { offer: Offer; tacticId: string; won: boolean } {
+export async function composeBargain(opts: {
+  rfq: StructuredRFQ;
+  vendor: Vendor;
+  currentPricePerDay?: number;
+  rivalPricePerDay?: number;
+  region?: string;
+  round: number;
+}): Promise<{ message: string; tacticId: string; tacticLabel: string }> {
   const tactics = getTactics();
-  // "Step up" the tactic as rounds progress - later rounds use stronger plays.
-  const tactic = tactics[Math.min(round, tactics.length - 1)] ?? tactics[0];
+  const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
+  const { listTraining } = await import("./memory");
+  const training = listTraining()
+    .slice(0, 4)
+    .map((t) => t.text)
+    .join("\n---\n");
 
-  const marketRate = marketRateFor(vendor, rfq); // Market-Rate Analyst
-  const start = vendor.basePricePerDay + (rfq.vehicleClass === "car" ? 6 : 0);
+  const spec = `${opts.rfq.engineSizeCc ? opts.rfq.engineSizeCc + "cc " : ""}${vehicleTerm(
+    opts.rfq.vehicleClass
+  )} for ${opts.rfq.durationDays} day(s)`;
 
-  // Each round shaves a bit more, bounded by the analyst's fair-market floor.
-  const winRate = tactic.uses > 0 ? tactic.wins / tactic.uses : 0.4;
-  const cutPct = Math.min(0.28, 0.06 + round * 0.05 + winRate * 0.08);
-  const pricePerDay = Math.max(
-    Math.round(marketRate * 0.92),
-    Math.round(start * (1 - cutPct))
-  );
+  const system =
+    "You write ONE short WhatsApp bargaining message for a traveller's automated " +
+    "procurement assistant to send a rental shop. Rules: plain text only, no " +
+    "markdown, no asterisks, no emoji spam (max one), 1-3 sentences, polite but " +
+    "money-smart, always identify context implicitly (we already introduced " +
+    "ourselves). Never invent prices we were not given. " +
+    `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
+    (opts.region
+      ? `The shop is in ${opts.region}: match the English level typical there - if English is a second language use short, simple, very clear sentences. `
+      : "") +
+    (training
+      ? "Learn tone and moves from these REAL past bargains by the owner:\n" + training
+      : "");
 
-  const includesDelivery =
-    rfq.fulfillment === "hotel-delivery" &&
-    vendor.fulfillment.includes("hotel-delivery") &&
-    round >= 1;
-  const includesInsurance = round >= 2 && vendor.rating >= 4.2;
+  const user =
+    `Vehicle: ${spec}. ` +
+    (opts.currentPricePerDay
+      ? `They quoted $${opts.currentPricePerDay}/day. `
+      : "No quote yet. ") +
+    (opts.rivalPricePerDay
+      ? `A nearby shop offered $${opts.rivalPricePerDay}/day. `
+      : "") +
+    "Write the next message to push the price down.";
 
-  const offer: Offer = {
-    pricePerDay,
-    listPricePerDay: Math.round(start),
-    currency: "USD",
-    totalPrice: pricePerDay * rfq.durationDays,
-    includesInsurance,
-    includesDelivery,
-    round,
-    verified: false,
-    simulated: true,
-    message: vendorReply(vendor, pricePerDay, includesDelivery, includesInsurance),
-  };
+  const llm = await chat([
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ]);
 
-  const discountPct = Math.round(((start - pricePerDay) / start) * 100);
-  const won = pricePerDay <= marketRate;
-  recordOutcome(tactic.id, won, discountPct);
+  const { sanitizeAiText } = await import("./text");
+  if (llm) {
+    return {
+      message: sanitizeAiText(llm),
+      tacticId: tactic.id,
+      tacticLabel: tactic.label,
+    };
+  }
 
-  return { offer, tacticId: tactic.id, won };
+  // Deterministic fallback built from the learned tactic script.
+  const filled = tactic.script
+    .replace("{target}", opts.currentPricePerDay ? `$${Math.max(1, Math.round(opts.currentPricePerDay * 0.85))}` : "a better rate")
+    .replace("{rival}", opts.rivalPricePerDay ? `$${opts.rivalPricePerDay}` : "a lower price")
+    .replace("{vehicle}", vehicleTerm(opts.rfq.vehicleClass))
+    .replace("{days}", String(opts.rfq.durationDays));
+  return { message: sanitizeAiText(filled), tacticId: tactic.id, tacticLabel: tactic.label };
+}
+
+/** Record a bargaining outcome so the playbook keeps learning. */
+export function learnOutcome(tacticId: string, won: boolean, discountPct: number) {
+  recordOutcome(tacticId, won, Math.max(0, Math.min(60, discountPct)));
 }
 
 /** Market-Rate Analyst Agent - estimates a fair local rate for the spec. */
@@ -270,20 +295,6 @@ export function sentimentFor(vendor: Vendor, round: number): number {
   const base = (vendor.rating - 3.5) / 1.4; // rating → 0..1-ish
   const warmth = Math.min(1, Math.max(0.1, base + round * 0.08));
   return Number(warmth.toFixed(2));
-}
-
-function vendorReply(
-  vendor: Vendor,
-  price: number,
-  delivery: boolean,
-  insurance: boolean
-): string {
-  const extras = [
-    delivery ? "free hotel delivery included" : null,
-    insurance ? "basic insurance included" : null,
-  ].filter(Boolean);
-  const tail = extras.length ? ` (${extras.join(", ")})` : "";
-  return `Best we can do is $${price}/day${tail}. Ready when you are! - ${vendor.name}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +479,10 @@ export async function writeFeedback(
     { role: "system", content: system },
     { role: "user", content: `Category: ${category}\nNotes: ${notes}` },
   ]);
-  if (llm) return llm.trim();
+  if (llm) {
+    const { sanitizeAiText } = await import("./text");
+    return sanitizeAiText(llm);
+  }
 
   // Fallback: lightly structure the raw notes.
   const n = notes.trim();

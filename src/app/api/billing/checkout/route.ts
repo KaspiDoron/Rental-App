@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   }
   const { planId } = await req.json().catch(() => ({}));
   const origin = new URL(req.url).origin;
-  const result = await createCheckoutSession(String(planId), origin);
+  const result = await createCheckoutSession(String(planId), origin, session.email);
   if (result.error) {
     return NextResponse.json(
       { error: result.error, configured: result.configured },

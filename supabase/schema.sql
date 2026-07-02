@@ -34,14 +34,72 @@ create index if not exists whatsapp_messages_received_idx
 
 -- ---- App users (access control + signup details) -----------------------------
 create table if not exists public.app_users (
-  email             text primary key,
-  phone             text,
-  name              text,
-  provider          text default 'email',
-  status            text not null default 'active' check (status in ('active','blocked')),
-  terms_accepted_at timestamptz,
-  added_at          timestamptz not null default now(),
-  last_seen         timestamptz not null default now()
+  email                text primary key,
+  phone                text,
+  name                 text,
+  provider             text default 'email',
+  status               text not null default 'active' check (status in ('active','blocked')),
+  plan                 text not null default 'free' check (plan in ('free','pro','business')),
+  password_hash        text,
+  must_change_password boolean default false,
+  terms_accepted_at    timestamptz,
+  added_at             timestamptz not null default now(),
+  last_seen            timestamptz not null default now()
+);
+-- If you already ran an older schema, run these once:
+alter table public.app_users add column if not exists plan text not null default 'free';
+alter table public.app_users add column if not exists password_hash text;
+alter table public.app_users add column if not exists must_change_password boolean default false;
+
+-- ---- Auth events (every login/signup is recorded) -----------------------------
+create table if not exists public.auth_events (
+  id         bigint generated always as identity primary key,
+  email      text,
+  event      text,
+  provider   text,
+  created_at timestamptz not null default now()
+);
+
+-- ---- AI provider usage log -----------------------------------------------------
+create table if not exists public.ai_usage (
+  id         bigint generated always as identity primary key,
+  provider   text,
+  tokens     int default 0,
+  failed     boolean default false,
+  created_at timestamptz not null default now()
+);
+
+-- ---- Owner-taught bargaining transcripts ---------------------------------------
+create table if not exists public.agent_training (
+  id         bigint generated always as identity primary key,
+  text       text not null,
+  note       text,
+  added_by   text,
+  created_at timestamptz not null default now()
+);
+
+-- ---- Vendor replies (raw) + composed bargain drafts ----------------------------
+create table if not exists public.vendor_replies (
+  id            bigint generated always as identity primary key,
+  user_email    text,
+  vendor_id     text,
+  vendor_name   text,
+  reply_text    text,
+  image_count   int default 0,
+  found         boolean default false,
+  price_per_day numeric,
+  matches_spec  boolean default false,
+  confidence    text,
+  created_at    timestamptz not null default now()
+);
+
+create table if not exists public.bargain_drafts (
+  id         bigint generated always as identity primary key,
+  user_email text,
+  vendor_id  text,
+  tactic     text,
+  message    text,
+  created_at timestamptz not null default now()
 );
 
 -- ---- Search history (agent memory) -------------------------------------------
@@ -149,5 +207,10 @@ alter table public.feedback         enable row level security;
 alter table public.billing_events   enable row level security;
 alter table public.searches         enable row level security;
 alter table public.offers           enable row level security;
+alter table public.auth_events      enable row level security;
+alter table public.ai_usage         enable row level security;
+alter table public.agent_training   enable row level security;
+alter table public.vendor_replies   enable row level security;
+alter table public.bargain_drafts   enable row level security;
 -- No policies are created on purpose: the anon/public key gets zero access;
 -- the server uses the service role key, which bypasses RLS.

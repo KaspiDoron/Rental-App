@@ -11,10 +11,12 @@ type Step = "verify" | "schedule" | "confirmed";
 export function BookingSheet({
   vendor,
   rfq,
+  plan = "free",
   onClose,
 }: {
   vendor: Vendor;
   rfq: StructuredRFQ | null;
+  plan?: string;
   onClose: () => void;
 }) {
   const [step, setStep] = useState<Step>("verify");
@@ -40,7 +42,13 @@ export function BookingSheet({
     };
   }, [vendor, rfq]);
 
+  // Free plan schedules SAME-DAY pickups only; Pro/Business unlock future days.
+  const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const freePlan = plan === "free";
+  const minDate = today;
+  const maxDate = freePlan ? today : undefined;
+  const defaultDate = freePlan ? today : tomorrow;
 
   async function confirm() {
     setStep("confirmed");
@@ -54,7 +62,7 @@ export function BookingSheet({
         pricePerDay: vendor.offer?.pricePerDay ?? 0,
         totalPrice: vendor.offer?.totalPrice ?? 0,
         fulfillment: mode,
-        scheduledAt: `${date || tomorrow}T${time}:00Z`,
+        scheduledAt: `${date || defaultDate}T${time}:00Z`,
       }),
     }).catch(() => {});
   }
@@ -146,15 +154,23 @@ export function BookingSheet({
             </button>
           </div>
 
+          {freePlan && (
+            <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+              Free plan: pickup can be scheduled for TODAY only. Upgrade to Pro
+              to book future days.
+            </div>
+          )}
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="text-[12px] font-bold text-soft">
               Date
               <input
                 type="date"
-                min={tomorrow}
-                value={date || tomorrow}
+                min={minDate}
+                max={maxDate}
+                disabled={freePlan}
+                value={date || defaultDate}
                 onChange={(e) => setDate(e.target.value)}
-                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-sm text-strong"
+                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-sm text-strong disabled:opacity-70"
               />
             </label>
             <label className="text-[12px] font-bold text-soft">
@@ -182,7 +198,7 @@ export function BookingSheet({
           <p className="text-sm text-soft">
             {vendor.name} is confirmed for{" "}
             <span className="font-extrabold text-strong">
-              {date || tomorrow} at {time}
+              {date || defaultDate} at {time}
             </span>
             {mode === "hotel-delivery"
               ? " - delivered to your hotel lobby."

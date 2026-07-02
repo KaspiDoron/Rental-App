@@ -37,6 +37,13 @@ export default function AdminPage() {
   const [stripeOn, setStripeOn] = useState(false);
   const [newAdmin, setNewAdmin] = useState("");
   const [userMsg, setUserMsg] = useState<string | null>(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [keyWarning, setKeyWarning] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<{ name: string; label: string; value: string }[] | null>(null);
+  const [aiProviders, setAiProviders] = useState<any[]>([]);
+  const [training, setTraining] = useState("");
+  const [trainingCount, setTrainingCount] = useState(0);
+  const [trainMsg, setTrainMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -55,6 +62,12 @@ export default function AdminPage() {
       const bill = await (await fetch("/api/billing/checkout")).json();
       setPlans(bill.plans ?? []);
       setStripeOn(Boolean(bill.configured));
+      const me = await (await fetch("/api/auth/me")).json();
+      setIsOwner(me.session?.role === "owner");
+      const ai = await (await fetch("/api/admin/ai-status")).json();
+      setAiProviders(ai.providers ?? []);
+      const tr = await (await fetch("/api/admin/training")).json();
+      setTrainingCount((tr.examples ?? []).length);
     })().catch(() => setAuthorized(false));
   }, []);
 
@@ -70,7 +83,48 @@ export default function AdminPage() {
       setKeys((ks) => ks.map((k) => (k.name === name ? data.key : k)));
       setEditing((e) => ({ ...e, [name]: "" }));
       setSaved(name);
+      setKeyWarning(data.warning ?? null);
       setTimeout(() => setSaved(null), 1500);
+    } else if (data.error) {
+      setKeyWarning(data.error);
+    }
+  }
+
+  async function toggleReveal() {
+    if (revealed) {
+      setRevealed(null);
+      return;
+    }
+    const res = await fetch("/api/admin/config?reveal=1");
+    const data = await res.json();
+    if (data.values) setRevealed(data.values);
+  }
+
+  async function switchProvider(provider: string) {
+    const res = await fetch("/api/admin/ai-status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    });
+    const data = await res.json();
+    if (data.providers) setAiProviders(data.providers);
+    if (data.warning) setKeyWarning(data.warning);
+  }
+
+  async function teach() {
+    setTrainMsg(null);
+    const res = await fetch("/api/admin/training", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: training }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      setTraining("");
+      setTrainingCount((data.examples ?? []).length);
+      setTrainMsg("Learned ✓ - the bargaining agents will use this style.");
+    } else {
+      setTrainMsg(data.error ?? "Could not save.");
     }
   }
 
@@ -125,6 +179,34 @@ export default function AdminPage() {
 
       {tab === "analytics" && analytics && (
         <div className="space-y-3">
+          {/* Teach the agents from real bargains */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 text-[13px] font-extrabold text-strong">
+              🎓 Teach the bargaining agents
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              Paste a real WhatsApp conversation where you bargained with a
+              rental shop. The agents learn your tone and moves ({trainingCount}{" "}
+              example{trainingCount === 1 ? "" : "s"} learned).
+            </p>
+            <textarea
+              value={training}
+              onChange={(e) => setTraining(e.target.value)}
+              rows={4}
+              placeholder={"Me: Hi! How much for a 125cc scooter for 3 days?\nShop: 100k per day\nMe: I saw 80k nearby, can you do 75k if I take 3 days?\n..."}
+              className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+            />
+            {trainMsg && (
+              <p className="mt-1 text-[12px] font-bold text-savings">{trainMsg}</p>
+            )}
+            <button
+              onClick={teach}
+              disabled={training.trim().length < 20}
+              className="btn btn-primary mt-2 w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
+            >
+              Teach the agents
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <Metric label="Search runs" value={String(analytics.totalRuns)} />
             <Metric label="Offers pulled" value={String(analytics.totalOffers)} />
@@ -175,9 +257,98 @@ export default function AdminPage() {
           >
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
             {persistent
-              ? "Persistence is on - edits are encrypted, saved to Supabase, applied within ~30s, and survive restarts. Secrets never reach the browser."
-              : "Demo persistence: connect Supabase to make vault edits durable. Secrets never reach the browser."}
+              ? "Persistence is on - edits are encrypted, saved to Supabase, applied within ~30s, and survive restarts."
+              : "Persistence is OFF: Supabase is not connected, so anything you paste here resets on the next deploy. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Vercel and run schema.sql."}
           </div>
+
+          {keyWarning && (
+            <div className="rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred">
+              {keyWarning}
+            </div>
+          )}
+
+          {/* AI providers: usage, remaining, switch, failover */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 text-[13px] font-extrabold text-strong">AI providers</div>
+            <p className="mb-2 text-[11px] text-faint">
+              The starred provider goes first; if it fails or runs out, the next
+              one takes over automatically. Tap to switch.
+            </p>
+            <div className="space-y-2">
+              {aiProviders.map((p) => (
+                <button
+                  key={p.name}
+                  onClick={() => switchProvider(p.name)}
+                  className={`btn chip w-full rounded-2xl border-2 p-3 text-left ${
+                    p.preferred ? "border-brandblue bg-brandblue-soft" : "border-line"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[13px] font-extrabold capitalize text-strong">
+                      {p.preferred ? "★ " : ""}
+                      {p.name}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                        p.configured ? "bg-savings-soft text-savings" : "bg-card2 text-faint"
+                      }`}
+                    >
+                      {p.configured ? "key set" : "no key"}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-soft">
+                    Used here: {p.tokensUsed.toLocaleString()} tokens · {p.requests} calls
+                    {p.failures > 0 ? ` · ${p.failures} failovers` : ""}
+                  </div>
+                  <div className="text-[11px] text-faint">
+                    Remaining:{" "}
+                    {p.remaining ?? "this provider does not expose remaining quota"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Owner-only: reveal & copy raw values */}
+          {isOwner && (
+            <div className="surface rounded-blob p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[13px] font-extrabold text-strong">
+                    👑 Owner: reveal all keys
+                  </div>
+                  <p className="text-[11px] text-faint">
+                    Visible and copyable only for you. Keep this screen private.
+                  </p>
+                </div>
+                <button onClick={toggleReveal} className="btn btn-sm btn-ghost rounded-xl px-3 text-[12px]">
+                  {revealed ? "Hide" : "Reveal"}
+                </button>
+              </div>
+              {revealed && (
+                <div className="mt-2 space-y-1.5">
+                  {revealed.map((v) => (
+                    <div key={v.name} className="flex items-center gap-2 rounded-xl bg-card2 p-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-extrabold text-faint">{v.name}</div>
+                        <div className="truncate font-mono text-[11px] text-strong">
+                          {v.value || "- not set -"}
+                        </div>
+                      </div>
+                      {v.value && (
+                        <button
+                          onClick={() => navigator.clipboard?.writeText(v.value)}
+                          className="btn btn-sm chip shrink-0 rounded-lg bg-brandblue-soft px-2.5 py-1 text-[11px] font-extrabold text-brandblue"
+                        >
+                          Copy
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {keys.map((k) => (
             <div key={k.name} className="surface rounded-blob p-4">
               <div className="flex items-center justify-between">

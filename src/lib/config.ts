@@ -39,6 +39,7 @@ const KEYS: {
   { name: "RESEND_API_KEY", label: "Resend Email API Key", scope: "email", editable: true },
   { name: "FEEDBACK_FROM_EMAIL", label: "Feedback From Address", scope: "email", editable: true },
   { name: "STRIPE_SECRET_KEY", label: "Stripe Secret Key", scope: "billing", editable: true },
+  { name: "ADSENSE_CLIENT", label: "Google AdSense Client (ca-pub-...)", scope: "billing", editable: true },
   { name: "STRIPE_WEBHOOK_SECRET", label: "Stripe Webhook Secret", scope: "billing", editable: true },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
@@ -77,17 +78,33 @@ export async function listKeys(): Promise<KeyInfo[]> {
 export async function setKey(
   name: string,
   value: string
-): Promise<KeyInfo | null> {
+): Promise<{ key: KeyInfo; warning?: string } | null> {
   const meta = KEYS.find((k) => k.name === name);
   if (!meta || !meta.editable) return null;
-  await setConfig(name, value);
+  const result = await setConfig(name, value);
   const v = await getConfig(name);
   return {
-    name,
-    label: meta.label,
-    scope: meta.scope,
-    editable: meta.editable,
-    configured: Boolean(v),
-    masked: mask(v),
+    key: {
+      name,
+      label: meta.label,
+      scope: meta.scope,
+      editable: meta.editable,
+      configured: Boolean(v),
+      masked: mask(v),
+    },
+    warning: result.error,
   };
+}
+
+/** OWNER ONLY: raw values for every managed key, ready to view and copy. */
+export async function revealKeys(): Promise<
+  { name: string; label: string; value: string }[]
+> {
+  return Promise.all(
+    KEYS.map(async (k) => ({
+      name: k.name,
+      label: k.label,
+      value: (await getConfig(k.name)) ?? "",
+    }))
+  );
 }

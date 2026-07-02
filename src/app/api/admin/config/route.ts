@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
-import { requireManagement } from "@/lib/session";
-import { listKeys, setKey, persistenceEnabled } from "@/lib/config";
+import { requireManagement, getSession } from "@/lib/session";
+import { listKeys, setKey, persistenceEnabled, revealKeys } from "@/lib/config";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await requireManagement();
   if (!session) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // Owner-only: reveal raw values for viewing/copying.
+  const reveal = new URL(req.url).searchParams.get("reveal") === "1";
+  if (reveal) {
+    const s = await getSession();
+    if (s?.role !== "owner") {
+      return NextResponse.json({ error: "Owner only" }, { status: 403 });
+    }
+    return NextResponse.json({ values: await revealKeys() });
+  }
+
   return NextResponse.json({
     keys: await listKeys(),
     persistent: persistenceEnabled(),
@@ -30,5 +41,5 @@ export async function POST(req: Request) {
     );
   }
   // Only ever return the masked view - never echo the raw secret back.
-  return NextResponse.json({ key: updated });
+  return NextResponse.json({ key: updated.key, warning: updated.warning });
 }
