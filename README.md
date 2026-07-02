@@ -52,7 +52,7 @@ npm run dev                  # http://localhost:3000
 ```
 
 Sign in from `/login` with any email. To unlock the admin workspace, sign in
-with an email listed in `ADMIN_EMAILS` (default: `doron@pristivo.com`).
+with an email listed in `ADMIN_EMAILS` (default: `kaspidoron@gmail.com`, the owner).
 
 ## ☁️ Deploy to Vercel (free tier, ~3 clicks)
 

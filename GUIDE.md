@@ -39,7 +39,7 @@ This lets you paste all other keys inside the app and have them stick.
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the anon key |
    | `SESSION_SECRET` | a long random string (see below) |
    | `OWNER_EMAIL` | `kaspidoron@gmail.com` (the owner - full control) |
-   | `ADMIN_EMAILS` | `kaspidoron@gmail.com,doron@pristivo.com` |
+   | `ADMIN_EMAILS` | `kaspidoron@gmail.com` |
 4. Make a `SESSION_SECRET`: on a Mac/Linux terminal run `openssl rand -hex 32`
    and paste the result. (Set it once and never change it - it protects your
    saved keys.)

@@ -31,7 +31,7 @@ export function isOwner(email: string): boolean {
 }
 
 function envAdmins(): string[] {
-  return (process.env.ADMIN_EMAILS || "kaspidoron@gmail.com,doron@pristivo.com")
+  return (process.env.ADMIN_EMAILS || "kaspidoron@gmail.com")
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
