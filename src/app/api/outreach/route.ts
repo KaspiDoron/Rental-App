@@ -1,22 +1,34 @@
 import { NextResponse } from "next/server";
 import { runSafety } from "@/lib/agents";
-import { sendWhatsApp } from "@/lib/whatsapp";
+import { sendWhatsApp, whatsappConfigured } from "@/lib/whatsapp";
+import {
+  evolutionConfigured,
+  connectionState,
+  sendFromUser,
+} from "@/lib/evolution";
+import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 
-// Screen an outbound custom message through the safety agent, then dispatch it
-// via the official WhatsApp Cloud API (or return a compliant wa.me link).
+// In-app outreach: the ONLY way messages leave the app. The user never jumps
+// to WhatsApp - we screen the message through the safety agent, resolve the
+// shop's number server-side (Place Details) when needed, send via the official
+// WhatsApp Cloud API, and log the full thread context so the webhook can match
+// the shop's reply back to this conversation automatically.
+//
+// Body: { to?, placeId?, vendorId?, vendorName?, message, kind?, rfq?, round? }
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Sign in to message vendors." }, { status: 401 });
   }
-  const { to, message } = await req.json().catch(() => ({}));
-  if (!to || !message) {
-    return NextResponse.json({ error: "to and message required" }, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  const message = String(body.message ?? "").trim();
+  if (!message) {
+    return NextResponse.json({ error: "message required" }, { status: 400 });
   }
 
-  const verdict = await runSafety(String(message));
+  const verdict = await runSafety(message);
   if (!verdict.allowed) {
     return NextResponse.json(
       { allowed: false, reason: verdict.reason, suggestion: verdict.suggestion },
@@ -24,18 +36,84 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = await sendWhatsApp(String(to), String(message));
+  // Resolve the destination number server-side.
+  let to = String(body.to ?? "").trim();
+  if (!to && body.placeId) {
+    const details = await placeDetails(String(body.placeId));
+    to = details?.phone ?? "";
+  }
+  if (!to) {
+    return NextResponse.json({
+      allowed: true,
+      sent: false,
+      reason: "no-phone",
+      note: "No phone number found for this shop yet.",
+    });
+  }
 
-  // Best-effort log for the admin communication vault (no-op without Supabase).
+  const digits = to.replace(/[^\d]/g, "");
+
+  // Channel priority:
+  //   1. The user's OWN WhatsApp (Evolution QR session) - the most authentic
+  //      sender a bargain can have, with strict anti-ban rate limits.
+  //   2. The official Meta Cloud API (owner-level business number).
+  //   3. Neither connected -> the UI falls back to copy-paste, still in-app.
+  let result: { channel: string; ok: boolean; error?: string; rateLimited?: boolean } = {
+    channel: "none",
+    ok: false,
+  };
+  let configured = false;
+
+  if ((await evolutionConfigured()) && (await connectionState(session.email)) === "open") {
+    configured = true;
+    const r = await sendFromUser(session.email, digits, message);
+    result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
+    if (r.rateLimited) {
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        configured: true,
+        channel: "personal-wa",
+        rateLimited: true,
+        error: r.error,
+      });
+    }
+  }
+  if (!result.ok && (await whatsappConfigured())) {
+    configured = true;
+    const r = await sendWhatsApp(to, message);
+    result = { channel: r.channel, ok: r.ok, error: r.error };
+  }
+
+  // Log the outbound message WITH thread context (vendor + rfq), so the
+  // webhook can match the inbound reply and keep the loop fully in-app.
   await sbInsert("whatsapp_messages", [
     {
-      to_number: String(to),
-      body: String(message),
+      to_number: digits,
+      body: message,
       type: "text",
       direction: "outbound",
-      raw: { channel: result.channel, sender: session.email, ok: result.ok },
+      raw: {
+        channel: configured ? result.channel : "unconfigured",
+        sender: session.email,
+        ok: result.ok,
+        vendorId: String(body.vendorId ?? ""),
+        vendorName: String(body.vendorName ?? ""),
+        kind: String(body.kind ?? "custom"),
+        round: Number(body.round ?? 0),
+        rfq: body.rfq ?? null,
+        region: String(body.region ?? ""),
+        plan: session.plan,
+      },
     },
   ]);
 
-  return NextResponse.json({ allowed: true, delivery: result });
+  return NextResponse.json({
+    allowed: true,
+    sent: configured && result.ok,
+    configured,
+    channel: configured ? result.channel : "unconfigured",
+    error: result.error,
+    phone: to,
+  });
 }

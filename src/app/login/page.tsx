@@ -5,8 +5,11 @@ import { BrandMark } from "@/components/BrandMark";
 import { TermsModal } from "@/components/TermsModal";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
+import { PasswordInput } from "@/components/PasswordInput";
+import { LanguageButton } from "@/components/LanguageButton";
 import { LoadingDots } from "@/components/LoadingDots";
 import { Icon } from "@/components/icons";
+import { useI18n } from "@/lib/i18n";
 
 declare global {
   interface Window {
@@ -17,6 +20,7 @@ declare global {
 type Mode = "login" | "signup";
 
 export default function LoginPage() {
+  const { t } = useI18n();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,11 +29,13 @@ export default function LoginPage() {
   const [googleCredential, setGoogleCredential] = useState<string | null>(null);
   const [googleName, setGoogleName] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [forgotBusy, setForgotBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [showTerms, setShowTerms] = useState(false);
   const [step, setStep] = useState<"auth" | "plans">("auth");
   const [plans, setPlans] = useState<PlanView[]>([]);
+  const [subBusy, setSubBusy] = useState(false);
   const googleDiv = useRef<HTMLDivElement>(null);
 
   // Google OAuth button (renders when a client id is configured).
@@ -101,68 +107,98 @@ export default function LoginPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setStatus("loading");
-    setError("");
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, email, password, phone, acceptTerms }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus("error");
-      setError(data.error ?? "Something went wrong.");
-      if (data.needsSignup) setMode("signup");
+    // Google-verified signups finish through the Google endpoint - they have
+    // no password (Google IS the credential). This was the loop bug.
+    if (googleCredential) {
+      await submitGoogle(googleCredential, true);
       return;
     }
-    await afterAuth(data, mode === "signup");
+    setStatus("loading");
+    setError("");
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, email, password, phone, acceptTerms }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus("error");
+        setError(data.error ?? t("Something went wrong."));
+        if (data.needsSignup) setMode("signup");
+        return;
+      }
+      await afterAuth(data, mode === "signup");
+    } catch {
+      setStatus("error");
+      setError(t("Network error - please try again."));
+    }
   }
 
   async function submitGoogle(credential: string, withProfile = false) {
     setStatus("loading");
     setError("");
-    const res = await fetch("/api/auth/google", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        withProfile ? { credential, phone, acceptTerms } : { credential }
-      ),
-    });
-    const data = await res.json();
-    if (data.needsSignup) {
-      setGoogleCredential(credential);
-      setGoogleName(data.name ?? "");
-      setEmail(data.email ?? "");
-      setMode("signup");
-      setStatus("idle");
-      setNotice("Almost there - add your phone and accept the terms.");
-      return;
-    }
-    if (!res.ok) {
+    try {
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          withProfile ? { credential, phone, acceptTerms } : { credential }
+        ),
+      });
+      const data = await res.json();
+      if (data.needsSignup) {
+        setGoogleCredential(credential);
+        setGoogleName(data.name ?? "");
+        setEmail(data.email ?? "");
+        setMode("signup");
+        setStatus("idle");
+        setNotice(
+          t("Almost there - add your phone and accept the terms. No password needed: you'll always sign in with Google.")
+        );
+        return;
+      }
+      if (!res.ok) {
+        setStatus("error");
+        setError(data.error ?? t("Google sign-in failed."));
+        return;
+      }
+      await afterAuth(data, Boolean(data.isNew));
+    } catch {
       setStatus("error");
-      setError(data.error ?? "Google sign-in failed.");
-      return;
+      setError(t("Network error - please try again."));
     }
-    await afterAuth(data, Boolean(data.isNew));
   }
 
   async function forgot() {
     if (!email) {
-      setError("Type your email above first, then tap Forgot password.");
+      setError(t("Type your email above first, then tap Forgot password."));
       setStatus("error");
       return;
     }
-    setStatus("loading");
+    setForgotBusy(true);
     setError("");
-    const res = await fetch("/api/auth/forgot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    const data = await res.json();
-    setStatus("idle");
-    if (!res.ok) setError(data.error ?? "Could not send the email.");
-    else setNotice(data.message);
+    setNotice("");
+    try {
+      const res = await fetch("/api/auth/forgot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus("error");
+        setError(data.error ?? t("Could not send the email."));
+      } else {
+        setStatus("idle");
+        setNotice(data.message);
+      }
+    } catch {
+      setStatus("error");
+      setError(t("Network error - please try again."));
+    } finally {
+      setForgotBusy(false);
+    }
   }
 
   async function devLogin(persona: string) {
@@ -181,9 +217,11 @@ export default function LoginPage() {
     return (
       <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
         <div className="mb-4 text-center">
-          <h1 className="font-display text-2xl font-extrabold text-strong">Welcome aboard! 🎉</h1>
+          <h1 className="font-display text-2xl font-extrabold text-strong">
+            {t("Welcome aboard!")} 🎉
+          </h1>
           <p className="mt-1 text-sm font-bold text-brandred">
-            One-time opening offer: 80% off, billed every 3 months
+            {t("One-time opening offer: 80% off, billed every 3 months")}
           </p>
         </div>
         <div className="space-y-3">
@@ -191,15 +229,21 @@ export default function LoginPage() {
             <PlanCard
               key={p.id}
               plan={p}
+              busy={subBusy}
               onSubscribe={async (id) => {
-                const res = await fetch("/api/billing/checkout", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ planId: id }),
-                });
-                const d = await res.json();
-                if (d.url) window.location.href = d.url;
-                else window.location.href = "/?welcome=1";
+                setSubBusy(true);
+                try {
+                  const res = await fetch("/api/billing/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ planId: id }),
+                  });
+                  const d = await res.json();
+                  if (d.url) window.location.href = d.url;
+                  else window.location.href = "/?welcome=1";
+                } finally {
+                  setSubBusy(false);
+                }
               }}
             />
           ))}
@@ -208,7 +252,7 @@ export default function LoginPage() {
           onClick={() => (window.location.href = "/?welcome=1")}
           className="btn btn-ghost mx-auto mt-4 rounded-2xl px-6 py-2.5 text-sm"
         >
-          Maybe later - start saving
+          {t("Maybe later - start saving")}
         </button>
       </main>
     );
@@ -216,6 +260,14 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
+      {/* Global translate - flashy so every traveller notices it up front */}
+      <div
+        className="fixed right-4 z-40"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+      >
+        <LanguageButton flashy />
+      </div>
+
       {/* Hero */}
       <div className="mb-5 text-center">
         <div className="mx-auto mb-2 w-fit animate-slide-up">
@@ -225,11 +277,15 @@ export default function LoginPage() {
           Wheel<span className="text-brandblue">Deal</span>
         </h1>
         <p className="mx-auto mt-1 max-w-[280px] text-sm text-soft">
-          AI agents hunt the cheapest scooter, motorcycle and car rentals around
-          your hotel - and bargain for you.
+          {t("AI agents hunt the cheapest scooter, motorcycle and car rentals around your hotel - and bargain for you.")}
         </p>
-        <div className="mx-auto mt-2 w-fit rounded-full bg-brandblue-soft px-3 py-1 text-[11px] font-extrabold text-brandblue">
-          🔐 Sign in or create an account to enter
+        <div className="mx-auto mt-2 flex w-fit flex-wrap items-center justify-center gap-1.5">
+          <span className="badge-flash rounded-full px-3 py-1 text-[11px] font-extrabold">
+            🤝 {t("Authentic bargaining")}
+          </span>
+          <span className="rounded-full bg-brandblue-soft px-3 py-1 text-[11px] font-extrabold text-brandblue">
+            🔐 {t("Sign in or create an account to enter")}
+          </span>
         </div>
       </div>
 
@@ -247,7 +303,7 @@ export default function LoginPage() {
               mode === m ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {m === "login" ? "Log in" : "Sign up"}
+            {m === "login" ? t("Log in") : t("Sign up")}
           </button>
         ))}
       </div>
@@ -256,11 +312,12 @@ export default function LoginPage() {
         {googleCredential ? (
           <div className="mb-3 flex items-center gap-2 rounded-2xl bg-brandblue-soft p-3 text-[13px] font-bold text-brandblue">
             <Icon name="check" className="h-4 w-4" />
-            Google verified{googleName ? `: ${googleName}` : ""} ({email})
+            {t("Google verified")}
+            {googleName ? `: ${googleName}` : ""} ({email})
           </div>
         ) : (
           <>
-            <label className="text-[12px] font-extrabold text-soft">Email</label>
+            <label className="text-[12px] font-extrabold text-soft">{t("Email")}</label>
             <input
               type="email"
               required
@@ -275,24 +332,34 @@ export default function LoginPage() {
         {!googleCredential && (
           <>
             <label className="mt-3 block text-[12px] font-extrabold text-soft">
-              Password
+              {t("Password")}
             </label>
-            <input
-              type="password"
-              required
-              minLength={mode === "signup" ? 6 : 1}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === "signup" ? "Choose a password (6+ chars)" : "Your password"}
-              className="mt-1 w-full rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            />
+            <div className="mt-1">
+              <PasswordInput
+                value={password}
+                onChange={setPassword}
+                required
+                minLength={mode === "signup" ? 6 : 1}
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                placeholder={
+                  mode === "signup"
+                    ? t("Choose a password (6+ characters)")
+                    : t("Your password")
+                }
+              />
+            </div>
             {mode === "login" && (
               <button
                 type="button"
                 onClick={forgot}
-                className="btn mt-1 text-[12px] font-extrabold text-brandblue"
+                disabled={forgotBusy}
+                className="btn mt-1 text-[12px] font-extrabold text-brandblue disabled:opacity-60"
               >
-                Forgot password?
+                {forgotBusy ? (
+                  <LoadingDots label={t("Sending a reset email")} />
+                ) : (
+                  t("Forgot password?")
+                )}
               </button>
             )}
           </>
@@ -301,7 +368,7 @@ export default function LoginPage() {
         {mode === "signup" && (
           <>
             <label className="mt-3 block text-[12px] font-extrabold text-soft">
-              Phone number
+              {t("Phone number")}
             </label>
             <div className="mt-1">
               <CountryPhoneInput value={phone} onChange={setPhone} />
@@ -315,16 +382,15 @@ export default function LoginPage() {
                 required
               />
               <span>
-                I agree to the{" "}
+                {t("I agree to the")}{" "}
                 <button
                   type="button"
                   onClick={() => setShowTerms(true)}
                   className="font-extrabold text-brandblue underline"
                 >
-                  Terms of Use
+                  {t("Terms of Use")}
                 </button>{" "}
-                and to the app using my phone&apos;s location to find rental
-                shops near me.
+                {t("and to the app using my phone's location to find rental shops near me.")}
               </span>
             </label>
           </>
@@ -345,20 +411,21 @@ export default function LoginPage() {
           className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
         >
           {status === "loading" ? (
-            <LoadingDots light label="One moment" />
+            <LoadingDots light label={t("One moment")} />
           ) : googleCredential ? (
-            "Create my account"
+            t("Create my account")
           ) : mode === "login" ? (
-            "Log in"
+            t("Log in")
           ) : (
-            "Create my account"
+            t("Create my account")
           )}
         </button>
 
         {!googleCredential && (
           <>
             <div className="my-3 flex items-center gap-3 text-[11px] font-bold text-faint">
-              <span className="h-px flex-1 bg-line" /> OR <span className="h-px flex-1 bg-line" />
+              <span className="h-px flex-1 bg-line" /> {t("OR")}{" "}
+              <span className="h-px flex-1 bg-line" />
             </div>
             <div ref={googleDiv} className="flex justify-center" />
           </>
@@ -366,7 +433,7 @@ export default function LoginPage() {
 
         <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-faint">
           <Icon name="lock" className="h-3.5 w-3.5" />
-          Secure signed session. Your details are stored safely.
+          {t("Secure signed session. Your details are stored safely.")}
         </p>
       </form>
 
@@ -381,7 +448,7 @@ export default function LoginPage() {
             ["manager", "🛡 Dev manager"],
             ["free", "🙂 Dev user free"],
             ["pro", "⭐ Dev user pro"],
-            ["business", "💼 Dev user business"],
+            ["ultra", "⚡ Dev user ultra"],
           ].map(([id, label]) => (
             <button
               key={id}

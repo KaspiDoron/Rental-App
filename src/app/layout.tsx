@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { I18nProvider } from "@/lib/i18n";
 import "./globals.css";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://wheeldeal.vercel.app";
@@ -89,8 +90,19 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap"
           rel="stylesheet"
         />
+        {/* Google AdSense (site-level tag so Google can review the site).
+            Individual slots render only on the free tier via <AdBanner>. */}
+        {process.env.ADSENSE_CLIENT && (
+          <script
+            async
+            src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${process.env.ADSENSE_CLIENT}`}
+            crossOrigin="anonymous"
+          />
+        )}
       </head>
-      <body className="app-shell">{children}</body>
+      <body className="app-shell">
+        <I18nProvider>{children}</I18nProvider>
+      </body>
     </html>
   );
 }

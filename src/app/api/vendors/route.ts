@@ -15,8 +15,9 @@ interface Body {
 }
 
 // Vendor discovery. With a Google Maps key this returns REAL rental businesses
-// from Places Nearby Search; otherwise clearly-labelled demo seeds so the
-// product remains usable before keys are added.
+// from Google Places. Demo seeds appear ONLY when no key is configured; if a
+// key IS configured but Google rejects it, we return the exact error instead
+// of silently showing dummy shops.
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as Body | null;
   if (!body?.origin || typeof body.origin.lat !== "number") {
@@ -28,11 +29,17 @@ export async function POST(req: Request) {
 
   const real = await findRealVendors(body.origin, radius, vClass);
   let vendors: Vendor[];
-  let source: "google" | "demo";
+  let source: "google" | "demo" | "google-error";
+  let sourceError: string | undefined;
 
-  if (real) {
+  if (real.vendors) {
     source = "google";
-    vendors = real.filter((v) => (v.distanceKm ?? 999) <= radius);
+    vendors = real.vendors.filter((v) => (v.distanceKm ?? 999) <= radius);
+  } else if (real.error) {
+    // A key is configured but Google refused it - never mask this with demo data.
+    source = "google-error";
+    sourceError = real.error;
+    vendors = [];
   } else {
     source = "demo";
     vendors = seedVendors(body.origin)
@@ -68,5 +75,5 @@ export async function POST(req: Request) {
     },
   ]);
 
-  return NextResponse.json({ vendors, source });
+  return NextResponse.json({ vendors, source, sourceError });
 }

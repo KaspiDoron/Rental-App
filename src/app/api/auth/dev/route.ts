@@ -4,13 +4,13 @@ import { registerUser, setPlan } from "@/lib/access";
 import type { PlanId } from "@/lib/access";
 
 // TEMPORARY development entry buttons (remove before public launch).
-// Personas: owner, manager, free, pro, business.
+// Personas: owner, manager, free, pro, ultra.
 const PERSONAS: Record<string, { email: string; plan: PlanId; admin?: boolean }> = {
-  owner: { email: "", plan: "business" }, // filled with ownerEmail() below
-  manager: { email: "dev-manager@wheeldeal.dev", plan: "business", admin: true },
+  owner: { email: "", plan: "ultra" }, // filled with ownerEmail() below
+  manager: { email: "dev-manager@wheeldeal.dev", plan: "ultra", admin: true },
   free: { email: "dev-free@wheeldeal.dev", plan: "free" },
   pro: { email: "dev-pro@wheeldeal.dev", plan: "pro" },
-  business: { email: "dev-business@wheeldeal.dev", plan: "business" },
+  ultra: { email: "dev-ultra@wheeldeal.dev", plan: "ultra" },
 };
 
 export async function POST(req: Request) {

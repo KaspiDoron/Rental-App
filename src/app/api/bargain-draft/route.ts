@@ -15,6 +15,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "vendor and rfq required" }, { status: 400 });
   }
 
+  // Local-language street bargaining is an Ultra perk (management included).
+  const wantsLocal = body.language === "local";
+  const isUltra = session.plan === "ultra";
+  if (wantsLocal && !isUltra) {
+    return NextResponse.json(
+      {
+        error: "Bargaining in the shop's local language is an Ultra feature.",
+        upgrade: true,
+      },
+      { status: 403 }
+    );
+  }
+
   const draft = await composeBargain({
     rfq: body.rfq as StructuredRFQ,
     vendor: body.vendor as Vendor,
@@ -22,6 +35,7 @@ export async function POST(req: Request) {
     rivalPricePerDay: body.rivalPricePerDay,
     region: body.region,
     round: Math.max(0, Number(body.round ?? 0)),
+    localLanguage: wantsLocal && isUltra,
   });
 
   // Safety-screen even our own composed drafts before they can be sent.

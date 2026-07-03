@@ -5,21 +5,23 @@ import { randomBytes } from "crypto";
 
 // Forgot password: set a temporary password, email it with an easy-copy block,
 // and force a change on next login (profile page opens first).
+//
+// Order matters: we send the email FIRST and only overwrite the password after
+// it is actually on its way, so a broken email setup never locks anyone out.
 export async function POST(req: Request) {
   const { email } = await req.json().catch(() => ({}));
   const key = String(email ?? "").trim().toLowerCase();
-  const user = getUser(key);
+  const user = await getUser(key, { fresh: true });
 
   // Do not reveal whether an account exists.
   const generic = {
     ok: true,
     message:
-      "If this email has an account, a temporary password is on its way. Check your inbox.",
+      "If this email has an account, a temporary password is on its way. Check your inbox (and spam).",
   };
   if (!user) return NextResponse.json(generic);
 
-  const temp = randomBytes(4).toString("hex").toUpperCase(); // e.g. 8 chars
-  await setPassword(key, temp, true);
+  const temp = randomBytes(4).toString("hex").toUpperCase(); // 8 chars
 
   const result = await sendEmail({
     to: [key],
@@ -38,9 +40,22 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          "Email sending isn't configured yet (add RESEND_API_KEY in Admin -> Keys). Ask the app owner to reset your password.",
+          result.reason === "unconfigured"
+            ? "Email sending isn't configured yet (the owner must add RESEND_API_KEY in Admin -> Keys). Your current password is unchanged - ask the app owner to reset it."
+            : `The reset email could not be sent (${result.error ?? "email error"}). Your current password is unchanged - try again in a minute.`,
       },
       { status: 503 }
+    );
+  }
+
+  const saved = await setPassword(key, temp, true);
+  if (!saved) {
+    return NextResponse.json(
+      {
+        error:
+          "The email was sent but the temporary password could not be saved (database issue). Ask the owner to check Supabase, then request a new reset.",
+      },
+      { status: 500 }
     );
   }
   return NextResponse.json(generic);

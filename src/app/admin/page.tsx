@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
+import { LoadingDots } from "@/components/LoadingDots";
+import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
@@ -19,14 +21,30 @@ interface UserRecord {
   phone?: string;
   status: "active" | "blocked";
   role: "owner" | "admin" | "user";
+  plan?: string;
   provider: string;
   addedAt: number;
   lastSeen: number;
 }
 
+interface FeedbackRow {
+  id: number;
+  category: string;
+  body: string;
+  reporter_email: string | null;
+  is_real_issue: boolean;
+  severity: string | null;
+  summary: string | null;
+  triage_reason: string | null;
+  image_count: number;
+  created_at: string;
+}
+
 export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
-  const [tab, setTab] = useState<"analytics" | "keys" | "users" | "billing">("analytics");
+  const [tab, setTab] = useState<"analytics" | "keys" | "users" | "feedback" | "billing">(
+    "analytics"
+  );
   const [analytics, setAnalytics] = useState<AnalyticsSnapshot | null>(null);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [users, setUsers] = useState<UserRecord[]>([]);
@@ -42,8 +60,16 @@ export default function AdminPage() {
   const [revealed, setRevealed] = useState<{ name: string; label: string; value: string }[] | null>(null);
   const [aiProviders, setAiProviders] = useState<any[]>([]);
   const [training, setTraining] = useState("");
+  const [trainingImages, setTrainingImages] = useState<string[]>([]);
   const [trainingCount, setTrainingCount] = useState(0);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
+  const [trainBusy, setTrainBusy] = useState(false);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState("");
+  const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
+  const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
+  const [diag, setDiag] = useState<{ kind: string; text: string; ok: boolean } | null>(null);
+  const [diagBusy, setDiagBusy] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -68,25 +94,79 @@ export default function AdminPage() {
       setAiProviders(ai.providers ?? []);
       const tr = await (await fetch("/api/admin/training")).json();
       setTrainingCount((tr.examples ?? []).length);
+      const fb = await (await fetch("/api/admin/feedback")).json();
+      setFeedbackRows(fb.feedback ?? []);
     })().catch(() => setAuthorized(false));
   }, []);
 
+  const visibleUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    let list = users.filter(
+      (u) =>
+        !q ||
+        u.email.toLowerCase().includes(q) ||
+        (u.phone ?? "").toLowerCase().includes(q) ||
+        u.role.includes(q) ||
+        (u.plan ?? "").includes(q)
+    );
+    if (userSort === "new") list = [...list].sort((a, b) => b.lastSeen - a.lastSeen);
+    else if (userSort === "old") list = [...list].sort((a, b) => a.lastSeen - b.lastSeen);
+    else
+      list = [...list].sort((a, b) => {
+        const rank = (u: UserRecord) => (u.role === "owner" ? 0 : u.role === "admin" ? 1 : 2);
+        return rank(a) - rank(b) || b.lastSeen - a.lastSeen;
+      });
+    return list;
+  }, [users, userSearch, userSort]);
+
+  async function runDiag(kind: "supabase" | "maps") {
+    setDiagBusy(kind);
+    setDiag(null);
+    try {
+      const res = await fetch(kind === "supabase" ? "/api/admin/supabase-test" : "/api/admin/maps-test");
+      const d = await res.json();
+      if (kind === "supabase") {
+        setDiag({ kind, ok: Boolean(d.appConfigOk), text: d.detail ?? "No result." });
+      } else {
+        const lines = [
+          `Places API (New): ${d.placesNew?.ok ? "OK" : "FAILED"} - ${d.placesNew?.detail}`,
+          `Places API (legacy): ${d.placesLegacy?.ok ? "OK" : "FAILED"} - ${d.placesLegacy?.detail}`,
+          `Geocoding: ${d.geocoding?.ok ? "OK" : "FAILED"} - ${d.geocoding?.detail}`,
+        ];
+        setDiag({
+          kind,
+          ok: Boolean(d.placesNew?.ok || d.placesLegacy?.ok),
+          text: d.keyConfigured ? lines.join("\n") : "No Google Maps key configured yet.",
+        });
+      }
+    } catch {
+      setDiag({ kind, ok: false, text: "Could not run the test." });
+    } finally {
+      setDiagBusy(null);
+    }
+  }
+
   async function saveKey(name: string) {
     const value = editing[name] ?? "";
-    const res = await fetch("/api/admin/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, value }),
-    });
-    const data = await res.json();
-    if (data.key) {
-      setKeys((ks) => ks.map((k) => (k.name === name ? data.key : k)));
-      setEditing((e) => ({ ...e, [name]: "" }));
-      setSaved(name);
-      setKeyWarning(data.warning ?? null);
-      setTimeout(() => setSaved(null), 1500);
-    } else if (data.error) {
-      setKeyWarning(data.error);
+    setSavingKey(name);
+    try {
+      const res = await fetch("/api/admin/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, value }),
+      });
+      const data = await res.json();
+      if (data.key) {
+        setKeys((ks) => ks.map((k) => (k.name === name ? data.key : k)));
+        setEditing((e) => ({ ...e, [name]: "" }));
+        setSaved(name);
+        setKeyWarning(data.warning ?? null);
+        setTimeout(() => setSaved(null), 1500);
+      } else if (data.error) {
+        setKeyWarning(data.error);
+      }
+    } finally {
+      setSavingKey(null);
     }
   }
 
@@ -113,19 +193,41 @@ export default function AdminPage() {
 
   async function teach() {
     setTrainMsg(null);
-    const res = await fetch("/api/admin/training", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: training }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setTraining("");
-      setTrainingCount((data.examples ?? []).length);
-      setTrainMsg("Learned ✓ - the bargaining agents will use this style.");
-    } else {
-      setTrainMsg(data.error ?? "Could not save.");
+    setTrainBusy(true);
+    try {
+      const res = await fetch("/api/admin/training", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: training, images: trainingImages }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTraining("");
+        setTrainingImages([]);
+        setTrainingCount((data.examples ?? []).length);
+        setTrainMsg(
+          data.transcribed
+            ? "Learned ✓ - the agent read your screenshots and learned the conversation."
+            : "Learned ✓ - the bargaining agents will use this style."
+        );
+      } else {
+        setTrainMsg(data.error ?? "Could not save.");
+      }
+    } finally {
+      setTrainBusy(false);
     }
+  }
+
+  function addTrainingFiles(files: FileList | null) {
+    if (!files) return;
+    Array.from(files)
+      .slice(0, 5 - trainingImages.length)
+      .forEach((f) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          setTrainingImages((prev) => [...prev, String(reader.result)].slice(0, 5));
+        reader.readAsDataURL(f);
+      });
   }
 
   async function userAction(body: Record<string, string>) {
@@ -164,15 +266,16 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong mb-4 flex gap-1 rounded-2xl p-1">
-        {(["analytics", "keys", "users", "billing"] as const).map((t) => (
+        {(["analytics", "keys", "users", "feedback", "billing"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`btn btn-sm flex-1 rounded-xl py-2 text-[12px] font-extrabold capitalize ${
+            className={`btn btn-sm flex-1 rounded-xl py-2 text-[11px] font-extrabold capitalize ${
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
             {t}
+            {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
           </button>
         ))}
       </div>
@@ -196,15 +299,49 @@ export default function AdminPage() {
               placeholder={"Me: Hi! How much for a 125cc scooter for 3 days?\nShop: 100k per day\nMe: I saw 80k nearby, can you do 75k if I take 3 days?\n..."}
               className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
             />
+            {/* Screenshots of real bargains - the vision agent transcribes them */}
+            <div className="mt-2 flex items-center gap-2">
+              {trainingImages.map((img, i) => (
+                <div key={i} className="relative h-12 w-12 overflow-hidden rounded-lg border-2 border-line">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={img} alt="" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setTrainingImages((p) => p.filter((_, j) => j !== i))}
+                    className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center bg-black/60 text-[10px] text-white"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {trainingImages.length < 5 && (
+                <label className="btn flex h-12 w-12 cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="sr-only"
+                    onChange={(e) => {
+                      addTrainingFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <Icon name="plus" className="h-4 w-4" />
+                </label>
+              )}
+              <span className="text-[10px] text-faint">
+                Or add chat screenshots - the AI reads real bargain images too.
+              </span>
+            </div>
             {trainMsg && (
               <p className="mt-1 text-[12px] font-bold text-savings">{trainMsg}</p>
             )}
             <button
               onClick={teach}
-              disabled={training.trim().length < 20}
+              disabled={trainBusy || (training.trim().length < 20 && trainingImages.length === 0)}
               className="btn btn-primary mt-2 w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
             >
-              Teach the agents
+              {trainBusy ? <LoadingDots light label="Learning" /> : "Teach the agents"}
             </button>
           </div>
           <div className="grid grid-cols-2 gap-2">
@@ -266,6 +403,39 @@ export default function AdminPage() {
               {keyWarning}
             </div>
           )}
+
+          {/* One-tap live diagnostics */}
+          <div className="surface rounded-blob p-4">
+            <div className="text-[13px] font-extrabold text-strong">🩺 Connection tests</div>
+            <p className="mb-2 text-[11px] text-faint">
+              Fire a real request and get the exact error + fix, instead of guessing.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => runDiag("supabase")}
+                disabled={diagBusy !== null}
+                className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+              >
+                {diagBusy === "supabase" ? <LoadingDots label="Testing" /> : "Test Supabase"}
+              </button>
+              <button
+                onClick={() => runDiag("maps")}
+                disabled={diagBusy !== null}
+                className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+              >
+                {diagBusy === "maps" ? <LoadingDots label="Testing" /> : "Test Google key"}
+              </button>
+            </div>
+            {diag && (
+              <pre
+                className={`mt-2 whitespace-pre-wrap rounded-xl p-2.5 font-sans text-[11px] font-bold ${
+                  diag.ok ? "bg-savings-soft text-savings" : "bg-brandred-soft text-brandred"
+                }`}
+              >
+                {diag.text}
+              </pre>
+            )}
+          </div>
 
           {/* AI providers: usage, remaining, switch, failover */}
           <div className="surface rounded-blob p-4">
@@ -376,9 +546,16 @@ export default function AdminPage() {
                   />
                   <button
                     onClick={() => saveKey(k.name)}
-                    className="btn btn-primary btn-sm rounded-xl px-3 text-[12px]"
+                    disabled={savingKey === k.name}
+                    className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
                   >
-                    {saved === k.name ? "Saved" : "Apply"}
+                    {savingKey === k.name ? (
+                      <LoadingDots light />
+                    ) : saved === k.name ? (
+                      "Saved"
+                    ) : (
+                      "Apply"
+                    )}
                   </button>
                 </div>
               ) : (
@@ -429,12 +606,37 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Search + sort */}
+          <div className="flex gap-2">
+            <input
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder="Search email, phone, role..."
+              className="flex-1 rounded-xl border-2 border-line bg-card p-2.5 text-[13px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+            />
+            <select
+              value={userSort}
+              onChange={(e) => setUserSort(e.target.value as typeof userSort)}
+              className="rounded-xl border-2 border-line bg-card p-2.5 text-[12px] font-bold text-strong"
+            >
+              <option value="new">Newest first</option>
+              <option value="old">Oldest first</option>
+              <option value="management">Management first</option>
+            </select>
+          </div>
+
           {users.length === 0 && (
             <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
-              No users have signed in on this instance yet.
+              No registered users found. If someone signed up but is missing
+              here, Supabase is not connected - run Test Supabase in Keys.
             </div>
           )}
-          {users.map((u) => (
+          {visibleUsers.length === 0 && users.length > 0 && (
+            <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
+              No users match &quot;{userSearch}&quot;.
+            </div>
+          )}
+          {visibleUsers.map((u) => (
             <div key={u.email} className="surface rounded-blob p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -453,6 +655,15 @@ export default function AdminPage() {
                     >
                       {u.role.toUpperCase()}
                     </span>
+                    {u.plan && u.role === "user" && u.plan !== "free" && (
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold text-white ${
+                          u.plan === "ultra" || u.plan === "business" ? "badge-ultra" : "bg-brandblue"
+                        }`}
+                      >
+                        {(u.plan === "business" ? "ultra" : u.plan).toUpperCase()}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] text-faint">
                     {u.phone ?? "no phone"} · {u.provider} · seen{" "}
@@ -495,6 +706,52 @@ export default function AdminPage() {
         </div>
       )}
 
+      {tab === "feedback" && (
+        <div className="space-y-3">
+          <div className="rounded-2xl border-2 border-savings bg-savings-soft p-3 text-[12px] font-bold text-savings">
+            📥 The in-app feedback inbox works with ZERO setup - every triaged
+            report lands here from Supabase. Email delivery (Resend) is
+            optional on top.
+          </div>
+          {feedbackRows.length === 0 && (
+            <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
+              No feedback yet (or Supabase is not connected - run Test Supabase
+              in Keys).
+            </div>
+          )}
+          {feedbackRows.map((f) => (
+            <div key={f.id} className="surface rounded-blob p-3">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${
+                    f.is_real_issue
+                      ? f.severity === "high"
+                        ? "bg-brandred text-white"
+                        : "bg-brandyellow text-[#4a3300]"
+                      : "bg-card2 text-faint"
+                  }`}
+                >
+                  {f.is_real_issue ? (f.severity ?? "issue").toUpperCase() : "NOISE"}
+                </span>
+                <span className="text-[11px] font-bold capitalize text-soft">{f.category}</span>
+                <span className="ml-auto text-[10px] text-faint">
+                  {new Date(f.created_at).toLocaleString()}
+                </span>
+              </div>
+              <div className="mt-1 text-[13px] font-extrabold text-strong">
+                {f.summary || f.body.slice(0, 80)}
+              </div>
+              <p className="mt-0.5 whitespace-pre-wrap text-[12px] text-soft">{f.body}</p>
+              <div className="mt-1 text-[10px] text-faint">
+                {f.reporter_email ?? "anonymous"}
+                {f.image_count > 0 ? ` · ${f.image_count} screenshot(s)` : ""}
+                {f.triage_reason ? ` · ${f.triage_reason}` : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {tab === "billing" && (
         <div className="space-y-3">
           <div
@@ -506,8 +763,8 @@ export default function AdminPage() {
           >
             <Icon name="card" className="mr-1 inline h-4 w-4" />
             {stripeOn
-              ? "Stripe is connected. Users see the 80% launch offer (billed every 3 months) via the upgrade chip and at signup."
-              : "Billing preview. Add STRIPE_SECRET_KEY in Keys to enable real Checkout. Users will see the 80% launch offer chip."}
+              ? "Payments are connected. Users see the 80% launch offer (billed every 3 months) via the upgrade chip and at signup."
+              : "Billing preview. Recommended for Israel: connect Lemon Squeezy (no business entity needed, pays out via PayPal/wire) - add the LEMONSQUEEZY_* keys in the Keys tab. Stripe stays available as an alternative."}
           </div>
           {plans.map((p) => (
             <PlanCard key={p.id} plan={p} />
@@ -520,9 +777,9 @@ export default function AdminPage() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto min-h-[100dvh] max-w-md pb-16 sm:max-w-lg">
+    <main className="mx-auto min-h-[100dvh] max-w-md pb-16 sm:max-w-lg md:max-w-2xl">
       <div className="topbar">
-        <div className="flex items-center justify-between px-4 pb-2.5">
+        <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-2xl">
           <div className="flex items-center gap-2">
             <BrandMark size={30} />
             <div>
@@ -532,9 +789,12 @@ function Shell({ children }: { children: React.ReactNode }) {
               <p className="text-[10px] font-bold text-faint">WheelDeal workspace</p>
             </div>
           </div>
-          <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
-            ← App
-          </a>
+          <div className="flex items-center gap-1.5">
+            <LanguageButton />
+            <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
+              ← App
+            </a>
+          </div>
         </div>
       </div>
       <div className="px-4 pt-4">{children}</div>

@@ -159,3 +159,25 @@ Visible only to management (Admin -> Billing).
   `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
 Always use freshly rotated keys - never ones that were shared in plain text.
+
+## v4 additions (July 2026)
+
+- Payments: Lemon Squeezy is now the primary provider (works for individuals
+  in Israel; pays out via PayPal or bank wire). Create a store at
+  lemonsqueezy.com, add two subscription products (Pro / Ultra, billed every
+  3 months), then paste LEMONSQUEEZY_API_KEY, LEMONSQUEEZY_STORE_ID,
+  LEMONSQUEEZY_VARIANT_PRO, LEMONSQUEEZY_VARIANT_ULTRA and
+  LEMONSQUEEZY_WEBHOOK_SECRET in Admin -> Keys. Webhook URL:
+  https://<your-domain>/api/webhooks/lemonsqueezy (event: order_created +
+  subscription events).
+- Personal WhatsApp: deploy Evolution API (self-hosted, free - see the
+  step-by-step in the project chat/README), then paste EVOLUTION_API_URL and
+  EVOLUTION_API_KEY in Admin -> Keys. Users connect their own number from
+  Profile -> Your WhatsApp (QR scan). Strict anti-ban rate limits are
+  enforced (15/hour, 60/day, 20s gap).
+- Diagnostics: Admin -> Keys -> "Test Supabase" and "Test Google key" fire
+  real requests and print the exact error + fix.
+- Feedback: readable with zero setup in Admin -> Feedback (Supabase-backed).
+  Resend email delivery stays optional.
+- AdSense: set ADSENSE_CLIENT (ca-pub-...); free-tier pages show labelled ad
+  slots (placeholder until Google approves the site). Paid plans are ad-free.

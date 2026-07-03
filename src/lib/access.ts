@@ -1,13 +1,31 @@
 // User registry / access control, with password auth and plans.
 //
-// Passwords are stored as scrypt hashes (salted). Signups are stored in-memory
-// per instance and mirrored to Supabase (app_users) so every registration is
-// durably saved.
+// Supabase (app_users) is the DURABLE source of truth: signups, password
+// changes and plan upgrades are written there and read back on every lookup,
+// so accounts work across serverless instances and deploys. A short in-memory
+// cache keeps latency low, and everything still works (non-durably) with no
+// Supabase configured.
+//
+// Plan naming: the top tier is "ultra" in the product. It is stored as
+// "business" in the app_users.plan column (legacy check constraint) and
+// normalised on read, so old databases keep working without a migration.
 
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
-import { sbInsert } from "./runtime-config";
+import { sbInsert, sbSelect, supabaseConfigured } from "./runtime-config";
 
-export type PlanId = "free" | "pro" | "business";
+export type PlanId = "free" | "pro" | "ultra";
+
+/** Normalise any stored plan value ("business" was renamed to Ultra). */
+export function normalizePlan(p: string | undefined | null): PlanId {
+  if (p === "pro") return "pro";
+  if (p === "ultra" || p === "business") return "ultra";
+  return "free";
+}
+
+/** Value written to the app_users.plan column (kept legacy-compatible). */
+function dbPlan(p: PlanId): string {
+  return p === "ultra" ? "business" : p;
+}
 
 export interface UserRecord {
   email: string;
@@ -23,16 +41,27 @@ export interface UserRecord {
   lastSeen: number;
 }
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __wheeldeal_users__: Map<string, UserRecord> | undefined;
+interface CacheEntry {
+  rec: UserRecord;
+  fetchedAt: number;
 }
 
-function store() {
-  if (!globalThis.__wheeldeal_users__) {
-    globalThis.__wheeldeal_users__ = new Map();
+const CACHE_TTL_MS = 10_000;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wheeldeal_users_v2__: Map<string, CacheEntry> | undefined;
+}
+
+function cache() {
+  if (!globalThis.__wheeldeal_users_v2__) {
+    globalThis.__wheeldeal_users_v2__ = new Map();
   }
-  return globalThis.__wheeldeal_users__;
+  return globalThis.__wheeldeal_users_v2__;
+}
+
+function remember(rec: UserRecord) {
+  cache().set(rec.email, { rec, fetchedAt: Date.now() });
 }
 
 // ---- password hashing --------------------------------------------------------
@@ -54,10 +83,44 @@ export function verifyPassword(plain: string, stored?: string): boolean {
   );
 }
 
-// ---- persistence mirror --------------------------------------------------------
+// ---- Supabase row mapping -----------------------------------------------------
 
-async function mirror(rec: UserRecord) {
-  await sbInsert(
+interface UserRow {
+  email: string;
+  phone: string | null;
+  name: string | null;
+  provider: string | null;
+  status: string | null;
+  plan: string | null;
+  password_hash: string | null;
+  must_change_password: boolean | null;
+  terms_accepted_at: string | null;
+  added_at: string | null;
+  last_seen: string | null;
+}
+
+function fromRow(r: UserRow): UserRecord {
+  return {
+    email: r.email,
+    phone: r.phone ?? undefined,
+    name: r.name ?? undefined,
+    provider: (["email", "google", "dev"].includes(r.provider ?? "")
+      ? r.provider
+      : "email") as UserRecord["provider"],
+    status: r.status === "blocked" ? "blocked" : "active",
+    plan: normalizePlan(r.plan),
+    passwordHash: r.password_hash ?? undefined,
+    mustChangePassword: Boolean(r.must_change_password),
+    termsAcceptedAt: r.terms_accepted_at ? Date.parse(r.terms_accepted_at) : undefined,
+    addedAt: r.added_at ? Date.parse(r.added_at) : Date.now(),
+    lastSeen: r.last_seen ? Date.parse(r.last_seen) : Date.now(),
+  };
+}
+
+/** Write a record to Supabase. Returns false when the durable write failed. */
+async function mirror(rec: UserRecord): Promise<boolean> {
+  remember(rec);
+  return sbInsert(
     "app_users",
     [
       {
@@ -66,7 +129,7 @@ async function mirror(rec: UserRecord) {
         name: rec.name ?? null,
         provider: rec.provider,
         status: rec.status,
-        plan: rec.plan,
+        plan: dbPlan(rec.plan),
         password_hash: rec.passwordHash ?? null,
         must_change_password: rec.mustChangePassword ?? false,
         terms_accepted_at: rec.termsAcceptedAt
@@ -81,8 +144,32 @@ async function mirror(rec: UserRecord) {
 
 // ---- CRUD ---------------------------------------------------------------------
 
-export function getUser(email: string): UserRecord | undefined {
-  return store().get(email.toLowerCase());
+/**
+ * Look a user up. Reads through to Supabase (the durable store) with a short
+ * per-instance cache; pass { fresh: true } for auth-critical checks.
+ */
+export async function getUser(
+  email: string,
+  opts?: { fresh?: boolean }
+): Promise<UserRecord | undefined> {
+  const key = email.trim().toLowerCase();
+  const hit = cache().get(key);
+  if (hit && !opts?.fresh && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
+    return hit.rec;
+  }
+  if (supabaseConfigured()) {
+    const rows = await sbSelect<UserRow>(
+      "app_users",
+      `select=*&email=eq.${encodeURIComponent(key)}&limit=1`
+    );
+    if (rows.length) {
+      const rec = fromRow(rows[0]);
+      remember(rec);
+      return rec;
+    }
+  }
+  // No durable row (or no Supabase): fall back to what this instance knows.
+  return hit?.rec;
 }
 
 export async function registerUser(u: {
@@ -94,9 +181,9 @@ export async function registerUser(u: {
   acceptedTerms: boolean;
   plan?: PlanId;
 }): Promise<UserRecord> {
-  const key = u.email.toLowerCase();
+  const key = u.email.trim().toLowerCase();
   const now = Date.now();
-  const existing = store().get(key);
+  const existing = await getUser(key, { fresh: true });
   const rec: UserRecord = existing
     ? {
         ...existing,
@@ -118,55 +205,79 @@ export async function registerUser(u: {
         addedAt: now,
         lastSeen: now,
       };
-  store().set(key, rec);
   await mirror(rec);
   return rec;
 }
 
+/**
+ * Set a new password. Returns false when the user does not exist OR when the
+ * durable write failed (so callers can tell the user instead of lying).
+ */
 export async function setPassword(
   email: string,
   password: string,
   mustChange = false
 ): Promise<boolean> {
-  const rec = store().get(email.toLowerCase());
+  const rec = await getUser(email, { fresh: true });
   if (!rec) return false;
   rec.passwordHash = hashPassword(password);
   rec.mustChangePassword = mustChange;
-  await mirror(rec);
-  return true;
+  const persisted = await mirror(rec);
+  return supabaseConfigured() ? persisted : true;
 }
 
 export async function setPlan(email: string, plan: PlanId): Promise<void> {
-  const rec = store().get(email.toLowerCase());
+  const rec = await getUser(email, { fresh: true });
   if (!rec) return;
   rec.plan = plan;
   await mirror(rec);
 }
 
-export function touchUser(email: string) {
-  const rec = store().get(email.toLowerCase());
-  if (rec) rec.lastSeen = Date.now();
+export async function touchUser(email: string): Promise<void> {
+  const rec = await getUser(email);
+  if (!rec) return;
+  rec.lastSeen = Date.now();
+  await mirror(rec);
 }
 
-export function isBlocked(email: string): boolean {
-  return store().get(email.toLowerCase())?.status === "blocked";
+export async function isBlocked(email: string): Promise<boolean> {
+  return (await getUser(email))?.status === "blocked";
 }
 
-export function listUsers(): UserRecord[] {
-  return [...store().values()].sort((a, b) => b.lastSeen - a.lastSeen);
+/** Every registered user, durable store first, newest activity first. */
+export async function listUsers(): Promise<UserRecord[]> {
+  const seen = new Map<string, UserRecord>();
+  if (supabaseConfigured()) {
+    const rows = await sbSelect<UserRow>(
+      "app_users",
+      "select=*&order=last_seen.desc&limit=500"
+    );
+    for (const r of rows) {
+      const rec = fromRow(r);
+      seen.set(rec.email, rec);
+      remember(rec);
+    }
+  }
+  // Include anything this instance knows that has not landed durably yet.
+  for (const { rec } of cache().values()) {
+    if (!seen.has(rec.email)) seen.set(rec.email, rec);
+  }
+  return [...seen.values()].sort((a, b) => b.lastSeen - a.lastSeen);
 }
 
-export function setUserStatus(email: string, status: "active" | "blocked") {
-  const key = email.toLowerCase();
-  const rec = store().get(key);
-  if (rec) rec.status = status;
-  else
-    store().set(key, {
-      email: key,
-      provider: "email",
-      status,
-      plan: "free",
-      addedAt: Date.now(),
-      lastSeen: Date.now(),
-    });
+export async function setUserStatus(
+  email: string,
+  status: "active" | "blocked"
+): Promise<void> {
+  const key = email.trim().toLowerCase();
+  const rec = (await getUser(key, { fresh: true })) ?? {
+    email: key,
+    provider: "email" as const,
+    status,
+    plan: "free" as PlanId,
+    addedAt: Date.now(),
+    lastSeen: Date.now(),
+  };
+  rec.status = status;
+  await mirror(rec);
 }

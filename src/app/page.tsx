@@ -21,6 +21,8 @@ import { BargainDraftModal } from "@/components/BargainDraftModal";
 import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
+import { LanguageButton } from "@/components/LanguageButton";
+import { useI18n } from "@/lib/i18n";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -44,14 +46,15 @@ const DEFAULT_ORIGIN: Origin = {
 };
 
 export default function Home() {
+  const { t } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
   const [radiusKm, setRadiusKm] = useState(8);
   const [rawText, setRawText] = useState(EXAMPLES[0]);
   const [rfq, setRfq] = useState<StructuredRFQ | null>(null);
-  const [marketRate, setMarketRate] = useState<number | null>(null);
   const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [source, setSource] = useState<"google" | "demo" | null>(null);
+  const [source, setSource] = useState<"google" | "demo" | "google-error" | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "profiling" | "running" | "done">("idle");
   const [view, setView] = useState<"list" | "map">("list");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -65,6 +68,7 @@ export default function Home() {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const appliedReplies = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     // Middleware already gates unauthenticated visitors; here we just load the
@@ -121,7 +125,51 @@ export default function Home() {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   });
 
-  async function fetchEstimate(vendor: Vendor, activeRfq: StructuredRFQ) {
+  // Live loop: while agents are waiting on shops, poll the reply feed so
+  // offers ingested by the WhatsApp webhook pop into the cards automatically.
+  const waiting = vendors.some(
+    (v) => v.stage === "rfq-sent" || v.stage === "awaiting-response"
+  );
+  useEffect(() => {
+    if (!session || !waiting || !rfq) return;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/replies", { cache: "no-store" });
+        const d = await res.json();
+        for (const r of d.replies ?? []) {
+          if (!r.found || !r.pricePerDay || appliedReplies.current.has(r.id)) continue;
+          appliedReplies.current.add(r.id);
+          setVendors((vs) =>
+            vs.map((v) =>
+              v.id === r.vendorId
+                ? {
+                    ...v,
+                    stage: "offer-received" as TrackerStage,
+                    offer: {
+                      pricePerDay: r.pricePerDay,
+                      listPricePerDay: v.offer?.listPricePerDay ?? r.pricePerDay,
+                      currency: "USD",
+                      totalPrice: Math.round(r.pricePerDay * rfq.durationDays),
+                      includesInsurance: false,
+                      includesDelivery: false,
+                      message: r.replyText?.slice(0, 200) ?? "",
+                      round: v.offer ? v.offer.round + 1 : 0,
+                      verified: Boolean(r.verified),
+                      simulated: false,
+                    },
+                  }
+                : v
+            )
+          );
+        }
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => clearInterval(id);
+  }, [session, waiting, rfq]);
+
+  async function fetchStatus(vendor: Vendor, activeRfq: StructuredRFQ) {
     const res = await fetch("/api/negotiate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -129,8 +177,7 @@ export default function Home() {
     });
     if (!res.ok) return;
     const data = await res.json();
-    if (data.marketRate) setMarketRate(data.marketRate);
-    patchVendor(vendor.id, { stage: "awaiting-response", sentiment: data.sentiment });
+    patchVendor(vendor.id, { sentiment: data.sentiment });
   }
 
   function runFunnel(list: Vendor[], activeRfq: StructuredRFQ) {
@@ -141,14 +188,10 @@ export default function Home() {
 
     list.forEach((vendor, i) => {
       const base = i * 200;
-      const stages: [TrackerStage, number][] = [
-        ["locating-contact", base + 300],
-        ["rfq-sent", base + 800],
-      ];
-      stages.forEach(([stage, ms]) => schedule(() => patchVendor(vendor.id, { stage }), ms));
-      schedule(() => fetchEstimate({ ...vendor }, activeRfq), base + 1300);
+      schedule(() => patchVendor(vendor.id, { stage: "locating-contact" }), base + 300);
+      schedule(() => fetchStatus({ ...vendor }, activeRfq), base + 900);
     });
-    schedule(() => setPhase("done"), list.length * 200 + 1800);
+    schedule(() => setPhase("done"), list.length * 200 + 1400);
   }
 
   async function startSearch() {
@@ -156,8 +199,8 @@ export default function Home() {
     setPhase("profiling");
     setVendors([]);
     setRfq(null);
-    setMarketRate(null);
     setSource(null);
+    setSourceError(null);
 
     const pRes = await fetch("/api/profile", {
       method: "POST",
@@ -191,6 +234,7 @@ export default function Home() {
       stage: "queued" as TrackerStage,
     }));
     setSource(vData.source ?? "demo");
+    setSourceError(vData.sourceError ?? null);
     setVendors(list);
     setPhase("running");
     runFunnel(list, pData.rfq);
@@ -202,18 +246,18 @@ export default function Home() {
 
   async function customMessage(vendorId: string, message: string) {
     const vendor = vendors.find((v) => v.id === vendorId);
-    if (session && vendor?.whatsapp) {
-      const res = await fetch("/api/outreach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: vendor.whatsapp, message }),
-      });
-      if (res.ok) return res.json();
-    }
-    const res = await fetch("/api/safety", {
+    const res = await fetch("/api/outreach", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({
+        to: vendor?.whatsapp || undefined,
+        placeId: vendor?.placeId,
+        vendorId,
+        vendorName: vendor?.name,
+        message,
+        kind: "custom",
+        rfq,
+      }),
     });
     return res.json();
   }
@@ -251,9 +295,9 @@ export default function Home() {
   const paidPlan = session ? session.plan !== "free" : false;
 
   return (
-    <main className="mx-auto min-h-[100dvh] max-w-md pb-36 sm:max-w-lg">
+    <main className="mx-auto min-h-[100dvh] max-w-md pb-36 sm:max-w-lg md:max-w-3xl">
       <div className="topbar">
-        <div className="flex items-center justify-between px-4 pb-2.5">
+        <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
           <div className="flex items-center gap-2">
             <BrandMark size={34} />
             <div>
@@ -261,13 +305,17 @@ export default function Home() {
                 Wheel<span className="text-brandblue">Deal</span>
               </h1>
               <p className="text-[10px] font-bold text-faint">
-                Cheapest local rides, negotiated for you
+                {t("Authentic bargains, negotiated for you")}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
             {session && session.plan !== "free" && (
-              <span className="rounded-full bg-brandblue px-2 py-1 text-[10px] font-extrabold uppercase text-white">
+              <span
+                className={`rounded-full px-2 py-1 text-[10px] font-extrabold uppercase text-white ${
+                  session.plan === "ultra" ? "badge-ultra" : "bg-brandblue"
+                }`}
+              >
                 {session.plan}
               </span>
             )}
@@ -278,21 +326,22 @@ export default function Home() {
                   : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
               }`}
             >
-              {aiOn ? "AI online" : "Demo AI"}
+              {aiOn ? t("AI online") : t("Demo AI")}
             </span>
+            <LanguageButton />
           </div>
         </div>
       </div>
 
       <div className="px-4">
         <section className="surface mt-4 rounded-blob p-4">
-          <label className="text-[12px] font-extrabold text-soft">Looking for...</label>
+          <label className="text-[12px] font-extrabold text-soft">{t("Looking for...")}</label>
           <textarea
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
             rows={2}
             className="mt-1 w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            placeholder="e.g. 125cc automatic scooter with phone mount, 3 days"
+            placeholder={t("e.g. 125cc automatic scooter with phone mount, 3 days")}
           />
           <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
             {EXAMPLES.map((ex) => (
@@ -311,7 +360,7 @@ export default function Home() {
           </div>
 
           <label className="mt-3 block text-[12px] font-extrabold text-soft">
-            Search radius · {radiusKm} km
+            {t("Search radius")} · {radiusKm} km
             <input
               type="range"
               min={2}
@@ -328,20 +377,20 @@ export default function Home() {
             className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
             {phase === "profiling" ? (
-              <LoadingDots light label="Structuring your request" />
+              <LoadingDots light label={t("Structuring your request")} />
             ) : phase === "running" ? (
-              <LoadingDots light label="Agents contacting shops" />
+              <LoadingDots light label={t("Agents contacting shops")} />
             ) : (
               <>
-                <Icon name="bolt" className="h-5 w-5" /> Find my deal
+                <Icon name="bolt" className="h-5 w-5" /> {t("Find my deal")}
               </>
             )}
           </button>
           {session?.plan === "free" && (
             <p className="mt-2 text-center text-[11px] font-bold text-faint">
-              Free plan: pickups can be scheduled for today only.{" "}
+              {t("Free plan: pickups can be scheduled for today only.")}{" "}
               <button onClick={() => setUpgradeOpen(true)} className="text-brandblue underline">
-                Upgrade
+                {t("Upgrade")}
               </button>
             </p>
           )}
@@ -349,23 +398,31 @@ export default function Home() {
 
         {source === "demo" && (
           <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow animate-slide-up">
-            Demo vendor list. Add a Google Maps key (Admin → Keys) to search real
-            rental shops. Prices are never invented either way - shops must reply.
+            {t("Demo shop list - no Google Maps key is set yet (owner: Admin -> Keys). Prices are never invented either way: we first ask each shop.")}
+          </div>
+        )}
+        {source === "google-error" && (
+          <div className="mt-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred animate-slide-up">
+            {t("Your Google Maps key is set but Google rejected the request:")}{" "}
+            <span className="font-mono text-[11px]">{sourceError}</span>
+            <div className="mt-1 font-semibold">
+              {t("Owner: open Admin -> Keys -> Test Google key for a one-tap diagnosis.")}
+            </div>
           </div>
         )}
         {source === "google" && (
           <div className="mt-3 rounded-2xl bg-savings-soft p-3 text-[12px] font-bold text-savings animate-slide-up">
-            ✓ Real rental shops near your stay, live from Google Maps.
+            ✓ {t("Real rental shops near your stay, live from Google Maps.")}
           </div>
         )}
 
         {rfq && (
           <div className="surface mt-3 rounded-blob p-3 text-[12px] animate-slide-up">
             <div className="mb-1 flex items-center gap-1.5 font-extrabold text-brandblue">
-              <Icon name="spark" className="h-3.5 w-3.5" /> Structured request
+              <Icon name="spark" className="h-3.5 w-3.5" /> {t("Structured request")}
               {session && session.plan !== "free" && phase === "running" && (
                 <span className="ml-auto font-bold text-faint">
-                  <LoadingDots label="Order status: contacting shops" />
+                  <LoadingDots label={t("Order status: contacting shops")} />
                 </span>
               )}
             </div>
@@ -373,7 +430,9 @@ export default function Home() {
               <Tag>{vehicleLabel(rfq.vehicleClass)}</Tag>
               {rfq.engineSizeCc && <Tag>{rfq.engineSizeCc}cc</Tag>}
               {rfq.maxMileageKm && <Tag>&lt;{rfq.maxMileageKm.toLocaleString()} km</Tag>}
-              <Tag>{rfq.durationDays} days</Tag>
+              <Tag>
+                {rfq.durationDays} {t("days")}
+              </Tag>
               {rfq.fulfillment !== "any" && <Tag>{rfq.fulfillment}</Tag>}
               {rfq.accessories.map((a) => (
                 <Tag key={a}>{a}</Tag>
@@ -384,11 +443,11 @@ export default function Home() {
 
         {vendors.length > 0 && (
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <Stat label="Shops found" value={vendors.length} />
-            <Stat label="Offers in" value={offersIn} accent />
+            <Stat label={t("Shops found")} value={vendors.length} />
+            <Stat label={t("Offers in")} value={offersIn} accent />
             <div className="surface rounded-blob p-3 text-center">
               <div className="text-[10px] font-extrabold uppercase tracking-wide text-savings">
-                Bargained
+                {t("Bargained")}
               </div>
               <div className="text-lg font-extrabold text-savings">
                 $<AnimatedNumber value={Math.round(totalSavings)} />
@@ -400,19 +459,19 @@ export default function Home() {
         {cheapest?.offer && (
           <div className="mt-3 flex items-center justify-between rounded-blob border-2 border-savings bg-savings-soft p-3 animate-slide-up">
             <div className="text-[12px]">
-              <div className="font-bold text-soft">Cheapest confirmed price</div>
+              <div className="font-bold text-soft">{t("Cheapest confirmed price")}</div>
               <div className="font-extrabold text-strong">{cheapest.name}</div>
             </div>
             <div className="text-right">
               <div className="text-xl font-extrabold text-savings">
                 ${cheapest.offer.pricePerDay}
-                <span className="text-xs text-soft">/day</span>
+                <span className="text-xs text-soft">/{t("day")}</span>
               </div>
               <button
                 onClick={() => setBookingVendor(cheapest)}
                 className="text-[11px] font-extrabold text-savings underline"
               >
-                Lock it →
+                {t("Lock it")} →
               </button>
             </div>
           </div>
@@ -424,10 +483,10 @@ export default function Home() {
           <>
             <div className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1">
               <ToggleBtn active={view === "list"} onClick={() => setView("list")}>
-                <Icon name="list" className="h-4 w-4" /> List
+                <Icon name="list" className="h-4 w-4" /> {t("List")}
               </ToggleBtn>
               <ToggleBtn active={view === "map"} onClick={() => setView("map")}>
-                <Icon name="map" className="h-4 w-4" /> Map
+                <Icon name="map" className="h-4 w-4" /> {t("Map")}
               </ToggleBtn>
             </div>
             <div className="mt-3">
@@ -437,7 +496,7 @@ export default function Home() {
         )}
 
         {view === "map" && vendors.length > 0 ? (
-          <div className="relative z-0 mt-3 h-[58vh] overflow-hidden rounded-blob border-2 border-line">
+          <div className="relative z-0 mt-3 h-[58vh] overflow-hidden rounded-blob border-2 border-line md:h-[64vh]">
             <MapView
               origin={origin}
               radiusKm={radiusKm}
@@ -451,28 +510,30 @@ export default function Home() {
             />
           </div>
         ) : (
-          <div className="mt-3 space-y-3">
+          <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
             {filtered.map((v) => (
               <VendorCard
                 key={v.id}
                 vendor={v}
                 rfq={rfq}
-                marketRate={marketRate}
                 plan={session?.plan}
                 onBook={setBookingVendor}
                 onReviews={setReviewsVendor}
                 onReply={setReplyVendor}
                 onBargain={setBargainVendor}
+                onStage={(id, stage) => patchVendor(id, { stage })}
                 onCustomMessage={customMessage}
               />
             ))}
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
-                <LoadingDots label="More agents reporting in" />
+                <LoadingDots label={t("More agents reporting in")} />
               </div>
             )}
           </div>
         )}
+
+        {vendors.length > 3 && view === "list" && <AdBanner plan={session?.plan} />}
 
         {vendors.length === 0 && phase === "idle" && (
           <div className="mt-10 text-center">
@@ -480,9 +541,7 @@ export default function Home() {
               <BrandMark size={72} />
             </div>
             <p className="mx-auto max-w-[280px] text-sm text-soft">
-              Tell us what you want to ride and where you&apos;re staying - the
-              agents will find every rental shop around you and help you chase
-              the best price.
+              {t("Tell us what you want to ride and where you're staying - the agents will find every rental shop around you and bargain authentically for the best price.")}
             </p>
           </div>
         )}
@@ -513,6 +572,7 @@ export default function Home() {
           rfq={rfq}
           region={origin.label}
           round={bargainVendor.offer ? bargainVendor.offer.round + 1 : 0}
+          plan={session?.plan}
           currentPricePerDay={bargainVendor.offer?.pricePerDay}
           rivalPricePerDay={
             cheapest && cheapest.id !== bargainVendor.id

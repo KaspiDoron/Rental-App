@@ -1,10 +1,18 @@
 // Google Maps Platform integration (server-side only - the key never reaches
 // the browser; all calls are proxied through our API routes).
 //
+// IMPORTANT: keys created recently only work with "Places API (New)"
+// (places.googleapis.com). We therefore call the NEW API first and fall back
+// to the legacy endpoints for old keys. Errors are never swallowed - the
+// exact Google status is surfaced so the admin can fix the key/console setup.
+//
 // With GOOGLE_MAPS_API_KEY configured:
-//   - address autocomplete/geocoding uses Google Geocoding
-//   - vendor discovery uses Places Nearby Search (real rental businesses)
-//   - reviews come from Place Details (real Google reviews)
+//   - address/hotel search uses Places Text Search (finds hotels, POIs,
+//     addresses - much better than plain geocoding), with Geocoding + OSM
+//     Nominatim fallbacks
+//   - vendor discovery uses Places Text Search around the stay (real rental
+//     businesses)
+//   - reviews/phone come from Place Details
 //   - photos stream through /api/photo
 // Without it, geocoding falls back to OpenStreetMap Nominatim (free, real
 // data), and vendors fall back to clearly-labelled demo seeds.
@@ -18,6 +26,8 @@ export async function mapsKey(): Promise<string | undefined> {
   return getConfig("GOOGLE_MAPS_API_KEY");
 }
 
+const NEW_BASE = "https://places.googleapis.com/v1";
+
 // ---- Geocoding / address search ---------------------------------------------
 
 export interface PlaceSuggestion {
@@ -27,9 +37,63 @@ export interface PlaceSuggestion {
   source: "google" | "osm";
 }
 
+/** Places API (New) Text Search - also the best "find my hotel" search. */
+async function newTextSearch(
+  key: string,
+  body: Record<string, unknown>,
+  fieldMask: string
+): Promise<{ places: any[] | null; error?: string }> {
+  try {
+    const res = await fetch(`${NEW_BASE}/places:searchText`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": fieldMask,
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        places: null,
+        error:
+          data?.error?.message ??
+          `Places API (New) responded ${res.status} - enable "Places API (New)" for this key in Google Cloud Console.`,
+      };
+    }
+    return { places: (data.places as any[]) ?? [] };
+  } catch (e) {
+    return {
+      places: null,
+      error: e instanceof Error ? e.message : "network error reaching Google",
+    };
+  }
+}
+
 export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
   const key = await mapsKey();
+
   if (key) {
+    // 1) Places API (New) Text Search: finds hotels, businesses, addresses.
+    const { places } = await newTextSearch(
+      key,
+      { textQuery: q, maxResultCount: 6 },
+      "places.displayName,places.formattedAddress,places.location"
+    );
+    if (places && places.length) {
+      return places.map((p) => ({
+        label: [p.displayName?.text, p.formattedAddress]
+          .filter(Boolean)
+          .join(" - "),
+        lat: p.location?.latitude ?? 0,
+        lng: p.location?.longitude ?? 0,
+        source: "google" as const,
+      }));
+    }
+
+    // 2) Legacy Geocoding (works on older keys).
     try {
       const res = await fetch(
         `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
@@ -50,6 +114,8 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
       /* fall through to OSM */
     }
   }
+
+  // 3) OpenStreetMap Nominatim - free, real data, no key needed.
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=${encodeURIComponent(
@@ -72,7 +138,7 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
   }
 }
 
-// ---- Vendor discovery (Places Nearby Search) ----------------------------------
+// ---- Vendor discovery ----------------------------------------------------------
 
 const KEYWORDS: Record<VehicleClass, string> = {
   car: "car rental",
@@ -80,14 +146,85 @@ const KEYWORDS: Record<VehicleClass, string> = {
   scooter: "scooter rental",
 };
 
+export interface VendorDiscovery {
+  vendors: Vendor[] | null; // null = no key OR the search failed (see error)
+  error?: string; // exact Google error when a configured key failed
+}
+
+function newPlaceToVendor(
+  p: any,
+  origin: { lat: number; lng: number },
+  vehicleClass: VehicleClass,
+  i: number
+): Vendor {
+  const loc = {
+    lat: p.location?.latitude ?? origin.lat,
+    lng: p.location?.longitude ?? origin.lng,
+  };
+  return {
+    id: p.id ?? `g${i}`,
+    placeId: p.id,
+    name: p.displayName?.text ?? "Rental",
+    lat: loc.lat,
+    lng: loc.lng,
+    rating: p.rating ?? 0,
+    reviews: p.userRatingCount ?? 0,
+    vehicleClasses: [vehicleClass],
+    fulfillment: ["in-store", "hotel-delivery"],
+    whatsapp: (p.internationalPhoneNumber ?? "").trim(),
+    basePricePerDay: 0,
+    partner: false,
+    demo: false,
+    address: p.formattedAddress,
+    openNow: p.currentOpeningHours?.openNow,
+    priceLevel: undefined,
+    photoUrl: p.photos?.[0]?.name
+      ? `/api/photo?name=${encodeURIComponent(p.photos[0].name)}`
+      : undefined,
+    distanceKm: haversineKm(origin, loc),
+  } satisfies Vendor;
+}
+
 export async function findRealVendors(
   origin: { lat: number; lng: number },
   radiusKm: number,
   vehicleClass: VehicleClass
-): Promise<Vendor[] | null> {
+): Promise<VendorDiscovery> {
   const key = await mapsKey();
-  if (!key) return null;
+  if (!key) return { vendors: null };
 
+  // 1) Places API (New) Text Search with a location bias circle.
+  const { places, error: newError } = await newTextSearch(
+    key,
+    {
+      textQuery: KEYWORDS[vehicleClass],
+      maxResultCount: 20,
+      locationBias: {
+        circle: {
+          center: { latitude: origin.lat, longitude: origin.lng },
+          radius: Math.min(50000, radiusKm * 1000),
+        },
+      },
+    },
+    [
+      "places.id",
+      "places.displayName",
+      "places.location",
+      "places.rating",
+      "places.userRatingCount",
+      "places.formattedAddress",
+      "places.currentOpeningHours.openNow",
+      "places.internationalPhoneNumber",
+      "places.photos",
+    ].join(",")
+  );
+  if (places) {
+    return {
+      vendors: places.map((p, i) => newPlaceToVendor(p, origin, vehicleClass, i)),
+    };
+  }
+
+  // 2) Legacy Nearby Search (older keys).
   try {
     const res = await fetch(
       `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${origin.lat},${origin.lng}&radius=${Math.min(
@@ -98,35 +235,45 @@ export async function findRealVendors(
     );
     const data = await res.json();
     if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-      throw new Error(data.status);
+      throw new Error(
+        `${data.status}${data.error_message ? `: ${data.error_message}` : ""}`
+      );
     }
-    return ((data.results as any[]) || []).map((p, i) => {
-      const loc = p.geometry?.location ?? { lat: origin.lat, lng: origin.lng };
-      return {
-        id: p.place_id ?? `g${i}`,
-        placeId: p.place_id,
-        name: p.name ?? "Rental",
-        lat: loc.lat,
-        lng: loc.lng,
-        rating: p.rating ?? 0,
-        reviews: p.user_ratings_total ?? 0,
-        vehicleClasses: [vehicleClass],
-        fulfillment: ["in-store", "hotel-delivery"],
-        whatsapp: "", // resolved on demand via Place Details
-        basePricePerDay: 0,
-        partner: false,
-        demo: false,
-        address: p.vicinity,
-        openNow: p.opening_hours?.open_now,
-        priceLevel: p.price_level,
-        photoUrl: p.photos?.[0]?.photo_reference
-          ? `/api/photo?ref=${encodeURIComponent(p.photos[0].photo_reference)}`
-          : undefined,
-        distanceKm: haversineKm(origin, loc),
-      } satisfies Vendor;
-    });
-  } catch {
-    return null; // caller decides on fallback
+    return {
+      vendors: ((data.results as any[]) || []).map((p, i) => {
+        const loc = p.geometry?.location ?? { lat: origin.lat, lng: origin.lng };
+        return {
+          id: p.place_id ?? `g${i}`,
+          placeId: p.place_id,
+          name: p.name ?? "Rental",
+          lat: loc.lat,
+          lng: loc.lng,
+          rating: p.rating ?? 0,
+          reviews: p.user_ratings_total ?? 0,
+          vehicleClasses: [vehicleClass],
+          fulfillment: ["in-store", "hotel-delivery"],
+          whatsapp: "", // resolved on demand via Place Details
+          basePricePerDay: 0,
+          partner: false,
+          demo: false,
+          address: p.vicinity,
+          openNow: p.opening_hours?.open_now,
+          priceLevel: p.price_level,
+          photoUrl: p.photos?.[0]?.photo_reference
+            ? `/api/photo?ref=${encodeURIComponent(p.photos[0].photo_reference)}`
+            : undefined,
+          distanceKm: haversineKm(origin, loc),
+        } satisfies Vendor;
+      }),
+    };
+  } catch (e) {
+    const legacyError = e instanceof Error ? e.message : "network error";
+    return {
+      vendors: null,
+      error: `Google Maps key is set but both Places APIs failed. New API: ${
+        newError ?? "unknown"
+      }. Legacy API: ${legacyError}. In Google Cloud Console enable "Places API (New)" (and optionally the legacy "Places API") for this key, and remove API restrictions that exclude them.`,
+    };
   }
 }
 
@@ -142,6 +289,39 @@ export async function placeDetails(placeId: string): Promise<{
 } | null> {
   const key = await mapsKey();
   if (!key) return null;
+
+  // 1) Places API (New) details.
+  try {
+    const res = await fetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}`, {
+      headers: {
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask":
+          "internationalPhoneNumber,nationalPhoneNumber,rating,userRatingCount,formattedAddress,websiteUri,reviews",
+      },
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const r = await res.json();
+      return {
+        phone: r.internationalPhoneNumber ?? r.nationalPhoneNumber,
+        rating: r.rating,
+        total: r.userRatingCount,
+        address: r.formattedAddress,
+        website: r.websiteUri,
+        reviews: ((r.reviews as any[]) || []).map((rv) => ({
+          author: rv.authorAttribution?.displayName ?? "Traveller",
+          rating: rv.rating ?? 0,
+          text: rv.text?.text ?? "",
+          timeAgo: rv.relativePublishTimeDescription ?? "",
+          timestamp: rv.publishTime ? Date.parse(rv.publishTime) : 0,
+        })),
+      };
+    }
+  } catch {
+    /* try legacy */
+  }
+
+  // 2) Legacy Place Details.
   try {
     const res = await fetch(
       `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=international_phone_number,formatted_phone_number,reviews,rating,user_ratings_total,formatted_address,website&key=${key}`,
@@ -167,4 +347,73 @@ export async function placeDetails(placeId: string): Promise<{
   } catch {
     return null;
   }
+}
+
+// ---- Key diagnostics (admin "Test key" button) ---------------------------------
+
+export interface MapsDiagnostics {
+  keyConfigured: boolean;
+  placesNew: { ok: boolean; detail: string };
+  placesLegacy: { ok: boolean; detail: string };
+  geocoding: { ok: boolean; detail: string };
+}
+
+/** Run a real request against each Google API and report the exact outcome. */
+export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
+  const key = await mapsKey();
+  if (!key) {
+    const off = { ok: false, detail: "No key configured." };
+    return { keyConfigured: false, placesNew: off, placesLegacy: off, geocoding: off };
+  }
+
+  const probe = { lat: -8.6478, lng: 115.1385 }; // Canggu, Bali
+
+  const [n, l, g] = await Promise.all([
+    (async () => {
+      const { places, error } = await newTextSearch(
+        key,
+        {
+          textQuery: "scooter rental",
+          maxResultCount: 1,
+          locationBias: {
+            circle: { center: { latitude: probe.lat, longitude: probe.lng }, radius: 10000 },
+          },
+        },
+        "places.id,places.displayName"
+      );
+      return places
+        ? { ok: true, detail: `OK - found ${places.length} result(s).` }
+        : { ok: false, detail: error ?? "failed" };
+    })(),
+    (async () => {
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${probe.lat},${probe.lng}&radius=10000&keyword=scooter%20rental&key=${key}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        return data.status === "OK" || data.status === "ZERO_RESULTS"
+          ? { ok: true, detail: `OK (${data.status}).` }
+          : { ok: false, detail: `${data.status}${data.error_message ? `: ${data.error_message}` : ""}` };
+      } catch (e) {
+        return { ok: false, detail: e instanceof Error ? e.message : "network error" };
+      }
+    })(),
+    (async () => {
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?address=Canggu%20Bali&key=${key}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        return data.status === "OK"
+          ? { ok: true, detail: "OK." }
+          : { ok: false, detail: `${data.status}${data.error_message ? `: ${data.error_message}` : ""}` };
+      } catch (e) {
+        return { ok: false, detail: e instanceof Error ? e.message : "network error" };
+      }
+    })(),
+  ]);
+
+  return { keyConfigured: true, placesNew: n, placesLegacy: l, geocoding: g };
 }

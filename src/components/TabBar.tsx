@@ -1,6 +1,7 @@
 "use client";
 
 import { Icon } from "./icons";
+import { useI18n } from "@/lib/i18n";
 
 type Tab = "home" | "map" | "profile" | "feedback";
 
@@ -19,11 +20,12 @@ export function TabBar({
   onUpgrade: () => void;
   showUpgrade: boolean;
 }) {
+  const { t } = useI18n();
   const items: { id: Tab; icon: string; label: string }[] = [
-    { id: "home", icon: "bolt", label: "Looking for..." },
-    { id: "map", icon: "map", label: "Map" },
-    { id: "profile", icon: "user", label: "Profile" },
-    { id: "feedback", icon: "chat", label: "Feedback" },
+    { id: "home", icon: "bolt", label: t("Looking for...") },
+    { id: "map", icon: "map", label: t("Map") },
+    { id: "profile", icon: "user", label: t("Profile") },
+    { id: "feedback", icon: "chat", label: t("Feedback") },
   ];
 
   return (
@@ -34,7 +36,7 @@ export function TabBar({
             onClick={onUpgrade}
             className="btn btn-sm chip pointer-events-auto flex items-center gap-1.5 rounded-full bg-brandyellow px-4 py-2 text-[12px] font-extrabold text-[#4a3300] shadow-lg animate-wiggle"
           >
-            🎉 80% OFF launch - Upgrade
+            🎉 {t("80% OFF launch - Upgrade")}
           </button>
         </div>
       )}

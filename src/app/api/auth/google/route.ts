@@ -40,25 +40,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not reach Google to verify." }, { status: 502 });
   }
 
-  if (isBlocked(email)) {
+  if (await isBlocked(email)) {
     return NextResponse.json(
       { error: "This account has been restricted by an administrator." },
       { status: 403 }
     );
   }
 
-  const existing = getUser(email);
+  const existing = await getUser(email, { fresh: true });
   const isNew = !existing;
   if (!existing && !isOwner(email)) {
     if (!phone || !PHONE_RX.test(phone) || !acceptTerms) {
       // Client should collect phone + terms, then re-post with the credential.
+      // Google accounts never need a password - Google is the credential.
       return NextResponse.json({ needsSignup: true, email, name });
     }
     await registerUser({ email, phone, name, provider: "google", acceptedTerms: true });
   } else if (!existing && isOwner(email)) {
     await registerUser({ email, name, provider: "google", acceptedTerms: true });
   } else {
-    touchUser(email);
+    await touchUser(email);
   }
 
   setSessionCookie(email);

@@ -27,9 +27,10 @@ export async function runProfiler(
     "JSON matching this TypeScript type: { vehicleClass: 'car'|'motorbike'|'scooter'," +
     " engineSizeCc?: number, transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
     " durationDays: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
-    " notes?: string, vendorMessage: string }. The vendorMessage must be a polite, " +
-    "professional inquiry that clearly identifies the sender as an automated " +
-    "procurement assistant acting on behalf of a traveller.";
+    " notes?: string, vendorMessage: string }. The vendorMessage must read like a " +
+    "natural, friendly first-person WhatsApp message from the traveller asking for " +
+    "availability and the best daily price - authentic and human, plain text, no " +
+    "markdown - ending with the short tag '(sent with my WheelDeal assistant)'.";
 
   const llm = await chat([
     { role: "system", content: system },
@@ -128,22 +129,21 @@ function vehicleTerm(v: VehicleClass): string {
 }
 
 function buildMessage(rfq: StructuredRFQ, raw: string): string {
+  // Authentic first-person message from the traveller (honest about the app).
   const parts: string[] = [];
-  parts.push(
-    "Hello! I'm WheelDeal's automated procurement assistant messaging on behalf of a traveller."
-  );
+  parts.push("Hi! I'm staying nearby and looking to rent");
   const spec: string[] = [`a ${vehicleTerm(rfq.vehicleClass)}`];
   if (rfq.engineSizeCc) spec.push(`${rfq.engineSizeCc}cc`);
   if (rfq.transmission !== "any") spec.push(rfq.transmission);
   if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
-  parts.push(
-    `They'd like ${spec.join(", ")} for ${rfq.durationDays} day(s).`
-  );
+  parts.push(`${spec.join(", ")} for ${rfq.durationDays} day(s).`);
   if (rfq.accessories.length)
-    parts.push(`Requested extras: ${rfq.accessories.join(", ")}.`);
+    parts.push(`I'd also need: ${rfq.accessories.join(", ")}.`);
   if (rfq.fulfillment === "hotel-delivery")
-    parts.push("Hotel delivery would be ideal.");
-  parts.push("Could you share your best available daily rate? Thank you!");
+    parts.push("Delivery to my hotel would be ideal.");
+  parts.push(
+    "Is it available, and what's your best daily price? Thanks! (sent with my WheelDeal assistant)"
+  );
   return parts.join(" ");
 }
 
@@ -216,14 +216,24 @@ export async function composeBargain(opts: {
   rivalPricePerDay?: number;
   region?: string;
   round: number;
+  // Ultra feature: bargain in the shop's LOCAL language, street-smart style.
+  localLanguage?: boolean;
 }): Promise<{ message: string; tacticId: string; tacticLabel: string }> {
   const tactics = getTactics();
   const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
+
+  // Training examples: durable (Supabase) first, then this instance's memory.
   const { listTraining } = await import("./memory");
-  const training = listTraining()
-    .slice(0, 4)
-    .map((t) => t.text)
-    .join("\n---\n");
+  const { sbSelect } = await import("./runtime-config");
+  const durable = await sbSelect<{ text: string }>(
+    "agent_training",
+    "select=text&order=created_at.desc&limit=4"
+  );
+  const examples = [
+    ...durable.map((d) => d.text),
+    ...listTraining().map((t) => t.text),
+  ];
+  const training = Array.from(new Set(examples)).slice(0, 4).join("\n---\n");
 
   const spec = `${opts.rfq.engineSizeCc ? opts.rfq.engineSizeCc + "cc " : ""}${vehicleTerm(
     opts.rfq.vehicleClass
@@ -236,7 +246,9 @@ export async function composeBargain(opts: {
     "money-smart, always identify context implicitly (we already introduced " +
     "ourselves). Never invent prices we were not given. " +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
-    (opts.region
+    (opts.localLanguage && opts.region
+      ? `IMPORTANT: write the message in the MAIN LOCAL LANGUAGE spoken in ${opts.region} (NOT English) - the casual, friendly street style locals use in everyday market talk, the way a savvy local haggles. Keep it short, simple, respectful and natural. `
+      : opts.region
       ? `The shop is in ${opts.region}: match the English level typical there - if English is a second language use short, simple, very clear sentences. `
       : "") +
     (training

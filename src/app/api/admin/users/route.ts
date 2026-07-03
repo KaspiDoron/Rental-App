@@ -3,9 +3,9 @@ import { requireManagement, setAdmin, adminEmails, isOwner } from "@/lib/session
 import { listUsers, setUserStatus } from "@/lib/access";
 
 async function payload() {
-  const admins = await adminEmails();
+  const [admins, users] = await Promise.all([adminEmails(), listUsers()]);
   return {
-    users: listUsers().map((u) => ({
+    users: users.map((u) => ({
       ...u,
       role: isOwner(u.email) ? "owner" : admins.includes(u.email) ? "admin" : "user",
     })),
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     if (isOwner(String(email))) {
       return NextResponse.json({ error: "The owner cannot be blocked." }, { status: 400 });
     }
-    setUserStatus(String(email), status);
+    await setUserStatus(String(email), status);
   } else {
     return NextResponse.json({ error: "Provide an action or status." }, { status: 400 });
   }

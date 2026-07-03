@@ -31,6 +31,10 @@ create table if not exists public.whatsapp_messages (
 );
 create index if not exists whatsapp_messages_received_idx
   on public.whatsapp_messages (received_at desc);
+-- Thread lookup: match an inbound vendor reply to the last outbound message we
+-- sent that number (powers the fully automatic in-app reply loop).
+create index if not exists whatsapp_messages_thread_idx
+  on public.whatsapp_messages (to_number, received_at desc);
 
 -- ---- App users (access control + signup details) -----------------------------
 create table if not exists public.app_users (
@@ -50,6 +54,11 @@ create table if not exists public.app_users (
 alter table public.app_users add column if not exists plan text not null default 'free';
 alter table public.app_users add column if not exists password_hash text;
 alter table public.app_users add column if not exists must_change_password boolean default false;
+-- The top tier is now "Ultra" (stored as 'business' for compatibility, but
+-- allow both values):
+alter table public.app_users drop constraint if exists app_users_plan_check;
+alter table public.app_users add constraint app_users_plan_check
+  check (plan in ('free','pro','business','ultra'));
 
 -- ---- Auth events (every login/signup is recorded) -----------------------------
 create table if not exists public.auth_events (
@@ -75,8 +84,11 @@ create table if not exists public.agent_training (
   text       text not null,
   note       text,
   added_by   text,
+  source     text default 'text',   -- 'text' | 'photo'
   created_at timestamptz not null default now()
 );
+-- If you already ran an older schema, run this once:
+alter table public.agent_training add column if not exists source text default 'text';
 
 -- ---- Vendor replies (raw) + composed bargain drafts ----------------------------
 create table if not exists public.vendor_replies (
@@ -90,8 +102,13 @@ create table if not exists public.vendor_replies (
   price_per_day numeric,
   matches_spec  boolean default false,
   confidence    text,
+  auto          boolean default false,   -- true = ingested by the webhook agent
   created_at    timestamptz not null default now()
 );
+-- If you already ran an older schema, run these once:
+alter table public.vendor_replies add column if not exists auto boolean default false;
+create index if not exists vendor_replies_user_idx
+  on public.vendor_replies (user_email, created_at desc);
 
 create table if not exists public.bargain_drafts (
   id         bigint generated always as identity primary key,
@@ -158,6 +175,16 @@ create table if not exists public.vendors (
   created_at       timestamptz not null default now()
 );
 
+-- ---- Personal WhatsApp sessions (Evolution API instances per user) -----------
+create table if not exists public.wa_sessions (
+  email         text primary key,
+  instance_name text not null,
+  status        text default 'connecting',
+  updated_at    timestamptz not null default now()
+);
+create index if not exists wa_sessions_instance_idx
+  on public.wa_sessions (instance_name);
+
 -- ---- Bookings ---------------------------------------------------------------
 create table if not exists public.bookings (
   id           bigint generated always as identity primary key,
@@ -212,5 +239,6 @@ alter table public.ai_usage         enable row level security;
 alter table public.agent_training   enable row level security;
 alter table public.vendor_replies   enable row level security;
 alter table public.bargain_drafts   enable row level security;
+alter table public.wa_sessions      enable row level security;
 -- No policies are created on purpose: the anon/public key gets zero access;
 -- the server uses the service role key, which bypasses RLS.

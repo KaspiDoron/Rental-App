@@ -116,10 +116,10 @@ export async function getSession(): Promise<Session | null> {
   const raw = decode(cookies().get(COOKIE)?.value);
   if (!raw?.email) return null;
   const role = await roleFor(raw.email);
-  // Management holds the Business plan automatically, free of charge.
-  const { getUser } = await import("./access");
+  // Management holds the Ultra plan automatically, free of charge.
+  const { getUser, normalizePlan } = await import("./access");
   const plan =
-    role !== "user" ? "business" : getUser(raw.email)?.plan ?? "free";
+    role !== "user" ? "ultra" : normalizePlan((await getUser(raw.email))?.plan);
   return { email: raw.email, issuedAt: raw.issuedAt, role, plan };
 }
 

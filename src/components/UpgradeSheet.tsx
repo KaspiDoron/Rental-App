@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
+import { LoadingDots } from "./LoadingDots";
+import { useI18n } from "@/lib/i18n";
 
 export interface PlanView {
   id: string;
@@ -57,8 +59,12 @@ export function PlanCard({
         </div>
       </div>
       {plan.amount > 0 && (
-        <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-brandred px-2.5 py-1 text-[11px] font-extrabold text-white">
-          🔥 {plan.discountPct}% OFF - limited-time opening offer
+        <div
+          className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-extrabold text-white ${
+            plan.id === "ultra" ? "badge-ultra" : "bg-brandred"
+          }`}
+        >
+          {plan.id === "ultra" ? "⚡" : "🔥"} {plan.discountPct}% OFF - limited-time opening offer
         </div>
       )}
       <ul className="mt-2 space-y-1">
@@ -75,7 +81,7 @@ export function PlanCard({
           disabled={busy}
           className="btn btn-primary mt-3 w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
         >
-          Claim 80% off - Subscribe
+          {busy ? <LoadingDots light label="Opening checkout" /> : "Claim 80% off - Subscribe"}
         </button>
       )}
     </div>
@@ -84,6 +90,7 @@ export function PlanCard({
 
 // The membership sheet, opened from the upgrade chip above the tab bar.
 export function UpgradeSheet({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -116,9 +123,9 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
     <Modal onClose={onClose}>
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-extrabold text-strong">Go Pro 🎉</h2>
+          <h2 className="text-lg font-extrabold text-strong">{t("Go Pro or Ultra")} 🎉</h2>
           <p className="text-[12px] font-bold text-brandred">
-            Opening offer: 80% off, for a limited time only
+            {t("Opening offer: 80% off, for a limited time only")}
           </p>
         </div>
         <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">

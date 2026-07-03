@@ -4,7 +4,7 @@ import { getUser } from "@/lib/access";
 
 export async function GET() {
   const session = await getSession();
-  const profile = session ? getUser(session.email) ?? null : null;
+  const profile = session ? (await getUser(session.email)) ?? null : null;
   return NextResponse.json({
     session,
     profile: profile

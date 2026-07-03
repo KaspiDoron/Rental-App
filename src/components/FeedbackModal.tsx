@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
+import { LoadingDots } from "./LoadingDots";
 
 const CATEGORIES = [
   { id: "bug", label: "Bug" },
@@ -58,7 +59,6 @@ export function FeedbackModal({
     | { s: "filtered"; reason: string }
     | { s: "error"; msg: string }
   >({ s: "idle" });
-  const fileRef = useRef<HTMLInputElement>(null);
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
@@ -163,12 +163,13 @@ export function FeedbackModal({
 
           <div className="mt-2 flex items-center justify-between">
             <button
+              type="button"
               onClick={assist}
               disabled={assisting || !text.trim()}
               className="btn btn-sm chip inline-flex items-center gap-1.5 rounded-xl border-2 border-brandred/30 bg-brandred-soft px-2.5 py-1.5 text-[12px] font-bold text-brandred disabled:opacity-50"
             >
               <Icon name="spark" className="h-3.5 w-3.5" />
-              {assisting ? "Writing..." : "Write it for me"}
+              {assisting ? <LoadingDots label="Writing" /> : "Write it for me"}
             </button>
             <span className="text-[11px] text-faint">{text.length}/4000</span>
           </div>
@@ -192,23 +193,27 @@ export function FeedbackModal({
                 </div>
               ))}
               {images.length < MAX_IMAGES && (
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="btn flex h-16 w-16 items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
+                // A real <label> wrapping the file input: the native, reliable
+                // way to open the gallery on every phone - it can never submit
+                // the form or send the feedback by accident.
+                <label
+                  className="btn flex h-16 w-16 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
                   aria-label="Add screenshot"
                 >
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="sr-only"
+                    onChange={(e) => {
+                      addFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
                   <Icon name="plus" className="h-5 w-5" />
-                </button>
+                </label>
               )}
             </div>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(e) => addFiles(e.target.files)}
-            />
           </div>
 
           {status.s === "error" && (
@@ -216,11 +221,16 @@ export function FeedbackModal({
           )}
 
           <button
+            type="button"
             onClick={submit}
             disabled={status.s === "sending" || text.trim().length < 3}
             className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
           >
-            {status.s === "sending" ? "Sending..." : "Submit feedback"}
+            {status.s === "sending" ? (
+              <LoadingDots light label="Sending your feedback" />
+            ) : (
+              "Submit feedback"
+            )}
           </button>
         </>
       ) : (

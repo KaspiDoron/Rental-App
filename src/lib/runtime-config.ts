@@ -41,11 +41,121 @@ function state() {
 }
 
 function supabase(): { url: string; key: string } | null {
-  const url =
-    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // trim(): pasted Vercel env values often carry an invisible trailing
+  // newline/space, which Supabase rejects as "Invalid API key".
+  const url = (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    ""
+  ).trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
   if (!url || !key) return null;
   return { url: url.replace(/\/$/, ""), key };
+}
+
+/** Which Supabase role a JWT-style key carries ("service_role", "anon", ...). */
+function jwtRole(key: string): string | null {
+  const parts = key.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    return typeof payload.role === "string" ? payload.role : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface SupabaseDiagnostics {
+  configured: boolean;
+  urlOk: boolean;
+  keyRole: string | null; // must be "service_role"
+  reachable: boolean;
+  appConfigOk: boolean;
+  detail: string;
+}
+
+/** Live end-to-end check of the Supabase connection, with an exact diagnosis. */
+export async function supabaseDiagnostics(): Promise<SupabaseDiagnostics> {
+  const conn = supabase();
+  if (!conn) {
+    return {
+      configured: false,
+      urlOk: false,
+      keyRole: null,
+      reachable: false,
+      appConfigOk: false,
+      detail:
+        "SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY are not set in the host environment (Vercel -> Settings -> Environment Variables).",
+    };
+  }
+  const urlOk = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(conn.url);
+  const keyRole = jwtRole(conn.key);
+  if (keyRole && keyRole !== "service_role") {
+    return {
+      configured: true,
+      urlOk,
+      keyRole,
+      reachable: false,
+      appConfigOk: false,
+      detail: `SUPABASE_SERVICE_ROLE_KEY currently holds the "${keyRole}" key - that is the WRONG key. In Supabase: Settings -> API -> "Project API keys" -> copy the one labelled service_role (secret), paste it into Vercel, and redeploy.`,
+    };
+  }
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/app_config?select=key&limit=1`, {
+      headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      return {
+        configured: true,
+        urlOk,
+        keyRole,
+        reachable: true,
+        appConfigOk: false,
+        detail:
+          "Supabase says the API key is invalid (401). Re-copy the service_role key from Supabase -> Settings -> API (watch for missing characters or extra spaces), update SUPABASE_SERVICE_ROLE_KEY in Vercel, and redeploy. If you rotated/regenerated your project's keys, the old value is dead.",
+      };
+    }
+    if (res.status === 404) {
+      return {
+        configured: true,
+        urlOk,
+        keyRole,
+        reachable: true,
+        appConfigOk: false,
+        detail:
+          "Connected, but the app_config table is missing - run supabase/schema.sql in the Supabase SQL Editor.",
+      };
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        configured: true,
+        urlOk,
+        keyRole,
+        reachable: true,
+        appConfigOk: false,
+        detail: `Supabase responded ${res.status}: ${body.slice(0, 160)}`,
+      };
+    }
+    return {
+      configured: true,
+      urlOk,
+      keyRole,
+      reachable: true,
+      appConfigOk: true,
+      detail: "Connected - key vault persistence and durable accounts are working.",
+    };
+  } catch (e) {
+    return {
+      configured: true,
+      urlOk,
+      keyRole,
+      reachable: false,
+      appConfigOk: false,
+      detail: `Could not reach Supabase: ${e instanceof Error ? e.message : "network error"}. Check that SUPABASE_URL is your project's https://xxxx.supabase.co URL.`,
+    };
+  }
 }
 
 export function supabaseConfigured(): boolean {
@@ -227,9 +337,12 @@ export async function setConfig(
     s.cache = null;
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      const hint = /relation .*app_config.* does not exist|404/.test(detail + res.status)
-        ? "The app_config table is missing - run supabase/schema.sql in the Supabase SQL Editor."
-        : detail.slice(0, 180);
+      const hint =
+        res.status === 401
+          ? "Invalid Supabase key: SUPABASE_SERVICE_ROLE_KEY in Vercel is wrong (it may be the anon key, have a typo, or the project keys were rotated). Copy the service_role key from Supabase -> Settings -> API, update Vercel, redeploy, then use Admin -> Keys -> Test Supabase."
+          : /relation .*app_config.* does not exist|404/.test(detail + res.status)
+          ? "The app_config table is missing - run supabase/schema.sql in the Supabase SQL Editor."
+          : detail.slice(0, 180);
       // Keep an in-memory copy so it at least works right now.
       if (value) s.mem[name] = value;
       return { ok: false, persistent: false, error: `Could not save to Supabase (${res.status}). ${hint}` };

@@ -199,6 +199,31 @@ input, textarea, select, button {
 
 .tabular { font-variant-numeric: tabular-nums; }
 
+/* ---- Flashy feature badges (Ultra, authentic bargain, translate intro) --- */
+@keyframes shine {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.badge-flash {
+  background: linear-gradient(
+    110deg,
+    var(--blue) 0%,
+    #7c3aed 30%,
+    var(--red) 55%,
+    var(--yellow) 80%,
+    var(--blue) 100%
+  );
+  background-size: 220% 100%;
+  animation: shine 4.5s linear infinite;
+  color: #ffffff;
+}
+.badge-ultra {
+  background: linear-gradient(110deg, #7c3aed 0%, var(--blue) 45%, #7c3aed 100%);
+  background-size: 220% 100%;
+  animation: shine 5s linear infinite;
+  color: #ffffff;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

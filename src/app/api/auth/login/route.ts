@@ -16,7 +16,8 @@ const PHONE_RX = /^\+?[\d\s\-()]{7,17}$/;
 // The owner's bootstrap password (changeable in Profile like any user).
 const OWNER_DEFAULT_PASSWORD = "KASPI123";
 
-// Email + password auth.
+// Email + password auth. Accounts live durably in Supabase (app_users), so
+// logins, signups and password changes work across serverless instances.
 //   mode "login"  : { email, password }
 //   mode "signup" : { email, phone, password, acceptTerms }
 export async function POST(req: Request) {
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
   if (!EMAIL_RX.test(email)) {
     return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
   }
-  if (isBlocked(email)) {
+  if (await isBlocked(email)) {
     return NextResponse.json(
       { error: "This account has been restricted by an administrator." },
       { status: 403 }
@@ -38,7 +39,7 @@ export async function POST(req: Request) {
   }
 
   if (mode === "signup") {
-    if (getUser(email)) {
+    if (await getUser(email, { fresh: true })) {
       return NextResponse.json(
         { error: "This email already has an account - use Log in instead." },
         { status: 400 }
@@ -69,8 +70,8 @@ export async function POST(req: Request) {
       acceptedTerms: true,
     });
   } else {
-    // Log in
-    let user = getUser(email);
+    // Log in - always verify against the freshest durable record.
+    let user = await getUser(email, { fresh: true });
     if (!user && isOwner(email)) {
       // Owner bootstrap on a fresh instance: create with the default password.
       user = await registerUser({
@@ -88,12 +89,12 @@ export async function POST(req: Request) {
     }
     if (!user.passwordHash && isOwner(email)) {
       await setPassword(email, OWNER_DEFAULT_PASSWORD);
+      user = await getUser(email, { fresh: true });
     }
-    const fresh = getUser(email);
-    if (!verifyPassword(password, fresh?.passwordHash)) {
+    if (!verifyPassword(password, user?.passwordHash)) {
       return NextResponse.json({ error: "Wrong password. Try again or use Forgot password." }, { status: 401 });
     }
-    touchUser(email);
+    await touchUser(email);
   }
 
   setSessionCookie(email);
@@ -101,10 +102,11 @@ export async function POST(req: Request) {
   await sbInsert("auth_events", [
     { email, event: mode, provider: "email" },
   ]);
+  const fresh = await getUser(email);
   return NextResponse.json({
     ok: true,
     session,
-    mustChangePassword: Boolean(getUser(email)?.mustChangePassword),
+    mustChangePassword: Boolean(fresh?.mustChangePassword),
     isNew: mode === "signup",
   });
 }

@@ -19,7 +19,7 @@ export async function POST(req: Request) {
 
   // Assemble the operational context the assistant can see.
   const a = analytics();
-  const users = listUsers();
+  const users = await listUsers();
   const [feedback, searches, offers, waMessages, bookings] = await Promise.all([
     sbSelect("feedback", "select=category,summary,severity,is_real_issue,created_at&order=created_at.desc&limit=15"),
     sbSelect("searches", "select=vehicle_class,source,results,created_at&order=created_at.desc&limit=20"),
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   const context = JSON.stringify(
     {
       negotiationAnalytics: a,
-      usersThisInstance: users.length,
+      registeredUsers: users.length,
       recentUsers: users.slice(0, 10).map((u) => ({
         email: u.email,
         status: u.status,
@@ -84,7 +84,7 @@ export async function POST(req: Request) {
   const lines = [
     "Here's your briefing (offline mode - add an AI key for full analysis):",
     `- Negotiation engine: ${a.totalRuns} runs, ${a.totalOffers} offers, avg discount ${a.avgDiscountPct}%. Best tactic: ${a.bestTactic ?? "n/a"}.`,
-    `- Users on this instance: ${users.length}.`,
+    `- Registered users: ${users.length}.`,
     urgent.length
       ? `- NEEDS ATTENTION: ${urgent.length} high-severity issue(s): ${urgent
           .map((f: any) => f.summary)

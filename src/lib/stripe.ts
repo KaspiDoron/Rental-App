@@ -1,12 +1,12 @@
 // Stripe billing via the REST API - no SDK dependency.
 //
 // Plans bill every 3 MONTHS (quarterly) with an 80% limited-time launch
-// discount. Owner and management hold the Business plan automatically, free.
+// discount. Owner and management hold the Ultra plan automatically, free.
 
 import "server-only";
 import { getConfig } from "./runtime-config";
 
-export type PlanId = "free" | "pro" | "business";
+export type PlanId = "free" | "pro" | "ultra";
 
 export interface Plan {
   id: PlanId;
@@ -62,8 +62,9 @@ export const PLANS: Plan[] = [
     ],
     true
   ),
-  plan("business", "Business", "Teams & heavy travellers", 14700, [
+  plan("ultra", "Ultra", "The ultimate bargaining machine", 14700, [
     "Everything in Pro",
+    "Agents bargain in the shop's LOCAL language - real street talk",
     "Advanced AI negotiation strategies",
     "Multi-city trip planning",
     "Price-drop alerts",

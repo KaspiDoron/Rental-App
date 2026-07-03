@@ -4,6 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@/lib/types";
 import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
+import { PasswordInput } from "@/components/PasswordInput";
+import { LoadingDots } from "@/components/LoadingDots";
+import { LanguageButton } from "@/components/LanguageButton";
+import { CountryPhoneInput } from "@/components/CountryPhoneInput";
+import { AdBanner } from "@/components/AdBanner";
+import { useI18n } from "@/lib/i18n";
 
 interface Booking {
   vendor_name: string;
@@ -21,6 +27,7 @@ interface ChatMsg {
 }
 
 export default function ProfilePage() {
+  const { t } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<{ phone?: string; name?: string } | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -28,8 +35,26 @@ export default function ProfilePage() {
   const [prefs, setPrefs] = useState({ currency: "USD", homeCity: "", ride: "scooter" });
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNext, setPwNext] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [mustChangePw, setMustChangePw] = useState(false);
+
+  // Phone editing (mirrored to the database + used by WhatsApp threads).
+  const [phoneEdit, setPhoneEdit] = useState(false);
+  const [phoneVal, setPhoneVal] = useState("");
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneMsg, setPhoneMsg] = useState<string | null>(null);
+
+  // Personal WhatsApp session (Evolution API).
+  const [wa, setWa] = useState<{
+    available: boolean;
+    connected: boolean;
+    state?: string;
+  } | null>(null);
+  const [waQr, setWaQr] = useState<string | null>(null);
+  const [waBusy, setWaBusy] = useState(false);
+  const [waErr, setWaErr] = useState<string | null>(null);
+  const waPoll = useRef<ReturnType<typeof setInterval>>();
 
   // Owner assistant chat
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -38,7 +63,7 @@ export default function ProfilePage() {
   const chatEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         if (!d.session) {
@@ -47,6 +72,7 @@ export default function ProfilePage() {
         }
         setSession(d.session);
         setProfile(d.profile);
+        setPhoneVal(d.profile?.phone ?? "");
         const urlPw = new URLSearchParams(window.location.search).get("pw") === "1";
         if (d.profile?.mustChangePassword || urlPw) setMustChangePw(true);
       })
@@ -55,19 +81,24 @@ export default function ProfilePage() {
       .then((r) => r.json())
       .then((d) => setBookings(d.bookings ?? []))
       .catch(() => {});
+    fetch("/api/wa/status")
+      .then((r) => r.json())
+      .then((d) => setWa(d))
+      .catch(() => {});
     try {
-      const t = (localStorage.getItem("wd_theme") as "light" | "dark") || "light";
-      setTheme(t);
+      const t2 = (localStorage.getItem("wd_theme") as "light" | "dark") || "light";
+      setTheme(t2);
       const p = localStorage.getItem("wd_prefs");
       if (p) setPrefs(JSON.parse(p));
     } catch {}
+    return () => clearInterval(waPoll.current);
   }, []);
 
-  function switchTheme(t: "light" | "dark") {
-    setTheme(t);
-    document.documentElement.setAttribute("data-theme", t);
+  function switchTheme(t2: "light" | "dark") {
+    setTheme(t2);
+    document.documentElement.setAttribute("data-theme", t2);
     try {
-      localStorage.setItem("wd_theme", t);
+      localStorage.setItem("wd_theme", t2);
     } catch {}
   }
 
@@ -81,6 +112,65 @@ export default function ProfilePage() {
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
+  }
+
+  async function savePhone() {
+    setPhoneBusy(true);
+    setPhoneMsg(null);
+    try {
+      const res = await fetch("/api/profile/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phoneVal }),
+      });
+      const d = await res.json();
+      if (res.ok) {
+        setProfile((p) => ({ ...p, phone: d.profile.phone ?? undefined }));
+        setPhoneEdit(false);
+        setPhoneMsg(t("Phone updated everywhere") + " ✓");
+      } else {
+        setPhoneMsg(d.error ?? t("Could not update."));
+      }
+    } finally {
+      setPhoneBusy(false);
+    }
+  }
+
+  async function connectWa() {
+    setWaBusy(true);
+    setWaErr(null);
+    try {
+      const res = await fetch("/api/wa/connect", { method: "POST" });
+      const d = await res.json();
+      if (!d.available || d.error) {
+        setWaErr(d.error ?? t("The WhatsApp connector is not set up yet."));
+        return;
+      }
+      if (d.qr) setWaQr(d.qr);
+      // Poll until the scan completes.
+      clearInterval(waPoll.current);
+      waPoll.current = setInterval(async () => {
+        const s = await (await fetch("/api/wa/status")).json();
+        setWa(s);
+        if (s.connected) {
+          clearInterval(waPoll.current);
+          setWaQr(null);
+        }
+      }, 3000);
+    } finally {
+      setWaBusy(false);
+    }
+  }
+
+  async function disconnectWa() {
+    setWaBusy(true);
+    try {
+      await fetch("/api/wa/disconnect", { method: "POST" });
+      setWa((w) => (w ? { ...w, connected: false, state: "disconnected" } : w));
+      setWaQr(null);
+    } finally {
+      setWaBusy(false);
+    }
   }
 
   async function ask(text?: string) {
@@ -108,17 +198,19 @@ export default function ProfilePage() {
   const isMgmt = session && session.role !== "user";
 
   return (
-    <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg">
-      {/* Section top bar (sits below the phone status bar - never under it) */}
+    <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-2xl">
       <div className="topbar">
-        <div className="flex items-center justify-between px-4 pb-2.5">
+        <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-2xl">
           <div className="flex items-center gap-2">
             <BrandMark size={30} />
-            <h1 className="font-display text-lg font-extrabold text-strong">Profile</h1>
+            <h1 className="font-display text-lg font-extrabold text-strong">{t("Profile")}</h1>
           </div>
-          <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
-            ← Search
-          </a>
+          <div className="flex items-center gap-1.5">
+            <LanguageButton />
+            <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
+              ← {t("Search")}
+            </a>
+          </div>
         </div>
       </div>
 
@@ -134,26 +226,140 @@ export default function ProfilePage() {
                 {profile?.name || session?.email}
               </div>
               <div className="truncate text-[12px] text-soft">{session?.email}</div>
-              {profile?.phone && (
-                <div className="text-[12px] text-faint">{profile.phone}</div>
-              )}
+              {!phoneEdit ? (
+                <button
+                  onClick={() => setPhoneEdit(true)}
+                  className="chip text-[12px] font-bold text-brandblue underline decoration-dotted"
+                >
+                  {profile?.phone || t("Add phone number")} ✎
+                </button>
+              ) : null}
             </div>
             <span
               className={`ml-auto shrink-0 rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
                 isOwner
                   ? "bg-brandyellow text-[#4a3300]"
                   : isMgmt
-                  ? "bg-brandblue text-white"
+                  ? "badge-ultra"
+                  : session?.plan === "ultra"
+                  ? "badge-ultra"
                   : "bg-savings-soft text-savings"
               }`}
             >
               {isOwner
                 ? "OWNER"
                 : isMgmt
-                ? "ADMIN · BUSINESS"
+                ? "ADMIN · ULTRA"
                 : (session?.plan ?? "free").toUpperCase()}
             </span>
           </div>
+          {phoneEdit && (
+            <div className="mt-3">
+              <label className="text-[11px] font-bold text-faint">{t("Phone number")}</label>
+              <div className="mt-1">
+                <CountryPhoneInput value={phoneVal} onChange={setPhoneVal} />
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={savePhone}
+                  disabled={phoneBusy}
+                  className="btn btn-primary btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+                >
+                  {phoneBusy ? <LoadingDots light label={t("Saving")} /> : t("Save phone")}
+                </button>
+                <button
+                  onClick={() => setPhoneEdit(false)}
+                  className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px]"
+                >
+                  {t("Cancel")}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[10px] text-faint">
+                {t("Updated everywhere we use it. Your WhatsApp connection below is tied to the phone that scans the QR - reconnect it if you switch numbers.")}
+              </p>
+            </div>
+          )}
+          {phoneMsg && (
+            <p className="mt-2 text-[12px] font-bold text-savings">{phoneMsg}</p>
+          )}
+        </section>
+
+        {/* Personal WhatsApp connection (Evolution API QR session) */}
+        <section className="surface rounded-blob p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+                💬 {t("Your WhatsApp")}
+                <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
+                  {t("Authentic bargaining")}
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-faint">
+                {t("Connect your own number so agents bargain as YOU - shops see a real traveller, and every reply lands in the app automatically.")}
+              </p>
+            </div>
+            <span
+              className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
+                wa?.connected
+                  ? "bg-savings-soft text-savings"
+                  : "bg-card2 text-faint"
+              }`}
+            >
+              {wa?.connected ? t("CONNECTED") : t("NOT CONNECTED")}
+            </span>
+          </div>
+
+          {waErr && (
+            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              {waErr}
+            </p>
+          )}
+
+          {waQr && !wa?.connected && (
+            <div className="mt-3 rounded-2xl bg-card2 p-3 text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={waQr}
+                alt="WhatsApp QR"
+                className="mx-auto h-44 w-44 rounded-xl bg-white p-2"
+              />
+              <p className="mt-2 text-[11px] font-bold text-soft">
+                {t("WhatsApp -> Settings -> Linked devices -> Link a device, then scan this code.")}
+              </p>
+              <div className="mt-1">
+                <LoadingDots label={t("Waiting for your scan")} />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            {!wa?.connected ? (
+              <button
+                onClick={connectWa}
+                disabled={waBusy}
+                className="btn btn-primary flex-1 rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
+              >
+                {waBusy ? (
+                  <LoadingDots light label={t("Preparing QR")} />
+                ) : waQr ? (
+                  t("Refresh QR")
+                ) : (
+                  t("Connect my WhatsApp")
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={disconnectWa}
+                disabled={waBusy}
+                className="btn btn-danger flex-1 rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
+              >
+                {waBusy ? <LoadingDots light label={t("Disconnecting")} /> : t("Disconnect")}
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-faint">
+            {t("Safety first: this uses the WhatsApp Web protocol, which WhatsApp's terms do not officially allow for automation. We keep your number safe with strict human-like limits (max 15 messages/hour, 60/day, 20s between messages), but a spare number is the safest choice.")}
+          </p>
         </section>
 
         {/* Owner AI co-manager */}
@@ -179,7 +385,11 @@ export default function ProfilePage() {
                   disabled={thinking}
                   className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow"
                 >
-                  {thinking ? "Analysing the business..." : "Brief me - what needs my attention?"}
+                  {thinking ? (
+                    <LoadingDots label="Analysing the business" />
+                  ) : (
+                    "Brief me - what needs my attention?"
+                  )}
                 </button>
               )}
               {chat.map((m, i) => (
@@ -195,8 +405,8 @@ export default function ProfilePage() {
                 </div>
               ))}
               {thinking && chat.length > 0 && (
-                <div className="mr-6 rounded-2xl bg-card p-2.5 text-[13px] text-faint">
-                  thinking...
+                <div className="mr-6 rounded-2xl bg-card p-2.5">
+                  <LoadingDots label="thinking" />
                 </div>
               )}
               <div ref={chatEnd} />
@@ -228,7 +438,7 @@ export default function ProfilePage() {
             className="btn surface flex items-center justify-between rounded-blob p-4"
           >
             <span className="flex items-center gap-2 text-[14px] font-extrabold text-strong">
-              <Icon name="shield" className="h-5 w-5 text-brandblue" /> Management workspace
+              <Icon name="shield" className="h-5 w-5 text-brandblue" /> {t("Management workspace")}
             </span>
             <Icon name="chevron" className="h-4 w-4 text-faint" />
           </a>
@@ -241,29 +451,28 @@ export default function ProfilePage() {
           }`}
         >
           <div className="mb-2 text-[13px] font-extrabold text-strong">
-            {mustChangePw ? "⚠️ Change your temporary password now" : "Change password"}
+            {mustChangePw ? `⚠️ ${t("Change your temporary password now")}` : t("Change password")}
           </div>
           {mustChangePw && (
             <p className="mb-2 rounded-2xl bg-brandred-soft p-2.5 text-[12px] font-bold text-brandred">
-              You logged in with a temporary password. Set a new one before
-              doing anything else.
+              {t("You logged in with a temporary password. Set a new one before doing anything else.")}
             </p>
           )}
           {!mustChangePw && (
-            <input
-              type="password"
-              value={pwCurrent}
-              onChange={(e) => setPwCurrent(e.target.value)}
-              placeholder="Current password"
-              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            />
+            <div className="mb-2">
+              <PasswordInput
+                value={pwCurrent}
+                onChange={setPwCurrent}
+                autoComplete="current-password"
+                placeholder={t("Current password")}
+              />
+            </div>
           )}
-          <input
-            type="password"
+          <PasswordInput
             value={pwNext}
-            onChange={(e) => setPwNext(e.target.value)}
-            placeholder="New password (6+ characters)"
-            className="w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+            onChange={setPwNext}
+            autoComplete="new-password"
+            placeholder={t("New password (6+ characters)")}
           />
           {pwMsg && (
             <p
@@ -277,43 +486,48 @@ export default function ProfilePage() {
           <button
             onClick={async () => {
               setPwMsg(null);
-              const res = await fetch("/api/auth/password", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ current: pwCurrent, next: pwNext }),
-              });
-              const d = await res.json();
-              if (res.ok) {
-                setPwMsg({ ok: true, text: "Password updated ✓" });
-                setPwCurrent("");
-                setPwNext("");
-                setMustChangePw(false);
-              } else {
-                setPwMsg({ ok: false, text: d.error ?? "Could not update." });
+              setPwBusy(true);
+              try {
+                const res = await fetch("/api/auth/password", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ current: pwCurrent, next: pwNext }),
+                });
+                const d = await res.json();
+                if (res.ok) {
+                  setPwMsg({ ok: true, text: t("Password updated - use it on your next login.") + " ✓" });
+                  setPwCurrent("");
+                  setPwNext("");
+                  setMustChangePw(false);
+                } else {
+                  setPwMsg({ ok: false, text: d.error ?? t("Could not update.") });
+                }
+              } finally {
+                setPwBusy(false);
               }
             }}
-            disabled={pwNext.length < 6}
+            disabled={pwNext.length < 6 || pwBusy}
             className="btn btn-primary mt-2 w-full rounded-2xl py-2.5 text-sm disabled:opacity-60"
           >
-            Update password
+            {pwBusy ? <LoadingDots light label={t("Saving")} /> : t("Update password")}
           </button>
         </section>
 
         {/* Appearance */}
         <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">Appearance</div>
+          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Appearance")}</div>
           <div className="grid grid-cols-2 gap-2">
-            {(["light", "dark"] as const).map((t) => (
+            {(["light", "dark"] as const).map((t2) => (
               <button
-                key={t}
-                onClick={() => switchTheme(t)}
+                key={t2}
+                onClick={() => switchTheme(t2)}
                 className={`btn chip rounded-2xl border-2 p-3 text-sm font-extrabold capitalize ${
-                  theme === t
+                  theme === t2
                     ? "border-brandblue bg-brandblue-soft text-brandblue"
                     : "border-line text-soft"
                 }`}
               >
-                {t === "light" ? "☀️ Light" : "🌙 Dark"}
+                {t2 === "light" ? `☀️ ${t("Light")}` : `🌙 ${t("Dark")}`}
               </button>
             ))}
           </div>
@@ -321,10 +535,10 @@ export default function ProfilePage() {
 
         {/* Travel preferences */}
         <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">Travel preferences</div>
+          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Travel preferences")}</div>
           <div className="grid grid-cols-2 gap-2">
             <label className="text-[11px] font-bold text-faint">
-              Currency
+              {t("Currency")}
               <select
                 value={prefs.currency}
                 onChange={(e) => savePrefs({ ...prefs, currency: e.target.value })}
@@ -336,20 +550,20 @@ export default function ProfilePage() {
               </select>
             </label>
             <label className="text-[11px] font-bold text-faint">
-              Favourite ride
+              {t("Favourite ride")}
               <select
                 value={prefs.ride}
                 onChange={(e) => savePrefs({ ...prefs, ride: e.target.value })}
                 className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm font-bold text-strong"
               >
-                <option value="scooter">Automatic scooter</option>
-                <option value="motorbike">Manual motorcycle</option>
-                <option value="car">Car</option>
+                <option value="scooter">{t("Automatic scooter")}</option>
+                <option value="motorbike">{t("Manual motorcycle")}</option>
+                <option value="car">{t("Car")}</option>
               </select>
             </label>
           </div>
           <label className="mt-2 block text-[11px] font-bold text-faint">
-            Home city
+            {t("Home city")}
             <input
               value={prefs.homeCity}
               onChange={(e) => savePrefs({ ...prefs, homeCity: e.target.value })}
@@ -361,10 +575,10 @@ export default function ProfilePage() {
 
         {/* Booking history */}
         <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">My bookings</div>
+          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("My bookings")}</div>
           {bookings.length === 0 ? (
             <p className="text-[12px] text-faint">
-              No bookings yet - lock your first deal and it will show up here.
+              {t("No bookings yet - lock your first deal and it will show up here.")}
             </p>
           ) : (
             <div className="space-y-2">
@@ -387,8 +601,10 @@ export default function ProfilePage() {
           )}
         </section>
 
+        <AdBanner plan={session?.plan} />
+
         <button onClick={signOut} className="btn btn-danger w-full rounded-2xl py-3 text-sm">
-          Sign out
+          {t("Sign out")}
         </button>
       </div>
     </main>

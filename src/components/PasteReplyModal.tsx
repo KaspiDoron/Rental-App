@@ -1,15 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { Vendor, StructuredRFQ, Offer } from "@/lib/types";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
+import { useI18n } from "@/lib/i18n";
 
-// The vendor replied on WhatsApp (text or a photo of a price list). Paste it
-// here; the Offer Extraction Agent reads it and only accepts a price it is
-// sure matches the exact requested vehicle - otherwise it drafts a
-// clarification question to send back.
+// Manual FALLBACK for adding a shop's reply (text or a photo of a price list).
+// With WhatsApp connected, replies flow in automatically via the webhook and
+// this modal is rarely needed. The Offer Extraction Agent only accepts a price
+// it is sure matches the exact requested vehicle - otherwise it sends a
+// clarification question back, from inside the app.
 export function PasteReplyModal({
   vendor,
   rfq,
@@ -25,9 +27,12 @@ export function PasteReplyModal({
   onOffer: (offer: Offer, verified: boolean) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [clarifyState, setClarifyState] = useState<"idle" | "sending" | "sent" | "manual">("idle");
+  const [copied, setCopied] = useState(false);
   const [result, setResult] = useState<{
     found: boolean;
     pricePerDay?: number;
@@ -36,7 +41,6 @@ export function PasteReplyModal({
     clarifyMessage?: string;
     vehicleDescription?: string;
   } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   function addFiles(files: FileList | null) {
     if (!files) return;
@@ -93,13 +97,36 @@ export function PasteReplyModal({
     }
   }
 
-  const waNumber = vendor.whatsapp.replace(/[^\d]/g, "");
+  // Send the clarification question WITHOUT leaving the app.
+  async function sendClarify(message: string) {
+    setClarifyState("sending");
+    try {
+      const res = await fetch("/api/outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: vendor.whatsapp || undefined,
+          placeId: vendor.placeId,
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          message,
+          kind: "clarify",
+          rfq,
+          round,
+        }),
+      });
+      const d = await res.json();
+      setClarifyState(d.sent ? "sent" : "manual");
+    } catch {
+      setClarifyState("manual");
+    }
+  }
 
   return (
     <Modal onClose={onClose}>
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-extrabold text-strong">Vendor reply</h2>
+          <h2 className="text-lg font-extrabold text-strong">{t("Add the shop's reply")}</h2>
           <p className="text-[12px] text-faint">{vendor.name}</p>
         </div>
         <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
@@ -107,11 +134,15 @@ export function PasteReplyModal({
         </button>
       </div>
 
+      <p className="mb-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+        {t("Fallback only: with WhatsApp connected, replies arrive here by themselves.")}
+      </p>
+
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
-        placeholder="Paste what the shop replied on WhatsApp..."
+        placeholder={t("Paste what the shop replied...")}
         className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
       />
 
@@ -121,6 +152,7 @@ export function PasteReplyModal({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={img} alt="" className="h-full w-full object-cover" />
             <button
+              type="button"
               onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
               className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center bg-black/60 text-[11px] text-white"
             >
@@ -129,24 +161,34 @@ export function PasteReplyModal({
           </div>
         ))}
         {images.length < 3 && (
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="btn flex h-14 w-14 items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
+          <label
+            className="btn flex h-14 w-14 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
             aria-label="Add price-list photo"
           >
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="sr-only"
+              onChange={(e) => {
+                addFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
             <Icon name="plus" className="h-5 w-5" />
-          </button>
+          </label>
         )}
-        <span className="text-[11px] text-faint">Photo of a price list? The agent reads images too.</span>
+        <span className="text-[11px] text-faint">
+          {t("Photo of a price list? The agent reads images too.")}
+        </span>
       </div>
-      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => addFiles(e.target.files)} />
 
       <button
         onClick={analyze}
         disabled={busy || (!text.trim() && images.length === 0)}
         className="btn btn-primary mt-3 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
       >
-        {busy ? <LoadingDots light label="Agent reading the reply" /> : "Analyze reply"}
+        {busy ? <LoadingDots light label={t("Agent reading the reply")} /> : t("Analyze reply")}
       </button>
 
       {result && (
@@ -154,25 +196,24 @@ export function PasteReplyModal({
           {result.found && result.pricePerDay ? (
             <>
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-bold text-soft">Detected price</span>
+                <span className="text-[13px] font-bold text-soft">{t("Detected price")}</span>
                 <span className="text-xl font-extrabold text-strong">
-                  ${result.pricePerDay}/day
+                  ${result.pricePerDay}/{t("day")}
                 </span>
               </div>
               {result.matchesSpec && result.confidence === "high" ? (
                 <div className="mt-1 flex items-center gap-1.5 text-[12px] font-bold text-savings">
-                  <Icon name="check" className="h-4 w-4" /> Verified: matches your exact vehicle.
+                  <Icon name="check" className="h-4 w-4" /> {t("Verified: matches your exact vehicle.")}
                 </div>
               ) : (
                 <div className="mt-1 text-[12px] font-bold text-brandyellow">
-                  Not 100% sure this price is for your exact vehicle - the offer
-                  is marked unconfirmed. Send the question below to verify:
+                  {t("Not 100% sure this price is for your exact vehicle - the offer is marked unconfirmed. Send the question below to verify:")}
                 </div>
               )}
             </>
           ) : (
             <div className="text-[13px] font-bold text-soft">
-              No clear price found. Ask the shop:
+              {t("No clear price found. Ask the shop:")}
             </div>
           )}
           {result.clarifyMessage && (
@@ -182,27 +223,39 @@ export function PasteReplyModal({
               </p>
               <div className="mt-2 flex gap-2">
                 <button
-                  onClick={() => navigator.clipboard?.writeText(result.clarifyMessage!)}
+                  onClick={() => sendClarify(result.clarifyMessage!)}
+                  disabled={clarifyState === "sending" || clarifyState === "sent"}
+                  className="btn flex-1 rounded-xl bg-savings py-2 text-center text-[12px] font-extrabold text-white disabled:opacity-70"
+                >
+                  {clarifyState === "sending" ? (
+                    <LoadingDots light label={t("Sending")} />
+                  ) : clarifyState === "sent" ? (
+                    `✓ ${t("Sent from the app")}`
+                  ) : (
+                    t("Send from the app")
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    navigator.clipboard?.writeText(result.clarifyMessage!);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
                   className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px]"
                 >
-                  Copy
+                  {copied ? `✓ ${t("Copied")}` : t("Copy")}
                 </button>
-                {waNumber && (
-                  <a
-                    href={`https://wa.me/${waNumber}?text=${encodeURIComponent(result.clarifyMessage)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-sm flex-1 rounded-xl bg-savings text-center text-[12px] font-extrabold leading-9 text-white"
-                  >
-                    Send on WhatsApp
-                  </a>
-                )}
               </div>
+              {clarifyState === "manual" && (
+                <p className="mt-1.5 text-[11px] font-bold text-brandyellow">
+                  {t("WhatsApp sending is not connected yet - use Copy for now.")}
+                </p>
+              )}
             </>
           )}
           {result.found && (
             <button onClick={onClose} className="btn btn-primary mt-2 w-full rounded-xl py-2 text-[13px]">
-              Done
+              {t("Done")}
             </button>
           )}
         </div>
