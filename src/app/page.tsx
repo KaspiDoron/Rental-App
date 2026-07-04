@@ -16,7 +16,6 @@ import { BrandMark } from "@/components/BrandMark";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
-import { PasteReplyModal } from "@/components/PasteReplyModal";
 import { BargainDraftModal } from "@/components/BargainDraftModal";
 import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
@@ -35,7 +34,7 @@ const MapView = dynamic(() => import("@/components/MapView"), {
 
 const EXAMPLES = [
   "125cc automatic scooter with a phone mount, under 20,000 km, for 3 days",
-  "Small automatic car, hotel delivery, 5 days, GPS included",
+  "Small automatic car, 5 days, GPS included, cheapest possible",
   "Manual motorcycle with helmet and storage box, cheapest possible, 1 week",
 ];
 
@@ -61,12 +60,14 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
   const [reviewsVendor, setReviewsVendor] = useState<Vendor | null>(null);
-  const [replyVendor, setReplyVendor] = useState<Vendor | null>(null);
   const [bargainVendor, setBargainVendor] = useState<Vendor | null>(null);
   const [aiOn, setAiOn] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
+  const [waConnected, setWaConnected] = useState(false);
+  const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
+  const [massNote, setMassNote] = useState<string | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
 
@@ -110,6 +111,10 @@ export default function Home() {
   // Terms of Use the user accepted at signup).
   useEffect(() => {
     if (!session) return;
+    fetch("/api/wa/status")
+      .then((r) => r.json())
+      .then((d) => setWaConnected(Boolean(d.connected)))
+      .catch(() => {});
     navigator.geolocation?.getCurrentPosition(
       (pos) =>
         setOrigin({
@@ -335,7 +340,9 @@ export default function Home() {
 
       <div className="px-4">
         <section className="surface mt-4 rounded-blob p-4">
-          <label className="text-[12px] font-extrabold text-soft">{t("Looking for...")}</label>
+          <label className="text-[12px] font-extrabold text-soft">
+            {t("What do you want to ride?")}
+          </label>
           <textarea
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
@@ -479,6 +486,71 @@ export default function Home() {
 
         <AdBanner plan={session?.plan} />
 
+        {/* Mass bargain: one tap asks several shops at once (Pro/Ultra) */}
+        {vendors.length > 1 && rfq && (
+          <div className="mt-3">
+            <button
+              onClick={async () => {
+                if (session?.plan === "free") {
+                  setUpgradeOpen(true);
+                  return;
+                }
+                setMassState("running");
+                setMassNote(null);
+                try {
+                  const targets = filtered
+                    .filter((v) => !v.offer && v.stage !== "rfq-sent" && v.stage !== "awaiting-response")
+                    .slice(0, 6)
+                    .map((v) => ({ id: v.id, name: v.name, whatsapp: v.whatsapp, placeId: v.placeId }));
+                  const res = await fetch("/api/outreach/mass", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      vendors: targets,
+                      message: rfq.vendorMessage,
+                      rfq,
+                      region: origin.label,
+                    }),
+                  });
+                  const d = await res.json();
+                  if (d.results) {
+                    for (const r of d.results) {
+                      if (r.sent) {
+                        patchVendor(r.id, { stage: "awaiting-response" });
+                      }
+                    }
+                    setMassNote(
+                      d.sent > 0
+                        ? `${t("Agents are on it - shops asked:")} ${d.sent}`
+                        : d.connect
+                        ? t("Connect your WhatsApp in Profile first.")
+                        : t("No shops could be messaged right now.")
+                    );
+                  } else {
+                    setMassNote(d.error ?? t("Could not start the mass bargain."));
+                    if (d.upgrade) setUpgradeOpen(true);
+                  }
+                } finally {
+                  setMassState("done");
+                }
+              }}
+              disabled={massState === "running"}
+              className={`btn w-full rounded-2xl py-3 text-[14px] font-extrabold text-white disabled:opacity-70 ${
+                session?.plan === "free" ? "bg-faint" : "badge-flash"
+              }`}
+            >
+              {massState === "running" ? (
+                <LoadingDots light label={t("Agents contacting every shop")} />
+              ) : (
+                <>⚡ {t("Mass bargain - ask all shops at once")}{session?.plan === "free" ? " 🔒" : ""}</>
+              )}
+            </button>
+            {massNote && (
+              <p className="mt-1 text-center text-[11px] font-bold text-soft">{massNote}</p>
+            )}
+          </div>
+        )}
+
         {vendors.length > 0 && (
           <>
             <div className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1">
@@ -519,7 +591,7 @@ export default function Home() {
                 plan={session?.plan}
                 onBook={setBookingVendor}
                 onReviews={setReviewsVendor}
-                onReply={setReplyVendor}
+                waConnected={waConnected}
                 onBargain={setBargainVendor}
                 onStage={(id, stage) => patchVendor(id, { stage })}
                 onCustomMessage={customMessage}
@@ -530,6 +602,22 @@ export default function Home() {
                 <LoadingDots label={t("More agents reporting in")} />
               </div>
             )}
+          </div>
+        )}
+
+        {/* Meta-style skeleton cards while the agents search */}
+        {phase === "profiling" && (
+          <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="surface overflow-hidden rounded-blob">
+                <div className="skeleton h-24 w-full" />
+                <div className="space-y-2 p-4">
+                  <div className="skeleton h-4 w-2/3 rounded-full" />
+                  <div className="skeleton h-3 w-1/2 rounded-full" />
+                  <div className="skeleton h-9 w-full rounded-2xl" />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -556,16 +644,6 @@ export default function Home() {
         />
       )}
       {reviewsVendor && <ReviewsSheet vendor={reviewsVendor} onClose={() => setReviewsVendor(null)} />}
-      {replyVendor && rfq && (
-        <PasteReplyModal
-          vendor={replyVendor}
-          rfq={rfq}
-          round={replyVendor.offer ? replyVendor.offer.round + 1 : 0}
-          firstQuote={replyVendor.offer?.listPricePerDay}
-          onOffer={(offer) => applyOffer(replyVendor.id, offer)}
-          onClose={() => setReplyVendor(null)}
-        />
-      )}
       {bargainVendor && rfq && (
         <BargainDraftModal
           vendor={bargainVendor}
@@ -587,10 +665,9 @@ export default function Home() {
       {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
 
       <TabBar
-        active={view === "map" ? "map" : "home"}
+        active="home"
         onSelect={(t) => {
           if (t === "profile") window.location.href = "/profile";
-          else if (t === "map") setView("map");
           else {
             setView("list");
             window.scrollTo({ top: 0, behavior: "smooth" });

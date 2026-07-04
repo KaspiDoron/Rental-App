@@ -254,3 +254,13 @@ create table if not exists public.api_usage (
 create index if not exists api_usage_kind_idx on public.api_usage (kind, created_at desc);
 create index if not exists api_usage_user_idx on public.api_usage (user_email, kind, created_at desc);
 alter table public.api_usage enable row level security;
+
+-- ---- Feedback screenshots (viewable in the management workspace) ------------
+create table if not exists public.feedback_images (
+  id          bigint generated always as identity primary key,
+  feedback_id bigint,
+  data_url    text not null,
+  created_at  timestamptz not null default now()
+);
+create index if not exists feedback_images_fid_idx on public.feedback_images (feedback_id);
+alter table public.feedback_images enable row level security;

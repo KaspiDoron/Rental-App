@@ -174,6 +174,14 @@ function newPlaceToVendor(
     lat: p.location?.latitude ?? origin.lat,
     lng: p.location?.longitude ?? origin.lng,
   };
+  const photoUrls: string[] = ((p.photos as any[]) ?? [])
+    .slice(0, 6)
+    .filter((ph) => ph?.name)
+    .map((ph) => `/api/photo?name=${encodeURIComponent(ph.name)}`);
+  // Today's opening line from Google's weekday descriptions.
+  const weekday: string[] = p.currentOpeningHours?.weekdayDescriptions ?? [];
+  const jsDay = new Date().getDay(); // 0=Sun; Google lists Mon..Sun
+  const todayHours = weekday.length === 7 ? weekday[(jsDay + 6) % 7] : undefined;
   return {
     id: p.id ?? `g${i}`,
     placeId: p.id,
@@ -190,10 +198,10 @@ function newPlaceToVendor(
     demo: false,
     address: p.formattedAddress,
     openNow: p.currentOpeningHours?.openNow,
+    todayHours,
     priceLevel: undefined,
-    photoUrl: p.photos?.[0]?.name
-      ? `/api/photo?name=${encodeURIComponent(p.photos[0].name)}`
-      : undefined,
+    photoUrl: photoUrls[0],
+    photoUrls,
     distanceKm: haversineKm(origin, loc),
   } satisfies Vendor;
 }
@@ -232,7 +240,7 @@ export async function findRealVendors(
       "places.rating",
       "places.userRatingCount",
       "places.formattedAddress",
-      "places.currentOpeningHours.openNow",
+      "places.currentOpeningHours",
       "places.internationalPhoneNumber",
       "places.photos",
     ].join(",")

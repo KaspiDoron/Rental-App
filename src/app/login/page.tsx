@@ -5,6 +5,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { TermsModal } from "@/components/TermsModal";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
+import { WaConnect } from "@/components/WaConnect";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LanguageButton } from "@/components/LanguageButton";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -33,7 +34,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [showTerms, setShowTerms] = useState(false);
-  const [step, setStep] = useState<"auth" | "plans">("auth");
+  const [step, setStep] = useState<"auth" | "whatsapp" | "plans">("auth");
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [subBusy, setSubBusy] = useState(false);
   const googleDiv = useRef<HTMLDivElement>(null);
@@ -91,6 +92,22 @@ export default function LoginPage() {
       return;
     }
     if (isNew && data.session?.role === "user") {
+      // WhatsApp is part of signing up: without it the agents cannot bargain.
+      try {
+        const wa = await (await fetch("/api/wa/status")).json();
+        if (wa.available && !wa.connected) {
+          setStep("whatsapp");
+          return;
+        }
+      } catch {}
+      await goPlans();
+      return;
+    }
+    enterApp(data.session, { welcome: isNew });
+  }
+
+  async function goPlans() {
+    {
       try {
         const res = await fetch("/api/billing/checkout");
         const d = await res.json();
@@ -102,7 +119,7 @@ export default function LoginPage() {
         }
       } catch {}
     }
-    enterApp(data.session, { welcome: isNew });
+    window.location.href = "/?welcome=1";
   }
 
   async function submit(e: React.FormEvent) {
@@ -211,6 +228,33 @@ export default function LoginPage() {
     const data = await res.json();
     if (res.ok) enterApp(data.session);
     else setStatus("idle");
+  }
+
+  if (step === "whatsapp") {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
+        <div className="mb-4 text-center">
+          <div className="mx-auto mb-2 w-fit animate-slide-up">
+            <BrandMark size={72} />
+          </div>
+          <h1 className="font-display text-2xl font-extrabold text-strong">
+            {t("Last step: connect WhatsApp")} 💬
+          </h1>
+          <p className="mx-auto mt-1 max-w-[300px] text-sm text-soft">
+            {t("This is how the agents bargain for you - shops answer YOUR number and every reply lands in the app.")}
+          </p>
+        </div>
+        <div className="surface rounded-blob p-5">
+          <WaConnect phone={phone} onConnected={() => goPlans()} />
+        </div>
+        <button
+          onClick={() => goPlans()}
+          className="btn mx-auto mt-3 text-[11px] font-bold text-faint underline"
+        >
+          {t("Having trouble? Connect later from Profile")}
+        </button>
+      </main>
+    );
   }
 
   if (step === "plans") {

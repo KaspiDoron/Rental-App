@@ -37,6 +37,7 @@ interface FeedbackRow {
   summary: string | null;
   triage_reason: string | null;
   image_count: number;
+  images?: string[];
   created_at: string;
 }
 
@@ -888,6 +889,20 @@ export default function AdminPage() {
                 {f.summary || f.body.slice(0, 80)}
               </div>
               <p className="mt-0.5 whitespace-pre-wrap text-[12px] text-soft">{f.body}</p>
+              {(f.images?.length ?? 0) > 0 && (
+                <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
+                  {f.images!.map((src, i) => (
+                    <a key={i} href={src} target="_blank" rel="noreferrer" className="shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={src}
+                        alt=""
+                        className="h-24 w-24 rounded-xl border-2 border-line object-cover"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )}
               <div className="mt-1 text-[10px] text-faint">
                 {f.reporter_email ?? "anonymous"}
                 {f.image_count > 0 ? ` · ${f.image_count} screenshot(s)` : ""}

@@ -9,9 +9,26 @@ export async function GET() {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const rows = await sbSelect(
+  const rows = await sbSelect<{ id: number; image_count: number }>(
     "feedback",
     "select=id,category,body,reporter_email,is_real_issue,severity,summary,triage_reason,image_count,created_at&order=created_at.desc&limit=100"
   );
-  return NextResponse.json({ feedback: rows });
+
+  // Attach screenshots for the rows that have them.
+  const withImages = rows.filter((r) => (r.image_count ?? 0) > 0).map((r) => r.id);
+  let images: { feedback_id: number; data_url: string }[] = [];
+  if (withImages.length) {
+    images = await sbSelect<{ feedback_id: number; data_url: string }>(
+      "feedback_images",
+      `select=feedback_id,data_url&feedback_id=in.(${withImages.join(",")})&limit=200`
+    );
+  }
+  const byId: Record<number, string[]> = {};
+  for (const img of images) {
+    (byId[img.feedback_id] ??= []).push(img.data_url);
+  }
+
+  return NextResponse.json({
+    feedback: rows.map((r) => ({ ...r, images: byId[r.id] ?? [] })),
+  });
 }

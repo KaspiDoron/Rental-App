@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { triageFeedback } from "@/lib/agents";
 import { sendEmail } from "@/lib/email";
-import { sbInsert } from "@/lib/runtime-config";
+import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import { adminEmails } from "@/lib/session";
 
 interface ImagePayload {
@@ -49,6 +49,24 @@ export async function POST(req: Request) {
       image_count: attachments.length,
     },
   ]);
+
+  // Store the screenshots so management can view them in the workspace.
+  if (Array.isArray(body.images) && body.images.length) {
+    try {
+      const latest = await sbSelect<{ id: number }>(
+        "feedback",
+        "select=id&order=created_at.desc&limit=1"
+      );
+      const fid = latest[0]?.id ?? null;
+      const rows = (body.images as { dataUrl?: string }[])
+        .slice(0, MAX_IMAGES)
+        .filter((img) => typeof img.dataUrl === "string" && img.dataUrl.startsWith("data:"))
+        .map((img) => ({ feedback_id: fid, data_url: img.dataUrl }));
+      if (rows.length) await sbInsert("feedback_images", rows);
+    } catch {
+      /* image storage is best-effort */
+    }
+  }
 
   if (!verdict.isRealIssue) {
     return NextResponse.json({

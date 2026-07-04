@@ -184,40 +184,65 @@ export default function MapView({
               <button
                 key={v.id}
                 onClick={() => onSelect(v.id)}
-                className={`surface-strong w-64 shrink-0 rounded-blob p-3 text-left transition ${
+                className={`surface-strong w-72 shrink-0 overflow-hidden rounded-blob text-left transition ${
                   v.id === selectedId ? "border-2 !border-brandblue" : ""
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
-                  <span className="shrink-0 text-[15px] font-extrabold text-strong">
-                    {v.offer ? `$${v.offer.pricePerDay}/d` : "..."}
-                  </span>
-                </div>
-                <div className="mt-0.5 flex items-center gap-2 text-[11px] text-soft">
-                  <span className="inline-flex items-center gap-0.5">
-                    <Icon name="star" className="h-3 w-3 text-brandyellow" />
-                    {v.rating ? v.rating.toFixed(1) : "New"} ({v.reviews})
-                  </span>
-                  <span>{v.distanceKm?.toFixed(1)} km</span>
-                  {v.openNow !== undefined && (
-                    <span className={v.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
-                      {v.openNow ? "Open" : "Closed"}
+                {v.photoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={v.photoUrl} alt="" className="h-20 w-full object-cover" />
+                )}
+                <div className="p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
+                    <span className="shrink-0 text-[15px] font-extrabold text-strong">
+                      {v.offer ? `$${v.offer.pricePerDay}/d` : "..."}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-soft">
+                    <span className="inline-flex items-center gap-0.5">
+                      <Icon name="star" className="h-3 w-3 text-brandyellow" />
+                      {v.rating ? v.rating.toFixed(1) : "New"} ({v.reviews} reviews)
+                    </span>
+                    <span>{v.distanceKm?.toFixed(1)} km</span>
+                    {v.openNow !== undefined && (
+                      <span className={v.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
+                        {v.openNow ? "Open now" : "Closed"}
+                      </span>
+                    )}
+                  </div>
+                  {v.todayHours && (
+                    <div className="mt-0.5 truncate text-[10px] font-bold text-faint">
+                      🕒 {v.todayHours}
+                    </div>
+                  )}
+                  {v.address && (
+                    <div className="truncate text-[10px] text-faint">{v.address}</div>
+                  )}
+                  <div className="mt-1">
+                    {(v.orders ?? 0) > 0 ? (
+                      <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
+                        ✓ {v.orders} booked here
+                      </span>
+                    ) : (
+                      <span className="rounded-md bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
+                        ✨ New on WheelDeal
+                      </span>
+                    )}
+                  </div>
+                  {onOpenVendor && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFull(false);
+                        onOpenVendor(v);
+                      }}
+                      className="btn btn-sm mt-2 block w-full rounded-xl bg-brandblue py-1.5 text-center text-[12px] font-extrabold text-white"
+                    >
+                      View details
                     </span>
                   )}
                 </div>
-                {onOpenVendor && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFull(false);
-                      onOpenVendor(v);
-                    }}
-                    className="btn btn-sm mt-2 block w-full rounded-xl bg-brandblue py-1.5 text-center text-[12px] font-extrabold text-white"
-                  >
-                    View details
-                  </span>
-                )}
               </button>
             ))}
           </div>

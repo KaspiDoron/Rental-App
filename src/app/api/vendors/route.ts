@@ -80,6 +80,18 @@ export async function POST(req: Request) {
   }
   vendors.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
 
+  // Social proof: how many WheelDeal bookings each shop already has.
+  try {
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const rows = await sbSelect<{ vendor_id: string }>(
+      "bookings",
+      "select=vendor_id&limit=2000"
+    );
+    const counts: Record<string, number> = {};
+    for (const r of rows) counts[r.vendor_id] = (counts[r.vendor_id] ?? 0) + 1;
+    vendors = vendors.map((v) => ({ ...v, orders: counts[v.id] ?? 0 }));
+  } catch {}
+
   // Save the search to agent memory (no-op without Supabase).
   await sbInsert("searches", [
     {

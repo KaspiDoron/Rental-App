@@ -51,7 +51,9 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
       </div>
 
       {open && (
-        <Modal onClose={() => setOpen(false)} center>
+        // Bottom sheet (not centered): always anchored to the bottom of the
+        // screen, so the close button can never be pushed off-screen.
+        <Modal onClose={() => setOpen(false)}>
           <div className="mb-3 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-extrabold text-strong">
@@ -83,7 +85,7 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
 
           {/* Internal scroll keeps the whole popup (and its close button) on
               screen even on short phones. */}
-          <div className="grid max-h-[45dvh] grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
+          <div className="grid max-h-[38dvh] grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
             {LANGS.map((l) => (
               <button
                 key={l.code}

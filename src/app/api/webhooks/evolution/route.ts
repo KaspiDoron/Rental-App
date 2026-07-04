@@ -7,13 +7,25 @@
 // random internet traffic cannot inject fake vendor replies.
 
 import { NextResponse } from "next/server";
-import { sbInsert } from "@/lib/runtime-config";
+import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import {
   webhookToken,
   emailForInstance,
   sendFromUser,
 } from "@/lib/evolution";
+
+// PRIVACY HARD RULE: WheelDeal must NEVER read a user's personal chats. A
+// message is stored/processed ONLY if it comes from a number WE first messaged
+// as a rental-shop thread (an outbound row exists for it). Anything else -
+// friends, family, groups, statuses - is dropped on the spot, unstored.
+async function isVendorThread(fromDigits: string): Promise<boolean> {
+  const rows = await sbSelect(
+    "whatsapp_messages",
+    `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(fromDigits)}&limit=1`
+  );
+  return rows.length > 0;
+}
 
 function extractText(data: any): string {
   return (
@@ -46,6 +58,10 @@ export async function POST(req: Request) {
       const remoteJid = String(data.key.remoteJid ?? "");
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
       const from = remoteJid.split("@")[0];
+
+      // Not a rental-shop thread we opened? Drop it - never stored, never read.
+      if (!(await isVendorThread(from))) continue;
+
       const text = extractText(data);
       const msgId = String(data.key.id ?? "");
 

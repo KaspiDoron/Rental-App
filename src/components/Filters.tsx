@@ -97,22 +97,8 @@ export function Filters({
         </div>
       )}
 
-      {/* Fulfillment + status + extras */}
+      {/* Status + extras (only real, Google-confirmed signals) */}
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
-        <Chip
-          active={filters.deliveryOnly}
-          onClick={() => set({ deliveryOnly: !filters.deliveryOnly })}
-        >
-          Hotel delivery
-        </Chip>
-        <Chip
-          active={filters.fulfillment === "in-store"}
-          onClick={() =>
-            set({ fulfillment: filters.fulfillment === "in-store" ? "any" : "in-store" })
-          }
-        >
-          In-store pickup
-        </Chip>
         <Chip
           active={filters.openNowOnly}
           onClick={() => set({ openNowOnly: !filters.openNowOnly })}

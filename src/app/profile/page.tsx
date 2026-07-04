@@ -8,7 +8,9 @@ import { PasswordInput } from "@/components/PasswordInput";
 import { LoadingDots } from "@/components/LoadingDots";
 import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
+import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
+import { CURRENCIES, setSavedCurrency } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
 interface Booking {
@@ -45,16 +47,17 @@ export default function ProfilePage() {
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [phoneMsg, setPhoneMsg] = useState<string | null>(null);
 
-  // Personal WhatsApp session (Evolution API).
+  // Personal WhatsApp session state (rendered by <WaConnect/>).
   const [wa, setWa] = useState<{
     available: boolean;
     connected: boolean;
     state?: string;
   } | null>(null);
-  const [waQr, setWaQr] = useState<string | null>(null);
-  const [waBusy, setWaBusy] = useState(false);
-  const [waErr, setWaErr] = useState<string | null>(null);
-  const waPoll = useRef<ReturnType<typeof setInterval>>();
+
+  // Owner brand/social
+  const [twitter, setTwitter] = useState("");
+  const [twitterBusy, setTwitterBusy] = useState(false);
+  const [twitterMsg, setTwitterMsg] = useState<string | null>(null);
 
   // Owner assistant chat
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -85,13 +88,20 @@ export default function ProfilePage() {
       .then((r) => r.json())
       .then((d) => setWa(d))
       .catch(() => {});
+    // Load the saved X handle (owner brand card).
+    fetch("/api/admin/config?reveal=1")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const row = d?.values?.find((v: any) => v.name === "TWITTER_HANDLE");
+        if (row?.value) setTwitter(row.value);
+      })
+      .catch(() => {});
     try {
       const t2 = (localStorage.getItem("wd_theme") as "light" | "dark") || "light";
       setTheme(t2);
       const p = localStorage.getItem("wd_prefs");
       if (p) setPrefs(JSON.parse(p));
     } catch {}
-    return () => clearInterval(waPoll.current);
   }, []);
 
   function switchTheme(t2: "light" | "dark") {
@@ -136,40 +146,19 @@ export default function ProfilePage() {
     }
   }
 
-  async function connectWa() {
-    setWaBusy(true);
-    setWaErr(null);
+  async function saveTwitter() {
+    setTwitterBusy(true);
+    setTwitterMsg(null);
     try {
-      const res = await fetch("/api/wa/connect", { method: "POST" });
-      const d = await res.json();
-      if (!d.available || d.error) {
-        setWaErr(d.error ?? t("The WhatsApp connector is not set up yet."));
-        return;
-      }
-      if (d.qr) setWaQr(d.qr);
-      // Poll until the scan completes.
-      clearInterval(waPoll.current);
-      waPoll.current = setInterval(async () => {
-        const s = await (await fetch("/api/wa/status")).json();
-        setWa(s);
-        if (s.connected) {
-          clearInterval(waPoll.current);
-          setWaQr(null);
-        }
-      }, 3000);
+      const res = await fetch("/api/admin/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "TWITTER_HANDLE", value: twitter.trim() }),
+      });
+      if (res.ok) setTwitterMsg("Saved - redeploy to refresh share cards. ✓");
+      else setTwitterMsg("Could not save.");
     } finally {
-      setWaBusy(false);
-    }
-  }
-
-  async function disconnectWa() {
-    setWaBusy(true);
-    try {
-      await fetch("/api/wa/disconnect", { method: "POST" });
-      setWa((w) => (w ? { ...w, connected: false, state: "disconnected" } : w));
-      setWaQr(null);
-    } finally {
-      setWaBusy(false);
+      setTwitterBusy(false);
     }
   }
 
@@ -309,69 +298,70 @@ export default function ProfilePage() {
             </span>
           </div>
 
-          {waErr && (
-            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-              {waErr}
-            </p>
-          )}
-
-          {waQr && !wa?.connected && (
-            <div className="mt-3 rounded-2xl bg-card2 p-3 text-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={waQr}
-                alt="WhatsApp QR"
-                className="mx-auto h-44 w-44 rounded-xl bg-white p-2"
-              />
-              <div className="mt-2 space-y-1 text-left text-[11px] font-bold text-soft">
-                <p className="text-center text-[11px] font-extrabold text-strong">
-                  {t("Scan with the phone that has your WhatsApp:")}
-                </p>
-                <p>
-                  🍏 {t("iPhone: open WhatsApp -> Settings (bottom right) -> Linked Devices -> Link a Device -> unlock with Face ID -> point the camera at this code.")}
-                </p>
-                <p>
-                  🤖 {t("Android: open WhatsApp -> tap the 3 dots (top right) -> Linked devices -> Link a device -> point the camera at this code.")}
-                </p>
-                <p className="text-faint">
-                  {t("The code refreshes every ~40 seconds - if it expires, tap Refresh QR.")}
-                </p>
-              </div>
-              <div className="mt-1">
-                <LoadingDots label={t("Waiting for your scan")} />
-              </div>
-            </div>
-          )}
-
-          <div className="mt-3 flex gap-2">
-            {!wa?.connected ? (
-              <button
-                onClick={connectWa}
-                disabled={waBusy}
-                className="btn btn-primary flex-1 rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
-              >
-                {waBusy ? (
-                  <LoadingDots light label={t("Preparing QR")} />
-                ) : waQr ? (
-                  t("Refresh QR")
-                ) : (
-                  t("Connect my WhatsApp")
-                )}
-              </button>
-            ) : (
-              <button
-                onClick={disconnectWa}
-                disabled={waBusy}
-                className="btn btn-danger flex-1 rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
-              >
-                {waBusy ? <LoadingDots light label={t("Disconnecting")} /> : t("Disconnect")}
-              </button>
-            )}
+          <div className="mt-3">
+            <WaConnect phone={profile?.phone} />
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-faint">
             {t("Human-pace sending limits apply automatically to keep your number safe. Details are in the Terms of Use.")}
           </p>
         </section>
+
+        {/* Owner brand kit + social */}
+        {isOwner && (
+          <section className="surface rounded-blob p-4">
+            <div className="mb-2 text-[13px] font-extrabold text-strong">🎨 Brand kit & social</div>
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href="/api/brand/banner"
+                download="wheeldeal-x-banner.png"
+                className="btn btn-ghost rounded-2xl py-2.5 text-center text-[12px] font-extrabold"
+              >
+                ⬇ X banner (1500x500)
+              </a>
+              <a
+                href="/apple-icon"
+                download="wheeldeal-logo.png"
+                className="btn btn-ghost rounded-2xl py-2.5 text-center text-[12px] font-extrabold"
+              >
+                ⬇ Logo (512)
+              </a>
+              <a
+                href="/opengraph-image"
+                download="wheeldeal-social.png"
+                className="btn btn-ghost rounded-2xl py-2.5 text-center text-[12px] font-extrabold"
+              >
+                ⬇ Social card
+              </a>
+              <a
+                href="/api/brand/banner"
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-ghost rounded-2xl py-2.5 text-center text-[12px] font-extrabold"
+              >
+                👁 Preview banner
+              </a>
+            </div>
+            <label className="mt-3 block text-[11px] font-bold text-faint">
+              X (Twitter) handle - shown in share cards
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={twitter}
+                  onChange={(e) => setTwitter(e.target.value)}
+                  placeholder="@wheeldeal"
+                  className="flex-1 rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+                />
+                <button
+                  onClick={saveTwitter}
+                  disabled={twitterBusy}
+                  className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
+                >
+                  {twitterBusy ? <LoadingDots light /> : "Save"}
+                </button>
+              </div>
+            </label>
+            {twitterMsg && <p className="mt-1 text-[11px] font-bold text-savings">{twitterMsg}</p>}
+          </section>
+        )}
 
         {/* Owner AI co-manager */}
         {isOwner && (
@@ -552,11 +542,16 @@ export default function ProfilePage() {
               {t("Currency")}
               <select
                 value={prefs.currency}
-                onChange={(e) => savePrefs({ ...prefs, currency: e.target.value })}
+                onChange={(e) => {
+                  savePrefs({ ...prefs, currency: e.target.value });
+                  setSavedCurrency(e.target.value);
+                }}
                 className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm font-bold text-strong"
               >
-                {["USD", "EUR", "GBP", "IDR", "THB", "ILS"].map((c) => (
-                  <option key={c}>{c}</option>
+                {CURRENCIES.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.flag} {c.code}
+                  </option>
                 ))}
               </select>
             </label>

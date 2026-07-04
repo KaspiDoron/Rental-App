@@ -2,7 +2,16 @@ import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/lib/i18n";
 import "./globals.css";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://wheeldeal.vercel.app";
+// Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
+// (og:image) work. Priority: explicit NEXT_PUBLIC_SITE_URL -> Vercel's
+// production domain -> current deployment URL -> fallback.
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "https://wheeldeal.vercel.app");
 const title = "WheelDeal - cheapest local rides, negotiated for you";
 const description =
   "AI agents find and negotiate the cheapest car, manual motorcycle & automatic scooter rentals near your hotel. Live bargaining, map + list, biggest savings first.";
@@ -37,7 +46,13 @@ export const metadata: Metadata = {
     url: siteUrl,
     locale: "en_US",
   },
-  twitter: { card: "summary_large_image", title, description },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+    site: process.env.TWITTER_HANDLE || undefined,
+    creator: process.env.TWITTER_HANDLE || undefined,
+  },
   robots: { index: true, follow: true },
   alternates: { canonical: "/" },
   category: "travel",

@@ -17,6 +17,12 @@ export async function POST(req: Request) {
   }
 
   const origin = new URL(req.url).origin;
-  const result = await connectInstance(session.email, origin);
-  return NextResponse.json({ available: true, ...result });
+  const body = await req.json().catch(() => ({}));
+  // Pairing code needs the user's WhatsApp number - prefer the one they typed
+  // now, else the phone on their profile.
+  const { getUser } = await import("@/lib/access");
+  const profile = await getUser(session.email);
+  const phone = String(body.phone ?? "").trim() || profile?.phone;
+  const result = await connectInstance(session.email, origin, phone);
+  return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }

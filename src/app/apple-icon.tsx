@@ -12,9 +12,27 @@ export default function AppleIcon() {
   ).toString("base64")}`;
   return new ImageResponse(
     (
-      <div style={{ display: "flex", width: "100%", height: "100%" }}>
+      // Nudge the mark left: the artwork's visual weight sits right of its
+      // bounding box, so a small negative offset makes it LOOK centred on the
+      // home screen.
+      <div
+        style={{
+          display: "flex",
+          width: "100%",
+          height: "100%",
+          background: "#f4f6f9",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img width={180} height={180} src={dataUri} alt="WheelDeal" />
+        <img
+          width={180}
+          height={180}
+          src={dataUri}
+          alt="WheelDeal"
+          style={{ marginLeft: -10 }}
+        />
       </div>
     ),
     { ...size }

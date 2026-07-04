@@ -21,9 +21,8 @@ export function BookingSheet({
 }) {
   const [step, setStep] = useState<Step>("verify");
   const [verification, setVerification] = useState<string>("");
-  const [mode, setMode] = useState<"hotel-delivery" | "in-store">(
-    vendor.fulfillment.includes("hotel-delivery") ? "hotel-delivery" : "in-store"
-  );
+  // Arrangement is confirmed with the shop over WhatsApp, not asserted here.
+  const mode: "in-store" = "in-store";
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
   const [dealTerms, setDealTerms] = useState(false);
@@ -127,33 +126,12 @@ export function BookingSheet({
       {step === "schedule" && (
         <div>
           <div className="mb-2 flex items-center gap-1.5 text-[12px] font-extrabold text-soft">
-            <Icon name="calendar" className="h-4 w-4 text-brandblue" /> Pickup or delivery
+            <Icon name="calendar" className="h-4 w-4 text-brandblue" /> When would you like it?
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              disabled={!vendor.fulfillment.includes("hotel-delivery")}
-              onClick={() => setMode("hotel-delivery")}
-              className={`btn chip rounded-2xl border-2 p-3 text-left text-sm disabled:opacity-40 ${
-                mode === "hotel-delivery"
-                  ? "border-brandblue bg-brandblue-soft text-strong"
-                  : "border-line text-soft"
-              }`}
-            >
-              <div className="font-extrabold">Hotel delivery</div>
-              <div className="text-[11px] text-faint">To your lobby</div>
-            </button>
-            <button
-              onClick={() => setMode("in-store")}
-              className={`btn chip rounded-2xl border-2 p-3 text-left text-sm ${
-                mode === "in-store"
-                  ? "border-brandblue bg-brandblue-soft text-strong"
-                  : "border-line text-soft"
-              }`}
-            >
-              <div className="font-extrabold">In-store pickup</div>
-              <div className="text-[11px] text-faint">At the shop</div>
-            </button>
-          </div>
+          <p className="mb-2 text-[11px] text-faint">
+            Confirm the exact pickup or delivery arrangement directly with the
+            shop over WhatsApp - the agents will have asked already.
+          </p>
 
           {freePlan && (
             <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
@@ -221,9 +199,7 @@ export function BookingSheet({
             <span className="font-extrabold text-strong">
               {date || defaultDate} at {time}
             </span>
-            {mode === "hotel-delivery"
-              ? " - delivered to your hotel lobby."
-              : " - pickup in store."}
+            .
           </p>
           <p className="mt-2 text-[12px] text-faint">
             The agent notified the vendor and saved the booking to your profile.

@@ -61,6 +61,9 @@ export interface Vendor {
   address?: string;
   openNow?: boolean;
   photoUrl?: string;
+  photoUrls?: string[]; // gallery (Google Places photos, proxied)
+  todayHours?: string; // e.g. "Monday: 8:00 AM - 8:00 PM"
+  orders?: number; // WheelDeal bookings made at this shop
   priceLevel?: number;
   distanceKm?: number;
   // live state (client-side)

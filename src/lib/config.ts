@@ -48,6 +48,7 @@ const KEYS: {
   { name: "LEMONSQUEEZY_VARIANT_ULTRA", label: "Lemon Squeezy Variant ID - Ultra", scope: "billing", editable: true },
   { name: "LEMONSQUEEZY_WEBHOOK_SECRET", label: "Lemon Squeezy Webhook Secret", scope: "billing", editable: true },
   { name: "ADSENSE_CLIENT", label: "Google AdSense Client (ca-pub-...)", scope: "billing", editable: true },
+  { name: "TWITTER_HANDLE", label: "X (Twitter) handle (@wheeldeal)", scope: "auth", editable: true },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
   { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },

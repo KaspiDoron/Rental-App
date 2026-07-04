@@ -175,7 +175,8 @@ async function saveSession(email: string, instance: string, status: string) {
  */
 export async function connectInstance(
   email: string,
-  appOrigin: string
+  appOrigin: string,
+  phone?: string
 ): Promise<{
   ok: boolean;
   state?: string;
@@ -232,8 +233,13 @@ export async function connectInstance(
     }),
   });
 
-  // Ask for the QR / current state.
-  const conn = await evoFetch(`/instance/connect/${instance}`);
+  // Ask for the QR AND (when we know the user's phone) an 8-character pairing
+  // code - the code is what makes linking possible on the SAME phone that has
+  // WhatsApp: Linked Devices -> "Link with phone number instead".
+  const digits = (phone ?? "").replace(/[^\d]/g, "");
+  const conn = await evoFetch(
+    `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
+  );
   const state = await connectionState(email);
   await saveSession(email, instance, state ?? "connecting");
 
@@ -244,12 +250,30 @@ export async function connectInstance(
       ? conn.data.code
       : undefined);
 
+  const rawPairing = conn.data?.pairingCode;
   return {
     ok: true,
     state: state ?? "connecting",
     qr,
-    pairingCode: conn.data?.pairingCode ?? conn.data?.code,
+    pairingCode:
+      typeof rawPairing === "string" && /^[A-Z0-9-]{8,9}$/i.test(rawPairing)
+        ? rawPairing
+        : undefined,
   };
+}
+
+/** True when this number is actually on WhatsApp (checked via the session). */
+export async function numberOnWhatsApp(
+  email: string,
+  number: string
+): Promise<boolean | null> {
+  const instance = instanceNameFor(email);
+  const res = await evoFetch(`/chat/whatsappNumbers/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({ numbers: [number.replace(/[^\d]/g, "")] }),
+  });
+  if (!res.ok || !Array.isArray(res.data)) return null; // unknown - don't block
+  return Boolean(res.data[0]?.exists ?? res.data[0]?.numberExists);
 }
 
 /** "open" = paired and ready to send. */
@@ -279,6 +303,13 @@ export async function sendFromUser(
 
   const instance = instanceNameFor(email);
   const number = to.replace(/[^\d]/g, "");
+
+  // Never message a number that is not on WhatsApp (some shops list landlines).
+  const exists = await numberOnWhatsApp(email, number);
+  if (exists === false) {
+    return { ok: false, error: "not-on-whatsapp" };
+  }
+
   // v2 shape first, then the legacy v1 body.
   let res = await evoFetch(`/message/sendText/${instance}`, {
     method: "POST",

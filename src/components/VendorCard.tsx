@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
-import { vehicleLabel } from "@/lib/labels";
 import { StageBadge, Pipeline } from "./Tracker";
 import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
@@ -17,9 +16,9 @@ export function VendorCard({
   vendor,
   rfq,
   plan,
+  waConnected,
   onBook,
   onReviews,
-  onReply,
   onBargain,
   onStage,
   onCustomMessage,
@@ -27,9 +26,9 @@ export function VendorCard({
   vendor: Vendor;
   rfq: StructuredRFQ | null;
   plan?: string;
+  waConnected: boolean;
   onBook: (vendor: Vendor) => void;
   onReviews: (vendor: Vendor) => void;
-  onReply: (vendor: Vendor) => void;
   onBargain: (vendor: Vendor) => void;
   onStage: (vendorId: string, stage: Vendor["stage"]) => void;
   onCustomMessage: (
@@ -49,6 +48,7 @@ export function VendorCard({
     "idle" | "sending" | "sent" | "no-phone" | "not-connected" | "rate-limited"
   >("idle");
   const [rfqError, setRfqError] = useState<string | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   const offer = vendor.offer;
   const savings =
@@ -151,13 +151,9 @@ export function VendorCard({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-[16px] font-extrabold text-strong">{vendor.name}</h3>
-              {vendor.demo ? (
+              {vendor.demo && (
                 <span className="shrink-0 rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
                   {t("Demo")}
-                </span>
-              ) : (
-                <span className="shrink-0 rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
-                  {t("Real place")}
                 </span>
               )}
             </div>
@@ -176,13 +172,31 @@ export function VendorCard({
                 <Icon name="pin" className="h-3.5 w-3.5 text-brandred" />
                 {vendor.distanceKm?.toFixed(1)} km
               </span>
-              <span className="inline-flex items-center gap-1">
-                <Icon
-                  name={vendor.vehicleClasses[0] === "car" ? "car" : "bike"}
-                  className="h-3.5 w-3.5"
-                />
-                {vendor.vehicleClasses.map(vehicleLabel).join(", ")}
-              </span>
+              {(vendor.photoUrls?.length ?? 0) > 1 && (
+                <button
+                  onClick={() => setGalleryOpen(true)}
+                  className="chip inline-flex items-center gap-1 font-bold text-brandblue"
+                >
+                  🖼 {vendor.photoUrls!.length} {t("photos")}
+                </button>
+              )}
+            </div>
+            {/* Real Google data chips */}
+            <div className="mt-1 flex flex-wrap gap-1">
+              {vendor.todayHours && (
+                <span className="rounded-md bg-card2 px-1.5 py-0.5 text-[10px] font-bold text-soft">
+                  🕒 {vendor.todayHours}
+                </span>
+              )}
+              {(vendor.orders ?? 0) > 0 ? (
+                <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[10px] font-extrabold text-savings">
+                  ✓ {vendor.orders} {t("booked here on WheelDeal")}
+                </span>
+              ) : (
+                <span className="rounded-md bg-brandblue-soft px-1.5 py-0.5 text-[10px] font-extrabold text-brandblue">
+                  ✨ {t("New on WheelDeal")}
+                </span>
+              )}
             </div>
             {vendor.address && (
               <div className="mt-1 truncate text-[12px] text-faint">{vendor.address}</div>
@@ -246,12 +260,6 @@ export function VendorCard({
                 🥊 {t("Bargain")}
               </button>
             </div>
-            <button
-              onClick={() => onReply(vendor)}
-              className="btn btn-ghost btn-sm mt-2 w-full rounded-xl py-2 text-[12px]"
-            >
-              + {t("Add another vendor reply")}
-            </button>
           </div>
         ) : (
           <div className="mt-3 rounded-2xl bg-card2 p-3">
@@ -264,26 +272,32 @@ export function VendorCard({
               </div>
             )}
 
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="mt-2">
               <button
                 onClick={sendRfq}
-                disabled={rfqState === "sending" || rfqState === "sent"}
-                className="btn rounded-2xl bg-savings py-2.5 text-[13px] font-extrabold text-white hover:brightness-95 disabled:opacity-70"
+                disabled={!waConnected || rfqState === "sending" || rfqState === "sent"}
+                className={`btn w-full rounded-2xl py-2.5 text-[13px] font-extrabold text-white disabled:opacity-60 ${
+                  waConnected ? "bg-savings hover:brightness-95" : "bg-faint"
+                }`}
               >
                 {rfqState === "sending" ? (
                   <LoadingDots light label={t("Sending")} />
                 ) : rfqState === "sent" ? (
                   `✓ ${t("Sent - reply lands here")}`
-                ) : (
+                ) : waConnected ? (
                   t("Ask for price")
+                ) : (
+                  `🔒 ${t("Ask for price")}`
                 )}
               </button>
-              <button
-                onClick={() => onReply(vendor)}
-                className="btn btn-ghost rounded-2xl py-2.5 text-[13px]"
-              >
-                {t("Add reply")}
-              </button>
+              {!waConnected && (
+                <a
+                  href="/profile"
+                  className="mt-1 block text-center text-[10px] font-bold text-brandblue underline"
+                >
+                  {t("Connect WhatsApp in Profile to unlock")} →
+                </a>
+              )}
             </div>
 
             {rfqState === "sent" && (
@@ -317,19 +331,46 @@ export function VendorCard({
 
         <div className="mt-2 flex items-center justify-between">
           <button
-            onClick={() => setChatOpen((o) => !o)}
-            className="btn btn-sm text-[12px] font-bold text-brandblue"
+            onClick={() => waConnected && setChatOpen((o) => !o)}
+            disabled={!waConnected}
+            className={`btn btn-sm text-[12px] font-bold ${
+              waConnected ? "text-brandblue" : "text-faint"
+            }`}
           >
             <span className="inline-flex items-center gap-1">
-              <Icon name="send" className="h-3.5 w-3.5" /> {t("Ask something custom")}
+              <Icon name="send" className="h-3.5 w-3.5" />{" "}
+              {waConnected ? t("Ask something custom") : `🔒 ${t("Ask something custom")}`}
             </span>
           </button>
-          {vendor.fulfillment.includes("hotel-delivery") && (
-            <span className="rounded-md bg-savings-soft px-2 py-0.5 text-[11px] font-bold text-savings">
-              {t("Hotel delivery")}
-            </span>
-          )}
         </div>
+
+        {galleryOpen && vendor.photoUrls && (
+          <div
+            onClick={() => setGalleryOpen(false)}
+            className="fixed inset-0 z-[1250] flex flex-col items-center justify-center gap-2 bg-black/80 p-4 backdrop-blur-sm"
+          >
+            <div className="text-[12px] font-extrabold text-white">
+              {vendor.name} · {t("photos from Google Maps")}
+            </div>
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="no-scrollbar flex w-full max-w-md gap-2 overflow-x-auto"
+            >
+              {vendor.photoUrls.map((u, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={i}
+                  src={u}
+                  alt=""
+                  className="h-72 w-auto shrink-0 rounded-2xl object-cover"
+                />
+              ))}
+            </div>
+            <button className="btn rounded-2xl bg-card px-5 py-2 text-sm font-extrabold text-strong">
+              ✕ {t("Close")}
+            </button>
+          </div>
+        )}
 
         {chatOpen && (
           <div className="mt-2 rounded-2xl border-2 border-line bg-card p-3">
