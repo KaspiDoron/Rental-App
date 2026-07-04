@@ -323,9 +323,20 @@ export default function ProfilePage() {
                 alt="WhatsApp QR"
                 className="mx-auto h-44 w-44 rounded-xl bg-white p-2"
               />
-              <p className="mt-2 text-[11px] font-bold text-soft">
-                {t("WhatsApp -> Settings -> Linked devices -> Link a device, then scan this code.")}
-              </p>
+              <div className="mt-2 space-y-1 text-left text-[11px] font-bold text-soft">
+                <p className="text-center text-[11px] font-extrabold text-strong">
+                  {t("Scan with the phone that has your WhatsApp:")}
+                </p>
+                <p>
+                  🍏 {t("iPhone: open WhatsApp -> Settings (bottom right) -> Linked Devices -> Link a Device -> unlock with Face ID -> point the camera at this code.")}
+                </p>
+                <p>
+                  🤖 {t("Android: open WhatsApp -> tap the 3 dots (top right) -> Linked devices -> Link a device -> point the camera at this code.")}
+                </p>
+                <p className="text-faint">
+                  {t("The code refreshes every ~40 seconds - if it expires, tap Refresh QR.")}
+                </p>
+              </div>
               <div className="mt-1">
                 <LoadingDots label={t("Waiting for your scan")} />
               </div>
@@ -358,7 +369,7 @@ export default function ProfilePage() {
             )}
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-faint">
-            {t("Safety first: this uses the WhatsApp Web protocol, which WhatsApp's terms do not officially allow for automation. We keep your number safe with strict human-like limits (max 15 messages/hour, 60/day, 20s between messages), but a spare number is the safest choice.")}
+            {t("Human-pace sending limits apply automatically to keep your number safe. Details are in the Terms of Use.")}
           </p>
         </section>
 

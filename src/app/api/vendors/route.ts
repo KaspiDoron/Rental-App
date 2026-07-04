@@ -19,6 +19,25 @@ interface Body {
 // key IS configured but Google rejects it, we return the exact error instead
 // of silently showing dummy shops.
 export async function POST(req: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  const { killSwitchOn, checkDailyLimit } = await import("@/lib/usage");
+  if (await killSwitchOn()) {
+    return NextResponse.json(
+      { error: "WheelDeal is temporarily paused by the owner." },
+      { status: 503 }
+    );
+  }
+  const gate = await checkDailyLimit("search", session.email, "LIMIT_SEARCHES_PER_DAY");
+  if (!gate.allowed) {
+    return NextResponse.json(
+      {
+        error: `Daily search limit reached (${gate.limit}/day) - this keeps the service free for everyone. Try again tomorrow.`,
+      },
+      { status: 429 }
+    );
+  }
+
   const body = (await req.json().catch(() => null)) as Body | null;
   if (!body?.origin || typeof body.origin.lat !== "number") {
     return NextResponse.json({ error: "origin required" }, { status: 400 });
@@ -62,7 +81,6 @@ export async function POST(req: Request) {
   vendors.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
 
   // Save the search to agent memory (no-op without Supabase).
-  const session = await getSession();
   await sbInsert("searches", [
     {
       user_email: session?.email ?? null,

@@ -81,7 +81,9 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
             </p>
           )}
 
-          <div className="grid grid-cols-2 gap-1.5">
+          {/* Internal scroll keeps the whole popup (and its close button) on
+              screen even on short phones. */}
+          <div className="grid max-h-[45dvh] grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
             {LANGS.map((l) => (
               <button
                 key={l.code}

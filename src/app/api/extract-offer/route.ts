@@ -10,6 +10,14 @@ export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
+  const { checkDailyLimit } = await import("@/lib/usage");
+  const gate = await checkDailyLimit("ai", session.email, "LIMIT_AI_PER_DAY");
+  if (!gate.allowed) {
+    return NextResponse.json(
+      { error: `Daily AI limit reached (${gate.limit}/day). Try again tomorrow.` },
+      { status: 429 }
+    );
+  }
   const body = await req.json().catch(() => null);
   if (!body?.rfq) return NextResponse.json({ error: "rfq required" }, { status: 400 });
 

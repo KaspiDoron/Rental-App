@@ -26,6 +26,7 @@ export function BookingSheet({
   );
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
+  const [dealTerms, setDealTerms] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -184,7 +185,27 @@ export function BookingSheet({
             </label>
           </div>
 
-          <button onClick={confirm} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">
+          {/* Liability acknowledgement - required before any deal is locked. */}
+          <label className="mt-3 flex items-start gap-2 rounded-2xl bg-card2 p-2.5 text-[11px] leading-relaxed text-soft">
+            <input
+              type="checkbox"
+              checked={dealTerms}
+              onChange={(e) => setDealTerms(e.target.checked)}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
+            />
+            <span>
+              I understand that WheelDeal only connects me with independent
+              rental shops and takes NO responsibility whatsoever for the
+              vehicle, its condition, pricing, insurance, deposits, accidents,
+              damages, disputes or the rental transaction itself. The agreement
+              is strictly between me and the shop, at my own risk.
+            </span>
+          </label>
+          <button
+            onClick={confirm}
+            disabled={!dealTerms}
+            className="btn btn-primary mt-3 w-full rounded-2xl py-2.5 text-sm disabled:opacity-50"
+          >
             Confirm booking
           </button>
         </div>

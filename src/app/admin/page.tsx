@@ -70,6 +70,29 @@ export default function AdminPage() {
   const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
   const [diag, setDiag] = useState<{ kind: string; text: string; ok: boolean } | null>(null);
   const [diagBusy, setDiagBusy] = useState<string | null>(null);
+  const [costs, setCosts] = useState<any>(null);
+  const [limitEdit, setLimitEdit] = useState<Record<string, string>>({});
+  const [limitsBusy, setLimitsBusy] = useState(false);
+  const [keyTests, setKeyTests] = useState<Record<string, { ok: boolean; detail: string }>>({});
+  const [keyTestBusy, setKeyTestBusy] = useState<string | null>(null);
+
+  async function refreshCosts() {
+    const c = await (await fetch("/api/admin/costs")).json();
+    setCosts(c);
+    setLimitEdit(
+      Object.fromEntries(Object.entries(c.limits ?? {}).map(([k, v]) => [k, String(v)]))
+    );
+  }
+
+  async function testKey(name: string) {
+    setKeyTestBusy(name);
+    try {
+      const r = await (await fetch(`/api/admin/key-test?name=${encodeURIComponent(name)}`)).json();
+      setKeyTests((p) => ({ ...p, [name]: r }));
+    } finally {
+      setKeyTestBusy(null);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -96,6 +119,7 @@ export default function AdminPage() {
       setTrainingCount((tr.examples ?? []).length);
       const fb = await (await fetch("/api/admin/feedback")).json();
       setFeedbackRows(fb.feedback ?? []);
+      await refreshCosts();
     })().catch(() => setAuthorized(false));
   }, []);
 
@@ -344,6 +368,106 @@ export default function AdminPage() {
               {trainBusy ? <LoadingDots light label="Learning" /> : "Teach the agents"}
             </button>
           </div>
+          {/* Cost tracker: every request against the free quotas + est. cost */}
+          {costs && (
+            <div className="surface rounded-blob p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-extrabold text-strong">💰 Cost tracker (this month)</div>
+                {isOwner && (
+                  <button
+                    onClick={async () => {
+                      await fetch("/api/admin/costs", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ killSwitch: !costs.killSwitch }),
+                      });
+                      await refreshCosts();
+                    }}
+                    className={`btn btn-sm chip rounded-xl px-3 text-[11px] font-extrabold ${
+                      costs.killSwitch ? "bg-brandred text-white" : "bg-card2 text-soft"
+                    }`}
+                  >
+                    {costs.killSwitch ? "🔴 KILL SWITCH ON - tap to resume" : "⭕ Kill switch (owner)"}
+                  </button>
+                )}
+              </div>
+              {costs.killSwitch && (
+                <p className="mt-1 rounded-xl bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
+                  All paid services and payments are PAUSED for every user.
+                </p>
+              )}
+              <div className="mt-2 space-y-2">
+                {(costs.apis ?? []).map((a: any) => (
+                  <div key={a.kind}>
+                    <div className="flex justify-between text-[11px] font-bold text-soft">
+                      <span>{a.label}</span>
+                      <span>
+                        {a.used.toLocaleString()} / {a.free.toLocaleString()} free
+                        {a.estCostUsd > 0 ? ` · ~$${a.estCostUsd} over` : " · $0.00"}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
+                      <div
+                        className={`h-full rounded-full ${
+                          a.used >= a.free ? "bg-brandred" : a.used >= a.free * 0.8 ? "bg-brandyellow" : "bg-savings"
+                        }`}
+                        style={{ width: `${Math.min(100, (a.used / a.free) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <div className="text-[11px] text-faint">
+                  AI tokens this month:{" "}
+                  {Object.entries(costs.aiTokens ?? {})
+                    .map(([p, n]) => `${p} ${(n as number).toLocaleString()}`)
+                    .join(" · ") || "0"}
+                </div>
+              </div>
+
+              {/* Abuse limits - adjustable */}
+              <div className="mt-3 border-t border-line pt-2">
+                <div className="text-[12px] font-extrabold text-strong">🛡 Per-user abuse limits</div>
+                <div className="mt-1 grid grid-cols-2 gap-2">
+                  {Object.keys(costs.defaults ?? {}).map((name) => (
+                    <label key={name} className="text-[10px] font-bold text-faint">
+                      {name.replace("LIMIT_", "").replace(/_/g, " ").toLowerCase()}
+                      <input
+                        type="number"
+                        min={1}
+                        value={limitEdit[name] ?? ""}
+                        onChange={(e) => setLimitEdit((p) => ({ ...p, [name]: e.target.value }))}
+                        className="mt-0.5 w-full rounded-lg border-2 border-line bg-card p-1.5 text-[12px] font-bold text-strong"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  onClick={async () => {
+                    setLimitsBusy(true);
+                    try {
+                      await fetch("/api/admin/costs", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          limits: Object.fromEntries(
+                            Object.entries(limitEdit).map(([k, v]) => [k, Number(v)])
+                          ),
+                        }),
+                      });
+                      await refreshCosts();
+                    } finally {
+                      setLimitsBusy(false);
+                    }
+                  }}
+                  disabled={limitsBusy}
+                  className="btn btn-primary btn-sm mt-2 w-full rounded-xl text-[12px] disabled:opacity-60"
+                >
+                  {limitsBusy ? <LoadingDots light label="Saving" /> : "Save limits"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             <Metric label="Search runs" value={String(analytics.totalRuns)} />
             <Metric label="Offers pulled" value={String(analytics.totalOffers)} />
@@ -535,6 +659,28 @@ export default function AdminPage() {
                 </span>
               </div>
               <div className="mt-2 font-mono text-[12px] text-soft">{k.masked}</div>
+              {k.editable && (
+                <>
+                  <button
+                    onClick={() => testKey(k.name)}
+                    disabled={keyTestBusy !== null}
+                    className="btn btn-sm chip mt-2 rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
+                  >
+                    {keyTestBusy === k.name ? <LoadingDots label="Testing" /> : "🩺 Test API"}
+                  </button>
+                  {keyTests[k.name] && (
+                    <p
+                      className={`mt-1 rounded-lg p-2 text-[11px] font-bold ${
+                        keyTests[k.name].ok
+                          ? "bg-savings-soft text-savings"
+                          : "bg-brandred-soft text-brandred"
+                      }`}
+                    >
+                      {keyTests[k.name].detail}
+                    </p>
+                  )}
+                </>
+              )}
               {k.editable ? (
                 <div className="mt-2 flex gap-2">
                   <input

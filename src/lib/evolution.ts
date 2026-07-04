@@ -17,10 +17,8 @@ import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect } from "./runtime-config";
 
-// ---- anti-ban limits (human-like behaviour) -----------------------------------
+// ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
-const MAX_PER_HOUR = 15;
-const MAX_PER_DAY = 60;
 const TYPING_DELAY_MS = () => 1200 + Math.floor(Math.random() * 2300);
 
 declare global {
@@ -66,17 +64,21 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
   const lastHour = rows.filter((r) => r.received_at >= hourIso).length;
   const lastDay = rows.length;
 
-  if (lastHour + recent.filter((t) => now - t < 3600_000).length >= MAX_PER_HOUR) {
+  const { limitFor } = await import("./usage");
+  const maxHour = await limitFor("LIMIT_WA_PER_HOUR");
+  const maxDay = await limitFor("LIMIT_WA_PER_DAY");
+
+  if (lastHour + recent.filter((t) => now - t < 3600_000).length >= maxHour) {
     return {
       allowed: false,
-      reason: `Hourly safety cap reached (${MAX_PER_HOUR}/h). This protects your WhatsApp number from being flagged.`,
+      reason: `Hourly safety cap reached (${maxHour}/h). This protects your WhatsApp number from being flagged.`,
       waitSeconds: 900,
     };
   }
-  if (lastDay + recent.length >= MAX_PER_DAY) {
+  if (lastDay + recent.length >= maxDay) {
     return {
       allowed: false,
-      reason: `Daily safety cap reached (${MAX_PER_DAY}/day). Try again tomorrow - this protects your number.`,
+      reason: `Daily safety cap reached (${maxDay}/day). Try again tomorrow - this protects your number.`,
     };
   }
   return { allowed: true };

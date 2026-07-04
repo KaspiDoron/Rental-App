@@ -247,10 +247,11 @@ export async function composeBargain(opts: {
     "ourselves). Never invent prices we were not given. " +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
     (opts.localLanguage && opts.region
-      ? `IMPORTANT: write the message in the MAIN LOCAL LANGUAGE spoken in ${opts.region} (NOT English) - the casual, friendly street style locals use in everyday market talk, the way a savvy local haggles. Keep it short, simple, respectful and natural. `
-      : opts.region
-      ? `The shop is in ${opts.region}: match the English level typical there - if English is a second language use short, simple, very clear sentences. `
-      : "") +
+      ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
+      : `Write in street-smart conversational English - the way real travellers haggle in chat: casual, warm, a little cheeky, contractions, no formal business tone. ` +
+        (opts.region
+          ? `The shop is in ${opts.region}; if English is a second language there, keep sentences extra short and simple. `
+          : "")) +
     (training
       ? "Learn tone and moves from these REAL past bargains by the owner:\n" + training
       : "");
@@ -484,9 +485,10 @@ export async function writeFeedback(
   notes: string
 ): Promise<string> {
   const system =
-    "You help a user write a clear, concise product bug/feedback report. Given " +
-    "their rough notes and a category, return 2-4 sentences describing the issue, " +
-    "steps to reproduce if implied, and expected vs actual behaviour. Plain text only.";
+    "Rewrite the user's rough notes into a SHORT, clear bug/feedback report: " +
+    "1-3 plain sentences, everyday words, keep the user's meaning EXACTLY. " +
+    "Never invent details, never pad, never add pleasantries or headings. " +
+    "If the notes are already clear, barely change them. Plain text only.";
   const llm = await chat([
     { role: "system", content: system },
     { role: "user", content: `Category: ${category}\nNotes: ${notes}` },

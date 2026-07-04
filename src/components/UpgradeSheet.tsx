@@ -17,17 +17,56 @@ export interface PlanView {
   highlight?: boolean;
 }
 
+// Pricing is anchored in ILS (matches the Lemon Squeezy products exactly);
+// other currencies are shown converted (USD is the default display).
+const ILS_PRICES: Record<string, number> = { pro: 16.5, ultra: 88 };
+const FX_PER_ILS: Record<string, { rate: number; symbol: string }> = {
+  USD: { rate: 0.3, symbol: "$" },
+  ILS: { rate: 1, symbol: "₪" },
+  EUR: { rate: 0.26, symbol: "€" },
+  GBP: { rate: 0.22, symbol: "£" },
+  THB: { rate: 9.8, symbol: "฿" },
+  IDR: { rate: 4600, symbol: "Rp" },
+};
+
+function planPrice(planId: string, currency: string): { now: string; list: string } | null {
+  const ils = ILS_PRICES[planId];
+  const fx = FX_PER_ILS[currency];
+  if (!ils || !fx) return null;
+  const adj = currency === "ILS" ? 1 : 1.002;
+  const now = ils * fx.rate * adj;
+  const list = now * 5; // 80% launch discount
+  const fmt = (n: number) =>
+    `${fx.symbol}${n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(2).replace(/\.00$/, "")}`;
+  return { now: fmt(now), list: fmt(list) };
+}
+
+function savedCurrency(): string {
+  try {
+    return localStorage.getItem("wd_currency") || "USD";
+  } catch {
+    return "USD";
+  }
+}
+
 export function PlanCard({
   plan,
   onSubscribe,
   busy,
+  current,
 }: {
   plan: PlanView;
   onSubscribe?: (id: string) => void;
   busy?: boolean;
+  current?: boolean;
 }) {
-  const list = (plan.listAmount / 100).toFixed(0);
-  const now = (plan.amount / 100).toFixed(2).replace(/\.00$/, "");
+  const [currency, setCurrency] = useState("USD");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => setCurrency(savedCurrency()), []);
+
+  const px = planPrice(plan.id, currency);
+  const list = px ? px.list : `$${(plan.listAmount / 100).toFixed(0)}`;
+  const now = px ? px.now : `$${(plan.amount / 100).toFixed(2).replace(/\.00$/, "")}`;
   return (
     <div
       className={`surface rounded-blob p-4 ${
@@ -46,14 +85,43 @@ export function PlanCard({
           </div>
           <div className="text-[12px] text-soft">{plan.blurb}</div>
         </div>
-        <div className="text-right">
+        <div className="relative text-right">
           {plan.amount === 0 ? (
             <div className="text-xl font-extrabold text-strong">Free</div>
           ) : (
             <>
-              <div className="text-[12px] font-bold text-faint line-through">${list}</div>
-              <div className="text-xl font-extrabold text-strong">${now}</div>
+              <div className="text-[12px] font-bold text-faint line-through">{list}</div>
+              <div className="text-xl font-extrabold text-strong">{now}</div>
               <div className="text-[10px] font-bold text-faint">every 3 months</div>
+              <button
+                type="button"
+                onClick={() => setPickerOpen((o) => !o)}
+                className="chip mt-0.5 rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandblue"
+              >
+                {currency} ▾
+              </button>
+              {pickerOpen && (
+                <div className="absolute right-0 z-30 mt-1 overflow-hidden rounded-xl surface-strong">
+                  {Object.keys(FX_PER_ILS).map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setCurrency(c);
+                        setPickerOpen(false);
+                        try {
+                          localStorage.setItem("wd_currency", c);
+                        } catch {}
+                      }}
+                      className={`block w-full px-4 py-1.5 text-left text-[12px] font-bold ${
+                        c === currency ? "bg-brandblue-soft text-brandblue" : "text-soft hover:bg-card2"
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -75,7 +143,12 @@ export function PlanCard({
           </li>
         ))}
       </ul>
-      {plan.amount > 0 && onSubscribe && (
+      {current && (
+        <div className="mt-3 w-full rounded-2xl bg-savings-soft py-2.5 text-center text-[13px] font-extrabold text-savings">
+          ✓ Your current plan
+        </div>
+      )}
+      {plan.amount > 0 && onSubscribe && !current && (
         <button
           onClick={() => onSubscribe(plan.id)}
           disabled={busy}
@@ -94,11 +167,16 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [myPlan, setMyPlan] = useState<string>("free");
 
   useEffect(() => {
     fetch("/api/billing/checkout")
       .then((r) => r.json())
       .then((d) => setPlans(d.plans ?? []))
+      .catch(() => {});
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => setMyPlan(d.session?.plan ?? "free"))
       .catch(() => {});
   }, []);
 
@@ -141,9 +219,18 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
         {plans
           .filter((p) => p.amount > 0)
           .map((p) => (
-            <PlanCard key={p.id} plan={p} onSubscribe={subscribe} busy={busy} />
+            <PlanCard
+              key={p.id}
+              plan={p}
+              onSubscribe={subscribe}
+              busy={busy}
+              current={myPlan === p.id}
+            />
           ))}
       </div>
+      <p className="mt-3 text-center text-[10px] text-faint">
+        {t("Switch plans any time - a new subscription replaces the old one. To cancel or downgrade, use the manage link in your payment receipt email.")}
+      </p>
     </Modal>
   );
 }

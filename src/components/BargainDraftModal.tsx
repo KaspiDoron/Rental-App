@@ -35,7 +35,6 @@ export function BargainDraftModal({
   );
   const [draft, setDraft] = useState<{ message: string; tacticLabel: string } | null>(null);
   const [busy, setBusy] = useState(true);
-  const [copied, setCopied] = useState(false);
   const [sendState, setSendState] = useState<"idle" | "sending" | "sent" | "manual">("idle");
   const [upgradeNote, setUpgradeNote] = useState(false);
 
@@ -182,21 +181,14 @@ export function BargainDraftModal({
             <button onClick={() => compose()} className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-[13px]">
               {t("Rewrite")}
             </button>
-            <button
-              onClick={() => {
-                navigator.clipboard?.writeText(draft.message);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-              className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-[13px]"
-            >
-              {copied ? `${t("Copied")} ✓` : t("Copy")}
-            </button>
           </div>
           {sendState === "manual" && (
-            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-              {t("WhatsApp sending is not connected yet (owner: Admin -> Keys) - use Copy for now.")}
-            </p>
+            <a
+              href="/profile"
+              className="mt-2 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow"
+            >
+              {t("Not sent - connect your WhatsApp in Profile first.")} →
+            </a>
           )}
           {sendState === "sent" && (
             <p className="mt-2 text-center text-[11px] font-bold text-savings">

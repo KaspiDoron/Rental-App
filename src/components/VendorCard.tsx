@@ -46,9 +46,9 @@ export function VendorCard({
     suggestion?: string;
   }>({ status: "idle" });
   const [rfqState, setRfqState] = useState<
-    "idle" | "sending" | "sent" | "no-phone" | "manual"
+    "idle" | "sending" | "sent" | "no-phone" | "not-connected" | "rate-limited"
   >("idle");
-  const [copied, setCopied] = useState(false);
+  const [rfqError, setRfqError] = useState<string | null>(null);
 
   const offer = vendor.offer;
   const savings =
@@ -83,19 +83,35 @@ export function VendorCard({
         setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200);
       } else if (d.reason === "no-phone") {
         setRfqState("no-phone");
+      } else if (d.rateLimited) {
+        setRfqState("rate-limited");
+        setRfqError(d.error ?? null);
       } else {
-        // Cloud API not connected yet - offer a copy fallback, still in-app.
-        setRfqState("manual");
+        // We NEVER pretend a message was sent: without a connected WhatsApp
+        // nothing goes out, and the user is told exactly that.
+        setRfqState("not-connected");
       }
     } catch {
-      setRfqState("manual");
+      setRfqState("not-connected");
     }
   }
 
   async function sendCustom() {
     if (!draft.trim()) return;
     setChatState({ status: "checking" });
-    const verdict = await onCustomMessage(vendor.id, draft.trim());
+    const verdict = (await onCustomMessage(vendor.id, draft.trim())) as {
+      allowed: boolean;
+      sent?: boolean;
+      reason?: string;
+      suggestion?: string;
+    };
+    if (verdict.allowed && !verdict.sent) {
+      setChatState({
+        status: "blocked",
+        reason: t("Not sent: connect your WhatsApp in Profile first - messages leave WheelDeal only through WhatsApp."),
+      });
+      return;
+    }
     if (verdict.allowed) {
       setChatState({ status: "sent" });
       setDraft("");
@@ -280,19 +296,20 @@ export function VendorCard({
                 {t("No phone number found for this shop yet - try another shop nearby.")}
               </div>
             )}
-            {rfqState === "manual" && (
+            {rfqState === "not-connected" && (
               <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-                {t("WhatsApp sending is not connected yet (owner: Admin -> Keys). Copy the agent's message below, send it, then paste the reply with Add reply.")}
-                <button
-                  onClick={() => {
-                    navigator.clipboard?.writeText(rfq?.vendorMessage ?? "");
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  }}
-                  className="btn btn-sm mt-1.5 block w-full rounded-lg bg-card py-1.5 text-center text-[11px] font-extrabold text-strong"
+                {t("Nothing was sent. Connect your WhatsApp first - it takes 30 seconds and the agents handle everything after that.")}
+                <a
+                  href="/profile"
+                  className="btn btn-sm mt-1.5 block w-full rounded-lg bg-card py-1.5 text-center text-[11px] font-extrabold text-brandblue"
                 >
-                  {copied ? `✓ ${t("Copied")}` : t("Copy the agent's message")}
-                </button>
+                  {t("Connect WhatsApp in Profile")} →
+                </a>
+              </div>
+            )}
+            {rfqState === "rate-limited" && (
+              <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+                {rfqError ?? t("Safety pause - try again in a few minutes.")}
               </div>
             )}
           </div>

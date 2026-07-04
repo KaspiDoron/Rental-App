@@ -65,11 +65,12 @@ export const PLANS: Plan[] = [
   plan("ultra", "Ultra", "The ultimate bargaining machine", 14700, [
     "Everything in Pro",
     "Agents bargain in the shop's LOCAL language - real street talk",
-    "Advanced AI negotiation strategies",
-    "Multi-city trip planning",
-    "Price-drop alerts",
-    "Expense-ready booking receipts",
-    "Team seats & priority support",
+    "Locals-only pricing: agents push for the rate locals pay",
+    "Auto re-bargain: agents keep pushing extra rounds by themselves",
+    "Unlimited daily searches & AI actions (fair use)",
+    "Instant alerts when a cheaper verified offer lands",
+    "Multi-city trip planning + expense-ready receipts",
+    "VIP support & early access to new agents",
   ]),
 ];
 

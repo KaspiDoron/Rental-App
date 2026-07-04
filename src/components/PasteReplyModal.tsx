@@ -32,7 +32,6 @@ export function PasteReplyModal({
   const [images, setImages] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [clarifyState, setClarifyState] = useState<"idle" | "sending" | "sent" | "manual">("idle");
-  const [copied, setCopied] = useState(false);
   const [result, setResult] = useState<{
     found: boolean;
     pricePerDay?: number;
@@ -221,35 +220,28 @@ export function PasteReplyModal({
               <p className="mt-2 rounded-xl bg-card p-2.5 text-[13px] text-soft">
                 {result.clarifyMessage}
               </p>
-              <div className="mt-2 flex gap-2">
+              <div className="mt-2">
                 <button
                   onClick={() => sendClarify(result.clarifyMessage!)}
                   disabled={clarifyState === "sending" || clarifyState === "sent"}
-                  className="btn flex-1 rounded-xl bg-savings py-2 text-center text-[12px] font-extrabold text-white disabled:opacity-70"
+                  className="btn w-full rounded-xl bg-savings py-2 text-center text-[12px] font-extrabold text-white disabled:opacity-70"
                 >
                   {clarifyState === "sending" ? (
                     <LoadingDots light label={t("Sending")} />
                   ) : clarifyState === "sent" ? (
                     `✓ ${t("Sent from the app")}`
                   ) : (
-                    t("Send from the app")
+                    t("Send via WhatsApp")
                   )}
-                </button>
-                <button
-                  onClick={() => {
-                    navigator.clipboard?.writeText(result.clarifyMessage!);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  }}
-                  className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px]"
-                >
-                  {copied ? `✓ ${t("Copied")}` : t("Copy")}
                 </button>
               </div>
               {clarifyState === "manual" && (
-                <p className="mt-1.5 text-[11px] font-bold text-brandyellow">
-                  {t("WhatsApp sending is not connected yet - use Copy for now.")}
-                </p>
+                <a
+                  href="/profile"
+                  className="mt-1.5 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow"
+                >
+                  {t("Not sent - connect your WhatsApp in Profile first.")} →
+                </a>
               )}
             </>
           )}

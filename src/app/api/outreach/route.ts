@@ -22,6 +22,13 @@ export async function POST(req: Request) {
   if (!session) {
     return NextResponse.json({ error: "Sign in to message vendors." }, { status: 401 });
   }
+  const { killSwitchOn } = await import("@/lib/usage");
+  if (await killSwitchOn()) {
+    return NextResponse.json(
+      { error: "WheelDeal is temporarily paused by the owner." },
+      { status: 503 }
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const message = String(body.message ?? "").trim();
   if (!message) {

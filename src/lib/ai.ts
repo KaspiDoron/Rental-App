@@ -9,7 +9,13 @@ import { getConfig } from "./runtime-config";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-type ProviderName = "groq" | "openrouter" | "cerebras" | "gemini";
+type ProviderName =
+  | "groq"
+  | "openrouter"
+  | "cerebras"
+  | "gemini"
+  | "mistral"
+  | "huggingface";
 
 interface ProviderConfig {
   name: ProviderName;
@@ -19,14 +25,28 @@ interface ProviderConfig {
 }
 
 async function allProviders(): Promise<ProviderConfig[]> {
-  const [groq, openrouter, cerebras, gemini] = await Promise.all([
+  const [groq, openrouter, cerebras, gemini, mistral, huggingface] = await Promise.all([
     getConfig("GROQ_TOKEN"),
     getConfig("OPENROUTER_TOKEN"),
     getConfig("CEREBRAS_TOKEN"),
     getConfig("GEMINI_TOKEN"),
+    getConfig("MISTRAL_TOKEN"),
+    getConfig("HUGGINGFACE_TOKEN"),
   ]);
 
   return [
+    {
+      name: "mistral",
+      token: mistral,
+      endpoint: "https://api.mistral.ai/v1/chat/completions",
+      model: "mistral-small-latest",
+    },
+    {
+      name: "huggingface",
+      token: huggingface,
+      endpoint: "https://router.huggingface.co/v1/chat/completions",
+      model: "meta-llama/Llama-3.1-8B-Instruct",
+    },
     {
       name: "groq",
       token: groq,

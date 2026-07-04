@@ -20,6 +20,7 @@
 import "server-only";
 import { getConfig } from "./runtime-config";
 import { haversineKm } from "./geo";
+import { cacheGet, cacheSet, recordApi } from "./usage";
 import type { Vendor, VehicleClass, VendorReview } from "./types";
 
 export async function mapsKey(): Promise<string | undefined> {
@@ -75,6 +76,12 @@ async function newTextSearch(
 export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
   const key = await mapsKey();
 
+  // Cache identical queries for a day - address text never changes that fast,
+  // and every cache hit is a free request.
+  const ck = `sp:${q.trim().toLowerCase()}`;
+  const cached = cacheGet<PlaceSuggestion[]>(ck);
+  if (cached) return cached;
+
   if (key) {
     // 1) Places API (New) Text Search: finds hotels, businesses, addresses.
     const { places } = await newTextSearch(
@@ -82,8 +89,9 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
       { textQuery: q, maxResultCount: 6 },
       "places.displayName,places.formattedAddress,places.location"
     );
+    await recordApi("places_search");
     if (places && places.length) {
-      return places.map((p) => ({
+      const out = places.map((p) => ({
         label: [p.displayName?.text, p.formattedAddress]
           .filter(Boolean)
           .join(" - "),
@@ -91,6 +99,8 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
         lng: p.location?.longitude ?? 0,
         source: "google" as const,
       }));
+      cacheSet(ck, out, 24 * 3600_000);
+      return out;
     }
 
     // 2) Legacy Geocoding (works on older keys).
@@ -102,13 +112,16 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
         { cache: "no-store" }
       );
       const data = await res.json();
+      await recordApi("geocoding");
       if (data.status === "OK") {
-        return (data.results as any[]).slice(0, 6).map((r) => ({
+        const out = (data.results as any[]).slice(0, 6).map((r) => ({
           label: r.formatted_address,
           lat: r.geometry.location.lat,
           lng: r.geometry.location.lng,
           source: "google" as const,
         }));
+        cacheSet(ck, out, 24 * 3600_000);
+        return out;
       }
     } catch {
       /* fall through to OSM */
@@ -193,6 +206,12 @@ export async function findRealVendors(
   const key = await mapsKey();
   if (!key) return { vendors: null };
 
+  // ~110m coordinate rounding + 10 min TTL: repeated searches around the same
+  // stay cost ZERO extra Places requests.
+  const ck = `fv:${origin.lat.toFixed(3)},${origin.lng.toFixed(3)},${Math.round(radiusKm)},${vehicleClass}`;
+  const cached = cacheGet<VendorDiscovery>(ck);
+  if (cached) return cached;
+
   // 1) Places API (New) Text Search with a location bias circle.
   const { places, error: newError } = await newTextSearch(
     key,
@@ -218,10 +237,13 @@ export async function findRealVendors(
       "places.photos",
     ].join(",")
   );
+  await recordApi("places_search");
   if (places) {
-    return {
+    const out = {
       vendors: places.map((p, i) => newPlaceToVendor(p, origin, vehicleClass, i)),
     };
+    cacheSet(ck, out, 10 * 60_000);
+    return out;
   }
 
   // 2) Legacy Nearby Search (older keys).
@@ -279,16 +301,24 @@ export async function findRealVendors(
 
 // ---- Place details: phone + reviews -------------------------------------------
 
-export async function placeDetails(placeId: string): Promise<{
+export interface PlaceDetailsResult {
   phone?: string;
   reviews: VendorReview[];
   rating?: number;
   total?: number;
   address?: string;
   website?: string;
-} | null> {
+}
+
+export async function placeDetails(placeId: string): Promise<PlaceDetailsResult | null> {
   const key = await mapsKey();
   if (!key) return null;
+
+  // Details rarely change - cache 6 hours per place.
+  const ck = `pd:${placeId}`;
+  const cached = cacheGet<PlaceDetailsResult>(ck);
+  if (cached) return cached;
+  await recordApi("place_details");
 
   // 1) Places API (New) details.
   try {
@@ -302,7 +332,7 @@ export async function placeDetails(placeId: string): Promise<{
     });
     if (res.ok) {
       const r = await res.json();
-      return {
+      const out: PlaceDetailsResult = {
         phone: r.internationalPhoneNumber ?? r.nationalPhoneNumber,
         rating: r.rating,
         total: r.userRatingCount,
@@ -316,6 +346,8 @@ export async function placeDetails(placeId: string): Promise<{
           timestamp: rv.publishTime ? Date.parse(rv.publishTime) : 0,
         })),
       };
+      cacheSet(ck, out, 6 * 3600_000);
+      return out;
     }
   } catch {
     /* try legacy */
@@ -330,7 +362,7 @@ export async function placeDetails(placeId: string): Promise<{
     const data = await res.json();
     if (data.status !== "OK") return null;
     const r = data.result;
-    return {
+    const out: PlaceDetailsResult = {
       phone: r.international_phone_number ?? r.formatted_phone_number,
       rating: r.rating,
       total: r.user_ratings_total,
@@ -344,6 +376,8 @@ export async function placeDetails(placeId: string): Promise<{
         timestamp: (rv.time ?? 0) * 1000,
       })),
     };
+    cacheSet(ck, out, 6 * 3600_000);
+    return out;
   } catch {
     return null;
   }

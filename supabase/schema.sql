@@ -242,3 +242,15 @@ alter table public.bargain_drafts   enable row level security;
 alter table public.wa_sessions      enable row level security;
 -- No policies are created on purpose: the anon/public key gets zero access;
 -- the server uses the service role key, which bypasses RLS.
+
+-- ---- API usage log (cost tracker + per-user daily limits) --------------------
+create table if not exists public.api_usage (
+  id         bigint generated always as identity primary key,
+  kind       text not null,
+  count      int not null default 1,
+  user_email text,
+  created_at timestamptz not null default now()
+);
+create index if not exists api_usage_kind_idx on public.api_usage (kind, created_at desc);
+create index if not exists api_usage_user_idx on public.api_usage (user_email, kind, created_at desc);
+alter table public.api_usage enable row level security;

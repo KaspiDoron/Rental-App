@@ -12,6 +12,13 @@ export async function POST(req: Request) {
   if (!session) {
     return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
+  const { killSwitchOn } = await import("@/lib/usage");
+  if (await killSwitchOn()) {
+    return NextResponse.json(
+      { error: "Payments are temporarily paused by the owner." },
+      { status: 503 }
+    );
+  }
   const { planId } = await req.json().catch(() => ({}));
   const origin = new URL(req.url).origin;
 

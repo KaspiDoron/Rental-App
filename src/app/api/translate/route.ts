@@ -9,16 +9,22 @@ import { getConfig, setConfig } from "@/lib/runtime-config";
 
 const LANG_RX = /^[a-z]{2}(-[A-Z]{2})?$/;
 const MAX_TEXTS = 500;
-const CHUNK = 22;
+// Small chunks = higher translation quality (the model sees each string with
+// full attention) and safer JSON output.
+const CHUNK = 14;
 
 async function translateChunk(
   langName: string,
   texts: string[]
 ): Promise<string[] | null> {
   const system =
-    `You translate short UI strings for a mobile travel app (rental bargaining) from English to ${langName}. ` +
-    "Keep translations concise and natural for app buttons/labels, keep emoji, numbers, punctuation and any placeholder text intact, " +
-    "and never add explanations. Reply ONLY as JSON: { \"t\": [\"...\"] } with the translations in the exact same order.";
+    `You are a senior product localiser translating UI strings for "WheelDeal", a mobile app where AI agents bargain for vehicle rentals, from English to ${langName}. ` +
+    "Rules: (1) translate MEANING, not word-by-word - use the natural phrasing a native mobile app in that language would use; " +
+    "(2) match register: buttons/labels stay short and imperative, sentences stay friendly and simple; " +
+    "(3) NEVER translate brand/product words: WheelDeal, Ultra, Pro, WhatsApp, Google, AI; " +
+    "(4) keep emoji, numbers, currency symbols, punctuation and placeholders exactly; " +
+    "(5) no explanations, no quotes added. " +
+    'Reply ONLY as JSON: { "t": ["..."] } with translations in the exact same order and count.';
   const out = await chat([
     { role: "system", content: system },
     { role: "user", content: JSON.stringify(texts) },

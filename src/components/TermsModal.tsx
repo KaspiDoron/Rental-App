@@ -42,6 +42,17 @@ export function TermsModal({ onClose }: { onClose: () => void }) {
           make based on it.
         </p>
         <p>
+          <b className="text-strong">4b. Connecting your WhatsApp.</b> If you
+          link your own WhatsApp number, messages are sent through your account
+          using the WhatsApp Web protocol, which WhatsApp&apos;s own terms do
+          not officially permit for automation. Your number could be limited or
+          banned by WhatsApp and you accept that risk entirely. WheelDeal
+          enforces human-pace sending limits and blocks bot-like behaviour
+          (bursts, mass messaging), and may suspend accounts that try to bypass
+          them, but gives no guarantee of any kind. Using a spare number is
+          recommended.
+        </p>
+        <p>
           <b className="text-strong">5. Your conduct.</b> You agree to use the
           app lawfully and respectfully, not to send spam or abusive content,
           and to comply with the terms of the messaging platforms you use
