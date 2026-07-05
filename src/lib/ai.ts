@@ -34,19 +34,10 @@ async function allProviders(): Promise<ProviderConfig[]> {
     getConfig("HUGGINGFACE_TOKEN"),
   ]);
 
+  // Order = default failover priority (most reliable free tiers first). Groq
+  // and OpenRouter are the steadiest; Gemini's free tier is often quota-0, so
+  // it sits last and the app fails over past it automatically.
   return [
-    {
-      name: "mistral",
-      token: mistral,
-      endpoint: "https://api.mistral.ai/v1/chat/completions",
-      model: "mistral-small-latest",
-    },
-    {
-      name: "huggingface",
-      token: huggingface,
-      endpoint: "https://router.huggingface.co/v1/chat/completions",
-      model: "meta-llama/Llama-3.1-8B-Instruct",
-    },
     {
       name: "groq",
       token: groq,
@@ -63,13 +54,24 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      model: "llama-3.3-70b",
+      model: "llama3.1-8b",
+    },
+    {
+      name: "mistral",
+      token: mistral,
+      endpoint: "https://api.mistral.ai/v1/chat/completions",
+      model: "mistral-small-latest",
+    },
+    {
+      name: "huggingface",
+      token: huggingface,
+      endpoint: "https://router.huggingface.co/v1/chat/completions",
+      model: "meta-llama/Llama-3.1-8B-Instruct",
     },
     {
       name: "gemini",
       token: gemini,
-      // gemini-1.5-flash was retired from v1beta; gemini-2.0-flash is the
-      // current free-tier model that supports generateContent.
+      // gemini-1.5-flash was retired from v1beta; gemini-2.0-flash is current.
       endpoint:
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       model: "gemini-2.0-flash",

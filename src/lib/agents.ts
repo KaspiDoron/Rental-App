@@ -485,13 +485,10 @@ export async function writeFeedback(
   notes: string
 ): Promise<string> {
   const system =
-    "You clean up a product feedback/bug note so the team reads it clearly. " +
-    "Rules: fix all spelling, grammar and punctuation; keep the user's exact " +
-    "meaning and their voice; do NOT invent facts, steps, or details they did " +
-    "not write. Length: aim for 2-3 clear sentences - if the note is a single " +
-    "short line, gently expand it to about two sentences by making the existing " +
-    "point clearer (never by adding new claims). No greetings, no headings, no " +
-    "sign-off. Plain text only.";
+    "You clean up a short product feedback/bug note. Output EXACTLY 2 to 3 " +
+    "sentences. Each sentence MUST be 8 words or fewer. Fix spelling and grammar, " +
+    "keep the user's exact meaning, never invent facts or steps they did not " +
+    "write. No greetings, no headings, no sign-off, plain text only.";
   const llm = await chat([
     { role: "system", content: system },
     { role: "user", content: `Category: ${category}\nNotes: ${notes}` },

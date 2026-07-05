@@ -101,3 +101,43 @@ export function Icon({
     </svg>
   );
 }
+
+const STAR_PATH =
+  "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 17l-5.2 2.6 1-5.8L3.5 9.7l5.9-.9L12 3.5Z";
+
+/** A single SOLID star (filled or empty) - the outline Icon can't show fill. */
+function Star({ filled, className = "" }: { filled: boolean; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path
+        d={STAR_PATH}
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Star-rating row - filled gold stars up to `value`, hollow after. */
+export function Stars({
+  value,
+  size = "h-4 w-4",
+}: {
+  value: number;
+  size?: string;
+}) {
+  const rounded = Math.round(value);
+  return (
+    <span className="inline-flex items-center gap-0.5" aria-label={`${value} out of 5`}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Star
+          key={i}
+          filled={i < rounded}
+          className={`${size} ${i < rounded ? "text-brandyellow" : "text-faint/40"}`}
+        />
+      ))}
+    </span>
+  );
+}

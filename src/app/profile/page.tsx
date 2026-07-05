@@ -203,7 +203,7 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      <div className="space-y-4 px-4 pt-4">
+      <div className="rise-in space-y-4 px-4 pt-4">
         {/* Identity card */}
         <section className="surface rounded-blob p-4">
           <div className="flex items-center gap-3">
@@ -381,17 +381,36 @@ export default function ProfilePage() {
             </div>
             <div className="max-h-72 space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3">
               {chat.length === 0 && (
-                <button
-                  onClick={() => ask()}
-                  disabled={thinking}
-                  className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow"
-                >
-                  {thinking ? (
-                    <LoadingDots label="Analysing the business" />
-                  ) : (
-                    "Brief me - what needs my attention?"
-                  )}
-                </button>
+                <>
+                  <button
+                    onClick={() => ask()}
+                    disabled={thinking}
+                    className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow"
+                  >
+                    {thinking ? (
+                      <LoadingDots label="Analysing the business" />
+                    ) : (
+                      "Brief me - what needs my attention?"
+                    )}
+                  </button>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      "Top issue right now?",
+                      "How are signups trending?",
+                      "Which shops convert best?",
+                      "Any API about to run out?",
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => ask(q)}
+                        disabled={thinking}
+                        className="chip rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-bold text-soft hover:border-brandblue hover:text-brandblue"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
               {chat.map((m, i) => (
                 <div

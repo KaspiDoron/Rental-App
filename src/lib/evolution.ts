@@ -240,8 +240,6 @@ export async function connectInstance(
 
   const pickPairing = (d: any): string | undefined => {
     const raw = d?.pairingCode ?? d?.qrcode?.pairingCode ?? d?.instance?.pairingCode;
-    // Accept any short alphanumeric code (Evolution formats vary: "WZHK9MN3",
-    // "WZHK-9MN3", digits...). Only reject obvious non-codes.
     return typeof raw === "string" && /^[A-Za-z0-9]{3,}-?[A-Za-z0-9]{0,}$/.test(raw) && raw.length <= 12
       ? raw
       : undefined;
@@ -251,35 +249,22 @@ export async function connectInstance(
     d?.qrcode?.base64 ??
     (typeof d?.code === "string" && d.code.startsWith("data:") ? d.code : undefined);
 
-  // Pairing code may already be in the create response.
+  // The pairing code may already be in the create response (Evolution v2 with
+  // number passed at create).
   let pairingCode = pickPairing(created.data);
   let qr = pickQr(created.data);
 
-  // Otherwise ask the connect endpoint (number = pairing-code request).
-  if (!pairingCode || !qr) {
+  // Otherwise poll the connect endpoint a few times. Baileys sometimes needs a
+  // moment to mint the code; we DON'T recreate the instance (that would
+  // invalidate an already-shown code and cause "couldn't link device").
+  const attempts = digits ? 4 : 1;
+  for (let i = 0; i < attempts && !pairingCode; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1400));
     const conn = await evoFetch(
       `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
     );
     pairingCode = pairingCode ?? pickPairing(conn.data);
     qr = qr ?? pickQr(conn.data);
-  }
-
-  // Still no code but we DO have a number and the instance already existed in
-  // QR mode: recreate it fresh WITH the number so a pairing code is minted.
-  if (!pairingCode && digits) {
-    await evoFetch(`/instance/logout/${instance}`, { method: "DELETE" });
-    await evoFetch(`/instance/delete/${instance}`, { method: "DELETE" });
-    const recreated = await evoFetch("/instance/create", {
-      method: "POST",
-      body: JSON.stringify({ ...createBody, number: digits }),
-    });
-    pairingCode = pickPairing(recreated.data);
-    qr = qr ?? pickQr(recreated.data);
-    if (!pairingCode) {
-      const conn2 = await evoFetch(`/instance/connect/${instance}?number=${digits}`);
-      pairingCode = pickPairing(conn2.data);
-      qr = qr ?? pickQr(conn2.data);
-    }
   }
 
   const state = await connectionState(email);
@@ -292,9 +277,19 @@ export async function connectInstance(
     pairingCode,
     error:
       !pairingCode && !qr
-        ? "Evolution API is reachable but returned neither a code nor a QR. Make sure your Render service is Evolution API v2 and is awake, then tap Try again."
+        ? "Couldn't get a code yet - your Render (Evolution) server may be waking up. Wait ~30 seconds and tap Try again."
+        : !pairingCode && qr
+        ? "Code not available right now - use the QR tab from a computer, or tap Try again."
         : undefined,
   };
+}
+
+/** Force a brand-new session (used by the 'New code' button when linking fails). */
+export async function resetInstance(email: string): Promise<void> {
+  const instance = instanceNameFor(email);
+  await evoFetch(`/instance/logout/${instance}`, { method: "DELETE" });
+  await evoFetch(`/instance/delete/${instance}`, { method: "DELETE" });
+  await saveSession(email, instance, "disconnected");
 }
 
 /** True when this number is actually on WhatsApp (checked via the session). */
@@ -309,6 +304,67 @@ export async function numberOnWhatsApp(
   });
   if (!res.ok || !Array.isArray(res.data)) return null; // unknown - don't block
   return Boolean(res.data[0]?.exists ?? res.data[0]?.numberExists);
+}
+
+// ---- Chat history (for auto-teaching the bargaining agents) --------------------
+
+export interface WaChat {
+  jid: string;
+  name?: string;
+}
+
+/** List the user's individual (non-group) chats. */
+export async function fetchChats(email: string): Promise<WaChat[]> {
+  const instance = instanceNameFor(email);
+  const res = await evoFetch(`/chat/findChats/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  const arr: any[] = Array.isArray(res.data) ? res.data : res.data?.chats ?? [];
+  return arr
+    .map((c) => ({
+      jid: String(c.remoteJid ?? c.id ?? c.jid ?? ""),
+      name: c.pushName ?? c.name ?? c.subject ?? undefined,
+    }))
+    .filter((c) => c.jid.endsWith("@s.whatsapp.net")); // individuals only, no groups
+}
+
+export interface WaMessage {
+  fromMe: boolean;
+  text: string;
+  ts: number;
+}
+
+/** Recent messages of one chat, oldest-first. */
+export async function fetchMessages(
+  email: string,
+  jid: string,
+  limit = 60
+): Promise<WaMessage[]> {
+  const instance = instanceNameFor(email);
+  const res = await evoFetch(`/chat/findMessages/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({ where: { key: { remoteJid: jid } }, limit }),
+  });
+  const arr: any[] = Array.isArray(res.data)
+    ? res.data
+    : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
+  return arr
+    .map((m) => {
+      const msg = m.message ?? {};
+      const text =
+        msg.conversation ??
+        msg.extendedTextMessage?.text ??
+        msg.imageMessage?.caption ??
+        "";
+      return {
+        fromMe: Boolean(m.key?.fromMe),
+        text: String(text),
+        ts: Number(m.messageTimestamp ?? 0),
+      };
+    })
+    .filter((m) => m.text.trim().length > 0)
+    .sort((a, b) => a.ts - b.ts);
 }
 
 /** "open" = paired and ready to send. */

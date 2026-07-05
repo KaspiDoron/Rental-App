@@ -9,14 +9,15 @@ import {
   Circle,
   useMap,
 } from "react-leaflet";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
 
-// Google-Maps-style map: Voyager cartography (gray roads, white-gray blocks,
-// green parks), price-bubble pins like Booking/Airbnb, zoom + locate controls,
-// and a fullscreen mode with a browsable shop list at the bottom.
+// Google-Maps-style map: Voyager cartography, price-bubble pins, and a
+// booking.com-style swipeable shop list along the bottom (in BOTH the compact
+// and fullscreen views). Zoom controls sit on the right edge, clear of the
+// card strip.
 
 function pinColor(v: Vendor): string {
   switch (v.stage) {
@@ -40,21 +41,24 @@ function priceIcon(v: Vendor, selected: boolean): L.DivIcon {
     ? `$${v.offer.pricePerDay}`
     : v.rating
     ? `★${v.rating.toFixed(1)}`
-    : "?";
+    : "🛵";
   const scale = selected ? 1.18 : 1;
   const ring = selected
-    ? `<span style="position:absolute;inset:0;border-radius:999px;background:${color};animation:ping-ring 1.6s cubic-bezier(0,0,0.2,1) infinite;z-index:-1"></span>`
+    ? `<span style="position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:999px;background:${color};animation:ping-ring 1.6s cubic-bezier(0,0,0.2,1) infinite;z-index:-1"></span>`
     : "";
   const z = selected ? 1000 : 400;
+  // A properly-sized icon so every pin sits exactly on its own coordinate
+  // (a 0x0 icon can make markers visually clump together).
   return L.divIcon({
     className: "wd-pin",
     html: `
       <div style="position:relative;z-index:${z};transform:scale(${scale});transform-origin:bottom center;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 3px 6px rgba(0,0,0,0.35))">
-        <div style="position:relative;background:${color};color:#fff;font:800 12px/1 Nunito,system-ui;padding:6px 10px;border-radius:999px;border:2px solid #fff;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">${ring}${label}</div>
+        ${ring}
+        <div style="background:${color};color:#fff;font:800 12px/1 Nunito,system-ui;padding:6px 10px;border-radius:999px;border:2px solid #fff;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">${label}</div>
         <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid ${color};margin-top:-1px"></div>
       </div>`,
-    iconSize: [0, 0],
-    iconAnchor: [0, 34],
+    iconSize: [70, 44],
+    iconAnchor: [35, 44],
   });
 }
 
@@ -62,19 +66,20 @@ const stayIcon = L.divIcon({
   className: "",
   html: `
     <div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.35))">
-      <div style="background:#ef4444;border:3px solid #fff;border-radius:999px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px">🏨</div>
+      <div style="background:#ef4444;border:3px solid #fff;border-radius:999px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px">🏨</div>
       <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid #ef4444;margin-top:-1px"></div>
     </div>`,
-  iconSize: [0, 0],
-  iconAnchor: [0, 30],
+  iconSize: [24, 31],
+  iconAnchor: [12, 31],
 });
 
 function Controls({ origin }: { origin: { lat: number; lng: number } }) {
   const map = useMap();
   const btn =
-    "flex h-10 w-10 items-center justify-center rounded-xl bg-card text-strong shadow-lg text-lg font-extrabold btn btn-sm";
+    "flex h-10 w-10 items-center justify-center rounded-xl bg-card text-strong shadow-lg text-lg font-extrabold btn btn-sm lift";
+  // Right edge, vertically centred - never overlapped by the bottom card strip.
   return (
-    <div className="absolute bottom-6 right-3 z-[500] flex flex-col gap-2">
+    <div className="absolute right-3 top-1/2 z-[500] flex -translate-y-1/2 flex-col gap-2">
       <button className={btn} onClick={() => map.zoomIn()} aria-label="Zoom in">+</button>
       <button className={btn} onClick={() => map.zoomOut()} aria-label="Zoom out">−</button>
       <button
@@ -96,25 +101,108 @@ function Controls({ origin }: { origin: { lat: number; lng: number } }) {
 function Recenter({
   origin,
   radiusKm,
+  vendors,
   focus,
 }: {
   origin: { lat: number; lng: number };
   radiusKm: number;
+  vendors: Vendor[];
   focus: { lat: number; lng: number } | null;
 }) {
   const map = useMap();
   useEffect(() => {
-    const dLat = radiusKm / 111;
-    map.fitBounds([
-      [origin.lat - dLat, origin.lng - dLat],
-      [origin.lat + dLat, origin.lng + dLat],
-    ]);
+    // Fit to the actual shop spread so pins never visually clump at one spot.
+    const pts: [number, number][] = vendors.map((v) => [v.lat, v.lng]);
+    pts.push([origin.lat, origin.lng]);
+    if (pts.length > 1) {
+      map.fitBounds(pts as any, { padding: [50, 50], maxZoom: 15 });
+    } else {
+      const dLat = radiusKm / 111;
+      map.fitBounds([
+        [origin.lat - dLat, origin.lng - dLat],
+        [origin.lat + dLat, origin.lng + dLat],
+      ]);
+    }
     setTimeout(() => map.invalidateSize(), 250);
-  }, [origin.lat, origin.lng, radiusKm, map]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [origin.lat, origin.lng, radiusKm, vendors.length, map]);
   useEffect(() => {
     if (focus) map.setView([focus.lat, focus.lng], Math.max(map.getZoom(), 15), { animate: true });
   }, [focus, map]);
   return null;
+}
+
+// One card design, used in both the compact and fullscreen strips.
+function ShopCard({
+  v,
+  selected,
+  onSelect,
+  onOpen,
+}: {
+  v: Vendor;
+  selected: boolean;
+  onSelect: () => void;
+  onOpen?: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={`surface-strong pop-in w-[78vw] max-w-xs shrink-0 snap-center overflow-hidden rounded-blob text-left transition ${
+        selected ? "ring-2 ring-brandblue" : ""
+      }`}
+    >
+      {v.photoUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={v.photoUrl} alt="" className="h-24 w-full object-cover" />
+      )}
+      <div className="p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
+          <span className="shrink-0 text-[14px] font-extrabold text-strong">
+            {v.offer ? `$${v.offer.pricePerDay}/d` : ""}
+          </span>
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-soft">
+          <span className="inline-flex items-center gap-0.5">
+            <Icon name="star" className="h-3 w-3 text-brandyellow" />
+            {v.rating ? v.rating.toFixed(1) : "New"} ({v.reviews})
+          </span>
+          <span>{v.distanceKm?.toFixed(1)} km</span>
+          {v.openNow !== undefined && (
+            <span className={v.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
+              {v.openNow ? "Open now" : "Closed"}
+            </span>
+          )}
+        </div>
+        {v.todayHours && (
+          <div className="mt-0.5 truncate text-[10px] font-bold text-faint">🕒 {v.todayHours}</div>
+        )}
+        {v.address && <div className="truncate text-[10px] text-faint">{v.address}</div>}
+        <div className="mt-1">
+          {(v.orders ?? 0) > 0 ? (
+            <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
+              ✓ {v.orders} booked here
+            </span>
+          ) : (
+            <span className="rounded-md bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
+              ✨ New on WheelDeal
+            </span>
+          )}
+        </div>
+        {onOpen && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+            className="btn btn-sm mt-2 flex w-full items-center justify-center rounded-xl bg-brandblue py-1.5 text-center text-[12px] font-extrabold text-white"
+          >
+            View details
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function MapView({
@@ -134,6 +222,14 @@ export default function MapView({
 }) {
   const [full, setFull] = useState(false);
   const selected = vendors.find((v) => v.id === selectedId) ?? null;
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected card scrolled into view in the strip.
+  useEffect(() => {
+    if (!selectedId || !stripRef.current) return;
+    const el = stripRef.current.querySelector<HTMLElement>(`[data-vid="${selectedId}"]`);
+    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [selectedId]);
 
   const map = (
     <MapContainer
@@ -147,7 +243,7 @@ export default function MapView({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
         url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
       />
-      <Recenter origin={origin} radiusKm={radiusKm} focus={selected} />
+      <Recenter origin={origin} radiusKm={radiusKm} vendors={vendors} focus={selected} />
       <Controls origin={origin} />
 
       <Circle
@@ -168,6 +264,32 @@ export default function MapView({
     </MapContainer>
   );
 
+  // Swipeable horizontal strip of shop cards (shared by both views).
+  const strip = (fs: boolean) => (
+    <div
+      ref={fs ? undefined : stripRef}
+      className="no-scrollbar flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-3"
+    >
+      {vendors.map((v) => (
+        <div key={v.id} data-vid={v.id} className="snap-center">
+          <ShopCard
+            v={v}
+            selected={v.id === selectedId}
+            onSelect={() => onSelect(v.id)}
+            onOpen={
+              onOpenVendor
+                ? () => {
+                    if (fs) setFull(false);
+                    onOpenVendor(v);
+                  }
+                : undefined
+            }
+          />
+        </div>
+      ))}
+    </div>
+  );
+
   if (full) {
     return createPortal(
       <div className="fixed inset-0 z-[1100] bg-base">
@@ -175,82 +297,13 @@ export default function MapView({
 
         <button
           onClick={() => setFull(false)}
-          className="btn absolute right-4 z-[1150] rounded-2xl bg-card px-4 py-2.5 text-sm font-extrabold text-strong shadow-lg"
+          className="btn absolute right-4 z-[1150] rounded-2xl bg-card px-4 py-2.5 text-sm font-extrabold text-strong shadow-lg lift"
           style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
         >
           ✕ Close map
         </button>
 
-        {/* Booking-style browsable shop list */}
-        <div className="absolute inset-x-0 bottom-0 z-[1140] pb-safe">
-          <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-3">
-            {vendors.map((v) => (
-              <button
-                key={v.id}
-                onClick={() => onSelect(v.id)}
-                className={`surface-strong w-72 shrink-0 overflow-hidden rounded-blob text-left transition ${
-                  v.id === selectedId ? "border-2 !border-brandblue" : ""
-                }`}
-              >
-                {v.photoUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={v.photoUrl} alt="" className="h-20 w-full object-cover" />
-                )}
-                <div className="p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
-                    <span className="shrink-0 text-[15px] font-extrabold text-strong">
-                      {v.offer ? `$${v.offer.pricePerDay}/d` : "..."}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-soft">
-                    <span className="inline-flex items-center gap-0.5">
-                      <Icon name="star" className="h-3 w-3 text-brandyellow" />
-                      {v.rating ? v.rating.toFixed(1) : "New"} ({v.reviews} reviews)
-                    </span>
-                    <span>{v.distanceKm?.toFixed(1)} km</span>
-                    {v.openNow !== undefined && (
-                      <span className={v.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
-                        {v.openNow ? "Open now" : "Closed"}
-                      </span>
-                    )}
-                  </div>
-                  {v.todayHours && (
-                    <div className="mt-0.5 truncate text-[10px] font-bold text-faint">
-                      🕒 {v.todayHours}
-                    </div>
-                  )}
-                  {v.address && (
-                    <div className="truncate text-[10px] text-faint">{v.address}</div>
-                  )}
-                  <div className="mt-1">
-                    {(v.orders ?? 0) > 0 ? (
-                      <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
-                        ✓ {v.orders} booked here
-                      </span>
-                    ) : (
-                      <span className="rounded-md bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
-                        ✨ New on WheelDeal
-                      </span>
-                    )}
-                  </div>
-                  {onOpenVendor && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setFull(false);
-                        onOpenVendor(v);
-                      }}
-                      className="btn btn-sm mt-2 block w-full rounded-xl bg-brandblue py-1.5 text-center text-[12px] font-extrabold text-white"
-                    >
-                      View details
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="absolute inset-x-0 bottom-0 z-[1140] pb-safe">{strip(true)}</div>
       </div>,
       document.body
     );
@@ -267,51 +320,9 @@ export default function MapView({
         ⛶ Expand
       </button>
 
-      {/* Tap a pin -> a compact detail card floats up */}
-      {selected && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[600] p-3">
-          <div className="surface-strong pop-in pointer-events-auto overflow-hidden rounded-blob">
-            <div className="flex">
-              {selected.photoUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={selected.photoUrl} alt="" className="h-24 w-24 shrink-0 object-cover" />
-              )}
-              <div className="min-w-0 flex-1 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[14px] font-extrabold text-strong">
-                    {selected.name}
-                  </span>
-                  <span className="shrink-0 text-[15px] font-extrabold text-strong">
-                    {selected.offer ? `$${selected.offer.pricePerDay}/d` : ""}
-                  </span>
-                </div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-soft">
-                  <span className="inline-flex items-center gap-0.5">
-                    <Icon name="star" className="h-3 w-3 text-brandyellow" />
-                    {selected.rating ? selected.rating.toFixed(1) : "New"} ({selected.reviews})
-                  </span>
-                  <span>{selected.distanceKm?.toFixed(1)} km</span>
-                  {selected.openNow !== undefined && (
-                    <span className={selected.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
-                      {selected.openNow ? "Open" : "Closed"}
-                    </span>
-                  )}
-                </div>
-                {selected.todayHours && (
-                  <div className="mt-0.5 truncate text-[10px] font-bold text-faint">🕒 {selected.todayHours}</div>
-                )}
-                {onOpenVendor && (
-                  <button
-                    onClick={() => onOpenVendor(selected)}
-                    className="btn btn-sm mt-1.5 w-full rounded-xl bg-brandblue py-1.5 text-[12px] font-extrabold text-white"
-                  >
-                    View details
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Swipeable shop strip along the bottom (clear of the zoom controls) */}
+      {vendors.length > 0 && (
+        <div className="absolute inset-x-0 bottom-0 z-[600] pb-1">{strip(false)}</div>
       )}
     </div>
   );

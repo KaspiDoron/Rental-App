@@ -124,7 +124,10 @@ export function WaConnect({
               {t("Connect your WhatsApp so the agents can ask shops for prices and bargain as YOU - replies land back here automatically. Takes ~30 seconds.")}
             </p>
           )}
-          <label className="mb-2 flex items-start gap-2 rounded-2xl bg-card2 p-2.5 text-[11px] leading-relaxed text-soft">
+          <label
+            dir="ltr"
+            className="mb-2 flex items-start gap-2 rounded-2xl bg-card2 p-2.5 text-left text-[12px] leading-relaxed text-soft"
+          >
             <input
               type="checkbox"
               checked={consent}

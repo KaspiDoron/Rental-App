@@ -6,6 +6,7 @@ import { StageBadge, Pipeline } from "./Tracker";
 import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
+import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
@@ -345,31 +346,11 @@ export function VendorCard({
         </div>
 
         {galleryOpen && vendor.photoUrls && (
-          <div
-            onClick={() => setGalleryOpen(false)}
-            className="fixed inset-0 z-[1250] flex flex-col items-center justify-center gap-2 bg-black/80 p-4 backdrop-blur-sm"
-          >
-            <div className="text-[12px] font-extrabold text-white">
-              {vendor.name} · {t("photos from Google Maps")}
-            </div>
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="no-scrollbar flex w-full max-w-md gap-2 overflow-x-auto"
-            >
-              {vendor.photoUrls.map((u, i) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={i}
-                  src={u}
-                  alt=""
-                  className="h-72 w-auto shrink-0 rounded-2xl object-cover"
-                />
-              ))}
-            </div>
-            <button className="btn rounded-2xl bg-card px-5 py-2 text-sm font-extrabold text-strong">
-              ✕ {t("Close")}
-            </button>
-          </div>
+          <PhotoGallery
+            name={vendor.name}
+            photos={vendor.photoUrls}
+            onClose={() => setGalleryOpen(false)}
+          />
         )}
 
         {chatOpen && (

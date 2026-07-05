@@ -14,9 +14,15 @@ async function testOpenAICompatible(endpoint: string, token: string, model: stri
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 2 }),
     });
-    if (res.ok) return { ok: true, detail: "OK - model responded." };
-    const d = await res.json().catch(() => ({}));
-    return { ok: false, detail: d?.error?.message ?? `HTTP ${res.status}` };
+    if (res.ok) return { ok: true, detail: `OK - ${model} responded.` };
+    // Surface the real error body (some providers return non-JSON on 404).
+    const raw = await res.text().catch(() => "");
+    let msg = raw.slice(0, 180);
+    try {
+      const j = JSON.parse(raw);
+      msg = j?.error?.message ?? j?.message ?? msg;
+    } catch {}
+    return { ok: false, detail: `HTTP ${res.status}: ${msg || "no body"} (model: ${model})` };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : "network error" };
   }
@@ -42,7 +48,7 @@ export async function GET(req: Request) {
       result = await testOpenAICompatible("https://openrouter.ai/api/v1/chat/completions", value!, "meta-llama/llama-3.1-8b-instruct");
       break;
     case "CEREBRAS_TOKEN":
-      result = await testOpenAICompatible("https://api.cerebras.ai/v1/chat/completions", value!, "llama-3.3-70b");
+      result = await testOpenAICompatible("https://api.cerebras.ai/v1/chat/completions", value!, "llama3.1-8b");
       break;
     case "MISTRAL_TOKEN":
       result = await testOpenAICompatible("https://api.mistral.ai/v1/chat/completions", value!, "mistral-small-latest");

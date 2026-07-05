@@ -60,8 +60,6 @@ export default function AdminPage() {
   const [keyWarning, setKeyWarning] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; label: string; value: string }[] | null>(null);
   const [aiProviders, setAiProviders] = useState<any[]>([]);
-  const [training, setTraining] = useState("");
-  const [trainingImages, setTrainingImages] = useState<string[]>([]);
   const [trainingCount, setTrainingCount] = useState(0);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
@@ -69,6 +67,7 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
   const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
+  const [feedbackFilter, setFeedbackFilter] = useState<"all" | "high" | "issues" | "noise">("all");
   const [diag, setDiag] = useState<{ kind: string; text: string; ok: boolean } | null>(null);
   const [diagBusy, setDiagBusy] = useState<string | null>(null);
   const [costs, setCosts] = useState<any>(null);
@@ -216,43 +215,24 @@ export default function AdminPage() {
     if (data.warning) setKeyWarning(data.warning);
   }
 
-  async function teach() {
+  async function importTraining() {
     setTrainMsg(null);
     setTrainBusy(true);
     try {
-      const res = await fetch("/api/admin/training", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: training, images: trainingImages }),
-      });
+      const res = await fetch("/api/admin/training/import", { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        setTraining("");
-        setTrainingImages([]);
-        setTrainingCount((data.examples ?? []).length);
-        setTrainMsg(
-          data.transcribed
-            ? "Learned ✓ - the agent read your screenshots and learned the conversation."
-            : "Learned ✓ - the bargaining agents will use this style."
-        );
+        setTrainMsg(data.note ?? "Done.");
+        const tr = await (await fetch("/api/admin/training")).json();
+        setTrainingCount((tr.examples ?? []).length);
       } else {
-        setTrainMsg(data.error ?? "Could not save.");
+        setTrainMsg(data.error ?? "Could not import.");
       }
+    } catch {
+      setTrainMsg("Could not reach the WhatsApp connector.");
     } finally {
       setTrainBusy(false);
     }
-  }
-
-  function addTrainingFiles(files: FileList | null) {
-    if (!files) return;
-    Array.from(files)
-      .slice(0, 5 - trainingImages.length)
-      .forEach((f) => {
-        const reader = new FileReader();
-        reader.onload = () =>
-          setTrainingImages((prev) => [...prev, String(reader.result)].slice(0, 5));
-        reader.readAsDataURL(f);
-      });
   }
 
   async function userAction(body: Record<string, string>) {
@@ -307,67 +287,38 @@ export default function AdminPage() {
 
       {tab === "analytics" && analytics && (
         <div className="space-y-3">
-          {/* Teach the agents from real bargains */}
+          {/* Teach the agents automatically from your OWN WhatsApp chats */}
           <div className="surface rounded-blob p-4">
-            <div className="mb-1 text-[13px] font-extrabold text-strong">
+            <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
               🎓 Teach the bargaining agents
-            </div>
-            <p className="mb-2 text-[11px] text-faint">
-              Paste a real WhatsApp conversation where you bargained with a
-              rental shop. The agents learn your tone and moves ({trainingCount}{" "}
-              example{trainingCount === 1 ? "" : "s"} learned).
-            </p>
-            <textarea
-              value={training}
-              onChange={(e) => setTraining(e.target.value)}
-              rows={4}
-              placeholder={"Me: Hi! How much for a 125cc scooter for 3 days?\nShop: 100k per day\nMe: I saw 80k nearby, can you do 75k if I take 3 days?\n..."}
-              className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            />
-            {/* Screenshots of real bargains - the vision agent transcribes them */}
-            <div className="mt-2 flex items-center gap-2">
-              {trainingImages.map((img, i) => (
-                <div key={i} className="relative h-12 w-12 overflow-hidden rounded-lg border-2 border-line">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img} alt="" className="h-full w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => setTrainingImages((p) => p.filter((_, j) => j !== i))}
-                    className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center bg-black/60 text-[10px] text-white"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              {trainingImages.length < 5 && (
-                <label className="btn flex h-12 w-12 cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="sr-only"
-                    onChange={(e) => {
-                      addTrainingFiles(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  <Icon name="plus" className="h-4 w-4" />
-                </label>
-              )}
-              <span className="text-[10px] text-faint">
-                Or add chat screenshots - the AI reads real bargain images too.
+              <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
+                Auto
               </span>
             </div>
+            <p className="mb-2 text-[11px] text-faint">
+              Connect your WhatsApp (Profile), then tap below. WheelDeal reads your
+              real chats with rental shops, keeps only the genuine price
+              negotiations, and teaches the agents your exact style - zero typing.
+              ({trainingCount} example{trainingCount === 1 ? "" : "s"} learned)
+            </p>
             {trainMsg && (
-              <p className="mt-1 text-[12px] font-bold text-savings">{trainMsg}</p>
+              <p className="mb-1 text-[12px] font-bold text-savings">{trainMsg}</p>
             )}
             <button
-              onClick={teach}
-              disabled={trainBusy || (training.trim().length < 20 && trainingImages.length === 0)}
-              className="btn btn-primary mt-2 w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
+              onClick={importTraining}
+              disabled={trainBusy}
+              className="btn btn-primary w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
             >
-              {trainBusy ? <LoadingDots light label="Learning" /> : "Teach the agents"}
+              {trainBusy ? (
+                <LoadingDots light label="Reading your rental chats" />
+              ) : (
+                "💬 Import bargains from my WhatsApp"
+              )}
             </button>
+            <p className="mt-1.5 text-[10px] text-faint">
+              Private: only 1:1 chats are scanned for rental negotiations. Nothing
+              else is stored, and personal chats are ignored.
+            </p>
           </div>
           {/* Cost tracker: every request against the free quotas + est. cost */}
           {costs && (
@@ -866,10 +817,31 @@ export default function AdminPage() {
 
       {tab === "feedback" && (
         <div className="space-y-3">
-          <div className="rounded-2xl border-2 border-savings bg-savings-soft p-3 text-[12px] font-bold text-savings">
-            📥 The in-app feedback inbox works with ZERO setup - every triaged
-            report lands here from Supabase. Email delivery (Resend) is
-            optional on top.
+          {/* Summary counts */}
+          <div className="grid grid-cols-3 gap-2">
+            <Metric
+              label="High severity"
+              value={String(feedbackRows.filter((f) => f.is_real_issue && f.severity === "high").length)}
+              accent
+            />
+            <Metric label="Real issues" value={String(feedbackRows.filter((f) => f.is_real_issue).length)} />
+            <Metric label="Total" value={String(feedbackRows.length)} />
+          </div>
+          {/* Filter chips */}
+          <div className="flex gap-1.5">
+            {(["all", "high", "issues", "noise"] as const).map((fl) => (
+              <button
+                key={fl}
+                onClick={() => setFeedbackFilter(fl)}
+                className={`chip flex-1 rounded-xl border-2 py-1.5 text-[11px] font-extrabold capitalize ${
+                  feedbackFilter === fl
+                    ? "border-brandblue bg-brandblue-soft text-brandblue"
+                    : "border-line text-soft"
+                }`}
+              >
+                {fl}
+              </button>
+            ))}
           </div>
           {feedbackRows.length === 0 && (
             <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
@@ -877,7 +849,17 @@ export default function AdminPage() {
               in Keys).
             </div>
           )}
-          {feedbackRows.map((f) => (
+          {feedbackRows
+            .filter((f) =>
+              feedbackFilter === "all"
+                ? true
+                : feedbackFilter === "high"
+                ? f.is_real_issue && f.severity === "high"
+                : feedbackFilter === "issues"
+                ? f.is_real_issue
+                : !f.is_real_issue
+            )
+            .map((f) => (
             <div key={f.id} className="surface rounded-blob p-3">
               <div className="flex items-center gap-2">
                 <span
@@ -969,7 +951,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </div>
-      <div className="px-4 pt-4">{children}</div>
+      <div className="rise-in px-4 pt-4">{children}</div>
     </main>
   );
 }

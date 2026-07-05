@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Vendor, VendorReview } from "@/lib/types";
 import { Modal } from "./Modal";
-import { Icon } from "./icons";
+import { Icon, Stars } from "./icons";
 
 // Real Google reviews for a rental place, with word search + sorting.
 export function ReviewsSheet({
@@ -58,8 +58,8 @@ export function ReviewsSheet({
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-extrabold text-strong">{vendor.name}</h2>
-          <div className="flex items-center gap-1 text-[13px] text-soft">
-            <Icon name="star" className="h-4 w-4 text-brandyellow" />
+          <div className="flex items-center gap-1.5 text-[13px] text-soft">
+            <Stars value={vendor.rating ?? 0} size="h-4 w-4" />
             <b className="text-strong">{vendor.rating?.toFixed(1)}</b>
             <span>· {vendor.reviews} Google reviews</span>
           </div>
@@ -107,16 +107,8 @@ export function ReviewsSheet({
                   <span className="text-[13px] font-extrabold text-strong">{r.author}</span>
                   <span className="text-[12px] text-faint">{r.timeAgo}</span>
                 </div>
-                <div className="mt-0.5 flex items-center gap-0.5">
-                  {Array.from({ length: 5 }).map((_, s) => (
-                    <Icon
-                      key={s}
-                      name="star"
-                      className={`h-3.5 w-3.5 ${
-                        s < r.rating ? "text-brandyellow" : "text-line"
-                      }`}
-                    />
-                  ))}
+                <div className="mt-0.5">
+                  <Stars value={r.rating} size="h-3.5 w-3.5" />
                 </div>
                 <p className="mt-1 text-[13px] leading-relaxed text-soft">{r.text}</p>
               </div>
