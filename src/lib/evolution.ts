@@ -187,36 +187,42 @@ export async function connectInstance(
   const instance = instanceNameFor(email);
   const token = await webhookToken();
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
+  const digits = (phone ?? "").replace(/[^\d]/g, "");
 
-  // Try to create; a 403/409 "already in use" simply means it exists.
-  const created = await evoFetch("/instance/create", {
+  // Pairing code needs the number PASSED AT CREATE time in Evolution v2 - the
+  // create response then carries the pairing code directly.
+  const createBody: Record<string, unknown> = {
+    instanceName: instance,
+    qrcode: true,
+    integration: "WHATSAPP-BAILEYS",
+    webhook: { url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
+  };
+  if (digits) createBody.number = digits;
+
+  let created = await evoFetch("/instance/create", {
     method: "POST",
-    body: JSON.stringify({
-      instanceName: instance,
-      qrcode: true,
-      integration: "WHATSAPP-BAILEYS",
-      webhook: { url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
-    }),
+    body: JSON.stringify(createBody),
   });
   if (!created.ok && created.status !== 403 && created.status !== 409) {
     // Older Evolution builds use a flat webhook field - retry once.
-    const legacy = await evoFetch("/instance/create", {
+    created = await evoFetch("/instance/create", {
       method: "POST",
       body: JSON.stringify({
         instanceName: instance,
         qrcode: true,
+        ...(digits ? { number: digits } : {}),
         webhook: webhookUrl,
         events: ["MESSAGES_UPSERT"],
       }),
     });
-    if (!legacy.ok && legacy.status !== 403 && legacy.status !== 409) {
+    if (!created.ok && created.status !== 403 && created.status !== 409) {
       return {
         ok: false,
         error:
-          legacy.data?.response?.message?.toString?.() ??
-          legacy.data?.message ??
-          legacy.data?.error ??
-          `Evolution API ${legacy.status}`,
+          created.data?.response?.message?.toString?.() ??
+          created.data?.message ??
+          created.data?.error ??
+          `Evolution API ${created.status} - check the URL + API key in Admin.`,
       };
     }
   }
@@ -226,38 +232,67 @@ export async function connectInstance(
     method: "POST",
     body: JSON.stringify({
       webhook: { enabled: true, url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
-      // legacy shape (ignored by v2):
       enabled: true,
       url: webhookUrl,
       events: ["MESSAGES_UPSERT"],
     }),
   });
 
-  // Ask for the QR AND (when we know the user's phone) an 8-character pairing
-  // code - the code is what makes linking possible on the SAME phone that has
-  // WhatsApp: Linked Devices -> "Link with phone number instead".
-  const digits = (phone ?? "").replace(/[^\d]/g, "");
-  const conn = await evoFetch(
-    `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
-  );
+  const pickPairing = (d: any): string | undefined => {
+    const raw = d?.pairingCode ?? d?.qrcode?.pairingCode ?? d?.instance?.pairingCode;
+    // Accept any short alphanumeric code (Evolution formats vary: "WZHK9MN3",
+    // "WZHK-9MN3", digits...). Only reject obvious non-codes.
+    return typeof raw === "string" && /^[A-Za-z0-9]{3,}-?[A-Za-z0-9]{0,}$/.test(raw) && raw.length <= 12
+      ? raw
+      : undefined;
+  };
+  const pickQr = (d: any): string | undefined =>
+    d?.base64 ??
+    d?.qrcode?.base64 ??
+    (typeof d?.code === "string" && d.code.startsWith("data:") ? d.code : undefined);
+
+  // Pairing code may already be in the create response.
+  let pairingCode = pickPairing(created.data);
+  let qr = pickQr(created.data);
+
+  // Otherwise ask the connect endpoint (number = pairing-code request).
+  if (!pairingCode || !qr) {
+    const conn = await evoFetch(
+      `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
+    );
+    pairingCode = pairingCode ?? pickPairing(conn.data);
+    qr = qr ?? pickQr(conn.data);
+  }
+
+  // Still no code but we DO have a number and the instance already existed in
+  // QR mode: recreate it fresh WITH the number so a pairing code is minted.
+  if (!pairingCode && digits) {
+    await evoFetch(`/instance/logout/${instance}`, { method: "DELETE" });
+    await evoFetch(`/instance/delete/${instance}`, { method: "DELETE" });
+    const recreated = await evoFetch("/instance/create", {
+      method: "POST",
+      body: JSON.stringify({ ...createBody, number: digits }),
+    });
+    pairingCode = pickPairing(recreated.data);
+    qr = qr ?? pickQr(recreated.data);
+    if (!pairingCode) {
+      const conn2 = await evoFetch(`/instance/connect/${instance}?number=${digits}`);
+      pairingCode = pickPairing(conn2.data);
+      qr = qr ?? pickQr(conn2.data);
+    }
+  }
+
   const state = await connectionState(email);
   await saveSession(email, instance, state ?? "connecting");
 
-  const qr =
-    conn.data?.base64 ??
-    conn.data?.qrcode?.base64 ??
-    (typeof conn.data?.code === "string" && conn.data.code.startsWith("data:")
-      ? conn.data.code
-      : undefined);
-
-  const rawPairing = conn.data?.pairingCode;
   return {
     ok: true,
     state: state ?? "connecting",
     qr,
-    pairingCode:
-      typeof rawPairing === "string" && /^[A-Z0-9-]{8,9}$/i.test(rawPairing)
-        ? rawPairing
+    pairingCode,
+    error:
+      !pairingCode && !qr
+        ? "Evolution API is reachable but returned neither a code nor a QR. Make sure your Render service is Evolution API v2 and is awake, then tap Try again."
         : undefined,
   };
 }

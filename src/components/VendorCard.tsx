@@ -129,7 +129,7 @@ export function VendorCard({
   }
 
   return (
-    <div className="surface animate-slide-up overflow-hidden rounded-blob">
+    <div className="surface lift overflow-hidden rounded-blob">
       {vendor.photoUrl && (
         <div className="relative h-32 w-full">
           {/* eslint-disable-next-line @next/next/no-img-element */}

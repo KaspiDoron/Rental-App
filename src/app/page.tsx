@@ -12,6 +12,7 @@ import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
 import { TabBar } from "@/components/TabBar";
 import { FeedbackModal } from "@/components/FeedbackModal";
+import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
@@ -68,8 +69,63 @@ export default function Home() {
   const [waConnected, setWaConnected] = useState(false);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
+  const [clearConfirm, setClearConfirm] = useState(false);
+  const [restored, setRestored] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
+
+  // Restore a previous search so it survives navigating to Profile/Admin and
+  // back. Kept in sessionStorage; cleared only by the explicit Clear button.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("wd_search");
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.vendors?.length) {
+          setVendors(s.vendors);
+          setRfq(s.rfq ?? null);
+          setSource(s.source ?? null);
+          setSourceError(s.sourceError ?? null);
+          setRawText(s.rawText ?? EXAMPLES[0]);
+          if (s.origin) setOrigin(s.origin);
+          if (typeof s.radiusKm === "number") setRadiusKm(s.radiusKm);
+          if (s.filters) setFilters(s.filters);
+          setPhase("done");
+        }
+      }
+    } catch {}
+    setRestored(true);
+  }, []);
+
+  // Persist the search whenever the vendor list changes.
+  useEffect(() => {
+    if (!restored) return;
+    try {
+      if (vendors.length) {
+        sessionStorage.setItem(
+          "wd_search",
+          JSON.stringify({ vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters })
+        );
+      } else {
+        sessionStorage.removeItem("wd_search");
+      }
+    } catch {}
+  }, [vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters, restored]);
+
+  function clearSearch() {
+    timers.current.forEach(clearTimeout);
+    setVendors([]);
+    setRfq(null);
+    setSource(null);
+    setSourceError(null);
+    setPhase("idle");
+    setClearConfirm(false);
+    appliedReplies.current = new Set();
+    try {
+      sessionStorage.removeItem("wd_search");
+    } catch {}
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   useEffect(() => {
     // Middleware already gates unauthenticated visitors; here we just load the
@@ -115,6 +171,12 @@ export default function Home() {
       .then((r) => r.json())
       .then((d) => setWaConnected(Boolean(d.connected)))
       .catch(() => {});
+    // Don't override a restored search's origin with the phone location.
+    let hasSaved = false;
+    try {
+      hasSaved = Boolean(sessionStorage.getItem("wd_search"));
+    } catch {}
+    if (hasSaved) return;
     navigator.geolocation?.getCurrentPosition(
       (pos) =>
         setOrigin({
@@ -381,7 +443,7 @@ export default function Home() {
           <button
             onClick={startSearch}
             disabled={phase === "profiling" || phase === "running"}
-            className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
+            className="btn btn-primary cta-sheen mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
             {phase === "profiling" ? (
               <LoadingDots light label={t("Structuring your request")} />
@@ -402,6 +464,15 @@ export default function Home() {
             </p>
           )}
         </section>
+
+        {vendors.length > 0 && (
+          <button
+            onClick={() => setClearConfirm(true)}
+            className="btn btn-ghost mt-3 flex w-full items-center justify-center gap-1.5 rounded-2xl py-2 text-[12px] font-extrabold"
+          >
+            <Icon name="x" className="h-3.5 w-3.5" /> {t("Clear search")}
+          </button>
+        )}
 
         {source === "demo" && (
           <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow animate-slide-up">
@@ -583,19 +654,20 @@ export default function Home() {
           </div>
         ) : (
           <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-            {filtered.map((v) => (
-              <VendorCard
-                key={v.id}
-                vendor={v}
-                rfq={rfq}
-                plan={session?.plan}
-                onBook={setBookingVendor}
-                onReviews={setReviewsVendor}
-                waConnected={waConnected}
-                onBargain={setBargainVendor}
-                onStage={(id, stage) => patchVendor(id, { stage })}
-                onCustomMessage={customMessage}
-              />
+            {filtered.map((v, i) => (
+              <div key={v.id} className="rise-in" style={{ ["--i" as string]: i }}>
+                <VendorCard
+                  vendor={v}
+                  rfq={rfq}
+                  plan={session?.plan}
+                  onBook={setBookingVendor}
+                  onReviews={setReviewsVendor}
+                  waConnected={waConnected}
+                  onBargain={setBargainVendor}
+                  onStage={(id, stage) => patchVendor(id, { stage })}
+                  onCustomMessage={customMessage}
+                />
+              </div>
             ))}
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
@@ -625,7 +697,7 @@ export default function Home() {
 
         {vendors.length === 0 && phase === "idle" && (
           <div className="mt-10 text-center">
-            <div className="mx-auto mb-3 w-fit opacity-90 animate-slide-up">
+            <div className="mx-auto mb-3 w-fit opacity-90 float-soft">
               <BrandMark size={72} />
             </div>
             <p className="mx-auto max-w-[280px] text-sm text-soft">
@@ -663,6 +735,33 @@ export default function Home() {
       {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
       {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
+      {clearConfirm && (
+        <Modal onClose={() => setClearConfirm(false)} center>
+          <div className="text-center">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brandred-soft text-2xl">
+              🧹
+            </div>
+            <h2 className="text-lg font-extrabold text-strong">{t("Clear this search?")}</h2>
+            <p className="mt-1 text-[13px] text-soft">
+              {t("Your current shops and any offers will be removed. This can't be undone.")}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setClearConfirm(false)}
+                className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-sm"
+              >
+                {t("Keep it")}
+              </button>
+              <button
+                onClick={clearSearch}
+                className="btn btn-danger flex-1 rounded-2xl py-2.5 text-sm"
+              >
+                {t("Clear search")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <TabBar
         active="home"

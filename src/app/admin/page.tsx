@@ -418,11 +418,21 @@ export default function AdminPage() {
                   </div>
                 ))}
                 <div className="text-[11px] text-faint">
-                  AI tokens this month:{" "}
+                  AI: {costs.stats?.aiCalls ?? 0} calls ·{" "}
                   {Object.entries(costs.aiTokens ?? {})
-                    .map(([p, n]) => `${p} ${(n as number).toLocaleString()}`)
-                    .join(" · ") || "0"}
+                    .map(([p, n]) => `${p} ${(n as number).toLocaleString()} tok`)
+                    .join(" · ") || "0 tokens"}
                 </div>
+                {(costs.stats?.searchesThisMonth ?? 0) === 0 &&
+                  (costs.stats?.aiCalls ?? 0) === 0 && (
+                    <div className="rounded-xl bg-card2 p-2 text-[10px] text-faint">
+                      No billable API usage recorded yet this month. Numbers
+                      appear here as soon as real searches (Google Maps key set)
+                      or AI calls happen. If you have used the app and this stays
+                      at zero, run Test Supabase - the api_usage table may be
+                      missing (re-run schema.sql).
+                    </div>
+                  )}
               </div>
 
               {/* Abuse limits - adjustable */}
@@ -469,11 +479,12 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Real durable stats (this month, from Supabase) */}
           <div className="grid grid-cols-2 gap-2">
-            <Metric label="Search runs" value={String(analytics.totalRuns)} />
-            <Metric label="Offers pulled" value={String(analytics.totalOffers)} />
-            <Metric label="Avg discount" value={`${analytics.avgDiscountPct}%`} accent />
-            <Metric label="Avg cycle" value={`${analytics.avgCycleSeconds}s`} />
+            <Metric label="Searches this month" value={String(costs?.stats?.searchesThisMonth ?? 0)} accent />
+            <Metric label="Offers received" value={String(costs?.stats?.offersThisMonth ?? 0)} />
+            <Metric label="Messages sent" value={String(costs?.stats?.messagesSent ?? 0)} />
+            <Metric label="Total users" value={String(costs?.stats?.totalUsers ?? 0)} />
           </div>
           <div className="surface rounded-blob p-4">
             <div className="mb-3 flex items-center gap-1.5 text-sm font-extrabold text-strong">

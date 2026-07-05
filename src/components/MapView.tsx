@@ -41,12 +41,16 @@ function priceIcon(v: Vendor, selected: boolean): L.DivIcon {
     : v.rating
     ? `★${v.rating.toFixed(1)}`
     : "?";
-  const scale = selected ? 1.15 : 1;
+  const scale = selected ? 1.18 : 1;
+  const ring = selected
+    ? `<span style="position:absolute;inset:0;border-radius:999px;background:${color};animation:ping-ring 1.6s cubic-bezier(0,0,0.2,1) infinite;z-index:-1"></span>`
+    : "";
+  const z = selected ? 1000 : 400;
   return L.divIcon({
-    className: "",
+    className: "wd-pin",
     html: `
-      <div style="transform:scale(${scale});transform-origin:bottom center;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3))">
-        <div style="background:${color};color:#fff;font:800 12px/1 Nunito,system-ui;padding:6px 9px;border-radius:999px;border:2px solid #fff;white-space:nowrap">${label}</div>
+      <div style="position:relative;z-index:${z};transform:scale(${scale});transform-origin:bottom center;display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 3px 6px rgba(0,0,0,0.35))">
+        <div style="position:relative;background:${color};color:#fff;font:800 12px/1 Nunito,system-ui;padding:6px 10px;border-radius:999px;border:2px solid #fff;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">${ring}${label}</div>
         <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid ${color};margin-top:-1px"></div>
       </div>`,
     iconSize: [0, 0],
@@ -258,10 +262,57 @@ export default function MapView({
       <button
         onClick={() => setFull(true)}
         aria-label="Expand map"
-        className="btn absolute right-3 top-3 z-[500] rounded-xl bg-card px-3 py-2 text-[12px] font-extrabold text-strong shadow-lg"
+        className="btn absolute right-3 top-3 z-[500] rounded-xl bg-card px-3 py-2 text-[12px] font-extrabold text-strong shadow-lg lift"
       >
         ⛶ Expand
       </button>
+
+      {/* Tap a pin -> a compact detail card floats up */}
+      {selected && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[600] p-3">
+          <div className="surface-strong pop-in pointer-events-auto overflow-hidden rounded-blob">
+            <div className="flex">
+              {selected.photoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={selected.photoUrl} alt="" className="h-24 w-24 shrink-0 object-cover" />
+              )}
+              <div className="min-w-0 flex-1 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-[14px] font-extrabold text-strong">
+                    {selected.name}
+                  </span>
+                  <span className="shrink-0 text-[15px] font-extrabold text-strong">
+                    {selected.offer ? `$${selected.offer.pricePerDay}/d` : ""}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-soft">
+                  <span className="inline-flex items-center gap-0.5">
+                    <Icon name="star" className="h-3 w-3 text-brandyellow" />
+                    {selected.rating ? selected.rating.toFixed(1) : "New"} ({selected.reviews})
+                  </span>
+                  <span>{selected.distanceKm?.toFixed(1)} km</span>
+                  {selected.openNow !== undefined && (
+                    <span className={selected.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
+                      {selected.openNow ? "Open" : "Closed"}
+                    </span>
+                  )}
+                </div>
+                {selected.todayHours && (
+                  <div className="mt-0.5 truncate text-[10px] font-bold text-faint">🕒 {selected.todayHours}</div>
+                )}
+                {onOpenVendor && (
+                  <button
+                    onClick={() => onOpenVendor(selected)}
+                    className="btn btn-sm mt-1.5 w-full rounded-xl bg-brandblue py-1.5 text-[12px] font-extrabold text-white"
+                  >
+                    View details
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

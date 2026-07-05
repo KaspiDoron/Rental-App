@@ -314,7 +314,7 @@ export default function LoginPage() {
 
       {/* Hero */}
       <div className="mb-5 text-center">
-        <div className="mx-auto mb-2 w-fit animate-slide-up">
+        <div className="mx-auto mb-2 w-fit float-soft">
           <BrandMark size={92} />
         </div>
         <h1 className="font-display text-3xl font-extrabold text-strong">

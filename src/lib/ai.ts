@@ -63,17 +63,22 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      model: "llama3.1-8b",
+      model: "llama-3.3-70b",
     },
     {
       name: "gemini",
       token: gemini,
+      // gemini-1.5-flash was retired from v1beta; gemini-2.0-flash is the
+      // current free-tier model that supports generateContent.
       endpoint:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-      model: "gemini-1.5-flash",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      model: "gemini-2.0-flash",
     },
   ];
 }
+
+// Current Gemini model used by every Gemini call (chat + vision).
+export const GEMINI_MODEL = "gemini-2.0-flash";
 
 /** Configured providers, preferred one first (automatic failover order). */
 async function providers(): Promise<ProviderConfig[]> {
@@ -250,7 +255,7 @@ export async function chatVision(
   if (!key) return null;
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

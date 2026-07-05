@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "./LoadingDots";
+import { WaTermsModal } from "./WaTermsModal";
 import { useI18n } from "@/lib/i18n";
 
 // The ONE WhatsApp-connect experience, used identically in signup and in the
@@ -25,6 +26,7 @@ export function WaConnect({
   const [consent, setConsent] = useState(false);
   const [copied, setCopied] = useState(false);
   const [method, setMethod] = useState<"code" | "qr">("code");
+  const [showTerms, setShowTerms] = useState(false);
   const poll = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
@@ -45,13 +47,15 @@ export function WaConnect({
         body: JSON.stringify({ phone }),
       });
       const d = await res.json();
-      if (!d.available || d.error) {
+      if (!d.available) {
         setErr(d.error ?? t("The WhatsApp connector is not set up yet."));
         return;
       }
       if (d.pairingCode) setPairingCode(d.pairingCode);
       if (d.qr) setQr(d.qr);
-      if (!d.pairingCode && !d.qr) {
+      // Soft error (reachable but no code/QR yet) - surface it but keep the UI.
+      if (d.error) setErr(d.error);
+      else if (!d.pairingCode && !d.qr) {
         setErr(t("Could not get a code yet - tap Try again in a few seconds."));
       }
       clearInterval(poll.current);
@@ -128,9 +132,21 @@ export function WaConnect({
               className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
             />
             <span>
-              {t("I accept the Terms of Use for linking my WhatsApp: WheelDeal messages only rental shops I choose, never reads my personal chats, applies human-pace sending limits - and carries NO responsibility whatsoever for any limitation or ban WhatsApp may place on my number. I connect at my own risk.")}
+              {t("I have read and accept the")}{" "}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowTerms(true);
+                }}
+                className="font-extrabold text-brandblue underline"
+              >
+                {t("WhatsApp Linking Terms, Waiver & Release of Liability")}
+              </button>
+              {t(", and I accept full and sole responsibility for any consequence to my number.")}
             </span>
           </label>
+          {showTerms && <WaTermsModal onClose={() => setShowTerms(false)} />}
           <button
             onClick={connect}
             disabled={busy || !consent}
@@ -183,7 +199,8 @@ export function WaConnect({
                 </button>
               ) : (
                 <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-                  {t("No code came back - add your phone number to your profile first, then tap Try again.")}
+                  {err ||
+                    t("Preparing your code... tap Try again in a few seconds. If it keeps failing, use the QR tab from a computer.")}
                 </p>
               )}
               <ol className="mt-2 list-decimal space-y-1 pl-5 text-[11px] font-bold text-soft">

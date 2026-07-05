@@ -211,6 +211,31 @@ export async function sbInsert(
   }
 }
 
+/** Insert and return the created rows (needs the id back, e.g. feedback). */
+export async function sbInsertReturning<T = Record<string, unknown>>(
+  table: string,
+  rows: Record<string, unknown>[]
+): Promise<T[]> {
+  const conn = supabase();
+  if (!conn || rows.length === 0) return [];
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}`, {
+      method: "POST",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(rows),
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as T[];
+  } catch {
+    return [];
+  }
+}
+
 // ---- encryption (AES-256-GCM, key derived from SESSION_SECRET) --------------
 
 function cryptoKey(): Buffer {

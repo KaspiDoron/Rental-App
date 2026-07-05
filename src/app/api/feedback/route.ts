@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { triageFeedback } from "@/lib/agents";
 import { sendEmail } from "@/lib/email";
-import { sbInsert, sbSelect } from "@/lib/runtime-config";
+import { sbInsert, sbInsertReturning } from "@/lib/runtime-config";
 import { adminEmails } from "@/lib/session";
 
 interface ImagePayload {
@@ -36,8 +36,9 @@ export async function POST(req: Request) {
   // Feedback Triage Agent: keep genuine issues, filter spam before emailing.
   const verdict = await triageFeedback(category, text);
 
-  // Always store the raw submission (with the verdict) for the admin vault.
-  await sbInsert("feedback", [
+  // Always store the raw submission (with the verdict) for the admin vault,
+  // returning the row so we can attach screenshots reliably.
+  const inserted = await sbInsertReturning<{ id: number }>("feedback", [
     {
       category,
       body: text,
@@ -49,23 +50,15 @@ export async function POST(req: Request) {
       image_count: attachments.length,
     },
   ]);
+  const feedbackId = inserted[0]?.id ?? null;
 
   // Store the screenshots so management can view them in the workspace.
-  if (Array.isArray(body.images) && body.images.length) {
-    try {
-      const latest = await sbSelect<{ id: number }>(
-        "feedback",
-        "select=id&order=created_at.desc&limit=1"
-      );
-      const fid = latest[0]?.id ?? null;
-      const rows = (body.images as { dataUrl?: string }[])
-        .slice(0, MAX_IMAGES)
-        .filter((img) => typeof img.dataUrl === "string" && img.dataUrl.startsWith("data:"))
-        .map((img) => ({ feedback_id: fid, data_url: img.dataUrl }));
-      if (rows.length) await sbInsert("feedback_images", rows);
-    } catch {
-      /* image storage is best-effort */
-    }
+  if (feedbackId !== null && Array.isArray(body.images) && body.images.length) {
+    const rows = (body.images as { dataUrl?: string }[])
+      .slice(0, MAX_IMAGES)
+      .filter((img) => typeof img.dataUrl === "string" && img.dataUrl.startsWith("data:"))
+      .map((img) => ({ feedback_id: feedbackId, data_url: img.dataUrl }));
+    if (rows.length) await sbInsert("feedback_images", rows);
   }
 
   if (!verdict.isRealIssue) {

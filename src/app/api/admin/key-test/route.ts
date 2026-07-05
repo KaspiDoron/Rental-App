@@ -42,7 +42,7 @@ export async function GET(req: Request) {
       result = await testOpenAICompatible("https://openrouter.ai/api/v1/chat/completions", value!, "meta-llama/llama-3.1-8b-instruct");
       break;
     case "CEREBRAS_TOKEN":
-      result = await testOpenAICompatible("https://api.cerebras.ai/v1/chat/completions", value!, "llama3.1-8b");
+      result = await testOpenAICompatible("https://api.cerebras.ai/v1/chat/completions", value!, "llama-3.3-70b");
       break;
     case "MISTRAL_TOKEN":
       result = await testOpenAICompatible("https://api.mistral.ai/v1/chat/completions", value!, "mistral-small-latest");
@@ -53,7 +53,7 @@ export async function GET(req: Request) {
     case "GEMINI_TOKEN": {
       try {
         const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${value}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${value}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },

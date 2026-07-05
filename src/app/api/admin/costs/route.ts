@@ -14,17 +14,37 @@ export async function GET() {
   start.setDate(1);
   start.setHours(0, 0, 0, 0);
 
-  const [usage, aiRows, kill] = await Promise.all([
+  const since = `created_at=gte.${encodeURIComponent(start.toISOString())}`;
+  const [usage, aiRows, searches, offers, outbound, users, kill] = await Promise.all([
     monthlyUsage(),
     sbSelect<{ provider: string; tokens: number }>(
       "ai_usage",
-      `select=provider,tokens&created_at=gte.${encodeURIComponent(start.toISOString())}&limit=10000`
+      `select=provider,tokens&${since}&limit=10000`
     ),
+    sbSelect<{ id: number }>("searches", `select=id&${since}&limit=10000`),
+    sbSelect<{ id: number }>("offers", `select=id&${since}&limit=10000`),
+    sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&received_at=gte.${encodeURIComponent(start.toISOString())}&limit=10000`
+    ),
+    sbSelect<{ email: string }>("app_users", "select=email&limit=10000"),
     killSwitchOn(),
   ]);
 
   const aiTokens: Record<string, number> = {};
-  for (const r of aiRows) aiTokens[r.provider] = (aiTokens[r.provider] ?? 0) + (r.tokens ?? 0);
+  let aiCalls = 0;
+  for (const r of aiRows) {
+    aiTokens[r.provider] = (aiTokens[r.provider] ?? 0) + (r.tokens ?? 0);
+    aiCalls += 1;
+  }
+
+  const stats = {
+    searchesThisMonth: searches.length,
+    offersThisMonth: offers.length,
+    messagesSent: outbound.length,
+    aiCalls,
+    totalUsers: users.length,
+  };
 
   const defaults = limitDefaults();
   const limits: Record<string, number> = {};
@@ -45,7 +65,7 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ apis, aiTokens, limits, defaults, killSwitch: kill });
+  return NextResponse.json({ apis, aiTokens, stats, limits, defaults, killSwitch: kill });
 }
 
 export async function POST(req: Request) {
