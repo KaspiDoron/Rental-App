@@ -180,10 +180,13 @@ create table if not exists public.wa_sessions (
   email         text primary key,
   instance_name text not null,
   status        text default 'connecting',
+  host_url      text,
   updated_at    timestamptz not null default now()
 );
 create index if not exists wa_sessions_instance_idx
   on public.wa_sessions (instance_name);
+-- If you already ran an older schema, run this once:
+alter table public.wa_sessions add column if not exists host_url text;
 
 -- ---- Bookings ---------------------------------------------------------------
 create table if not exists public.bookings (

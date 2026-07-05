@@ -91,45 +91,140 @@ export function recordSend(email: string) {
   rateStore().set(email, mem);
 }
 
-// ---- Evolution API client -------------------------------------------------------
+// ---- Multi-host Evolution client -----------------------------------------------
+//
+// Free hosts (Render/Koyeb/etc.) sleep and restart. To stay reliable on 100%
+// free tiers we support a POOL of Evolution servers that all point at the SAME
+// Supabase Postgres database. Because the Baileys credentials live in that
+// shared DB, ANY host can resume a user's session - so if a user's host is
+// asleep/down we transparently fail the user over to a healthy host with NO
+// re-linking. Users are also sharded across hosts to spread the load and stay
+// within each free tier's limits.
+//
+// Config (Admin -> Keys):
+//   EVOLUTION_HOSTS  (preferred) - one "url|apikey" per line/comma, e.g.
+//       https://wd-wa-1.onrender.com|KEY1
+//       https://wd-wa-2.koyeb.app|KEY2
+//   EVOLUTION_API_URL + EVOLUTION_API_KEY - single-host fallback (legacy).
 
-async function evoConfig(): Promise<{ url: string; key: string } | null> {
+export interface Host {
+  url: string;
+  key: string;
+}
+
+async function getHosts(): Promise<Host[]> {
+  const multi = (await getConfig("EVOLUTION_HOSTS")) ?? "";
+  const parsed = multi
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [url, key] = line.split("|").map((x) => x?.trim());
+      return url && key ? { url: url.replace(/\/$/, ""), key } : null;
+    })
+    .filter((h): h is Host => h !== null);
+  if (parsed.length) return parsed;
+
   const [url, key] = await Promise.all([
     getConfig("EVOLUTION_API_URL"),
     getConfig("EVOLUTION_API_KEY"),
   ]);
-  if (!url || !key) return null;
-  return { url: url.trim().replace(/\/$/, ""), key: key.trim() };
+  if (url && key) return [{ url: url.trim().replace(/\/$/, ""), key: key.trim() }];
+  return [];
 }
 
 export async function evolutionConfigured(): Promise<boolean> {
-  return (await evoConfig()) !== null;
+  return (await getHosts()).length > 0;
 }
 
-/** Deterministic, collision-safe instance name for a user. */
+/** Deterministic, collision-safe instance name for a user (same on every host). */
 export function instanceNameFor(email: string): string {
   return `wd-${createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16)}`;
 }
 
-/** Token Evolution must echo back to our webhook (derived, never stored raw). */
+/** Webhook token derived from a stable secret so it works across all hosts. */
 export async function webhookToken(): Promise<string | null> {
-  const cfg = await evoConfig();
-  if (!cfg) return null;
-  return createHash("sha256").update(`wd-webhook:${cfg.key}`).digest("hex").slice(0, 32);
+  if ((await getHosts()).length === 0) return null;
+  const secret = process.env.SESSION_SECRET || "wd-fallback-secret";
+  return createHash("sha256").update(`wd-webhook:${secret}`).digest("hex").slice(0, 32);
+}
+
+// ---- host health (short-lived cache) --------------------------------------------
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_wa_health__: Map<string, { ok: boolean; exp: number }> | undefined;
+}
+function healthStore() {
+  if (!globalThis.__wd_wa_health__) globalThis.__wd_wa_health__ = new Map();
+  return globalThis.__wd_wa_health__;
+}
+
+async function hostHealthy(h: Host): Promise<boolean> {
+  const cache = healthStore();
+  const hit = cache.get(h.url);
+  if (hit && hit.exp > Date.now()) return hit.ok;
+  let ok = false;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4500);
+    const res = await fetch(`${h.url}/instance/fetchInstances`, {
+      headers: { apikey: h.key },
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    clearTimeout(timer);
+    ok = res.status < 500; // reachable and not erroring (401 still = alive)
+  } catch {
+    ok = false;
+  }
+  cache.set(h.url, { ok, exp: Date.now() + 15_000 });
+  return ok;
+}
+
+function hostPref(email: string, url: string): number {
+  return parseInt(
+    createHash("sha256").update(`${email.toLowerCase()}:${url}`).digest("hex").slice(0, 8),
+    16
+  );
+}
+
+/** The Evolution host this user's session should live on right now. */
+async function resolveHost(email: string): Promise<Host | null> {
+  const hosts = await getHosts();
+  if (hosts.length === 0) return null;
+  if (hosts.length === 1) return hosts[0];
+
+  // Stick to the stored host while it is healthy (keeps the session in place).
+  const rows = await sbSelect<{ host_url: string | null }>(
+    "wa_sessions",
+    `select=host_url&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+  );
+  const stored = rows[0]?.host_url;
+  if (stored) {
+    const h = hosts.find((x) => x.url === stored);
+    if (h && (await hostHealthy(h))) return h;
+  }
+
+  // Otherwise pick a healthy host, preferring a stable per-user assignment.
+  const order = [...hosts].sort((a, b) => hostPref(email, a.url) - hostPref(email, b.url));
+  for (const h of order) {
+    if (await hostHealthy(h)) return h;
+  }
+  return order[0] ?? null; // everything down - return the preferred anyway
 }
 
 async function evoFetch(
+  host: Host,
   path: string,
   init?: RequestInit
 ): Promise<{ ok: boolean; status: number; data: any }> {
-  const cfg = await evoConfig();
-  if (!cfg) return { ok: false, status: 0, data: { error: "not configured" } };
   try {
-    const res = await fetch(`${cfg.url}${path}`, {
+    const res = await fetch(`${host.url}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
-        apikey: cfg.key,
+        apikey: host.key,
         ...(init?.headers ?? {}),
       },
       cache: "no-store",
@@ -145,6 +240,35 @@ async function evoFetch(
   }
 }
 
+/** Resolve the user's host and call it. */
+async function evo(
+  email: string,
+  path: string,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const host = await resolveHost(email);
+  if (!host) return { ok: false, status: 0, data: { error: "not configured" } };
+  return evoFetch(host, path, init);
+}
+
+/** Keep-awake: ping every configured host so none of them sleeps. */
+export async function pingAllHosts(): Promise<{ url: string; ok: boolean }[]> {
+  const hosts = await getHosts();
+  return Promise.all(
+    hosts.map(async (h) => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 7000);
+        const res = await fetch(`${h.url}/`, { signal: ctrl.signal, cache: "no-store" });
+        clearTimeout(timer);
+        return { url: h.url, ok: res.status < 500 };
+      } catch {
+        return { url: h.url, ok: false };
+      }
+    })
+  );
+}
+
 /** Look up which user owns an instance (used by the webhook). */
 export async function emailForInstance(instance: string): Promise<string | null> {
   const rows = await sbSelect<{ email: string }>(
@@ -154,7 +278,12 @@ export async function emailForInstance(instance: string): Promise<string | null>
   return rows[0]?.email ?? null;
 }
 
-async function saveSession(email: string, instance: string, status: string) {
+async function saveSession(
+  email: string,
+  instance: string,
+  status: string,
+  hostUrl?: string
+) {
   await sbInsert(
     "wa_sessions",
     [
@@ -162,6 +291,7 @@ async function saveSession(email: string, instance: string, status: string) {
         email,
         instance_name: instance,
         status,
+        ...(hostUrl ? { host_url: hostUrl } : {}),
         updated_at: new Date().toISOString(),
       },
     ],
@@ -199,19 +329,37 @@ export async function ensureConnected(
   budgetMs = 6000
 ): Promise<{ ok: boolean; state: string | null }> {
   const instance = instanceNameFor(email);
+  const host = await resolveHost(email);
+  if (!host) return { ok: false, state: null };
+
   let state = await connectionState(email);
   if (state === "open") {
     markOpen(email).catch(() => {});
     return { ok: true, state };
   }
-  // Resume the existing session from saved creds (no number = reconnect only).
-  await evoFetch(`/instance/connect/${instance}`);
+
+  // If we've failed the user over to a different host, the instance may not
+  // exist there yet - creating it makes Evolution load the SHARED creds from
+  // the database and reconnect the session (no re-linking needed).
+  await evoFetch(host, "/instance/create", {
+    method: "POST",
+    body: JSON.stringify({
+      instanceName: instance,
+      qrcode: false,
+      integration: "WHATSAPP-BAILEYS",
+    }),
+  });
+  // Kick a reconnect on the resolved host.
+  await evoFetch(host, `/instance/connect/${instance}`);
+  await saveSession(email, instance, "connecting", host.url);
+
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 1200));
     state = await connectionState(email);
     if (state === "open") {
       markOpen(email).catch(() => {});
+      await saveSession(email, instance, "open", host.url);
       return { ok: true, state };
     }
   }
@@ -234,6 +382,8 @@ export async function connectInstance(
   error?: string;
 }> {
   const instance = instanceNameFor(email);
+  const host = await resolveHost(email);
+  if (!host) return { ok: false, error: "The WhatsApp connector is not set up yet." };
   const token = await webhookToken();
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
   const digits = (phone ?? "").replace(/[^\d]/g, "");
@@ -248,13 +398,13 @@ export async function connectInstance(
   };
   if (digits) createBody.number = digits;
 
-  let created = await evoFetch("/instance/create", {
+  let created = await evoFetch(host, "/instance/create", {
     method: "POST",
     body: JSON.stringify(createBody),
   });
   if (!created.ok && created.status !== 403 && created.status !== 409) {
     // Older Evolution builds use a flat webhook field - retry once.
-    created = await evoFetch("/instance/create", {
+    created = await evoFetch(host, "/instance/create", {
       method: "POST",
       body: JSON.stringify({
         instanceName: instance,
@@ -277,7 +427,7 @@ export async function connectInstance(
   }
 
   // Make sure the webhook is set even for pre-existing instances.
-  await evoFetch(`/webhook/set/${instance}`, {
+  await evoFetch(host, `/webhook/set/${instance}`, {
     method: "POST",
     body: JSON.stringify({
       webhook: { enabled: true, url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
@@ -310,6 +460,7 @@ export async function connectInstance(
   for (let i = 0; i < attempts && !pairingCode; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 1400));
     const conn = await evoFetch(
+      host,
       `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
     );
     pairingCode = pairingCode ?? pickPairing(conn.data);
@@ -317,7 +468,7 @@ export async function connectInstance(
   }
 
   const state = await connectionState(email);
-  await saveSession(email, instance, state ?? "connecting");
+  await saveSession(email, instance, state ?? "connecting", host.url);
 
   return {
     ok: true,
@@ -336,8 +487,8 @@ export async function connectInstance(
 /** Force a brand-new session (used by the 'New code' button when linking fails). */
 export async function resetInstance(email: string): Promise<void> {
   const instance = instanceNameFor(email);
-  await evoFetch(`/instance/logout/${instance}`, { method: "DELETE" });
-  await evoFetch(`/instance/delete/${instance}`, { method: "DELETE" });
+  await evo(email, `/instance/logout/${instance}`, { method: "DELETE" });
+  await evo(email, `/instance/delete/${instance}`, { method: "DELETE" });
   await saveSession(email, instance, "disconnected");
 }
 
@@ -347,7 +498,7 @@ export async function numberOnWhatsApp(
   number: string
 ): Promise<boolean | null> {
   const instance = instanceNameFor(email);
-  const res = await evoFetch(`/chat/whatsappNumbers/${instance}`, {
+  const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
     method: "POST",
     body: JSON.stringify({ numbers: [number.replace(/[^\d]/g, "")] }),
   });
@@ -365,7 +516,7 @@ export interface WaChat {
 /** List the user's individual (non-group) chats. */
 export async function fetchChats(email: string): Promise<WaChat[]> {
   const instance = instanceNameFor(email);
-  const res = await evoFetch(`/chat/findChats/${instance}`, {
+  const res = await evo(email, `/chat/findChats/${instance}`, {
     method: "POST",
     body: JSON.stringify({}),
   });
@@ -391,7 +542,7 @@ export async function fetchMessages(
   limit = 60
 ): Promise<WaMessage[]> {
   const instance = instanceNameFor(email);
-  const res = await evoFetch(`/chat/findMessages/${instance}`, {
+  const res = await evo(email, `/chat/findMessages/${instance}`, {
     method: "POST",
     body: JSON.stringify({ where: { key: { remoteJid: jid } }, limit }),
   });
@@ -419,7 +570,7 @@ export async function fetchMessages(
 /** "open" = paired and ready to send. */
 export async function connectionState(email: string): Promise<string | null> {
   const instance = instanceNameFor(email);
-  const res = await evoFetch(`/instance/connectionState/${instance}`);
+  const res = await evo(email, `/instance/connectionState/${instance}`);
   if (!res.ok) return null;
   const state = res.data?.instance?.state ?? res.data?.state ?? null;
   if (state === "open") markOpen(email).catch(() => {});
@@ -428,8 +579,8 @@ export async function connectionState(email: string): Promise<string | null> {
 
 export async function disconnectInstance(email: string): Promise<boolean> {
   const instance = instanceNameFor(email);
-  await evoFetch(`/instance/logout/${instance}`, { method: "DELETE" });
-  const res = await evoFetch(`/instance/delete/${instance}`, { method: "DELETE" });
+  await evo(email, `/instance/logout/${instance}`, { method: "DELETE" });
+  const res = await evo(email, `/instance/delete/${instance}`, { method: "DELETE" });
   await saveSession(email, instance, "disconnected");
   return res.ok;
 }
@@ -458,12 +609,12 @@ export async function sendFromUser(
 
   const trySend = async () => {
     // v2 shape first, then the legacy v1 body.
-    let r = await evoFetch(`/message/sendText/${instance}`, {
+    let r = await evo(email, `/message/sendText/${instance}`, {
       method: "POST",
       body: JSON.stringify({ number, text: message, delay: TYPING_DELAY_MS() }),
     });
     if (!r.ok) {
-      r = await evoFetch(`/message/sendText/${instance}`, {
+      r = await evo(email, `/message/sendText/${instance}`, {
         method: "POST",
         body: JSON.stringify({
           number,
@@ -478,7 +629,7 @@ export async function sendFromUser(
   // Send with one reconnect-and-retry on failure.
   let res = await trySend();
   if (!res.ok) {
-    await evoFetch(`/instance/connect/${instance}`);
+    await evo(email, `/instance/connect/${instance}`);
     await new Promise((r) => setTimeout(r, 1200));
     res = await trySend();
   }

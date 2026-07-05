@@ -87,24 +87,46 @@ export async function GET(req: Request) {
         ? { ok: true, detail: "Format looks right. Full check happens on a real Google sign-in." }
         : { ok: false, detail: "Should end with .apps.googleusercontent.com" };
       break;
+    case "EVOLUTION_HOSTS":
     case "EVOLUTION_API_URL":
     case "EVOLUTION_API_KEY": {
-      const [url, key] = await Promise.all([getConfig("EVOLUTION_API_URL"), getConfig("EVOLUTION_API_KEY")]);
-      if (!url || !key) {
-        result = { ok: false, detail: "Set BOTH the Evolution URL and API key first." };
+      // Build the same host list the app uses, then test each one.
+      const multi = (await getConfig("EVOLUTION_HOSTS")) ?? "";
+      let hosts = multi
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [u, k] = line.split("|").map((x) => x?.trim());
+          return u && k ? { url: u.replace(/\/$/, ""), key: k } : null;
+        })
+        .filter((h): h is { url: string; key: string } => h !== null);
+      if (hosts.length === 0) {
+        const [u, k] = await Promise.all([getConfig("EVOLUTION_API_URL"), getConfig("EVOLUTION_API_KEY")]);
+        if (u && k) hosts = [{ url: u.trim().replace(/\/$/, ""), key: k.trim() }];
+      }
+      if (hosts.length === 0) {
+        result = { ok: false, detail: "No hosts configured. Add EVOLUTION_HOSTS (url|key per line) or the single URL+key." };
         break;
       }
-      try {
-        const res = await fetch(`${url.trim().replace(/\/$/, "")}/instance/fetchInstances`, {
-          headers: { apikey: key.trim() },
-          cache: "no-store",
-        });
-        result = res.ok
-          ? { ok: true, detail: "OK - Evolution API reachable and the key is accepted." }
-          : { ok: false, detail: `Evolution responded ${res.status} - check the URL and AUTHENTICATION_API_KEY.` };
-      } catch (e) {
-        result = { ok: false, detail: `Could not reach Evolution: ${e instanceof Error ? e.message : "network error"}` };
-      }
+      const checks = await Promise.all(
+        hosts.map(async (h) => {
+          try {
+            const res = await fetch(`${h.url}/instance/fetchInstances`, {
+              headers: { apikey: h.key },
+              cache: "no-store",
+            });
+            return `${h.url} -> ${res.ok ? "OK" : `HTTP ${res.status}`}`;
+          } catch (e) {
+            return `${h.url} -> ${e instanceof Error ? e.message : "unreachable"}`;
+          }
+        })
+      );
+      const okCount = checks.filter((c) => c.endsWith("OK")).length;
+      result = {
+        ok: okCount > 0,
+        detail: `${okCount}/${hosts.length} host(s) healthy.\n${checks.join("\n")}`,
+      };
       break;
     }
     case "RESEND_API_KEY": {

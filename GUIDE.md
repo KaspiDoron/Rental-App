@@ -181,3 +181,38 @@ Always use freshly rotated keys - never ones that were shared in plain text.
   Resend email delivery stays optional.
 - AdSense: set ADSENSE_CLIENT (ca-pub-...); free-tier pages show labelled ad
   slots (placeholder until Google approves the site). Paid plans are ad-free.
+
+## v9: Multi-host WhatsApp pool (100% free, resilient)
+
+Free hosts (Render/Koyeb/etc.) sleep and restart. To keep WhatsApp reliable on
+free tiers, run SEVERAL Evolution servers that ALL point at the SAME Supabase
+database, then list them in Admin -> Keys -> EVOLUTION_HOSTS (one "url|key" per
+line). Because the Baileys credentials live in the shared database, ANY host can
+resume a user's session - so if one host is asleep, the app fails the user over
+to a healthy host with NO re-linking.
+
+1. Deploy Evolution API v2 on 2-3 free hosts (see below). Give each the SAME
+   env: DATABASE_ENABLED=true, DATABASE_PROVIDER=postgresql,
+   DATABASE_CONNECTION_URI=<your Supabase Postgres URI>,
+   DATABASE_SAVE_DATA_INSTANCE=true, DATABASE_SAVE_DATA_NEW_MESSAGE=true,
+   DATABASE_SAVE_DATA_CHATS=true, CACHE_LOCAL_ENABLED=true,
+   CACHE_REDIS_ENABLED=false, and a shared AUTHENTICATION_API_KEY.
+2. In Admin -> Keys set EVOLUTION_HOSTS, e.g.:
+     https://wd-wa-1.onrender.com|MYKEY
+     https://wd-wa-2.koyeb.app|MYKEY
+     https://wd-wa-3.fly.dev|MYKEY
+   (Leave the single EVOLUTION_API_URL/KEY empty when using the pool.)
+3. Keep-awake: point cron-job.org (and a second free cron pinger such as
+   uptimerobot.com or a second cron-job.org account) at
+   https://YOUR-APP.vercel.app/api/wa/ping every 5 minutes. That endpoint pings
+   EVERY host for you and returns a tiny response.
+
+Free hosts that run Evolution well (all have generous free tiers):
+- Render (free web service) - sleeps after 15 min; keep-awake required.
+- Koyeb (free instance) - one always-on free service.
+- Fly.io (free allowance) - set min_machines_running for always-on.
+- Northflank / Zeabur / Railway trial - additional shards.
+
+Reality: free tiers are best-effort. The pool + shared-DB failover + keep-awake
+makes it dramatically more reliable, but for guaranteed 24/7 a single ~$7/mo
+always-on instance is the long-term ideal.
