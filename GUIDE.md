@@ -227,10 +227,13 @@ Docker image for every host: `atendai/evolution-api:v2.1.1` (or `:latest`),
 internal port `8080`.
 
 Where to get `DATABASE_CONNECTION_URI`: Supabase -> Project Settings ->
-Database -> "Connection string" -> URI. Use the "Session/Transaction pooler"
-URI on port 6543 (works from serverless-style hosts) and add
-`?pgbouncer=true` if the host complains about prepared statements. Replace
-`[YOUR-PASSWORD]` with your DB password.
+Database -> "Connection string" -> URI -> the **Session pooler** (port 5432).
+That is the right one for Evolution (it keeps a long-lived connection). It looks
+like:
+`postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-1-<region>.pooler.supabase.com:5432/postgres`
+Replace `[YOUR-PASSWORD]` with your Supabase database password (URL-encode any
+special characters, e.g. `@` -> `%40`). No `?pgbouncer=true` needed on 5432 -
+that flag is only for the 6543 transaction port. Paste the SAME URI on every host.
 
 ### Deploy on 8 free services (pick any, do 3-8 of them)
 
