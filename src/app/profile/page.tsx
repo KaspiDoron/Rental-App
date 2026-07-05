@@ -6,6 +6,7 @@ import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LoadingDots } from "@/components/LoadingDots";
+import { Skeleton, SkeletonCard } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
@@ -203,7 +204,23 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      <div className="rise-in space-y-4 px-4 pt-4">
+      {!session && (
+        <div className="space-y-4 px-4 pt-4" role="status" aria-label="Loading profile">
+          <section className="surface rounded-blob p-4">
+            <div className="flex items-center gap-3">
+              <Skeleton rounded="rounded-full" className="h-14 w-14" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-1/3" />
+              </div>
+            </div>
+          </section>
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={3} />
+        </div>
+      )}
+
+      <div className={`rise-in space-y-4 px-4 pt-4 ${!session ? "hidden" : ""}`}>
         {/* Identity card */}
         <section className="surface rounded-blob p-4">
           <div className="flex items-center gap-3">

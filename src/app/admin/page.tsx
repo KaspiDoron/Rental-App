@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
 import { LoadingDots } from "@/components/LoadingDots";
+import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import type { AnalyticsSnapshot } from "@/lib/types";
@@ -43,6 +44,7 @@ interface FeedbackRow {
 
 export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<"analytics" | "keys" | "users" | "feedback" | "billing">(
     "analytics"
   );
@@ -79,6 +81,9 @@ export default function AdminPage() {
     { hosts: { url: string; healthy: boolean; users: number; detail: string }[]; healthy: number; total: number; users: number } | null
   >(null);
   const [waHostsBusy, setWaHostsBusy] = useState(false);
+  const [waHostTest, setWaHostTest] = useState<
+    Record<string, { busy: boolean; ok?: boolean; detail?: string }>
+  >({});
 
   async function loadWaHosts() {
     setWaHostsBusy(true);
@@ -89,6 +94,16 @@ export default function AdminPage() {
       setWaHosts(null);
     } finally {
       setWaHostsBusy(false);
+    }
+  }
+
+  async function testOneWaHost(url: string) {
+    setWaHostTest((p) => ({ ...p, [url]: { busy: true } }));
+    try {
+      const r = await (await fetch(`/api/admin/wa-hosts?test=${encodeURIComponent(url)}`)).json();
+      setWaHostTest((p) => ({ ...p, [url]: { busy: false, ok: r.healthy, detail: r.detail } }));
+    } catch {
+      setWaHostTest((p) => ({ ...p, [url]: { busy: false, ok: false, detail: "Test failed to run." } }));
     }
   }
 
@@ -136,6 +151,7 @@ export default function AdminPage() {
       const fb = await (await fetch("/api/admin/feedback")).json();
       setFeedbackRows(fb.feedback ?? []);
       await refreshCosts();
+      setLoaded(true);
     })().catch(() => setAuthorized(false));
   }, []);
 
@@ -272,7 +288,15 @@ export default function AdminPage() {
   if (authorized === null) {
     return (
       <Shell>
-        <div className="mt-20 text-center text-faint">Checking access...</div>
+        <div className="surface-strong mb-4 flex gap-1 rounded-2xl p-1">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="skeleton h-8 flex-1 rounded-xl" />
+          ))}
+        </div>
+        <SkeletonList count={4} />
+        <p className="mt-4 text-center text-[12px] font-bold text-faint">
+          <LoadingDots label="Checking access" />
+        </p>
       </Shell>
     );
   }
@@ -307,7 +331,9 @@ export default function AdminPage() {
         ))}
       </div>
 
-      {tab === "analytics" && analytics && (
+      {!loaded && <SkeletonList count={4} />}
+
+      {loaded && tab === "analytics" && analytics && (
         <div className="space-y-3">
           {/* Teach the agents automatically from your OWN WhatsApp chats */}
           <div className="surface rounded-blob p-4">
@@ -492,7 +518,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "keys" && (
+      {loaded && tab === "keys" && (
         <div className="space-y-3">
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
@@ -606,6 +632,22 @@ export default function AdminPage() {
                             }`}
                           >
                             {h.detail}
+                          </p>
+                        )}
+                        <button
+                          onClick={() => testOneWaHost(h.url)}
+                          disabled={waHostTest[h.url]?.busy}
+                          className="btn btn-sm chip mt-1.5 rounded-lg border-2 border-line px-2.5 text-[10px] font-extrabold text-brandblue disabled:opacity-60"
+                        >
+                          {waHostTest[h.url]?.busy ? <LoadingDots label="Testing" /> : "🩺 Test this server"}
+                        </button>
+                        {waHostTest[h.url] && !waHostTest[h.url].busy && waHostTest[h.url].detail && (
+                          <p
+                            className={`mt-1 rounded-lg p-1.5 text-[10px] font-bold ${
+                              waHostTest[h.url].ok ? "bg-savings-soft text-savings" : "bg-brandred-soft text-brandred"
+                            }`}
+                          >
+                            {waHostTest[h.url].detail}
                           </p>
                         )}
                       </div>
@@ -792,7 +834,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "users" && (
+      {loaded && tab === "users" && (
         <div className="space-y-3">
           {/* Add management */}
           <div className="surface rounded-blob p-4">
@@ -930,7 +972,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "feedback" && (
+      {loaded && tab === "feedback" && (
         <div className="space-y-3">
           {/* Summary counts */}
           <div className="grid grid-cols-3 gap-2">
@@ -1021,7 +1063,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "billing" && (
+      {loaded && tab === "billing" && (
         <div className="space-y-3">
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${

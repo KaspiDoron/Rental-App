@@ -312,6 +312,43 @@ export async function hostsStatus(): Promise<
   );
 }
 
+/**
+ * On-demand deep test of ONE host: forces a fresh probe (bypassing the 15s
+ * cache) and, if the key is accepted, reports how many Evolution instances that
+ * server is actually running - so the owner can confirm a specific server is
+ * live and its API key/credentials work, right from the Keys screen.
+ */
+export async function testOneHost(
+  url: string
+): Promise<{ url: string; healthy: boolean; detail: string; instances?: number }> {
+  const hosts = await getHosts();
+  const host = hosts.find((h) => h.url === url.replace(/\/$/, ""));
+  if (!host) return { url, healthy: false, detail: "This host is not in the pool anymore." };
+  healthStore().delete(host.url); // force a live re-check
+  const { ok, detail } = await hostHealthDetail(host);
+  if (!ok) return { url: host.url, healthy: false, detail };
+  // Alive + key accepted: count the live instances as a concrete proof of life.
+  try {
+    const res = await fetch(`${host.url}/instance/fetchInstances`, {
+      headers: { apikey: host.key },
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => null);
+    const instances = Array.isArray(data) ? data.length : undefined;
+    return {
+      url: host.url,
+      healthy: true,
+      detail:
+        instances === undefined
+          ? "Live and the API key works."
+          : `Live, API key accepted - running ${instances} WhatsApp instance(s).`,
+      instances,
+    };
+  } catch {
+    return { url: host.url, healthy: true, detail: "Live and the API key works." };
+  }
+}
+
 async function evoFetch(
   host: Host,
   path: string,
