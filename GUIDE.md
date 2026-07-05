@@ -295,6 +295,14 @@ runcmd:
 Note: hosts are `http://` (not https). That is fine - the app calls them
 server-side from Vercel, so there is no browser mixed-content issue.
 
+"Estimated cost EUR1.85/month" scare: Oracle's cost estimator IGNORES the free
+tier (it literally says "does not reflect any tier unit pricing") and prices the
+boot volume at pay-as-you-go rates. On an Always Free account the A1.Flex shape
+is EUR0 and the boot volume is covered by the 200 GB free storage allowance, so
+the real cost is EUR0. To guarantee it: keep the account as "Always Free" (do NOT
+upgrade to Pay As You Go - a Free Tier account cannot be billed, it just stops
+resources if you exceed a limit), and leave the boot volume at the ~47 GB default.
+
 ### Wire the pool into WheelDeal
 
 1. Owner page -> Keys -> `EVOLUTION_HOSTS` (multi-line box). One `url|apikey` per
