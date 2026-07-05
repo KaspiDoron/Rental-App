@@ -256,6 +256,10 @@ first boot, so you never open a terminal.
 Startup script to paste in the create-VM form (set YOUR-DB-PASSWORD; keep the same
 AUTHENTICATION_API_KEY on every VM):
 
+Swap lines are included so the small 1 GB AMD micro shape does not OOM-kill
+Evolution; they are harmless on the bigger ARM shape too, so use ONE script for
+every VM:
+
 ```
 #cloud-config
 package_update: true
@@ -263,12 +267,28 @@ packages:
   - docker.io
   - iptables-persistent
 runcmd:
+  - bash -c 'fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048'
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - bash -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
   - systemctl enable --now docker
   - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8080 -j ACCEPT
   - netfilter-persistent save
   - sleep 5
   - docker run -d --name evolution --restart always -p 8080:8080 -e AUTHENTICATION_API_KEY="wd-pool-KEY" -e DATABASE_ENABLED="true" -e DATABASE_PROVIDER="postgresql" -e DATABASE_CONNECTION_URI="postgresql://postgres.<ref>:YOUR-DB-PASSWORD@aws-1-<region>.pooler.supabase.com:5432/postgres" -e DATABASE_SAVE_DATA_INSTANCE="true" -e DATABASE_SAVE_DATA_NEW_MESSAGE="true" -e DATABASE_SAVE_DATA_MESSAGE_UPDATE="true" -e DATABASE_SAVE_DATA_CONTACTS="true" -e DATABASE_SAVE_DATA_CHATS="true" -e CACHE_LOCAL_ENABLED="true" -e CACHE_REDIS_ENABLED="false" -e CONFIG_SESSION_PHONE_CLIENT="WheelDeal" -e CONFIG_SESSION_PHONE_NAME="Chrome" atendai/evolution-api:v2.1.1
 ```
+
+Shape choice (smooth WhatsApp, $0): the ARM VM.Standard.A1.Flex (up to 4 OCPU +
+24 GB total, splittable) is the real powerhouse and is free. If it shows "Out of
+host capacity" (common in small regions), either:
+- Bridge now on TWO AMD VM.Standard.E2.1.Micro VMs (1 GB each, always available,
+  both Always Free) with the swap script above - the pool fails over between them.
+- Then land ARM in the background: ask for a SMALL ARM first (1 OCPU / 6 GB - more
+  likely to have capacity), retry at off-peak hours, or use "Save as stack" in the
+  create form and re-tap Apply in Resource Manager (one-tap retry) until it
+  succeeds. Add the ARM to the pool when it comes up; keep the micros as backups.
+The shared Supabase DB means adding/removing hosts never makes a user re-link.
 
 1. **Account:** oracle.com/cloud/free -> Start for free -> verify email -> add card
    (identity only, never charged on Always Free).
