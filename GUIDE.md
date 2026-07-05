@@ -182,7 +182,7 @@ Always use freshly rotated keys - never ones that were shared in plain text.
 - AdSense: set ADSENSE_CLIENT (ca-pub-...); free-tier pages show labelled ad
   slots (placeholder until Google approves the site). Paid plans are ad-free.
 
-## v10: Multi-host WhatsApp pool - 8 free servers, no user left behind
+## v10: Multi-host WhatsApp pool - Oracle Always Free, no user left behind
 
 WhatsApp is the heart of WheelDeal. A single free host sleeps after ~15 min and
 drops the connection - bad. The fix is a POOL: run the SAME Evolution API server
@@ -237,102 +237,93 @@ Replace `[YOUR-PASSWORD]` with your Supabase database password (URL-encode any
 special characters, e.g. `@` -> `%40`). No `?pgbouncer=true` needed on 5432 -
 that flag is only for the 6543 transaction port. Paste the SAME URI on every host.
 
-### Deploy on 8 free services (pick any, do 3-8 of them)
+### The honest 2026 reality on "free"
 
-Each recipe ends with a public URL. Add every one to the pool as `url|key`.
+Most container hosts have killed their no-card free tiers (Koyeb, Railway) or now
+require a card even at $0 (Fly, Northflank, Cloud Run). The ONE platform that
+still gives real, always-on, never-sleeps servers for free FOREVER is **Oracle
+Cloud Always Free** - and it gives you SEVERAL: up to 4 ARM cores + 24 GB RAM
+(splittable into multiple VMs) PLUS 2 AMD micro VMs. So your whole pool can be
+Oracle: 3-4 always-on hosts, $0/month, none sleeping. Oracle asks for a card ONCE
+for identity - it is never charged while you stay on "Always Free eligible" shapes.
 
-**1) Render (render.com) - easiest.**
-   a. New -> Web Service -> "Deploy an existing image".
-   b. Image URL: `atendai/evolution-api:v2.1.1` (NO `docker.io/` prefix, or
-      Render says "No public image found"). Instance: Free.
-   c. Advanced -> add ALL the env vars above. Set `PORT=8080`.
-   d. Create. Copy the `https://xxx.onrender.com` URL. (Sleeps at 15 min -
-      the keep-awake cron below wakes it; the pool covers the wake gap.)
+Everything below is doable 100% from an iPhone browser - no CLI, no Mac. A
+cloud-init startup script installs Docker and launches Evolution automatically on
+first boot, so you never open a terminal.
 
-**2) Koyeb (koyeb.com) - one always-on free instance.**
-   a. Create Service -> Docker -> image `atendai/evolution-api:v2.1.1`.
-   b. Instance: Free (Nano). Region: pick nearest.
-   c. Ports: expose `8080` (HTTP). Add all env vars. Deploy.
-   d. Copy the `https://xxx.koyeb.app` URL. Free instance stays warm.
+### Deploy Oracle Always Free VMs (iPhone, no terminal)
 
-**3) Fly.io (fly.io) - free allowance, can be always-on.**
-   a. Install flyctl, `fly launch --image atendai/evolution-api:v2.1.1
-      --no-deploy`.
-   b. In `fly.toml` set `internal_port = 8080` and
-      `[http_service] min_machines_running = 1` (keeps it awake).
-   c. `fly secrets set AUTHENTICATION_API_KEY=... DATABASE_CONNECTION_URI=...`
-      (and the rest). `fly deploy`.
-   d. URL is `https://YOURAPP.fly.dev`.
+Startup script to paste in the create-VM form (set YOUR-DB-PASSWORD; keep the same
+AUTHENTICATION_API_KEY on every VM):
 
-**4) Northflank (northflank.com) - free project.**
-   a. New Service -> Deployment -> External image
-      `docker.io/atendai/evolution-api:v2.1.1`.
-   b. Free plan resources. Networking: add public port `8080` (HTTP).
-   c. Add env vars (Northflank has a "Secrets" tab - paste there). Deploy.
-   d. Copy the generated `https://xxx.code.run` URL.
+```
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - iptables-persistent
+runcmd:
+  - systemctl enable --now docker
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8080 -j ACCEPT
+  - netfilter-persistent save
+  - sleep 5
+  - docker run -d --name evolution --restart always -p 8080:8080 -e AUTHENTICATION_API_KEY="wd-pool-KEY" -e DATABASE_ENABLED="true" -e DATABASE_PROVIDER="postgresql" -e DATABASE_CONNECTION_URI="postgresql://postgres.<ref>:YOUR-DB-PASSWORD@aws-1-<region>.pooler.supabase.com:5432/postgres" -e DATABASE_SAVE_DATA_INSTANCE="true" -e DATABASE_SAVE_DATA_NEW_MESSAGE="true" -e DATABASE_SAVE_DATA_MESSAGE_UPDATE="true" -e DATABASE_SAVE_DATA_CONTACTS="true" -e DATABASE_SAVE_DATA_CHATS="true" -e CACHE_LOCAL_ENABLED="true" -e CACHE_REDIS_ENABLED="false" -e CONFIG_SESSION_PHONE_CLIENT="WheelDeal" -e CONFIG_SESSION_PHONE_NAME="Chrome" atendai/evolution-api:v2.1.1
+```
 
-**5) Back4App Containers (containers.back4app.com) - free container.**
-   a. New App -> "Containers as a Service" -> deploy from a public image.
-   b. Image `atendai/evolution-api:v2.1.1`, port `8080`.
-   c. Add env vars. Deploy. Copy the `https://xxx.b4a.run` URL.
+1. **Account:** oracle.com/cloud/free -> Start for free -> verify email -> add card
+   (identity only, never charged on Always Free).
+2. **Create instance:** Menu -> Compute -> Instances -> Create instance. Name
+   `wd-wa-1`.
+3. **Image and shape -> Edit:** Image = Canonical Ubuntu; Shape = Change shape ->
+   Ampere -> VM.Standard.A1.Flex (2 OCPU / 12 GB, shows "Always Free"). If you hit
+   "Out of host capacity", try another Availability Domain, or use
+   VM.Standard.E2.1.Micro (AMD, always available, also Always Free).
+4. **Networking:** keep defaults; Assign public IPv4 = Yes.
+5. **SSH keys:** "Generate a key pair for me" -> Save private key (to Files; you
+   won't need it - cloud-init does everything).
+6. **Show advanced options -> Management -> Initialization script -> Paste
+   cloud-init script** -> paste the block above -> Create.
+7. **Open port 8080:** instance page -> Virtual cloud network / subnet -> Security
+   Lists -> Default Security List -> Add Ingress Rules -> Source `0.0.0.0/0`,
+   Protocol TCP, Destination Port `8080` -> Add.
+8. **Get URL:** copy the Public IPv4. Host = `http://<IP>:8080` (http, port 8080).
+   Open it in Safari after ~3-4 min; a small JSON "Welcome to the Evolution API"
+   means it's live.
+9. **Repeat** for `wd-wa-2`, `wd-wa-3` (Always Free covers several VMs - 4 ARM
+   cores + 24 GB total, plus 2 AMD micros). Each VM = one host line.
 
-**6) Zeabur (zeabur.com) - free serverless containers.**
-   a. New Project -> Deploy -> "Prebuilt image" ->
-      `atendai/evolution-api:v2.1.1`.
-   b. Add the env vars in Variables. Networking -> expose port `8080`.
-   c. Generate a domain. Copy the `https://xxx.zeabur.app` URL.
-
-**7) Google Cloud Run (cloud.google.com/run) - generous always-free requests.**
-   a. Cloud Run -> Deploy container -> Container image URL
-      `docker.io/atendai/evolution-api:v2.1.1`.
-   b. Allow unauthenticated invocations. Container port `8080`.
-   c. Variables & Secrets -> add all env vars. Set Min instances = 0 (free)
-      or 1 (warmer, still cheap). Deploy. Copy the `https://xxx.run.app` URL.
-
-**8) Oracle Cloud - Always Free VM (the truly 24/7 one).**
-   a. Create an "Always Free" Ampere ARM VM (Ubuntu). Open port `8080` in the
-      security list.
-   b. `sudo apt install docker.io -y`, then
-      `sudo docker run -d --restart always -p 8080:8080 --env-file evo.env
-      atendai/evolution-api:v2.1.1` (put the env vars in `evo.env`).
-   c. Point a free domain / use the public IP as `http://IP:8080`. This one
-      never sleeps - make it your anchor host.
-
-Bonus interchangeable options: Okteto, Leapcell, Railway trial, Sevalla - same
-recipe (public image, port 8080, shared env). Add as many as you like.
+Note: hosts are `http://` (not https). That is fine - the app calls them
+server-side from Vercel, so there is no browser mixed-content issue.
 
 ### Wire the pool into WheelDeal
 
-1. Owner page -> Keys -> `EVOLUTION_HOSTS`. Paste ONE `url|apikey` per line
-   (the box is a multi-line editor):
+1. Owner page -> Keys -> `EVOLUTION_HOSTS` (multi-line box). One `url|apikey` per
+   line, same key everywhere:
 
    ```
-   https://wd-wa-1.onrender.com|MYSHAREDKEY
-   https://wd-wa-2.koyeb.app|MYSHAREDKEY
-   https://wd-wa-3.fly.dev|MYSHAREDKEY
-   https://wd-wa-4.code.run|MYSHAREDKEY
-   https://wd-wa-5.b4a.run|MYSHAREDKEY
-   https://wd-wa-6.zeabur.app|MYSHAREDKEY
-   https://wd-wa-7.run.app|MYSHAREDKEY
-   http://ORACLE-IP:8080|MYSHAREDKEY
+   http://140.238.10.11:8080|wd-pool-KEY
+   http://140.238.10.12:8080|wd-pool-KEY
+   http://140.238.10.13:8080|wd-pool-KEY
    ```
-   Leave single-host `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` empty when using
-   the pool. Tap "Apply pool", then "Test API" to confirm `8/8 host(s) healthy`.
+   Leave single-host `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` empty. Tap "Apply
+   pool", then "Test API" to confirm `N/N host(s) healthy`.
 
-2. (Optional) `EVOLUTION_MAX_PER_HOST` - users per host before spilling to the
-   next. 40 is a safe free-tier number; raise it if your hosts are beefier.
+2. Run once in Supabase SQL editor:
+   `alter table public.wa_sessions add column if not exists host_url text;`
 
-3. Keep-awake (covers the sleepy hosts): create a free cron at cron-job.org
-   (and a second pinger such as uptimerobot.com for redundancy) hitting
-   `https://YOUR-APP.vercel.app/api/wa/ping` every 5 minutes. That ONE endpoint
-   pings EVERY host in your pool and returns a tiny response (so cron-job.org
-   won't disable it for "output too large").
+3. (Optional) `EVOLUTION_MAX_PER_HOST` - users per host before spilling to the
+   next (default 40).
+
+4. The **WhatsApp host pool** panel (same Keys screen) shows every VM live:
+   green/red dot, user count, and the reason if one is ever down. Add/remove hosts
+   by editing the box. Keep-awake cron is optional on Oracle (it never sleeps),
+   but leaving `/api/wa/ping` on cron-job.org does no harm.
 
 ### Reality check (honest)
 
-The pool + shared-DB failover + keep-awake makes free-tier WhatsApp
-dramatically more reliable - a sleeping host no longer strands a user, because
-another host resumes their session from the shared database. Include the Oracle
-Always Free VM (#8) as your anchor and you effectively have 24/7 coverage at
-zero cost. If you ever want a single guaranteed always-on box, any ~$7/mo
-instance running the same image and env is a drop-in replacement.
+Oracle Always Free VMs never sleep and you can run several for $0, so this is a
+genuinely free, always-on, self-healing pool - the shared Supabase DB means any
+VM can resume any user's session, so even a reboot never strands a traveller. If
+a truly free provider ever re-appears with no card, add it to the pool the same
+way (public image, port 8080, shared env + DB). A single ~$7/mo box running the
+same image is always a drop-in if you want zero setup.
