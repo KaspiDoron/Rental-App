@@ -223,8 +223,10 @@ CONFIG_SESSION_PHONE_CLIENT = WheelDeal
 CONFIG_SESSION_PHONE_NAME   = Chrome
 ```
 
-Docker image for every host: `atendai/evolution-api:v2.1.1` (or `:latest`),
-internal port `8080`.
+Docker image for every host: `atendai/evolution-api:v2.1.1` (newest stable v2 is
+`:v2.2.3`), internal port `8080`. Enter it WITHOUT a `docker.io/` prefix - Render
+(and some others) treat `docker.io/...` as a private registry and error with "No
+public image found". Just type `atendai/evolution-api:v2.1.1`.
 
 Where to get `DATABASE_CONNECTION_URI`: Supabase -> Project Settings ->
 Database -> "Connection string" -> URI -> the **Session pooler** (port 5432).
@@ -241,7 +243,8 @@ Each recipe ends with a public URL. Add every one to the pool as `url|key`.
 
 **1) Render (render.com) - easiest.**
    a. New -> Web Service -> "Deploy an existing image".
-   b. Image URL: `docker.io/atendai/evolution-api:v2.1.1`. Instance: Free.
+   b. Image URL: `atendai/evolution-api:v2.1.1` (NO `docker.io/` prefix, or
+      Render says "No public image found"). Instance: Free.
    c. Advanced -> add ALL the env vars above. Set `PORT=8080`.
    d. Create. Copy the `https://xxx.onrender.com` URL. (Sleeps at 15 min -
       the keep-awake cron below wakes it; the pool covers the wake gap.)
