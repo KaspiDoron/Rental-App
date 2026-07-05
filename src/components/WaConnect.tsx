@@ -18,7 +18,11 @@ export function WaConnect({
   onConnected?: () => void;
 }) {
   const { t } = useI18n();
-  const [wa, setWa] = useState<{ available: boolean; connected: boolean } | null>(null);
+  const [wa, setWa] = useState<{
+    available: boolean;
+    connected: boolean;
+    reconnecting?: boolean;
+  } | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -96,10 +100,16 @@ export function WaConnect({
 
   if (wa?.connected) {
     return (
-      <div className="rounded-2xl bg-savings-soft p-3">
+      <div className={`rounded-2xl p-3 ${wa.reconnecting ? "bg-brandyellow-soft" : "bg-savings-soft"}`}>
         <div className="flex items-center justify-between">
-          <span className="text-[13px] font-extrabold text-savings">
-            ✓ {t("WhatsApp connected - agents bargain as you")}
+          <span
+            className={`text-[13px] font-extrabold ${
+              wa.reconnecting ? "text-[#8a6100] dark:text-brandyellow" : "text-savings"
+            }`}
+          >
+            {wa.reconnecting
+              ? `↻ ${t("WhatsApp linked - reconnecting the server...")}`
+              : `✓ ${t("WhatsApp connected - agents bargain as you")}`}
           </span>
           <button
             onClick={disconnect}

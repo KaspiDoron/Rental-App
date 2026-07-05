@@ -4,7 +4,8 @@ import { runSafety } from "@/lib/agents";
 import { sendWhatsApp, whatsappConfigured } from "@/lib/whatsapp";
 import {
   evolutionConfigured,
-  connectionState,
+  wasEverConnected,
+  ensureConnected,
   sendFromUser,
 } from "@/lib/evolution";
 import { placeDetails } from "@/lib/google";
@@ -43,11 +44,13 @@ export async function POST(req: Request) {
   }
 
   const personal =
-    (await evolutionConfigured()) && (await connectionState(session.email)) === "open";
+    (await evolutionConfigured()) && (await wasEverConnected(session.email));
   const cloud = await whatsappConfigured();
   if (!personal && !cloud) {
     return NextResponse.json({ error: "Connect your WhatsApp first.", connect: true }, { status: 400 });
   }
+  // Resume a dropped session before the batch (best-effort).
+  if (personal) await ensureConnected(session.email, 6000);
 
   const results: { id: string; sent: boolean; reason?: string }[] = [];
   for (const v of vendors) {

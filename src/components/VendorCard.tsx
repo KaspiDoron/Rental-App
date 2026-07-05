@@ -87,6 +87,10 @@ export function VendorCard({
       } else if (d.rateLimited) {
         setRfqState("rate-limited");
         setRfqError(d.error ?? null);
+      } else if (d.reconnecting) {
+        // Transient drop (server waking) - no re-link needed, just retry.
+        setRfqState("rate-limited");
+        setRfqError(d.error ?? null);
       } else {
         // We NEVER pretend a message was sent: without a connected WhatsApp
         // nothing goes out, and the user is told exactly that.

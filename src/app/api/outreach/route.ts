@@ -3,7 +3,7 @@ import { runSafety } from "@/lib/agents";
 import { sendWhatsApp, whatsappConfigured } from "@/lib/whatsapp";
 import {
   evolutionConfigured,
-  connectionState,
+  wasEverConnected,
   sendFromUser,
 } from "@/lib/evolution";
 import { placeDetails } from "@/lib/google";
@@ -71,7 +71,10 @@ export async function POST(req: Request) {
   };
   let configured = false;
 
-  if ((await evolutionConfigured()) && (await connectionState(session.email)) === "open") {
+  // Try the user's personal WhatsApp whenever the connector is set up and they
+  // have paired before - sendFromUser auto-resumes a dropped session, so a
+  // transient Render restart no longer forces "connect again".
+  if ((await evolutionConfigured()) && (await wasEverConnected(session.email))) {
     configured = true;
     const r = await sendFromUser(session.email, digits, message);
     result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
@@ -83,6 +86,17 @@ export async function POST(req: Request) {
         channel: "personal-wa",
         rateLimited: true,
         error: r.error,
+      });
+    }
+    if (r.error === "reconnecting") {
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        configured: true,
+        channel: "personal-wa",
+        reconnecting: true,
+        error:
+          "Your WhatsApp is reconnecting (the server was waking up). Wait a few seconds and tap again - no need to re-link.",
       });
     }
   }

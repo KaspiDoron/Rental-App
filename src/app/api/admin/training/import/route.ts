@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { connectionState, fetchChats, fetchMessages } from "@/lib/evolution";
+import { ensureConnected, fetchChats, fetchMessages } from "@/lib/evolution";
 import { chat, extractJson } from "@/lib/ai";
 import { addTraining } from "@/lib/memory";
 import { sbInsert } from "@/lib/runtime-config";
@@ -19,7 +19,7 @@ export async function POST() {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  if ((await connectionState(session.email)) !== "open") {
+  if (!(await ensureConnected(session.email, 6000)).ok) {
     return NextResponse.json(
       { error: "Connect your WhatsApp first (Profile -> Your WhatsApp), then import." },
       { status: 400 }

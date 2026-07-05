@@ -169,6 +169,55 @@ async function saveSession(email: string, instance: string, status: string) {
   );
 }
 
+/** Last durable status we recorded for this user's session. */
+async function storedStatus(email: string): Promise<string | null> {
+  const rows = await sbSelect<{ status: string }>(
+    "wa_sessions",
+    `select=status&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+  );
+  return rows[0]?.status ?? null;
+}
+
+/** True once the user has successfully paired (and hasn't explicitly logged out). */
+export async function wasEverConnected(email: string): Promise<boolean> {
+  return (await storedStatus(email)) === "open";
+}
+
+/** Record that the session is live and paired (never downgraded automatically). */
+export async function markOpen(email: string) {
+  await saveSession(email, instanceNameFor(email), "open");
+}
+
+/**
+ * Make sure the session is live, resuming from saved credentials if the
+ * connection dropped (Render free tier sleeps/restarts). Returns quickly if
+ * already open; otherwise kicks a reconnect and polls within a small budget.
+ * Does NOT require the user to re-link as long as their creds are persisted.
+ */
+export async function ensureConnected(
+  email: string,
+  budgetMs = 6000
+): Promise<{ ok: boolean; state: string | null }> {
+  const instance = instanceNameFor(email);
+  let state = await connectionState(email);
+  if (state === "open") {
+    markOpen(email).catch(() => {});
+    return { ok: true, state };
+  }
+  // Resume the existing session from saved creds (no number = reconnect only).
+  await evoFetch(`/instance/connect/${instance}`);
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1200));
+    state = await connectionState(email);
+    if (state === "open") {
+      markOpen(email).catch(() => {});
+      return { ok: true, state };
+    }
+  }
+  return { ok: false, state };
+}
+
 /**
  * Create (or reuse) the user's instance and point its webhook at us.
  * Returns a QR code (base64 image) while the session is not yet paired.
@@ -372,7 +421,9 @@ export async function connectionState(email: string): Promise<string | null> {
   const instance = instanceNameFor(email);
   const res = await evoFetch(`/instance/connectionState/${instance}`);
   if (!res.ok) return null;
-  return res.data?.instance?.state ?? res.data?.state ?? null;
+  const state = res.data?.instance?.state ?? res.data?.state ?? null;
+  if (state === "open") markOpen(email).catch(() => {});
+  return state;
 }
 
 export async function disconnectInstance(email: string): Promise<boolean> {
@@ -395,26 +446,41 @@ export async function sendFromUser(
   const instance = instanceNameFor(email);
   const number = to.replace(/[^\d]/g, "");
 
-  // Never message a number that is not on WhatsApp (some shops list landlines).
-  const exists = await numberOnWhatsApp(email, number);
-  if (exists === false) {
-    return { ok: false, error: "not-on-whatsapp" };
+  // Resume the session if it dropped, instead of failing outright.
+  const conn = await ensureConnected(email, 6000);
+  if (!conn.ok) {
+    const paired = await wasEverConnected(email);
+    return {
+      ok: false,
+      error: paired ? "reconnecting" : "not-connected",
+    };
   }
 
-  // v2 shape first, then the legacy v1 body.
-  let res = await evoFetch(`/message/sendText/${instance}`, {
-    method: "POST",
-    body: JSON.stringify({ number, text: message, delay: TYPING_DELAY_MS() }),
-  });
-  if (!res.ok) {
-    res = await evoFetch(`/message/sendText/${instance}`, {
+  const trySend = async () => {
+    // v2 shape first, then the legacy v1 body.
+    let r = await evoFetch(`/message/sendText/${instance}`, {
       method: "POST",
-      body: JSON.stringify({
-        number,
-        options: { delay: TYPING_DELAY_MS(), presence: "composing" },
-        textMessage: { text: message },
-      }),
+      body: JSON.stringify({ number, text: message, delay: TYPING_DELAY_MS() }),
     });
+    if (!r.ok) {
+      r = await evoFetch(`/message/sendText/${instance}`, {
+        method: "POST",
+        body: JSON.stringify({
+          number,
+          options: { delay: TYPING_DELAY_MS(), presence: "composing" },
+          textMessage: { text: message },
+        }),
+      });
+    }
+    return r;
+  };
+
+  // Send with one reconnect-and-retry on failure.
+  let res = await trySend();
+  if (!res.ok) {
+    await evoFetch(`/instance/connect/${instance}`);
+    await new Promise((r) => setTimeout(r, 1200));
+    res = await trySend();
   }
   if (res.ok) {
     recordSend(email);
