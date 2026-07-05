@@ -75,6 +75,22 @@ export default function AdminPage() {
   const [limitsBusy, setLimitsBusy] = useState(false);
   const [keyTests, setKeyTests] = useState<Record<string, { ok: boolean; detail: string }>>({});
   const [keyTestBusy, setKeyTestBusy] = useState<string | null>(null);
+  const [waHosts, setWaHosts] = useState<
+    { hosts: { url: string; healthy: boolean; users: number; detail: string }[]; healthy: number; total: number; users: number } | null
+  >(null);
+  const [waHostsBusy, setWaHostsBusy] = useState(false);
+
+  async function loadWaHosts() {
+    setWaHostsBusy(true);
+    try {
+      const r = await (await fetch("/api/admin/wa-hosts")).json();
+      setWaHosts(r);
+    } catch {
+      setWaHosts(null);
+    } finally {
+      setWaHostsBusy(false);
+    }
+  }
 
   async function refreshCosts() {
     const c = await (await fetch("/api/admin/costs")).json();
@@ -122,6 +138,12 @@ export default function AdminPage() {
       await refreshCosts();
     })().catch(() => setAuthorized(false));
   }, []);
+
+  // Auto-probe the WhatsApp host pool the first time the owner opens Keys.
+  useEffect(() => {
+    if (tab === "keys" && waHosts === null && !waHostsBusy) loadWaHosts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const visibleUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
@@ -524,6 +546,76 @@ export default function AdminPage() {
             )}
           </div>
 
+          {/* WhatsApp host pool: live health + load across every free server */}
+          <div className="surface rounded-blob p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">📡 WhatsApp host pool</div>
+              <button
+                onClick={loadWaHosts}
+                disabled={waHostsBusy}
+                className="btn btn-sm chip rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
+              >
+                {waHostsBusy ? <LoadingDots label="Checking" /> : waHosts ? "Refresh" : "Check hosts"}
+              </button>
+            </div>
+            <p className="mb-2 mt-1 text-[11px] text-faint">
+              Every free Evolution server you added in EVOLUTION_HOSTS, live. Users
+              auto-spread across the healthy ones and fail over instantly if one sleeps.
+            </p>
+            {waHosts && (
+              <>
+                <div className="mb-2 flex gap-2">
+                  <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
+                    {waHosts.healthy}/{waHosts.total} healthy
+                  </span>
+                  <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+                    {waHosts.users} live sessions
+                  </span>
+                </div>
+                {waHosts.total === 0 ? (
+                  <p className="rounded-lg bg-card2 p-2 text-[11px] font-bold text-faint">
+                    No hosts yet. Paste one url|key per line into EVOLUTION_HOSTS below,
+                    then follow the deploy guide in GUIDE.md.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {waHosts.hosts.map((h) => (
+                      <div
+                        key={h.url}
+                        className="rounded-xl border-2 border-line p-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span
+                              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                                h.healthy ? "bg-savings" : "bg-brandred"
+                              }`}
+                            />
+                            <span className="truncate font-mono text-[11px] text-soft">
+                              {h.url.replace(/^https?:\/\//, "")}
+                            </span>
+                          </div>
+                          <span className="ml-2 shrink-0 text-[10px] font-extrabold text-faint">
+                            {h.users} user{h.users === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        {h.detail && (
+                          <p
+                            className={`mt-1 text-[10px] font-bold ${
+                              h.healthy ? "text-savings" : "text-brandred"
+                            }`}
+                          >
+                            {h.detail}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {/* AI providers: usage, remaining, switch, failover */}
           <div className="surface rounded-blob p-4">
             <div className="mb-1 text-[13px] font-extrabold text-strong">AI providers</div>
@@ -645,28 +737,51 @@ export default function AdminPage() {
                 </>
               )}
               {k.editable ? (
-                <div className="mt-2 flex gap-2">
-                  <input
-                    type="password"
-                    placeholder="Set / rotate value"
-                    value={editing[k.name] ?? ""}
-                    onChange={(e) => setEditing((ed) => ({ ...ed, [k.name]: e.target.value }))}
-                    className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
-                  />
-                  <button
-                    onClick={() => saveKey(k.name)}
-                    disabled={savingKey === k.name}
-                    className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
-                  >
-                    {savingKey === k.name ? (
-                      <LoadingDots light />
-                    ) : saved === k.name ? (
-                      "Saved"
-                    ) : (
-                      "Apply"
-                    )}
-                  </button>
-                </div>
+                k.name === "EVOLUTION_HOSTS" ? (
+                  <div className="mt-2">
+                    <textarea
+                      rows={4}
+                      placeholder={"https://host-1.onrender.com|apikey1\nhttps://host-2.koyeb.app|apikey2\nhttps://host-3.fly.dev|apikey3"}
+                      value={editing[k.name] ?? ""}
+                      onChange={(e) => setEditing((ed) => ({ ...ed, [k.name]: e.target.value }))}
+                      className="w-full rounded-xl border-2 border-line bg-card p-2 font-mono text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                    />
+                    <p className="mt-1 text-[11px] text-faint">
+                      One server per line as <span className="font-mono">url|apikey</span>. Add up
+                      to 8+ free servers - users spread across them and fail over automatically.
+                    </p>
+                    <button
+                      onClick={() => saveKey(k.name)}
+                      disabled={savingKey === k.name}
+                      className="btn btn-primary btn-sm mt-2 w-full rounded-xl px-3 text-[12px] disabled:opacity-60"
+                    >
+                      {savingKey === k.name ? <LoadingDots light /> : saved === k.name ? "Saved" : "Apply pool"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="password"
+                      placeholder="Set / rotate value"
+                      value={editing[k.name] ?? ""}
+                      onChange={(e) => setEditing((ed) => ({ ...ed, [k.name]: e.target.value }))}
+                      className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                    />
+                    <button
+                      onClick={() => saveKey(k.name)}
+                      disabled={savingKey === k.name}
+                      className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
+                    >
+                      {savingKey === k.name ? (
+                        <LoadingDots light />
+                      ) : saved === k.name ? (
+                        "Saved"
+                      ) : (
+                        "Apply"
+                      )}
+                    </button>
+                  </div>
+                )
               ) : (
                 <div className="mt-2 text-[11px] text-faint">
                   Bootstrap secret - set via host environment variables only.

@@ -182,37 +182,151 @@ Always use freshly rotated keys - never ones that were shared in plain text.
 - AdSense: set ADSENSE_CLIENT (ca-pub-...); free-tier pages show labelled ad
   slots (placeholder until Google approves the site). Paid plans are ad-free.
 
-## v9: Multi-host WhatsApp pool (100% free, resilient)
+## v10: Multi-host WhatsApp pool - 8 free servers, no user left behind
 
-Free hosts (Render/Koyeb/etc.) sleep and restart. To keep WhatsApp reliable on
-free tiers, run SEVERAL Evolution servers that ALL point at the SAME Supabase
-database, then list them in Admin -> Keys -> EVOLUTION_HOSTS (one "url|key" per
-line). Because the Baileys credentials live in the shared database, ANY host can
-resume a user's session - so if one host is asleep, the app fails the user over
-to a healthy host with NO re-linking.
+WhatsApp is the heart of WheelDeal. A single free host sleeps after ~15 min and
+drops the connection - bad. The fix is a POOL: run the SAME Evolution API server
+on 8+ free services, all pointed at the SAME Supabase Postgres database. Because
+every WhatsApp (Baileys) credential lives in that shared database, ANY host can
+resume ANY user's session. If one host is asleep or slow, the app instantly
+fails the user over to a healthy host - with NO re-scanning, NO re-linking.
 
-1. Deploy Evolution API v2 on 2-3 free hosts (see below). Give each the SAME
-   env: DATABASE_ENABLED=true, DATABASE_PROVIDER=postgresql,
-   DATABASE_CONNECTION_URI=<your Supabase Postgres URI>,
-   DATABASE_SAVE_DATA_INSTANCE=true, DATABASE_SAVE_DATA_NEW_MESSAGE=true,
-   DATABASE_SAVE_DATA_CHATS=true, CACHE_LOCAL_ENABLED=true,
-   CACHE_REDIS_ENABLED=false, and a shared AUTHENTICATION_API_KEY.
-2. In Admin -> Keys set EVOLUTION_HOSTS, e.g.:
-     https://wd-wa-1.onrender.com|MYKEY
-     https://wd-wa-2.koyeb.app|MYKEY
-     https://wd-wa-3.fly.dev|MYKEY
-   (Leave the single EVOLUTION_API_URL/KEY empty when using the pool.)
-3. Keep-awake: point cron-job.org (and a second free cron pinger such as
-   uptimerobot.com or a second cron-job.org account) at
-   https://YOUR-APP.vercel.app/api/wa/ping every 5 minutes. That endpoint pings
-   EVERY host for you and returns a tiny response.
+### How the app spreads users (built in - nothing to configure)
 
-Free hosts that run Evolution well (all have generous free tiers):
-- Render (free web service) - sleeps after 15 min; keep-awake required.
-- Koyeb (free instance) - one always-on free service.
-- Fly.io (free allowance) - set min_machines_running for always-on.
-- Northflank / Zeabur / Railway trial - additional shards.
+- On every send/connect the app health-checks all hosts in parallel (cached 15s).
+- Each user "sticks" to one host (saved in `wa_sessions.host_url`) so their
+  session stays warm; if that host is down, they migrate to the least-loaded
+  healthy host automatically.
+- A per-host cap (Admin -> Keys -> `EVOLUTION_MAX_PER_HOST`, default 40) stops
+  any one free server from being overloaded - new users land on emptier hosts.
+- Owner page -> Keys -> "WhatsApp host pool" shows a live green/red dot and the
+  user count for every host. Tap "Test API" on `EVOLUTION_HOSTS` to ping them all.
 
-Reality: free tiers are best-effort. The pool + shared-DB failover + keep-awake
-makes it dramatically more reliable, but for guaranteed 24/7 a single ~$7/mo
-always-on instance is the long-term ideal.
+### The ONE shared config every host needs (identical on all 8)
+
+Set these environment variables the SAME on every host. The shared database +
+shared API key is what makes failover seamless:
+
+```
+AUTHENTICATION_API_KEY   = <pick one long random string, SAME on all hosts>
+DATABASE_ENABLED         = true
+DATABASE_PROVIDER        = postgresql
+DATABASE_CONNECTION_URI  = <your Supabase Postgres "Connection string" URI>
+DATABASE_SAVE_DATA_INSTANCE     = true
+DATABASE_SAVE_DATA_NEW_MESSAGE  = true
+DATABASE_SAVE_DATA_MESSAGE_UPDATE = true
+DATABASE_SAVE_DATA_CONTACTS     = true
+DATABASE_SAVE_DATA_CHATS        = true
+CACHE_LOCAL_ENABLED      = true
+CACHE_REDIS_ENABLED      = false
+CONFIG_SESSION_PHONE_CLIENT = WheelDeal
+CONFIG_SESSION_PHONE_NAME   = Chrome
+```
+
+Docker image for every host: `atendai/evolution-api:v2.1.1` (or `:latest`),
+internal port `8080`.
+
+Where to get `DATABASE_CONNECTION_URI`: Supabase -> Project Settings ->
+Database -> "Connection string" -> URI. Use the "Session/Transaction pooler"
+URI on port 6543 (works from serverless-style hosts) and add
+`?pgbouncer=true` if the host complains about prepared statements. Replace
+`[YOUR-PASSWORD]` with your DB password.
+
+### Deploy on 8 free services (pick any, do 3-8 of them)
+
+Each recipe ends with a public URL. Add every one to the pool as `url|key`.
+
+**1) Render (render.com) - easiest.**
+   a. New -> Web Service -> "Deploy an existing image".
+   b. Image URL: `docker.io/atendai/evolution-api:v2.1.1`. Instance: Free.
+   c. Advanced -> add ALL the env vars above. Set `PORT=8080`.
+   d. Create. Copy the `https://xxx.onrender.com` URL. (Sleeps at 15 min -
+      the keep-awake cron below wakes it; the pool covers the wake gap.)
+
+**2) Koyeb (koyeb.com) - one always-on free instance.**
+   a. Create Service -> Docker -> image `atendai/evolution-api:v2.1.1`.
+   b. Instance: Free (Nano). Region: pick nearest.
+   c. Ports: expose `8080` (HTTP). Add all env vars. Deploy.
+   d. Copy the `https://xxx.koyeb.app` URL. Free instance stays warm.
+
+**3) Fly.io (fly.io) - free allowance, can be always-on.**
+   a. Install flyctl, `fly launch --image atendai/evolution-api:v2.1.1
+      --no-deploy`.
+   b. In `fly.toml` set `internal_port = 8080` and
+      `[http_service] min_machines_running = 1` (keeps it awake).
+   c. `fly secrets set AUTHENTICATION_API_KEY=... DATABASE_CONNECTION_URI=...`
+      (and the rest). `fly deploy`.
+   d. URL is `https://YOURAPP.fly.dev`.
+
+**4) Northflank (northflank.com) - free project.**
+   a. New Service -> Deployment -> External image
+      `docker.io/atendai/evolution-api:v2.1.1`.
+   b. Free plan resources. Networking: add public port `8080` (HTTP).
+   c. Add env vars (Northflank has a "Secrets" tab - paste there). Deploy.
+   d. Copy the generated `https://xxx.code.run` URL.
+
+**5) Back4App Containers (containers.back4app.com) - free container.**
+   a. New App -> "Containers as a Service" -> deploy from a public image.
+   b. Image `atendai/evolution-api:v2.1.1`, port `8080`.
+   c. Add env vars. Deploy. Copy the `https://xxx.b4a.run` URL.
+
+**6) Zeabur (zeabur.com) - free serverless containers.**
+   a. New Project -> Deploy -> "Prebuilt image" ->
+      `atendai/evolution-api:v2.1.1`.
+   b. Add the env vars in Variables. Networking -> expose port `8080`.
+   c. Generate a domain. Copy the `https://xxx.zeabur.app` URL.
+
+**7) Google Cloud Run (cloud.google.com/run) - generous always-free requests.**
+   a. Cloud Run -> Deploy container -> Container image URL
+      `docker.io/atendai/evolution-api:v2.1.1`.
+   b. Allow unauthenticated invocations. Container port `8080`.
+   c. Variables & Secrets -> add all env vars. Set Min instances = 0 (free)
+      or 1 (warmer, still cheap). Deploy. Copy the `https://xxx.run.app` URL.
+
+**8) Oracle Cloud - Always Free VM (the truly 24/7 one).**
+   a. Create an "Always Free" Ampere ARM VM (Ubuntu). Open port `8080` in the
+      security list.
+   b. `sudo apt install docker.io -y`, then
+      `sudo docker run -d --restart always -p 8080:8080 --env-file evo.env
+      atendai/evolution-api:v2.1.1` (put the env vars in `evo.env`).
+   c. Point a free domain / use the public IP as `http://IP:8080`. This one
+      never sleeps - make it your anchor host.
+
+Bonus interchangeable options: Okteto, Leapcell, Railway trial, Sevalla - same
+recipe (public image, port 8080, shared env). Add as many as you like.
+
+### Wire the pool into WheelDeal
+
+1. Owner page -> Keys -> `EVOLUTION_HOSTS`. Paste ONE `url|apikey` per line
+   (the box is a multi-line editor):
+
+   ```
+   https://wd-wa-1.onrender.com|MYSHAREDKEY
+   https://wd-wa-2.koyeb.app|MYSHAREDKEY
+   https://wd-wa-3.fly.dev|MYSHAREDKEY
+   https://wd-wa-4.code.run|MYSHAREDKEY
+   https://wd-wa-5.b4a.run|MYSHAREDKEY
+   https://wd-wa-6.zeabur.app|MYSHAREDKEY
+   https://wd-wa-7.run.app|MYSHAREDKEY
+   http://ORACLE-IP:8080|MYSHAREDKEY
+   ```
+   Leave single-host `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` empty when using
+   the pool. Tap "Apply pool", then "Test API" to confirm `8/8 host(s) healthy`.
+
+2. (Optional) `EVOLUTION_MAX_PER_HOST` - users per host before spilling to the
+   next. 40 is a safe free-tier number; raise it if your hosts are beefier.
+
+3. Keep-awake (covers the sleepy hosts): create a free cron at cron-job.org
+   (and a second pinger such as uptimerobot.com for redundancy) hitting
+   `https://YOUR-APP.vercel.app/api/wa/ping` every 5 minutes. That ONE endpoint
+   pings EVERY host in your pool and returns a tiny response (so cron-job.org
+   won't disable it for "output too large").
+
+### Reality check (honest)
+
+The pool + shared-DB failover + keep-awake makes free-tier WhatsApp
+dramatically more reliable - a sleeping host no longer strands a user, because
+another host resumes their session from the shared database. Include the Oracle
+Always Free VM (#8) as your anchor and you effectively have 24/7 coverage at
+zero cost. If you ever want a single guaranteed always-on box, any ~$7/mo
+instance running the same image and env is a drop-in replacement.

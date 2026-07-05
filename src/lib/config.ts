@@ -34,6 +34,7 @@ const KEYS: {
   { name: "HUGGINGFACE_TOKEN", label: "Hugging Face Gateway (free tier)", scope: "ai", editable: true },
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
   { name: "EVOLUTION_HOSTS", label: "Evolution host pool (url|key per line)", scope: "messaging", editable: true },
+  { name: "EVOLUTION_MAX_PER_HOST", label: "Max WhatsApp users per host", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_URL", label: "Evolution API URL (single-host fallback)", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_KEY", label: "Evolution API Key (single-host fallback)", scope: "messaging", editable: true },
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token (optional)", scope: "messaging", editable: true },

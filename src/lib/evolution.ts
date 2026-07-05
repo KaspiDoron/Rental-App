@@ -153,18 +153,27 @@ export async function webhookToken(): Promise<string | null> {
 
 declare global {
   // eslint-disable-next-line no-var
-  var __wd_wa_health__: Map<string, { ok: boolean; exp: number }> | undefined;
+  var __wd_wa_health__: Map<string, { ok: boolean; detail: string; exp: number }> | undefined;
 }
 function healthStore() {
   if (!globalThis.__wd_wa_health__) globalThis.__wd_wa_health__ = new Map();
   return globalThis.__wd_wa_health__;
 }
 
-async function hostHealthy(h: Host): Promise<boolean> {
+/**
+ * Probe one host and explain the result. "ok" means reachable and not
+ * server-erroring (a 401 still means the box is ALIVE - just a wrong key), so
+ * the pool keeps using it. The human-readable detail powers the owner panel's
+ * "why is this host down" line and the per-host Test API output.
+ */
+async function hostHealthDetail(h: Host): Promise<{ ok: boolean; detail: string }> {
   const cache = healthStore();
   const hit = cache.get(h.url);
-  if (hit && hit.exp > Date.now()) return hit.ok;
+  if (hit && hit.exp > Date.now()) return { ok: hit.ok, detail: hit.detail };
+
   let ok = false;
+  let detail = "";
+  const started = Date.now();
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4500);
@@ -174,12 +183,28 @@ async function hostHealthy(h: Host): Promise<boolean> {
       cache: "no-store",
     });
     clearTimeout(timer);
-    ok = res.status < 500; // reachable and not erroring (401 still = alive)
-  } catch {
-    ok = false;
+    const ms = Date.now() - started;
+    if (res.status < 500) {
+      ok = true; // reachable and not erroring (401 still = alive)
+      detail =
+        res.status === 401 || res.status === 403
+          ? `Awake but rejecting the API key (HTTP ${res.status}) - check this host's AUTHENTICATION_API_KEY matches the key in EVOLUTION_HOSTS.`
+          : `Healthy (HTTP ${res.status}, ${ms}ms).`;
+    } else {
+      detail = `Server error HTTP ${res.status} - the container is up but Evolution is crashing (usually a bad DATABASE_CONNECTION_URI).`;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "unreachable";
+    detail = /abort/i.test(msg)
+      ? "No response within 4.5s - host is asleep or cold-starting. Keep-awake cron should wake it; the pool routes around it meanwhile."
+      : `Unreachable: ${msg}. Check the URL is correct and the service is deployed.`;
   }
-  cache.set(h.url, { ok, exp: Date.now() + 15_000 });
-  return ok;
+  cache.set(h.url, { ok, detail, exp: Date.now() + 15_000 });
+  return { ok, detail };
+}
+
+async function hostHealthy(h: Host): Promise<boolean> {
+  return (await hostHealthDetail(h)).ok;
 }
 
 function hostPref(email: string, url: string): number {
@@ -189,29 +214,102 @@ function hostPref(email: string, url: string): number {
   );
 }
 
-/** The Evolution host this user's session should live on right now. */
+/**
+ * How many paired users each host currently carries (for even load-balancing).
+ * Cached 10s so a burst of concurrent sends from hundreds of users does not fire
+ * one table scan per message - the count only needs to be approximately fresh.
+ */
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_wa_counts__: { data: Record<string, number>; exp: number } | undefined;
+}
+async function hostUserCounts(): Promise<Record<string, number>> {
+  const cache = globalThis.__wd_wa_counts__;
+  if (cache && cache.exp > Date.now()) return cache.data;
+  const rows = await sbSelect<{ host_url: string | null }>(
+    "wa_sessions",
+    "select=host_url&status=eq.open&limit=50000"
+  );
+  const counts: Record<string, number> = {};
+  for (const r of rows) if (r.host_url) counts[r.host_url] = (counts[r.host_url] ?? 0) + 1;
+  globalThis.__wd_wa_counts__ = { data: counts, exp: Date.now() + 10_000 };
+  return counts;
+}
+
+/** Nudge the cached count when we place/relocate a user, so back-to-back new
+ *  users in the same 10s window don't all pile onto the same "emptiest" host. */
+function bumpHostCount(url: string, by = 1) {
+  const cache = globalThis.__wd_wa_counts__;
+  if (cache && cache.exp > Date.now()) {
+    cache.data[url] = (cache.data[url] ?? 0) + by;
+  }
+}
+
+/** Soft cap of paired users per host (owner-adjustable). */
+async function maxPerHost(): Promise<number> {
+  const v = Number(await getConfig("EVOLUTION_MAX_PER_HOST"));
+  return Number.isFinite(v) && v > 0 ? v : 40;
+}
+
+/**
+ * The Evolution host this user's session should live on right now.
+ *
+ * Scales cleanly to many hosts: health is probed in PARALLEL, a paired user
+ * sticks to their (healthy) host, and brand-new users are placed on the
+ * LEAST-LOADED healthy host under the per-host cap - so load spreads evenly and
+ * no user is left without a home.
+ */
 async function resolveHost(email: string): Promise<Host | null> {
   const hosts = await getHosts();
   if (hosts.length === 0) return null;
   if (hosts.length === 1) return hosts[0];
 
-  // Stick to the stored host while it is healthy (keeps the session in place).
+  // Probe all hosts at once.
+  const health = await Promise.all(
+    hosts.map(async (h) => ({ h, ok: await hostHealthy(h) }))
+  );
+  const healthy = health.filter((x) => x.ok).map((x) => x.h);
+
+  // Keep the user on their existing host while it is healthy.
   const rows = await sbSelect<{ host_url: string | null }>(
     "wa_sessions",
     `select=host_url&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
   );
   const stored = rows[0]?.host_url;
   if (stored) {
-    const h = hosts.find((x) => x.url === stored);
-    if (h && (await hostHealthy(h))) return h;
+    const h = healthy.find((x) => x.url === stored);
+    if (h) return h;
   }
 
-  // Otherwise pick a healthy host, preferring a stable per-user assignment.
-  const order = [...hosts].sort((a, b) => hostPref(email, a.url) - hostPref(email, b.url));
-  for (const h of order) {
-    if (await hostHealthy(h)) return h;
-  }
-  return order[0] ?? null; // everything down - return the preferred anyway
+  // Place a new/relocating user on the least-loaded healthy host under the cap.
+  const counts = await hostUserCounts();
+  const cap = await maxPerHost();
+  const pickFrom = healthy.length ? healthy : hosts;
+  const underCap = pickFrom.filter((h) => (counts[h.url] ?? 0) < cap);
+  const pool = underCap.length ? underCap : pickFrom;
+  pool.sort(
+    (a, b) =>
+      (counts[a.url] ?? 0) - (counts[b.url] ?? 0) ||
+      hostPref(email, a.url) - hostPref(email, b.url)
+  );
+  const chosen = pool[0] ?? null;
+  // Reserve a slot immediately so concurrent new users spread out instead of
+  // stampeding onto the same emptiest host before the DB count catches up.
+  if (chosen && chosen.url !== stored) bumpHostCount(chosen.url);
+  return chosen;
+}
+
+/** Live health + load + reason of every configured host (for the owner panel). */
+export async function hostsStatus(): Promise<
+  { url: string; healthy: boolean; users: number; detail: string }[]
+> {
+  const [hosts, counts] = await Promise.all([getHosts(), hostUserCounts()]);
+  return Promise.all(
+    hosts.map(async (h) => {
+      const { ok, detail } = await hostHealthDetail(h);
+      return { url: h.url, healthy: ok, users: counts[h.url] ?? 0, detail };
+    })
+  );
 }
 
 async function evoFetch(
