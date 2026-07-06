@@ -28,6 +28,12 @@ services:
     dockerContext: ./deploy/evolution
     healthCheckPath: /
     envVars:
+      # Evolution listens on 8080; tell Render to route + health-check that port
+      # (otherwise Render probes its default 10000, sees nothing, and fails).
+      - key: PORT
+        value: "8080"
+      - key: SERVER_PORT
+        value: "8080"
       - key: AUTHENTICATION_API_KEY
         value: wd-pool-9x7k2mQ4pL8vT1nR
       - key: DATABASE_ENABLED
