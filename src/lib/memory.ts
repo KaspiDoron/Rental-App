@@ -136,6 +136,23 @@ export function listTraining(): TrainingExample[] {
   return [...trainingStore()].sort((a, b) => b.addedAt - a.addedAt);
 }
 
+/** Remove an in-memory example by id (durable rows are deleted in Supabase). */
+export function deleteTraining(id: number): boolean {
+  const s = trainingStore();
+  const i = s.findIndex((e) => e.id === id);
+  if (i === -1) return false;
+  s.splice(i, 1);
+  return true;
+}
+
+/** Edit an in-memory example's text (durable rows are patched in Supabase). */
+export function updateTraining(id: number, text: string): boolean {
+  const e = trainingStore().find((x) => x.id === id);
+  if (!e) return false;
+  e.text = text.slice(0, 4000);
+  return true;
+}
+
 export function analytics() {
   const s = store();
   const ranked = getTactics();

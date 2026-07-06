@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { addTraining, listTraining } from "@/lib/memory";
-import { sbInsert, sbSelect } from "@/lib/runtime-config";
+import { addTraining, listTraining, deleteTraining, updateTraining } from "@/lib/memory";
+import { sbInsert, sbSelect, sbDelete, sbUpdate } from "@/lib/runtime-config";
 import { chatVision } from "@/lib/ai";
 
 // Teach the bargaining agents from real WhatsApp bargains - pasted text AND
@@ -93,4 +93,30 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ ok: true, transcribed, examples: await allExamples() });
+}
+
+// Delete one learned example (owner full control over agent memory). ?id=<id>
+export async function DELETE(req: Request) {
+  const session = await requireManagement();
+  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const id = Number(new URL(req.url).searchParams.get("id"));
+  if (!Number.isFinite(id)) return NextResponse.json({ error: "Bad id" }, { status: 400 });
+  await sbDelete("agent_training", `id=eq.${id}`);
+  deleteTraining(id);
+  return NextResponse.json({ ok: true, examples: await allExamples() });
+}
+
+// Edit the text of one learned example. Body: { id, text }
+export async function PATCH(req: Request) {
+  const session = await requireManagement();
+  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const body = await req.json().catch(() => ({}));
+  const id = Number(body.id);
+  const text = String(body.text ?? "").trim();
+  if (!Number.isFinite(id) || text.length < 5) {
+    return NextResponse.json({ error: "Need an id and some text." }, { status: 400 });
+  }
+  await sbUpdate("agent_training", `id=eq.${id}`, { text: text.slice(0, 4000) });
+  updateTraining(id, text);
+  return NextResponse.json({ ok: true, examples: await allExamples() });
 }

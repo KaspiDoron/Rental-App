@@ -236,6 +236,50 @@ export async function sbInsertReturning<T = Record<string, unknown>>(
   }
 }
 
+/** Delete rows matching a PostgREST filter (e.g. `id=eq.42`). */
+export async function sbDelete(table: string, filter: string): Promise<boolean> {
+  const conn = supabase();
+  if (!conn) return false;
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+      method: "DELETE",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        Prefer: "return=minimal",
+      },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Patch rows matching a PostgREST filter with the given values. */
+export async function sbUpdate(
+  table: string,
+  filter: string,
+  values: Record<string, unknown>
+): Promise<boolean> {
+  const conn = supabase();
+  if (!conn) return false;
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+      method: "PATCH",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(values),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ---- encryption (AES-256-GCM, key derived from SESSION_SECRET) --------------
 
 function cryptoKey(): Buffer {

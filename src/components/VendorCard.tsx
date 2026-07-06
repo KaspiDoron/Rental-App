@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
-import { StageBadge, Pipeline } from "./Tracker";
+import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
@@ -212,6 +212,12 @@ export function VendorCard({
 
         <div className="mt-3">
           <Pipeline stage={vendor.stage ?? "queued"} />
+          {vendor.stage && vendor.stage !== "offer-received" && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
+              <span className="shrink-0">{stageCaption(vendor.stage).emoji}</span>
+              <span>{t(stageCaption(vendor.stage).text)}</span>
+            </div>
+          )}
         </div>
 
         {offer ? (

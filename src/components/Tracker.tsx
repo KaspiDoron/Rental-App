@@ -53,6 +53,34 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
   );
 }
 
+/**
+ * Plain-language, reassuring line describing what the AI agent is doing right
+ * now - so the user always knows what step we are on and feels in control while
+ * the agent does the work. English strings; translate at the call site with t().
+ */
+export function stageCaption(stage: TrackerStage): { emoji: string; text: string } {
+  switch (stage) {
+    case "queued":
+      return { emoji: "🕓", text: "Queued - your agent starts on this shop in a moment." };
+    case "locating-contact":
+      return { emoji: "🔎", text: "Your agent is finding this shop's WhatsApp number." };
+    case "rfq-sent":
+      return { emoji: "📨", text: "Your agent messaged the shop asking for the best price." };
+    case "awaiting-response":
+      return { emoji: "⏳", text: "Waiting for the shop to reply - your agent is watching for it." };
+    case "negotiating":
+      return { emoji: "🤝", text: "Your agent is haggling with the shop for a lower price." };
+    case "offer-received":
+      return { emoji: "✅", text: "Price is in - review the shop's offer below." };
+    case "no-response":
+      return { emoji: "💤", text: "No reply yet. Your agent will keep watching for one." };
+    case "declined":
+      return { emoji: "🚫", text: "This shop passed - other shops are still negotiating." };
+    default:
+      return { emoji: "🤖", text: "Your agent is on it." };
+  }
+}
+
 /** Horizontal pipeline showing progress through the negotiation flow. */
 export function Pipeline({ stage }: { stage: TrackerStage }) {
   const idx = ORDER.indexOf(stage);

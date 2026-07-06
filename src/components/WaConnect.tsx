@@ -31,7 +31,25 @@ export function WaConnect({
   const [copied, setCopied] = useState(false);
   const [method, setMethod] = useState<"code" | "qr">("code");
   const [showTerms, setShowTerms] = useState(false);
+  const [waitStep, setWaitStep] = useState(0);
   const poll = useRef<ReturnType<typeof setInterval>>();
+
+  // Plain-language, reassuring status shown while WhatsApp finishes linking, so
+  // the user understands WHY they are waiting instead of staring at a spinner.
+  const WAIT_STEPS = [
+    t("Waking up your assistant..."),
+    t("Creating your private, secure link..."),
+    t("Waiting for WhatsApp to confirm on your phone..."),
+    t("Almost there - saving your connection so you never redo this..."),
+  ];
+  const showingCode = pairingCode || qr;
+  useEffect(() => {
+    if (!showingCode) return;
+    setWaitStep(0);
+    const id = setInterval(() => setWaitStep((s) => (s + 1) % WAIT_STEPS.length), 4000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showingCode]);
 
   useEffect(() => {
     fetch("/api/wa/status")
@@ -123,8 +141,6 @@ export function WaConnect({
     );
   }
 
-  const showingCode = pairingCode || qr;
-
   return (
     <div>
       {!showingCode && (
@@ -160,12 +176,18 @@ export function WaConnect({
             </span>
           </label>
           {showTerms && <WaTermsModal onClose={() => setShowTerms(false)} />}
+          <div className="mb-2 flex items-start gap-2 rounded-2xl bg-brandblue-soft p-2.5 text-[11px] font-bold text-brandblue">
+            <span className="text-[14px]">⏱</span>
+            <span>
+              {t("This takes about 3 minutes. Keep this screen open - your assistant does all the setup, you just enter one code.")}
+            </span>
+          </div>
           <button
             onClick={connect}
             disabled={busy || !consent}
             className="btn btn-primary w-full rounded-2xl py-3 text-[14px] disabled:opacity-50"
           >
-            {busy ? <LoadingDots light label={t("Preparing your code")} /> : `💬 ${t("Connect my WhatsApp")}`}
+            {busy ? <LoadingDots light label={t("Getting your code ready")} /> : `💬 ${t("Connect my WhatsApp")}`}
           </button>
         </>
       )}
@@ -246,11 +268,20 @@ export function WaConnect({
               <p className="text-center text-[11px] font-bold text-faint">{t("QR not available - use the code method.")}</p>
             ))}
 
-          <div className="mt-2 flex items-center justify-between">
+          {/* Plain-language "what's happening now" so waiting feels purposeful */}
+          <div className="mt-2 rounded-xl bg-brandblue-soft p-2.5">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-brandblue">
+              <LoadingDots />
+              <span>{WAIT_STEPS[waitStep]}</span>
+            </div>
+            <p className="mt-1 text-[10px] font-bold text-brandblue/80">
+              {t("Usually about 3 minutes. You can keep the app open - it turns green by itself when done.")}
+            </p>
+          </div>
+          <div className="mt-2 flex items-center justify-end">
             <button onClick={connect} disabled={busy} className="btn btn-sm chip rounded-xl bg-card px-3 text-[11px] font-bold text-brandblue disabled:opacity-60">
               {busy ? <LoadingDots /> : `↻ ${t("Try again / new code")}`}
             </button>
-            <LoadingDots label={t("Waiting for the link")} />
           </div>
         </div>
       )}

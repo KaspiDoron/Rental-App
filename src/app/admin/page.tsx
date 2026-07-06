@@ -66,6 +66,60 @@ export default function AdminPage() {
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
   const [trainNumbers, setTrainNumbers] = useState("");
+  const [memory, setMemory] = useState<{ id: number; text: string; note?: string; addedAt: number }[]>([]);
+  const [memEditId, setMemEditId] = useState<number | null>(null);
+  const [memEditText, setMemEditText] = useState("");
+  const [memAdd, setMemAdd] = useState("");
+  const [memBusy, setMemBusy] = useState(false);
+
+  async function refreshMemory() {
+    const tr = await (await fetch("/api/admin/training")).json();
+    setMemory(tr.examples ?? []);
+    setTrainingCount((tr.examples ?? []).length);
+  }
+  async function addMemory() {
+    if (memAdd.trim().length < 20) {
+      setTrainMsg("Paste at least a few lines of a real bargain.");
+      return;
+    }
+    setMemBusy(true);
+    try {
+      const r = await (await fetch("/api/admin/training", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: memAdd.trim(), note: "manual" }),
+      })).json();
+      if (r.examples) {
+        setMemory(r.examples);
+        setTrainingCount(r.examples.length);
+        setMemAdd("");
+        setTrainMsg("Added to the agents' memory.");
+      } else setTrainMsg(r.error ?? "Could not add.");
+    } finally {
+      setMemBusy(false);
+    }
+  }
+  async function saveMemoryEdit(id: number) {
+    setMemBusy(true);
+    try {
+      const r = await (await fetch("/api/admin/training", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, text: memEditText }),
+      })).json();
+      if (r.examples) setMemory(r.examples);
+      setMemEditId(null);
+    } finally {
+      setMemBusy(false);
+    }
+  }
+  async function deleteMemory(id: number) {
+    const r = await (await fetch(`/api/admin/training?id=${id}`, { method: "DELETE" })).json();
+    if (r.examples) {
+      setMemory(r.examples);
+      setTrainingCount(r.examples.length);
+    }
+  }
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
@@ -149,6 +203,7 @@ export default function AdminPage() {
       setAiProviders(ai.providers ?? []);
       const tr = await (await fetch("/api/admin/training")).json();
       setTrainingCount((tr.examples ?? []).length);
+      setMemory(tr.examples ?? []);
       const fb = await (await fetch("/api/admin/feedback")).json();
       setFeedbackRows(fb.feedback ?? []);
       await refreshCosts();
@@ -266,8 +321,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setTrainMsg(data.note ?? "Done.");
-        const tr = await (await fetch("/api/admin/training")).json();
-        setTrainingCount((tr.examples ?? []).length);
+        await refreshMemory();
       } else {
         setTrainMsg(data.error ?? "Could not import.");
       }
@@ -381,6 +435,103 @@ export default function AdminPage() {
               Private: only the numbers you paste are opened. Leave it empty to let
               the AI scan recent 1:1 chats instead. Personal chats are never stored.
             </p>
+          </div>
+
+          {/* Agent memory: full control over everything the agents have learned */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">🧠 Agent memory</div>
+              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+                {memory.length} learned
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              Everything your agents remember and bargain from. You are in full
+              control - read, edit, or delete any memory, or add one by hand.
+            </p>
+
+            {/* Manual add */}
+            <textarea
+              rows={3}
+              value={memAdd}
+              onChange={(e) => setMemAdd(e.target.value)}
+              placeholder={"Add a bargain by hand, e.g.\nMe: What is your best price per day for the scooter?\nShop: 150k.\nMe: I will take it at 110k for 3 days.\nShop: Ok 120k, deal."}
+              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+            />
+            <button
+              onClick={addMemory}
+              disabled={memBusy}
+              className="btn btn-ghost btn-sm mb-3 w-full rounded-xl border-2 border-line text-[12px] font-extrabold text-brandblue disabled:opacity-60"
+            >
+              {memBusy ? <LoadingDots label="Saving" /> : "+ Add to memory"}
+            </button>
+
+            {/* List */}
+            {memory.length === 0 ? (
+              <p className="rounded-xl bg-card2 p-3 text-center text-[11px] font-bold text-faint">
+                No memories yet. Import from WhatsApp above, or add one by hand.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {memory.map((m) => (
+                  <div key={m.id} className="rounded-xl border-2 border-line p-2.5">
+                    {memEditId === m.id ? (
+                      <>
+                        <textarea
+                          rows={5}
+                          value={memEditText}
+                          onChange={(e) => setMemEditText(e.target.value)}
+                          className="w-full rounded-lg border-2 border-brandblue bg-card p-2 text-[12px] text-strong focus:outline-none"
+                        />
+                        <div className="mt-1.5 flex gap-2">
+                          <button
+                            onClick={() => saveMemoryEdit(m.id)}
+                            disabled={memBusy}
+                            className="btn btn-primary btn-sm flex-1 rounded-lg text-[11px]"
+                          >
+                            {memBusy ? <LoadingDots light /> : "Save"}
+                          </button>
+                          <button
+                            onClick={() => setMemEditId(null)}
+                            className="btn btn-ghost btn-sm flex-1 rounded-lg border-2 border-line text-[11px]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {m.note && (
+                          <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                            {m.note}
+                          </div>
+                        )}
+                        <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-soft">
+                          {m.text}
+                        </pre>
+                        <div className="mt-1.5 flex gap-2">
+                          <button
+                            onClick={() => {
+                              setMemEditId(m.id);
+                              setMemEditText(m.text);
+                            }}
+                            className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-3 text-[11px] font-extrabold text-brandblue"
+                          >
+                            ✎ Edit
+                          </button>
+                          <button
+                            onClick={() => deleteMemory(m.id)}
+                            className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-3 text-[11px] font-extrabold text-brandred"
+                          >
+                            🗑 Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           {/* Cost tracker: every request against the free quotas + est. cost */}
           {costs && (
