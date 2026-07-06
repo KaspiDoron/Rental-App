@@ -25,9 +25,11 @@ export async function runProfiler(
     "You are a procurement assistant for a vehicle-rental savings app. " +
     "Convert the traveller's raw request into a JSON RFQ. Respond with ONLY " +
     "JSON matching this TypeScript type: { vehicleClass: 'car'|'motorbike'|'scooter'," +
-    " engineSizeCc?: number, transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
+    " engineSizeCc?: number, seats?: number, carType?: 'economy'|'sedan'|'suv'|'van'|'luxury'|'any'," +
+    " transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
     " durationDays: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
-    " notes?: string, vendorMessage: string }. The vendorMessage must read like a " +
+    " notes?: string, vendorMessage: string }. For cars use seats/carType (not engineSizeCc); " +
+    "for scooters/motorbikes use engineSizeCc. The vendorMessage must read like a " +
     "natural, friendly first-person WhatsApp message from the traveller asking for " +
     "availability and the best daily price - authentic and human, plain text, no " +
     "markdown - ending with the short tag '(sent with my WheelDeal assistant)'.";
@@ -55,7 +57,9 @@ function normalizeRFQ(
     vehicleClass: (["car", "motorbike", "scooter"].includes(rfq.vehicleClass)
       ? rfq.vehicleClass
       : "car") as VehicleClass,
-    engineSizeCc: rfq.engineSizeCc,
+    engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc,
+    seats: rfq.vehicleClass === "car" ? rfq.seats : undefined,
+    carType: rfq.vehicleClass === "car" ? rfq.carType : undefined,
     transmission: (["automatic", "manual", "any"].includes(rfq.transmission)
       ? rfq.transmission
       : "any") as Transmission,
@@ -81,6 +85,20 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
   const ccMatch = t.match(/(\d{2,4})\s*cc/);
   const mileageMatch = t.match(/(\d[\d,\.]{2,})\s*(k|km|kms|kilomet)/);
   const daysMatch = t.match(/(\d+)\s*(day|days|night|nights|week)/);
+  // Car-specific: seats ("5 seats", "7-seater") and body type.
+  const seatsMatch = t.match(/(\d)\s*(?:-)?\s*seat/);
+  const seats = seatsMatch ? parseInt(seatsMatch[1], 10) : undefined;
+  const carType: StructuredRFQ["carType"] = /suv|4x4|jeep/.test(t)
+    ? "suv"
+    : /van|minivan|people mover/.test(t)
+    ? "van"
+    : /luxury|premium|bmw|mercedes|audi/.test(t)
+    ? "luxury"
+    : /sedan|saloon/.test(t)
+    ? "sedan"
+    : /economy|cheap|small|compact/.test(t)
+    ? "economy"
+    : "any";
 
   const accessories: string[] = [];
   if (/phone|mount|holder/.test(t)) accessories.push("phone mount");
@@ -97,7 +115,9 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
 
   const rfq: StructuredRFQ = {
     vehicleClass,
-    engineSizeCc: ccMatch ? parseInt(ccMatch[1], 10) : undefined,
+    engineSizeCc: vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : undefined,
+    seats: vehicleClass === "car" ? seats : undefined,
+    carType: vehicleClass === "car" ? carType : undefined,
     transmission: /manual|stick/.test(t)
       ? "manual"
       : /auto/.test(t)
@@ -133,9 +153,16 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   const parts: string[] = [];
   parts.push("Hi! I'm staying nearby and looking to rent");
   const spec: string[] = [`a ${vehicleTerm(rfq.vehicleClass)}`];
-  if (rfq.engineSizeCc) spec.push(`${rfq.engineSizeCc}cc`);
-  if (rfq.transmission !== "any") spec.push(rfq.transmission);
-  if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
+  if (rfq.vehicleClass === "car") {
+    // Cars: seats, body type and transmission matter (not engine cc).
+    if (rfq.carType && rfq.carType !== "any") spec.push(rfq.carType);
+    if (rfq.seats) spec.push(`${rfq.seats} seats`);
+    if (rfq.transmission !== "any") spec.push(rfq.transmission);
+  } else {
+    if (rfq.engineSizeCc) spec.push(`${rfq.engineSizeCc}cc`);
+    if (rfq.transmission !== "any") spec.push(rfq.transmission);
+    if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
+  }
   parts.push(`${spec.join(", ")} for ${rfq.durationDays} day(s).`);
   if (rfq.accessories.length)
     parts.push(`I'd also need: ${rfq.accessories.join(", ")}.`);

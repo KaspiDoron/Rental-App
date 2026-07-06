@@ -35,7 +35,8 @@ const MapView = dynamic(() => import("@/components/MapView"), {
 
 const EXAMPLES = [
   "125cc automatic scooter with a phone mount, under 20,000 km, for 3 days",
-  "Small automatic car, 5 days, GPS included, cheapest possible",
+  "Automatic SUV, 5 seats, 5 days, GPS + child seat, cheapest possible",
+  "Economy automatic car, 7 days, hotel delivery, best price",
   "Manual motorcycle with helmet and storage box, cheapest possible, 1 week",
 ];
 
@@ -403,14 +404,14 @@ export default function Home() {
       <div className="px-4">
         <section className="surface mt-4 rounded-blob p-4">
           <label className="text-[12px] font-extrabold text-soft">
-            {t("What do you want to ride?")}
+            {t("What do you want to rent?")}
           </label>
           <textarea
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
             rows={2}
             className="mt-1 w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            placeholder={t("e.g. 125cc automatic scooter with phone mount, 3 days")}
+            placeholder={t("e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount")}
           />
           <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
             {EXAMPLES.map((ex) => (
@@ -701,7 +702,7 @@ export default function Home() {
               <BrandMark size={72} />
             </div>
             <p className="mx-auto max-w-[280px] text-sm text-soft">
-              {t("Tell us what you want to ride and where you're staying - the agents will find every rental shop around you and bargain authentically for the best price.")}
+              {t("Tell us what you want to rent - car, scooter or motorbike - and where you're staying. The agents find every rental shop around you and bargain authentically for the best price.")}
             </p>
           </div>
         )}

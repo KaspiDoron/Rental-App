@@ -10,6 +10,9 @@ export interface StructuredRFQ {
   engineSizeCc?: number;
   transmission: Transmission;
   maxMileageKm?: number;
+  // Car-specific: number of seats and the body type the traveller wants.
+  seats?: number;
+  carType?: "economy" | "sedan" | "suv" | "van" | "luxury" | "any";
   durationDays: number;
   accessories: string[];
   fulfillment: Fulfillment;
