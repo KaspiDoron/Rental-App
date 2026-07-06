@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
-import { stageCaption } from "./Tracker";
+import { stageCaption, StageBadge } from "./Tracker";
 
 // Google-Maps-style map: Voyager cartography, price-bubble pins, and a
 // booking.com-style swipeable shop list along the bottom (in BOTH the compact
@@ -163,6 +163,11 @@ function ShopCard({
             {v.offer ? `$${v.offer.pricePerDay}/d` : ""}
           </span>
         </div>
+        {v.stage && v.stage !== "queued" && (
+          <div className="mt-1">
+            <StageBadge stage={v.stage} />
+          </div>
+        )}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-soft">
           <span className="inline-flex items-center gap-0.5">
             <Icon name="star" className="h-3 w-3 text-brandyellow" />

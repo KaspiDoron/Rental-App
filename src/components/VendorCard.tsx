@@ -51,6 +51,12 @@ export function VendorCard({
   const [rfqError, setRfqError] = useState<string | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
 
+  // Short, honest preview of a message we sent (first sentence, ~70 chars).
+  const summarizeMsg = (m: string): string => {
+    const first = m.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/)[0] ?? m;
+    return first.length > 70 ? `${first.slice(0, 67)}...` : first;
+  };
+
   const offer = vendor.offer;
   const savings =
     offer && rfq
@@ -217,6 +223,15 @@ export function VendorCard({
               <span className="shrink-0">{stageCaption(vendor.stage).emoji}</span>
               <span>{t(stageCaption(vendor.stage).text)}</span>
             </div>
+          )}
+          {/* Control: a short summary of what your agent actually said. */}
+          {rfq?.vendorMessage && vendor.stage && vendor.stage !== "queued" && (
+            <details className="mt-1.5 rounded-xl border-2 border-line p-2 text-[11px]">
+              <summary className="cursor-pointer font-extrabold text-brandblue">
+                💬 {t("What your agent said")}: &ldquo;{summarizeMsg(rfq.vendorMessage)}&rdquo;
+              </summary>
+              <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">{rfq.vendorMessage}</p>
+            </details>
           )}
         </div>
 

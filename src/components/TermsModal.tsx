@@ -80,8 +80,66 @@ export function TermsModal({ onClose }: { onClose: () => void }) {
           non-refundable except where required by law.
         </p>
         <p>
-          <b className="text-strong">9. Changes.</b> These terms may be updated
-          at any time; continued use means acceptance of the latest version.
+          <b className="text-strong">9. Assumption of risk, waiver &amp; release.</b>{" "}
+          You knowingly and voluntarily assume all risks of every kind arising
+          from your use of the app, any rental, any vehicle, and any interaction
+          with any business or third party found through it. To the maximum
+          extent permitted by law you fully and irrevocably RELEASE, WAIVE and
+          DISCHARGE WheelDeal, its owner, operators, founders, employees,
+          contractors, agents, affiliates, successors and assigns (the
+          &quot;Released Parties&quot;) from any and all claims, demands, causes
+          of action, damages, losses, liabilities, costs and expenses of any
+          kind, whether known or unknown, now existing or hereafter arising.
+        </p>
+        <p>
+          <b className="text-strong">10. Indemnification.</b> You agree to
+          indemnify, defend and hold harmless the Released Parties from and
+          against any claim, liability, damage, loss or expense (including
+          reasonable legal fees) arising out of or connected with your use of
+          the app, your messages, your rentals, your breach of these terms, or
+          your violation of any law or any third party&apos;s rights.
+        </p>
+        <p>
+          <b className="text-strong">11. Limitation of liability.</b> To the
+          maximum extent permitted by law, in no event will the Released
+          Parties&apos; total aggregate liability arising out of or relating to
+          the app exceed the greater of the amount you paid us in the prior
+          three months or ten US dollars, and in no event will they be liable
+          for any indirect, incidental, special, consequential, exemplary or
+          punitive damages.
+        </p>
+        <p>
+          <b className="text-strong">12. No professional advice; third
+          parties.</b> The app does not provide legal, insurance, safety,
+          financial or travel advice. Mapping, messaging, AI and payment
+          providers are independent third parties whose services and terms are
+          outside our control and for which we are not responsible.
+        </p>
+        <p>
+          <b className="text-strong">13. Binding arbitration; class-action
+          waiver.</b> Any dispute arising out of or relating to the app or these
+          terms shall be resolved exclusively by final and binding individual
+          arbitration, and NOT in a court or before a jury. You and WheelDeal
+          each waive any right to a jury trial and any right to bring or
+          participate in a class, collective or representative action. Nothing
+          prevents either party from seeking injunctive relief for intellectual
+          property misuse.
+        </p>
+        <p>
+          <b className="text-strong">14. Governing law; severability; entire
+          agreement; survival.</b> These terms are governed by the laws of the
+          owner&apos;s place of residence, without regard to conflict-of-law
+          rules. If any provision is held unenforceable, the remainder stays in
+          full force. These terms (with the WhatsApp Linking Terms where
+          applicable) are the entire agreement between you and WheelDeal, and the
+          releases, waivers, disclaimers, limitations, indemnities and
+          arbitration provisions survive termination indefinitely.
+        </p>
+        <p>
+          <b className="text-strong">15. Changes.</b> These terms may be updated
+          at any time; continued use means acceptance of the latest version. BY
+          CREATING AN ACCOUNT YOU CONFIRM YOU HAVE READ, UNDERSTOOD AND AGREED TO
+          ALL OF THE FOREGOING.
         </p>
       </div>
       <button onClick={onClose} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">
