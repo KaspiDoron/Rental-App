@@ -172,7 +172,6 @@ export function WaConnect({
               >
                 {t("WhatsApp Linking Terms, Waiver & Release of Liability")}
               </button>
-              {t(".")}
             </span>
           </label>
           {showTerms && <WaTermsModal onClose={() => setShowTerms(false)} />}

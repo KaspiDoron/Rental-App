@@ -175,8 +175,8 @@ function newPlaceToVendor(
     lng: p.location?.longitude ?? origin.lng,
   };
   const photoUrls: string[] = ((p.photos as any[]) ?? [])
-    .slice(0, 6)
     .filter((ph) => ph?.name)
+    .slice(0, 12) // Google returns up to ~10; show them all, not just 6.
     .map((ph) => `/api/photo?name=${encodeURIComponent(ph.name)}`);
   // Today's opening line from Google's weekday descriptions.
   const weekday: string[] = p.currentOpeningHours?.weekdayDescriptions ?? [];
@@ -247,9 +247,14 @@ export async function findRealVendors(
   );
   await recordApi("places_search");
   if (places) {
-    const out = {
-      vendors: places.map((p, i) => newPlaceToVendor(p, origin, vehicleClass, i)),
-    };
+    const mapped = places.map((p, i) => newPlaceToVendor(p, origin, vehicleClass, i));
+    // Never surface shops we cannot actually message: drop any without a usable
+    // phone number. (If that would empty the list, keep them so the map/list is
+    // not blank, but the card still gates "Ask for price" on a real number.)
+    const reachable = mapped.filter(
+      (v) => (v.whatsapp ?? "").replace(/[^\d]/g, "").length >= 7
+    );
+    const out = { vendors: reachable.length > 0 ? reachable : mapped };
     cacheSet(ck, out, 10 * 60_000);
     return out;
   }
