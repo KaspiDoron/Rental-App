@@ -11,7 +11,7 @@
 // normalised on read, so old databases keep working without a migration.
 
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
-import { sbInsert, sbSelect, supabaseConfigured } from "./runtime-config";
+import { sbInsert, sbSelect, sbDelete, supabaseConfigured } from "./runtime-config";
 
 export type PlanId = "free" | "pro" | "ultra";
 
@@ -224,6 +224,18 @@ export async function setPassword(
   rec.mustChangePassword = mustChange;
   const persisted = await mirror(rec);
   return supabaseConfigured() ? persisted : true;
+}
+
+/**
+ * Permanently erase a user (not a block): removes their account row from the
+ * durable store and the in-memory cache. The caller also severs the user's
+ * WhatsApp link so nothing about them remains.
+ */
+export async function deleteUser(email: string): Promise<boolean> {
+  const key = email.toLowerCase();
+  cache().delete(key);
+  cache().delete(email);
+  return sbDelete("app_users", `email=eq.${encodeURIComponent(key)}`);
 }
 
 export async function setPlan(email: string, plan: PlanId): Promise<void> {

@@ -15,7 +15,7 @@
 
 import "server-only";
 import { createHash } from "crypto";
-import { getConfig, sbInsert, sbSelect } from "./runtime-config";
+import { getConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
@@ -523,6 +523,14 @@ export async function connectInstance(
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
   const digits = (phone ?? "").replace(/[^\d]/g, "");
 
+  // Start every explicit link from a CLEAN slate. A leftover instance (from a
+  // previous attempt, common in the signup funnel) hands WhatsApp a stale
+  // pairing code, which WhatsApp rejects as "Incorrect code". Deleting first
+  // guarantees the code we show is the current, valid one.
+  await evoFetch(host, `/instance/logout/${instance}`, { method: "DELETE" });
+  await evoFetch(host, `/instance/delete/${instance}`, { method: "DELETE" });
+  await new Promise((r) => setTimeout(r, 600));
+
   // Pairing code needs the number PASSED AT CREATE time in Evolution v2 - the
   // create response then carries the pairing code directly.
   const createBody: Record<string, unknown> = {
@@ -712,12 +720,23 @@ export async function connectionState(email: string): Promise<string | null> {
   return state;
 }
 
+/**
+ * Fully sever our link to the user's WhatsApp. Logs out and DELETES the instance
+ * on EVERY host (so no server keeps a live socket) and on the shared database
+ * (so the Baileys credentials are gone), then removes our own wa_sessions record
+ * entirely - we retain nothing about their WhatsApp afterwards.
+ */
 export async function disconnectInstance(email: string): Promise<boolean> {
   const instance = instanceNameFor(email);
-  await evo(email, `/instance/logout/${instance}`, { method: "DELETE" });
-  const res = await evo(email, `/instance/delete/${instance}`, { method: "DELETE" });
-  await saveSession(email, instance, "disconnected");
-  return res.ok;
+  const hosts = await getHosts();
+  let ok = false;
+  for (const h of hosts) {
+    await evoFetch(h, `/instance/logout/${instance}`, { method: "DELETE" });
+    const res = await evoFetch(h, `/instance/delete/${instance}`, { method: "DELETE" });
+    ok = ok || res.ok;
+  }
+  await sbDelete("wa_sessions", `email=eq.${encodeURIComponent(email.toLowerCase())}`);
+  return ok;
 }
 
 /** Send a text from the user's own WhatsApp (rate-limited, human-like). */

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireManagement, setAdmin, adminEmails, isOwner } from "@/lib/session";
-import { listUsers, setUserStatus } from "@/lib/access";
+import { listUsers, setUserStatus, deleteUser } from "@/lib/access";
+import { disconnectInstance } from "@/lib/evolution";
+import { sbDelete } from "@/lib/runtime-config";
 
 async function payload() {
   const [admins, users] = await Promise.all([adminEmails(), listUsers()]);
@@ -25,6 +27,22 @@ export async function POST(req: Request) {
 
   const { email, action, status } = await req.json().catch(() => ({}));
   if (!email) return NextResponse.json({ error: "email required" }, { status: 400 });
+
+  if (action === "delete") {
+    // Permanently erase the user: sever their WhatsApp link, delete their
+    // account and their app data. The owner can never be erased.
+    if (isOwner(String(email))) {
+      return NextResponse.json({ error: "The owner cannot be erased." }, { status: 400 });
+    }
+    const target = String(email).toLowerCase();
+    await disconnectInstance(target); // logout + delete WhatsApp everywhere
+    // Purge the rows we key by their email so nothing about them remains.
+    for (const table of ["bookings", "searches", "feedback", "wa_sessions"]) {
+      await sbDelete(table, `email=eq.${encodeURIComponent(target)}`);
+    }
+    await deleteUser(target);
+    return NextResponse.json(await payload());
+  }
 
   if (action === "promote" || action === "demote") {
     // Only management may manage management; the owner can never be demoted.

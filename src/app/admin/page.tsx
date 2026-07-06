@@ -1130,6 +1130,20 @@ export default function AdminPage() {
                   >
                     {u.status === "active" ? "Block" : "Unblock"}
                   </button>
+                  <button
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Permanently erase ${u.email}? This deletes their account, data, and WhatsApp link. This cannot be undone.`
+                        )
+                      )
+                        userAction({ email: u.email, action: "delete" });
+                    }}
+                    className="btn btn-sm chip rounded-xl border-2 border-brandred/40 px-3 py-1.5 text-[12px] font-extrabold text-brandred"
+                    title="Permanently erase this user"
+                  >
+                    🗑 Erase
+                  </button>
                 </div>
               )}
             </div>
