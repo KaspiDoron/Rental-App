@@ -65,6 +65,7 @@ export default function AdminPage() {
   const [trainingCount, setTrainingCount] = useState(0);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
+  const [trainNumbers, setTrainNumbers] = useState("");
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
@@ -257,7 +258,11 @@ export default function AdminPage() {
     setTrainMsg(null);
     setTrainBusy(true);
     try {
-      const res = await fetch("/api/admin/training/import", { method: "POST" });
+      const res = await fetch("/api/admin/training/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ numbers: trainNumbers }),
+      });
       const data = await res.json();
       if (res.ok) {
         setTrainMsg(data.note ?? "Done.");
@@ -344,11 +349,18 @@ export default function AdminPage() {
               </span>
             </div>
             <p className="mb-2 text-[11px] text-faint">
-              Connect your WhatsApp (Profile), then tap below. WheelDeal reads your
-              real chats with rental shops, keeps only the genuine price
-              negotiations, and teaches the agents your exact style - zero typing.
-              ({trainingCount} example{trainingCount === 1 ? "" : "s"} learned)
+              Connect your WhatsApp (Profile), paste the rental shops&apos; numbers you
+              have haggled with, and tap Import. WheelDeal opens ONLY those chats,
+              cleans the negotiations, and teaches the agents your exact style - zero
+              typing. ({trainingCount} example{trainingCount === 1 ? "" : "s"} learned)
             </p>
+            <textarea
+              rows={3}
+              value={trainNumbers}
+              onChange={(e) => setTrainNumbers(e.target.value)}
+              placeholder={"Rental shop numbers, one per line:\n+62 812 3456 7890\n+66 98 765 4321"}
+              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 font-mono text-[12px] text-strong focus:border-brandblue focus:outline-none"
+            />
             {trainMsg && (
               <p className="mb-1 text-[12px] font-bold text-savings">{trainMsg}</p>
             )}
@@ -358,14 +370,16 @@ export default function AdminPage() {
               className="btn btn-primary w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
             >
               {trainBusy ? (
-                <LoadingDots light label="Reading your rental chats" />
+                <LoadingDots light label="Reading those shop chats" />
+              ) : trainNumbers.trim() ? (
+                "💬 Learn from these shop chats"
               ) : (
                 "💬 Import bargains from my WhatsApp"
               )}
             </button>
             <p className="mt-1.5 text-[10px] text-faint">
-              Private: only 1:1 chats are scanned for rental negotiations. Nothing
-              else is stored, and personal chats are ignored.
+              Private: only the numbers you paste are opened. Leave it empty to let
+              the AI scan recent 1:1 chats instead. Personal chats are never stored.
             </p>
           </div>
           {/* Cost tracker: every request against the free quotas + est. cost */}

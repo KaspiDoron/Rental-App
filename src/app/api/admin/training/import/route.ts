@@ -5,17 +5,75 @@ import { chat, extractJson } from "@/lib/ai";
 import { addTraining } from "@/lib/memory";
 import { sbInsert } from "@/lib/runtime-config";
 
-// Auto-teach the bargaining agents from the owner's OWN WhatsApp chats with
-// rental shops. Zero manual work: connect WhatsApp, tap Import, and the app
-// reads recent 1:1 chats, asks the AI which are vehicle-rental price
-// negotiations, and stores the good ones as training transcripts.
+// Teach the bargaining agents from the owner's OWN WhatsApp chats with rental
+// shops. The owner PASTES the shops' WhatsApp numbers (the places they have
+// really haggled with); the app reads ONLY those conversations, cleans them
+// with the AI, and stores them as training transcripts. Nothing else is read -
+// personal chats are never touched, because only the numbers you name are opened.
 //
-// Bounded so it never runs away: at most MAX_CHATS chats, MAX_MSGS messages
-// each, and only conversations with real back-and-forth.
+// If no numbers are given we fall back to scanning recent 1:1 chats and letting
+// the AI keep only the genuine rental negotiations (older behaviour, kept as a
+// convenience), but the number list is the intended, privacy-first path.
+const MAX_NUMBERS = 50;
 const MAX_CHATS = 25;
-const MAX_MSGS = 50;
+const MAX_MSGS = 60;
 
-export async function POST() {
+function toJid(raw: string): string | null {
+  const digits = raw.replace(/[^\d]/g, "");
+  if (digits.length < 7) return null; // not a real phone number
+  return `${digits}@s.whatsapp.net`;
+}
+
+async function learnFromTranscript(
+  transcript: string,
+  label: string,
+  email: string,
+  trustRental: boolean
+): Promise<boolean> {
+  // Ask the AI to clean (and, when scanning, classify) the transcript.
+  const out = await chat([
+    {
+      role: "system",
+      content:
+        "You review a WhatsApp chat transcript between a traveller and a vehicle " +
+        "rental shop (car/scooter/motorbike). Return ONLY JSON: " +
+        '{ "isRentalBargain": boolean, "cleanTranscript": string }. cleanTranscript ' +
+        "keeps only the negotiation lines (price, discount, availability, deposit), " +
+        "each prefixed 'Me:' or 'Shop:'. If it is clearly NOT a rental chat, set " +
+        "isRentalBargain false and cleanTranscript ''.",
+    },
+    { role: "user", content: transcript },
+  ]);
+
+  if (!out) {
+    // No AI provider: keep it if the owner named this number (trustRental) or it
+    // reads like a rental chat.
+    const looksRental =
+      /\b(rent|rental|scooter|motor|bike|car|per day|\/day|price|discount|deposit|helmet|cc)\b/i.test(
+        transcript
+      );
+    if (!trustRental && !looksRental) return false;
+    const ex = addTraining(transcript.slice(0, 3500), label);
+    await sbInsert("agent_training", [
+      { text: ex.text, note: ex.note ?? null, added_by: email, source: "whatsapp" },
+    ]);
+    return true;
+  }
+
+  const parsed = extractJson<{ isRentalBargain?: boolean; cleanTranscript?: string }>(out);
+  const clean = parsed?.cleanTranscript?.trim();
+  // For owner-named numbers we trust it is a rental shop even if the AI is unsure,
+  // as long as it produced a usable cleaned transcript.
+  const keep = clean && clean.length > 30 && (trustRental || parsed?.isRentalBargain);
+  if (!keep) return false;
+  const ex = addTraining(clean, label);
+  await sbInsert("agent_training", [
+    { text: ex.text, note: ex.note ?? null, added_by: email, source: "whatsapp" },
+  ]);
+  return true;
+}
+
+export async function POST(req: Request) {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -26,71 +84,70 @@ export async function POST() {
     );
   }
 
-  const chats = (await fetchChats(session.email)).slice(0, MAX_CHATS);
-  if (chats.length === 0) {
-    return NextResponse.json({ imported: 0, scanned: 0, note: "No individual chats found yet." });
-  }
+  const body = await req.json().catch(() => ({}));
+  const rawNumbers: string[] = Array.isArray(body?.numbers)
+    ? body.numbers
+    : typeof body?.numbers === "string"
+    ? String(body.numbers).split(/[\n,]+/)
+    : [];
+  const jids = rawNumbers
+    .map((n) => toJid(String(n)))
+    .filter((j): j is string => j !== null)
+    .slice(0, MAX_NUMBERS);
 
   let imported = 0;
   let scanned = 0;
   const samples: string[] = [];
 
+  if (jids.length > 0) {
+    // PRIVACY-FIRST PATH: read only the shop numbers the owner pasted.
+    for (const jid of jids) {
+      const msgs = await fetchMessages(session.email, jid, MAX_MSGS);
+      if (msgs.length < 2) continue; // no real conversation with this number
+      scanned += 1;
+      const transcript = msgs
+        .map((m) => `${m.fromMe ? "Me" : "Shop"}: ${m.text.replace(/\s+/g, " ").trim()}`)
+        .join("\n")
+        .slice(0, 3500);
+      const number = jid.replace("@s.whatsapp.net", "");
+      if (await learnFromTranscript(transcript, `WhatsApp: +${number}`, session.email, true)) {
+        imported += 1;
+        if (samples.length < 5) samples.push(`+${number}`);
+      }
+    }
+    return NextResponse.json({
+      imported,
+      scanned,
+      note:
+        imported > 0
+          ? `Learned from ${imported} shop chat${imported === 1 ? "" : "s"}${
+              samples.length ? ` (${samples.join(", ")})` : ""
+            }. The agents now bargain in your style.`
+          : "Opened those numbers but found no readable conversation to learn from. Make sure you have actually chatted with them on this WhatsApp.",
+    });
+  }
+
+  // FALLBACK: no numbers given - scan recent 1:1 chats and let the AI keep only
+  // genuine rental negotiations.
+  const chats = (await fetchChats(session.email)).slice(0, MAX_CHATS);
+  if (chats.length === 0) {
+    return NextResponse.json({ imported: 0, scanned: 0, note: "No individual chats found yet." });
+  }
   for (const c of chats) {
     const msgs = await fetchMessages(session.email, c.jid, MAX_MSGS);
-    // Need a real conversation with both sides.
     const mine = msgs.filter((m) => m.fromMe).length;
     const theirs = msgs.filter((m) => !m.fromMe).length;
     if (msgs.length < 4 || mine < 2 || theirs < 2) continue;
     scanned += 1;
-
     const transcript = msgs
       .map((m) => `${m.fromMe ? "Me" : "Shop"}: ${m.text.replace(/\s+/g, " ").trim()}`)
       .join("\n")
       .slice(0, 3500);
-
-    // Ask the AI to classify + clean it (skip if no AI provider).
-    const out = await chat([
-      {
-        role: "system",
-        content:
-          "You review a WhatsApp chat transcript. Decide if it is a real negotiation " +
-          "with a VEHICLE RENTAL shop about renting a car/scooter/motorbike (asking " +
-          "price, haggling, availability). Reply ONLY as JSON: " +
-          '{ "isRentalBargain": boolean, "cleanTranscript": string }. cleanTranscript ' +
-          "keeps only the relevant negotiation lines, each prefixed 'Me:' or 'Shop:'. " +
-          "If not a rental negotiation, set isRentalBargain false and cleanTranscript ''.",
-      },
-      { role: "user", content: transcript },
-    ]);
-
-    if (!out) {
-      // No AI available: fall back to a keyword heuristic so it still works.
-      const looksRental =
-        /\b(rent|rental|scooter|motor|bike|car|per day|\/day|price|discount|deposit|helmet|cc)\b/i.test(
-          transcript
-        );
-      if (looksRental) {
-        const ex = addTraining(transcript, `WhatsApp: ${c.name ?? c.jid}`);
-        await sbInsert("agent_training", [
-          { text: ex.text, note: ex.note ?? null, added_by: session.email, source: "whatsapp" },
-        ]);
-        imported += 1;
-        if (samples.length < 3) samples.push(c.name ?? "a shop");
-      }
-      continue;
-    }
-
-    const parsed = extractJson<{ isRentalBargain?: boolean; cleanTranscript?: string }>(out);
-    if (parsed?.isRentalBargain && parsed.cleanTranscript && parsed.cleanTranscript.length > 30) {
-      const ex = addTraining(parsed.cleanTranscript, `WhatsApp: ${c.name ?? c.jid}`);
-      await sbInsert("agent_training", [
-        { text: ex.text, note: ex.note ?? null, added_by: session.email, source: "whatsapp" },
-      ]);
+    if (await learnFromTranscript(transcript, `WhatsApp: ${c.name ?? c.jid}`, session.email, false)) {
       imported += 1;
       if (samples.length < 3) samples.push(c.name ?? "a shop");
     }
   }
-
   return NextResponse.json({
     imported,
     scanned,
@@ -98,7 +155,7 @@ export async function POST() {
       imported > 0
         ? `Learned from ${imported} real rental chat${imported === 1 ? "" : "s"}${
             samples.length ? ` (e.g. ${samples.join(", ")})` : ""
-          }. The agents now bargain in your style.`
-        : "Scanned your chats but found no clear rental negotiations to learn from yet.",
+          }. Tip: paste the shops' numbers above for exact, private control.`
+        : "Scanned your chats but found no clear rental negotiations. Try pasting the shops' numbers above.",
   });
 }
