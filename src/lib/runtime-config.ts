@@ -297,6 +297,15 @@ function encrypt(plain: string): string {
   )}`;
 }
 
+/** AES-256-GCM encrypt an arbitrary string (used for transient signup payloads). */
+export function encryptString(plain: string): string {
+  return encrypt(plain);
+}
+/** Decrypt a string produced by encryptString. Returns null on tamper/failure. */
+export function decryptString(blob: string): string | null {
+  return decrypt(blob);
+}
+
 function decrypt(blob: string): string | null {
   try {
     const [v, ivB, tagB, dataB] = blob.split(":");

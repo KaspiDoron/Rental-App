@@ -187,9 +187,15 @@ input, textarea, select, button {
 .leaflet-container {
   background: #e8ecef !important;
   font-family: var(--font-body);
-  z-index: 0; /* never above navigation bars */
+  /* The container makes its own stacking context, so it stays below the app's
+     navbars WITHOUT flattening the internal panes. Do NOT force .leaflet-pane to
+     z-index 0 - that collapses Leaflet's tile(200)/overlay(400)/marker(600)
+     stacking and makes the shop pins render under the tiles (invisible). */
+  z-index: 0;
+  isolation: isolate;
 }
-.leaflet-pane, .leaflet-top, .leaflet-bottom { z-index: 0 !important; }
+/* Keep only Leaflet's own control corners tame; leave the panes to Leaflet. */
+.leaflet-top, .leaflet-bottom { z-index: 400; }
 .leaflet-control-attribution {
   background: rgba(255, 255, 255, 0.75) !important;
   color: #6b7280 !important;

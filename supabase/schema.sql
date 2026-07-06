@@ -69,6 +69,19 @@ create table if not exists public.auth_events (
   created_at timestamptz not null default now()
 );
 
+-- ---- Email-ownership verification (pending signups) ----------------------------
+-- Holds a hashed 6-digit code + the encrypted pending signup until the user
+-- proves they control the email. Rows are deleted on success/expiry.
+create table if not exists public.email_verifications (
+  email       text primary key,
+  code_hash   text not null,
+  payload     text,
+  expires_at  timestamptz not null,
+  sent_at     timestamptz not null default now(),
+  created_at  timestamptz not null default now()
+);
+alter table public.email_verifications enable row level security;
+
 -- ---- AI provider usage log -----------------------------------------------------
 create table if not exists public.ai_usage (
   id         bigint generated always as identity primary key,

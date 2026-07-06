@@ -61,11 +61,25 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
+      // A user CANNOT create an account without proving they own the email:
+      // email them a 6-digit code and hold the signup until it is confirmed.
+      const { startEmailVerification } = await import("@/lib/verify");
+      const started = await startEmailVerification({
+        email,
+        phone: phone || undefined,
+        password,
+        acceptedTerms: true,
+      });
+      if (!started.ok) {
+        return NextResponse.json({ error: started.error }, { status: started.cooldown ? 429 : 400 });
+      }
+      return NextResponse.json({ needsVerification: true, email });
     }
+    // Owner bootstrap: no email round-trip needed.
     await registerUser({
       email,
       phone: phone || undefined,
-      password: password || (isOwner(email) ? OWNER_DEFAULT_PASSWORD : undefined),
+      password: password || OWNER_DEFAULT_PASSWORD,
       provider: "email",
       acceptedTerms: true,
     });

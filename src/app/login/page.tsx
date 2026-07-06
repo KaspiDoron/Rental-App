@@ -33,6 +33,8 @@ export default function LoginPage() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [verifyFor, setVerifyFor] = useState("");
+  const [code, setCode] = useState("");
   const [showTerms, setShowTerms] = useState(false);
   const [step, setStep] = useState<"auth" | "whatsapp" | "plans">("auth");
   const [plans, setPlans] = useState<PlanView[]>([]);
@@ -145,7 +147,39 @@ export default function LoginPage() {
         if (data.needsSignup) setMode("signup");
         return;
       }
+      // Email must be verified before the account is created.
+      if (data.needsVerification) {
+        setVerifyFor(data.email);
+        setCode("");
+        setStatus("idle");
+        setNotice(t("We emailed you a 6-digit code. Enter it below to finish."));
+        return;
+      }
       await afterAuth(data, mode === "signup");
+    } catch {
+      setStatus("error");
+      setError(t("Network error - please try again."));
+    }
+  }
+
+  async function verifyCode(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus("loading");
+    setError("");
+    try {
+      const res = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verifyFor, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus("error");
+        setError(data.error ?? t("Wrong code."));
+        return;
+      }
+      setVerifyFor("");
+      await afterAuth(data, true);
     } catch {
       setStatus("error");
       setError(t("Network error - please try again."));
@@ -352,6 +386,43 @@ export default function LoginPage() {
         ))}
       </div>
 
+      {verifyFor ? (
+        <form onSubmit={verifyCode} className="surface rounded-blob p-5">
+          <div className="mb-1 text-[15px] font-extrabold text-strong">{t("Check your email")}</div>
+          <p className="mb-3 text-[12px] text-soft">
+            {t("We sent a 6-digit code to")} <span className="font-bold text-strong">{verifyFor}</span>.{" "}
+            {t("Enter it to verify this is really your email and finish creating your account.")}
+          </p>
+          <input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/[^\d]/g, ""))}
+            placeholder="123456"
+            className="w-full rounded-2xl border-2 border-line bg-card p-3 text-center font-mono text-2xl font-extrabold tracking-[0.4em] text-strong focus:border-brandblue focus:outline-none"
+          />
+          {error && <p className="mt-2 text-[12px] font-bold text-brandred">{error}</p>}
+          <button
+            type="submit"
+            disabled={status === "loading" || code.length < 6}
+            className="btn btn-primary mt-3 w-full rounded-2xl py-3 text-[14px] disabled:opacity-50"
+          >
+            {status === "loading" ? <LoadingDots light /> : t("Verify & create my account")}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setVerifyFor("");
+              setError("");
+              setNotice("");
+            }}
+            className="mt-2 block w-full text-center text-[12px] font-bold text-brandblue underline"
+          >
+            {t("Use a different email")}
+          </button>
+        </form>
+      ) : (
       <form onSubmit={submit} className="surface rounded-blob p-5">
         {googleCredential ? (
           <div className="mb-3 flex items-center gap-2 rounded-2xl bg-brandblue-soft p-3 text-[13px] font-bold text-brandblue">
@@ -480,6 +551,7 @@ export default function LoginPage() {
           {t("Secure signed session. Your details are stored safely.")}
         </p>
       </form>
+      )}
 
       {/* TEMPORARY dev entries - removed before public launch */}
       <div className="mt-4">
