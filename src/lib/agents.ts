@@ -209,6 +209,39 @@ export async function runSafety(message: string): Promise<SafetyVerdict> {
 // language; natural fluent English elsewhere). Output is always plain text.
 // ---------------------------------------------------------------------------
 
+// Common rental-destination countries -> local currency, matched against the
+// geocoded region string so the agent bargains in the money the shop uses.
+const REGION_CURRENCY: [RegExp, string][] = [
+  [/thai|\bthailand\b/i, "THB"],
+  [/\bisrael\b/i, "ILS"],
+  [/\bindonesia|\bbali\b/i, "IDR"],
+  [/\bvietnam\b/i, "VND"],
+  [/\bindia\b/i, "INR"],
+  [/\bjapan\b/i, "JPY"],
+  [/\bphilippin/i, "PHP"],
+  [/\bmalaysia\b/i, "MYR"],
+  [/\bturkey|\btürkiye/i, "TRY"],
+  [/\bmexico\b/i, "MXN"],
+  [/\bunited kingdom|\bengland|\bscotland|\bwales/i, "GBP"],
+  [/\beuro|\bspain|\bitaly|\bfrance|\bgermany|\bportugal|\bgreece|\bnetherlands/i, "EUR"],
+  [/\bunited states|\busa\b|\bu\.s\./i, "USD"],
+];
+
+/** Best-guess local currency for a geocoded region string (undefined if unknown). */
+export function currencyForRegion(region?: string): string | undefined {
+  if (!region) return undefined;
+  for (const [re, cur] of REGION_CURRENCY) if (re.test(region)) return cur;
+  return undefined;
+}
+
+/** Format money in the LOCAL rental currency (never force dollars). */
+export function money(amount: number, currency?: string): string {
+  const c = (currency || "USD").toUpperCase();
+  if (c === "USD") return `$${Math.round(amount)}`;
+  const symbols: Record<string, string> = { EUR: "€", GBP: "£", THB: "฿", ILS: "₪", JPY: "¥", INR: "₹" };
+  return symbols[c] ? `${symbols[c]}${Math.round(amount)}` : `${Math.round(amount)} ${c}`;
+}
+
 export async function composeBargain(opts: {
   rfq: StructuredRFQ;
   vendor: Vendor;
@@ -216,9 +249,13 @@ export async function composeBargain(opts: {
   rivalPricePerDay?: number;
   region?: string;
   round: number;
+  // The LOCAL rental currency where the shop is (e.g. THB) - the agent must
+  // bargain in THIS currency, never convert to dollars.
+  currency?: string;
   // Ultra feature: bargain in the shop's LOCAL language, street-smart style.
   localLanguage?: boolean;
 }): Promise<{ message: string; tacticId: string; tacticLabel: string }> {
+  const cur = opts.currency || currencyForRegion(opts.region) || "USD";
   const tactics = getTactics();
   const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
 
@@ -246,6 +283,7 @@ export async function composeBargain(opts: {
     "money-smart, always identify context implicitly (we already introduced " +
     "ourselves). Never invent prices we were not given. " +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
+    `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
       ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
       : `Write in street-smart conversational English - the way real travellers haggle in chat: casual, warm, a little cheeky, contractions, no formal business tone. ` +
@@ -257,14 +295,14 @@ export async function composeBargain(opts: {
       : "");
 
   const user =
-    `Vehicle: ${spec}. ` +
+    `Vehicle: ${spec}. Currency: ${cur}. ` +
     (opts.currentPricePerDay
-      ? `They quoted $${opts.currentPricePerDay}/day. `
+      ? `They quoted ${money(opts.currentPricePerDay, cur)}/day. `
       : "No quote yet. ") +
     (opts.rivalPricePerDay
-      ? `A nearby shop offered $${opts.rivalPricePerDay}/day. `
+      ? `A nearby shop offered ${money(opts.rivalPricePerDay, cur)}/day. `
       : "") +
-    "Write the next message to push the price down.";
+    `Write the next message to push the price down. All amounts in ${cur}.`;
 
   const llm = await chat([
     { role: "system", content: system },
@@ -282,8 +320,8 @@ export async function composeBargain(opts: {
 
   // Deterministic fallback built from the learned tactic script.
   const filled = tactic.script
-    .replace("{target}", opts.currentPricePerDay ? `$${Math.max(1, Math.round(opts.currentPricePerDay * 0.85))}` : "a better rate")
-    .replace("{rival}", opts.rivalPricePerDay ? `$${opts.rivalPricePerDay}` : "a lower price")
+    .replace("{target}", opts.currentPricePerDay ? money(Math.max(1, opts.currentPricePerDay * 0.85), cur) : "a better rate")
+    .replace("{rival}", opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : "a lower price")
     .replace("{vehicle}", vehicleTerm(opts.rfq.vehicleClass))
     .replace("{days}", String(opts.rfq.durationDays));
   return { message: sanitizeAiText(filled), tacticId: tactic.id, tacticLabel: tactic.label };
