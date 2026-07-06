@@ -1,0 +1,58 @@
+# One-click WheelDeal WhatsApp backend on Render's free tier.
+#
+# Render reads this Blueprint, builds the Evolution API image from
+# deploy/evolution/Dockerfile, provisions a FREE Postgres database, and wires the
+# database connection string into Evolution automatically - so there is NO
+# database password to copy by hand (the #1 thing that broke the manual VM
+# attempts). After it deploys, copy the service URL and paste it into the app at
+# Owner -> Keys -> EVOLUTION_HOSTS as:  https://<service>.onrender.com|<API key>
+#
+# Honest free-tier limits: the web service sleeps after ~15 min idle (use the
+# keep-awake cron on /api/wa/ping to wake it), has 512 MB RAM (fine for an MVP /
+# a handful of live sessions), and the free Postgres expires after ~30 days
+# (recreate it, or upgrade the DB to the ~$7/mo plan when you launch for real).
+
+databases:
+  - name: wd-evo-db
+    plan: free
+    region: oregon
+    databaseName: evolution
+
+services:
+  - type: web
+    name: wd-evolution
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./deploy/evolution/Dockerfile
+    dockerContext: ./deploy/evolution
+    healthCheckPath: /
+    envVars:
+      - key: AUTHENTICATION_API_KEY
+        value: wd-pool-9x7k2mQ4pL8vT1nR
+      - key: DATABASE_ENABLED
+        value: "true"
+      - key: DATABASE_PROVIDER
+        value: postgresql
+      - key: DATABASE_CONNECTION_URI
+        fromDatabase:
+          name: wd-evo-db
+          property: connectionString
+      - key: DATABASE_SAVE_DATA_INSTANCE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_NEW_MESSAGE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_MESSAGE_UPDATE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_CONTACTS
+        value: "true"
+      - key: DATABASE_SAVE_DATA_CHATS
+        value: "true"
+      - key: CACHE_LOCAL_ENABLED
+        value: "true"
+      - key: CACHE_REDIS_ENABLED
+        value: "false"
+      - key: CONFIG_SESSION_PHONE_CLIENT
+        value: WheelDeal
+      - key: CONFIG_SESSION_PHONE_NAME
+        value: Chrome
