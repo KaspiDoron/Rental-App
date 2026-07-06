@@ -45,9 +45,28 @@ interface FeedbackRow {
 export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<"analytics" | "keys" | "users" | "feedback" | "billing">(
-    "analytics"
-  );
+  const [tab, setTab] = useState<
+    "analytics" | "keys" | "users" | "feedback" | "billing" | "data"
+  >("analytics");
+  const [dataTables, setDataTables] = useState<{ name: string; label: string; count: number }[]>([]);
+  const [dataTable, setDataTable] = useState<string | null>(null);
+  const [dataRows, setDataRows] = useState<Record<string, unknown>[]>([]);
+  const [dataBusy, setDataBusy] = useState(false);
+
+  async function loadDataTables() {
+    const r = await (await fetch("/api/admin/data")).json();
+    setDataTables(r.tables ?? []);
+  }
+  async function openDataTable(name: string) {
+    setDataTable(name);
+    setDataBusy(true);
+    try {
+      const r = await (await fetch(`/api/admin/data?table=${encodeURIComponent(name)}&limit=100`)).json();
+      setDataRows(r.rows ?? []);
+    } finally {
+      setDataBusy(false);
+    }
+  }
   const [analytics, setAnalytics] = useState<AnalyticsSnapshot | null>(null);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [users, setUsers] = useState<UserRecord[]>([]);
@@ -214,6 +233,7 @@ export default function AdminPage() {
   // Auto-probe the WhatsApp host pool the first time the owner opens Keys.
   useEffect(() => {
     if (tab === "keys" && waHosts === null && !waHostsBusy) loadWaHosts();
+    if (tab === "data" && dataTables.length === 0) loadDataTables();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -376,7 +396,7 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong mb-4 flex gap-1 rounded-2xl p-1">
-        {(["analytics", "keys", "users", "feedback", "billing"] as const).map((t) => (
+        {(["analytics", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1148,6 +1168,67 @@ export default function AdminPage() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {loaded && tab === "data" && (
+        <div className="space-y-3">
+          <div className="surface rounded-blob p-4">
+            <div className="text-[13px] font-extrabold text-strong">🗄 Data explorer</div>
+            <p className="mb-2 text-[11px] text-faint">
+              Every record the app stores. Read-only, newest first. Tap a table to view.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {dataTables.map((tbl) => (
+                <button
+                  key={tbl.name}
+                  onClick={() => openDataTable(tbl.name)}
+                  className={`btn btn-sm chip rounded-xl border-2 px-3 py-1.5 text-[11px] font-extrabold ${
+                    dataTable === tbl.name ? "border-brandblue bg-brandblue-soft text-brandblue" : "border-line text-soft"
+                  }`}
+                >
+                  {tbl.label} <span className="text-faint">({tbl.count})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {dataBusy && <SkeletonList count={3} />}
+
+          {!dataBusy && dataTable && (
+            <div className="surface rounded-blob p-4">
+              <div className="mb-2 text-[13px] font-extrabold text-strong">
+                {dataTables.find((t) => t.name === dataTable)?.label ?? dataTable}
+                <span className="ml-2 text-[11px] font-bold text-faint">{dataRows.length} rows</span>
+              </div>
+              {dataRows.length === 0 ? (
+                <p className="rounded-xl bg-card2 p-3 text-center text-[11px] font-bold text-faint">
+                  No records yet.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {dataRows.map((row, i) => (
+                    <details key={i} className="rounded-xl border-2 border-line p-2.5">
+                      <summary className="cursor-pointer truncate text-[11px] font-bold text-soft">
+                        {String(
+                          (row as any).email ??
+                            (row as any).vendor_name ??
+                            (row as any).type ??
+                            (row as any).event ??
+                            (row as any).text ??
+                            Object.values(row)[1] ??
+                            `row ${i + 1}`
+                        ).slice(0, 60)}
+                      </summary>
+                      <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-card2 p-2 text-[10px] leading-relaxed text-soft">
+                        {JSON.stringify(row, null, 2)}
+                      </pre>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
