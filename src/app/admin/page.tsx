@@ -49,8 +49,23 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<
-    "command" | "analytics" | "agents" | "keys" | "users" | "feedback" | "billing" | "data"
+    "command" | "analytics" | "agents" | "intel" | "keys" | "users" | "feedback" | "billing" | "data"
   >("command");
+  const [intel, setIntel] = useState<{
+    areas: {
+      area: string;
+      vehicles: {
+        vehicle: string; currency: string; samples: number; shops: number;
+        low: number; high: number; avg: number; typicalDays: number | null;
+        deliverRate: number; lastSeen: string;
+      }[];
+    }[];
+    totalOffers: number;
+  } | null>(null);
+  async function loadIntel() {
+    const r = await (await fetch("/api/admin/intelligence")).json();
+    if (r.areas) setIntel(r);
+  }
   // Command center + agent studio data
   const [command, setCommand] = useState<{
     alerts: { level: string; title: string; detail: string; href?: string }[];
@@ -320,6 +335,7 @@ export default function AdminPage() {
     if (tab === "data" && dataTables.length === 0) loadDataTables();
     if (tab === "command" && !command) loadCommand().catch(() => {});
     if (tab === "agents" && floors.length === 0 && !waSec) loadAgentStudio().catch(() => {});
+    if (tab === "intel" && !intel) loadIntel().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -482,7 +498,7 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
-        {(["command", "analytics", "agents", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
+        {(["command", "analytics", "agents", "intel", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -490,7 +506,7 @@ export default function AdminPage() {
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t}
+            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t === "intel" ? "📊 intel" : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -1228,6 +1244,72 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {loaded && tab === "intel" && (
+        <div className="space-y-3">
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">
+                📊 Shop-price intelligence
+              </div>
+              <button
+                onClick={loadIntel}
+                className="btn btn-sm chip rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue"
+              >
+                ↻ Refresh
+              </button>
+            </div>
+            <p className="text-[11px] text-faint">
+              Every REAL price shops have quoted us, by area and vehicle type - the
+              lowest, highest and average per day, typical rental length, how many
+              shops, and how often they offer delivery. Built automatically from the
+              funnel. {intel ? `${intel.totalOffers} offers analysed.` : ""}
+            </p>
+          </div>
+          {!intel ? (
+            <SkeletonList count={3} />
+          ) : intel.areas.length === 0 ? (
+            <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
+              No offers yet - once shops start quoting through the funnel, their real
+              prices are aggregated here by area and vehicle type.
+            </div>
+          ) : (
+            intel.areas.map((a) => (
+              <div key={a.area} className="surface rounded-blob p-3">
+                <div className="mb-1.5 text-[12px] font-extrabold text-strong">📍 {a.area}</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="text-left text-[9px] uppercase text-faint">
+                      <tr>
+                        <th className="p-1">Vehicle</th>
+                        <th className="p-1">Low</th>
+                        <th className="p-1">Avg</th>
+                        <th className="p-1">High</th>
+                        <th className="p-1">Days</th>
+                        <th className="p-1">Shops</th>
+                        <th className="p-1">Deliv.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {a.vehicles.map((v) => (
+                        <tr key={v.vehicle} className="border-t border-line text-soft">
+                          <td className="p-1 font-bold">{v.vehicle}</td>
+                          <td className="p-1 text-savings">{v.low} {v.currency}</td>
+                          <td className="p-1">{v.avg}</td>
+                          <td className="p-1 text-brandred">{v.high}</td>
+                          <td className="p-1">{v.typicalDays ?? "-"}</td>
+                          <td className="p-1">{v.shops} <span className="text-faint">({v.samples})</span></td>
+                          <td className="p-1">{v.deliverRate}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
           )}
         </div>
       )}

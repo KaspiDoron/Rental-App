@@ -169,6 +169,14 @@ export async function processVendorReply(opts: {
   const cur =
     extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
   if (usablePrice) {
+    // Tag the offer with area + vehicle bucket + a delivery signal, so the
+    // owner's shop-intelligence warehouse can aggregate real market data.
+    const { vehicleKeyFor, regionKeysFor } = await import("./market");
+    const regionKey = regionKeysFor(ctx.region || undefined)[0] ?? null;
+    const vehicleKey = vehicleKeyFor(rfq);
+    const delivers = /\b(deliver|drop off|bring it|to your hotel|free delivery)\b/i.test(text)
+      ? true
+      : null;
     await sbInsert("offers", [
       {
         user_email: ctx.sender ?? null,
@@ -180,6 +188,10 @@ export async function processVendorReply(opts: {
         round,
         simulated: false,
         verified,
+        region_key: regionKey,
+        vehicle_key: vehicleKey,
+        duration_days: rfq.durationDays ?? null,
+        delivers,
       },
     ]);
   }

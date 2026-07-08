@@ -427,3 +427,12 @@ alter table public.user_cooldowns enable row level security;
 alter table public.feedback add column if not exists status     text default 'open';
 alter table public.feedback add column if not exists owner_note text;
 alter table public.feedback add column if not exists resolved_at timestamptz;
+
+-- ---- Shop intelligence (New#18): tag offers with area + vehicle bucket ---------
+-- So we can aggregate real market data by area and vehicle type (lowest /
+-- highest / typical price, rental duration, delivery signal) for the owner.
+alter table public.offers add column if not exists region_key   text;
+alter table public.offers add column if not exists vehicle_key  text;
+alter table public.offers add column if not exists duration_days int;
+alter table public.offers add column if not exists delivers      boolean;
+create index if not exists offers_intel_idx on public.offers (region_key, vehicle_key);
