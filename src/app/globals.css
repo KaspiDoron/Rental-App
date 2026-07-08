@@ -287,12 +287,18 @@ input, textarea, select, button {
   animation: cta-sheen 3.2s ease-in-out infinite;
 }
 
-/* Map pin drop + selected pulse */
+/* Map pin drop + selected pulse.
+   CRITICAL: never animate transform on .wd-pin itself - Leaflet positions
+   every marker with an inline transform:translate3d(...) on that element, and
+   an animation with a forwards fill overrides it, collapsing ALL pins onto
+   the map origin (the "every shop at the same point" bug). Animate the inner
+   wrapper instead, with a backwards-only fill so the inline styles win after
+   the drop finishes. */
 @keyframes pin-drop {
-  0% { opacity: 0; transform: translateY(-14px) scale(0.8); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; margin-top: -14px; }
+  100% { opacity: 1; margin-top: 0; }
 }
-.wd-pin { animation: pin-drop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.wd-pin > div { animation: pin-drop 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
 @keyframes ping-ring {
   0% { transform: scale(0.6); opacity: 0.6; }
   80%, 100% { transform: scale(2.4); opacity: 0; }
