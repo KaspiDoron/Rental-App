@@ -734,54 +734,85 @@ export default function AdminPage() {
               </button>
             </div>
             {floorMsg && <p className="mb-2 text-[11px] font-bold text-savings">{floorMsg}</p>}
+            <div className="mb-2 rounded-xl bg-card2 p-2 text-[10px] leading-relaxed text-faint">
+              🤖 <b>Autonomous:</b> a new area is researched and saved the first
+              time a user searches there (or when you research it above), then
+              refreshed weekly. We store ONE row per area + vehicle bucket - never
+              per town - so the database stays small. Prices are always in the
+              area&apos;s <b>local currency</b>. 👑 = your manual edit (survives AI
+              refreshes), 🤖 = AI estimate.
+            </div>
             {floors.length === 0 ? (
               <p className="rounded-xl bg-card2 p-3 text-center text-[11px] font-bold text-faint">
                 No areas researched yet - it happens automatically on the first search
                 in an area, or run one above.
               </p>
             ) : (
-              <div className="max-h-72 overflow-y-auto rounded-xl border-2 border-line">
-                <table className="w-full text-[11px]">
-                  <thead className="sticky top-0 bg-card2 text-left text-[10px] uppercase text-faint">
-                    <tr>
-                      <th className="p-1.5">Area</th>
-                      <th className="p-1.5">Vehicle</th>
-                      <th className="p-1.5">Floor/day</th>
-                      <th className="p-1.5">Typical</th>
-                      <th className="p-1.5">Src</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {floors.map((f) => (
-                      <tr key={f.id} className="border-t border-line text-soft">
-                        <td className="p-1.5">{f.region_key}</td>
-                        <td className="p-1.5 font-bold">{f.vehicle_key}</td>
-                        <td className="p-1.5">
-                          <input
-                            defaultValue={f.floor_per_day}
-                            onBlur={async (e) => {
-                              const v = Number(e.target.value);
-                              if (v > 0 && v !== f.floor_per_day) {
-                                await fetch("/api/admin/market", {
-                                  method: "PATCH",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ id: f.id, floor: v }),
-                                });
-                                const m = await (await fetch("/api/admin/market")).json();
-                                if (m.rows) setFloors(m.rows);
-                              }
-                            }}
-                            className="w-16 rounded border border-line bg-card p-1 text-strong"
-                          />{" "}
-                          {f.currency}
-                        </td>
-                        <td className="p-1.5">{f.typical_per_day ?? "-"}</td>
-                        <td className="p-1.5">{f.source === "owner" ? "👑" : "🤖"}</td>
-                      </tr>
+              (() => {
+                // 2-D matrix: one block per AREA, rows = vehicle bucket,
+                // columns = floor / typical, in that area's local currency.
+                const byArea = new Map<string, typeof floors>();
+                for (const f of floors) {
+                  if (!byArea.has(f.region_key)) byArea.set(f.region_key, []);
+                  byArea.get(f.region_key)!.push(f);
+                }
+                const VLABEL: Record<string, string> = {
+                  "scooter-110": "Scooter 110cc", "scooter-125": "Scooter 125cc", "scooter-160": "Scooter 160cc",
+                  "motorbike-150": "Bike 150cc", "motorbike-300": "Bike 300cc", "motorbike-500": "Bike 500cc", "motorbike-big": "Bike 650cc+",
+                  "car-economy": "Car economy", "car-sedan": "Car sedan", "car-suv": "Car SUV", "car-van": "Car van", "car-luxury": "Car luxury",
+                };
+                return (
+                  <div className="space-y-3">
+                    {[...byArea.entries()].map(([area, rows]) => (
+                      <div key={area} className="rounded-xl border-2 border-line">
+                        <div className="flex items-center justify-between bg-card2 px-2 py-1.5">
+                          <span className="text-[11px] font-extrabold text-strong">📍 {area}</span>
+                          <span className="text-[10px] font-bold text-faint">
+                            {rows[0]?.currency} · {rows.length} vehicles
+                          </span>
+                        </div>
+                        <table className="w-full text-[11px]">
+                          <thead className="text-left text-[9px] uppercase text-faint">
+                            <tr>
+                              <th className="p-1.5">Vehicle</th>
+                              <th className="p-1.5">Floor/day</th>
+                              <th className="p-1.5">Typical</th>
+                              <th className="p-1.5">Src</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((f) => (
+                              <tr key={f.id} className="border-t border-line text-soft">
+                                <td className="p-1.5 font-bold">{VLABEL[f.vehicle_key] ?? f.vehicle_key}</td>
+                                <td className="p-1.5">
+                                  <input
+                                    defaultValue={f.floor_per_day}
+                                    onBlur={async (e) => {
+                                      const v = Number(e.target.value);
+                                      if (v > 0 && v !== f.floor_per_day) {
+                                        await fetch("/api/admin/market", {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ id: f.id, floor: v }),
+                                        });
+                                        const m = await (await fetch("/api/admin/market")).json();
+                                        if (m.rows) setFloors(m.rows);
+                                      }
+                                    }}
+                                    className="w-14 rounded border border-line bg-card p-1 text-strong"
+                                  />
+                                </td>
+                                <td className="p-1.5">{f.typical_per_day ?? "-"}</td>
+                                <td className="p-1.5">{f.source === "owner" ? "👑" : "🤖"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                );
+              })()
             )}
           </div>
 
