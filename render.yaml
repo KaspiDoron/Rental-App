@@ -62,3 +62,40 @@ services:
         value: WheelDeal
       - key: CONFIG_SESSION_PHONE_NAME
         value: Chrome
+      # ---- Throughput / load tuning (New#9: handle many concurrent sessions) --
+      # Quieter logs = less CPU/IO under load.
+      - key: LOG_LEVEL
+        value: "ERROR"
+      - key: LOG_BAILEYS
+        value: "error"
+      # We consume events via HTTP webhooks, not the socket API - turning the
+      # websocket server off frees memory per connection.
+      - key: WEBSOCKET_ENABLED
+        value: "false"
+      # Don't sync the full contact book (heavy); chats + messages are enough
+      # for the funnel and for teaching from named numbers.
+      - key: DATABASE_SAVE_DATA_CONTACTS
+        value: "false"
+      # Many instances on one process => raise the emitter ceiling so Node does
+      # not warn/leak under a few hundred live sessions.
+      - key: EVENT_EMITTER_MAX_LISTENERS
+        value: "500"
+      # Reuse one Baileys store cache across instances.
+      - key: CACHE_LOCAL_ENABLED
+        value: "true"
+
+# ---------------------------------------------------------------------------
+# SCALING TO HUNDREDS OF CONCURRENT SESSIONS
+# ---------------------------------------------------------------------------
+# The app already spreads users across a POOL of Evolution hosts (Owner ->
+# Keys -> EVOLUTION_HOSTS, one url|key per line) and fails over automatically,
+# so horizontal scale = add more hosts. To go big on ONE deployment:
+#   1. Bump this service `plan: free` -> `standard` (2 GB+ RAM) - a 512 MB free
+#      instance comfortably holds ~30-50 live WhatsApp sockets; a 2 GB standard
+#      instance holds a few hundred.
+#   2. Add a shared Redis so multiple instances coordinate (set
+#      CACHE_REDIS_ENABLED=true, CACHE_REDIS_URI=<render key-value url>), then
+#      raise `numInstances` for the web service.
+#   3. Upgrade the free Postgres (expires ~30 days) to the paid DB plan.
+# Do NOT try to push more raw throughput than the anti-ban engine allows - the
+# per-number caps are the real limit that keeps every user's number safe.
