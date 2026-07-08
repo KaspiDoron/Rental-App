@@ -55,21 +55,21 @@ export const PLANS: Plan[] = [
     [
       "100% ad-free experience",
       "Priority negotiation agents",
-      "Saved trips",
-      "Full order history",
-      "AI order-status assistant while searching",
+      "Mass bargain: ask many shops at once",
       "Schedule pickups for future days",
+      "Saved trips & full order history",
+      "AI order-status assistant while searching",
     ],
     true
   ),
   plan("ultra", "Ultra", "The ultimate bargaining machine", 14700, [
     "Everything in Pro",
     "Agents bargain in the shop's LOCAL language - real street talk",
-    "Locals-only pricing: agents push for the rate locals pay",
-    "Auto re-bargain: agents keep pushing extra rounds by themselves",
+    "Locals-only pricing: agents anchor to the real local market floor",
+    "See the English translation of every local-language message",
+    "Fast-responder insights: which shops reply quickest",
     "Unlimited daily searches & AI actions (fair use)",
     "Instant alerts when a cheaper verified offer lands",
-    "Multi-city trip planning + expense-ready receipts",
     "VIP support & early access to new agents",
   ]),
 ];
