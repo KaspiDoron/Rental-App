@@ -85,20 +85,27 @@ export default function AdminPage() {
   const [spName, setSpName] = useState("");
   const [spPhone, setSpPhone] = useState("");
   const [spNotes, setSpNotes] = useState("");
+  const [prompts, setPrompts] = useState<
+    { id: string; label: string; agent: string; def: string; override: string | null }[]
+  >([]);
+  const [promptDraft, setPromptDraft] = useState<Record<string, string>>({});
+  const [promptSaved, setPromptSaved] = useState<string | null>(null);
 
   async function loadCommand() {
     const r = await (await fetch("/api/admin/command")).json();
     if (r.alerts) setCommand(r);
   }
   async function loadAgentStudio() {
-    const [m, s, sp] = await Promise.all([
+    const [m, s, sp, pr] = await Promise.all([
       (await fetch("/api/admin/market")).json(),
       (await fetch("/api/admin/wa-security")).json(),
       (await fetch("/api/admin/sponsored")).json(),
+      (await fetch("/api/admin/prompts")).json(),
     ]);
     if (m.rows) setFloors(m.rows);
     if (s.policies) setWaSec(s);
     if (sp.rows) setSponsors(sp.rows);
+    if (pr.prompts) setPrompts(pr.prompts);
   }
   const [dataTables, setDataTables] = useState<{ name: string; label: string; count: number }[]>([]);
   const [dataTable, setDataTable] = useState<string | null>(null);
@@ -1059,6 +1066,80 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+
+          {/* Core prompts: view/edit every agent's brain (never removable) */}
+          {isOwner && (
+            <div className="surface rounded-blob p-4">
+              <div className="mb-1 text-[13px] font-extrabold text-strong">
+                🧬 Agent core prompts
+              </div>
+              <p className="mb-2 text-[11px] text-faint">
+                The exact instructions each agent runs on. Edit any of them - changes
+                apply live. You can never delete a prompt: clearing the box restores
+                the built-in default.
+              </p>
+              <div className="space-y-2">
+                {prompts.map((p) => {
+                  const val = promptDraft[p.id] ?? p.override ?? p.def;
+                  const overridden = Boolean(p.override);
+                  return (
+                    <details key={p.id} className="rounded-xl border-2 border-line p-2">
+                      <summary className="cursor-pointer text-[12px] font-extrabold text-strong">
+                        {p.label}{" "}
+                        {overridden && (
+                          <span className="rounded-full bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
+                            edited
+                          </span>
+                        )}
+                      </summary>
+                      <textarea
+                        rows={5}
+                        value={val}
+                        onChange={(e) =>
+                          setPromptDraft((d) => ({ ...d, [p.id]: e.target.value }))
+                        }
+                        className="mt-2 w-full rounded-lg border-2 border-line bg-card p-2 font-mono text-[11px] leading-relaxed text-strong focus:border-brandblue focus:outline-none"
+                      />
+                      <div className="mt-1.5 flex gap-2">
+                        <button
+                          onClick={async () => {
+                            const r = await (
+                              await fetch("/api/admin/prompts", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ id: p.id, text: val }),
+                              })
+                            ).json();
+                            if (r.prompts) setPrompts(r.prompts);
+                            setPromptSaved(p.id);
+                            setTimeout(() => setPromptSaved(null), 1500);
+                          }}
+                          className="btn btn-primary btn-sm flex-1 rounded-lg text-[11px]"
+                        >
+                          {promptSaved === p.id ? "Saved" : "Save prompt"}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await fetch("/api/admin/prompts", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ id: p.id, text: "" }),
+                            });
+                            setPromptDraft((d) => ({ ...d, [p.id]: p.def }));
+                            const r = await (await fetch("/api/admin/prompts")).json();
+                            if (r.prompts) setPrompts(r.prompts);
+                          }}
+                          className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-3 text-[11px] font-extrabold text-brandred"
+                        >
+                          Reset to default
+                        </button>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

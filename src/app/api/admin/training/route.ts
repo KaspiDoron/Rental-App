@@ -63,11 +63,9 @@ export async function POST(req: Request) {
   if (text.length >= 20) pieces.push({ text, source: "text" });
 
   if (images.length > 0) {
+    const { getPrompt } = await import("@/lib/prompts");
     const out = await chatVision(
-      "You transcribe WhatsApp bargaining screenshots into plain-text dialogue. " +
-        "Output ONLY the conversation, one line per message, prefixed 'Me:' for the " +
-        "right-side (sent) bubbles and 'Shop:' for the left-side (received) bubbles, " +
-        "in order. No commentary, no markdown.",
+      await getPrompt("transcribe"),
       "Transcribe this bargaining conversation exactly.",
       images
     );

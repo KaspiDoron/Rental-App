@@ -21,19 +21,8 @@ export async function runProfiler(
   input: string,
   durationDaysHint?: number
 ): Promise<StructuredRFQ> {
-  const system =
-    "You are a procurement assistant for a vehicle-rental savings app. " +
-    "Convert the traveller's raw request into a JSON RFQ. Respond with ONLY " +
-    "JSON matching this TypeScript type: { vehicleClass: 'car'|'motorbike'|'scooter'," +
-    " engineSizeCc?: number, seats?: number, carType?: 'economy'|'sedan'|'suv'|'van'|'luxury'|'any'," +
-    " transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
-    " durationDays: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
-    " notes?: string, vendorMessage: string }. For cars use seats/carType (not engineSizeCc); " +
-    "for scooters/motorbikes use engineSizeCc. The vendorMessage must read like a " +
-    "natural, friendly first-person WhatsApp message from the traveller asking for " +
-    "availability and the best daily price - authentic and human, plain text, no " +
-    "markdown. Write as a REAL human traveller messaging a shop - never mention " +
-    "an app, assistant, bot or automation of any kind.";
+  const { getPrompt } = await import("./prompts");
+  const system = await getPrompt("profiler");
 
   const llm = await chat([
     { role: "system", content: system },
@@ -207,11 +196,8 @@ export async function runSafety(message: string): Promise<SafetyVerdict> {
     }
   }
 
-  const system =
-    "You are a communication safety filter for messages a traveller sends to " +
-    "rental vendors. Block anything harmful, harassing, discriminatory, " +
-    "reputation-damaging, or that shares private data. Reply ONLY as JSON: " +
-    '{ "allowed": boolean, "reason"?: string, "suggestion"?: string }.';
+  const { getPrompt } = await import("./prompts");
+  const system = await getPrompt("safety");
 
   const llm = await chat([
     { role: "system", content: system },
@@ -350,6 +336,11 @@ export async function composeBargain(opts: {
       ? "Learn tone and moves from these REAL past bargains by the owner:\n" + training
       : "");
 
+  // Owner-editable house rules for the bargaining agent (never removable).
+  const { getPrompt } = await import("./prompts");
+  const directives = await getPrompt("bargain_directives");
+  const systemWithDirectives = directives ? `${system}\nHOUSE RULES: ${directives}` : system;
+
   const user =
     `Vehicle: ${spec}. Currency: ${cur}. ` +
     (quoted ? `They quoted ${money(quoted, cur)}/day. ` : "No quote yet. ") +
@@ -364,9 +355,9 @@ export async function composeBargain(opts: {
   // a short plain-English gloss (as JSON) so the traveller can read what their
   // agent is saying on their behalf.
   const localSystem = opts.localLanguage
-    ? system +
+    ? systemWithDirectives +
       ' Reply ONLY as JSON: { "message": "<the local-language message>", "english": "<a short plain-English translation of it>" }.'
-    : system;
+    : systemWithDirectives;
 
   const llm = await chat([
     { role: "system", content: localSystem },
@@ -556,12 +547,8 @@ export async function triageFeedback(
   const tooShort = trimmed.length < 12;
   const noise = NOISE.some((rx) => rx.test(trimmed));
 
-  const system =
-    "You triage product feedback for a rental app. Decide if a submission is a " +
-    "GENUINE bug or usability flaw worth a developer's time, versus spam, praise, " +
-    "gibberish, or vague noise. Reply ONLY as JSON: " +
-    '{ "isRealIssue": boolean, "severity": "low"|"medium"|"high", ' +
-    '"summary": string, "reason": string }. summary is a one-line issue title.';
+  const { getPrompt } = await import("./prompts");
+  const system = await getPrompt("triage");
 
   const llm = await chat([
     { role: "system", content: system },
@@ -603,11 +590,8 @@ export async function writeFeedback(
   category: string,
   notes: string
 ): Promise<string> {
-  const system =
-    "You clean up a short product feedback/bug note. Output EXACTLY 2 to 3 " +
-    "sentences. Each sentence MUST be 8 words or fewer. Fix spelling and grammar, " +
-    "keep the user's exact meaning, never invent facts or steps they did not " +
-    "write. No greetings, no headings, no sign-off, plain text only.";
+  const { getPrompt } = await import("./prompts");
+  const system = await getPrompt("writer");
   const llm = await chat([
     { role: "system", content: system },
     { role: "user", content: `Category: ${category}\nNotes: ${notes}` },
