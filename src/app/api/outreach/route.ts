@@ -117,7 +117,7 @@ export async function POST(req: Request) {
   // because a bookkeeping row is missing.
   if (await evolutionConfigured()) {
     configured = (await wasEverConnected(session.email)) || false;
-    const r = await sendFromUser(session.email, digits, guardedMessage);
+    const r = await sendFromUser(session.email, digits, guardedMessage, true);
     if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
     result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
     if (r.rateLimited) {

@@ -5,6 +5,7 @@ import {
   evolutionConfigured,
   wasEverConnected,
   touchActivity,
+  markOpen,
 } from "@/lib/evolution";
 
 // Current state of the user's personal WhatsApp session.
@@ -21,6 +22,10 @@ export async function GET() {
 
   const state = await connectionState(session.email);
   const paired = state === "open" ? true : await wasEverConnected(session.email);
+
+  // Persist "open" durably whenever we observe a live socket, so the send path
+  // never later mistakes a transient drop for "never connected".
+  if (state === "open") markOpen(session.email).catch(() => {});
 
   // App-activity heartbeat: the session stays "awake" only while the app is
   // actually being used; idle sessions are quieted by pauseIdleSessions.

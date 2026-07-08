@@ -20,9 +20,21 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   // Pairing code needs the user's WhatsApp number - prefer the one they typed
   // now, else the phone on their profile.
-  const { getUser } = await import("@/lib/access");
+  const { getUser, registerUser } = await import("@/lib/access");
   const profile = await getUser(session.email);
-  const phone = String(body.phone ?? "").trim() || profile?.phone;
+  const typed = String(body.phone ?? "").trim();
+  const phone = typed || profile?.phone;
+  // Persist the number the user links with to their account, so it survives
+  // across sessions and is never lost between logins (durable in app_users).
+  if (typed && typed !== profile?.phone) {
+    await registerUser({
+      email: session.email,
+      phone: typed,
+      name: profile?.name,
+      provider: profile?.provider ?? "email",
+      acceptedTerms: true,
+    }).catch(() => {});
+  }
   const result = await connectInstance(session.email, origin, phone);
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }

@@ -134,6 +134,11 @@ export async function POST(req: Request) {
       if (!text) continue;
 
       const email = await emailForInstance(instance);
+      // A real inbound proves the socket is live: persist "open" durably.
+      if (email) {
+        const { markOpen } = await import("@/lib/evolution");
+        markOpen(email).catch(() => {});
+      }
       await processVendorReply({
         fromDigits: from,
         text,

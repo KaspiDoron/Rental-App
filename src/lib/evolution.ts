@@ -547,6 +547,19 @@ export async function wasEverConnected(email: string): Promise<boolean> {
   return (await storedStatus(email)) === "open";
 }
 
+/**
+ * True if the user has a session row at all (i.e. they went through linking on
+ * this or any host). Used by the send path so a transient reconnect is NEVER
+ * mistaken for "not connected" - the user is told to wait, never to re-link.
+ */
+export async function hasSessionRow(email: string): Promise<boolean> {
+  const rows = await sbSelect<{ email: string }>(
+    "wa_sessions",
+    `select=email&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+  );
+  return rows.length > 0;
+}
+
 /** Record that the session is live and paired (never downgraded automatically). */
 export async function markOpen(email: string) {
   await saveSession(email, instanceNameFor(email), "open");
@@ -876,11 +889,15 @@ export async function disconnectInstance(email: string): Promise<boolean> {
   return ok;
 }
 
-/** Send a text from the user's own WhatsApp (rate-limited, human-like). */
+/** Send a text from the user's own WhatsApp (rate-limited, human-like).
+ *  `fast` skips the blocking presence-mimicry wait so the API returns quickly
+ *  (used for interactive sends where the UI needs to feel instant; a short
+ *  typing indicator still fires, and the guard already spaced the message). */
 export async function sendFromUser(
   email: string,
   to: string,
-  message: string
+  message: string,
+  fast = false
 ): Promise<{ ok: boolean; error?: string; rateLimited?: boolean }> {
   const rate = await checkRateLimit(email);
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
@@ -891,34 +908,47 @@ export async function sendFromUser(
   // Resume the session if it dropped, instead of failing outright.
   const conn = await ensureConnected(email, 6000);
   if (!conn.ok) {
-    const paired = await wasEverConnected(email);
+    // A session row means the user HAS linked - a failed resume is a transient
+    // reconnect (Render waking), never a reason to make them re-link.
+    const paired = await hasSessionRow(email);
     return {
       ok: false,
       error: paired ? "reconnecting" : "not-connected",
     };
   }
+  // We reached the socket live: persist "open" so wasEverConnected stays true
+  // durably and future sends never regress to "not connected".
+  markOpen(email).catch(() => {});
 
-  // Multi-step presence mimicry (anti-ban): a real human types, pauses to
-  // think, and types again before sending. Best-effort - if the presence
-  // endpoint is missing on this Evolution build we still send.
+  // Presence mimicry (anti-ban): show a "typing…" indicator before the message.
+  // FAST path (interactive sends) fires the indicator but does NOT block on the
+  // full multi-step wait, so the UI feels instant; the anti-ban GAP between
+  // messages is already enforced by the guard. SLOW path (queued/background
+  // sends) does the full human-like composing -> pause -> composing sequence.
   try {
     const { getPolicies } = await import("./wa-guard");
     const p = await getPolicies();
     const span = Math.max(0, p.presence_max_ms - p.presence_min_ms);
-    const t1 = p.presence_min_ms + Math.floor(Math.random() * span * 0.6);
-    const pause = 600 + Math.floor(Math.random() * 1400);
-    const t2 = Math.min(4000, 900 + Math.floor(message.length * (18 + Math.random() * 22)) / 4);
     const presence = (state: string, delay: number) =>
       evo(email, `/chat/sendPresence/${instance}`, {
         method: "POST",
         body: JSON.stringify({ number, presence: state, delay }),
       });
-    await presence("composing", t1);
-    await new Promise((r) => setTimeout(r, Math.min(t1, 5000)));
-    await presence("paused", pause);
-    await new Promise((r) => setTimeout(r, pause));
-    await presence("composing", t2);
-    await new Promise((r) => setTimeout(r, Math.min(t2, 4000)));
+    if (fast) {
+      // One short typing burst, no blocking wait beyond ~1.2s.
+      await presence("composing", 1500);
+      await new Promise((r) => setTimeout(r, 900 + Math.floor(Math.random() * 500)));
+    } else {
+      const t1 = p.presence_min_ms + Math.floor(Math.random() * span * 0.6);
+      const pause = 600 + Math.floor(Math.random() * 1400);
+      const t2 = Math.min(4000, 900 + Math.floor(message.length * (18 + Math.random() * 22)) / 4);
+      await presence("composing", t1);
+      await new Promise((r) => setTimeout(r, Math.min(t1, 5000)));
+      await presence("paused", pause);
+      await new Promise((r) => setTimeout(r, pause));
+      await presence("composing", t2);
+      await new Promise((r) => setTimeout(r, Math.min(t2, 4000)));
+    }
   } catch {
     /* presence is cosmetic - never block the send */
   }
