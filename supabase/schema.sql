@@ -365,3 +365,16 @@ create table if not exists public.sponsored_shops (
   created_at  timestamptz not null default now()
 );
 alter table public.sponsored_shops enable row level security;
+
+-- ---- Agent events (owner notifications: vague replies, funnel anomalies) ------
+create table if not exists public.agent_events (
+  id          bigint generated always as identity primary key,
+  kind        text not null,           -- 'vague-reply' | 'funnel-gap' | ...
+  vendor_id   text,
+  vendor_name text,
+  detail      text,
+  handled     boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+create index if not exists agent_events_kind_idx on public.agent_events (kind, created_at desc);
+alter table public.agent_events enable row level security;

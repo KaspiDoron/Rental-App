@@ -21,7 +21,7 @@ export async function GET() {
   const dayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
-  const [feedback, outbox, reputation, sessions, billing, replies, offers, aiErrors] =
+  const [feedback, outbox, reputation, sessions, billing, replies, offers, aiErrors, agentEvents] =
     await Promise.all([
       sbSelect<{ id: number; severity: string; summary: string; created_at: string }>(
         "feedback",
@@ -54,6 +54,10 @@ export async function GET() {
       sbSelect<{ id: number; provider: string; ok: boolean; created_at: string }>(
         "ai_usage",
         `select=id,provider,ok,created_at&ok=eq.false&created_at=gte.${encodeURIComponent(dayAgo)}&limit=100`
+      ).catch(() => []),
+      sbSelect<{ id: number; kind: string; vendor_name: string; detail: string }>(
+        "agent_events",
+        `select=id,kind,vendor_name,detail&handled=eq.false&created_at=gte.${encodeURIComponent(weekAgo)}&order=created_at.desc&limit=30`
       ).catch(() => []),
     ]);
 
@@ -95,6 +99,22 @@ export async function GET() {
       title: `${outbox.length} message${outbox.length > 1 ? "s" : ""} queued for shop opening hours`,
       detail: "The anti-ban engine is pacing sends - all normal.",
       href: "whatsapp",
+    });
+  }
+
+  // Funnel gaps: shops that dodged the price question with a vague answer -
+  // each one is a candidate for a new branch in the negotiation funnel.
+  const vagueReplies = agentEvents.filter((e) => e.kind === "vague-reply");
+  if (vagueReplies.length) {
+    alerts.push({
+      level: "warning",
+      title: `${vagueReplies.length} shop${vagueReplies.length > 1 ? "s" : ""} gave a vague answer (funnel gap)`,
+      detail:
+        vagueReplies
+          .slice(0, 3)
+          .map((e) => `${e.vendor_name || "shop"}: "${(e.detail || "").slice(0, 60)}"`)
+          .join(" · ") + " - consider a new funnel branch for these.",
+      href: "agents",
     });
   }
 

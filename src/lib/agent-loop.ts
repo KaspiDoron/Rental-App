@@ -115,6 +115,24 @@ export async function processVendorReply(opts: {
     (m) => m.direction === "outbound" && m.raw?.kind === "auto-close"
   ).length;
 
+  // Funnel-gap detector: shops that dodge with "come to the shop and we'll
+  // talk" / "depends" answers need a NEW branch in the negotiation funnel.
+  // Log an owner notification so the funnel keeps learning from real gaps.
+  const vague =
+    /\b(come (to|by|visit)|visit (us|our shop|the shop)|see for yourself|talk (at|in) the shop|depends|not sure|we'?ll see|call us|stop by)\b/i.test(
+      text
+    );
+  if (vague) {
+    sbInsert("agent_events", [
+      {
+        kind: "vague-reply",
+        vendor_id: ctx.vendorId ?? "",
+        vendor_name: ctx.vendorName ?? "",
+        detail: text.slice(0, 500),
+      },
+    ]).catch(() => {});
+  }
+
   const extraction = await extractOffer(rfq, text, [], history);
   const verified =
     extraction.found && extraction.matchesSpec && extraction.confidence === "high";
