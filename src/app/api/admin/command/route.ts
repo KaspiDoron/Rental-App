@@ -25,7 +25,7 @@ export async function GET() {
     await Promise.all([
       sbSelect<{ id: number; severity: string; summary: string; created_at: string }>(
         "feedback",
-        `select=id,severity,summary,created_at&is_real_issue=eq.true&order=created_at.desc&limit=20`
+        `select=id,severity,summary,created_at&is_real_issue=eq.true&or=(status.is.null,status.eq.open,status.eq.in-progress)&order=created_at.desc&limit=20`
       ).catch(() => []),
       sbSelect<{ id: number; not_before: string }>(
         "wa_outbox",

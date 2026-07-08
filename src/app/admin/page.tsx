@@ -40,6 +40,8 @@ interface FeedbackRow {
   triage_reason: string | null;
   image_count: number;
   images?: string[];
+  status?: string;
+  owner_note?: string | null;
   created_at: string;
 }
 
@@ -1868,6 +1870,60 @@ export default function AdminPage() {
                 {f.image_count > 0 ? ` · ${f.image_count} screenshot(s)` : ""}
                 {f.triage_reason ? ` · ${f.triage_reason}` : ""}
               </div>
+
+              {/* Triage workflow: status chips + owner note (New#11) */}
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(["open", "in-progress", "resolved", "dismissed"] as const).map((st) => {
+                  const active = (f.status ?? "open") === st;
+                  return (
+                    <button
+                      key={st}
+                      onClick={async () => {
+                        await fetch("/api/admin/feedback", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ id: f.id, status: st }),
+                        });
+                        setFeedbackRows((rows) =>
+                          rows.map((r) => (r.id === f.id ? { ...r, status: st } : r))
+                        );
+                      }}
+                      className={`chip rounded-lg border-2 px-2 py-0.5 text-[10px] font-extrabold capitalize ${
+                        active
+                          ? st === "resolved"
+                            ? "border-savings bg-savings-soft text-savings"
+                            : st === "dismissed"
+                            ? "border-line bg-card2 text-faint"
+                            : st === "in-progress"
+                            ? "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                            : "border-brandblue bg-brandblue-soft text-brandblue"
+                          : "border-line text-faint"
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  );
+                })}
+              </div>
+              <textarea
+                rows={1}
+                defaultValue={f.owner_note ?? ""}
+                placeholder="Add an owner note (what you'll do about it)..."
+                onBlur={async (e) => {
+                  const note = e.target.value.trim();
+                  if (note !== (f.owner_note ?? "")) {
+                    await fetch("/api/admin/feedback", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ id: f.id, note }),
+                    });
+                    setFeedbackRows((rows) =>
+                      rows.map((r) => (r.id === f.id ? { ...r, owner_note: note } : r))
+                    );
+                  }
+                }}
+                className="mt-1.5 w-full rounded-lg border-2 border-line bg-card p-1.5 text-[11px] text-strong focus:border-brandblue focus:outline-none"
+              />
             </div>
           ))}
         </div>

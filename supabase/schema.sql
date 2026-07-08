@@ -422,3 +422,8 @@ create table if not exists public.user_cooldowns (
   primary key (email, kind)
 );
 alter table public.user_cooldowns enable row level security;
+
+-- ---- Feedback workflow (owner triage: status + notes) ------------------------
+alter table public.feedback add column if not exists status     text default 'open';
+alter table public.feedback add column if not exists owner_note text;
+alter table public.feedback add column if not exists resolved_at timestamptz;
