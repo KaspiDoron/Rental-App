@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { ensureConnected, fetchChats, fetchMessages } from "@/lib/evolution";
+import { ensureConnected, fetchChats, fetchMessages, resolveChatJid } from "@/lib/evolution";
 import { chat, extractJson } from "@/lib/ai";
 import { addTraining } from "@/lib/memory";
 import { sbInsert } from "@/lib/runtime-config";
@@ -90,20 +90,33 @@ export async function POST(req: Request) {
     : typeof body?.numbers === "string"
     ? String(body.numbers).split(/[\n,]+/)
     : [];
-  const jids = rawNumbers
-    .map((n) => toJid(String(n)))
-    .filter((j): j is string => j !== null)
+  const rawList = rawNumbers
+    .map((n) => String(n).trim())
+    .filter((n) => n.replace(/[^\d]/g, "").length >= 7)
     .slice(0, MAX_NUMBERS);
 
   let imported = 0;
   let scanned = 0;
+  const notFound: string[] = [];
   const samples: string[] = [];
 
-  if (jids.length > 0) {
+  if (rawList.length > 0) {
     // PRIVACY-FIRST PATH: read only the shop numbers the owner pasted.
-    for (const jid of jids) {
-      const msgs = await fetchMessages(session.email, jid, MAX_MSGS);
-      if (msgs.length < 2) continue; // no real conversation with this number
+    for (const raw of rawList) {
+      // Resolve to WhatsApp's canonical JID first (handles format differences
+      // and the new @lid privacy JIDs) - this is what fixes "no chat found".
+      const jid = (await resolveChatJid(session.email, raw)) ?? toJid(raw);
+      if (!jid) continue;
+      let msgs = await fetchMessages(session.email, jid, MAX_MSGS);
+      // Retry with the plain digits JID if the canonical one was empty.
+      if (msgs.length < 2 && !jid.endsWith("@s.whatsapp.net")) {
+        const alt = toJid(raw);
+        if (alt) msgs = await fetchMessages(session.email, alt, MAX_MSGS);
+      }
+      if (msgs.length < 2) {
+        notFound.push(raw);
+        continue; // no real conversation with this number
+      }
       scanned += 1;
       const transcript = msgs
         .map((m) => `${m.fromMe ? "Me" : "Shop"}: ${m.text.replace(/\s+/g, " ").trim()}`)
@@ -118,12 +131,13 @@ export async function POST(req: Request) {
     return NextResponse.json({
       imported,
       scanned,
+      notFound,
       note:
         imported > 0
           ? `Learned from ${imported} shop chat${imported === 1 ? "" : "s"}${
               samples.length ? ` (${samples.join(", ")})` : ""
-            }. The agents now bargain in your style.`
-          : "Opened those numbers but found no readable conversation to learn from. Make sure you have actually chatted with them on this WhatsApp.",
+            }.${notFound.length ? ` Couldn't find a chat for: ${notFound.join(", ")}.` : ""} The agents now bargain in your style.`
+          : `No readable conversation found for: ${notFound.join(", ") || "those numbers"}. This WhatsApp needs a moment to finish syncing your chat history after connecting - wait ~1 minute and try again, and double-check you chatted with them on THIS number.`,
     });
   }
 

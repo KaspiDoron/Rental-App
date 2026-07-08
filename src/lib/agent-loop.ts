@@ -65,10 +65,13 @@ export async function processVendorReply(opts: {
   fromDigits: string;
   text: string;
   waMessageId?: string;
+  images?: { mime: string; base64: string }[];
   send: SendFn;
 }): Promise<void> {
   const text = opts.text.trim();
-  if (!text) return;
+  const images = opts.images ?? [];
+  // A price-list PHOTO with no caption is still a real reply we must read.
+  if (!text && images.length === 0) return;
   const from = opts.fromDigits.replace(/[^\d]/g, "");
 
   // Dedupe: providers retry webhooks - never process the same message twice.
@@ -133,7 +136,12 @@ export async function processVendorReply(opts: {
     ]).catch(() => {});
   }
 
-  const extraction = await extractOffer(rfq, text, [], history);
+  const extraction = await extractOffer(
+    rfq,
+    text || "(the shop sent a price-list photo)",
+    images,
+    history
+  );
   const verified =
     extraction.found && extraction.matchesSpec && extraction.confidence === "high";
   // After we've clarified once, a found price counts even if not fully
@@ -149,7 +157,7 @@ export async function processVendorReply(opts: {
       vendor_id: ctx.vendorId ?? "",
       vendor_name: ctx.vendorName ?? "",
       reply_text: text.slice(0, 4000),
-      image_count: 0,
+      image_count: images.length,
       found: extraction.found,
       price_per_day: extraction.pricePerDay ?? null,
       matches_spec: extraction.matchesSpec,

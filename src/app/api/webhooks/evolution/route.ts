@@ -115,14 +115,15 @@ export async function POST(req: Request) {
 
       const text = extractText(data);
       const msgId = String(data.key.id ?? "");
+      const hasImage = Boolean(data?.message?.imageMessage);
 
       await sbInsert("whatsapp_messages", [
         {
           wa_message_id: msgId,
           from_number: from,
           to_number: instance,
-          body: text,
-          type: "text",
+          body: text || (hasImage ? "[photo]" : ""),
+          type: hasImage ? "image" : "text",
           direction: "inbound",
           raw: { instance, pushName: data.pushName ?? null, channel: "evolution" },
         },
@@ -131,7 +132,9 @@ export async function POST(req: Request) {
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
-      if (!text) continue;
+      // A shop that sends ONLY a price-list photo (no caption) is the common
+      // case - read the image, don't skip it.
+      if (!text && !hasImage) continue;
 
       const email = await emailForInstance(instance);
       // A real inbound proves the socket is live: persist "open" durably.
@@ -139,9 +142,19 @@ export async function POST(req: Request) {
         const { markOpen } = await import("@/lib/evolution");
         markOpen(email).catch(() => {});
       }
+
+      // Price-list photo? Download it so the vision agent can read the prices.
+      const images: { mime: string; base64: string }[] = [];
+      if (hasImage && email) {
+        const { fetchMediaBase64 } = await import("@/lib/evolution");
+        const media = await fetchMediaBase64(email, data);
+        if (media) images.push(media);
+      }
+
       await processVendorReply({
         fromDigits: from,
         text,
+        images,
         waMessageId: msgId,
         send: async (to, message) => {
           if (!email) return { ok: false, error: "unknown instance" };

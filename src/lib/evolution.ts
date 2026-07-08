@@ -658,7 +658,10 @@ export async function connectInstance(
     alwaysOnline: false,
     readMessages: false,
     readStatus: false,
-    syncFullHistory: false,
+    // History sync ON so the owner can teach the agents from past bargains
+    // (the import reads only the numbers you name). It is a one-time read, not
+    // a ban vector; always_online/proxy are the protections that matter.
+    syncFullHistory: true,
   };
   const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
 
@@ -672,7 +675,7 @@ export async function connectInstance(
     groupsIgnore: true,
     readMessages: false,
     readStatus: false,
-    syncFullHistory: false,
+    syncFullHistory: true,
     ...(proxy ? { proxyHost: proxy.host, proxyPort: proxy.port, proxyProtocol: proxy.protocol, proxyUsername: proxy.username, proxyPassword: proxy.password } : {}),
     webhook: { url: webhookUrl, byEvents: false, events },
   };
@@ -828,6 +831,43 @@ export interface WaMessage {
   ts: number;
 }
 
+/**
+ * Resolve a pasted phone number to the exact JID WhatsApp stores for it. This
+ * fixes "no chat found" when the owner types the number in a slightly different
+ * format than WhatsApp's canonical one (e.g. a leading 0, a missing country
+ * code, or the new @lid privacy JIDs).
+ */
+export async function resolveChatJid(
+  email: string,
+  rawNumber: string
+): Promise<string | null> {
+  const digits = rawNumber.replace(/[^\d]/g, "");
+  if (digits.length < 7) return null;
+  const instance = instanceNameFor(email);
+  // 1) Ask WhatsApp for the canonical JID of this number.
+  try {
+    const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
+      method: "POST",
+      body: JSON.stringify({ numbers: [digits] }),
+    });
+    const jid = res.data?.[0]?.jid ?? res.data?.[0]?.remoteJid;
+    if (typeof jid === "string" && jid.includes("@")) return jid;
+  } catch {
+    /* fall through */
+  }
+  // 2) Otherwise match against the synced chat list by trailing digits.
+  try {
+    const chats = await fetchChats(email);
+    const tail = digits.slice(-9);
+    const hit = chats.find((c) => c.jid.replace(/[^\d]/g, "").endsWith(tail));
+    if (hit) return hit.jid;
+  } catch {
+    /* fall through */
+  }
+  // 3) Best-effort default form.
+  return `${digits}@s.whatsapp.net`;
+}
+
 /** Recent messages of one chat, oldest-first. */
 export async function fetchMessages(
   email: string,
@@ -858,6 +898,32 @@ export async function fetchMessages(
     })
     .filter((m) => m.text.trim().length > 0)
     .sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Download an inbound media message (a price-list photo) as base64 so the
+ * vision agent can read the prices off it. Evolution v2 exposes
+ * getBase64FromMediaMessage; returns { base64, mime } or null.
+ */
+export async function fetchMediaBase64(
+  email: string,
+  message: unknown
+): Promise<{ base64: string; mime: string } | null> {
+  const instance = instanceNameFor(email);
+  try {
+    const res = await evo(email, `/chat/getBase64FromMediaMessage/${instance}`, {
+      method: "POST",
+      body: JSON.stringify({ message, convertToMp4: false }),
+    });
+    const base64 = res.data?.base64 ?? res.data?.media ?? res.data?.buffer;
+    const mime = res.data?.mimetype ?? res.data?.mimeType ?? "image/jpeg";
+    if (typeof base64 === "string" && base64.length > 100) {
+      return { base64: base64.replace(/^data:[^,]+,/, ""), mime };
+    }
+  } catch {
+    /* media fetch is best-effort */
+  }
+  return null;
 }
 
 /** "open" = paired and ready to send. */
