@@ -635,7 +635,17 @@ export async function connectInstance(
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
   const digits = (phone ?? "").replace(/[^\d]/g, "");
 
-  // Start every explicit link from a CLEAN slate. A leftover instance (from a
+  // NEVER destroy an already-linked session. If the instance is already open,
+  // the user has connected - return that instead of wiping it (this was the
+  // cause of "WhatsApp says linked but the app keeps asking to connect": a
+  // re-entry into connect() deleted the fresh session).
+  const existing = await connectionState(email);
+  if (existing === "open") {
+    await markOpen(email);
+    return { ok: true, state: "open" };
+  }
+
+  // Otherwise start from a CLEAN slate. A leftover half-linked instance (from a
   // previous attempt, common in the signup funnel) hands WhatsApp a stale
   // pairing code, which WhatsApp rejects as "Incorrect code". Deleting first
   // guarantees the code we show is the current, valid one.
@@ -926,12 +936,56 @@ export async function fetchMediaBase64(
   return null;
 }
 
-/** "open" = paired and ready to send. */
+/**
+ * Read the state directly off Evolution's instance list. Right after a
+ * pairing-code link the dedicated /connectionState endpoint is often still
+ * "connecting" (stale cache) while fetchInstances already reports "open" - so
+ * we cross-check both. Returns "open" | "connecting" | "close" | null.
+ */
+async function stateFromFetchInstances(email: string): Promise<string | null> {
+  const instance = instanceNameFor(email);
+  const res = await evo(email, `/instance/fetchInstances?instanceName=${instance}`);
+  if (!res.ok) return null;
+  const arr: any[] = Array.isArray(res.data) ? res.data : res.data ? [res.data] : [];
+  // Evolution v2 shapes vary: [{ name, connectionStatus }] or
+  // [{ instance: { instanceName, state|status } }].
+  const match =
+    arr.find(
+      (x) =>
+        x?.name === instance ||
+        x?.instanceName === instance ||
+        x?.instance?.instanceName === instance ||
+        x?.instance?.name === instance
+    ) ?? arr[0];
+  if (!match) return null;
+  const raw =
+    match.connectionStatus ??
+    match.state ??
+    match.status ??
+    match.instance?.state ??
+    match.instance?.status ??
+    match.instance?.connectionStatus ??
+    null;
+  if (!raw) return null;
+  const s = String(raw).toLowerCase();
+  return s === "connected" ? "open" : s;
+}
+
+/** "open" = paired and ready to send. Cross-checks both Evolution endpoints. */
 export async function connectionState(email: string): Promise<string | null> {
   const instance = instanceNameFor(email);
   const res = await evo(email, `/instance/connectionState/${instance}`);
-  if (!res.ok) return null;
-  const state = res.data?.instance?.state ?? res.data?.state ?? null;
+  let state: string | null = res.ok
+    ? res.data?.instance?.state ?? res.data?.state ?? null
+    : null;
+  // If the dedicated endpoint is not already "open", ask the instance list -
+  // it reflects a fresh pairing-code link faster. This is the fix for
+  // "WhatsApp says linked but the app still says NOT CONNECTED".
+  if (state !== "open") {
+    const alt = await stateFromFetchInstances(email);
+    if (alt === "open") state = "open";
+    else if (!state && alt) state = alt;
+  }
   if (state === "open") markOpen(email).catch(() => {});
   return state;
 }

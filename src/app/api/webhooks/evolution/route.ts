@@ -77,22 +77,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // Connection lifecycle: a logged-out / 401 close means WhatsApp severed or
-    // restricted the session. Enter graduated ban-recovery (long pause + slow
-    // warm-up resume) instead of hammering reconnects.
+    // Connection lifecycle. IMPORTANT: a 401 "close" is ALSO emitted as a
+    // normal part of the pairing-code handshake (restartRequired), so we must
+    // NOT treat every 401 as a ban - that would pause a number the instant it
+    // links. Only a genuine loggedOut/conflict reason enters ban-recovery; an
+    // "open" refreshes the durable state so the app flips to connected.
     if (event.includes("connection.update")) {
       try {
         const data = Array.isArray(body.data) ? body.data[0] : body.data;
         const state = String(data?.state ?? data?.connection ?? "").toLowerCase();
-        const code = Number(
-          data?.statusCode ?? data?.lastDisconnect?.error?.output?.statusCode ?? 0
-        );
-        if (state === "close" && (code === 401 || code === 403)) {
-          const email = await emailForInstance(instance);
-          if (email) {
-            const { enterBanRecovery } = await import("@/lib/wa-guard");
-            await enterBanRecovery(email, 24);
-          }
+        const reason = String(
+          data?.statusReason ??
+            data?.lastDisconnect?.error?.output?.payload?.error ??
+            data?.lastDisconnect?.error?.message ??
+            ""
+        ).toLowerCase();
+        const email = await emailForInstance(instance);
+        if (state === "open" && email) {
+          const { markOpen } = await import("@/lib/evolution");
+          markOpen(email).catch(() => {});
+        } else if (
+          state === "close" &&
+          email &&
+          /logged.?out|conflict|banned|forbidden|multidevice.?mismatch/.test(reason)
+        ) {
+          const { enterBanRecovery } = await import("@/lib/wa-guard");
+          await enterBanRecovery(email, 24);
         }
       } catch {
         /* best-effort */
