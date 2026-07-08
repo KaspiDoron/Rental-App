@@ -184,7 +184,7 @@ export default function AdminPage() {
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainBusy, setTrainBusy] = useState(false);
   const [trainNumbers, setTrainNumbers] = useState("");
-  const [memory, setMemory] = useState<{ id: number; text: string; note?: string; addedAt: number }[]>([]);
+  const [memory, setMemory] = useState<{ id: number; text: string; note?: string; origin?: string; source?: string; addedBy?: string; addedAt: number }[]>([]);
   const [memEditId, setMemEditId] = useState<number | null>(null);
   const [memEditText, setMemEditText] = useState("");
   const [memAdd, setMemAdd] = useState("");
@@ -766,11 +766,12 @@ export default function AdminPage() {
                       </>
                     ) : (
                       <>
-                        {m.note && (
-                          <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wide text-faint">
-                            {m.note}
-                          </div>
-                        )}
+                        {/* Origin tracing: where this memory was learned from */}
+                        <div className="mb-1 flex items-center gap-1">
+                          <span className="rounded-full bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
+                            🧬 {m.origin ?? m.note ?? "origin unknown"}
+                          </span>
+                        </div>
                         <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-soft">
                           {m.text}
                         </pre>

@@ -15,10 +15,23 @@ interface TrainingRow {
   created_at: string;
 }
 
+// Human-readable origin of a memory: WHERE the agent learned it from.
+function originOf(source: string | null, note: string | null, addedBy: string | null): string {
+  const s = (source || "").toLowerCase();
+  const who = addedBy ? ` · ${addedBy}` : "";
+  if (s === "whatsapp") return `Learned from a WhatsApp chat${who}`;
+  if (s === "photo") return `From a screenshot${who}`;
+  if (s === "funnel") return `From a live user negotiation${who}`;
+  if (s === "training") return `Owner training session${who}`;
+  if (s === "text") return `Pasted by hand${who}`;
+  if (note) return `${note}${who}`;
+  return addedBy ? `Added by ${addedBy}` : "Origin unknown";
+}
+
 async function allExamples() {
-  const durable = await sbSelect<TrainingRow>(
+  const durable = await sbSelect<TrainingRow & { added_by?: string | null }>(
     "agent_training",
-    "select=id,text,note,source,created_at&order=created_at.desc&limit=50"
+    "select=id,text,note,source,added_by,created_at&order=created_at.desc&limit=100"
   );
   const mem = listTraining();
   const seen = new Set(durable.map((d) => d.text));
@@ -27,9 +40,12 @@ async function allExamples() {
       id: d.id,
       text: d.text,
       note: d.note ?? undefined,
+      source: d.source ?? undefined,
+      addedBy: d.added_by ?? undefined,
+      origin: originOf(d.source, d.note, d.added_by ?? null),
       addedAt: Date.parse(d.created_at),
     })),
-    ...mem.filter((m) => !seen.has(m.text)),
+    ...mem.filter((m) => !seen.has(m.text)).map((m) => ({ ...m, origin: "This session (in-memory)" })),
   ];
 }
 
