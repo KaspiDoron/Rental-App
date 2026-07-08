@@ -16,6 +16,7 @@ interface KeyInfo {
   masked: string;
   scope: string;
   editable: boolean;
+  docUrl?: string;
 }
 interface UserRecord {
   email: string;
@@ -1402,21 +1403,59 @@ export default function AdminPage() {
               )}
             </div>
           )}
-          {keys.map((k) => (
-            <div key={k.name} className="surface rounded-blob p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[13px] font-extrabold text-strong">{k.label}</div>
-                  <div className="font-mono text-[11px] text-faint">{k.name}</div>
-                </div>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
-                    k.configured ? "bg-savings-soft text-savings" : "bg-card2 text-faint"
-                  }`}
-                >
-                  {k.configured ? "configured" : "missing"}
-                </span>
-              </div>
+          {(() => {
+            const order = ["ai", "messaging", "maps", "email", "billing", "auth", "data"];
+            const groupLabel: Record<string, string> = {
+              ai: "🧠 AI providers",
+              messaging: "💬 WhatsApp & messaging",
+              maps: "🗺 Google Maps",
+              email: "✉️ Email",
+              billing: "💳 Payments & ads",
+              auth: "🔐 Auth & social",
+              data: "🗄 Data (bootstrap)",
+            };
+            const sorted = [...keys].sort(
+              (a, b) => order.indexOf(a.scope) - order.indexOf(b.scope)
+            );
+            let lastScope = "";
+            return sorted.map((k) => {
+              const header =
+                k.scope !== lastScope ? (
+                  <div
+                    key={`hdr-${k.scope}`}
+                    className="px-1 pt-3 text-[11px] font-extrabold uppercase tracking-wide text-faint"
+                  >
+                    {groupLabel[k.scope] ?? k.scope}
+                  </div>
+                ) : null;
+              lastScope = k.scope;
+              return (
+                <div key={k.name}>
+                  {header}
+                  <div className="surface rounded-blob p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[13px] font-extrabold text-strong">{k.label}</div>
+                        <div className="font-mono text-[11px] text-faint">{k.name}</div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                          k.configured ? "bg-savings-soft text-savings" : "bg-card2 text-faint"
+                        }`}
+                      >
+                        {k.configured ? "configured" : "missing"}
+                      </span>
+                    </div>
+                    {!k.configured && k.docUrl && (
+                      <a
+                        href={k.docUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-[11px] font-extrabold text-brandblue underline"
+                      >
+                        Get this key ↗
+                      </a>
+                    )}
               <div className="mt-2 font-mono text-[12px] text-soft">{k.masked}</div>
               {k.editable && (
                 <>
@@ -1486,13 +1525,16 @@ export default function AdminPage() {
                     </button>
                   </div>
                 )
-              ) : (
-                <div className="mt-2 text-[11px] text-faint">
-                  Bootstrap secret - set via host environment variables only.
+                    ) : (
+                      <div className="mt-2 text-[11px] text-faint">
+                        Bootstrap secret - set via host environment variables only.
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          ))}
+              );
+            });
+          })()}
         </div>
       )}
 

@@ -16,7 +16,39 @@ export interface KeyInfo {
   masked: string;
   scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth" | "maps";
   editable: boolean;
+  docUrl?: string; // where to generate this key (shown when it is missing)
 }
+
+// Where to obtain each key - a "Get key" link surfaces when the key is unset.
+const DOC_URLS: Record<string, string> = {
+  GROQ_TOKEN: "https://console.groq.com/keys",
+  GEMINI_TOKEN: "https://aistudio.google.com/app/apikey",
+  OPENROUTER_TOKEN: "https://openrouter.ai/keys",
+  CEREBRAS_TOKEN: "https://cloud.cerebras.ai/",
+  MISTRAL_TOKEN: "https://console.mistral.ai/api-keys/",
+  HUGGINGFACE_TOKEN: "https://huggingface.co/settings/tokens",
+  EVOLUTION_HOSTS: "https://doc.evolution-api.com/",
+  EVOLUTION_API_URL: "https://doc.evolution-api.com/",
+  EVOLUTION_API_KEY: "https://doc.evolution-api.com/",
+  EVOLUTION_PROXY: "https://doc.evolution-api.com/v2/en/configuration/proxy",
+  WHATSAPP_ACCESS_TOKEN: "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started",
+  WHATSAPP_PHONE_NUMBER_ID: "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started",
+  WHATSAPP_VERIFY_TOKEN: "https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks",
+  GOOGLE_MAPS_API_KEY: "https://console.cloud.google.com/google/maps-apis/credentials",
+  GOOGLE_OAUTH_CLIENT_ID: "https://console.cloud.google.com/apis/credentials",
+  GMAIL_USER: "https://myaccount.google.com/security",
+  GMAIL_APP_PASSWORD: "https://myaccount.google.com/apppasswords",
+  RESEND_API_KEY: "https://resend.com/api-keys",
+  BREVO_API_KEY: "https://app.brevo.com/settings/keys/api",
+  BREVO_SENDER: "https://app.brevo.com/senders",
+  LEMONSQUEEZY_API_KEY: "https://app.lemonsqueezy.com/settings/api",
+  LEMONSQUEEZY_STORE_ID: "https://app.lemonsqueezy.com/settings/stores",
+  LEMONSQUEEZY_VARIANT_PRO: "https://app.lemonsqueezy.com/products",
+  LEMONSQUEEZY_VARIANT_ULTRA: "https://app.lemonsqueezy.com/products",
+  LEMONSQUEEZY_WEBHOOK_SECRET: "https://app.lemonsqueezy.com/settings/webhooks",
+  ADSENSE_CLIENT: "https://www.google.com/adsense/",
+  TWITTER_HANDLE: "https://x.com/settings/profile",
+};
 
 // Keys that can be set from the admin panel at runtime. Bootstrap secrets
 // (Supabase connection, SESSION_SECRET) are intentionally env-only.
@@ -84,6 +116,7 @@ export async function listKeys(): Promise<KeyInfo[]> {
         editable: k.editable,
         configured: Boolean(v),
         masked: mask(v),
+        docUrl: DOC_URLS[k.name],
       };
     })
   );
