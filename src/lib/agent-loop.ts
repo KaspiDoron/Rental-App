@@ -135,6 +135,10 @@ export async function processVendorReply(opts: {
         detail: text.slice(0, 500),
       },
     ]).catch(() => {});
+    // Auto-grow a branch on the funnel tree for this vague case (New#10).
+    import("./funnel")
+      .then((m) => m.autoBranchVague(text.slice(0, 120)))
+      .catch(() => {});
   }
 
   const extraction = await extractOffer(

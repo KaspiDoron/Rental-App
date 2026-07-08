@@ -7,6 +7,7 @@ import { LoadingDots } from "@/components/LoadingDots";
 import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
+import { FunnelEditor } from "@/components/FunnelEditor";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -1308,6 +1309,24 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+
+          {/* Negotiation funnel tree - drag-to-pan if/else map (New#3/#10) */}
+          {isOwner && (
+            <div className="surface rounded-blob p-4">
+              <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+                🗺 Negotiation funnel map
+                <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
+                  Editable
+                </span>
+              </div>
+              <p className="mb-2 text-[11px] text-faint">
+                The agent&apos;s if/else negotiation flow as a map you can drag around and
+                edit. Tap a node to change its condition/action, add a branch, or ask
+                the AI to improve it. Vague shop replies auto-grow a ✨ branch here.
+              </p>
+              <FunnelEditor />
+            </div>
+          )}
 
           {/* Core prompts: view/edit every agent's brain (never removable) */}
           {isOwner && (
