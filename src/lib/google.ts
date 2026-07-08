@@ -254,7 +254,16 @@ export async function findRealVendors(
     const reachable = mapped.filter(
       (v) => (v.whatsapp ?? "").replace(/[^\d]/g, "").length >= 7
     );
-    const out = { vendors: reachable.length > 0 ? reachable : mapped };
+    const list = reachable.length > 0 ? reachable : mapped;
+    // Tag the fastest-replying quartile (Ultra insight).
+    const { fastResponderPhones } = await import("./stats");
+    const fast = await fastResponderPhones();
+    if (fast.size) {
+      for (const v of list) {
+        if (fast.has((v.whatsapp ?? "").replace(/[^\d]/g, ""))) v.fastResponder = true;
+      }
+    }
+    const out = { vendors: list };
     cacheSet(ck, out, 10 * 60_000);
     return out;
   }

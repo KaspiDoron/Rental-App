@@ -76,6 +76,10 @@ export async function POST(req: Request) {
           raw: { instance, pushName: data.pushName ?? null, channel: "evolution" },
         },
       ]);
+      // Response-time analytics: record how fast this shop replied to our RFQ.
+      const { recordResponseTime } = await import("@/lib/stats");
+      recordResponseTime(from).catch(() => {});
+
       if (!text) continue;
 
       const email = await emailForInstance(instance);

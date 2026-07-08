@@ -208,6 +208,11 @@ export function VendorCard({
                   ✨ {t("New on WheelDeal")}
                 </span>
               )}
+              {vendor.fastResponder && (
+                <span className="rounded-md bg-brandyellow-soft px-1.5 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                  ⚡ {t("Fast responder")}
+                </span>
+              )}
             </div>
             {vendor.address && (
               <div className="mt-1 truncate text-[12px] text-faint">{vendor.address}</div>

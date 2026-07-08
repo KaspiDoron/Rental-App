@@ -69,6 +69,7 @@ export interface Vendor {
   orders?: number; // WheelDeal bookings made at this shop
   priceLevel?: number;
   distanceKm?: number;
+  fastResponder?: boolean; // in the fastest-replying quartile (Ultra insight)
   // live state (client-side)
   stage?: TrackerStage;
   offer?: Offer;

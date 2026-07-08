@@ -82,6 +82,15 @@ create table if not exists public.email_verifications (
 );
 alter table public.email_verifications enable row level security;
 
+-- ---- Shop response-time samples (first reply speed, for the fast-responder tag)
+create table if not exists public.response_times (
+  id         bigint generated always as identity primary key,
+  phone      text not null,
+  ms         bigint not null,
+  created_at timestamptz not null default now()
+);
+alter table public.response_times enable row level security;
+
 -- ---- AI provider usage log -----------------------------------------------------
 create table if not exists public.ai_usage (
   id         bigint generated always as identity primary key,

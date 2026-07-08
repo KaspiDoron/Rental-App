@@ -13,6 +13,7 @@ export interface FilterState {
   maxPricePerDay: number | null;
   deliveryOnly: boolean;
   openNowOnly: boolean;
+  fastOnly: boolean; // Ultra: show only the fastest-replying shops
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -24,6 +25,7 @@ export const DEFAULT_FILTERS: FilterState = {
   maxPricePerDay: null,
   deliveryOnly: false,
   openNowOnly: false,
+  fastOnly: false,
 };
 
 function Chip({
@@ -53,10 +55,14 @@ export function Filters({
   filters,
   onChange,
   availableClasses,
+  isUltra = false,
+  onUpgrade,
 }: {
   filters: FilterState;
   onChange: (f: FilterState) => void;
   availableClasses: VehicleClass[];
+  isUltra?: boolean;
+  onUpgrade?: () => void;
 }) {
   const set = (patch: Partial<FilterState>) => onChange({ ...filters, ...patch });
   const classes: (VehicleClass | "any")[] =
@@ -134,6 +140,20 @@ export function Filters({
           }
         >
           Has offer
+        </Chip>
+        {/* Ultra insight: fastest-replying shops. Visible to all; tapping it
+            without Ultra opens the upgrade sheet instead of filtering. */}
+        <Chip
+          active={filters.fastOnly}
+          onClick={() => {
+            if (!isUltra) {
+              onUpgrade?.();
+              return;
+            }
+            set({ fastOnly: !filters.fastOnly });
+          }}
+        >
+          ⚡ Fast responders{!isUltra ? " ✦" : ""}
         </Chip>
       </div>
     </div>

@@ -634,7 +634,13 @@ export default function Home() {
               </ToggleBtn>
             </div>
             <div className="mt-3">
-              <Filters filters={filters} onChange={setFilters} availableClasses={availableClasses} />
+              <Filters
+                filters={filters}
+                onChange={setFilters}
+                availableClasses={availableClasses}
+                isUltra={session?.plan === "ultra"}
+                onUpgrade={() => setUpgradeOpen(true)}
+              />
             </div>
           </>
         )}
@@ -834,6 +840,7 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
   if (f.fulfillment === "in-store")
     list = list.filter((v) => v.fulfillment.includes("in-store"));
   if (f.openNowOnly) list = list.filter((v) => v.openNow !== false);
+  if (f.fastOnly) list = list.filter((v) => v.fastResponder);
   if (f.minRating > 0) list = list.filter((v) => v.rating >= f.minRating);
   if (f.maxPricePerDay)
     list = list.filter((v) => v.offer && v.offer.pricePerDay <= (f.maxPricePerDay as number));
