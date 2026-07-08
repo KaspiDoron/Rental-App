@@ -4,6 +4,7 @@ import {
   connectionState,
   evolutionConfigured,
   wasEverConnected,
+  touchActivity,
 } from "@/lib/evolution";
 
 // Current state of the user's personal WhatsApp session.
@@ -20,6 +21,10 @@ export async function GET() {
 
   const state = await connectionState(session.email);
   const paired = state === "open" ? true : await wasEverConnected(session.email);
+
+  // App-activity heartbeat: the session stays "awake" only while the app is
+  // actually being used; idle sessions are quieted by pauseIdleSessions.
+  touchActivity(session.email).catch(() => {});
 
   // Opportunistic anti-ban outbox drain: the app polling status while open is
   // our free "worker tick" for business-hours / pacing-queued messages.

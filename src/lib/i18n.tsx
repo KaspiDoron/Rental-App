@@ -69,11 +69,15 @@ const I18nContext = createContext<I18nValue>({
   error: null,
 });
 
+import { I18N_CATALOG } from "./i18n-catalog";
+
 // Strings seen by t() that still need a translation (swept in batches).
 const pending = new Set<string>();
-// Everything t() has ever seen - sent on a language switch so the first fetch
-// covers the whole visible app at once.
-const registry = new Set<string>();
+// The FULL app catalogue (generated at build time from every t("...") in the
+// codebase) plus anything t() sees at runtime. Seeding with the catalogue is
+// what makes a language switch translate EVERY page - tags, buttons, admin,
+// profile - not only the screens that happen to be mounted right now.
+const registry = new Set<string>(I18N_CATALOG);
 
 function cacheGet(lang: string): Dict {
   try {
@@ -110,24 +114,34 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       setBusy(true);
       setError(null);
       try {
-        const res = await fetch("/api/translate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            lang: code,
-            langName: LANGS.find((l) => l.code === code)?.name ?? code,
-            texts,
-          }),
-        });
-        const data = await res.json();
-        if (data.map && langRef.current === code) {
-          setDict((prev) => {
-            const next = { ...prev, ...data.map };
-            cacheSet(code, next);
-            return next;
+        // Batch so each request stays well inside the serverless time budget
+        // (the whole-app catalogue can be hundreds of strings). Results apply
+        // progressively - the page translates as batches land.
+        const BATCH = 42;
+        for (let i = 0; i < texts.length; i += BATCH) {
+          if (langRef.current !== code) break; // user switched again
+          const res = await fetch("/api/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lang: code,
+              langName: LANGS.find((l) => l.code === code)?.name ?? code,
+              texts: texts.slice(i, i + BATCH),
+            }),
           });
+          const data = await res.json();
+          if (data.map && langRef.current === code) {
+            setDict((prev) => {
+              const next = { ...prev, ...data.map };
+              cacheSet(code, next);
+              return next;
+            });
+          }
+          if (data.error) {
+            setError(data.error);
+            break;
+          }
         }
-        if (data.error) setError(data.error);
       } catch {
         setError("Could not reach the translation service.");
       } finally {
@@ -163,7 +177,12 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       if (saved && saved !== "en" && LANGS.some((l) => l.code === saved)) {
         setLangState(saved);
         applyDirection(saved);
-        setDict(cacheGet(saved));
+        const cached = cacheGet(saved);
+        setDict(cached);
+        // Complete coverage for THIS page too: anything in the app catalogue
+        // that is not yet cached gets translated right away.
+        const missing = [...registry].filter((s) => !cached[s]);
+        if (missing.length) fetchTranslations(saved, missing);
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps

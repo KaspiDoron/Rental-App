@@ -42,6 +42,8 @@ export interface SecurityPolicies {
   engagement_halt: boolean;     // require a reply before the next auto message
   presence_min_ms: number;      // composing simulation floor
   presence_max_ms: number;      // composing simulation ceiling
+  idle_pause_hours: number;     // hours without app activity before the user's
+                                // WA session goes quiet (presence unavailable)
 }
 
 const DEFAULTS: SecurityPolicies = {
@@ -58,6 +60,7 @@ const DEFAULTS: SecurityPolicies = {
   engagement_halt: true,
   presence_min_ms: 2500,
   presence_max_ms: 8000,
+  idle_pause_hours: 6,
 };
 
 declare global {

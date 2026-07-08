@@ -15,6 +15,7 @@ import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
 import { stageCaption, StageBadge } from "./Tracker";
 import { moneyLocal } from "@/lib/currency";
+import { useI18n } from "@/lib/i18n";
 
 // Google-Maps-style map: Voyager cartography, price-bubble pins, and a
 // booking.com-style swipeable shop list along the bottom (in BOTH the compact
@@ -146,6 +147,7 @@ function ShopCard({
   onSelect: () => void;
   onOpen?: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div
       onClick={onSelect}
@@ -177,7 +179,7 @@ function ShopCard({
           <span>{v.distanceKm?.toFixed(1)} km</span>
           {v.openNow !== undefined && (
             <span className={v.openNow ? "font-bold text-savings" : "font-bold text-brandred"}>
-              {v.openNow ? "Open now" : "Closed"}
+              {v.openNow ? t("Open now") : t("Closed")}
             </span>
           )}
         </div>
@@ -188,11 +190,11 @@ function ShopCard({
         <div className="mt-1">
           {(v.orders ?? 0) > 0 ? (
             <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
-              ✓ {v.orders} booked here
+              ✓ {v.orders} {t("booked here")}
             </span>
           ) : (
             <span className="rounded-md bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
-              ✨ New on WheelDeal
+              ✨ {t("New on WheelDeal")}
             </span>
           )}
         </div>
@@ -210,7 +212,7 @@ function ShopCard({
             }}
             className="btn btn-sm mt-2 flex w-full items-center justify-center rounded-xl bg-brandblue py-1.5 text-center text-[12px] font-extrabold text-white"
           >
-            View details
+            {t("View details")}
           </button>
         )}
       </div>

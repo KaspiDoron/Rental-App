@@ -105,6 +105,14 @@ export async function POST(req: Request) {
   } catch {
     /* best-effort */
   }
+  // Quiet sessions whose users have not used the app for a while - the link
+  // survives, but the device stops looking permanently active on WhatsApp.
+  try {
+    const { pauseIdleSessions } = await import("@/lib/evolution");
+    pauseIdleSessions().catch(() => {});
+  } catch {
+    /* best-effort */
+  }
 
   return NextResponse.json({ ok: true });
 }

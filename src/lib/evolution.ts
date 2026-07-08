@@ -434,6 +434,73 @@ async function saveSession(
   );
 }
 
+// ---- Idle pause: quiet the session while the user is not using the app ------
+//
+// WhatsApp shows a linked device as "connected" as long as the pairing exists;
+// what makes it feel intrusive is the device appearing ACTIVE around the
+// clock. When the app has been idle past the policy window we push presence
+// "unavailable" (no online status, no activity), and the first app use flips
+// it back - the user never re-pairs.
+
+async function setInstancePresence(email: string, presence: "available" | "unavailable") {
+  const instance = instanceNameFor(email);
+  await evo(email, `/instance/setPresence/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({ presence }),
+  });
+}
+
+/** App-activity heartbeat (called from the status poll while the app is open). */
+export async function touchActivity(email: string): Promise<void> {
+  try {
+    const { sbUpdate } = await import("./runtime-config");
+    const rows = await sbSelect<{ idle_paused: boolean | null }>(
+      "wa_sessions",
+      `select=idle_paused&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+    );
+    if (rows[0]?.idle_paused) {
+      setInstancePresence(email, "available").catch(() => {});
+    }
+    await sbUpdate("wa_sessions", `email=eq.${encodeURIComponent(email.toLowerCase())}`, {
+      last_active: new Date().toISOString(),
+      idle_paused: false,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Quiet every session idle past the policy window. Returns paused count. */
+export async function pauseIdleSessions(): Promise<number> {
+  try {
+    const { getPolicies } = await import("./wa-guard");
+    const { sbUpdate } = await import("./runtime-config");
+    const p = await getPolicies();
+    const cutoff = new Date(
+      Date.now() - Math.max(1, p.idle_pause_hours) * 3600_000
+    ).toISOString();
+    const idle = await sbSelect<{ email: string }>(
+      "wa_sessions",
+      `select=email&status=eq.open&idle_paused=eq.false&last_active=lt.${encodeURIComponent(
+        cutoff
+      )}&limit=10`
+    );
+    let n = 0;
+    for (const row of idle) {
+      await setInstancePresence(row.email, "unavailable").catch(() => {});
+      await sbUpdate(
+        "wa_sessions",
+        `email=eq.${encodeURIComponent(row.email.toLowerCase())}`,
+        { idle_paused: true }
+      );
+      n++;
+    }
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
 /** Last durable status we recorded for this user's session. */
 async function storedStatus(email: string): Promise<string | null> {
   const rows = await sbSelect<{ status: string }>(

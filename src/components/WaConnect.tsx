@@ -146,9 +146,30 @@ export function WaConnect({
       {!showingCode && (
         <>
           {!compact && (
-            <p className="mb-2 text-[12px] text-soft">
-              {t("Connect your WhatsApp so the agents can ask shops for prices and bargain as YOU - replies land back here automatically. Takes ~30 seconds.")}
-            </p>
+            <>
+              {/* Trust header: pro WhatsApp-AI mark + calming pitch */}
+              <div className="mb-2 flex items-center gap-2.5 rounded-2xl bg-card2 p-2.5">
+                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#25D366] text-[22px] shadow-md">
+                  💬
+                  <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-brandblue text-[10px] shadow">
+                    ✨
+                  </span>
+                </span>
+                <div className="text-[12px] leading-snug text-soft">
+                  <div className="font-extrabold text-strong">
+                    {t("Your WhatsApp, your agent")}
+                  </div>
+                  {t("Agents message shops as YOU, so bargains are authentic - replies land back here automatically.")}
+                </div>
+              </div>
+              {/* The four promises that make people comfortable linking */}
+              <ul className="mb-2 space-y-1 rounded-2xl bg-savings-soft p-2.5 text-[11px] font-bold text-savings">
+                <li>🔒 {t("Private: we only ever see chats with shops the app messaged - never friends or family.")}</li>
+                <li>😴 {t("Quiet: when you are not using the app, your WhatsApp goes back to sleep - no activity, nothing sent.")}</li>
+                <li>🛡 {t("Protected: human-pace sending, daily safety caps and shop business-hours only - built to keep your number safe.")}</li>
+                <li>✌️ {t("Yours: disconnect any time with one tap and every trace of the link is erased.")}</li>
+              </ul>
+            </>
           )}
           <label
             dir="ltr"

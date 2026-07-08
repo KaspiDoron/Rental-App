@@ -347,3 +347,7 @@ create table if not exists public.wa_outbox (
 );
 create index if not exists wa_outbox_due_idx on public.wa_outbox (not_before asc);
 alter table public.wa_outbox enable row level security;
+
+-- ---- WA idle pause (session quiets down while the app is not in use) ----------
+alter table public.wa_sessions add column if not exists last_active timestamptz;
+alter table public.wa_sessions add column if not exists idle_paused boolean default false;

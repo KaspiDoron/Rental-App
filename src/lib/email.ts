@@ -48,16 +48,62 @@ async function sendViaBrevo(
   }
 }
 
+// Gmail SMTP with an App Password: 100% free, no custom domain, no IP
+// allowlist, ~500 emails/day - the zero-cost default. Setup: Google Account
+// -> Security -> 2-Step Verification -> App passwords -> paste GMAIL_USER
+// (your Gmail address) + GMAIL_APP_PASSWORD into Admin -> Keys.
+async function sendViaGmail(
+  user: string,
+  appPassword: string,
+  opts: { to: string[]; subject: string; html: string; attachments?: Attachment[] }
+): Promise<EmailResult> {
+  try {
+    const nodemailer = (await import("nodemailer")).default;
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user, pass: appPassword.replace(/\s+/g, "") },
+    });
+    const info = await transporter.sendMail({
+      from: `WheelDeal <${user}>`,
+      to: opts.to.join(", "),
+      subject: opts.subject,
+      html: opts.html,
+      attachments: opts.attachments?.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+        encoding: "base64" as const,
+      })),
+    });
+    return { sent: true, id: info.messageId };
+  } catch (e) {
+    return {
+      sent: false,
+      reason: "error",
+      error: e instanceof Error ? e.message : "smtp error",
+    };
+  }
+}
+
 export async function sendEmail(opts: {
   to: string[];
   subject: string;
   html: string;
   attachments?: Attachment[];
 }): Promise<EmailResult> {
-  // Brevo first when configured: it allows sending from a SINGLE verified sender
-  // email (e.g. your Gmail) with NO custom domain, so verification codes reach
-  // real users on the free tier. Resend needs a verified domain, so it is the
-  // fallback (fine once you own a domain).
+  // Priority: Gmail SMTP (free, no domain, no IP allowlist, ~500/day) ->
+  // Brevo (300/day, single verified sender) -> Resend (needs a domain).
+  const [gmailUser, gmailPass] = await Promise.all([
+    getConfig("GMAIL_USER"),
+    getConfig("GMAIL_APP_PASSWORD"),
+  ]);
+  if (gmailUser && gmailPass) {
+    const gmail = await sendViaGmail(gmailUser, gmailPass, opts);
+    if (gmail.sent) return gmail;
+    // On a hard Gmail failure fall through to the other providers.
+  }
+
   const brevoKey = await getConfig("BREVO_API_KEY");
   if (brevoKey && !opts.attachments?.length) {
     const brevo = await sendViaBrevo(brevoKey, opts);

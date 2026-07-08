@@ -39,10 +39,14 @@ function memStore() {
   return globalThis.__wd_email_verify__;
 }
 
-/** True when we can actually send verification emails (Brevo or Resend). */
+/** True when we can actually send verification emails (Gmail/Brevo/Resend). */
 export async function emailVerificationAvailable(): Promise<boolean> {
   const { getConfig } = await import("./runtime-config");
-  return Boolean((await getConfig("BREVO_API_KEY")) || (await getConfig("RESEND_API_KEY")));
+  return Boolean(
+    ((await getConfig("GMAIL_USER")) && (await getConfig("GMAIL_APP_PASSWORD"))) ||
+      (await getConfig("BREVO_API_KEY")) ||
+      (await getConfig("RESEND_API_KEY"))
+  );
 }
 
 /**
