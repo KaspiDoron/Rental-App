@@ -113,12 +113,27 @@ export function PlanCard({
         </div>
       )}
       <ul className="mt-2 space-y-1">
-        {plan.features.map((f) => (
-          <li key={f} className="flex items-center gap-1.5 text-[12px] font-semibold text-soft">
-            <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-savings" />
-            {f}
-          </li>
-        ))}
+        {plan.features.map((f) => {
+          // Make the marquee Ultra feature - agents talking in the shop's own
+          // language - glow so it stands out as the headline perk.
+          const glow = /local language|native language|local dialect/i.test(f);
+          return glow ? (
+            <li
+              key={f}
+              className="sponsored-glow flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-brandblue/10 via-[#7c5cff]/10 to-brandred/10 px-2 py-1.5 text-[12px] font-extrabold text-strong"
+            >
+              <span className="shrink-0">🌐</span>
+              <span className="bg-gradient-to-r from-brandblue via-[#7c5cff] to-brandred bg-clip-text text-transparent">
+                {f}
+              </span>
+            </li>
+          ) : (
+            <li key={f} className="flex items-center gap-1.5 text-[12px] font-semibold text-soft">
+              <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-savings" />
+              {f}
+            </li>
+          );
+        })}
       </ul>
       {current && (
         <div className="mt-3 w-full rounded-2xl bg-savings-soft py-2.5 text-center text-[13px] font-extrabold text-savings">

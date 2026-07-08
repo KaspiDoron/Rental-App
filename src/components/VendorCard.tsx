@@ -20,6 +20,8 @@ export function VendorCard({
   rfq,
   plan,
   waConnected,
+  localLang,
+  region,
   onBook,
   onReviews,
   onBargain,
@@ -30,6 +32,8 @@ export function VendorCard({
   rfq: StructuredRFQ | null;
   plan?: string;
   waConnected: boolean;
+  localLang?: boolean;
+  region?: string;
   onBook: (vendor: Vendor) => void;
   onReviews: (vendor: Vendor) => void;
   onBargain: (vendor: Vendor) => void;
@@ -85,6 +89,8 @@ export function VendorCard({
           kind: "rfq",
           rfq,
           round: 0,
+          region,
+          localLang: Boolean(localLang),
         }),
       });
       const d = await res.json();

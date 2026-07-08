@@ -288,7 +288,7 @@ export async function composeBargain(opts: {
   // Recent conversation, oldest first, so the agent never re-asks anything
   // the shop already answered.
   history?: string;
-}): Promise<{ message: string; tacticId: string; tacticLabel: string }> {
+}): Promise<{ message: string; tacticId: string; tacticLabel: string; english?: string }> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
   // Sane target: the market floor when we know it, otherwise a modest 15% cut.
   // Clamped so we never ask below the floor or below 60% of the quote.
@@ -360,13 +360,32 @@ export async function composeBargain(opts: {
       ? `Write our single friendly ask for ${money(target, cur)}/day. All amounts in ${cur}.`
       : `Write one friendly message asking their best price. All amounts in ${cur}.`);
 
+  // When bargaining in the LOCAL language, ask for BOTH the local message and
+  // a short plain-English gloss (as JSON) so the traveller can read what their
+  // agent is saying on their behalf.
+  const localSystem = opts.localLanguage
+    ? system +
+      ' Reply ONLY as JSON: { "message": "<the local-language message>", "english": "<a short plain-English translation of it>" }.'
+    : system;
+
   const llm = await chat([
-    { role: "system", content: system },
+    { role: "system", content: localSystem },
     { role: "user", content: user },
   ]);
 
   const { sanitizeAiText } = await import("./text");
   if (llm) {
+    if (opts.localLanguage) {
+      const parsed = extractJson<{ message?: string; english?: string }>(llm);
+      if (parsed?.message) {
+        return {
+          message: sanitizeAiText(parsed.message),
+          english: parsed.english ? sanitizeAiText(parsed.english) : undefined,
+          tacticId: tactic.id,
+          tacticLabel: tactic.label,
+        };
+      }
+    }
     return {
       message: sanitizeAiText(llm),
       tacticId: tactic.id,

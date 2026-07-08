@@ -11,6 +11,7 @@ import { useI18n } from "@/lib/i18n";
 interface Msg {
   text: string;
   at?: string;
+  english?: string; // Ultra local-language: English gloss of what we said
 }
 
 function summarize(m: string): string {
@@ -35,6 +36,11 @@ function Row({
         {emoji} {label}: &ldquo;{summarize(msg.text)}&rdquo;
       </summary>
       <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">{msg.text}</p>
+      {msg.english && (
+        <p className="mt-1 whitespace-pre-wrap rounded-lg bg-brandblue-soft p-1.5 text-[10px] font-bold leading-relaxed text-brandblue">
+          🌐 In English: {msg.english}
+        </p>
+      )}
     </details>
   );
 }

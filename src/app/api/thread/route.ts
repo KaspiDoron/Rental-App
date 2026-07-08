@@ -13,9 +13,9 @@ export async function GET(req: Request) {
   const vendorId = url.searchParams.get("vendorId") ?? "";
   if (!vendorId) return NextResponse.json({ error: "vendorId required" }, { status: 400 });
 
-  const outbound = await sbSelect<{ body: string; received_at: string; to_number: string }>(
+  const outbound = await sbSelect<{ body: string; received_at: string; to_number: string; raw: { englishGloss?: string } | null }>(
     "whatsapp_messages",
-    `select=body,received_at,to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=body,received_at,to_number,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       session.email
     )}&raw->>vendorId=eq.${encodeURIComponent(vendorId)}&order=received_at.desc&limit=1`
   );
@@ -33,7 +33,9 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json({
-    sent: sent ? { text: sent.body, at: sent.received_at } : null,
+    sent: sent
+      ? { text: sent.body, at: sent.received_at, english: sent.raw?.englishGloss }
+      : null,
     received: received ? { text: received.body, at: received.received_at } : null,
   });
 }

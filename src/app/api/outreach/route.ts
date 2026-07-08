@@ -81,6 +81,7 @@ export async function POST(req: Request) {
       rfq: body.rfq ?? null,
       region: String(body.region ?? ""),
       plan: session.plan,
+      localLang: Boolean(body.localLang) && session.plan === "ultra",
     },
   });
   if (!guard.allow) {
@@ -168,6 +169,7 @@ export async function POST(req: Request) {
         rfq: body.rfq ?? null,
         region: String(body.region ?? ""),
         plan: session.plan,
+        localLang: Boolean(body.localLang) && session.plan === "ultra",
       },
     },
   ]);

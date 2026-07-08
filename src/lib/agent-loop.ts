@@ -30,6 +30,7 @@ export interface ThreadContext {
   region?: string;
   plan?: string;
   channel?: string;
+  localLang?: boolean;
 }
 
 interface OutboundRow {
@@ -187,6 +188,7 @@ export async function processVendorReply(opts: {
   let followUp: string | null = null;
   let followKind = "clarify";
   let nextRound = round;
+  let englishGloss: string | undefined;
 
   if (!usablePrice && !verified && extraction.clarifyMessage && autoClarifies === 0) {
     // Genuinely no price yet and we have never clarified: ask once, politely.
@@ -207,6 +209,7 @@ export async function processVendorReply(opts: {
       const target = floorPrice
         ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
         : Math.round(usablePrice * 0.85);
+      const useLocal = Boolean(ctx.localLang) && ctx.plan === "ultra";
       const draft = await composeBargain({
         rfq,
         vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
@@ -214,7 +217,7 @@ export async function processVendorReply(opts: {
         region: ctx.region || undefined,
         round: 1,
         currency: cur,
-        localLanguage: ctx.plan === "ultra",
+        localLanguage: useLocal,
         targetPricePerDay: target,
         floorPricePerDay: floorPrice,
         history,
@@ -222,6 +225,9 @@ export async function processVendorReply(opts: {
       followUp = draft.message;
       followKind = "bargain";
       nextRound = 1;
+      // Ultra local-language: also keep a plain-English gloss so the user can
+      // read what the agent is saying on their behalf.
+      if (useLocal && draft.english) englishGloss = draft.english;
       await sbInsert("bargain_drafts", [
         {
           user_email: ctx.sender ?? null,
@@ -265,7 +271,13 @@ export async function processVendorReply(opts: {
           body: verdict.text,
           type: "text",
           direction: "outbound",
-          raw: { ...ctx, kind: `auto-${followKind}`, round: nextRound, auto: true },
+          raw: {
+            ...ctx,
+            kind: `auto-${followKind}`,
+            round: nextRound,
+            auto: true,
+            ...(englishGloss ? { englishGloss } : {}),
+          },
         },
       ]);
     }

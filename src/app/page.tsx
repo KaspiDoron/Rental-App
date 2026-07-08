@@ -97,10 +97,21 @@ export default function Home() {
   const [waConnected, setWaConnected] = useState(false);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
+  // Ultra option: let the agents bargain in the shop's LOCAL language. OFF by
+  // default (optional), persisted, and gated - free/pro see the upgrade sheet.
+  const [localLang, setLocalLang] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [restored, setRestored] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
+
+  // Restore the local-language preference.
+  useEffect(() => {
+    try {
+      setLocalLang(localStorage.getItem("wd_local_lang") === "1");
+    } catch {}
+  }, []);
+  const localLangActive = localLang && session?.plan === "ultra";
 
   // Fresh random suggestion chips on every visit (client-only so SSR markup
   // stays deterministic).
@@ -585,6 +596,45 @@ export default function Home() {
 
         <AdBanner plan={session?.plan} />
 
+        {/* Ultra: bargain in the shop's LOCAL language (optional toggle). */}
+        {rfq && (
+          <button
+            onClick={() => {
+              if (session?.plan !== "ultra") {
+                setUpgradeOpen(true);
+                return;
+              }
+              const next = !localLang;
+              setLocalLang(next);
+              try {
+                localStorage.setItem("wd_local_lang", next ? "1" : "0");
+              } catch {}
+            }}
+            className={`mt-3 flex w-full items-center justify-between rounded-2xl border-2 px-4 py-2.5 text-[13px] font-extrabold transition ${
+              localLangActive
+                ? "border-transparent bg-gradient-to-r from-brandblue via-[#7c5cff] to-brandred text-white shadow-lg"
+                : "border-line bg-card text-soft"
+            }`}
+          >
+            <span>🌐 {t("Bargain in the shop's local language")}</span>
+            <span className="flex items-center gap-1">
+              {session?.plan !== "ultra" && <span className="text-[10px]">✦ Ultra</span>}
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] ${
+                  localLangActive ? "bg-white/25" : "bg-card2 text-faint"
+                }`}
+              >
+                {localLangActive ? t("ON") : t("OFF")}
+              </span>
+            </span>
+          </button>
+        )}
+        {localLangActive && (
+          <p className="mt-1 text-[11px] font-bold text-brandblue">
+            🌐 {t("Agents will haggle like a local - and you'll see the English translation of every message.")}
+          </p>
+        )}
+
         {/* Mass bargain: one tap asks several shops at once (Pro/Ultra) */}
         {vendors.length > 1 && rfq && (
           <div className="mt-3">
@@ -609,6 +659,7 @@ export default function Home() {
                       message: rfq.vendorMessage,
                       rfq,
                       region: origin.label,
+                      localLang: localLangActive,
                     }),
                   });
                   const d = await res.json();
@@ -694,9 +745,11 @@ export default function Home() {
                   vendor={v}
                   rfq={rfq}
                   plan={session?.plan}
+                  waConnected={waConnected}
+                  localLang={localLangActive}
+                  region={origin.label}
                   onBook={setBookingVendor}
                   onReviews={setReviewsVendor}
-                  waConnected={waConnected}
                   onBargain={setBargainVendor}
                   onStage={(id, stage) => patchVendor(id, { stage })}
                   onCustomMessage={customMessage}
