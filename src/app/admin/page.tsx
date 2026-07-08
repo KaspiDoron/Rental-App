@@ -90,6 +90,31 @@ export default function AdminPage() {
   >([]);
   const [promptDraft, setPromptDraft] = useState<Record<string, string>>({});
   const [promptSaved, setPromptSaved] = useState<string | null>(null);
+  const [xPosts, setXPosts] = useState<
+    { text: string; hashtags: string[]; imageIdea: string; angle: string }[]
+  >([]);
+  const [xTheme, setXTheme] = useState("");
+  const [xBusy, setXBusy] = useState(false);
+  const [xCopied, setXCopied] = useState<number | null>(null);
+  const [xErr, setXErr] = useState<string | null>(null);
+
+  async function genXPosts() {
+    setXBusy(true);
+    setXErr(null);
+    try {
+      const r = await (
+        await fetch("/api/admin/x-posts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ theme: xTheme }),
+        })
+      ).json();
+      if (r.posts) setXPosts(r.posts);
+      else setXErr(r.error ?? "Could not generate posts.");
+    } finally {
+      setXBusy(false);
+    }
+  }
 
   async function loadCommand() {
     const r = await (await fetch("/api/admin/command")).json();
@@ -544,6 +569,70 @@ export default function AdminPage() {
                 >
                   ↻ Refresh
                 </button>
+              </div>
+
+              {/* X (Twitter) post studio - top model drafts 5 on-trend posts */}
+              <div className="surface rounded-blob p-4">
+                <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+                  𝕏 Post studio
+                  <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
+                    Top model
+                  </span>
+                </div>
+                <p className="mb-2 text-[11px] text-faint">
+                  Our best AI drafts 5 ready-to-post X ideas in WheelDeal&apos;s playful-pro
+                  voice - on-trend hooks, emojis, hashtags and a funny image idea. Leave
+                  the box empty for fresh trending ideas, or steer it with a theme.
+                </p>
+                <div className="mb-2 flex gap-2">
+                  <input
+                    value={xTheme}
+                    onChange={(e) => setXTheme(e.target.value)}
+                    placeholder="Optional theme, e.g. Songkran in Thailand, scooter myths..."
+                    className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                  />
+                  <button
+                    onClick={genXPosts}
+                    disabled={xBusy}
+                    className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
+                  >
+                    {xBusy ? <LoadingDots light /> : xPosts.length ? "↻ New 5" : "✨ Draft 5"}
+                  </button>
+                </div>
+                {xErr && <p className="mb-1 text-[11px] font-bold text-brandred">{xErr}</p>}
+                <div className="space-y-2">
+                  {xPosts.map((p, i) => (
+                    <div key={i} className="rounded-xl border-2 border-line p-2.5">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold uppercase text-brandblue">
+                          {p.angle || `Option ${i + 1}`}
+                        </span>
+                        <button
+                          onClick={() => {
+                            const full = `${p.text}\n\n${p.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")}`;
+                            navigator.clipboard?.writeText(full);
+                            setXCopied(i);
+                            setTimeout(() => setXCopied(null), 1500);
+                          }}
+                          className="btn btn-sm chip rounded-lg border-2 border-line px-2 text-[10px] font-extrabold text-brandblue"
+                        >
+                          {xCopied === i ? "Copied ✓" : "Copy"}
+                        </button>
+                      </div>
+                      <p className="whitespace-pre-wrap text-[12px] text-strong">{p.text}</p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {p.hashtags.map((h) => (
+                          <span key={h} className="text-[10px] font-bold text-brandblue">
+                            {h.startsWith("#") ? h : `#${h}`}
+                          </span>
+                        ))}
+                      </div>
+                      {p.imageIdea && (
+                        <div className="mt-1 text-[10px] text-faint">📸 {p.imageIdea}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </>
           ) : (
