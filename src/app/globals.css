@@ -305,3 +305,13 @@ input, textarea, select, button {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Sponsored ("Recommended") cards: animated gradient glow frame */
+@keyframes sponsored-glow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(47,111,237,0.65), 0 0 18px rgba(124,92,255,0.35); }
+  50% { box-shadow: 0 0 0 2px rgba(124,92,255,0.75), 0 0 26px rgba(47,111,237,0.5); }
+}
+.sponsored-glow {
+  animation: sponsored-glow 2.6s ease-in-out infinite;
+  border-color: transparent !important;
+}

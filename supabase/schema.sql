@@ -351,3 +351,17 @@ alter table public.wa_outbox enable row level security;
 -- ---- WA idle pause (session quiets down while the app is not in use) ----------
 alter table public.wa_sessions add column if not exists last_active timestamptz;
 alter table public.wa_sessions add column if not exists idle_paused boolean default false;
+
+-- ---- Sponsored rental shops (owner-managed, paid placement) -------------------
+-- Shops that pay to appear at the top of results with a glowing card and a
+-- "Recommended" tag. Matched against Google results by phone digits or name.
+create table if not exists public.sponsored_shops (
+  id          bigint generated always as identity primary key,
+  name        text not null,          -- shop name exactly as on Google Maps
+  place_query text,                   -- optional "name, area" hint for matching
+  phone       text,                   -- digits-only phone for exact matching
+  active      boolean not null default true,
+  notes       text,                   -- deal terms, contact, price paid...
+  created_at  timestamptz not null default now()
+);
+alter table public.sponsored_shops enable row level security;

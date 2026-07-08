@@ -46,8 +46,45 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<
-    "analytics" | "keys" | "users" | "feedback" | "billing" | "data"
-  >("analytics");
+    "command" | "analytics" | "agents" | "keys" | "users" | "feedback" | "billing" | "data"
+  >("command");
+  // Command center + agent studio data
+  const [command, setCommand] = useState<{
+    alerts: { level: string; title: string; detail: string; href?: string }[];
+    stats: Record<string, number>;
+  } | null>(null);
+  const [floors, setFloors] = useState<
+    { id: number; region_key: string; vehicle_key: string; currency: string; floor_per_day: number; typical_per_day: number | null; source: string }[]
+  >([]);
+  const [floorRegion, setFloorRegion] = useState("");
+  const [floorBusy, setFloorBusy] = useState(false);
+  const [floorMsg, setFloorMsg] = useState<string | null>(null);
+  const [waSec, setWaSec] = useState<{
+    policies: Record<string, number | boolean>;
+    reputation: { sender_key: string; trust_score: number; sent_total: number; replies_total: number }[];
+    outbox: { id: number; to_number: string; not_before: string }[];
+  } | null>(null);
+  const [sponsors, setSponsors] = useState<
+    { id: number; name: string; phone: string | null; active: boolean; notes: string | null }[]
+  >([]);
+  const [spName, setSpName] = useState("");
+  const [spPhone, setSpPhone] = useState("");
+  const [spNotes, setSpNotes] = useState("");
+
+  async function loadCommand() {
+    const r = await (await fetch("/api/admin/command")).json();
+    if (r.alerts) setCommand(r);
+  }
+  async function loadAgentStudio() {
+    const [m, s, sp] = await Promise.all([
+      (await fetch("/api/admin/market")).json(),
+      (await fetch("/api/admin/wa-security")).json(),
+      (await fetch("/api/admin/sponsored")).json(),
+    ]);
+    if (m.rows) setFloors(m.rows);
+    if (s.policies) setWaSec(s);
+    if (sp.rows) setSponsors(sp.rows);
+  }
   const [dataTables, setDataTables] = useState<{ name: string; label: string; count: number }[]>([]);
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [dataRows, setDataRows] = useState<Record<string, unknown>[]>([]);
@@ -234,6 +271,8 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab === "keys" && waHosts === null && !waHostsBusy) loadWaHosts();
     if (tab === "data" && dataTables.length === 0) loadDataTables();
+    if (tab === "command" && !command) loadCommand().catch(() => {});
+    if (tab === "agents" && floors.length === 0 && !waSec) loadAgentStudio().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -395,24 +434,103 @@ export default function AdminPage() {
 
   return (
     <Shell>
-      <div className="surface-strong mb-4 flex gap-1 rounded-2xl p-1">
-        {(["analytics", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
+      <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
+        {(["command", "analytics", "agents", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`btn btn-sm flex-1 rounded-xl py-2 text-[11px] font-extrabold capitalize ${
+            className={`btn btn-sm shrink-0 rounded-xl px-3 py-2 text-[11px] font-extrabold capitalize ${
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t}
+            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
+            {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
+              ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
+              : ""}
           </button>
         ))}
       </div>
 
       {!loaded && <SkeletonList count={4} />}
 
-      {loaded && tab === "analytics" && analytics && (
+      {loaded && tab === "command" && (
+        <div className="space-y-3">
+          {/* Live pulse */}
+          {command ? (
+            <>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                {[
+                  { k: "waSessions", label: "WA sessions live", emoji: "🟢" },
+                  { k: "repliesToday", label: "Shop replies (24h)", emoji: "📥" },
+                  { k: "offersToday", label: "Offers landed (24h)", emoji: "🤝" },
+                  { k: "queuedMessages", label: "Queued messages", emoji: "🕘" },
+                  { k: "openIssues", label: "Open issues", emoji: "🐛" },
+                ].map((s) => (
+                  <div key={s.k} className="surface rounded-2xl p-3 text-center">
+                    <div className="text-xl font-extrabold text-strong">
+                      {s.emoji} {command.stats[s.k] ?? 0}
+                    </div>
+                    <div className="text-[10px] font-bold text-faint">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Needs your attention NOW */}
+              <div className="surface rounded-blob p-4">
+                <div className="mb-2 text-[13px] font-extrabold text-strong">
+                  🎯 Needs your attention
+                </div>
+                {command.alerts.length === 0 ? (
+                  <p className="rounded-xl bg-savings-soft p-3 text-center text-[12px] font-extrabold text-savings">
+                    ✓ All clear - nothing needs you right now.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {command.alerts.map((a, i) => (
+                      <button
+                        key={i}
+                        onClick={() => a.href && setTab(a.href as typeof tab)}
+                        className={`block w-full rounded-xl border-2 p-2.5 text-left ${
+                          a.level === "critical"
+                            ? "border-brandred/40 bg-brandred-soft"
+                            : a.level === "warning"
+                            ? "border-brandyellow/40 bg-brandyellow-soft"
+                            : "border-line bg-card2"
+                        }`}
+                      >
+                        <div
+                          className={`text-[12px] font-extrabold ${
+                            a.level === "critical"
+                              ? "text-brandred"
+                              : a.level === "warning"
+                              ? "text-[#8a6100] dark:text-brandyellow"
+                              : "text-strong"
+                          }`}
+                        >
+                          {a.level === "critical" ? "🚨" : a.level === "warning" ? "⚠️" : "ℹ️"}{" "}
+                          {a.title}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-soft">{a.detail}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => loadCommand()}
+                  className="btn btn-ghost btn-sm mt-2 w-full rounded-xl border-2 border-line text-[11px] font-extrabold text-brandblue"
+                >
+                  ↻ Refresh
+                </button>
+              </div>
+            </>
+          ) : (
+            <SkeletonList count={3} />
+          )}
+        </div>
+      )}
+
+      {loaded && tab === "agents" && (
         <div className="space-y-3">
           {/* Teach the agents automatically from your OWN WhatsApp chats */}
           <div className="surface rounded-blob p-4">
@@ -553,6 +671,281 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+
+          {/* Market floor prices: the table the agent anchors its ONE ask to */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">
+                📉 Cheapest-price table (market floors)
+              </div>
+              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+                {floors.length} rows
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              The lowest realistic daily price per area and vehicle bucket. The AI
+              researches each area weekly (first search triggers it); your manual
+              edits always win. The bargaining agent never asks below these floors.
+            </p>
+            <div className="mb-2 flex gap-2">
+              <input
+                value={floorRegion}
+                onChange={(e) => setFloorRegion(e.target.value)}
+                placeholder="Research an area now, e.g. koh samui, thailand"
+                className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+              />
+              <button
+                onClick={async () => {
+                  if (!floorRegion.trim()) return;
+                  setFloorBusy(true);
+                  setFloorMsg(null);
+                  try {
+                    const r = await (
+                      await fetch("/api/admin/market", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ region: floorRegion }),
+                      })
+                    ).json();
+                    setFloorMsg(r.note ?? r.error ?? null);
+                    const m = await (await fetch("/api/admin/market")).json();
+                    if (m.rows) setFloors(m.rows);
+                  } finally {
+                    setFloorBusy(false);
+                  }
+                }}
+                disabled={floorBusy}
+                className="btn btn-primary btn-sm rounded-xl px-3 text-[11px] disabled:opacity-60"
+              >
+                {floorBusy ? <LoadingDots light /> : "🔍 Research"}
+              </button>
+            </div>
+            {floorMsg && <p className="mb-2 text-[11px] font-bold text-savings">{floorMsg}</p>}
+            {floors.length === 0 ? (
+              <p className="rounded-xl bg-card2 p-3 text-center text-[11px] font-bold text-faint">
+                No areas researched yet - it happens automatically on the first search
+                in an area, or run one above.
+              </p>
+            ) : (
+              <div className="max-h-72 overflow-y-auto rounded-xl border-2 border-line">
+                <table className="w-full text-[11px]">
+                  <thead className="sticky top-0 bg-card2 text-left text-[10px] uppercase text-faint">
+                    <tr>
+                      <th className="p-1.5">Area</th>
+                      <th className="p-1.5">Vehicle</th>
+                      <th className="p-1.5">Floor/day</th>
+                      <th className="p-1.5">Typical</th>
+                      <th className="p-1.5">Src</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {floors.map((f) => (
+                      <tr key={f.id} className="border-t border-line text-soft">
+                        <td className="p-1.5">{f.region_key}</td>
+                        <td className="p-1.5 font-bold">{f.vehicle_key}</td>
+                        <td className="p-1.5">
+                          <input
+                            defaultValue={f.floor_per_day}
+                            onBlur={async (e) => {
+                              const v = Number(e.target.value);
+                              if (v > 0 && v !== f.floor_per_day) {
+                                await fetch("/api/admin/market", {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ id: f.id, floor: v }),
+                                });
+                                const m = await (await fetch("/api/admin/market")).json();
+                                if (m.rows) setFloors(m.rows);
+                              }
+                            }}
+                            className="w-16 rounded border border-line bg-card p-1 text-strong"
+                          />{" "}
+                          {f.currency}
+                        </td>
+                        <td className="p-1.5">{f.typical_per_day ?? "-"}</td>
+                        <td className="p-1.5">{f.source === "owner" ? "👑" : "🤖"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Anti-Ban engine: trust scores + every policy knob, live-editable */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 text-[13px] font-extrabold text-strong">
+              🛡 Anti-Ban engine
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              Dynamic trust scores per connected number (replies build trust and
+              relax hourly limits) and every policy knob - edits apply live, no
+              redeploy.
+            </p>
+            {waSec ? (
+              <>
+                {waSec.reputation.length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {waSec.reputation.map((r) => (
+                      <div
+                        key={r.sender_key}
+                        className="flex items-center justify-between rounded-xl bg-card2 p-2 text-[11px]"
+                      >
+                        <span className="truncate font-bold text-soft">{r.sender_key}</span>
+                        <span
+                          className={`ml-2 shrink-0 font-extrabold ${
+                            r.trust_score < 15
+                              ? "text-brandred"
+                              : r.trust_score < 40
+                              ? "text-[#8a6100] dark:text-brandyellow"
+                              : "text-savings"
+                          }`}
+                        >
+                          trust {r.trust_score} · {r.sent_total} sent · {r.replies_total} replies
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(waSec.policies).map(([k, v]) => (
+                    <label key={k} className="rounded-xl border-2 border-line p-2 text-[10px] font-bold text-faint">
+                      {k.replace(/_/g, " ")}
+                      <input
+                        defaultValue={String(v)}
+                        onBlur={async (e) => {
+                          const val = e.target.value.trim();
+                          if (val && val !== String(v)) {
+                            const r = await (
+                              await fetch("/api/admin/wa-security", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ key: k, value: val }),
+                              })
+                            ).json();
+                            if (r.policies) setWaSec({ ...waSec, policies: r.policies });
+                          }
+                        }}
+                        className="mt-0.5 w-full rounded border border-line bg-card p-1 text-[12px] font-extrabold text-strong"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <SkeletonList count={2} />
+            )}
+          </div>
+
+          {/* Sponsored shops: paid placements with the glowing Recommended card */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">⭐ Sponsored shops</div>
+              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+                {sponsors.filter((s) => s.active).length} live
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              Shops that pay for placement appear FIRST with a glowing frame and a
+              &ldquo;Recommended shop&rdquo; tag. Match by the shop&apos;s Google Maps name
+              and/or phone number.
+            </p>
+            <div className="mb-2 space-y-1.5">
+              <input
+                value={spName}
+                onChange={(e) => setSpName(e.target.value)}
+                placeholder="Shop name exactly as on Google Maps"
+                className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+              />
+              <div className="flex gap-1.5">
+                <input
+                  value={spPhone}
+                  onChange={(e) => setSpPhone(e.target.value)}
+                  placeholder="Phone (optional, exact match)"
+                  className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                />
+                <input
+                  value={spNotes}
+                  onChange={(e) => setSpNotes(e.target.value)}
+                  placeholder="Deal notes (private)"
+                  className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                />
+              </div>
+              <button
+                onClick={async () => {
+                  if (!spName.trim()) return;
+                  const r = await (
+                    await fetch("/api/admin/sponsored", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ name: spName, phone: spPhone, notes: spNotes }),
+                    })
+                  ).json();
+                  if (r.rows) {
+                    setSponsors(r.rows);
+                    setSpName("");
+                    setSpPhone("");
+                    setSpNotes("");
+                  }
+                }}
+                className="btn btn-primary btn-sm w-full rounded-xl text-[12px]"
+              >
+                + Add sponsored shop
+              </button>
+            </div>
+            {sponsors.length > 0 && (
+              <div className="space-y-1.5">
+                {sponsors.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between rounded-xl border-2 border-line p-2 text-[11px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-extrabold text-strong">
+                        {s.active ? "⭐" : "💤"} {s.name}
+                      </div>
+                      <div className="truncate text-faint">
+                        {s.phone ?? "no phone"} {s.notes ? `· ${s.notes}` : ""}
+                      </div>
+                    </div>
+                    <div className="ml-2 flex shrink-0 gap-1.5">
+                      <button
+                        onClick={async () => {
+                          const r = await (
+                            await fetch("/api/admin/sponsored", {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ id: s.id, active: !s.active }),
+                            })
+                          ).json();
+                          if (r.rows) setSponsors(r.rows);
+                        }}
+                        className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-2 text-[10px] font-extrabold text-brandblue"
+                      >
+                        {s.active ? "Pause" : "Activate"}
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const r = await (
+                            await fetch(`/api/admin/sponsored?id=${s.id}`, { method: "DELETE" })
+                          ).json();
+                          if (r.rows) setSponsors(r.rows);
+                        }}
+                        className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-2 text-[10px] font-extrabold text-brandred"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {loaded && tab === "analytics" && analytics && (
+        <div className="space-y-3">
           {/* Cost tracker: every request against the free quotas + est. cost */}
           {costs && (
             <div className="surface rounded-blob p-4">

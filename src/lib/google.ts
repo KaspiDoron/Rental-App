@@ -263,6 +263,9 @@ export async function findRealVendors(
         if (fast.has((v.whatsapp ?? "").replace(/[^\d]/g, ""))) v.fastResponder = true;
       }
     }
+    // Paid placements: glowing "Recommended" cards pinned to the top.
+    const { tagSponsored } = await import("./sponsored");
+    await tagSponsored(list);
     const out = { vendors: list };
     cacheSet(ck, out, 10 * 60_000);
     return out;

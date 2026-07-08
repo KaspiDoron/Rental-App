@@ -33,12 +33,39 @@ const MapView = dynamic(() => import("@/components/MapView"), {
   ),
 });
 
-const EXAMPLES = [
+// Dozens of ready-made searches; each visit shows a random 3-4 of them so the
+// home screen always feels fresh.
+const ALL_EXAMPLES = [
   "125cc automatic scooter with a phone mount, under 20,000 km, for 3 days",
   "Automatic SUV, 5 seats, 5 days, GPS + child seat, cheapest possible",
   "Economy automatic car, 7 days, hotel delivery, best price",
   "Manual motorcycle with helmet and storage box, cheapest possible, 1 week",
+  "160cc scooter (NMax or PCX), 2 helmets, 5 days, delivery to my hotel",
+  "Cheap 110cc scooter for 2 weeks, long-term discount",
+  "Automatic scooter for 1 day, need it in the next hour",
+  "300cc manual motorcycle, 3 days, helmet + gloves",
+  "Big bike 650cc+, weekend ride, 2 days",
+  "7-seater van, airport pickup, 4 days, cheapest",
+  "Luxury sedan for 2 days, wedding, white if possible",
+  "Small automatic car, 10 days, unlimited mileage",
+  "Scooter with 2 helmets and a child seat, 4 days",
+  "125cc scooter, month-long rental, best monthly rate",
+  "4x4 SUV for a mountain trip, 3 days, full insurance",
+  "Manual motorcycle 150cc, 5 days, phone mount + raincoat",
+  "Electric scooter or small EV, 2 days, city only",
+  "Automatic car with GPS, 6 days, hotel delivery, no deposit if possible",
+  "Vespa-style scooter, 3 days, photo-friendly color",
+  "Cheapest anything with 2 wheels for tomorrow, 1 day",
+  "Sedan with driver-quality comfort, 8 days, best total price",
+  "Scooter under 15,000 km with new tires, 1 week",
+  "Motorbike for two people with top box, 5 days",
+  "Compact car, 3 days, need child booster seat",
 ];
+
+function pickExamples(): string[] {
+  const shuffled = [...ALL_EXAMPLES].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3 + Math.floor(Math.random() * 2)); // 3-4 chips
+}
 
 const DEFAULT_ORIGIN: Origin = {
   label: "Canggu, Bali, Indonesia",
@@ -51,7 +78,8 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
   const [radiusKm, setRadiusKm] = useState(8);
-  const [rawText, setRawText] = useState(EXAMPLES[0]);
+  const [examples, setExamples] = useState<string[]>(ALL_EXAMPLES.slice(0, 4));
+  const [rawText, setRawText] = useState(ALL_EXAMPLES[0]);
   const [rfq, setRfq] = useState<StructuredRFQ | null>(null);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [source, setSource] = useState<"google" | "demo" | "google-error" | null>(null);
@@ -74,6 +102,16 @@ export default function Home() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
 
+  // Fresh random suggestion chips on every visit (client-only so SSR markup
+  // stays deterministic).
+  useEffect(() => {
+    const picked = pickExamples();
+    setExamples(picked);
+    setRawText((prev) =>
+      ALL_EXAMPLES.includes(prev) ? picked[0] : prev
+    );
+  }, []);
+
   // Restore a previous search so it survives navigating to Profile/Admin and
   // back. Kept in sessionStorage; cleared only by the explicit Clear button.
   useEffect(() => {
@@ -86,7 +124,7 @@ export default function Home() {
           setRfq(s.rfq ?? null);
           setSource(s.source ?? null);
           setSourceError(s.sourceError ?? null);
-          setRawText(s.rawText ?? EXAMPLES[0]);
+          setRawText(s.rawText ?? ALL_EXAMPLES[0]);
           if (s.origin) setOrigin(s.origin);
           if (typeof s.radiusKm === "number") setRadiusKm(s.radiusKm);
           if (s.filters) setFilters(s.filters);
@@ -403,7 +441,7 @@ export default function Home() {
             placeholder={t("e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount")}
           />
           <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
-            {EXAMPLES.map((ex) => (
+            {examples.map((ex) => (
               <button
                 key={ex}
                 onClick={() => setRawText(ex)}
@@ -848,6 +886,9 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
     v.offer ? (v.offer.listPricePerDay - v.offer.pricePerDay) * days : -1;
 
   list.sort((a, b) => {
+    // Paid placements always lead, whatever the sort.
+    const sp = (b.sponsored ? 1 : 0) - (a.sponsored ? 1 : 0);
+    if (sp !== 0) return sp;
     switch (f.sort) {
       case "rating":
         return b.rating - a.rating;

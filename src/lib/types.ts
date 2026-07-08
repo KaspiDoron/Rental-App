@@ -70,6 +70,7 @@ export interface Vendor {
   priceLevel?: number;
   distanceKm?: number;
   fastResponder?: boolean; // in the fastest-replying quartile (Ultra insight)
+  sponsored?: boolean; // paid placement: glowing card, pinned to the top
   // live state (client-side)
   stage?: TrackerStage;
   offer?: Offer;

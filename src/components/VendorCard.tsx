@@ -174,7 +174,16 @@ export function VendorCard({
   }
 
   return (
-    <div className="surface lift overflow-hidden rounded-blob">
+    <div
+      className={`surface lift overflow-hidden rounded-blob ${
+        vendor.sponsored ? "sponsored-glow" : ""
+      }`}
+    >
+      {vendor.sponsored && (
+        <div className="flex items-center justify-center gap-1 bg-gradient-to-r from-brandblue via-[#7c5cff] to-brandred py-1 text-[10px] font-extrabold uppercase tracking-wide text-white">
+          ⭐ {t("Recommended shop")}
+        </div>
+      )}
       {vendor.photoUrl && (
         <div className="relative h-32 w-full">
           {/* eslint-disable-next-line @next/next/no-img-element */}
