@@ -8,6 +8,8 @@ import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
+import { moneyLocal } from "@/lib/currency";
+import { ThreadPeek } from "./ThreadPeek";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
 // only its real reply produces a price. Everything happens INSIDE the app:
@@ -46,18 +48,20 @@ export function VendorCard({
     suggestion?: string;
   }>({ status: "idle" });
   const [rfqState, setRfqState] = useState<
-    "idle" | "sending" | "sent" | "no-phone" | "not-connected" | "rate-limited"
+    "idle" | "sending" | "sent" | "queued" | "no-phone" | "not-connected" | "rate-limited"
   >("idle");
   const [rfqError, setRfqError] = useState<string | null>(null);
+  // "Already asked" survives navigation: it derives from the vendor's stage
+  // (persisted with the search), not from this component's local state.
+  const alreadyAsked = ["rfq-sent", "awaiting-response", "negotiating"].includes(
+    vendor.stage ?? ""
+  );
+  const askDone = alreadyAsked || rfqState === "sent" || rfqState === "queued";
   const [galleryOpen, setGalleryOpen] = useState(false);
 
-  // Short, honest preview of a message we sent (first sentence, ~70 chars).
-  const summarizeMsg = (m: string): string => {
-    const first = m.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/)[0] ?? m;
-    return first.length > 70 ? `${first.slice(0, 67)}...` : first;
-  };
-
   const offer = vendor.offer;
+  // The offer's own currency symbol - prices display in the shop's money.
+  const curSymbol = offer ? moneyLocal(0, offer.currency).replace(/[\d.,\s]/g, "") || "$" : "$";
   const savings =
     offer && rfq
       ? Math.max(0, (offer.listPricePerDay - offer.pricePerDay) * rfq.durationDays)
@@ -88,6 +92,15 @@ export function VendorCard({
         setRfqState("sent");
         onStage(vendor.id, "rfq-sent");
         setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200);
+      } else if (d.queued) {
+        // Shop is closed: the anti-ban engine queued the message for their
+        // opening hours - it WILL go out, so the ask is spent.
+        setRfqState("queued");
+        onStage(vendor.id, "rfq-sent");
+      } else if (d.halted) {
+        // Already asked and awaiting the reply (server-side truth).
+        setRfqState("sent");
+        onStage(vendor.id, "awaiting-response");
       } else if (d.reason === "no-phone") {
         setRfqState("no-phone");
       } else if (d.rateLimited) {
@@ -113,13 +126,34 @@ export function VendorCard({
     const verdict = (await onCustomMessage(vendor.id, draft.trim())) as {
       allowed: boolean;
       sent?: boolean;
+      configured?: boolean;
+      queued?: boolean;
+      reconnecting?: boolean;
+      rateLimited?: boolean;
+      error?: string;
       reason?: string;
       suggestion?: string;
     };
     if (verdict.allowed && !verdict.sent) {
+      if (verdict.queued) {
+        // Anti-ban queue (shop closed / pacing): the message WILL go out.
+        setChatState({ status: "sent" });
+        setDraft("");
+        setTimeout(() => {
+          setChatOpen(false);
+          setChatState({ status: "idle" });
+        }, 1600);
+        return;
+      }
+      // Only claim "connect WhatsApp" when that is actually the problem -
+      // a temporary reconnect or rate pause must never masquerade as it.
       setChatState({
         status: "blocked",
-        reason: t("Not sent: connect your WhatsApp in Profile first - messages leave WheelDeal only through WhatsApp."),
+        reason:
+          verdict.configured === false
+            ? t("Not sent: connect your WhatsApp in Profile first - messages leave WheelDeal only through WhatsApp.")
+            : verdict.error ??
+              t("Not sent - a temporary hiccup on the WhatsApp connection. Try again in a few seconds."),
       });
       return;
     }
@@ -229,14 +263,14 @@ export function VendorCard({
               <span>{t(stageCaption(vendor.stage).text)}</span>
             </div>
           )}
-          {/* Control: a short summary of what your agent actually said. */}
-          {rfq?.vendorMessage && vendor.stage && vendor.stage !== "queued" && (
-            <details className="mt-1.5 rounded-xl border-2 border-line p-2 text-[11px]">
-              <summary className="cursor-pointer font-extrabold text-brandblue">
-                💬 {t("What your agent said")}: &ldquo;{summarizeMsg(rfq.vendorMessage)}&rdquo;
-              </summary>
-              <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">{rfq.vendorMessage}</p>
-            </details>
+          {/* Control: the last message we sent + the shop's last reply, each
+              collapsible on its own, newest at the bottom. */}
+          {vendor.stage && vendor.stage !== "queued" && vendor.stage !== "locating-contact" && (
+            <ThreadPeek
+              vendorId={vendor.id}
+              fallbackSent={rfq?.vendorMessage}
+              fallbackReceived={offer?.message}
+            />
           )}
         </div>
 
@@ -257,11 +291,12 @@ export function VendorCard({
                   )}
                 </div>
                 <div className="text-2xl font-extrabold text-strong">
-                  $<AnimatedNumber value={offer.pricePerDay} />
+                  {curSymbol}
+                  <AnimatedNumber value={offer.pricePerDay} />
                   <span className="text-sm font-bold text-faint">/{t("day")}</span>
                 </div>
                 <div className="text-[12px] text-soft">
-                  ${offer.totalPrice.toLocaleString()} {t("total")} · {rfq?.durationDays}d
+                  {moneyLocal(offer.totalPrice, offer.currency)} {t("total")} · {rfq?.durationDays}d
                 </div>
               </div>
               {savings > 0 && (
@@ -270,7 +305,7 @@ export function VendorCard({
                     🤝 {t("Authentic bargain")}
                   </div>
                   <div className="mt-1 text-lg font-extrabold text-savings">
-                    -$
+                    -{curSymbol}
                     <AnimatedNumber value={Math.round(savings)} />
                   </div>
                 </div>
@@ -306,14 +341,16 @@ export function VendorCard({
             <div className="mt-2">
               <button
                 onClick={sendRfq}
-                disabled={!waConnected || rfqState === "sending" || rfqState === "sent"}
+                disabled={!waConnected || rfqState === "sending" || askDone}
                 className={`btn w-full rounded-2xl py-2.5 text-[13px] font-extrabold text-white disabled:opacity-60 ${
                   waConnected ? "bg-savings hover:brightness-95" : "bg-faint"
                 }`}
               >
                 {rfqState === "sending" ? (
                   <LoadingDots light label={t("Sending")} />
-                ) : rfqState === "sent" ? (
+                ) : rfqState === "queued" ? (
+                  `🕘 ${t("Queued - sends when the shop opens")}`
+                ) : askDone ? (
                   `✓ ${t("Sent - reply lands here")}`
                 ) : waConnected ? (
                   t("Ask for price")

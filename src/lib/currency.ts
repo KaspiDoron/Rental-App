@@ -48,6 +48,20 @@ export function fromIls(ils: number, code: string): string {
   return c.symbol.length > 1 ? `${c.symbol} ${rounded}` : `${c.symbol}${rounded}`;
 }
 
+/**
+ * Format an amount that is ALREADY in the shop's local currency (offers come
+ * from vendor replies in their own money - never convert, never force "$").
+ */
+export function moneyLocal(amount: number, code?: string): string {
+  const c = CURRENCIES.find((x) => x.code === (code ?? "").toUpperCase());
+  const n =
+    amount >= 1000
+      ? Math.round(amount).toLocaleString()
+      : `${Math.round(amount * 100) / 100}`;
+  if (!c) return code ? `${n} ${code.toUpperCase()}` : `$${n}`;
+  return c.symbol.length > 1 ? `${c.symbol} ${n}` : `${c.symbol}${n}`;
+}
+
 export function savedCurrency(): string {
   try {
     return localStorage.getItem("wd_currency") || "USD";

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { vehicleLabel } from "@/lib/labels";
+import { moneyLocal } from "@/lib/currency";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 
@@ -82,7 +83,8 @@ export function BookingSheet({
         <div className="font-extrabold text-strong">{vendor.name}</div>
         {vendor.offer && (
           <div className="text-soft">
-            ${vendor.offer.pricePerDay}/day · ${vendor.offer.totalPrice} total
+            {moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day ·{" "}
+            {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} total
           </div>
         )}
       </div>

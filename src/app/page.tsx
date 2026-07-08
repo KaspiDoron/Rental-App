@@ -635,7 +635,7 @@ export default function Home() {
         )}
 
         {view === "map" && vendors.length > 0 ? (
-          <div className="relative z-0 mt-3 h-[58vh] overflow-hidden rounded-blob border-2 border-line md:h-[64vh]">
+          <div className="relative z-0 mt-3">
             <MapView
               origin={origin}
               radiusKm={radiusKm}
@@ -834,7 +834,12 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
   if (f.maxPricePerDay)
     list = list.filter((v) => v.offer && v.offer.pricePerDay <= (f.maxPricePerDay as number));
 
-  if (f.agentStatus === "negotiating") list = list.filter((v) => v.stage === "negotiating");
+  if (f.agentStatus === "negotiating")
+    // "Negotiating now" = every shop the agent is actively working: message
+    // sent, awaiting the reply, or mid-bargain.
+    list = list.filter((v) =>
+      ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
+    );
   else if (f.agentStatus === "offer") list = list.filter((v) => v.offer);
   else if (f.agentStatus === "dropped")
     list = list.filter((v) => v.offer && v.offer.round > 0);

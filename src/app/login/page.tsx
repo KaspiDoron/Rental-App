@@ -9,6 +9,7 @@ import { WaConnect } from "@/components/WaConnect";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LanguageButton } from "@/components/LanguageButton";
 import { LoadingDots } from "@/components/LoadingDots";
+import { startNav } from "@/components/NavVeil";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 
@@ -80,6 +81,7 @@ export default function LoginPage() {
   }, []);
 
   function enterApp(session: any, opts?: { welcome?: boolean; changePw?: boolean }) {
+    startNav(); // instant feedback while the next page loads
     if (opts?.changePw) {
       window.location.href = "/profile?pw=1";
       return;
@@ -121,6 +123,7 @@ export default function LoginPage() {
         }
       } catch {}
     }
+    startNav();
     window.location.href = "/?welcome=1";
   }
 

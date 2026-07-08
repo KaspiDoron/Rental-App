@@ -9,11 +9,12 @@ import {
   Circle,
   useMap,
 } from "react-leaflet";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
 import { stageCaption, StageBadge } from "./Tracker";
+import { moneyLocal } from "@/lib/currency";
 
 // Google-Maps-style map: Voyager cartography, price-bubble pins, and a
 // booking.com-style swipeable shop list along the bottom (in BOTH the compact
@@ -39,7 +40,7 @@ function pinColor(v: Vendor): string {
 function priceIcon(v: Vendor, selected: boolean): L.DivIcon {
   const color = pinColor(v);
   const label = v.offer
-    ? `$${v.offer.pricePerDay}`
+    ? moneyLocal(v.offer.pricePerDay, v.offer.currency)
     : v.rating
     ? `★${v.rating.toFixed(1)}`
     : "🛵";
@@ -160,7 +161,7 @@ function ShopCard({
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
           <span className="shrink-0 text-[14px] font-extrabold text-strong">
-            {v.offer ? `$${v.offer.pricePerDay}/d` : ""}
+            {v.offer ? `${moneyLocal(v.offer.pricePerDay, v.offer.currency)}/d` : ""}
           </span>
         </div>
         {v.stage && v.stage !== "queued" && (
@@ -233,8 +234,26 @@ export default function MapView({
   onOpenVendor?: (v: Vendor) => void;
 }) {
   const [full, setFull] = useState(false);
-  const selected = vendors.find((v) => v.id === selectedId) ?? null;
   const stripRef = useRef<HTMLDivElement>(null);
+
+  // CRITICAL pin fix: shops with a missing or duplicate Google location all
+  // collapse onto ONE point and their rating bubbles stack unusably. Spread
+  // exact-duplicate coordinates onto a small deterministic golden-angle fan
+  // (~80-150m) around the shared spot so every pin is visible and tappable.
+  const spread = useMemo(() => {
+    const seen = new Map<string, number>();
+    return vendors.map((v) => {
+      const key = `${v.lat.toFixed(4)},${v.lng.toFixed(4)}`;
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      if (n === 0) return v;
+      const angle = (n * 137.5 * Math.PI) / 180;
+      const r = 0.0008 + 0.00025 * n;
+      return { ...v, lat: v.lat + r * Math.sin(angle), lng: v.lng + r * Math.cos(angle) };
+    });
+  }, [vendors]);
+
+  const selected = spread.find((v) => v.id === selectedId) ?? null;
 
   // Keep the selected card scrolled into view in the strip.
   useEffect(() => {
@@ -255,7 +274,7 @@ export default function MapView({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
         url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
       />
-      <Recenter origin={origin} radiusKm={radiusKm} vendors={vendors} focus={selected} />
+      <Recenter origin={origin} radiusKm={radiusKm} vendors={spread} focus={selected} />
       <Controls origin={origin} />
 
       <Circle
@@ -265,7 +284,7 @@ export default function MapView({
       />
       <Marker position={[origin.lat, origin.lng]} icon={stayIcon} />
 
-      {vendors.map((v) => (
+      {spread.map((v) => (
         <Marker
           key={v.id}
           position={[v.lat, v.lng]}
@@ -321,21 +340,23 @@ export default function MapView({
     );
   }
 
+  // Compact view: the cards live BELOW the map so the map itself stays fully
+  // visible; only the fullscreen view overlays the strip on the map.
   return (
-    <div className="relative z-0 h-full w-full">
-      {map}
-      <button
-        onClick={() => setFull(true)}
-        aria-label="Expand map"
-        className="btn absolute right-3 top-3 z-[500] rounded-xl bg-card px-3 py-2 text-[12px] font-extrabold text-strong shadow-lg lift"
-      >
-        ⛶ Expand
-      </button>
+    <div className="w-full">
+      <div className="relative z-0 h-[44vh] w-full overflow-hidden rounded-blob border-2 border-line md:h-[56vh]">
+        {map}
+        <button
+          onClick={() => setFull(true)}
+          aria-label="Expand map"
+          className="btn absolute right-3 top-3 z-[500] rounded-xl bg-card px-3 py-2 text-[12px] font-extrabold text-strong shadow-lg lift"
+        >
+          ⛶ Expand
+        </button>
+      </div>
 
-      {/* Swipeable shop strip along the bottom (clear of the zoom controls) */}
-      {vendors.length > 0 && (
-        <div className="absolute inset-x-0 bottom-0 z-[600] pb-1">{strip(false)}</div>
-      )}
+      {/* Swipeable shop strip UNDER the map (tap a card to focus its pin) */}
+      {vendors.length > 0 && <div className="mt-3 -mx-4">{strip(false)}</div>}
     </div>
   );
 }

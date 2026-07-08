@@ -111,12 +111,14 @@ export async function POST(req: Request) {
   };
   let configured = false;
 
-  // Try the user's personal WhatsApp whenever the connector is set up and they
-  // have paired before - sendFromUser auto-resumes a dropped session, so a
-  // transient Render restart no longer forces "connect again".
-  if ((await evolutionConfigured()) && (await wasEverConnected(session.email))) {
-    configured = true;
+  // Try the user's personal WhatsApp whenever the connector is set up.
+  // sendFromUser itself verifies the live session (auto-resuming a dropped
+  // one), so we never wrongly tell a connected user to "connect first" just
+  // because a bookkeeping row is missing.
+  if (await evolutionConfigured()) {
+    configured = (await wasEverConnected(session.email)) || false;
     const r = await sendFromUser(session.email, digits, guardedMessage);
+    if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
     result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
     if (r.rateLimited) {
       return NextResponse.json({

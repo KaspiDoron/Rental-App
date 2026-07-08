@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/lib/i18n";
+import { NavVeil } from "@/components/NavVeil";
 import "./globals.css";
 
 // Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
@@ -116,7 +117,10 @@ export default function RootLayout({
         )}
       </head>
       <body className="app-shell">
-        <I18nProvider>{children}</I18nProvider>
+        <I18nProvider>
+          {children}
+          <NavVeil />
+        </I18nProvider>
       </body>
     </html>
   );
