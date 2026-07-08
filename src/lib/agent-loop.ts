@@ -92,7 +92,7 @@ export async function processVendorReply(opts: {
   const round = Number(ctx.round ?? 0);
 
   // A reply arrived: build the sender's trust score (anti-ban engagement).
-  if (ctx.sender) await recordInboundEngagement(ctx.sender);
+  if (ctx.sender) await recordInboundEngagement(ctx.sender, from);
 
   // Read the WHOLE recent thread so the agent has real memory.
   const threadRows = await sbSelect<ThreadMsg>(
@@ -250,7 +250,7 @@ export async function processVendorReply(opts: {
     if (!verdict.allow) return; // queued for later or held by the guard
     const result = await opts.send(from, verdict.text);
     if (result.ok) {
-      await afterSend(ctx.sender ?? "system");
+      await afterSend(ctx.sender ?? "system", from);
       await sbInsert("whatsapp_messages", [
         {
           to_number: from,

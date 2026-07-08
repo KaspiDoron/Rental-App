@@ -61,9 +61,21 @@ export default function AdminPage() {
   const [floorMsg, setFloorMsg] = useState<string | null>(null);
   const [waSec, setWaSec] = useState<{
     policies: Record<string, number | boolean>;
-    reputation: { sender_key: string; trust_score: number; sent_total: number; replies_total: number }[];
+    help: Record<string, { label: string; help: string; best: string }>;
+    reputation: {
+      sender_key: string;
+      trust_score: number;
+      risk_score?: number;
+      sent_total: number;
+      replies_total: number;
+      blocks_total?: number;
+      fails_total?: number;
+      paused_until?: string | null;
+      risk?: { score: number; reasons: string[] };
+    }[];
     outbox: { id: number; to_number: string; not_before: string }[];
   } | null>(null);
+  const [waHelp, setWaHelp] = useState<string | null>(null); // open info popup key
   const [sponsors, setSponsors] = useState<
     { id: number; name: string; phone: string | null; active: boolean; notes: string | null }[]
   >([]);
@@ -785,51 +797,123 @@ export default function AdminPage() {
             {waSec ? (
               <>
                 {waSec.reputation.length > 0 && (
-                  <div className="mb-2 space-y-1">
-                    {waSec.reputation.map((r) => (
-                      <div
-                        key={r.sender_key}
-                        className="flex items-center justify-between rounded-xl bg-card2 p-2 text-[11px]"
-                      >
-                        <span className="truncate font-bold text-soft">{r.sender_key}</span>
-                        <span
-                          className={`ml-2 shrink-0 font-extrabold ${
-                            r.trust_score < 15
-                              ? "text-brandred"
-                              : r.trust_score < 40
-                              ? "text-[#8a6100] dark:text-brandyellow"
-                              : "text-savings"
-                          }`}
-                        >
-                          trust {r.trust_score} · {r.sent_total} sent · {r.replies_total} replies
-                        </span>
-                      </div>
-                    ))}
+                  <div className="mb-3 space-y-1.5">
+                    {waSec.reputation.map((r) => {
+                      const paused = r.paused_until && new Date(r.paused_until).getTime() > Date.now();
+                      const risk = r.risk?.score ?? r.risk_score ?? 0;
+                      return (
+                        <div key={r.sender_key} className="rounded-xl bg-card2 p-2 text-[11px]">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-bold text-soft">{r.sender_key}</span>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                                risk >= 70
+                                  ? "bg-brandred text-white"
+                                  : risk >= 40
+                                  ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                                  : "bg-savings-soft text-savings"
+                              }`}
+                            >
+                              risk {risk}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-faint">
+                            <span>trust {r.trust_score}</span>
+                            <span>{r.sent_total} sent</span>
+                            <span>{r.replies_total} replies</span>
+                            {(r.blocks_total ?? 0) > 0 && (
+                              <span className="text-brandred">{r.blocks_total} blocks</span>
+                            )}
+                            {(r.fails_total ?? 0) > 0 && (
+                              <span className="text-brandred">{r.fails_total} fails</span>
+                            )}
+                          </div>
+                          {r.risk?.reasons?.length ? (
+                            <div className="mt-0.5 text-[10px] text-faint">
+                              {r.risk.reasons.join(" · ")}
+                            </div>
+                          ) : null}
+                          {paused && (
+                            <div className="mt-1 flex items-center justify-between rounded-lg bg-brandred-soft p-1.5">
+                              <span className="text-[10px] font-extrabold text-brandred">
+                                ⏸ Paused until {new Date(r.paused_until!).toLocaleTimeString()}
+                              </span>
+                              <button
+                                onClick={async () => {
+                                  await fetch("/api/admin/wa-security", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ action: "clear-pause", senderKey: r.sender_key }),
+                                  });
+                                  loadAgentStudio();
+                                }}
+                                className="btn btn-sm rounded-lg bg-card px-2 text-[10px] font-extrabold text-brandblue"
+                              >
+                                Resume
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(waSec.policies).map(([k, v]) => (
-                    <label key={k} className="rounded-xl border-2 border-line p-2 text-[10px] font-bold text-faint">
-                      {k.replace(/_/g, " ")}
-                      <input
-                        defaultValue={String(v)}
-                        onBlur={async (e) => {
-                          const val = e.target.value.trim();
-                          if (val && val !== String(v)) {
-                            const r = await (
-                              await fetch("/api/admin/wa-security", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ key: k, value: val }),
-                              })
-                            ).json();
-                            if (r.policies) setWaSec({ ...waSec, policies: r.policies });
-                          }
-                        }}
-                        className="mt-0.5 w-full rounded border border-line bg-card p-1 text-[12px] font-extrabold text-strong"
-                      />
-                    </label>
-                  ))}
+                  {Object.entries(waSec.policies).map(([k, v]) => {
+                    const h = waSec.help?.[k];
+                    return (
+                      <label key={k} className="relative rounded-xl border-2 border-line p-2 text-[10px] font-bold text-faint">
+                        <span className="flex items-center gap-1">
+                          {h?.label ?? k.replace(/_/g, " ")}
+                          {h && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setWaHelp(waHelp === k ? null : k);
+                              }}
+                              className="flex h-4 w-4 items-center justify-center rounded-full bg-brandblue-soft text-[9px] font-extrabold text-brandblue"
+                            >
+                              i
+                            </button>
+                          )}
+                        </span>
+                        <input
+                          defaultValue={String(v)}
+                          onBlur={async (e) => {
+                            const val = e.target.value.trim();
+                            if (val && val !== String(v)) {
+                              const r = await (
+                                await fetch("/api/admin/wa-security", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ key: k, value: val }),
+                                })
+                              ).json();
+                              if (r.policies) setWaSec({ ...waSec, policies: r.policies });
+                            }
+                          }}
+                          className="mt-0.5 w-full rounded border border-line bg-card p-1 text-[12px] font-extrabold text-strong"
+                        />
+                        {waHelp === k && h && (
+                          <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-xl border-2 border-brandblue bg-card p-2.5 text-[11px] shadow-xl">
+                            <div className="font-extrabold text-strong">{h.label}</div>
+                            <div className="mt-1 font-normal text-soft">{h.help}</div>
+                            <div className="mt-1.5 font-bold text-savings">✓ {h.best}</div>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setWaHelp(null);
+                              }}
+                              className="mt-1.5 text-[10px] font-extrabold text-brandblue"
+                            >
+                              Close
+                            </button>
+                          </div>
+                        )}
+                      </label>
+                    );
+                  })}
                 </div>
               </>
             ) : (

@@ -48,9 +48,60 @@ export async function POST(req: Request) {
 
   try {
     const event = String(body.event ?? "").toLowerCase().replace(/_/g, ".");
+    const instance = String(body.instance ?? body.instanceName ?? "");
+
+    // Delivery / read receipts (blue tick) feed the Anti-Ban risk engine:
+    // a healthy number gets read and replied to; delivered-but-never-read is a
+    // strong spam signal, so we track it and let the guard react.
+    if (event.includes("messages.update")) {
+      try {
+        const email = await emailForInstance(instance);
+        if (email) {
+          const items = Array.isArray(body.data) ? body.data : [body.data];
+          const { recordReadReceipt, recordDelivery } = await import("@/lib/wa-guard");
+          for (const d of items.slice(0, 20)) {
+            const jid = String(d?.key?.remoteJid ?? "");
+            if (!d?.key?.fromMe || !jid.endsWith("@s.whatsapp.net")) continue;
+            const to = jid.split("@")[0];
+            const status = String(d?.update?.status ?? d?.status ?? "").toUpperCase();
+            if (status.includes("READ") || status === "4" || status === "5") {
+              await recordReadReceipt(email, to);
+            } else if (status.includes("DELIVERY") || status === "3") {
+              await recordDelivery(email, to);
+            }
+          }
+        }
+      } catch {
+        /* receipts are best-effort */
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Connection lifecycle: a logged-out / 401 close means WhatsApp severed or
+    // restricted the session. Enter graduated ban-recovery (long pause + slow
+    // warm-up resume) instead of hammering reconnects.
+    if (event.includes("connection.update")) {
+      try {
+        const data = Array.isArray(body.data) ? body.data[0] : body.data;
+        const state = String(data?.state ?? data?.connection ?? "").toLowerCase();
+        const code = Number(
+          data?.statusCode ?? data?.lastDisconnect?.error?.output?.statusCode ?? 0
+        );
+        if (state === "close" && (code === 401 || code === 403)) {
+          const email = await emailForInstance(instance);
+          if (email) {
+            const { enterBanRecovery } = await import("@/lib/wa-guard");
+            await enterBanRecovery(email, 24);
+          }
+        }
+      } catch {
+        /* best-effort */
+      }
+      return NextResponse.json({ ok: true });
+    }
+
     if (!event.includes("messages.upsert")) return NextResponse.json({ ok: true });
 
-    const instance = String(body.instance ?? body.instanceName ?? "");
     const items = Array.isArray(body.data) ? body.data : [body.data];
 
     for (const data of items.slice(0, 3)) {

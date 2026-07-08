@@ -137,6 +137,38 @@ export async function evolutionConfigured(): Promise<boolean> {
   return (await getHosts()).length > 0;
 }
 
+interface Proxy {
+  host: string;
+  port: string;
+  protocol: string;
+  username: string;
+  password: string;
+}
+
+/**
+ * Optional residential proxy for the WhatsApp WebSocket. Datacenter IPs (Render
+ * / cloud) are a TOP-weighted ban signal per the research (Φ_net); routing
+ * through a residential SOCKS5/HTTP proxy that maps to the phone's country is
+ * the single biggest network-level protection. Config EVOLUTION_PROXY accepts a
+ * URL: socks5://user:pass@host:port  (or http://host:port).
+ */
+async function parseProxy(): Promise<Proxy | null> {
+  const raw = (await getConfig("EVOLUTION_PROXY"))?.trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return {
+      protocol: u.protocol.replace(":", "") || "socks5",
+      host: u.hostname,
+      port: u.port || (u.protocol.startsWith("socks") ? "1080" : "8080"),
+      username: decodeURIComponent(u.username || ""),
+      password: decodeURIComponent(u.password || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Deterministic, collision-safe instance name for a user (same on every host). */
 export function instanceNameFor(email: string): string {
   return `wd-${createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16)}`;
@@ -598,13 +630,38 @@ export async function connectInstance(
   await evoFetch(host, `/instance/delete/${instance}`, { method: "DELETE" });
   await new Promise((r) => setTimeout(r, 600));
 
+  // Anti-ban instance hardening (from the WhatsApp ban-vector research):
+  //  - always_online:false  -> the device NEVER shows as permanently online
+  //    (this is the root cause of "always connected"; presence is driven only
+  //    while the app is in use).
+  //  - markMessagesRead:false-> we never auto-read the user's other chats.
+  //  - groupsIgnore:true     -> group traffic is dropped (privacy + less noise).
+  //  - a residential proxy (if configured) routes the WebSocket through a
+  //    non-datacenter IP - datacenter IPs are a top-weighted ban signal.
+  const proxy = await parseProxy();
+  const hardening = {
+    rejectCall: false,
+    groupsIgnore: true,
+    alwaysOnline: false,
+    readMessages: false,
+    readStatus: false,
+    syncFullHistory: false,
+  };
+  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+
   // Pairing code needs the number PASSED AT CREATE time in Evolution v2 - the
   // create response then carries the pairing code directly.
   const createBody: Record<string, unknown> = {
     instanceName: instance,
     qrcode: true,
     integration: "WHATSAPP-BAILEYS",
-    webhook: { url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
+    alwaysOnline: false,
+    groupsIgnore: true,
+    readMessages: false,
+    readStatus: false,
+    syncFullHistory: false,
+    ...(proxy ? { proxyHost: proxy.host, proxyPort: proxy.port, proxyProtocol: proxy.protocol, proxyUsername: proxy.username, proxyPassword: proxy.password } : {}),
+    webhook: { url: webhookUrl, byEvents: false, events },
   };
   if (digits) createBody.number = digits;
 
@@ -640,12 +697,25 @@ export async function connectInstance(
   await evoFetch(host, `/webhook/set/${instance}`, {
     method: "POST",
     body: JSON.stringify({
-      webhook: { enabled: true, url: webhookUrl, byEvents: false, events: ["MESSAGES_UPSERT"] },
+      webhook: { enabled: true, url: webhookUrl, byEvents: false, events },
       enabled: true,
       url: webhookUrl,
-      events: ["MESSAGES_UPSERT"],
+      events,
     }),
   });
+
+  // Apply the hardening settings (also covers pre-existing instances). Best
+  // effort - older Evolution builds ignore unknown fields.
+  await evoFetch(host, `/settings/set/${instance}`, {
+    method: "POST",
+    body: JSON.stringify(hardening),
+  }).catch(() => {});
+  if (proxy) {
+    await evoFetch(host, `/proxy/set/${instance}`, {
+      method: "POST",
+      body: JSON.stringify({ enabled: true, ...proxy }),
+    }).catch(() => {});
+  }
 
   const pickPairing = (d: any): string | undefined => {
     const raw = d?.pairingCode ?? d?.qrcode?.pairingCode ?? d?.instance?.pairingCode;
@@ -883,12 +953,20 @@ export async function sendFromUser(
     recordSend(email);
     return { ok: true };
   }
-  return {
-    ok: false,
-    error:
-      res.data?.response?.message?.toString?.() ??
-      res.data?.message ??
-      res.data?.error ??
-      `Evolution API ${res.status}`,
-  };
+  const errText =
+    res.data?.response?.message?.toString?.() ??
+    res.data?.message ??
+    res.data?.error ??
+    `Evolution API ${res.status}`;
+  // A send failure to a number that is not on WhatsApp (or that blocked us)
+  // looks like list-blasting to Meta - feed it to the risk engine so the
+  // number's ban-risk score reflects it.
+  try {
+    const { recordSendFailure } = await import("./wa-guard");
+    const blocked = /not.*whatsapp|invalid|exist|blocked|forbidden/i.test(String(errText));
+    await recordSendFailure(email, number, blocked ? "block" : "fail");
+  } catch {
+    /* best-effort */
+  }
+  return { ok: false, error: errText };
 }

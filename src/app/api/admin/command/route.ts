@@ -31,9 +31,9 @@ export async function GET() {
         "wa_outbox",
         "select=id,not_before&order=not_before.asc&limit=50"
       ).catch(() => []),
-      sbSelect<{ sender_key: string; trust_score: number }>(
+      sbSelect<{ sender_key: string; trust_score: number; paused_until?: string; risk_score?: number }>(
         "whatsapp_number_reputation",
-        "select=sender_key,trust_score&trust_score=lt.15&limit=20"
+        "select=sender_key,trust_score,paused_until,risk_score&or=(trust_score.lt.15,risk_score.gte.40,paused_until.not.is.null)&limit=30"
       ).catch(() => []),
       sbSelect<{ email: string; status: string }>(
         "wa_sessions",
@@ -118,15 +118,42 @@ export async function GET() {
     });
   }
 
-  // Numbers at ban risk.
-  if (reputation.length) {
+  // Numbers auto-paused by the ban-risk engine (most urgent).
+  const paused = reputation.filter(
+    (r) => (r as { paused_until?: string }).paused_until &&
+      Date.parse((r as { paused_until?: string }).paused_until as string) > Date.now()
+  );
+  if (paused.length) {
     alerts.push({
       level: "critical",
-      title: `${reputation.length} WhatsApp number${reputation.length > 1 ? "s" : ""} at ban risk`,
+      title: `${paused.length} WhatsApp number${paused.length > 1 ? "s" : ""} AUTO-PAUSED (ban risk)`,
       detail:
-        "Trust score under 15 (lots of outbound, few replies): " +
-        reputation.slice(0, 3).map((r) => `${r.sender_key} (${r.trust_score})`).join(", "),
-      href: "data",
+        "The anti-ban engine paused these numbers to prevent a restriction: " +
+        paused.slice(0, 3).map((r) => r.sender_key).join(", ") +
+        ". Review in the Agents tab.",
+      href: "agents",
+    });
+  }
+  // Numbers trending toward risk (low trust) but not yet paused.
+  const lowTrust = reputation.filter((r) => r.trust_score < 15 && !paused.includes(r));
+  if (lowTrust.length) {
+    alerts.push({
+      level: "warning",
+      title: `${lowTrust.length} WhatsApp number${lowTrust.length > 1 ? "s" : ""} at ban risk`,
+      detail:
+        "Low trust (lots of outbound, few replies): " +
+        lowTrust.slice(0, 3).map((r) => `${r.sender_key} (${r.trust_score})`).join(", "),
+      href: "agents",
+    });
+  }
+  // Explicit ban-risk events raised by the engine.
+  const banEvents = agentEvents.filter((e) => e.kind === "wa-ban-risk");
+  if (banEvents.length) {
+    alerts.push({
+      level: "critical",
+      title: `${banEvents.length} ban-risk event${banEvents.length > 1 ? "s" : ""}`,
+      detail: banEvents.slice(0, 2).map((e) => e.detail).join(" · "),
+      href: "agents",
     });
   }
 

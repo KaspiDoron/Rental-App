@@ -378,3 +378,34 @@ create table if not exists public.agent_events (
 );
 create index if not exists agent_events_kind_idx on public.agent_events (kind, created_at desc);
 alter table public.agent_events enable row level security;
+
+-- ---- Anti-Ban v2: deeper reputation + risk signals ---------------------------
+-- Extra columns tracked per connected number so the risk engine can score ban
+-- likelihood from real behaviour (cold-contact volume, block/read rates, etc.).
+alter table public.whatsapp_number_reputation add column if not exists blocks_total       int default 0;
+alter table public.whatsapp_number_reputation add column if not exists fails_total        int default 0;
+alter table public.whatsapp_number_reputation add column if not exists reads_total        int default 0;
+alter table public.whatsapp_number_reputation add column if not exists delivered_total    int default 0;
+alter table public.whatsapp_number_reputation add column if not exists new_contacts_today int default 0;
+alter table public.whatsapp_number_reputation add column if not exists new_contacts_date  text;
+alter table public.whatsapp_number_reputation add column if not exists last_reply_at      timestamptz;
+alter table public.whatsapp_number_reputation add column if not exists paused_until       timestamptz;
+alter table public.whatsapp_number_reputation add column if not exists risk_score         int default 0;
+
+-- Per-recipient delivery state (read receipts + block detection) so the
+-- engagement halt can require a blue tick OR a reply before any follow-up,
+-- and so we can measure delivered-but-never-read (a strong bot signal).
+create table if not exists public.wa_recipient_state (
+  id            bigint generated always as identity primary key,
+  sender_key    text not null,
+  to_number     text not null,
+  last_sent_at  timestamptz,
+  last_read_at  timestamptz,
+  last_reply_at timestamptz,
+  delivered     boolean default false,
+  read          boolean default false,
+  blocked       boolean default false,
+  unique (sender_key, to_number)
+);
+create index if not exists wa_recipient_state_idx on public.wa_recipient_state (sender_key, to_number);
+alter table public.wa_recipient_state enable row level security;

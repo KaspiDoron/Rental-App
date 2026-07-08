@@ -147,7 +147,7 @@ export async function POST(req: Request) {
     const r = await sendWhatsApp(to, guardedMessage);
     result = { channel: r.channel, ok: r.ok, error: r.error };
   }
-  if (result.ok) await afterSend(session.email);
+  if (result.ok) await afterSend(session.email, digits);
 
   // Log the outbound message WITH thread context (vendor + rfq), so the
   // webhook can match the inbound reply and keep the loop fully in-app.

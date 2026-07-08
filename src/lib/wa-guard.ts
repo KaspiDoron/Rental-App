@@ -44,6 +44,18 @@ export interface SecurityPolicies {
   presence_max_ms: number;      // composing simulation ceiling
   idle_pause_hours: number;     // hours without app activity before the user's
                                 // WA session goes quiet (presence unavailable)
+  // ---- Anti-Ban v2 knobs ----
+  max_new_contacts_per_day: number; // cold first-contacts/day (biggest signal)
+  min_reply_rate: number;           // below this (with enough samples) new
+                                    // cold outreach is frozen
+  min_reply_samples: number;        // sends needed before reply-rate matters
+  risk_pause_threshold: number;     // ban-risk score (0-100) that auto-pauses
+  risk_pause_minutes: number;       // how long an auto-pause lasts
+  burst_window_seconds: number;     // rolling window for burst detection
+  burst_max_in_window: number;      // max sends in that window before a rest
+  burst_cooldown_minutes: number;   // enforced rest after a burst
+  require_number_on_whatsapp: boolean; // validate the number exists on WA first
+  daily_cap_jitter_pct: number;     // ± random daily-cap wobble (anti-pattern)
 }
 
 const DEFAULTS: SecurityPolicies = {
@@ -61,6 +73,16 @@ const DEFAULTS: SecurityPolicies = {
   presence_min_ms: 2500,
   presence_max_ms: 8000,
   idle_pause_hours: 6,
+  max_new_contacts_per_day: 15,
+  min_reply_rate: 0.15,
+  min_reply_samples: 8,
+  risk_pause_threshold: 70,
+  risk_pause_minutes: 240,
+  burst_window_seconds: 600,
+  burst_max_in_window: 5,
+  burst_cooldown_minutes: 30,
+  require_number_on_whatsapp: true,
+  daily_cap_jitter_pct: 20,
 };
 
 declare global {
@@ -115,14 +137,26 @@ export interface Reputation {
   replies_total: number;
   last_send_at: string | null;
   created_at?: string;
+  blocks_total?: number;
+  fails_total?: number;
+  reads_total?: number;
+  delivered_total?: number;
+  new_contacts_today?: number;
+  new_contacts_date?: string | null;
+  last_reply_at?: string | null;
+  paused_until?: string | null;
+  risk_score?: number;
 }
+
+const REP_COLS =
+  "id,sender_key,trust_score,sent_total,replies_total,last_send_at,created_at," +
+  "blocks_total,fails_total,reads_total,delivered_total,new_contacts_today," +
+  "new_contacts_date,last_reply_at,paused_until,risk_score";
 
 async function getReputation(senderKey: string): Promise<Reputation> {
   const rows = await sbSelect<Reputation>(
     "whatsapp_number_reputation",
-    `select=id,sender_key,trust_score,sent_total,replies_total,last_send_at,created_at&sender_key=eq.${encodeURIComponent(
-      senderKey
-    )}&limit=1`
+    `select=${REP_COLS}&sender_key=eq.${encodeURIComponent(senderKey)}&limit=1`
   );
   if (rows[0]) return rows[0];
   const fresh: Reputation = {
@@ -138,51 +172,277 @@ async function getReputation(senderKey: string): Promise<Reputation> {
   return fresh;
 }
 
-/** Hourly budget scales with trust; warm-up halves it for new numbers. */
-export function dynamicHourCap(rep: Reputation, p: SecurityPolicies): number {
-  const t = Math.max(0, Math.min(100, rep.trust_score));
-  let cap = Math.round(p.base_hour_cap + ((p.max_hour_cap - p.base_hour_cap) * t) / 100);
-  const ageDays = rep.created_at
-    ? (Date.now() - Date.parse(rep.created_at)) / 86_400_000
-    : 0;
-  if (ageDays < p.warmup_days) cap = Math.max(2, Math.floor(cap / 2));
-  return cap;
+/** Account age in days (0 for a brand-new number). */
+function ageDaysOf(rep: Reputation): number {
+  return rep.created_at ? (Date.now() - Date.parse(rep.created_at)) / 86_400_000 : 0;
 }
 
-/** Called from the inbound webhook: replies BUILD trust (two-way engagement). */
-export async function recordInboundEngagement(senderKey: string): Promise<void> {
+/**
+ * Warm-up ramp: a fresh number earns its full budget gradually over
+ * `warmup_days`. Day 0 gets ~1/warmup of the budget, day warmup_days gets the
+ * full budget. This is the single biggest protection for a NEW linked number.
+ */
+function warmupMultiplier(rep: Reputation, p: SecurityPolicies): number {
+  const age = ageDaysOf(rep);
+  if (age >= p.warmup_days) return 1;
+  return Math.min(1, (age + 1) / Math.max(1, p.warmup_days));
+}
+
+/** Deterministic-per-day ±jitter so a fixed cap is not itself a pattern. */
+function dailyCapJitter(senderKey: string, p: SecurityPolicies): number {
+  const day = new Date().toISOString().slice(0, 10);
+  let h = 0;
+  const s = senderKey + day;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  const frac = (h % 1000) / 1000; // 0..1 stable for the day
+  const span = p.daily_cap_jitter_pct / 100;
+  return 1 - span + frac * span * 2; // 1-span .. 1+span
+}
+
+/** Hourly budget scales with trust AND the warm-up ramp (velocity vector). */
+export function dynamicHourCap(rep: Reputation, p: SecurityPolicies): number {
+  const t = Math.max(0, Math.min(100, rep.trust_score));
+  const base = p.base_hour_cap + ((p.max_hour_cap - p.base_hour_cap) * t) / 100;
+  const cap = base * warmupMultiplier(rep, p);
+  return Math.max(1, Math.round(cap));
+}
+
+/** Cold first-contacts allowed today (warm-up ramped). */
+function newContactCap(rep: Reputation, p: SecurityPolicies): number {
+  return Math.max(1, Math.round(p.max_new_contacts_per_day * warmupMultiplier(rep, p)));
+}
+
+/** Lifetime reply rate (0..1) - the strongest health signal. */
+function replyRate(rep: Reputation): number {
+  const sent = rep.sent_total || 0;
+  if (sent === 0) return 1;
+  return Math.min(1, (rep.replies_total || 0) / sent);
+}
+
+export interface RiskBreakdown {
+  score: number; // 0..100
+  reasons: string[];
+}
+
+/**
+ * Ban-risk score from real behaviour. High score => the number looks like an
+ * automated spammer to WhatsApp's heuristics and must be throttled/paused.
+ */
+export function computeRisk(rep: Reputation, p: SecurityPolicies): RiskBreakdown {
+  const reasons: string[] = [];
+  let risk = 0;
+
+  // 1. Low reply rate is THE dominant spam signal.
+  if ((rep.sent_total || 0) >= p.min_reply_samples) {
+    const rr = replyRate(rep);
+    if (rr < p.min_reply_rate) {
+      const add = Math.round(((p.min_reply_rate - rr) / p.min_reply_rate) * 45);
+      risk += add;
+      reasons.push(`low reply rate ${(rr * 100).toFixed(0)}% (+${add})`);
+    }
+  }
+  // 2. Blocks/reports from recipients are catastrophic.
+  if ((rep.blocks_total || 0) > 0) {
+    const add = Math.min(30, (rep.blocks_total || 0) * 12);
+    risk += add;
+    reasons.push(`${rep.blocks_total} block/report (+${add})`);
+  }
+  // 3. Failed sends (invalid/non-WA numbers) look like list-blasting.
+  if ((rep.fails_total || 0) >= 3) {
+    const add = Math.min(15, (rep.fails_total || 0) * 3);
+    risk += add;
+    reasons.push(`${rep.fails_total} failed sends (+${add})`);
+  }
+  // 4. Delivered but never read => nobody engages (bot pattern).
+  if ((rep.delivered_total || 0) >= 8) {
+    const readRate = (rep.reads_total || 0) / (rep.delivered_total || 1);
+    if (readRate < 0.3) {
+      risk += 12;
+      reasons.push(`low read rate ${(readRate * 100).toFixed(0)}% (+12)`);
+    }
+  }
+  // 5. A brand-new number doing anything is inherently riskier.
+  if (ageDaysOf(rep) < 1 && (rep.sent_total || 0) > 3) {
+    risk += 10;
+    reasons.push("new number sending on day 1 (+10)");
+  }
+
+  return { score: Math.max(0, Math.min(100, risk)), reasons };
+}
+
+async function upsertRecipient(
+  senderKey: string,
+  toNumber: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const rows = await sbSelect<{ id: number }>(
+    "wa_recipient_state",
+    `select=id&sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(
+      toNumber
+    )}&limit=1`
+  );
+  if (rows[0]?.id) {
+    await sbUpdate("wa_recipient_state", `id=eq.${rows[0].id}`, patch);
+  } else {
+    await sbInsert("wa_recipient_state", [
+      { sender_key: senderKey, to_number: toNumber, ...patch },
+    ]);
+  }
+}
+
+/** Persist reputation and recompute the ban-risk score (auto-pause on spike). */
+async function saveReputation(
+  senderKey: string,
+  patch: Partial<Reputation>
+): Promise<void> {
+  const rep = { ...(await getReputation(senderKey)), ...patch };
+  const p = await getPolicies();
+  const risk = computeRisk(rep, p);
+  const update: Record<string, unknown> = { ...patch, risk_score: risk.score };
+  // Auto-pause a number that has crossed the danger line. The pause blocks all
+  // automated sending and the owner is alerted from the command center.
+  if (risk.score >= p.risk_pause_threshold) {
+    const until = new Date(Date.now() + p.risk_pause_minutes * 60_000).toISOString();
+    const already = rep.paused_until && Date.parse(rep.paused_until) > Date.now();
+    if (!already) {
+      update.paused_until = until;
+      try {
+        await sbInsert("agent_events", [
+          {
+            kind: "wa-ban-risk",
+            detail: `${senderKey} auto-paused ${p.risk_pause_minutes}min - risk ${risk.score}: ${risk.reasons.join("; ")}`,
+          },
+        ]);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  await sbUpdate(
+    "whatsapp_number_reputation",
+    `sender_key=eq.${encodeURIComponent(senderKey)}`,
+    update
+  );
+}
+
+/** Inbound reply: builds trust, records engagement, clears delivered-not-read. */
+export async function recordInboundEngagement(
+  senderKey: string,
+  fromNumber?: string
+): Promise<void> {
   try {
     const p = await getPolicies();
     const rep = await getReputation(senderKey);
-    await sbUpdate(
-      "whatsapp_number_reputation",
-      `sender_key=eq.${encodeURIComponent(senderKey)}`,
-      {
-        trust_score: Math.min(100, rep.trust_score + p.trust_reply_gain),
-        replies_total: rep.replies_total + 1,
-      }
-    );
+    await saveReputation(senderKey, {
+      trust_score: Math.min(100, rep.trust_score + p.trust_reply_gain),
+      replies_total: (rep.replies_total || 0) + 1,
+      last_reply_at: new Date().toISOString(),
+    });
+    if (fromNumber) {
+      await upsertRecipient(senderKey, fromNumber, {
+        last_reply_at: new Date().toISOString(),
+        read: true,
+        delivered: true,
+      });
+    }
   } catch {
     /* reputation is best-effort - never block the reply pipeline */
   }
 }
 
-async function recordOutboundSend(senderKey: string): Promise<void> {
+/** Read receipt (blue tick) from Evolution messages.update - engagement proof. */
+export async function recordReadReceipt(
+  senderKey: string,
+  toNumber: string
+): Promise<void> {
   try {
-    const p = await getPolicies();
     const rep = await getReputation(senderKey);
-    await sbUpdate(
-      "whatsapp_number_reputation",
-      `sender_key=eq.${encodeURIComponent(senderKey)}`,
-      {
-        trust_score: Math.max(0, rep.trust_score - p.trust_send_decay),
-        sent_total: rep.sent_total + 1,
-        last_send_at: new Date().toISOString(),
-      }
-    );
+    await saveReputation(senderKey, {
+      reads_total: (rep.reads_total || 0) + 1,
+      delivered_total: Math.max((rep.delivered_total || 0), (rep.reads_total || 0) + 1),
+    });
+    await upsertRecipient(senderKey, toNumber, {
+      read: true,
+      delivered: true,
+      last_read_at: new Date().toISOString(),
+    });
   } catch {
     /* best-effort */
   }
+}
+
+/** Delivery ack (double grey tick) - message reached the device. */
+export async function recordDelivery(
+  senderKey: string,
+  toNumber: string
+): Promise<void> {
+  try {
+    const rep = await getReputation(senderKey);
+    await saveReputation(senderKey, {
+      delivered_total: (rep.delivered_total || 0) + 1,
+    });
+    await upsertRecipient(senderKey, toNumber, { delivered: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** A send failed (invalid/non-WA number, or recipient blocked us). */
+export async function recordSendFailure(
+  senderKey: string,
+  toNumber: string,
+  kind: "fail" | "block" = "fail"
+): Promise<void> {
+  try {
+    const rep = await getReputation(senderKey);
+    if (kind === "block") {
+      await saveReputation(senderKey, { blocks_total: (rep.blocks_total || 0) + 1 });
+      await upsertRecipient(senderKey, toNumber, { blocked: true });
+    } else {
+      await saveReputation(senderKey, { fails_total: (rep.fails_total || 0) + 1 });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function recordOutboundSend(senderKey: string, toNumber?: string): Promise<void> {
+  try {
+    const p = await getPolicies();
+    const rep = await getReputation(senderKey);
+    const today = new Date().toISOString().slice(0, 10);
+    const isNewDay = rep.new_contacts_date !== today;
+    // Was this a brand-new cold contact (no prior recipient state)?
+    let newContact = false;
+    if (toNumber) {
+      const prior = await sbSelect<{ id: number }>(
+        "wa_recipient_state",
+        `select=id&sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(
+          toNumber
+        )}&limit=1`
+      );
+      newContact = prior.length === 0;
+      await upsertRecipient(senderKey, toNumber, { last_sent_at: new Date().toISOString() });
+    }
+    await saveReputation(senderKey, {
+      trust_score: Math.max(0, rep.trust_score - p.trust_send_decay),
+      sent_total: (rep.sent_total || 0) + 1,
+      last_send_at: new Date().toISOString(),
+      new_contacts_date: today,
+      new_contacts_today: (isNewDay ? 0 : rep.new_contacts_today || 0) + (newContact ? 1 : 0),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Owner control: lift an auto-pause on a number. */
+export async function clearPause(senderKey: string): Promise<void> {
+  await sbUpdate(
+    "whatsapp_number_reputation",
+    `sender_key=eq.${encodeURIComponent(senderKey)}`,
+    { paused_until: null, risk_score: 0 }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -263,10 +523,50 @@ export function humanizeVariant(text: string): string {
   // Contraction jitter (one direction only, keeps grammar safe).
   if (Math.random() < 0.5) out = out.replace(/\bI am\b/g, "I'm");
   if (Math.random() < 0.4) out = out.replace(/\bwhat is\b/gi, (m) => (m[0] === "W" ? "What's" : "what's"));
+  if (Math.random() < 0.3) out = out.replace(/\bokay\b/gi, "ok");
   // Punctuation/spacing jitter - invisible to a human, new hash every time.
   if (Math.random() < 0.35) out = out.replace(/\. /g, ".  ");
   if (Math.random() < 0.3 && !/[?!]$/.test(out)) out = out.replace(/\.$/, "");
+  // Rare, self-corrected typo (research: a ~2.5% typo rate reads as a real
+  // human and breaks hash-matching). We append a natural correction rather
+  // than send a misspelled word, so the shop still reads clean intent.
+  if (Math.random() < 0.025) {
+    const words = out.split(" ");
+    const i = words.findIndex((w) => w.length >= 4 && /^[a-z]+$/i.test(w));
+    if (i >= 0) {
+      const w = words[i];
+      const typo = w.slice(0, 1) + w.slice(2, 3) + w.slice(1, 2) + w.slice(3); // swap 2 chars
+      out = out.replace(w, `${typo} ${w}`);
+    }
+  }
   return out;
+}
+
+/**
+ * Graduated ban-recovery: after a REAL WhatsApp restriction (a 401/logout or a
+ * detected soft-ban), pause the number for a long rest, then it resumes under
+ * the warm-up ramp. Called from the connection lifecycle handler.
+ */
+export async function enterBanRecovery(
+  senderKey: string,
+  hours = 24
+): Promise<void> {
+  try {
+    const until = new Date(Date.now() + hours * 3600_000).toISOString();
+    await sbUpdate(
+      "whatsapp_number_reputation",
+      `sender_key=eq.${encodeURIComponent(senderKey)}`,
+      { paused_until: until, trust_score: 10 }
+    );
+    await sbInsert("agent_events", [
+      {
+        kind: "wa-ban-risk",
+        detail: `${senderKey} entered ban-recovery: paused ${hours}h after a WhatsApp restriction/logout. Sending resumes slowly under warm-up.`,
+      },
+    ]);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,10 +595,47 @@ export async function guardOutbound(opts: {
 }): Promise<GuardVerdict> {
   const p = await getPolicies();
   const text = opts.auto ? humanizeVariant(opts.text) : opts.text;
+  const now = Date.now();
+  const rep = await getReputation(opts.senderKey);
 
-  // 1. Two-way engagement halt: never send another AUTOMATED message to a
-  //    number that has not replied since our last outbound to it.
-  if (opts.auto && p.engagement_halt) {
+  const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
+    if (opts.queueIfBlocked !== false) {
+      await sbInsert("wa_outbox", [
+        {
+          sender_key: opts.senderKey,
+          to_number: opts.toDigits,
+          body: text,
+          not_before: notBefore,
+          meta: opts.meta ?? null,
+        },
+      ]);
+      return { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text };
+    }
+    return { allow: false, reason, text };
+  };
+
+  // Is this a brand-new cold contact (no prior message to this number)?
+  const priorRecipient = await sbSelect<{ id: number }>(
+    "wa_recipient_state",
+    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}&to_number=eq.${encodeURIComponent(
+      opts.toDigits
+    )}&limit=1`
+  );
+  const isNewContact = priorRecipient.length === 0;
+
+  // 0. GLOBAL ACCOUNT PAUSE - a number the risk engine (or a real WhatsApp
+  //    restriction) has quarantined sends nothing until the pause expires.
+  //    This is the graduated ban-recovery guard from the research.
+  if (rep.paused_until && Date.parse(rep.paused_until) > now) {
+    if (opts.auto) return await queue(rep.paused_until, "number paused (ban-risk recovery)");
+    return { allow: false, reason: "This number is paused for safety recovery.", text };
+  }
+
+  // 1. TWO-WAY ENGAGEMENT HALT. Never send a second AUTOMATED message to a
+  //    number until it has engaged - a reply OR at least a read receipt (blue
+  //    tick). Delivered-but-ignored contacts are the #1 spam signal, so we do
+  //    NOT keep pushing them.
+  if (opts.auto && p.engagement_halt && !isNewContact) {
     const lastOut = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
@@ -312,100 +649,116 @@ export async function guardOutbound(opts: {
           opts.toDigits
         )}&received_at=gte.${encodeURIComponent(lastOut[0].received_at)}&limit=1`
       );
-      if (!inboundSince.length) {
+      const state = await sbSelect<{ read: boolean; last_reply_at: string | null }>(
+        "wa_recipient_state",
+        `select=read,last_reply_at&sender_key=eq.${encodeURIComponent(
+          opts.senderKey
+        )}&to_number=eq.${encodeURIComponent(opts.toDigits)}&limit=1`
+      );
+      const engaged =
+        inboundSince.length > 0 || state[0]?.read || Boolean(state[0]?.last_reply_at);
+      if (!engaged) {
         return {
           allow: false,
-          reason: "engagement-halt: waiting for the shop to reply first",
+          reason: "engagement-halt: no reply or read receipt yet",
           text,
         };
       }
     }
   }
 
-  // 2. Recipient business hours: park night sends until the window opens.
+  // 2. RECIPIENT BUSINESS HOURS - never message a shop at 3 AM local time.
   const hour = recipientLocalHour(opts.toDigits);
   const inWindow = hour >= p.business_hour_start && hour < p.business_hour_end;
   if (opts.auto && !inWindow) {
-    if (opts.queueIfBlocked !== false) {
-      const notBefore = nextBusinessOpen(opts.toDigits, p);
-      await sbInsert("wa_outbox", [
-        {
-          sender_key: opts.senderKey,
-          to_number: opts.toDigits,
-          body: text,
-          not_before: notBefore,
-          meta: opts.meta ?? null,
-        },
-      ]);
+    return await queue(nextBusinessOpen(opts.toDigits, p), "outside recipient business hours");
+  }
+
+  // 3. COLD-OUTREACH GOVERNOR (only for brand-new first contacts - the highest
+  //    ban-risk action). Combines: daily new-contact cap, reply-rate circuit
+  //    breaker, and delivery-rate circuit breaker (double-tick < threshold).
+  if (opts.auto && isNewContact) {
+    const today = new Date().toISOString().slice(0, 10);
+    const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
+    const capNew = newContactCap(rep, p);
+    if (newToday >= capNew) {
+      return await queue(
+        new Date(now + 60 * 60_000).toISOString(),
+        `daily new-contact cap reached (${capNew}/day)`
+      );
+    }
+    // Reply-rate breaker: if we have enough history and almost nobody replies,
+    // freeze cold outreach - this is what actually trips WhatsApp's filters.
+    if ((rep.sent_total || 0) >= p.min_reply_samples && replyRate(rep) < p.min_reply_rate) {
       return {
         allow: false,
-        reason: "outside recipient business hours - queued",
-        queuedUntil: notBefore,
+        reason: `reply-rate circuit breaker (${(replyRate(rep) * 100).toFixed(0)}% < ${(p.min_reply_rate * 100).toFixed(0)}%) - cold outreach frozen to protect the number`,
         text,
       };
     }
-    return { allow: false, reason: "outside recipient business hours", text };
+    // Delivery-rate breaker (research: double-tick threshold ~60%).
+    if ((rep.delivered_total || 0) >= 8) {
+      const delivRate = (rep.delivered_total || 0) / Math.max(1, rep.sent_total || 0);
+      if (delivRate < 0.6) {
+        return {
+          allow: false,
+          reason: `delivery-rate breaker (${(delivRate * 100).toFixed(0)}% delivered) - number may be soft-restricted`,
+          text,
+        };
+      }
+    }
   }
 
-  // 3. Dynamic volume caps from reputation (velocity vector).
-  const rep = await getReputation(opts.senderKey);
-  const hourCap = dynamicHourCap(rep, p);
-  const now = Date.now();
+  // 4. DYNAMIC VOLUME CAPS (velocity vector) - trust-scaled, warm-up ramped,
+  //    with a per-day random wobble so a fixed cap is not itself a pattern.
+  const jitter = dailyCapJitter(opts.senderKey, p);
+  const hourCap = Math.max(1, Math.round(dynamicHourCap(rep, p) * jitter));
+  const dayCap = Math.max(1, Math.round(p.day_cap * jitter));
   const sentRows = await sbSelect<{ received_at: string }>(
     "whatsapp_messages",
     `select=received_at&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       opts.senderKey
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()
-    )}&order=received_at.desc&limit=200`
+    )}&order=received_at.desc&limit=300`
   );
   const hourAgo = new Date(now - 3600_000).toISOString();
   const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length;
   if (lastHour >= hourCap) {
-    return {
-      allow: false,
-      reason: `dynamic hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`,
-      text,
-    };
+    return await queue(
+      new Date(now + 15 * 60_000).toISOString(),
+      `hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`
+    );
   }
-  if (sentRows.length >= p.day_cap) {
-    return { allow: false, reason: `daily cap reached (${p.day_cap}/day)`, text };
+  if (sentRows.length >= dayCap) {
+    return { allow: false, reason: `daily cap reached (${dayCap}/day)`, text };
   }
 
-  // 4. Anti-robotic minimum gap with jitter.
+  // 5. BURST COOLDOWN - even within caps, N sends in a short window is a robotic
+  //    burst. After a burst, enforce a longer rest before the next send.
+  const burstWindowAgo = new Date(now - p.burst_window_seconds * 1000).toISOString();
+  const inBurst = sentRows.filter((r) => r.received_at >= burstWindowAgo).length;
+  if (opts.auto && inBurst >= p.burst_max_in_window) {
+    const newest = sentRows[0] ? Date.parse(sentRows[0].received_at) : now;
+    const until = new Date(newest + p.burst_cooldown_minutes * 60_000).toISOString();
+    return await queue(until, `burst cooldown (${inBurst} in ${p.burst_window_seconds}s)`);
+  }
+
+  // 6. ANTI-ROBOTIC MINIMUM GAP with jitter (never two sends back-to-back).
   if (rep.last_send_at) {
-    const gapNeeded =
-      (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000;
+    const gapNeeded = (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000;
     const since = now - Date.parse(rep.last_send_at);
     if (opts.auto && since < gapNeeded) {
-      if (opts.queueIfBlocked !== false) {
-        const notBefore = new Date(now + (gapNeeded - since)).toISOString();
-        await sbInsert("wa_outbox", [
-          {
-            sender_key: opts.senderKey,
-            to_number: opts.toDigits,
-            body: text,
-            not_before: notBefore,
-            meta: opts.meta ?? null,
-          },
-        ]);
-        return {
-          allow: false,
-          reason: "human pacing gap - queued",
-          queuedUntil: notBefore,
-          text,
-        };
-      }
-      return { allow: false, reason: "human pacing gap", text };
+      return await queue(new Date(now + (gapNeeded - since)).toISOString(), "human pacing gap");
     }
   }
 
   return { allow: true, text };
 }
 
-/** Book-keeping after a successful send (trust decay + last_send_at). */
-export async function afterSend(senderKey: string): Promise<void> {
-  await recordOutboundSend(senderKey);
+/** Book-keeping after a successful send (trust decay, new-contact count). */
+export async function afterSend(senderKey: string, toNumber?: string): Promise<void> {
+  await recordOutboundSend(senderKey, toNumber);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +806,7 @@ export async function drainOutbox(
     const r = await send(row.sender_key, row.to_number, verdict.text);
     if (r.ok) {
       sent++;
-      await afterSend(row.sender_key);
+      await afterSend(row.sender_key, row.to_number);
       await sbInsert("whatsapp_messages", [
         {
           to_number: row.to_number,

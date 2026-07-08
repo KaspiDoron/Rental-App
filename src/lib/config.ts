@@ -35,6 +35,7 @@ const KEYS: {
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
   { name: "EVOLUTION_HOSTS", label: "Evolution host pool (url|key per line)", scope: "messaging", editable: true },
   { name: "EVOLUTION_MAX_PER_HOST", label: "Max WhatsApp users per host", scope: "messaging", editable: true },
+  { name: "EVOLUTION_PROXY", label: "Residential proxy URL (anti-ban - socks5://user:pass@host:port)", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_URL", label: "Evolution API URL (single-host fallback)", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_KEY", label: "Evolution API Key (single-host fallback)", scope: "messaging", editable: true },
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token (optional)", scope: "messaging", editable: true },
