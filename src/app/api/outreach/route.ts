@@ -43,6 +43,36 @@ export async function POST(req: Request) {
     );
   }
 
+  // Free-tier pickup rule: only TODAY pickups are allowed. A free user who is
+  // already in a cooldown (from a prior bypass attempt) is blocked entirely;
+  // a fresh attempt to arrange a next-day pickup triggers a 6-hour cooldown.
+  if (session.plan === "free") {
+    const { cooldownLeft, setCooldown, requestsFuturePickup } = await import("@/lib/cooldown");
+    const left = await cooldownLeft(session.email, "pickup-bypass");
+    if (left > 0) {
+      return NextResponse.json({
+        allowed: false,
+        blocked: true,
+        cooldownMinutes: left,
+        reason: `Free plan is today-pickup only. Sending is paused for ${Math.ceil(
+          left / 60
+        )}h after trying to arrange a future-day pickup. Upgrade to schedule future pickups.`,
+        upgrade: true,
+      });
+    }
+    if (requestsFuturePickup(message)) {
+      await setCooldown(session.email, "pickup-bypass", 360, "free-tier future pickup attempt");
+      return NextResponse.json({
+        allowed: false,
+        blocked: true,
+        cooldownMinutes: 360,
+        reason:
+          "The free plan can only arrange same-day (today) pickups. Scheduling a future pickup needs Pro/Ultra - sending is paused for 6 hours.",
+        upgrade: true,
+      });
+    }
+  }
+
   // Resolve the destination number server-side.
   let to = String(body.to ?? "").trim();
   if (!to && body.placeId) {

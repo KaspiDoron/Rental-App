@@ -62,8 +62,12 @@ const ALL_EXAMPLES = [
   "Compact car, 3 days, need child booster seat",
 ];
 
-function pickExamples(): string[] {
-  const shuffled = [...ALL_EXAMPLES].sort(() => Math.random() - 0.5);
+// Free plan is today-pickup only, so never suggest future-scheduling searches.
+const FUTURE_HINT = /tomorrow|next (hour|day|week)|weekend|month|long-term|\d+ weeks?/i;
+function pickExamples(plan?: string): string[] {
+  const pool =
+    plan === "free" ? ALL_EXAMPLES.filter((e) => !FUTURE_HINT.test(e)) : ALL_EXAMPLES;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
   return shuffled.slice(0, 3 + Math.floor(Math.random() * 2)); // 3-4 chips
 }
 
@@ -114,14 +118,12 @@ export default function Home() {
   const localLangActive = localLang && session?.plan === "ultra";
 
   // Fresh random suggestion chips on every visit (client-only so SSR markup
-  // stays deterministic).
+  // stays deterministic). Free users never see future-day pickup suggestions.
   useEffect(() => {
-    const picked = pickExamples();
+    const picked = pickExamples(session?.plan);
     setExamples(picked);
-    setRawText((prev) =>
-      ALL_EXAMPLES.includes(prev) ? picked[0] : prev
-    );
-  }, []);
+    setRawText((prev) => (ALL_EXAMPLES.includes(prev) ? picked[0] : prev));
+  }, [session?.plan]);
 
   // Restore a previous search so it survives navigating to Profile/Admin and
   // back. Kept in sessionStorage; cleared only by the explicit Clear button.

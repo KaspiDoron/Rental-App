@@ -409,3 +409,16 @@ create table if not exists public.wa_recipient_state (
 );
 create index if not exists wa_recipient_state_idx on public.wa_recipient_state (sender_key, to_number);
 alter table public.wa_recipient_state enable row level security;
+
+-- ---- User cooldowns (free-tier pickup-bypass enforcement, etc.) ---------------
+-- Temporary per-user blocks. Free users who try to arrange a next-day pickup
+-- (bypassing the today-only limit) are blocked from sending for 6 hours.
+create table if not exists public.user_cooldowns (
+  email      text not null,
+  kind       text not null,
+  until      timestamptz not null,
+  reason     text,
+  created_at timestamptz not null default now(),
+  primary key (email, kind)
+);
+alter table public.user_cooldowns enable row level security;
