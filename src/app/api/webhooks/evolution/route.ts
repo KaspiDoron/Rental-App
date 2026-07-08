@@ -97,5 +97,14 @@ export async function POST(req: Request) {
     // Never fail the webhook.
   }
 
+  // Opportunistic queue drain: any webhook activity flushes due outbox
+  // messages (business-hours / pacing queue) without a dedicated worker.
+  try {
+    const { drainOutbox } = await import("@/lib/wa-guard");
+    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text));
+  } catch {
+    /* best-effort */
+  }
+
   return NextResponse.json({ ok: true });
 }

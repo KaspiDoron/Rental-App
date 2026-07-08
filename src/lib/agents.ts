@@ -32,7 +32,8 @@ export async function runProfiler(
     "for scooters/motorbikes use engineSizeCc. The vendorMessage must read like a " +
     "natural, friendly first-person WhatsApp message from the traveller asking for " +
     "availability and the best daily price - authentic and human, plain text, no " +
-    "markdown - ending with the short tag '(sent with my WheelDeal assistant)'.";
+    "markdown. Write as a REAL human traveller messaging a shop - never mention " +
+    "an app, assistant, bot or automation of any kind.";
 
   const llm = await chat([
     { role: "system", content: system },
@@ -168,9 +169,7 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
     parts.push(`I'd also need: ${rfq.accessories.join(", ")}.`);
   if (rfq.fulfillment === "hotel-delivery")
     parts.push("Delivery to my hotel would be ideal.");
-  parts.push(
-    "Is it available, and what's your best daily price? Thanks! (sent with my WheelDeal assistant)"
-  );
+  parts.push("Is it available, and what's your best daily price? Thanks!");
   return parts.join(" ");
 }
 
@@ -281,8 +280,28 @@ export async function composeBargain(opts: {
   currency?: string;
   // Ultra feature: bargain in the shop's LOCAL language, street-smart style.
   localLanguage?: boolean;
+  // Ask-once discipline: the EXACT target to ask for (anchored to the market
+  // floor for the area) and the floor itself - the agent may NEVER go below
+  // the floor. Absurd lowballs (70 THB/day scooters) kill deals and trust.
+  targetPricePerDay?: number;
+  floorPricePerDay?: number;
+  // Recent conversation, oldest first, so the agent never re-asks anything
+  // the shop already answered.
+  history?: string;
 }): Promise<{ message: string; tacticId: string; tacticLabel: string }> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
+  // Sane target: the market floor when we know it, otherwise a modest 15% cut.
+  // Clamped so we never ask below the floor or below 60% of the quote.
+  const quoted = opts.currentPricePerDay;
+  let target = opts.targetPricePerDay;
+  if (!target && quoted) {
+    target = Math.round(quoted * 0.85);
+  }
+  if (target && quoted) {
+    const lowest = Math.max(opts.floorPricePerDay ?? 0, Math.round(quoted * 0.6));
+    if (target < lowest) target = lowest;
+    if (target >= quoted) target = undefined; // quote already at/below target
+  }
   const tactics = getTactics();
   const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
 
@@ -304,12 +323,22 @@ export async function composeBargain(opts: {
   )} for ${opts.rfq.durationDays} day(s)`;
 
   const system =
-    "You write ONE short WhatsApp bargaining message for a traveller's automated " +
-    "procurement assistant to send a rental shop. Rules: plain text only, no " +
-    "markdown, no asterisks, no emoji spam (max one), 1-3 sentences, polite but " +
-    "money-smart, always identify context implicitly (we already introduced " +
-    "ourselves). Never invent prices we were not given. " +
+    "You write ONE short WhatsApp message from a real human traveller chatting " +
+    "with a rental shop. Rules: plain text only, no markdown, no asterisks, no " +
+    "emoji spam (max one), 1-3 sentences, warm and polite, never robotic, never " +
+    "mention an app or assistant. Never invent prices we were not given. " +
+    "ASK-ONCE DISCIPLINE: this is our ONE and ONLY price ask for this shop - " +
+    "make it friendly and easy to say yes to, and make clear we're happy either " +
+    "way. Never pressure, never repeat a question the shop already answered. " +
+    (opts.history
+      ? "Conversation so far (oldest first) - do NOT re-ask anything answered here:\n" +
+        opts.history +
+        "\n"
+      : "") +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
+    (target
+      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(Math.max(opts.floorPricePerDay ?? target, Math.round((quoted ?? target) * 0.6)), cur)} - unrealistic lowballs insult the shop. `
+      : "Do NOT propose any specific number - just warmly ask for their best price. ") +
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
       ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
@@ -323,13 +352,13 @@ export async function composeBargain(opts: {
 
   const user =
     `Vehicle: ${spec}. Currency: ${cur}. ` +
-    (opts.currentPricePerDay
-      ? `They quoted ${money(opts.currentPricePerDay, cur)}/day. `
-      : "No quote yet. ") +
+    (quoted ? `They quoted ${money(quoted, cur)}/day. ` : "No quote yet. ") +
     (opts.rivalPricePerDay
       ? `A nearby shop offered ${money(opts.rivalPricePerDay, cur)}/day. `
       : "") +
-    `Write the next message to push the price down. All amounts in ${cur}.`;
+    (target
+      ? `Write our single friendly ask for ${money(target, cur)}/day. All amounts in ${cur}.`
+      : `Write one friendly message asking their best price. All amounts in ${cur}.`);
 
   const llm = await chat([
     { role: "system", content: system },
@@ -347,7 +376,7 @@ export async function composeBargain(opts: {
 
   // Deterministic fallback built from the learned tactic script.
   const filled = tactic.script
-    .replace("{target}", opts.currentPricePerDay ? money(Math.max(1, opts.currentPricePerDay * 0.85), cur) : "a better rate")
+    .replace("{target}", target ? money(target, cur) : "a better rate")
     .replace("{rival}", opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : "a lower price")
     .replace("{vehicle}", vehicleTerm(opts.rfq.vehicleClass))
     .replace("{days}", String(opts.rfq.durationDays));
@@ -395,7 +424,8 @@ export interface ExtractedOffer {
 export async function extractOffer(
   rfq: StructuredRFQ,
   text: string,
-  images: { mime: string; base64: string }[] = []
+  images: { mime: string; base64: string }[] = [],
+  history?: string
 ): Promise<ExtractedOffer> {
   const { chatVision } = await import("./ai");
   const spec = `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
@@ -414,9 +444,14 @@ export async function extractOffer(
     '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string }. ' +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
-    "vehicle. If anything is unclear, set confidence low and write a short, " +
-    "polite clarifyMessage asking the vendor to confirm the exact vehicle and " +
-    "daily price.";
+    "vehicle. Combine the reply with the conversation history: if the vehicle " +
+    "and daily price are both clear from the thread as a whole, set matchesSpec " +
+    "true and confidence high. Only when something is genuinely still unknown, " +
+    "write a short, polite clarifyMessage - and it must NEVER repeat a question " +
+    "the vendor already answered anywhere in the thread." +
+    (history
+      ? "\nConversation so far (oldest first):\n" + history
+      : "");
 
   // Vision path (handles price-list photos) when Gemini is available.
   if (images.length > 0) {

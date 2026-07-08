@@ -60,6 +60,46 @@ export async function POST(req: Request) {
 
   const digits = to.replace(/[^\d]/g, "");
 
+  // Anti-Ban gate for agent-composed sends (RFQs, bargains). Custom messages
+  // the user typed are auto:false - they skip the engagement halt but still
+  // respect volume caps. Blocked-by-hours sends are QUEUED, not lost.
+  const kind = String(body.kind ?? "custom");
+  const isAuto = kind !== "custom";
+  const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
+  const guard = await guardOutbound({
+    senderKey: session.email,
+    toDigits: digits,
+    text: message,
+    auto: isAuto,
+    queueIfBlocked: true,
+    meta: {
+      sender: session.email,
+      vendorId: String(body.vendorId ?? ""),
+      vendorName: String(body.vendorName ?? ""),
+      kind,
+      round: Number(body.round ?? 0),
+      rfq: body.rfq ?? null,
+      region: String(body.region ?? ""),
+      plan: session.plan,
+    },
+  });
+  if (!guard.allow) {
+    const halted = (guard.reason ?? "").startsWith("engagement-halt");
+    return NextResponse.json({
+      allowed: true,
+      sent: false,
+      queued: Boolean(guard.queuedUntil),
+      queuedUntil: guard.queuedUntil,
+      halted,
+      error: halted
+        ? "Message already sent - your agent is waiting for the shop to reply first."
+        : guard.queuedUntil
+        ? "The shop is closed right now - your message is queued and will be sent when they open."
+        : guard.reason,
+    });
+  }
+  const guardedMessage = guard.text;
+
   // Channel priority:
   //   1. The user's OWN WhatsApp (Evolution QR session) - the most authentic
   //      sender a bargain can have, with strict anti-ban rate limits.
@@ -76,7 +116,7 @@ export async function POST(req: Request) {
   // transient Render restart no longer forces "connect again".
   if ((await evolutionConfigured()) && (await wasEverConnected(session.email))) {
     configured = true;
-    const r = await sendFromUser(session.email, digits, message);
+    const r = await sendFromUser(session.email, digits, guardedMessage);
     result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
     if (r.rateLimited) {
       return NextResponse.json({
@@ -102,16 +142,17 @@ export async function POST(req: Request) {
   }
   if (!result.ok && (await whatsappConfigured())) {
     configured = true;
-    const r = await sendWhatsApp(to, message);
+    const r = await sendWhatsApp(to, guardedMessage);
     result = { channel: r.channel, ok: r.ok, error: r.error };
   }
+  if (result.ok) await afterSend(session.email);
 
   // Log the outbound message WITH thread context (vendor + rfq), so the
   // webhook can match the inbound reply and keep the loop fully in-app.
   await sbInsert("whatsapp_messages", [
     {
       to_number: digits,
-      body: message,
+      body: guardedMessage,
       type: "text",
       direction: "outbound",
       raw: {

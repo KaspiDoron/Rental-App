@@ -20,6 +20,10 @@ const TABLES: { name: string; label: string; order: string }[] = [
   { name: "billing_events", label: "Billing events", order: "created_at.desc" },
   { name: "api_usage", label: "API usage", order: "created_at.desc" },
   { name: "ai_usage", label: "AI usage", order: "created_at.desc" },
+  { name: "market_floor_prices", label: "Market floor prices", order: "updated_at.desc" },
+  { name: "whatsapp_number_reputation", label: "WA trust scores", order: "created_at.desc" },
+  { name: "whatsapp_security_policies", label: "WA security policies", order: "id.asc" },
+  { name: "wa_outbox", label: "WA outbox (queued)", order: "not_before.asc" },
 ];
 
 export async function GET(req: Request) {

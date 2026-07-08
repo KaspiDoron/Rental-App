@@ -21,6 +21,18 @@ export async function GET() {
   const state = await connectionState(session.email);
   const paired = state === "open" ? true : await wasEverConnected(session.email);
 
+  // Opportunistic anti-ban outbox drain: the app polling status while open is
+  // our free "worker tick" for business-hours / pacing-queued messages.
+  try {
+    const { drainOutbox } = await import("@/lib/wa-guard");
+    const { sendFromUser } = await import("@/lib/evolution");
+    drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
+      () => {}
+    );
+  } catch {
+    /* best-effort */
+  }
+
   return NextResponse.json({
     available: true,
     state: state ?? "disconnected",

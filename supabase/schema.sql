@@ -289,3 +289,61 @@ create table if not exists public.feedback_images (
 );
 create index if not exists feedback_images_fid_idx on public.feedback_images (feedback_id);
 alter table public.feedback_images enable row level security;
+
+-- ---- Market floor prices (owner + AI weekly research) ------------------------
+-- Lowest realistic daily rental price per area + vehicle bucket. Keyed at the
+-- AREA level ("koh samui, thailand") with a COUNTRY fallback row - never one
+-- row per town. The bargaining agent anchors its single ask to these floors.
+create table if not exists public.market_floor_prices (
+  id              bigint generated always as identity primary key,
+  region_key      text not null,
+  vehicle_key     text not null,
+  currency        text not null default 'USD',
+  floor_per_day   numeric not null,
+  typical_per_day numeric,
+  source          text not null default 'ai', -- 'ai' | 'owner'
+  updated_at      timestamptz not null default now(),
+  unique (region_key, vehicle_key)
+);
+create index if not exists market_floor_region_idx
+  on public.market_floor_prices (region_key, vehicle_key);
+alter table public.market_floor_prices enable row level security;
+
+-- ---- WhatsApp number reputation (Anti-Ban engine) -----------------------------
+-- Dynamic Trust Score per connected sender. Replies build trust and relax the
+-- hourly budget; pure outbound decays it. New numbers warm up on half budget.
+create table if not exists public.whatsapp_number_reputation (
+  id            bigint generated always as identity primary key,
+  sender_key    text not null unique,   -- user email (one WA number per user)
+  trust_score   int not null default 20,
+  sent_total    int not null default 0,
+  replies_total int not null default 0,
+  last_send_at  timestamptz,
+  created_at    timestamptz not null default now()
+);
+alter table public.whatsapp_number_reputation enable row level security;
+
+-- ---- WhatsApp security policies (owner control panel) -------------------------
+-- Every anti-ban knob lives here so the owner tunes the engine from the DB /
+-- admin UI without a redeploy. Missing keys fall back to safe code defaults.
+create table if not exists public.whatsapp_security_policies (
+  id    bigint generated always as identity primary key,
+  key   text not null unique,
+  value text not null
+);
+alter table public.whatsapp_security_policies enable row level security;
+
+-- ---- WhatsApp outbox (business-hours + pacing queue) --------------------------
+-- Automated messages blocked by recipient night hours or pacing gaps park here
+-- and are drained opportunistically by the webhook / status poll.
+create table if not exists public.wa_outbox (
+  id         bigint generated always as identity primary key,
+  sender_key text not null,
+  to_number  text not null,
+  body       text not null,
+  not_before timestamptz not null,
+  meta       jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists wa_outbox_due_idx on public.wa_outbox (not_before asc);
+alter table public.wa_outbox enable row level security;

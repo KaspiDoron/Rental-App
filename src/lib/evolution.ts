@@ -761,6 +761,31 @@ export async function sendFromUser(
     };
   }
 
+  // Multi-step presence mimicry (anti-ban): a real human types, pauses to
+  // think, and types again before sending. Best-effort - if the presence
+  // endpoint is missing on this Evolution build we still send.
+  try {
+    const { getPolicies } = await import("./wa-guard");
+    const p = await getPolicies();
+    const span = Math.max(0, p.presence_max_ms - p.presence_min_ms);
+    const t1 = p.presence_min_ms + Math.floor(Math.random() * span * 0.6);
+    const pause = 600 + Math.floor(Math.random() * 1400);
+    const t2 = Math.min(4000, 900 + Math.floor(message.length * (18 + Math.random() * 22)) / 4);
+    const presence = (state: string, delay: number) =>
+      evo(email, `/chat/sendPresence/${instance}`, {
+        method: "POST",
+        body: JSON.stringify({ number, presence: state, delay }),
+      });
+    await presence("composing", t1);
+    await new Promise((r) => setTimeout(r, Math.min(t1, 5000)));
+    await presence("paused", pause);
+    await new Promise((r) => setTimeout(r, pause));
+    await presence("composing", t2);
+    await new Promise((r) => setTimeout(r, Math.min(t2, 4000)));
+  } catch {
+    /* presence is cosmetic - never block the send */
+  }
+
   const trySend = async () => {
     // v2 shape first, then the legacy v1 body.
     let r = await evo(email, `/message/sendText/${instance}`, {

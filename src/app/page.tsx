@@ -63,7 +63,6 @@ export default function Home() {
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
   const [reviewsVendor, setReviewsVendor] = useState<Vendor | null>(null);
   const [bargainVendor, setBargainVendor] = useState<Vendor | null>(null);
-  const [aiOn, setAiOn] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
@@ -282,7 +281,6 @@ export default function Home() {
       return;
     }
     setRfq(pData.rfq);
-    setAiOn(Boolean(pData.aiEnabled));
     // The active filter always follows the requested vehicle class.
     setFilters({ ...DEFAULT_FILTERS, vehicleClass: pData.rfq.vehicleClass });
 
@@ -387,15 +385,6 @@ export default function Home() {
                 {session.plan}
               </span>
             )}
-            <span
-              className={`rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
-                aiOn
-                  ? "bg-savings-soft text-savings"
-                  : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
-              }`}
-            >
-              {aiOn ? t("AI online") : t("Demo AI")}
-            </span>
             <LanguageButton />
           </div>
         </div>
