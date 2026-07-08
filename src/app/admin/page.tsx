@@ -105,6 +105,51 @@ export default function AdminPage() {
   >([]);
   const [promptDraft, setPromptDraft] = useState<Record<string, string>>({});
   const [promptSaved, setPromptSaved] = useState<string | null>(null);
+  // Interactive train-the-agent studio (New#13)
+  const [tcTurns, setTcTurns] = useState<{ role: "shop" | "agent"; text: string }[]>([]);
+  const [tcInput, setTcInput] = useState("");
+  const [tcRegion, setTcRegion] = useState("Koh Samui, Thailand");
+  const [tcBusy, setTcBusy] = useState(false);
+  const [tcInfo, setTcInfo] = useState<{
+    action: string; reasoning: string;
+    understood: { foundPrice: number | null; currency: string; matchesVehicle: boolean; confidence: string };
+  } | null>(null);
+  const [tcSaved, setTcSaved] = useState(false);
+
+  async function tcSend() {
+    const text = tcInput.trim();
+    if (!text || tcBusy) return;
+    const turns = [...tcTurns, { role: "shop" as const, text }];
+    setTcTurns(turns);
+    setTcInput("");
+    setTcBusy(true);
+    try {
+      const r = await (
+        await fetch("/api/admin/train-chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turns, region: tcRegion }),
+        })
+      ).json();
+      if (r.agentMessage) {
+        setTcTurns([...turns, { role: "agent", text: r.agentMessage }]);
+        setTcInfo({ action: r.action, reasoning: r.reasoning, understood: r.understood });
+      }
+    } finally {
+      setTcBusy(false);
+    }
+  }
+  async function tcSave() {
+    await fetch("/api/admin/train-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", turns: tcTurns, region: tcRegion }),
+    });
+    setTcSaved(true);
+    setTimeout(() => setTcSaved(false), 2000);
+    refreshMemory();
+  }
+
   const [xPosts, setXPosts] = useState<
     { text: string; hashtags: string[]; imageIdea: string; angle: string }[]
   >([]);
@@ -659,6 +704,97 @@ export default function AdminPage() {
 
       {loaded && tab === "agents" && (
         <div className="space-y-3">
+          {/* Interactive training dojo: you play the SHOP, the real agent replies */}
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+              🥋 Train the agent live
+              <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
+                Real brain
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] text-faint">
+              YOU play a rental shop - message the agent and watch how it really
+              negotiates: what it understood, its target, and its next move. Save the
+              session to teach it. (This runs the exact funnel brain.)
+            </p>
+            <input
+              value={tcRegion}
+              onChange={(e) => setTcRegion(e.target.value)}
+              placeholder="Scenario area, e.g. Koh Samui, Thailand"
+              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+            />
+            <div className="mb-2 max-h-64 space-y-1.5 overflow-y-auto rounded-xl bg-card2 p-2">
+              {tcTurns.length === 0 ? (
+                <p className="p-3 text-center text-[11px] text-faint">
+                  Start as the shop, e.g. &ldquo;Scooter is 250 baht per day&rdquo;.
+                </p>
+              ) : (
+                tcTurns.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`max-w-[85%] rounded-xl px-2.5 py-1.5 text-[12px] ${
+                      m.role === "agent"
+                        ? "ml-auto bg-brandblue text-white"
+                        : "mr-auto bg-card text-strong"
+                    }`}
+                  >
+                    <span className="mb-0.5 block text-[9px] font-extrabold uppercase opacity-70">
+                      {m.role === "agent" ? "Agent" : "You (shop)"}
+                    </span>
+                    {m.text}
+                  </div>
+                ))
+              )}
+            </div>
+            {tcInfo && (
+              <div className="mb-2 rounded-xl border-2 border-brandblue/30 bg-brandblue-soft p-2 text-[10px] leading-relaxed text-brandblue">
+                <div className="font-extrabold">🧠 {tcInfo.action}</div>
+                <div className="mt-0.5">{tcInfo.reasoning}</div>
+                <div className="mt-1 text-faint">
+                  Understood: price{" "}
+                  {tcInfo.understood.foundPrice ?? "—"} {tcInfo.understood.currency} ·
+                  matches vehicle: {String(tcInfo.understood.matchesVehicle)} · confidence{" "}
+                  {tcInfo.understood.confidence}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                value={tcInput}
+                onChange={(e) => setTcInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && tcSend()}
+                placeholder="Reply as the shop..."
+                className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+              />
+              <button
+                onClick={tcSend}
+                disabled={tcBusy}
+                className="btn btn-primary btn-sm rounded-xl px-3 text-[12px] disabled:opacity-60"
+              >
+                {tcBusy ? <LoadingDots light /> : "Send"}
+              </button>
+            </div>
+            {tcTurns.length > 1 && (
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={tcSave}
+                  className="btn btn-ghost btn-sm flex-1 rounded-xl border-2 border-line text-[11px] font-extrabold text-savings"
+                >
+                  {tcSaved ? "Saved to memory ✓" : "💾 Save this session to memory"}
+                </button>
+                <button
+                  onClick={() => {
+                    setTcTurns([]);
+                    setTcInfo(null);
+                  }}
+                  className="btn btn-ghost btn-sm rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-faint"
+                >
+                  Reset
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Teach the agents automatically from your OWN WhatsApp chats */}
           <div className="surface rounded-blob p-4">
             <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
