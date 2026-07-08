@@ -15,7 +15,10 @@ type ProviderName =
   | "cerebras"
   | "gemini"
   | "mistral"
-  | "huggingface";
+  | "huggingface"
+  | "deepseek"
+  | "together"
+  | "sambanova";
 
 interface ProviderConfig {
   name: ProviderName;
@@ -25,53 +28,77 @@ interface ProviderConfig {
 }
 
 async function allProviders(): Promise<ProviderConfig[]> {
-  const [groq, openrouter, cerebras, gemini, mistral, huggingface] = await Promise.all([
-    getConfig("GROQ_TOKEN"),
-    getConfig("OPENROUTER_TOKEN"),
-    getConfig("CEREBRAS_TOKEN"),
-    getConfig("GEMINI_TOKEN"),
-    getConfig("MISTRAL_TOKEN"),
-    getConfig("HUGGINGFACE_TOKEN"),
-  ]);
+  const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova] =
+    await Promise.all([
+      getConfig("GROQ_TOKEN"),
+      getConfig("OPENROUTER_TOKEN"),
+      getConfig("CEREBRAS_TOKEN"),
+      getConfig("GEMINI_TOKEN"),
+      getConfig("MISTRAL_TOKEN"),
+      getConfig("HUGGINGFACE_TOKEN"),
+      getConfig("DEEPSEEK_TOKEN"),
+      getConfig("TOGETHER_TOKEN"),
+      getConfig("SAMBANOVA_TOKEN"),
+    ]);
 
-  // Order = default failover priority (most reliable free tiers first). Groq
-  // and OpenRouter are the steadiest; Gemini's free tier is often quota-0, so
-  // it sits last and the app fails over past it automatically.
+  // Every provider now runs a TOP-TIER model (70B+/frontier), so whichever key
+  // the owner has, the agents get a strong brain. Order = default failover
+  // priority (fastest + steadiest free tiers first). All are OpenAI-compatible
+  // except Gemini, which the chat() path special-cases.
   return [
     {
       name: "groq",
       token: groq,
       endpoint: "https://api.groq.com/openai/v1/chat/completions",
-      model: "llama-3.3-70b-versatile",
-    },
-    {
-      name: "openrouter",
-      token: openrouter,
-      endpoint: "https://openrouter.ai/api/v1/chat/completions",
-      model: "meta-llama/llama-3.1-8b-instruct",
+      // Kimi-K2: a frontier-class open model, served fast on Groq's free tier.
+      model: "moonshotai/kimi-k2-instruct",
     },
     {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      model: "llama3.1-8b",
+      model: "llama-3.3-70b",
+    },
+    {
+      name: "sambanova",
+      token: sambanova,
+      endpoint: "https://api.sambanova.ai/v1/chat/completions",
+      model: "Meta-Llama-3.3-70B-Instruct",
+    },
+    {
+      name: "deepseek",
+      token: deepseek,
+      endpoint: "https://api.deepseek.com/chat/completions",
+      model: "deepseek-chat",
+    },
+    {
+      name: "together",
+      token: together,
+      endpoint: "https://api.together.xyz/v1/chat/completions",
+      model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+    },
+    {
+      name: "openrouter",
+      token: openrouter,
+      endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      // Frontier open model, free tier on OpenRouter.
+      model: "deepseek/deepseek-chat-v3.1:free",
     },
     {
       name: "mistral",
       token: mistral,
       endpoint: "https://api.mistral.ai/v1/chat/completions",
-      model: "mistral-small-latest",
+      model: "mistral-large-latest",
     },
     {
       name: "huggingface",
       token: huggingface,
       endpoint: "https://router.huggingface.co/v1/chat/completions",
-      model: "meta-llama/Llama-3.1-8B-Instruct",
+      model: "meta-llama/Llama-3.3-70B-Instruct",
     },
     {
       name: "gemini",
       token: gemini,
-      // gemini-1.5-flash was retired from v1beta; gemini-2.0-flash is current.
       endpoint:
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       model: "gemini-2.0-flash",
