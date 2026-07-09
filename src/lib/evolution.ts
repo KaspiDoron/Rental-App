@@ -152,11 +152,9 @@ interface Proxy {
  * the single biggest network-level protection. Config EVOLUTION_PROXY accepts a
  * URL: socks5://user:pass@host:port  (or http://host:port).
  */
-async function parseProxy(): Promise<Proxy | null> {
-  const raw = (await getConfig("EVOLUTION_PROXY"))?.trim();
-  if (!raw) return null;
+function proxyFromUrl(raw: string): Proxy | null {
   try {
-    const u = new URL(raw);
+    const u = new URL(raw.trim());
     return {
       protocol: u.protocol.replace(":", "") || "socks5",
       host: u.hostname,
@@ -167,6 +165,29 @@ async function parseProxy(): Promise<Proxy | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve the proxy for a given user, in priority order:
+ *   1. EVOLUTION_PROXY_POOL - one proxy URL per line; each user is pinned to a
+ *      stable line by hashing their email (unique residential IP per instance,
+ *      the post-revenue scaling step). A user always maps to the same proxy.
+ *   2. EVOLUTION_PROXY - a single shared proxy (pre-revenue / testing).
+ * Returns null when neither is set (datacenter IP - baseline behaviour).
+ */
+async function parseProxy(email?: string): Promise<Proxy | null> {
+  const pool = (await getConfig("EVOLUTION_PROXY_POOL"))?.trim();
+  if (pool && email) {
+    const lines = pool.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    if (lines.length > 0) {
+      const h = createHash("sha256").update(email.toLowerCase()).digest();
+      const idx = h.readUInt32BE(0) % lines.length;
+      const p = proxyFromUrl(lines[idx]);
+      if (p) return p;
+    }
+  }
+  const raw = (await getConfig("EVOLUTION_PROXY"))?.trim();
+  return raw ? proxyFromUrl(raw) : null;
 }
 
 /** Deterministic, collision-safe instance name for a user (same on every host). */
@@ -661,7 +682,7 @@ export async function connectInstance(
   //  - groupsIgnore:true     -> group traffic is dropped (privacy + less noise).
   //  - a residential proxy (if configured) routes the WebSocket through a
   //    non-datacenter IP - datacenter IPs are a top-weighted ban signal.
-  const proxy = await parseProxy();
+  const proxy = await parseProxy(email);
   const hardening = {
     rejectCall: false,
     groupsIgnore: true,

@@ -280,6 +280,24 @@ export async function GET(req: Request) {
       }
       break;
     }
+    case "EVOLUTION_PROXY_POOL": {
+      const lines = value!.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+      const bad: string[] = [];
+      for (const l of lines) {
+        try {
+          const u = new URL(l);
+          if (!/^(socks5?|https?):$/.test(u.protocol) || !u.hostname || !u.port) bad.push(l);
+        } catch {
+          bad.push(l);
+        }
+      }
+      result = lines.length === 0
+        ? { ok: false, detail: "Add one proxy URL per line (scheme://user:pass@host:port)." }
+        : bad.length === 0
+        ? { ok: true, detail: `OK - ${lines.length} proxy(ies). Each user is pinned to one for a stable residential IP.` }
+        : { ok: false, detail: `${bad.length} malformed line(s): ${bad.slice(0, 2).join(" ; ")}` };
+      break;
+    }
     case "EVOLUTION_MAX_PER_HOST": {
       const n = Number(value);
       result = Number.isInteger(n) && n > 0
