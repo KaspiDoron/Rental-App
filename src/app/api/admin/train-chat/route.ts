@@ -32,7 +32,9 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
-  const region = String(body.region ?? "Koh Samui, Thailand");
+  // Global: no country is baked in. If the owner leaves the area blank the agent
+  // simply bargains in a neutral currency until an area is given.
+  const region = String(body.region ?? "").trim();
   const rfq: StructuredRFQ = { ...DEFAULT_RFQ, ...(body.rfq ?? {}) };
   const turns: Turn[] = Array.isArray(body.turns) ? body.turns : [];
 

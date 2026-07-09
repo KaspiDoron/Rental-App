@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { chat, extractJson, aiEnabled } from "@/lib/ai";
+import { chatDetailed, extractJson, aiEnabled } from "@/lib/ai";
 
 // X (Twitter) post studio for the owner. The top-tier model drafts 5 ready-to-
 // post options in WheelDeal's playful-yet-slick-professional voice, each with
@@ -47,12 +47,26 @@ export async function POST(req: Request) {
     ? `Make the 5 posts about: ${theme}`
     : "Give me 5 fresh, on-trend posts to grow the WheelDeal account.";
 
-  const out = await chat([
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ]);
+  // Two attempts: JSON-heavy prompts occasionally get truncated or a free-tier
+  // host hiccups, so one silent retry makes the studio feel reliable.
+  let out: string | null = null;
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt < 2 && !out; attempt++) {
+    const r = await chatDetailed(
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { maxTokens: 1400 }
+    );
+    out = r.text;
+    lastError = r.error;
+  }
   if (!out) {
-    return NextResponse.json({ error: "The AI provider did not respond - try again." }, { status: 502 });
+    return NextResponse.json(
+      { error: lastError ? `AI provider error: ${lastError}` : "The AI provider did not respond - try again." },
+      { status: 502 }
+    );
   }
   const parsed = extractJson<{ posts: XPost[] }>(out);
   const posts = (parsed?.posts ?? [])

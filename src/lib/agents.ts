@@ -223,20 +223,58 @@ export async function runSafety(message: string): Promise<SafetyVerdict> {
 
 // Common rental-destination countries -> local currency, matched against the
 // geocoded region string so the agent bargains in the money the shop uses.
+// Global country -> local currency map so the agent ALWAYS bargains in the money
+// the shop uses, anywhere on earth. Matched against the geocoded region string
+// (which usually ends in the country name). Order matters only for overlaps.
 const REGION_CURRENCY: [RegExp, string][] = [
-  [/thai|\bthailand\b/i, "THB"],
-  [/\bisrael\b/i, "ILS"],
-  [/\bindonesia|\bbali\b/i, "IDR"],
-  [/\bvietnam\b/i, "VND"],
-  [/\bindia\b/i, "INR"],
-  [/\bjapan\b/i, "JPY"],
+  [/\bthai|\bthailand\b/i, "THB"],
+  [/\bisrael\b|\bpalestin/i, "ILS"],
+  [/\bindonesia|\bbali\b|\blombok|\bjakarta/i, "IDR"],
+  [/\bvietnam\b|\bviet nam/i, "VND"],
+  [/\bindia\b|\bgoa\b/i, "INR"],
+  [/\bjapan\b|\bnippon/i, "JPY"],
   [/\bphilippin/i, "PHP"],
-  [/\bmalaysia\b/i, "MYR"],
-  [/\bturkey|\btürkiye/i, "TRY"],
-  [/\bmexico\b/i, "MXN"],
-  [/\bunited kingdom|\bengland|\bscotland|\bwales/i, "GBP"],
-  [/\beuro|\bspain|\bitaly|\bfrance|\bgermany|\bportugal|\bgreece|\bnetherlands/i, "EUR"],
-  [/\bunited states|\busa\b|\bu\.s\./i, "USD"],
+  [/\bmalaysia\b|\bkuala lumpur|\blangkawi/i, "MYR"],
+  [/\bsingapore\b/i, "SGD"],
+  [/\bturkey|\btürkiye|\bturkiye/i, "TRY"],
+  [/\bmexico\b|\bméxico|\bcancun|\btulum/i, "MXN"],
+  [/\bbrazil|\bbrasil/i, "BRL"],
+  [/\bargentin/i, "ARS"],
+  [/\bcolombia\b/i, "COP"],
+  [/\bperu\b|\bperú/i, "PEN"],
+  [/\bchile\b/i, "CLP"],
+  [/\bunited arab emirates|\bdubai\b|\babu dhabi|\buae\b/i, "AED"],
+  [/\bsaudi\b/i, "SAR"],
+  [/\bqatar\b/i, "QAR"],
+  [/\bmorocco|\bmarrakech/i, "MAD"],
+  [/\begypt\b|\bcairo\b/i, "EGP"],
+  [/\bsouth africa|\bcape town|\bjohannesburg/i, "ZAR"],
+  [/\bkenya\b/i, "KES"],
+  [/\bsri lanka|\bcolombo\b/i, "LKR"],
+  [/\bnepal\b/i, "NPR"],
+  [/\bcambodia|\bsiem reap|\bphnom penh/i, "USD"], // KHR quoted, USD common
+  [/\blaos\b|\blao pdr/i, "LAK"],
+  [/\bchina\b|\bbeijing|\bshanghai/i, "CNY"],
+  [/\bhong kong/i, "HKD"],
+  [/\btaiwan\b|\btaipei/i, "TWD"],
+  [/\bsouth korea|\bkorea\b|\bseoul\b/i, "KRW"],
+  [/\baustralia|\bsydney|\bmelbourne/i, "AUD"],
+  [/\bnew zealand\b/i, "NZD"],
+  [/\bcanada\b|\btoronto|\bvancouver/i, "CAD"],
+  [/\bswitzerland|\bschweiz|\bsuisse/i, "CHF"],
+  [/\bunited kingdom|\bengland|\bscotland|\bwales|\blondon\b/i, "GBP"],
+  [/\bpoland\b|\bpolska/i, "PLN"],
+  [/\bczech\b|\bprague/i, "CZK"],
+  [/\bhungary|\bbudapest/i, "HUF"],
+  [/\bsweden\b/i, "SEK"],
+  [/\bnorway\b/i, "NOK"],
+  [/\bdenmark\b/i, "DKK"],
+  [/\brussia\b|\bmoscow/i, "RUB"],
+  [
+    /\beuro\b|\bspain|\bitaly|\bfrance|\bgermany|\bportugal|\bgreece|\bnetherlands|\bireland|\baustria|\bbelgium|\bcroatia|\bcyprus|\bmalta|\bfinland|\bslovak|\bsloven|\bestonia|\blatvia|\blithuania/i,
+    "EUR",
+  ],
+  [/\bunited states|\busa\b|\bu\.s\.|\bamerica\b/i, "USD"],
 ];
 
 /** Best-guess local currency for a geocoded region string (undefined if unknown). */
@@ -246,12 +284,25 @@ export function currencyForRegion(region?: string): string | undefined {
   return undefined;
 }
 
+// Symbols for currencies the agent quotes in. Anything not listed prints the
+// ISO code after the number (e.g. "1200 CZK") - always correct, never wrong.
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: "$", EUR: "€", GBP: "£", THB: "฿", ILS: "₪", JPY: "¥", INR: "₹",
+  IDR: "Rp", VND: "₫", PHP: "₱", MYR: "RM", SGD: "S$", AUD: "A$", NZD: "NZ$",
+  CAD: "C$", CHF: "CHF", CNY: "¥", HKD: "HK$", TWD: "NT$", KRW: "₩", TRY: "₺",
+  MXN: "$", BRL: "R$", ARS: "$", COP: "$", CLP: "$", PEN: "S/", AED: "د.إ",
+  SAR: "﷼", QAR: "﷼", MAD: "DH", EGP: "E£", ZAR: "R", KES: "KSh", LKR: "Rs",
+  NPR: "Rs", LAK: "₭", PLN: "zł", CZK: "Kč", HUF: "Ft", SEK: "kr", NOK: "kr",
+  DKK: "kr", RUB: "₽",
+};
+
 /** Format money in the LOCAL rental currency (never force dollars). */
 export function money(amount: number, currency?: string): string {
   const c = (currency || "USD").toUpperCase();
-  if (c === "USD") return `$${Math.round(amount)}`;
-  const symbols: Record<string, string> = { EUR: "€", GBP: "£", THB: "฿", ILS: "₪", JPY: "¥", INR: "₹" };
-  return symbols[c] ? `${symbols[c]}${Math.round(amount)}` : `${Math.round(amount)} ${c}`;
+  const n = Math.round(amount).toLocaleString();
+  const sym = CURRENCY_SYMBOLS[c];
+  if (!sym) return `${n} ${c}`;
+  return sym.length > 1 ? `${sym} ${n}` : `${sym}${n}`;
 }
 
 export async function composeBargain(opts: {

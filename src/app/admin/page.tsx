@@ -109,7 +109,7 @@ export default function AdminPage() {
   // Interactive train-the-agent studio (New#13)
   const [tcTurns, setTcTurns] = useState<{ role: "shop" | "agent"; text: string }[]>([]);
   const [tcInput, setTcInput] = useState("");
-  const [tcRegion, setTcRegion] = useState("Koh Samui, Thailand");
+  const [tcRegion, setTcRegion] = useState("");
   const [tcBusy, setTcBusy] = useState(false);
   const [tcInfo, setTcInfo] = useState<{
     action: string; reasoning: string;
@@ -721,13 +721,18 @@ export default function AdminPage() {
             <input
               value={tcRegion}
               onChange={(e) => setTcRegion(e.target.value)}
-              placeholder="Scenario area, e.g. Koh Samui, Thailand"
+              placeholder="Scenario area (any country) - e.g. Lisbon, Portugal / Bali, Indonesia"
               className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
             />
+            <p className="mb-2 text-[10px] text-faint">
+              Set the area and the agent bargains in that country&rsquo;s currency and
+              style - it is not tied to any single country.
+            </p>
             <div className="mb-2 max-h-64 space-y-1.5 overflow-y-auto rounded-xl bg-card2 p-2">
               {tcTurns.length === 0 ? (
                 <p className="p-3 text-center text-[11px] text-faint">
-                  Start as the shop, e.g. &ldquo;Scooter is 250 baht per day&rdquo;.
+                  Start as the shop - quote a price in your local currency, e.g.
+                  &ldquo;Scooter is 250 per day&rdquo;.
                 </p>
               ) : (
                 tcTurns.map((m, i) => (

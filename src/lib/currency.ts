@@ -32,6 +32,21 @@ export const CURRENCIES: Currency[] = [
   { code: "RUB", symbol: "₽", flag: "🇷🇺", perIls: 25 },
   { code: "PLN", symbol: "zł", flag: "🇵🇱", perIls: 1.08 },
   { code: "PHP", symbol: "₱", flag: "🇵🇭", perIls: 15.5 },
+  { code: "MYR", symbol: "RM", flag: "🇲🇾", perIls: 1.24 },
+  { code: "NZD", symbol: "NZ$", flag: "🇳🇿", perIls: 0.45 },
+  { code: "HKD", symbol: "HK$", flag: "🇭🇰", perIls: 2.1 },
+  { code: "TWD", symbol: "NT$", flag: "🇹🇼", perIls: 8.7 },
+  { code: "KRW", symbol: "₩", flag: "🇰🇷", perIls: 370 },
+  { code: "SAR", symbol: "﷼", flag: "🇸🇦", perIls: 1.01 },
+  { code: "MAD", symbol: "DH", flag: "🇲🇦", perIls: 2.7 },
+  { code: "EGP", symbol: "E£", flag: "🇪🇬", perIls: 13.3 },
+  { code: "LKR", symbol: "Rs", flag: "🇱🇰", perIls: 82 },
+  { code: "NPR", symbol: "Rs", flag: "🇳🇵", perIls: 37 },
+  { code: "CZK", symbol: "Kč", flag: "🇨🇿", perIls: 6.2 },
+  { code: "HUF", symbol: "Ft", flag: "🇭🇺", perIls: 98 },
+  { code: "SEK", symbol: "kr", flag: "🇸🇪", perIls: 2.9 },
+  { code: "NOK", symbol: "kr", flag: "🇳🇴", perIls: 3.0 },
+  { code: "DKK", symbol: "kr", flag: "🇩🇰", perIls: 1.9 },
 ];
 
 export function currency(code: string): Currency {

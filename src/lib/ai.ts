@@ -25,7 +25,17 @@ interface ProviderConfig {
   token?: string;
   endpoint: string;
   model: string;
+  // A safe secondary model on the SAME provider. If the primary model id is
+  // rejected (400/404 - ids drift on free tiers), we retry once with this one
+  // before failing over to the next provider. Keeps the app resilient to model
+  // renames without a redeploy.
+  fallbackModel?: string;
 }
+
+// Per provider call budget. A hung free-tier endpoint must fail over fast, not
+// stall the whole request (this was a cause of the "provider did not respond"
+// errors: no timeout meant one slow host blocked everything).
+const CALL_TIMEOUT_MS = 22000;
 
 async function allProviders(): Promise<ProviderConfig[]> {
   const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova] =
@@ -52,18 +62,22 @@ async function allProviders(): Promise<ProviderConfig[]> {
       endpoint: "https://api.groq.com/openai/v1/chat/completions",
       // Kimi-K2: a frontier-class open model, served fast on Groq's free tier.
       model: "moonshotai/kimi-k2-instruct",
+      // Llama-3.3-70B is always live on Groq - a rock-solid fallback.
+      fallbackModel: "llama-3.3-70b-versatile",
     },
     {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
       model: "llama-3.3-70b",
+      fallbackModel: "llama3.1-70b",
     },
     {
       name: "sambanova",
       token: sambanova,
       endpoint: "https://api.sambanova.ai/v1/chat/completions",
       model: "Meta-Llama-3.3-70B-Instruct",
+      fallbackModel: "Meta-Llama-3.1-70B-Instruct",
     },
     {
       name: "deepseek",
@@ -76,6 +90,7 @@ async function allProviders(): Promise<ProviderConfig[]> {
       token: together,
       endpoint: "https://api.together.xyz/v1/chat/completions",
       model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+      fallbackModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
     },
     {
       name: "openrouter",
@@ -83,12 +98,14 @@ async function allProviders(): Promise<ProviderConfig[]> {
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       // Frontier open model, free tier on OpenRouter.
       model: "deepseek/deepseek-chat-v3.1:free",
+      fallbackModel: "meta-llama/llama-3.3-70b-instruct:free",
     },
     {
       name: "mistral",
       token: mistral,
       endpoint: "https://api.mistral.ai/v1/chat/completions",
       model: "mistral-large-latest",
+      fallbackModel: "open-mistral-nemo",
     },
     {
       name: "huggingface",
@@ -192,24 +209,49 @@ export async function aiStatus() {
   );
 }
 
+/** fetch with a hard timeout so one slow provider cannot stall the request. */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Trim a provider error body to a short, safe diagnostic (never leaks the key).
+async function errorDetail(res: Response, name: string): Promise<string> {
+  let body = "";
+  try {
+    body = (await res.text()).slice(0, 300);
+  } catch {
+    /* ignore */
+  }
+  const msg = body.replace(/\s+/g, " ").trim();
+  return `${name} ${res.status}${msg ? ` - ${msg}` : ""}`;
+}
+
 async function callOpenAICompatible(
   cfg: ProviderConfig,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  model: string,
+  maxTokens: number
 ): Promise<{ text: string; tokens: number }> {
-  const res = await fetch(cfg.endpoint, {
+  const res = await fetchWithTimeout(cfg.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${cfg.token}`,
     },
     body: JSON.stringify({
-      model: cfg.model,
+      model,
       messages,
       temperature: 0.6,
-      max_tokens: 700,
+      max_tokens: maxTokens,
     }),
   });
-  if (!res.ok) throw new Error(`${cfg.name} ${res.status}`);
+  if (!res.ok) throw new Error(await errorDetail(res, cfg.name));
   const data = await res.json();
   return {
     text: data.choices?.[0]?.message?.content?.trim() ?? "",
@@ -219,7 +261,9 @@ async function callOpenAICompatible(
 
 async function callGemini(
   cfg: ProviderConfig,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  model: string,
+  maxTokens: number
 ): Promise<{ text: string; tokens: number }> {
   const system = messages.find((m) => m.role === "system")?.content ?? "";
   const contents = messages
@@ -229,16 +273,17 @@ async function callGemini(
       parts: [{ text: m.content }],
     }));
 
-  const res = await fetch(`${cfg.endpoint}?key=${cfg.token}`, {
+  const endpoint = cfg.endpoint.replace(/models\/[^:]+:/, `models/${model}:`);
+  const res = await fetchWithTimeout(`${endpoint}?key=${cfg.token}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents,
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-      generationConfig: { temperature: 0.6, maxOutputTokens: 700 },
+      generationConfig: { temperature: 0.6, maxOutputTokens: maxTokens },
     }),
   });
-  if (!res.ok) throw new Error(`gemini ${res.status}`);
+  if (!res.ok) throw new Error(await errorDetail(res, "gemini"));
   const data = await res.json();
   return {
     text: data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "",
@@ -246,28 +291,69 @@ async function callGemini(
   };
 }
 
+// One provider attempt: primary model, then its fallback model on a model-id
+// error (400/404). Returns text or throws with a readable reason.
+async function callProvider(
+  cfg: ProviderConfig,
+  messages: ChatMessage[],
+  maxTokens: number
+): Promise<{ text: string; tokens: number }> {
+  const run = (model: string) =>
+    cfg.name === "gemini"
+      ? callGemini(cfg, messages, model, maxTokens)
+      : callOpenAICompatible(cfg, messages, model, maxTokens);
+  try {
+    return await run(cfg.model);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    const modelIssue = /\b(400|404)\b/.test(reason);
+    if (cfg.fallbackModel && modelIssue) {
+      return run(cfg.fallbackModel);
+    }
+    throw e;
+  }
+}
+
 /**
  * Run a chat completion against the first healthy provider.
  * Returns null when no provider is configured (caller should fall back to mock).
  */
-export async function chat(messages: ChatMessage[]): Promise<string | null> {
+export async function chat(
+  messages: ChatMessage[],
+  opts?: { maxTokens?: number }
+): Promise<string | null> {
+  return (await chatDetailed(messages, opts)).text;
+}
+
+/**
+ * Like chat(), but also returns which provider answered and, on total failure,
+ * a readable reason (the last provider error) so callers can show something
+ * useful instead of a generic "did not respond".
+ */
+export async function chatDetailed(
+  messages: ChatMessage[],
+  opts?: { maxTokens?: number }
+): Promise<{ text: string | null; provider?: ProviderName; error?: string }> {
   const list = await providers();
-  if (list.length === 0) return null;
+  if (list.length === 0) {
+    return { text: null, error: "No AI provider key is configured. Add one in Admin -> Keys." };
+  }
+  const maxTokens = opts?.maxTokens ?? 900;
+  const errors: string[] = [];
 
   for (const cfg of list) {
     try {
-      const { text, tokens } =
-        cfg.name === "gemini"
-          ? await callGemini(cfg, messages)
-          : await callOpenAICompatible(cfg, messages);
+      const { text, tokens } = await callProvider(cfg, messages, maxTokens);
       await recordUsage(cfg.name, tokens);
-      if (text) return text;
-    } catch {
+      if (text) return { text, provider: cfg.name };
+      errors.push(`${cfg.name}: empty reply`);
+    } catch (e) {
       // Automatic failover: log the failure and try the next provider.
       await recordUsage(cfg.name, 0, true);
+      errors.push(e instanceof Error ? e.message : String(e));
     }
   }
-  return null;
+  return { text: null, error: errors[errors.length - 1] ?? "All AI providers failed." };
 }
 
 /**
@@ -283,7 +369,7 @@ export async function chatVision(
   const key = await getConfig("GEMINI_TOKEN");
   if (!key) return null;
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
       {
         method: "POST",
