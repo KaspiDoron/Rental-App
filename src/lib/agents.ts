@@ -399,7 +399,13 @@ export async function composeBargain(opts: {
     `Vehicle: ${spec}. Currency: ${cur}. ` +
     (quoted ? `They quoted ${money(quoted, cur)}/day. ` : "No quote yet. ") +
     (opts.rivalPricePerDay
-      ? `A nearby shop offered ${money(opts.rivalPricePerDay, cur)}/day. `
+      ? `LEVERAGE: another shop already offered this traveller ${money(
+          opts.rivalPricePerDay,
+          cur
+        )}/day for the same vehicle. Naturally mention you already have an offer at ${money(
+          opts.rivalPricePerDay,
+          cur
+        )}/day and warmly ask if THIS shop can beat it - make clear that if they go lower you'll rent from them. Friendly, never threatening. `
       : "") +
     (target
       ? `Write our single friendly ask for ${money(target, cur)}/day. All amounts in ${cur}.`

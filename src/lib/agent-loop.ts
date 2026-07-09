@@ -223,14 +223,44 @@ export async function processVendorReply(opts: {
         followKind = "close";
       }
     } else {
-      const target = floorPrice
+      // CROSS-SHOP LEVERAGE (same search session): if ANOTHER shop already
+      // quoted this traveller a lower price for the SAME vehicle, use it as real
+      // negotiating leverage - "I have an offer at 180, can you beat it?". This
+      // is the smart, competitive move a human would make.
+      let rivalPrice: number | undefined;
+      if (ctx.sender) {
+        const { vehicleKeyFor } = await import("./market");
+        const vkey = vehicleKeyFor(rfq);
+        const since = new Date(Date.now() - 18 * 3600_000).toISOString();
+        const rivals = await sbSelect<{ price_per_day: number }>(
+          "offers",
+          `select=price_per_day&user_email=eq.${encodeURIComponent(
+            ctx.sender
+          )}&simulated=eq.false&currency=eq.${encodeURIComponent(
+            cur
+          )}&vehicle_key=eq.${encodeURIComponent(vkey)}&vendor_id=neq.${encodeURIComponent(
+            ctx.vendorId ?? ""
+          )}&price_per_day=lt.${usablePrice}&created_at=gte.${encodeURIComponent(
+            since
+          )}&order=price_per_day.asc&limit=1`
+        );
+        rivalPrice = rivals[0]?.price_per_day;
+      }
+
+      const baseTarget = floorPrice
         ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
         : Math.round(usablePrice * 0.85);
+      // With a real rival price, aim the ask at (or just under) it - but never
+      // below the local floor. Without one, use the standard target.
+      const target = rivalPrice
+        ? Math.max(floorPrice ?? 0, Math.min(baseTarget, rivalPrice))
+        : baseTarget;
       const useLocal = Boolean(ctx.localLang) && ctx.plan === "ultra";
       const draft = await composeBargain({
         rfq,
         vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
         currentPricePerDay: usablePrice,
+        rivalPricePerDay: rivalPrice,
         region: ctx.region || undefined,
         round: 1,
         currency: cur,
