@@ -36,6 +36,7 @@ export function BargainDraftModal({
   );
   const [text, setText] = useState("");
   const [tacticLabel, setTacticLabel] = useState("");
+  const [wasFallback, setWasFallback] = useState(false);
   const [busy, setBusy] = useState(true);
   const [edited, setEdited] = useState(false);
   const [sendState, setSendState] = useState<
@@ -66,6 +67,7 @@ export function BargainDraftModal({
       if (data.message) {
         setText(data.message);
         setTacticLabel(data.tacticLabel ?? "");
+        setWasFallback(Boolean(data.fallback));
         setEdited(false);
       } else if (data.upgrade) setUpgradeNote(true);
     } finally {
@@ -203,6 +205,11 @@ export function BargainDraftModal({
             <div className="mb-2 inline-flex rounded-full bg-brandred-soft px-2.5 py-1 text-[11px] font-extrabold text-brandred">
               {t("Tactic:")} {tacticLabel}
             </div>
+          )}
+          {wasFallback && !edited && (
+            <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              {t("The AI was unreachable, so this is a simple template - tap Rewrite to try the full agent again, or edit it yourself.")}
+            </p>
           )}
           {/* Editable draft: the traveller can tweak or fully rewrite it.
               Every send is safety-checked on the server before it leaves. */}

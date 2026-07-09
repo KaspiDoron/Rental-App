@@ -24,8 +24,26 @@ export async function runProfiler(
   const { getPrompt } = await import("./prompts");
   const system = await getPrompt("profiler");
 
+  // Variety seed: with hundreds of users, identical vendorMessages would look
+  // like a bot blast to shops AND to WhatsApp's spam filters. Each request
+  // gets a randomly different, natural phrasing style.
+  const styles = [
+    "start with a casual greeting and get straight to the point",
+    "open by mentioning you're staying nearby, keep it warm and brief",
+    "lead with the availability question, then the details",
+    "sound easy-going and friendly, one light touch of humour is fine",
+    "be brief and practical - a traveller typing on the go",
+    "start with 'Good morning/afternoon' style politeness, then the request",
+  ];
+  const styleSeed = styles[Math.floor(Math.random() * styles.length)];
+
   const llm = await chat([
-    { role: "system", content: system },
+    {
+      role: "system",
+      content:
+        system +
+        ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.`,
+    },
     { role: "user", content: input },
   ]);
 
@@ -138,11 +156,14 @@ function vehicleTerm(v: VehicleClass): string {
     : "car";
 }
 
+const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
 function buildMessage(rfq: StructuredRFQ, raw: string): string {
-  // Authentic first-person message from the traveller (honest about the app).
-  const parts: string[] = [];
-  parts.push("Hi! I'm staying nearby and looking to rent");
-  const spec: string[] = [`a ${vehicleTerm(rfq.vehicleClass)}`];
+  // Authentic first-person message from the traveller. VARIETY MATTERS: with
+  // hundreds of users, identical first messages look like a bot blast (to the
+  // shops AND to WhatsApp's spam filters), so every slot is randomized - the
+  // same request produces many natural phrasings.
+  const spec: string[] = [];
   if (rfq.vehicleClass === "car") {
     // Cars: seats, body type and transmission matter (not engine cc).
     if (rfq.carType && rfq.carType !== "any") spec.push(rfq.carType);
@@ -153,13 +174,42 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
     if (rfq.transmission !== "any") spec.push(rfq.transmission);
     if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
   }
-  parts.push(`${spec.join(", ")} for ${rfq.durationDays} day(s).`);
-  if (rfq.accessories.length)
-    parts.push(`I'd also need: ${rfq.accessories.join(", ")}.`);
-  if (rfq.fulfillment === "hotel-delivery")
-    parts.push("Delivery to my hotel would be ideal.");
-  parts.push("Is it available, and what's your best daily price? Thanks!");
-  return parts.join(" ");
+  const vehicle = `${vehicleTerm(rfq.vehicleClass)}${spec.length ? ` (${spec.join(", ")})` : ""}`;
+  const days = `${rfq.durationDays} day${rfq.durationDays === 1 ? "" : "s"}`;
+
+  const opener = pick([
+    `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days}.`,
+    `Hello! Do you have a ${vehicle} available for ${days}?`,
+    `Hey there! I'm nearby and need a ${vehicle} for about ${days}.`,
+    `Hi, quick question - could I rent a ${vehicle} from you for ${days}?`,
+    `Good day! I'm in town for a bit and after a ${vehicle} for ${days}.`,
+    `Hey! Looking to rent a ${vehicle} for ${days} - do you have one free?`,
+  ]);
+  const extras =
+    rfq.accessories.length > 0
+      ? pick([
+          `I'd also need: ${rfq.accessories.join(", ")}.`,
+          `Would you have ${rfq.accessories.join(" and ")} too?`,
+          `Plus ${rfq.accessories.join(", ")} if possible.`,
+        ])
+      : "";
+  const delivery =
+    rfq.fulfillment === "hotel-delivery"
+      ? pick([
+          "Delivery to my hotel would be ideal.",
+          "Could you bring it to my hotel?",
+          "If you deliver to hotels, even better.",
+        ])
+      : "";
+  const ask = pick([
+    "What's your best daily price?",
+    "What would the daily rate be?",
+    "How much per day, best price?",
+    "What's the best you could do per day?",
+  ]);
+  const thanks = pick(["Thanks!", "Thank you!", "Cheers!", "Thanks a lot!"]);
+
+  return [opener, extras, delivery, `${ask} ${thanks}`].filter(Boolean).join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +375,14 @@ export async function composeBargain(opts: {
   // Recent conversation, oldest first, so the agent never re-asks anything
   // the shop already answered.
   history?: string;
-}): Promise<{ message: string; tacticId: string; tacticLabel: string; english?: string }> {
+}): Promise<{
+  message: string;
+  tacticId: string;
+  tacticLabel: string;
+  english?: string;
+  // True when the AI was unreachable and a varied template was used instead.
+  fallback?: boolean;
+}> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
   // Sane target: the market floor when we know it, otherwise a modest 15% cut.
   // Clamped so we never ask below the floor or below 60% of the quote.
@@ -444,13 +501,35 @@ export async function composeBargain(opts: {
     };
   }
 
-  // Deterministic fallback built from the learned tactic script.
-  const filled = tactic.script
-    .replace("{target}", target ? money(target, cur) : "a better rate")
-    .replace("{rival}", opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : "a lower price")
-    .replace("{vehicle}", vehicleTerm(opts.rfq.vehicleClass))
-    .replace("{days}", String(opts.rfq.durationDays));
-  return { message: sanitizeAiText(filled), tacticId: tactic.id, tacticLabel: tactic.label };
+  // Deterministic fallback (AI unreachable). Varied templates so even the
+  // fallback never sends the same message twice, and it is flagged so the UI
+  // can tell the user this was a template, not the real agent brain.
+  const t = target ? money(target, cur) : undefined;
+  const rival = opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : undefined;
+  const days = opts.rfq.durationDays;
+  const vt = vehicleTerm(opts.rfq.vehicleClass);
+  const fallbackPool = rival
+    ? [
+        `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${days} days?`,
+        `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${days} days?`,
+      ]
+    : t
+    ? [
+        `Thanks for the price! Since it's ${days} days, would ${t}/day be possible? If yes, I'm ready to confirm.`,
+        `That sounds close! For the full ${days} days, could you do ${t}/day? Happy to lock it in today if so.`,
+        `Thanks! I'm comparing a couple of places - if you could do ${t}/day for the ${days} days, you'd have a deal.`,
+      ]
+    : [
+        `Thanks! What's the very best daily rate you could do for the ${days} days? I'm ready to book if it works.`,
+        `Appreciate it! Any wiggle room on the daily price for a ${days}-day rental? I can confirm right away.`,
+      ];
+  const filled = fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
+  return {
+    message: sanitizeAiText(filled),
+    tacticId: tactic.id,
+    tacticLabel: tactic.label,
+    fallback: true,
+  };
 }
 
 /** Record a bargaining outcome so the playbook keeps learning. */
