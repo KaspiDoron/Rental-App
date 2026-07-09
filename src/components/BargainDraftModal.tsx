@@ -7,8 +7,9 @@ import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
 
 // Adaptive Bargaining Agent UI: composes the next message and sends it to the
-// shop from INSIDE the app (official Cloud API). Ultra members can flip the
-// agent into the shop's local language - real street-smart haggling.
+// shop from INSIDE the app. The traveller can also WRITE or EDIT the message
+// themselves - every send is safety-screened by the server before it leaves.
+// Ultra members can flip the agent into the shop's local language.
 export function BargainDraftModal({
   vendor,
   rfq,
@@ -33,14 +34,20 @@ export function BargainDraftModal({
   const [language, setLanguage] = useState<"english" | "local">(
     isUltra ? "local" : "english"
   );
-  const [draft, setDraft] = useState<{ message: string; tacticLabel: string } | null>(null);
+  const [text, setText] = useState("");
+  const [tacticLabel, setTacticLabel] = useState("");
   const [busy, setBusy] = useState(true);
-  const [sendState, setSendState] = useState<"idle" | "sending" | "sent" | "manual">("idle");
+  const [edited, setEdited] = useState(false);
+  const [sendState, setSendState] = useState<
+    "idle" | "sending" | "sent" | "queued" | "reconnecting" | "blocked" | "manual" | "ratelimited"
+  >("idle");
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [upgradeNote, setUpgradeNote] = useState(false);
 
   async function compose(langChoice = language) {
     setBusy(true);
     setSendState("idle");
+    setStatusMsg(null);
     try {
       const res = await fetch("/api/bargain-draft", {
         method: "POST",
@@ -56,8 +63,11 @@ export function BargainDraftModal({
         }),
       });
       const data = await res.json();
-      if (data.message) setDraft(data);
-      else if (data.upgrade) setUpgradeNote(true);
+      if (data.message) {
+        setText(data.message);
+        setTacticLabel(data.tacticLabel ?? "");
+        setEdited(false);
+      } else if (data.upgrade) setUpgradeNote(true);
     } finally {
       setBusy(false);
     }
@@ -69,8 +79,10 @@ export function BargainDraftModal({
   }, []);
 
   async function sendInApp() {
-    if (!draft) return;
+    const message = text.trim();
+    if (!message) return;
     setSendState("sending");
+    setStatusMsg(null);
     try {
       const res = await fetch("/api/outreach", {
         method: "POST",
@@ -80,15 +92,44 @@ export function BargainDraftModal({
           placeId: vendor.placeId,
           vendorId: vendor.id,
           vendorName: vendor.name,
-          message: draft.message,
-          kind: "bargain",
+          message,
+          // A hand-edited message is a custom send (safety-screened, and it skips
+          // the agent engagement-halt); an untouched AI draft is a bargain.
+          kind: edited ? "custom" : "bargain",
           rfq,
           round,
           region,
+          openNow: vendor.openNow,
         }),
       });
       const d = await res.json();
-      setSendState(d.sent ? "sent" : "manual");
+      if (d.sent) {
+        setSendState("sent");
+      } else if (d.allowed === false && d.reason) {
+        // Safety filter blocked the wording.
+        setSendState("blocked");
+        setStatusMsg(
+          `${d.reason}${d.suggestion ? ` — ${t("Try:")} "${d.suggestion}"` : ""}`
+        );
+      } else if (d.queued) {
+        setSendState("queued");
+        setStatusMsg(
+          d.queuedUntil
+            ? `${t("The shop looks closed now - your message is queued and sends automatically when they open")} (${new Date(
+                d.queuedUntil
+              ).toLocaleString()}).`
+            : t("Your message is queued and will send shortly.")
+        );
+      } else if (d.reconnecting) {
+        setSendState("reconnecting");
+        setStatusMsg(d.error ?? t("Your WhatsApp is reconnecting - wait a few seconds and tap send again."));
+      } else if (d.rateLimited) {
+        setSendState("ratelimited");
+        setStatusMsg(d.error ?? t("Daily safe-send limit reached for now - it resumes automatically."));
+      } else {
+        setSendState("manual");
+        setStatusMsg(d.error ?? null);
+      }
     } catch {
       setSendState("manual");
     }
@@ -156,18 +197,38 @@ export function BargainDraftModal({
         <div className="flex justify-center py-8">
           <LoadingDots label={t("Agent writing the perfect message")} />
         </div>
-      ) : draft ? (
+      ) : (
         <>
-          <div className="mb-2 inline-flex rounded-full bg-brandred-soft px-2.5 py-1 text-[11px] font-extrabold text-brandred">
-            {t("Tactic:")} {draft.tacticLabel}
+          {tacticLabel && !edited && (
+            <div className="mb-2 inline-flex rounded-full bg-brandred-soft px-2.5 py-1 text-[11px] font-extrabold text-brandred">
+              {t("Tactic:")} {tacticLabel}
+            </div>
+          )}
+          {/* Editable draft: the traveller can tweak or fully rewrite it.
+              Every send is safety-checked on the server before it leaves. */}
+          <textarea
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setEdited(true);
+              if (sendState !== "idle") {
+                setSendState("idle");
+                setStatusMsg(null);
+              }
+            }}
+            rows={5}
+            placeholder={t("Write your message to the shop...")}
+            className="w-full rounded-2xl border-2 border-line bg-card2 p-3 text-[14px] leading-relaxed text-strong focus:border-brandblue focus:outline-none"
+          />
+          <div className="mt-1 flex items-center justify-between text-[10px] text-faint">
+            <span>{edited ? t("Edited by you - screened before sending") : t("AI draft - edit it if you like")}</span>
+            <span>{text.trim().length} {t("chars")}</span>
           </div>
-          <p className="rounded-2xl bg-card2 p-3 text-[14px] leading-relaxed text-strong">
-            {draft.message}
-          </p>
+
           <div className="mt-3 flex gap-2">
             <button
               onClick={sendInApp}
-              disabled={sendState === "sending" || sendState === "sent"}
+              disabled={sendState === "sending" || sendState === "sent" || !text.trim()}
               className="btn flex-1 rounded-2xl bg-savings py-2.5 text-center text-[13px] font-extrabold text-white disabled:opacity-70"
             >
               {sendState === "sending" ? (
@@ -178,29 +239,46 @@ export function BargainDraftModal({
                 t("Send from the app")
               )}
             </button>
-            <button onClick={() => compose()} className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-[13px]">
-              {t("Rewrite")}
+            <button
+              onClick={() => compose()}
+              className="btn btn-ghost rounded-2xl px-4 py-2.5 text-[13px]"
+              title={t("Ask the AI to rewrite it")}
+            >
+              🤖 {t("Rewrite")}
             </button>
           </div>
-          {sendState === "manual" && (
-            <a
-              href="/profile"
-              className="mt-2 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow"
-            >
-              {t("Not sent - connect your WhatsApp in Profile first.")} →
-            </a>
-          )}
+
+          {/* Accurate, honest send status */}
           {sendState === "sent" && (
             <p className="mt-2 text-center text-[11px] font-bold text-savings">
               {t("The shop's answer will appear on the card automatically.")}
             </p>
           )}
+          {sendState === "queued" && statusMsg && (
+            <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-center text-[11px] font-bold text-brandblue">
+              🕒 {statusMsg}
+            </p>
+          )}
+          {(sendState === "reconnecting" || sendState === "ratelimited") && statusMsg && (
+            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              {statusMsg}
+            </p>
+          )}
+          {sendState === "blocked" && statusMsg && (
+            <p className="mt-2 rounded-xl bg-brandred-soft p-2 text-center text-[11px] font-bold text-brandred">
+              🛡️ {statusMsg}
+            </p>
+          )}
+          {sendState === "manual" && (
+            <a
+              href="/profile"
+              className="mt-2 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow"
+            >
+              {statusMsg ?? t("Not sent - connect your WhatsApp in Profile first.")} →
+            </a>
+          )}
         </>
-      ) : !upgradeNote ? (
-        <p className="py-6 text-center text-[13px] text-faint">
-          {t("Could not compose a draft. Try again.")}
-        </p>
-      ) : null}
+      )}
     </Modal>
   );
 }
