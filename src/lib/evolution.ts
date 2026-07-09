@@ -932,6 +932,54 @@ export async function fetchMessages(
 }
 
 /**
+ * Recent messages of one chat WITH their WhatsApp ids - the shape the
+ * pull-sync needs to detect inbound replies whose webhook never arrived
+ * (e.g. the Evolution host was down at delivery time).
+ */
+export interface WaMessageRaw {
+  id: string;
+  fromMe: boolean;
+  text: string;
+  ts: number; // seconds since epoch
+  hasImage: boolean;
+  record: unknown; // full Evolution record (needed for media download)
+}
+
+export async function fetchMessagesRaw(
+  email: string,
+  jid: string,
+  limit = 10
+): Promise<WaMessageRaw[]> {
+  const instance = instanceNameFor(email);
+  const res = await evo(email, `/chat/findMessages/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({ where: { key: { remoteJid: jid } }, limit }),
+  });
+  const arr: any[] = Array.isArray(res.data)
+    ? res.data
+    : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
+  return arr
+    .map((m) => {
+      const msg = m.message ?? {};
+      const text =
+        msg.conversation ??
+        msg.extendedTextMessage?.text ??
+        msg.imageMessage?.caption ??
+        "";
+      return {
+        id: String(m.key?.id ?? ""),
+        fromMe: Boolean(m.key?.fromMe),
+        text: String(text),
+        ts: Number(m.messageTimestamp ?? 0),
+        hasImage: Boolean(msg.imageMessage),
+        record: m,
+      };
+    })
+    .filter((m) => m.id)
+    .sort((a, b) => a.ts - b.ts);
+}
+
+/**
  * Download an inbound media message (a price-list photo) as base64 so the
  * vision agent can read the prices off it. Evolution v2 exposes
  * getBase64FromMediaMessage; returns { base64, mime } or null.

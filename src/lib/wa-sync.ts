@@ -1,0 +1,107 @@
+// Webhook-independent inbound sync (reliability core).
+//
+// The webhook is the fast path, but it is LOSSY: if the Evolution host was
+// crashing, restarting or asleep when the shop replied, the event never reaches
+// the app and the reply "exists in WhatsApp but not in the app". This module is
+// the truth-reconciler: while a user is actively waiting on shops, we PULL the
+// recent messages of their open threads straight from Evolution and process any
+// inbound the webhook missed. Called opportunistically from /api/replies (the
+// poll the app already runs every 15s), throttled per user.
+
+import "server-only";
+import { sbSelect, sbInsert } from "./runtime-config";
+import { fetchMessagesRaw, fetchMediaBase64, sendFromUser } from "./evolution";
+import { processVendorReply } from "./agent-loop";
+
+const SYNC_MIN_GAP_MS = 25_000; // at most one real sync per user per 25s
+const THREAD_WINDOW_H = 36; // only threads we messaged in the last 36h
+const MAX_THREADS = 8;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_wa_sync__: Map<string, number> | undefined;
+}
+function lastSyncStore() {
+  if (!globalThis.__wd_wa_sync__) globalThis.__wd_wa_sync__ = new Map();
+  return globalThis.__wd_wa_sync__;
+}
+
+/**
+ * Reconcile recent inbound replies for one user. Returns how many missed
+ * messages were recovered (0 on the throttled fast path).
+ */
+export async function syncInboundReplies(email: string): Promise<number> {
+  const store = lastSyncStore();
+  const last = store.get(email) ?? 0;
+  if (Date.now() - last < SYNC_MIN_GAP_MS) return 0;
+  store.set(email, Date.now());
+
+  // The numbers this user recently messaged (their open shop threads).
+  const since = new Date(Date.now() - THREAD_WINDOW_H * 3600_000).toISOString();
+  const outbound = await sbSelect<{ to_number: string }>(
+    "whatsapp_messages",
+    `select=to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      email
+    )}&received_at=gte.${encodeURIComponent(since)}&order=received_at.desc&limit=60`
+  ).catch(() => []);
+  const numbers = [...new Set(outbound.map((o) => (o.to_number || "").replace(/[^\d]/g, "")))]
+    .filter((n) => n.length >= 7)
+    .slice(0, MAX_THREADS);
+  if (numbers.length === 0) return 0;
+
+  let recovered = 0;
+  for (const digits of numbers) {
+    try {
+      const msgs = await fetchMessagesRaw(email, `${digits}@s.whatsapp.net`, 10);
+      const inbound = msgs.filter(
+        (m) => !m.fromMe && (m.text.trim() || m.hasImage) &&
+          // ignore ancient history - only the active window matters
+          m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000
+      );
+      if (inbound.length === 0) continue;
+
+      // Which of these already made it in via the webhook?
+      const ids = inbound.map((m) => m.id);
+      const seen = await sbSelect<{ wa_message_id: string }>(
+        "whatsapp_messages",
+        `select=wa_message_id&direction=eq.inbound&wa_message_id=in.(${ids
+          .map((i) => `"${i}"`)
+          .join(",")})&limit=${ids.length}`
+      ).catch(() => []);
+      const seenIds = new Set(seen.map((s) => s.wa_message_id));
+
+      for (const m of inbound) {
+        if (seenIds.has(m.id)) continue;
+        recovered += 1;
+        // Mirror the webhook's insert so the thread history stays coherent.
+        await sbInsert("whatsapp_messages", [
+          {
+            wa_message_id: m.id,
+            from_number: digits,
+            to_number: "",
+            body: m.text || (m.hasImage ? "[photo]" : ""),
+            type: m.hasImage ? "image" : "text",
+            direction: "inbound",
+            raw: { channel: "evolution", recovered: true },
+          },
+        ]).catch(() => {});
+
+        const images: { mime: string; base64: string }[] = [];
+        if (m.hasImage) {
+          const media = await fetchMediaBase64(email, m.record);
+          if (media) images.push(media);
+        }
+        await processVendorReply({
+          fromDigits: digits,
+          text: m.text,
+          images,
+          waMessageId: m.id,
+          send: (to, message) => sendFromUser(email, to, message),
+        }).catch(() => {});
+      }
+    } catch {
+      /* one broken thread must not kill the sync */
+    }
+  }
+  return recovered;
+}

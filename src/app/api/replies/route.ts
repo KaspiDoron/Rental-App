@@ -10,6 +10,24 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
+  // Reliability core: reconcile replies the webhook may have MISSED (the
+  // Evolution host can be restarting exactly when a shop answers). Throttled
+  // to one real pull per user per ~25s, so most polls skip it instantly.
+  try {
+    const { syncInboundReplies } = await import("@/lib/wa-sync");
+    await syncInboundReplies(session.email);
+  } catch {
+    /* the DB feed below still answers */
+  }
+  // Any user activity also flushes due queued messages (no dedicated worker).
+  try {
+    const { drainOutbox } = await import("@/lib/wa-guard");
+    const { sendFromUser } = await import("@/lib/evolution");
+    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+  } catch {
+    /* best-effort */
+  }
+
   const rows = await sbSelect<{
     id: number;
     vendor_id: string;
