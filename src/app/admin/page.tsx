@@ -55,14 +55,23 @@ export default function AdminPage() {
   const [intel, setIntel] = useState<{
     areas: {
       area: string;
+      areaLabel: string;
+      tagged: boolean;
+      samples: number;
+      shops: number;
       vehicles: {
-        vehicle: string; currency: string; samples: number; shops: number;
-        low: number; high: number; avg: number; typicalDays: number | null;
-        deliverRate: number; lastSeen: string;
+        vehicle: string; vehicleLabel: string; currency: string; samples: number; shops: number;
+        shopNames: string[];
+        low: number; median: number; high: number; avg: number; spreadPct: number;
+        typicalDays: number | null; minDays: number | null; maxDays: number | null;
+        delivers: number; deliverRate: number | null; verified: number;
+        firstSeen: string; lastSeen: string;
       }[];
     }[];
     totalOffers: number;
+    areasCount: number;
   } | null>(null);
+  const [intelOpen, setIntelOpen] = useState<string | null>(null);
   async function loadIntel() {
     const r = await (await fetch("/api/admin/intelligence")).json();
     if (r.areas) setIntel(r);
@@ -1424,10 +1433,11 @@ export default function AdminPage() {
               </button>
             </div>
             <p className="text-[11px] text-faint">
-              Every REAL price shops have quoted us, by area and vehicle type - the
-              lowest, highest and average per day, typical rental length, how many
-              shops, and how often they offer delivery. Built automatically from the
-              funnel. {intel ? `${intel.totalOffers} offers analysed.` : ""}
+              Every REAL price shops have quoted us, by area and vehicle type: lowest /
+              median / highest / average per day, price spread, rental-duration range,
+              how many shops, delivery rate and verified count. Built automatically from
+              the funnel.{" "}
+              {intel ? `${intel.totalOffers} offers across ${intel.areasCount} area(s).` : ""}
             </p>
           </div>
           {!intel ? (
@@ -1440,34 +1450,80 @@ export default function AdminPage() {
           ) : (
             intel.areas.map((a) => (
               <div key={a.area} className="surface rounded-blob p-3">
-                <div className="mb-1.5 text-[12px] font-extrabold text-strong">📍 {a.area}</div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[11px]">
-                    <thead className="text-left text-[9px] uppercase text-faint">
-                      <tr>
-                        <th className="p-1">Vehicle</th>
-                        <th className="p-1">Low</th>
-                        <th className="p-1">Avg</th>
-                        <th className="p-1">High</th>
-                        <th className="p-1">Days</th>
-                        <th className="p-1">Shops</th>
-                        <th className="p-1">Deliv.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {a.vehicles.map((v) => (
-                        <tr key={v.vehicle} className="border-t border-line text-soft">
-                          <td className="p-1 font-bold">{v.vehicle}</td>
-                          <td className="p-1 text-savings">{v.low} {v.currency}</td>
-                          <td className="p-1">{v.avg}</td>
-                          <td className="p-1 text-brandred">{v.high}</td>
-                          <td className="p-1">{v.typicalDays ?? "-"}</td>
-                          <td className="p-1">{v.shops} <span className="text-faint">({v.samples})</span></td>
-                          <td className="p-1">{v.deliverRate}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <div className="text-[12px] font-extrabold text-strong">
+                    📍 {a.areaLabel}
+                    {!a.tagged && (
+                      <span className="ml-1 rounded-full bg-card2 px-1.5 py-0.5 text-[8px] font-bold uppercase text-faint">
+                        pre-upgrade
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-faint">
+                    {a.shops} shop(s) · {a.samples} quote(s)
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  {a.vehicles.map((v) => {
+                    const key = `${a.area}:${v.vehicle}`;
+                    const open = intelOpen === key;
+                    return (
+                      <div key={v.vehicle} className="rounded-xl bg-card2">
+                        {/* Tap a row to expand full detail (#6 expandable) */}
+                        <button
+                          onClick={() => setIntelOpen(open ? null : key)}
+                          className="flex w-full items-center gap-2 p-2 text-left"
+                        >
+                          <span className="text-[9px] text-faint">{open ? "▼" : "▶"}</span>
+                          <span className="flex-1 text-[11px] font-bold text-strong">
+                            {v.vehicleLabel}
+                          </span>
+                          <span className="text-[11px] text-savings">
+                            {v.low}
+                            <span className="text-faint">-</span>
+                            <span className="text-brandred">{v.high}</span>{" "}
+                            <span className="text-faint">{v.currency}</span>
+                          </span>
+                        </button>
+                        {open && (
+                          <div className="grid grid-cols-2 gap-1.5 border-t border-line p-2.5 text-[10px] text-soft">
+                            <Stat label="Lowest / day" value={`${v.low} ${v.currency}`} good />
+                            <Stat label="Highest / day" value={`${v.high} ${v.currency}`} bad />
+                            <Stat label="Median / day" value={`${v.median} ${v.currency}`} />
+                            <Stat label="Average / day" value={`${v.avg} ${v.currency}`} />
+                            <Stat label="Price spread" value={`${v.spreadPct}%`} />
+                            <Stat label="Quotes / shops" value={`${v.samples} / ${v.shops}`} />
+                            <Stat
+                              label="Rental length"
+                              value={
+                                v.typicalDays
+                                  ? `${v.minDays}-${v.maxDays}d (typ. ${v.typicalDays}d)`
+                                  : "-"
+                              }
+                            />
+                            <Stat
+                              label="Delivery"
+                              value={
+                                v.deliverRate === null
+                                  ? "unknown"
+                                  : `${v.deliverRate}% (${v.delivers})`
+                              }
+                            />
+                            <Stat label="Verified quotes" value={String(v.verified)} />
+                            <Stat
+                              label="Last seen"
+                              value={new Date(v.lastSeen).toLocaleDateString()}
+                            />
+                            {v.shopNames.length > 0 && (
+                              <div className="col-span-2 mt-0.5 text-[9px] text-faint">
+                                Shops: {v.shopNames.join(", ")}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))
@@ -2405,6 +2461,32 @@ function Metric({
     <div className="surface rounded-blob p-4 text-center">
       <div className="text-[10px] font-extrabold uppercase tracking-wide text-faint">{label}</div>
       <div className={`mt-1 text-xl font-extrabold ${accent ? "text-brandblue" : "text-strong"}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// Compact label/value stat used in the Intel expandable detail grid.
+function Stat({
+  label,
+  value,
+  good,
+  bad,
+}: {
+  label: string;
+  value: string;
+  good?: boolean;
+  bad?: boolean;
+}) {
+  return (
+    <div className="rounded-lg bg-card p-1.5">
+      <div className="text-[8px] font-bold uppercase tracking-wide text-faint">{label}</div>
+      <div
+        className={`text-[11px] font-extrabold ${
+          good ? "text-savings" : bad ? "text-brandred" : "text-strong"
+        }`}
+      >
         {value}
       </div>
     </div>
