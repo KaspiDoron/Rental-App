@@ -11,13 +11,14 @@ import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
-import { CURRENCIES, setSavedCurrency } from "@/lib/currency";
+import { CURRENCIES, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
 interface Booking {
   vendor_name: string;
   price_per_day: number;
   total_price: number;
+  currency?: string | null;
   fulfillment: string;
   scheduled_at: string | null;
   status: string;
@@ -636,7 +637,9 @@ export default function ProfilePage() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-[14px] font-extrabold text-strong">${b.total_price}</div>
+                    <div className="text-[14px] font-extrabold text-strong">
+                      {moneyLocal(b.total_price, b.currency ?? undefined)}
+                    </div>
                     <div className="text-[10px] font-bold uppercase text-savings">{b.status}</div>
                   </div>
                 </div>

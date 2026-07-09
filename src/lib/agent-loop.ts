@@ -157,6 +157,8 @@ export async function processVendorReply(opts: {
       ? extraction.pricePerDay
       : undefined;
 
+  const cur =
+    extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
   await sbInsert("vendor_replies", [
     {
       user_email: ctx.sender ?? null,
@@ -169,19 +171,23 @@ export async function processVendorReply(opts: {
       matches_spec: extraction.matchesSpec,
       confidence: extraction.confidence,
       auto: true,
+      // The shop's own money + confirmed conditions, so the app can show the
+      // real local price and honest tags (never a silent USD default).
+      currency: cur,
+      deposit: extraction.deposit ?? null,
+      delivers: extraction.delivers ?? null,
     },
   ]);
-  const cur =
-    extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
   if (usablePrice) {
     // Tag the offer with area + vehicle bucket + a delivery signal, so the
     // owner's shop-intelligence warehouse can aggregate real market data.
     const { vehicleKeyFor, regionKeysFor } = await import("./market");
     const regionKey = regionKeysFor(ctx.region || undefined)[0] ?? null;
     const vehicleKey = vehicleKeyFor(rfq);
-    const delivers = /\b(deliver|drop off|bring it|to your hotel|free delivery)\b/i.test(text)
-      ? true
-      : null;
+    // Prefer the AI's explicit read; fall back to a conservative text signal.
+    const delivers =
+      extraction.delivers ??
+      (/\b(deliver|drop off|bring it|to your hotel|free delivery)\b/i.test(text) ? true : null);
     await sbInsert("offers", [
       {
         user_email: ctx.sender ?? null,
@@ -197,6 +203,7 @@ export async function processVendorReply(opts: {
         vehicle_key: vehicleKey,
         duration_days: rfq.durationDays ?? null,
         delivers,
+        deposit_note: extraction.deposit ?? null,
       },
     ]);
   }

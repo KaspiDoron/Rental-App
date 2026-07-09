@@ -45,6 +45,8 @@ export interface Offer {
   // vendor. Simulated (demo) offers are marked so the UI can label them.
   verified: boolean;
   simulated: boolean;
+  // Shop-confirmed conditions (shown as tags ONLY when explicitly stated).
+  deposit?: string; // e.g. "Passport only", "3,000 THB cash"
 }
 
 export interface Vendor {

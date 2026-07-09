@@ -62,6 +62,7 @@ export function BookingSheet({
         vendorName: vendor.name,
         pricePerDay: vendor.offer?.pricePerDay ?? 0,
         totalPrice: vendor.offer?.totalPrice ?? 0,
+        currency: vendor.offer?.currency ?? "USD",
         fulfillment: mode,
         scheduledAt: `${date || defaultDate}T${time}:00Z`,
       }),

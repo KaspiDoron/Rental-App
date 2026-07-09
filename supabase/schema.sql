@@ -436,3 +436,13 @@ alter table public.offers add column if not exists vehicle_key  text;
 alter table public.offers add column if not exists duration_days int;
 alter table public.offers add column if not exists delivers      boolean;
 create index if not exists offers_intel_idx on public.offers (region_key, vehicle_key);
+
+-- ---- Honest local pricing + confirmed conditions (Wave 35) --------------------
+-- vendor_replies carries the shop's OWN currency and any explicitly-confirmed
+-- deposit / delivery terms, so the app never silently defaults to USD and can
+-- show truthful tags ("Passport deposit", "Delivers") on the cards.
+alter table public.vendor_replies add column if not exists currency text;
+alter table public.vendor_replies add column if not exists deposit  text;
+alter table public.vendor_replies add column if not exists delivers boolean;
+alter table public.offers         add column if not exists deposit_note text;
+alter table public.bookings add column if not exists currency text;

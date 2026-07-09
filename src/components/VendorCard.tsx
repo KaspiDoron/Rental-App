@@ -314,6 +314,21 @@ export function VendorCard({
                 <div className="text-[12px] text-soft">
                   {moneyLocal(offer.totalPrice, offer.currency)} {t("total")} · {rfq?.durationDays}d
                 </div>
+                {/* Shop-CONFIRMED conditions only - never guessed */}
+                {(offer.deposit || offer.includesDelivery) && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {offer.deposit && (
+                      <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">
+                        🛂 {t("Deposit:")} {offer.deposit}
+                      </span>
+                    )}
+                    {offer.includesDelivery && (
+                      <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
+                        🛵 {t("Delivers")}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               {savings > 0 && (
                 <div className="text-right">

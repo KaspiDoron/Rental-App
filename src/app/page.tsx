@@ -267,14 +267,17 @@ export default function Home() {
                     offer: {
                       pricePerDay: r.pricePerDay,
                       listPricePerDay: v.offer?.listPricePerDay ?? r.pricePerDay,
-                      currency: "USD",
+                      // The shop's OWN currency from the reply (server-derived);
+                      // never a silent USD default.
+                      currency: r.currency ?? v.offer?.currency ?? "USD",
                       totalPrice: Math.round(r.pricePerDay * rfq.durationDays),
                       includesInsurance: false,
-                      includesDelivery: false,
+                      includesDelivery: r.delivers === true || v.offer?.includesDelivery === true,
                       message: r.replyText?.slice(0, 200) ?? "",
                       round: v.offer ? v.offer.round + 1 : 0,
                       verified: Boolean(r.verified),
                       simulated: false,
+                      deposit: r.deposit ?? v.offer?.deposit,
                     },
                   }
                 : v

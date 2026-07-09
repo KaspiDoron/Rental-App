@@ -20,10 +20,13 @@ export async function GET() {
     matches_spec: boolean;
     confidence: string;
     auto: boolean;
+    currency: string | null;
+    deposit: string | null;
+    delivers: boolean | null;
     created_at: string;
   }>(
     "vendor_replies",
-    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,created_at&user_email=eq.${encodeURIComponent(
+    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&user_email=eq.${encodeURIComponent(
       session.email
     )}&order=created_at.desc&limit=40`
   );
@@ -38,6 +41,9 @@ export async function GET() {
       pricePerDay: r.price_per_day,
       verified: r.matches_spec && r.confidence === "high",
       auto: r.auto,
+      currency: r.currency, // the shop's own money - never defaulted here
+      deposit: r.deposit,
+      delivers: r.delivers,
       createdAt: r.created_at,
     })),
   });
