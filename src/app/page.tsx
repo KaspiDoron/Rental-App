@@ -374,6 +374,8 @@ export default function Home() {
         message,
         kind: "custom",
         rfq,
+        region: origin.label || undefined,
+        openNow: vendor?.openNow,
       }),
     });
     return res.json();

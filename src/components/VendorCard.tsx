@@ -90,6 +90,7 @@ export function VendorCard({
           rfq,
           round: 0,
           region,
+          openNow: vendor.openNow,
           localLang: Boolean(localLang),
         }),
       });

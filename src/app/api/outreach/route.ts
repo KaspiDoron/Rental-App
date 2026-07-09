@@ -102,6 +102,10 @@ export async function POST(req: Request) {
     text: message,
     auto: isAuto,
     queueIfBlocked: true,
+    region: String(body.region ?? "") || undefined,
+    // The client passes the shop's live Google "open now" state so the gate
+    // agrees with the badge the user sees on the card (fixes false "closed").
+    shopOpenNow: typeof body.openNow === "boolean" ? body.openNow : undefined,
     meta: {
       sender: session.email,
       vendorId: String(body.vendorId ?? ""),

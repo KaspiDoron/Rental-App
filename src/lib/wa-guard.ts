@@ -450,40 +450,87 @@ export async function clearPause(senderKey: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 // Phone prefix -> representative UTC offset (hours). Coarse is fine: the goal
-// is "never message a shop at 3 AM", not astronomy.
+// is "never message a shop at 3 AM", not astronomy. Longer prefixes first so
+// "972" (Israel) wins over "9", and "1" (US/CA) stays last.
 const PREFIX_UTC: [string, number][] = [
+  ["972", 2], // Israel
+  ["351", 0], // Portugal
   ["66", 7], // Thailand
   ["62", 8], // Indonesia (Bali)
   ["84", 7], // Vietnam
   ["91", 5.5], // India
   ["81", 9], // Japan
+  ["82", 9], // South Korea
   ["63", 8], // Philippines
   ["60", 8], // Malaysia
+  ["65", 8], // Singapore
+  ["86", 8], // China
+  ["852", 8], // Hong Kong
+  ["886", 8], // Taiwan
   ["90", 3], // Turkey
+  ["971", 4], // UAE
+  ["966", 3], // Saudi
+  ["20", 2], // Egypt
+  ["212", 1], // Morocco
+  ["27", 2], // South Africa
+  ["254", 3], // Kenya
+  ["94", 5.5], // Sri Lanka
+  ["977", 5.75], // Nepal
   ["52", -6], // Mexico
-  ["972", 2], // Israel
+  ["55", -3], // Brazil
+  ["54", -3], // Argentina
+  ["57", -5], // Colombia
+  ["51", -5], // Peru
+  ["56", -4], // Chile
+  ["61", 10], // Australia (east)
+  ["64", 12], // New Zealand
   ["44", 0], // UK
-  ["34", 1], ["39", 1], ["33", 1], ["49", 1], ["351", 0], ["30", 2], ["31", 1],
+  ["34", 1], ["39", 1], ["33", 1], ["49", 1], ["30", 2], ["31", 1],
+  ["48", 1], ["420", 1], ["36", 1], ["46", 1], ["47", 1], ["45", 1], ["7", 3],
   ["1", -5], // US/CA (east-coast bias)
 ];
 
-function utcOffsetFor(digits: string): number {
+// Region-string -> UTC offset. More reliable than a bare local number, because
+// the geocoded region almost always ends in the country name.
+const REGION_UTC: [RegExp, number][] = [
+  [/\bthai|\bthailand/i, 7], [/\bindonesia|\bbali/i, 8], [/\bvietnam/i, 7],
+  [/\bindia\b|\bgoa\b/i, 5.5], [/\bjapan/i, 9], [/\bkorea/i, 9],
+  [/\bphilippin/i, 8], [/\bmalaysia/i, 8], [/\bsingapore/i, 8],
+  [/\bchina\b/i, 8], [/\bhong kong/i, 8], [/\btaiwan/i, 8],
+  [/\bturkey|\btürkiye/i, 3], [/\bemirates|\bdubai|\buae\b/i, 4], [/\bsaudi/i, 3],
+  [/\begypt/i, 2], [/\bmorocco/i, 1], [/\bsouth africa/i, 2], [/\bkenya/i, 3],
+  [/\bsri lanka/i, 5.5], [/\bnepal/i, 5.75], [/\bisrael/i, 2],
+  [/\bmexico/i, -6], [/\bbrazil|\bbrasil/i, -3], [/\bargentin/i, -3],
+  [/\bcolombia/i, -5], [/\bperu/i, -5], [/\bchile/i, -4],
+  [/\baustralia/i, 10], [/\bnew zealand/i, 12],
+  [/\bunited kingdom|\bengland|\bscotland|\bwales|\blondon/i, 0],
+  [/\bportugal/i, 0], [/\bspain|\bitaly|\bfrance|\bgermany|\bnetherlands|\bbelgium|\baustria|\bpoland|\bczech|\bhungary/i, 1],
+  [/\bgreece\b/i, 2], [/\bsweden|\bnorway|\bdenmark/i, 1], [/\brussia|\bmoscow/i, 3],
+  [/\bunited states|\busa\b|\bcanada/i, -5],
+];
+
+// Returns the offset AND whether we actually know it (unknown => never queue on
+// hours; a false "closed" is worse UX than a rare off-hours send).
+function resolveOffset(digits: string, region?: string): { off: number; known: boolean } {
   for (const [prefix, off] of PREFIX_UTC) {
-    if (digits.startsWith(prefix)) return off;
+    if (digits.startsWith(prefix)) return { off, known: true };
   }
-  return 0;
+  if (region) {
+    for (const [re, off] of REGION_UTC) if (re.test(region)) return { off, known: true };
+  }
+  return { off: 0, known: false };
 }
 
 /** Recipient's local hour right now (0-23, fractional offsets floored). */
-export function recipientLocalHour(toDigits: string): number {
-  const off = utcOffsetFor(toDigits);
+export function recipientLocalHour(toDigits: string, region?: string): number {
+  const { off } = resolveOffset(toDigits, region);
   const h = (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
   return Math.floor(h);
 }
 
 /** Next moment the recipient's business window opens, as ISO string. */
-function nextBusinessOpen(toDigits: string, p: SecurityPolicies): string {
-  const off = utcOffsetFor(toDigits);
+function nextBusinessOpen(toDigits: string, p: SecurityPolicies, region?: string): string {
+  const { off } = resolveOffset(toDigits, region);
   const now = new Date();
   const localHour = (now.getUTCHours() + now.getUTCMinutes() / 60 + off + 24) % 24;
   let waitHours: number;
@@ -591,8 +638,11 @@ export async function guardOutbound(opts: {
   text: string;
   auto: boolean;
   queueIfBlocked?: boolean; // park in wa_outbox instead of rejecting
+  region?: string;          // geocoded shop region - best timezone source
+  shopOpenNow?: boolean;    // Google "open now" truth - overrides the clock
   meta?: Record<string, unknown>; // thread context for queued sends
 }): Promise<GuardVerdict> {
+  const region = opts.region ?? (typeof opts.meta?.region === "string" ? (opts.meta.region as string) : undefined);
   const p = await getPolicies();
   const text = opts.auto ? humanizeVariant(opts.text) : opts.text;
   const now = Date.now();
@@ -668,10 +718,30 @@ export async function guardOutbound(opts: {
   }
 
   // 2. RECIPIENT BUSINESS HOURS - never message a shop at 3 AM local time.
-  const hour = recipientLocalHour(opts.toDigits);
-  const inWindow = hour >= p.business_hour_start && hour < p.business_hour_end;
-  if (opts.auto && !inWindow) {
-    return await queue(nextBusinessOpen(opts.toDigits, p), "outside recipient business hours");
+  //    Priority of truth:
+  //      a) Google "open now" (opts.shopOpenNow) - the SAME signal the card
+  //         shows the user, so the app never says "open" then queues as "closed".
+  //      b) The recipient's local clock, timezone resolved from the region
+  //         string first, then the phone prefix.
+  //      c) If the timezone is genuinely unknown, DO NOT queue - a false
+  //         "closed" on an open shop is the worse bug (issue #21).
+  if (opts.auto && opts.shopOpenNow !== true) {
+    const { off, known } = resolveOffset(opts.toDigits, region);
+    if (opts.shopOpenNow === false) {
+      return await queue(nextBusinessOpen(opts.toDigits, p, region), "shop is closed now");
+    }
+    if (known) {
+      const localHour =
+        (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
+      const inWindow = localHour >= p.business_hour_start && localHour < p.business_hour_end;
+      if (!inWindow) {
+        return await queue(
+          nextBusinessOpen(opts.toDigits, p, region),
+          "outside recipient business hours"
+        );
+      }
+    }
+    // unknown timezone => allow (never false-queue an open shop)
   }
 
   // 3. COLD-OUTREACH GOVERNOR (only for brand-new first contacts - the highest
