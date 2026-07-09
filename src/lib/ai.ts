@@ -34,8 +34,9 @@ interface ProviderConfig {
 
 // Per provider call budget. A hung free-tier endpoint must fail over fast, not
 // stall the whole request (this was a cause of the "provider did not respond"
-// errors: no timeout meant one slow host blocked everything).
-const CALL_TIMEOUT_MS = 22000;
+// errors: no timeout meant one slow host blocked everything). Kept under 15s so
+// a 2-3 provider failover chain still fits inside the route's 60s maxDuration.
+const CALL_TIMEOUT_MS = 14000;
 
 async function allProviders(): Promise<ProviderConfig[]> {
   const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova] =

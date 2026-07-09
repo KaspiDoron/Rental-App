@@ -83,3 +83,6 @@ export async function POST(req: Request) {
   }
   return NextResponse.json({ posts });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

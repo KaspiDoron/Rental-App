@@ -66,3 +66,6 @@ export async function POST(req: Request) {
   if (!parsed) return NextResponse.json({ error: "Could not parse suggestion." }, { status: 502 });
   return NextResponse.json({ suggestion: parsed });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

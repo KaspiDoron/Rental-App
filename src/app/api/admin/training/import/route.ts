@@ -190,3 +190,6 @@ export async function POST(req: Request) {
         : "Scanned your chats but found no clear rental negotiations. Try pasting the shops' numbers above.",
   });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

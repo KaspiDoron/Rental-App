@@ -28,3 +28,6 @@ export async function POST(req: Request) {
     sentiment: sentimentFor(body.vendor, Math.max(0, body.round ?? 0)),
   });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

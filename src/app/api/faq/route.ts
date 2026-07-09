@@ -54,3 +54,6 @@ export async function DELETE(req: Request) {
   const items = await removeFaq(id);
   return NextResponse.json({ ok: true, items });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

@@ -134,3 +134,6 @@ export async function PATCH(req: Request) {
   updateTraining(id, text);
   return NextResponse.json({ ok: true, examples: await allExamples() });
 }
+
+// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;
