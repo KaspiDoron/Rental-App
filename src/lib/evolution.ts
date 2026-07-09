@@ -244,7 +244,7 @@ async function hostHealthDetail(h: Host): Promise<{ ok: boolean; detail: string 
           ? `Awake but rejecting the API key (HTTP ${res.status}) - check this host's AUTHENTICATION_API_KEY matches the key in EVOLUTION_HOSTS.`
           : `Healthy (HTTP ${res.status}, ${ms}ms).`;
     } else {
-      detail = `Server error HTTP ${res.status} - the container is up but Evolution is crashing (usually a bad DATABASE_CONNECTION_URI).`;
+      detail = `Server error HTTP ${res.status} - Evolution is crashing. Known causes: the OnWhatsappCache/Prisma bug (fix: redeploy the updated render.yaml Blueprint - it adds Redis + DATABASE_SAVE_IS_ON_WHATSAPP=false) or a bad DATABASE_CONNECTION_URI.`;
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unreachable";

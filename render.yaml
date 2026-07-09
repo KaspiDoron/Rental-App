@@ -1,28 +1,43 @@
-# One-click WheelDeal WhatsApp backend on Render's free tier.
+# WheelDeal WhatsApp backend on Render - SMALLEST PAID setup (robust, no sleep).
 #
 # Render reads this Blueprint, builds the Evolution API image from
-# deploy/evolution/Dockerfile, provisions a FREE Postgres database, and wires the
-# database connection string into Evolution automatically - so there is NO
-# database password to copy by hand (the #1 thing that broke the manual VM
-# attempts). After it deploys, copy the service URL and paste it into the app at
-# Owner -> Keys -> EVOLUTION_HOSTS as:  https://<service>.onrender.com|<API key>
+# deploy/evolution/Dockerfile, provisions a Postgres database AND a free Redis
+# (Key Value) cache, and wires the connection strings automatically. After it
+# deploys, copy the service URL and paste it into the app at Owner -> Keys ->
+# EVOLUTION_HOSTS as:  https://<service>.onrender.com|<API key>
 #
-# Honest free-tier limits: the web service sleeps after ~15 min idle (use the
-# keep-awake cron on /api/wa/ping to wake it), has 512 MB RAM (fine for an MVP /
-# a handful of live sessions), and the free Postgres expires after ~30 days
-# (recreate it, or upgrade the DB to the ~$7/mo plan when you launch for real).
+# Cost: web `starter` ~$7/mo + Postgres `basic-256mb` ~$6/mo. Redis is free.
+# What the money buys: the service NEVER sleeps (no cold starts, no dropped
+# WhatsApp sockets), and the database never expires (free Postgres dies after
+# ~30 days). This is the smallest paid combo that is launch-grade.
+#
+# CRASH FIX (502/503, "OnWhatsappCache ... PrismaClientKnownRequestError"):
+# Evolution's "is this number on WhatsApp" cache fell through to Prisma/Postgres
+# and crashed the process. Fixed here two ways:
+#   1. A real Redis cache (free Key Value instance) - the cache never touches
+#      Prisma again (CACHE_REDIS_ENABLED=true).
+#   2. DATABASE_SAVE_IS_ON_WHATSAPP=false - stop persisting those rows at all.
+# To apply: Render dashboard -> Blueprints -> your repo -> "Manual Sync" (it
+# re-reads this file), or delete + re-create the Blueprint. Zero other work.
 
 databases:
   - name: wd-evo-db
-    plan: free
+    plan: basic-256mb # smallest PAID Postgres (~$6/mo) - never expires
     region: oregon
     databaseName: evolution
 
 services:
+  # Free Redis-compatible cache - kills the Prisma cache crash.
+  - type: keyvalue
+    name: wd-evo-redis
+    plan: free
+    region: oregon
+    ipAllowList: [] # internal connections only
+
   - type: web
     name: wd-evolution
     runtime: docker
-    plan: free
+    plan: starter # smallest PAID web plan (~$7/mo) - never sleeps
     region: oregon
     dockerfilePath: ./deploy/evolution/Dockerfile
     dockerContext: ./deploy/evolution
@@ -50,19 +65,34 @@ services:
         value: "true"
       - key: DATABASE_SAVE_DATA_MESSAGE_UPDATE
         value: "true"
+      # Don't sync the full contact book (heavy); chats + messages are enough
+      # for the funnel and for teaching from named numbers.
       - key: DATABASE_SAVE_DATA_CONTACTS
-        value: "true"
+        value: "false"
       - key: DATABASE_SAVE_DATA_CHATS
         value: "true"
-      - key: CACHE_LOCAL_ENABLED
-        value: "true"
+      # THE CRASH FIX: stop persisting "is on WhatsApp" lookups via Prisma.
+      - key: DATABASE_SAVE_IS_ON_WHATSAPP
+        value: "false"
+      # THE CRASH FIX part 2: cache in Redis (free Key Value above), not Prisma.
       - key: CACHE_REDIS_ENABLED
+        value: "true"
+      - key: CACHE_REDIS_URI
+        fromService:
+          type: keyvalue
+          name: wd-evo-redis
+          property: connectionString
+      - key: CACHE_REDIS_PREFIX_KEY
+        value: evolution
+      - key: CACHE_REDIS_SAVE_INSTANCES
+        value: "false"
+      - key: CACHE_LOCAL_ENABLED
         value: "false"
       - key: CONFIG_SESSION_PHONE_CLIENT
         value: WheelDeal
       - key: CONFIG_SESSION_PHONE_NAME
         value: Chrome
-      # ---- Throughput / load tuning (New#9: handle many concurrent sessions) --
+      # ---- Throughput / load tuning (handle many concurrent sessions) --------
       # Quieter logs = less CPU/IO under load.
       - key: LOG_LEVEL
         value: "ERROR"
@@ -72,30 +102,25 @@ services:
       # websocket server off frees memory per connection.
       - key: WEBSOCKET_ENABLED
         value: "false"
-      # Don't sync the full contact book (heavy); chats + messages are enough
-      # for the funnel and for teaching from named numbers.
-      - key: DATABASE_SAVE_DATA_CONTACTS
-        value: "false"
       # Many instances on one process => raise the emitter ceiling so Node does
       # not warn/leak under a few hundred live sessions.
       - key: EVENT_EMITTER_MAX_LISTENERS
         value: "500"
-      # Reuse one Baileys store cache across instances.
-      - key: CACHE_LOCAL_ENABLED
-        value: "true"
 
 # ---------------------------------------------------------------------------
+# KEEP-ALIVE: with `plan: starter` the service never sleeps, so the cron ping
+# is only a health watchdog now. Keep pointing cron-job.org at the Vercel app's
+# /api/wa/ping - it pings every Evolution host server-side (the direct Render
+# URL is hit for you; no WhatsApp events are triggered by a GET /).
+#
 # SCALING TO HUNDREDS OF CONCURRENT SESSIONS
 # ---------------------------------------------------------------------------
 # The app already spreads users across a POOL of Evolution hosts (Owner ->
 # Keys -> EVOLUTION_HOSTS, one url|key per line) and fails over automatically,
 # so horizontal scale = add more hosts. To go big on ONE deployment:
-#   1. Bump this service `plan: free` -> `standard` (2 GB+ RAM) - a 512 MB free
-#      instance comfortably holds ~30-50 live WhatsApp sockets; a 2 GB standard
-#      instance holds a few hundred.
-#   2. Add a shared Redis so multiple instances coordinate (set
-#      CACHE_REDIS_ENABLED=true, CACHE_REDIS_URI=<render key-value url>), then
-#      raise `numInstances` for the web service.
-#   3. Upgrade the free Postgres (expires ~30 days) to the paid DB plan.
-# Do NOT try to push more raw throughput than the anti-ban engine allows - the
+#   1. Bump `plan: starter` -> `standard` (2 GB+ RAM). A 512 MB starter holds
+#      ~30-50 live WhatsApp sockets; 2 GB holds a few hundred.
+#   2. Redis is already wired (above) so multiple instances can coordinate -
+#      raise `numInstances` when you outgrow one.
+# Do NOT push more raw throughput than the anti-ban engine allows - the
 # per-number caps are the real limit that keeps every user's number safe.
