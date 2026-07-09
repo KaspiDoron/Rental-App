@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { ensureConnected, fetchChats, fetchMessages, resolveChatJid } from "@/lib/evolution";
+import {
+  ensureConnected,
+  fetchChats,
+  fetchMessages,
+  resolveChatJid,
+  hasSessionRow,
+} from "@/lib/evolution";
 import { chat, extractJson } from "@/lib/ai";
 import { addTraining } from "@/lib/memory";
 import { sbInsert } from "@/lib/runtime-config";
@@ -77,12 +83,19 @@ export async function POST(req: Request) {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  if (!(await ensureConnected(session.email, 6000)).ok) {
+  // Try to bring the live socket up, but do NOT hard-block on it: on a cold
+  // free-tier server a genuinely-linked session can take longer than the probe
+  // budget to report "open". As long as the user has EVER linked (a session row
+  // exists) we proceed and attempt the read - a transient wake-up must never be
+  // mistaken for "not connected" (this was why teaching failed while connected).
+  const conn = await ensureConnected(session.email, 9000);
+  if (!conn.ok && !(await hasSessionRow(session.email))) {
     return NextResponse.json(
       { error: "Connect your WhatsApp first (Profile -> Your WhatsApp), then import." },
       { status: 400 }
     );
   }
+  const waking = !conn.ok; // linked, but the socket was still coming up
 
   const body = await req.json().catch(() => ({}));
   const rawNumbers: string[] = Array.isArray(body?.numbers)
@@ -137,7 +150,11 @@ export async function POST(req: Request) {
           ? `Learned from ${imported} shop chat${imported === 1 ? "" : "s"}${
               samples.length ? ` (${samples.join(", ")})` : ""
             }.${notFound.length ? ` Couldn't find a chat for: ${notFound.join(", ")}.` : ""} The agents now bargain in your style.`
-          : `No readable conversation found for: ${notFound.join(", ") || "those numbers"}. This WhatsApp needs a moment to finish syncing your chat history after connecting - wait ~1 minute and try again, and double-check you chatted with them on THIS number.`,
+          : `No readable conversation found for: ${notFound.join(", ") || "those numbers"}. ${
+              waking
+                ? "Your WhatsApp was still waking up on the server - give it ~30 seconds and tap import again."
+                : "This WhatsApp needs a moment to finish syncing your chat history after connecting - wait ~1 minute and try again, and double-check you chatted with them on THIS number."
+            }`,
     });
   }
 

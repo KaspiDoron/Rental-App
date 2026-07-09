@@ -237,6 +237,7 @@ export default function AdminPage() {
   const [aiProviders, setAiProviders] = useState<any[]>([]);
   const [trainingCount, setTrainingCount] = useState(0);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
+  const [trainOk, setTrainOk] = useState(true);
   const [trainBusy, setTrainBusy] = useState(false);
   const [trainNumbers, setTrainNumbers] = useState("");
   const [memory, setMemory] = useState<{ id: number; text: string; note?: string; origin?: string; source?: string; addedBy?: string; addedAt: number }[]>([]);
@@ -497,12 +498,15 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (res.ok) {
+        setTrainOk((data.imported ?? 0) > 0);
         setTrainMsg(data.note ?? "Done.");
         await refreshMemory();
       } else {
+        setTrainOk(false);
         setTrainMsg(data.error ?? "Could not import.");
       }
     } catch {
+      setTrainOk(false);
       setTrainMsg("Could not reach the WhatsApp connector.");
     } finally {
       setTrainBusy(false);
@@ -832,7 +836,9 @@ export default function AdminPage() {
               className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 font-mono text-[12px] text-strong focus:border-brandblue focus:outline-none"
             />
             {trainMsg && (
-              <p className="mb-1 text-[12px] font-bold text-savings">{trainMsg}</p>
+              <p className={`mb-1 text-[12px] font-bold ${trainOk ? "text-savings" : "text-brandred"}`}>
+                {trainMsg}
+              </p>
             )}
             <button
               onClick={importTraining}

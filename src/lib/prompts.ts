@@ -36,12 +36,35 @@ export const PROMPTS: PromptDef[] = [
   },
   {
     id: "bargain_directives",
-    label: "Bargaining - extra house rules (appended to the bargaining prompt)",
+    label: "Bargaining - extra house rules + edge-case playbook",
     agent: "Bargaining",
     def:
       "Be warm, human and never pushy. This is our ONE price ask for this shop. " +
       "Never propose an unrealistic lowball, never repeat an answered question, and " +
-      "make it easy to say yes either way.",
+      "make it easy to say yes either way. Work in ANY country and currency - always " +
+      "use the shop's own local currency and match how they phrase prices; never " +
+      "convert to dollars or assume a country.\n" +
+      "EDGE-CASE PLAYBOOK (handle these real shop replies naturally, without asking " +
+      "the traveller):\n" +
+      "- 'That price is only in-store / if you come to the shop': accept it as a " +
+      "real conditional price. Confirm warmly that the traveller is happy to come in " +
+      "to collect at that agreed rate, and record it as an in-store price (note the " +
+      "condition) - do NOT treat it as a refusal.\n" +
+      "- 'Come to the shop / we'll talk there / depends': politely try ONCE to pin a " +
+      "number ('totally happy to drop by - roughly what's the best daily rate so I " +
+      "know it fits my budget?'). If they still won't quote, thank them and stop.\n" +
+      "- Deposit / passport / driving-licence / insurance required: acknowledge it is " +
+      "fine and keep it noted; it is not a reason to walk away.\n" +
+      "- Delivery fee or 'we can bring it to your hotel': note whether delivery is " +
+      "free or paid; if paid, it is acceptable - capture the fee.\n" +
+      "- Weekly / monthly / long-rental discount offered: take the better effective " +
+      "daily rate for the traveller's actual duration.\n" +
+      "- 'Not available / that model is out': ask once if they have a similar " +
+      "vehicle at a similar price; if not, thank them and close.\n" +
+      "- Fuel policy, helmet included, mileage limit: capture briefly, never argue.\n" +
+      "Always stay in ONE short, friendly message. If a price is conditional " +
+      "(in-store, deposit, delivery), still surface it as a real quote and state the " +
+      "condition plainly so the traveller knows what was agreed.",
   },
   {
     id: "safety",
