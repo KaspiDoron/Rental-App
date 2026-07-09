@@ -56,10 +56,19 @@ export async function GET(req: Request) {
     case "HUGGINGFACE_TOKEN":
       result = await testOpenAICompatible("https://router.huggingface.co/v1/chat/completions", value!, "meta-llama/Llama-3.1-8B-Instruct");
       break;
+    case "DEEPSEEK_TOKEN":
+      result = await testOpenAICompatible("https://api.deepseek.com/chat/completions", value!, "deepseek-chat");
+      break;
+    case "TOGETHER_TOKEN":
+      result = await testOpenAICompatible("https://api.together.xyz/v1/chat/completions", value!, "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free");
+      break;
+    case "SAMBANOVA_TOKEN":
+      result = await testOpenAICompatible("https://api.sambanova.ai/v1/chat/completions", value!, "Meta-Llama-3.1-8B-Instruct");
+      break;
     case "GEMINI_TOKEN": {
       try {
         const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${value}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${value}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -221,8 +230,82 @@ export async function GET(req: Request) {
       result = { ok: true, detail: `Preferred provider set to "${value}". Use the AI providers panel to switch.` };
       break;
     case "FEEDBACK_FROM_EMAIL":
-      result = { ok: true, detail: "Used as the From address once Resend is connected." };
+    case "BREVO_SENDER":
+      result = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value!)
+        ? { ok: true, detail: "Valid email format. It becomes the visible From/sender address." }
+        : { ok: false, detail: "Enter a valid email address (e.g. hello@yourdomain.com)." };
       break;
+    case "BREVO_API_KEY": {
+      try {
+        const res = await fetch("https://api.brevo.com/v3/account", {
+          headers: { "api-key": value!, Accept: "application/json" },
+        });
+        const d = await res.json().catch(() => ({}));
+        result = res.ok
+          ? { ok: true, detail: `OK - Brevo account: ${d?.email ?? "connected"}.` }
+          : { ok: false, detail: d?.message ?? `Brevo responded ${res.status} - re-copy the key.` };
+      } catch (e) {
+        result = { ok: false, detail: e instanceof Error ? e.message : "network error" };
+      }
+      break;
+    }
+    case "GMAIL_USER":
+      result = /^[^@\s]+@gmail\.com$/i.test(value!)
+        ? { ok: true, detail: "Valid Gmail address. Pair it with a 16-char App Password (not your login password)." }
+        : { ok: false, detail: "Enter your full Gmail address, e.g. you@gmail.com." };
+      break;
+    case "GMAIL_APP_PASSWORD": {
+      const gu = await getConfig("GMAIL_USER");
+      const clean = value!.replace(/\s+/g, "");
+      if (clean.length !== 16) {
+        result = { ok: false, detail: "A Google App Password is 16 characters (spaces are ignored). Generate one at myaccount.google.com/apppasswords." };
+        break;
+      }
+      result = gu
+        ? { ok: true, detail: "Format OK (16 chars). Live SMTP is verified on the first email sent." }
+        : { ok: false, detail: "Set GMAIL_USER (your Gmail address) as well." };
+      break;
+    }
+    case "EVOLUTION_PROXY": {
+      // Validate the proxy URL shape (socks5/http). Live SOCKS cannot be probed
+      // from a fetch, but a malformed URL is the common mistake we can catch.
+      try {
+        const u = new URL(value!);
+        const okScheme = /^(socks5?|https?):$/.test(u.protocol);
+        result = okScheme && u.hostname && u.port
+          ? { ok: true, detail: `Format OK - ${u.protocol}//${u.hostname}:${u.port}. Evolution injects it per instance; a bad proxy shows as a failed connect on link.` }
+          : { ok: false, detail: "Use scheme://user:pass@host:port (e.g. socks5://user:pass@1.2.3.4:1080)." };
+      } catch {
+        result = { ok: false, detail: "Not a valid URL. Use scheme://user:pass@host:port." };
+      }
+      break;
+    }
+    case "EVOLUTION_MAX_PER_HOST": {
+      const n = Number(value);
+      result = Number.isInteger(n) && n > 0
+        ? { ok: true, detail: `OK - up to ${n} WhatsApp users per host before failover to the next.` }
+        : { ok: false, detail: "Enter a positive whole number (e.g. 40)." };
+      break;
+    }
+    case "TWITTER_HANDLE":
+      result = /^@?[A-Za-z0-9_]{1,15}$/.test(value!)
+        ? { ok: true, detail: `Handle format OK (${value!.startsWith("@") ? value : "@" + value}).` }
+        : { ok: false, detail: "An X handle is 1-15 letters/numbers/underscores, e.g. @wheeldeal." };
+      break;
+    case "NEXT_PUBLIC_SUPABASE_URL":
+    case "SUPABASE_SERVICE_ROLE_KEY":
+    case "SESSION_SECRET": {
+      if (name === "SESSION_SECRET") {
+        result = value && value.length >= 16
+          ? { ok: true, detail: "Set and long enough to sign sessions securely." }
+          : { ok: false, detail: "Set a long random secret (>= 16 chars) in the environment." };
+        break;
+      }
+      const { supabaseDiagnostics } = await import("@/lib/runtime-config");
+      const d = await supabaseDiagnostics();
+      result = { ok: d.reachable && d.appConfigOk, detail: d.detail };
+      break;
+    }
   }
 
   return NextResponse.json(result);

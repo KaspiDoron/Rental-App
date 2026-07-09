@@ -72,6 +72,14 @@ export default function AdminPage() {
     areasCount: number;
   } | null>(null);
   const [intelOpen, setIntelOpen] = useState<string | null>(null);
+  // Keys page: collapse each scope group so the long page is easy to walk.
+  const [collapsedScopes, setCollapsedScopes] = useState<Record<string, boolean>>({
+    maps: true,
+    email: true,
+    billing: true,
+    auth: true,
+    data: true,
+  });
   async function loadIntel() {
     const r = await (await fetch("/api/admin/intelligence")).json();
     if (r.areas) setIntel(r);
@@ -1460,8 +1468,11 @@ export default function AdminPage() {
                   <div className="text-[12px] font-extrabold text-strong">
                     📍 {a.areaLabel}
                     {!a.tagged && (
-                      <span className="ml-1 rounded-full bg-card2 px-1.5 py-0.5 text-[8px] font-bold uppercase text-faint">
-                        pre-upgrade
+                      <span
+                        className="ml-1 rounded-full bg-card2 px-1.5 py-0.5 text-[8px] font-bold uppercase text-faint"
+                        title="These quotes were captured before area tagging - grouped by their currency's country. New quotes are tagged with the exact area automatically."
+                      >
+                        area pending ⓘ
                       </span>
                     )}
                   </div>
@@ -1927,16 +1938,32 @@ export default function AdminPage() {
             );
             let lastScope = "";
             return sorted.map((k) => {
-              const header =
-                k.scope !== lastScope ? (
-                  <div
-                    key={`hdr-${k.scope}`}
-                    className="px-1 pt-3 text-[11px] font-extrabold uppercase tracking-wide text-faint"
-                  >
-                    {groupLabel[k.scope] ?? k.scope}
-                  </div>
-                ) : null;
+              const isFirstOfScope = k.scope !== lastScope;
               lastScope = k.scope;
+              const collapsed = collapsedScopes[k.scope];
+              const inScope = sorted.filter((x) => x.scope === k.scope);
+              const doneCount = inScope.filter((x) => x.configured).length;
+              const header = isFirstOfScope ? (
+                <button
+                  key={`hdr-${k.scope}`}
+                  onClick={() =>
+                    setCollapsedScopes((s) => ({ ...s, [k.scope]: !s[k.scope] }))
+                  }
+                  className="mt-3 flex w-full items-center gap-2 rounded-xl bg-card2 px-3 py-2 text-left"
+                >
+                  <span className="text-[10px] text-faint">{collapsed ? "▶" : "▼"}</span>
+                  <span className="flex-1 text-[11px] font-extrabold uppercase tracking-wide text-strong">
+                    {groupLabel[k.scope] ?? k.scope}
+                  </span>
+                  <span className="rounded-full bg-card px-2 py-0.5 text-[9px] font-bold text-faint">
+                    {doneCount}/{inScope.length} set
+                  </span>
+                </button>
+              ) : null;
+              // Collapsed group: show only its header row.
+              if (collapsed) {
+                return header ? <div key={k.name}>{header}</div> : null;
+              }
               return (
                 <div key={k.name}>
                   {header}

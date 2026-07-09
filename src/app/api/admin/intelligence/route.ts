@@ -39,9 +39,24 @@ function vehicleLabel(key: string): string {
   return key;
 }
 
-// "koh phangan, thailand" -> "Koh Phangan, Thailand"
-function areaLabel(key: string): string {
-  if (!key || key === "unknown area") return "Area not tagged yet";
+// Currency -> country, so legacy offers with no region tag still land under a
+// meaningful place ("Thailand") instead of a confusing "unknown".
+const CURRENCY_COUNTRY: Record<string, string> = {
+  THB: "Thailand", IDR: "Indonesia", VND: "Vietnam", INR: "India", JPY: "Japan",
+  PHP: "Philippines", MYR: "Malaysia", SGD: "Singapore", TRY: "Turkey",
+  MXN: "Mexico", BRL: "Brazil", AED: "UAE", SAR: "Saudi Arabia", EGP: "Egypt",
+  MAD: "Morocco", ZAR: "South Africa", KES: "Kenya", LKR: "Sri Lanka",
+  NPR: "Nepal", GBP: "United Kingdom", EUR: "Europe", USD: "United States",
+  AUD: "Australia", NZD: "New Zealand", CAD: "Canada", ILS: "Israel",
+};
+
+// "koh phangan, thailand" -> "Koh Phangan, Thailand". When the region was never
+// tagged we fall back to the country implied by the quote's currency.
+function areaLabel(key: string, currencyHint?: string): string {
+  if (!key || key === "unknown area") {
+    const c = currencyHint ? CURRENCY_COUNTRY[currencyHint.toUpperCase()] : undefined;
+    return c ? `${c} (area pending)` : "Area pending";
+  }
   return key.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -147,9 +162,10 @@ export async function GET() {
       const areaSamples = vehicles.reduce((s, v) => s + v.samples, 0);
       const areaShops = new Set<string>();
       for (const b of byV.values()) for (const v of b.vendors) areaShops.add(v);
+      const currencyHint = vehicles[0]?.currency;
       return {
         area,
-        areaLabel: areaLabel(area),
+        areaLabel: areaLabel(area, currencyHint),
         tagged: area !== "unknown area",
         samples: areaSamples,
         shops: areaShops.size,
