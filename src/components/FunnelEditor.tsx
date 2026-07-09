@@ -78,10 +78,21 @@ function removeNode(root: Node, id: string): Node {
 export function FunnelEditor() {
   const [tree, setTree] = useState<Node | null>(null);
   const [sel, setSel] = useState<string | null>(null);
-  const [pan, setPan] = useState({ x: 10, y: 0 });
+  const [view, setView] = useState({ x: 10, y: 0, scale: 1 });
   const [saving, setSaving] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
-  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const suppressClick = useRef(false);
+  // Active pointers (id -> position) so one finger pans and two pinch-zoom.
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const gesture = useRef<{
+    startView: { x: number; y: number; scale: number };
+    startMid: { x: number; y: number };
+    startDist: number;
+    moved: boolean;
+  } | null>(null);
+
+  const didFit = useRef(false);
 
   useEffect(() => {
     fetch("/api/admin/funnel")
@@ -89,6 +100,18 @@ export function FunnelEditor() {
       .then((d) => d.tree && setTree(d.tree))
       .catch(() => {});
   }, []);
+
+  // Auto-fit the tree into view the first time it loads.
+  useEffect(() => {
+    if (!tree || didFit.current || !canvasRef.current) return;
+    didFit.current = true;
+    const { width, height } = layout(tree);
+    const el = canvasRef.current;
+    const vw = el.clientWidth;
+    const vh = el.clientHeight;
+    const scale = Math.min(2, Math.max(0.3, Math.min(vw / (width + 20), vh / (height + 20), 1)));
+    setView({ x: (vw - width * scale) / 2, y: 12, scale });
+  }, [tree]);
 
   const save = useCallback(async (next: Node) => {
     setTree(next);
@@ -109,23 +132,94 @@ export function FunnelEditor() {
   const { nodes, width, height } = layout(tree);
   const selected = nodes.find((n) => n.node.id === sel)?.node ?? null;
 
+  const clampScale = (s: number) => Math.min(2, Math.max(0.3, s));
+  const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.hypot(a.x - b.x, a.y - b.y);
+  const mid = (a: { x: number; y: number }, b: { x: number; y: number }) => ({
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  });
+
+  // Fit the whole tree into the visible canvas (recenter + auto scale).
+  const fit = () => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const vw = el.clientWidth;
+    const vh = el.clientHeight;
+    const scale = clampScale(Math.min(vw / (width + 20), vh / (height + 20), 1));
+    setView({ x: (vw - width * scale) / 2, y: 12, scale });
+  };
+
   const onDown = (e: React.PointerEvent) => {
-    drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pts = [...pointers.current.values()];
+    gesture.current = {
+      startView: { ...view },
+      startMid: pts.length >= 2 ? mid(pts[0], pts[1]) : { x: e.clientX, y: e.clientY },
+      startDist: pts.length >= 2 ? dist(pts[0], pts[1]) : 0,
+      moved: false,
+    };
   };
   const onMove = (e: React.PointerEvent) => {
-    if (!drag.current) return;
-    setPan({
-      x: drag.current.px + (e.clientX - drag.current.x),
-      y: drag.current.py + (e.clientY - drag.current.y),
-    });
+    if (!pointers.current.has(e.pointerId) || !gesture.current) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pts = [...pointers.current.values()];
+    const g = gesture.current;
+    if (pts.length >= 2) {
+      // Pinch: scale around the midpoint, and pan by the midpoint delta.
+      const m = mid(pts[0], pts[1]);
+      const scale = clampScale((g.startView.scale * dist(pts[0], pts[1])) / (g.startDist || 1));
+      const k = scale / g.startView.scale;
+      setView({
+        scale,
+        x: m.x - (g.startMid.x - g.startView.x) * k,
+        y: m.y - (g.startMid.y - g.startView.y) * k,
+      });
+      g.moved = true;
+    } else {
+      const dx = pts[0].x - g.startMid.x;
+      const dy = pts[0].y - g.startMid.y;
+      if (Math.hypot(dx, dy) > 4) g.moved = true;
+      setView({ ...view, x: g.startView.x + dx, y: g.startView.y + dy });
+    }
   };
-  const onUp = () => (drag.current = null);
+  const onUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size === 0) {
+      // If this gesture panned/zoomed, swallow the click that follows so a drag
+      // never accidentally opens a node.
+      if (gesture.current?.moved) {
+        suppressClick.current = true;
+        setTimeout(() => (suppressClick.current = false), 60);
+      }
+      gesture.current = null;
+    }
+  };
+  const onWheel = (e: React.WheelEvent) => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const scale = clampScale(view.scale * (e.deltaY < 0 ? 1.1 : 0.9));
+    const k = scale / view.scale;
+    setView({ scale, x: px - (px - view.x) * k, y: py - (py - view.y) * k });
+  };
+  const zoomBy = (factor: number) => {
+    const el = canvasRef.current;
+    const cx = (el?.clientWidth ?? 300) / 2;
+    const cy = (el?.clientHeight ?? 360) / 2;
+    const scale = clampScale(view.scale * factor);
+    const k = scale / view.scale;
+    setView({ scale, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k });
+  };
 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <div className="text-[11px] font-bold text-faint">
-          Drag the map to pan · tap a node to edit {saving && "· saving…"}
+          Drag to pan · pinch/scroll to zoom · tap a node {saving && "· saving…"}
         </div>
         <button
           onClick={async () => {
@@ -144,17 +238,26 @@ export function FunnelEditor() {
         </button>
       </div>
 
-      {/* Pannable canvas */}
+      {/* Pannable + zoomable canvas */}
       <div
-        className="relative h-72 touch-none overflow-hidden rounded-xl border-2 border-line bg-card2"
+        ref={canvasRef}
+        className="relative h-80 touch-none select-none overflow-hidden rounded-xl border-2 border-line bg-card2"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
+        onPointerCancel={onUp}
         onPointerLeave={onUp}
+        onWheel={onWheel}
       >
+        {/* Zoom controls */}
+        <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
+          <button onClick={() => zoomBy(1.2)} className="h-7 w-7 rounded-lg border-2 border-line bg-card text-[14px] font-extrabold text-strong">+</button>
+          <button onClick={() => zoomBy(1 / 1.2)} className="h-7 w-7 rounded-lg border-2 border-line bg-card text-[14px] font-extrabold text-strong">−</button>
+          <button onClick={fit} title="Fit to screen" className="h-7 w-7 rounded-lg border-2 border-line bg-card text-[11px] font-extrabold text-brandblue">⤢</button>
+        </div>
         <div
-          className="absolute"
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, width, height }}
+          className="absolute origin-top-left"
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, width, height }}
         >
           <svg className="absolute inset-0" width={width} height={height} style={{ pointerEvents: "none" }}>
             {nodes.map((n) =>
@@ -176,6 +279,7 @@ export function FunnelEditor() {
               key={n.node.id}
               onClick={(e) => {
                 e.stopPropagation();
+                if (suppressClick.current) return; // was a pan, not a tap
                 setSel(n.node.id);
               }}
               className={`absolute overflow-hidden rounded-xl border-2 p-2 text-left ${
