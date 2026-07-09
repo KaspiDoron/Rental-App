@@ -656,7 +656,8 @@ export async function guardOutbound(opts: {
           to_number: opts.toDigits,
           body: text,
           not_before: notBefore,
-          meta: opts.meta ?? null,
+          // Keep the human reason with the row so the queue viewer explains why.
+          meta: { ...(opts.meta ?? {}), reason },
         },
       ]);
       return { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text };

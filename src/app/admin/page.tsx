@@ -591,20 +591,23 @@ export default function AdminPage() {
             <>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                 {[
-                  { k: "waSessions", label: "WA sessions live", emoji: "🟢" },
-                  { k: "repliesToday", label: "Shop replies (24h)", emoji: "📥" },
-                  { k: "offersToday", label: "Offers landed (24h)", emoji: "🤝" },
-                  { k: "queuedMessages", label: "Queued messages", emoji: "🕘" },
-                  { k: "openIssues", label: "Open issues", emoji: "🐛" },
+                  { k: "waSessions", label: "WA sessions live", emoji: "🟢", hint: "How many users (including you) currently have a live, linked WhatsApp session sending through the app right now." },
+                  { k: "repliesToday", label: "Shop replies (24h)", emoji: "📥", hint: "Messages rental shops sent back to your agents in the last 24 hours." },
+                  { k: "offersToday", label: "Offers landed (24h)", emoji: "🤝", hint: "Real prices captured from shop replies in the last 24 hours." },
+                  { k: "queuedMessages", label: "Queued messages", emoji: "🕘", hint: "Messages the anti-ban engine is holding to send later (shop closed, rate limit, human pacing). Tap below to see and flush them." },
+                  { k: "openIssues", label: "Open issues", emoji: "🐛", hint: "Feedback the AI triaged as a genuine bug/usability issue that is still open." },
                 ].map((s) => (
-                  <div key={s.k} className="surface rounded-2xl p-3 text-center">
+                  <div key={s.k} title={s.hint} className="surface rounded-2xl p-3 text-center">
                     <div className="text-xl font-extrabold text-strong">
                       {s.emoji} {command.stats[s.k] ?? 0}
                     </div>
-                    <div className="text-[10px] font-bold text-faint">{s.label}</div>
+                    <div className="text-[10px] font-bold text-faint">{s.label} ⓘ</div>
                   </div>
                 ))}
               </div>
+
+              {/* Queued WhatsApp messages: what is waiting, when, why + flush */}
+              <WaQueuePanel />
 
               {/* Needs your attention NOW */}
               <div className="surface rounded-blob p-4">
@@ -2521,6 +2524,116 @@ function Stat({
         }`}
       >
         {value}
+      </div>
+    </div>
+  );
+}
+
+// Queued WhatsApp messages viewer (#10/#11). Lists what is waiting, to whom,
+// when it will send and WHY, with a one-tap flush of everything due now.
+function WaQueuePanel() {
+  const [items, setItems] = useState<
+    {
+      id: number;
+      to: string;
+      preview: string;
+      notBefore: string;
+      due: boolean;
+      overdue: boolean;
+      vendorName: string | null;
+      reason: string;
+    }[]
+  >([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function load() {
+    const d = await (await fetch("/api/admin/wa-queue")).json();
+    setItems(d.items ?? []);
+    setLoaded(true);
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function flush() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const d = await (
+        await fetch("/api/admin/wa-queue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "flush" }),
+        })
+      ).json();
+      setNote(`Sent ${d.sent ?? 0} due message(s).`);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function drop(id: number) {
+    await fetch("/api/admin/wa-queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", id }),
+    });
+    await load();
+  }
+
+  if (loaded && items.length === 0) return null;
+
+  return (
+    <div className="surface rounded-blob p-4">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="text-[13px] font-extrabold text-strong">🕘 Queued messages</div>
+        <button
+          onClick={flush}
+          disabled={busy}
+          className="btn btn-sm chip rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
+        >
+          {busy ? <LoadingDots label="Sending" /> : "Send due now"}
+        </button>
+      </div>
+      <p className="mb-2 text-[11px] text-faint">
+        Messages the anti-ban engine is holding so your number stays safe. Each one
+        shows who it is for, when it sends, and why it is waiting. Nothing is lost -
+        they send automatically, or tap Send due now.
+      </p>
+      {note && <p className="mb-2 text-[11px] font-bold text-savings">{note}</p>}
+      <div className="space-y-1.5">
+        {items.map((it) => (
+          <div key={it.id} className="rounded-xl bg-card2 p-2.5">
+            <div className="flex items-center justify-between">
+              <div className="text-[12px] font-bold text-strong">
+                {it.vendorName || `+${it.to}`}
+              </div>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${
+                  it.overdue
+                    ? "bg-brandred-soft text-brandred"
+                    : it.due
+                    ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                    : "bg-card text-faint"
+                }`}
+              >
+                {it.overdue ? "overdue" : it.due ? "due now" : "scheduled"}
+              </span>
+            </div>
+            <div className="mt-0.5 truncate text-[11px] text-soft">{it.preview}</div>
+            <div className="mt-1 flex items-center justify-between text-[10px] text-faint">
+              <span>
+                {it.due ? "Ready" : `Sends ${new Date(it.notBefore).toLocaleString()}`} · {it.reason}
+              </span>
+              <button onClick={() => drop(it.id)} className="font-bold text-brandred">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
