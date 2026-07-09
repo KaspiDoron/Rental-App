@@ -15,6 +15,7 @@ import { FeedbackModal } from "@/components/FeedbackModal";
 import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
+import { FaqSection } from "@/components/FaqSection";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { BargainDraftModal } from "@/components/BargainDraftModal";
@@ -796,6 +797,9 @@ export default function Home() {
             </p>
           </div>
         )}
+
+        {/* Popular questions - owner-managed, expandable (#18) */}
+        {phase === "idle" && <FaqSection />}
       </div>
 
       {bookingVendor && (

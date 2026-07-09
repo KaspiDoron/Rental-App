@@ -609,6 +609,9 @@ export default function AdminPage() {
               {/* Queued WhatsApp messages: what is waiting, when, why + flush */}
               <WaQueuePanel />
 
+              {/* Popular-questions manager: add (AI or by hand) / remove (#18) */}
+              <FaqManager />
+
               {/* Needs your attention NOW */}
               <div className="surface rounded-blob p-4">
                 <div className="mb-2 text-[13px] font-extrabold text-strong">
@@ -2632,6 +2635,104 @@ function WaQueuePanel() {
                 Cancel
               </button>
             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// FAQ manager (#18): owner adds popular questions (AI-written or typed) and
+// removes them. Travellers see them as an expandable section in the app.
+function FaqManager() {
+  const [items, setItems] = useState<{ id: string; q: string; a: string }[]>([]);
+  const [q, setQ] = useState("");
+  const [a, setA] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function load() {
+    const d = await (await fetch("/api/faq")).json();
+    setItems(d.items ?? []);
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add(generate: boolean) {
+    if (!q.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const d = await (
+        await fetch("/api/faq", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: q.trim(), answer: a.trim(), generate }),
+        })
+      ).json();
+      if (d.items) {
+        setItems(d.items);
+        setQ("");
+        setA("");
+      } else setMsg(d.error ?? "Could not add.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    const d = await (await fetch(`/api/faq?id=${id}`, { method: "DELETE" })).json();
+    if (d.items) setItems(d.items);
+  }
+
+  return (
+    <div className="surface rounded-blob p-4">
+      <div className="mb-1 text-[13px] font-extrabold text-strong">💬 Popular questions</div>
+      <p className="mb-2 text-[11px] text-faint">
+        Shown to travellers on the home screen. Add a question and either write the
+        answer or let the AI write it. Remove any at any time.
+      </p>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Question, e.g. Do I need an international licence?"
+        className="mb-1.5 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+      />
+      <textarea
+        value={a}
+        onChange={(e) => setA(e.target.value)}
+        rows={2}
+        placeholder="Answer (leave empty and tap 'AI write' to generate one)"
+        className="mb-1.5 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+      />
+      {msg && <p className="mb-1.5 text-[11px] font-bold text-brandred">{msg}</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={() => add(false)}
+          disabled={busy || !q.trim() || !a.trim()}
+          className="btn btn-primary btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-50"
+        >
+          {busy ? <LoadingDots light /> : "Add"}
+        </button>
+        <button
+          onClick={() => add(true)}
+          disabled={busy || !q.trim()}
+          className="btn btn-sm flex-1 rounded-xl border-2 border-line text-[12px] font-extrabold text-brandblue disabled:opacity-50"
+        >
+          🤖 AI write
+        </button>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        {items.map((it) => (
+          <div key={it.id} className="rounded-xl bg-card2 p-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="text-[12px] font-bold text-strong">{it.q}</div>
+              <button onClick={() => remove(it.id)} className="shrink-0 text-[11px] font-bold text-brandred">
+                Remove
+              </button>
+            </div>
+            <div className="mt-0.5 text-[11px] text-soft">{it.a}</div>
           </div>
         ))}
       </div>
