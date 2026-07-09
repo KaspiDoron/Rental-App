@@ -337,6 +337,9 @@ export async function composeBargain(opts: {
   if (target && quoted) {
     const lowest = Math.max(opts.floorPricePerDay ?? 0, Math.round(quoted * 0.6));
     if (target < lowest) target = lowest;
+    // Ask for a clean, human number (220, not 213) - odd figures read as robotic
+    // and weaken the ask.
+    target = roundNice(target);
     if (target >= quoted) target = undefined; // quote already at/below target
   }
   const tactics = getTactics();
@@ -486,7 +489,8 @@ export async function extractOffer(
   rfq: StructuredRFQ,
   text: string,
   images: { mime: string; base64: string }[] = [],
-  history?: string
+  history?: string,
+  region?: string
 ): Promise<ExtractedOffer> {
   const { chatVision } = await import("./ai");
   const spec = `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
@@ -496,6 +500,13 @@ export async function extractOffer(
       ? "manual motorcycle"
       : "car"
   }${rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""}`;
+
+  // The local currency of the shop. When a shop replies with a bare number and
+  // no symbol ("250 per day"), it means 250 in THEIR money - never dollars.
+  const localCur = currencyForRegion(region);
+  // Did the reply contain ANY explicit currency token? (Declared up-front so the
+  // nested normalizeExtraction can read it safely.)
+  const symbolMatch = text.match(/\$|usd|idr|\brp\b|eur|€|thb|฿|aud|\bnzd?\b|myr|\brm\b|php|₱|inr|₹|vnd|₫/i);
 
   const system =
     "You extract rental price offers from a vendor's reply (text and/or a photo " +
@@ -509,7 +520,12 @@ export async function extractOffer(
     "and daily price are both clear from the thread as a whole, set matchesSpec " +
     "true and confidence high. Only when something is genuinely still unknown, " +
     "write a short, polite clarifyMessage - and it must NEVER repeat a question " +
-    "the vendor already answered anywhere in the thread." +
+    "the vendor already answered anywhere in the thread. " +
+    (localCur
+      ? `IMPORTANT: this shop is in a place whose local currency is ${localCur}. ` +
+        `If the reply gives a bare number with no currency symbol, the currency is ` +
+        `${localCur} - NEVER assume US dollars. Return currency "${localCur}" in that case.`
+      : "If the reply gives a bare number with no symbol, return the shop's local currency, not USD.") +
     (history
       ? "\nConversation so far (oldest first):\n" + history
       : "");
@@ -539,13 +555,14 @@ export async function extractOffer(
     if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
   }
 
-  // Heuristic fallback: find a price, but never auto-verify it.
-  const m = text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i);
+  // Heuristic fallback: find a price, but never auto-verify it. A bare number
+  // is in the shop's LOCAL currency, never dollars.
+  const m = text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿|rm|php|₱|₹|₫)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i);
   if (m) {
     return {
       found: true,
       pricePerDay: parseFloat(m[1].replace(/,/g, "")),
-      currency: "USD",
+      currency: symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD",
       matchesSpec: false,
       confidence: "medium",
       clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
@@ -557,19 +574,51 @@ export async function extractOffer(
     confidence: "low",
     clarifyMessage: `Could you share your best daily price for the ${spec}? Thank you!`,
   };
+
+  function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
+    const conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+    const verifiedEnough = e.found && e.matchesSpec && conf === "high";
+    // If the model returned no currency (or defaulted to USD for a bare number
+    // in a non-USD country), stamp the real local currency.
+    let cur = e.currency;
+    const hadSymbol = symbolMatch != null;
+    if (localCur && (!cur || (cur.toUpperCase() === "USD" && localCur !== "USD" && !hadSymbol))) {
+      cur = localCur;
+    }
+    return {
+      ...e,
+      currency: cur,
+      confidence: conf,
+      clarifyMessage: verifiedEnough
+        ? undefined
+        : e.clarifyMessage ||
+          `Thanks! Could you confirm the exact daily price for the ${specStr}?`,
+    };
+  }
 }
 
-function normalizeExtraction(e: ExtractedOffer, spec: string): ExtractedOffer {
-  const conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
-  const verifiedEnough = e.found && e.matchesSpec && conf === "high";
-  return {
-    ...e,
-    confidence: conf,
-    clarifyMessage: verifiedEnough
-      ? undefined
-      : e.clarifyMessage ||
-        `Thanks! Could you confirm the exact daily price for the ${spec}?`,
-  };
+// Map a currency token found in text ("฿", "rp", "rm") to an ISO code.
+function currencyFromToken(tok: string): string {
+  const t = tok.toLowerCase();
+  if (/\$|usd/.test(t)) return "USD";
+  if (/฿|thb/.test(t)) return "THB";
+  if (/€|eur/.test(t)) return "EUR";
+  if (/rp|idr/.test(t)) return "IDR";
+  if (/rm|myr/.test(t)) return "MYR";
+  if (/₱|php/.test(t)) return "PHP";
+  if (/₹|inr/.test(t)) return "INR";
+  if (/₫|vnd/.test(t)) return "VND";
+  return "USD";
+}
+
+/** Round a bargain target to a clean, human number (nearest 10, or 50/100 for
+ *  larger amounts) so the agent asks for 220, not 213. */
+export function roundNice(n: number): number {
+  if (n <= 0) return n;
+  if (n < 100) return Math.round(n / 10) * 10;
+  if (n < 1000) return Math.round(n / 10) * 10;
+  if (n < 10000) return Math.round(n / 50) * 50;
+  return Math.round(n / 100) * 100;
 }
 
 // ---------------------------------------------------------------------------

@@ -145,7 +145,8 @@ export async function processVendorReply(opts: {
     rfq,
     text || "(the shop sent a price-list photo)",
     images,
-    history
+    history,
+    ctx.region || undefined
   );
   const verified =
     extraction.found && extraction.matchesSpec && extraction.confidence === "high";

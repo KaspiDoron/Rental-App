@@ -61,7 +61,7 @@ export async function POST(req: Request) {
   const cur = currencyForRegion(region) || "USD";
 
   // Read what the shop said (price? matches the vehicle? still unclear?).
-  const extraction = await extractOffer(rfq, lastShop || "(no message yet)", [], history);
+  const extraction = await extractOffer(rfq, lastShop || "(no message yet)", [], history, region);
   const priorBargains = turns.filter(
     (t) => t.role === "agent" && /best|deal|discount|possible|\bfor\b.*\bday/i.test(t.text)
   ).length;

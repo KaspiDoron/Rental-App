@@ -117,14 +117,17 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "gemini",
       token: gemini,
       endpoint:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-      model: "gemini-2.0-flash",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+      // gemini-2.0-flash lost its free tier (limit 0). 2.5-flash still has a
+      // free tier; 2.5-flash-lite is the higher-quota fallback.
+      model: "gemini-2.5-flash",
+      fallbackModel: "gemini-2.5-flash-lite",
     },
   ];
 }
 
 // Current Gemini model used by every Gemini call (chat + vision).
-export const GEMINI_MODEL = "gemini-2.0-flash";
+export const GEMINI_MODEL = "gemini-2.5-flash";
 
 /** Configured providers, preferred one first (automatic failover order). */
 async function providers(): Promise<ProviderConfig[]> {
@@ -368,35 +371,42 @@ export async function chatVision(
 ): Promise<string | null> {
   const key = await getConfig("GEMINI_TOKEN");
   if (!key) return null;
-  try {
-    const res = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: userText },
-                ...images.map((img) => ({
-                  inline_data: { mime_type: img.mime, data: img.base64 },
-                })),
-              ],
-            },
-          ],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
-        }),
-      }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? null;
-  } catch {
-    return null;
+  // Try the primary vision model, then the higher-quota lite model if the first
+  // is rate-limited/unavailable, so a busy free tier still reads the photo.
+  const models = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+  for (const model of models) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: userText },
+                  ...images.map((img) => ({
+                    inline_data: { mime_type: img.mime, data: img.base64 },
+                  })),
+                ],
+              },
+            ],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+          }),
+        }
+      );
+      if (!res.ok) continue; // 429/404 - try the next model
+      const data = await res.json();
+      const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (out) return out;
+    } catch {
+      /* try next model */
+    }
   }
+  return null;
 }
 
 /** Extract the first JSON object from an LLM response, tolerating code fences. */
