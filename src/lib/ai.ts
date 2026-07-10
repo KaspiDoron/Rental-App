@@ -344,8 +344,15 @@ export async function chatDetailed(
   }
   const maxTokens = opts?.maxTokens ?? 900;
   const errors: string[] = [];
+  // Total chain budget: however many providers are configured, the whole
+  // failover run must finish well inside the route's 60s maxDuration.
+  const deadline = Date.now() + 38_000;
 
   for (const cfg of list) {
+    if (Date.now() > deadline) {
+      errors.push("time budget exhausted before trying remaining providers");
+      break;
+    }
     try {
       const { text, tokens } = await callProvider(cfg, messages, maxTokens);
       await recordUsage(cfg.name, tokens);

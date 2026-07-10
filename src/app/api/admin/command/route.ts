@@ -51,9 +51,11 @@ export async function GET() {
         "offers",
         `select=id&created_at=gte.${encodeURIComponent(dayAgo)}&limit=200`
       ).catch(() => []),
-      sbSelect<{ id: number; provider: string; ok: boolean; created_at: string }>(
+      // NOTE: the column is `failed` (not `ok`) - the old query silently
+      // returned [] and AI-failure alerts never fired.
+      sbSelect<{ id: number; provider: string; failed: boolean; created_at: string }>(
         "ai_usage",
-        `select=id,provider,ok,created_at&ok=eq.false&created_at=gte.${encodeURIComponent(dayAgo)}&limit=100`
+        `select=id,provider,failed,created_at&failed=eq.true&created_at=gte.${encodeURIComponent(dayAgo)}&limit=100`
       ).catch(() => []),
       sbSelect<{ id: number; kind: string; vendor_name: string; detail: string }>(
         "agent_events",

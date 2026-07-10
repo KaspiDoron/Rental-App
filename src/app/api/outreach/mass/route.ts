@@ -52,7 +52,8 @@ export async function POST(req: Request) {
   // Resume a dropped session before the batch (best-effort).
   if (personal) await ensureConnected(session.email, 6000);
 
-  const results: { id: string; sent: boolean; reason?: string }[] = [];
+  const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
+  const results: { id: string; sent: boolean; queued?: boolean; reason?: string }[] = [];
   for (const v of vendors) {
     let to = (v.whatsapp ?? "").trim();
     if (!to && v.placeId) to = (await placeDetails(v.placeId))?.phone ?? "";
@@ -61,10 +62,44 @@ export async function POST(req: Request) {
       continue;
     }
     const digits = to.replace(/[^\d]/g, "");
+
+    // EVERY mass send passes the anti-ban gate: identical text blasted to 6
+    // shops in a burst is a textbook spam signature. The gate varies the
+    // payload PER SHOP, respects hours/caps, and queues instead of dropping.
+    const meta = {
+      sender: session.email,
+      vendorId: v.id,
+      vendorName: v.name,
+      kind: "rfq",
+      round: 0,
+      rfq: body.rfq ?? null,
+      region: String(body.region ?? ""),
+      plan: session.plan,
+      localLang: Boolean(body.localLang) && session.plan === "ultra",
+    };
+    const guard = await guardOutbound({
+      senderKey: session.email,
+      toDigits: digits,
+      text: message,
+      auto: true,
+      queueIfBlocked: true,
+      region: String(body.region ?? "") || undefined,
+      meta,
+    });
+    if (!guard.allow) {
+      results.push({
+        id: v.id,
+        sent: false,
+        queued: Boolean(guard.queuedUntil),
+        reason: guard.queuedUntil ? "queued" : guard.reason,
+      });
+      continue;
+    }
+
     let ok = false;
     let reason: string | undefined;
     if (personal) {
-      const r = await sendFromUser(session.email, digits, message);
+      const r = await sendFromUser(session.email, digits, guard.text);
       ok = r.ok;
       reason = r.error;
       if (r.rateLimited) {
@@ -72,37 +107,30 @@ export async function POST(req: Request) {
         break; // budget exhausted - stop the batch quietly
       }
     } else if (cloud) {
-      const r = await sendWhatsApp(to, message);
+      const r = await sendWhatsApp(to, guard.text);
       ok = r.ok && r.channel === "cloud-api";
       reason = r.error;
     }
     if (ok) {
+      await afterSend(session.email, digits);
       await sbInsert("whatsapp_messages", [
         {
           to_number: digits,
-          body: message,
+          body: guard.text,
           type: "text",
           direction: "outbound",
-          raw: {
-            channel: personal ? "personal-wa" : "cloud-api",
-            sender: session.email,
-            ok: true,
-            vendorId: v.id,
-            vendorName: v.name,
-            kind: "rfq",
-            round: 0,
-            rfq: body.rfq ?? null,
-            region: String(body.region ?? ""),
-            plan: session.plan,
-            localLang: Boolean(body.localLang) && session.plan === "ultra",
-          },
+          raw: { channel: personal ? "personal-wa" : "cloud-api", ok: true, ...meta },
         },
       ]);
     }
     results.push({ id: v.id, sent: ok, reason: ok ? undefined : reason ?? "not-on-whatsapp" });
   }
 
-  return NextResponse.json({ results, sent: results.filter((r) => r.sent).length });
+  return NextResponse.json({
+    results,
+    sent: results.filter((r) => r.sent).length,
+    queued: results.filter((r) => r.queued).length,
+  });
 }
 
 // Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).

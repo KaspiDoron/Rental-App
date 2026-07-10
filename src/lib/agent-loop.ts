@@ -67,6 +67,10 @@ export async function processVendorReply(opts: {
   text: string;
   waMessageId?: string;
   images?: { mime: string; base64: string }[];
+  // The user whose WhatsApp received this reply. CRITICAL for multi-user
+  // correctness: two users can bargain with the SAME shop, and the reply must
+  // attach to THIS user's thread, never someone else's.
+  senderEmail?: string;
   send: SendFn;
 }): Promise<void> {
   const text = opts.text.trim();
@@ -74,6 +78,9 @@ export async function processVendorReply(opts: {
   // A price-list PHOTO with no caption is still a real reply we must read.
   if (!text && images.length === 0) return;
   const from = opts.fromDigits.replace(/[^\d]/g, "");
+  const senderFilter = opts.senderEmail
+    ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`
+    : "";
 
   // Dedupe: providers retry webhooks - never process the same message twice.
   if (opts.waMessageId) {
@@ -84,10 +91,12 @@ export async function processVendorReply(opts: {
     if (dup.length > 1) return;
   }
 
-  // Find the thread: the last outbound message we sent this number.
+  // Find the thread: the last outbound THIS USER sent this number.
   const prior = await sbSelect<OutboundRow>(
     "whatsapp_messages",
-    `select=id,to_number,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(from)}&order=received_at.desc&limit=1`
+    `select=id,to_number,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+      from
+    )}${senderFilter}&order=received_at.desc&limit=1`
   );
   const ctx = prior[0]?.raw;
   if (!ctx?.rfq) return; // reply without a known thread - stored, not processed
@@ -98,14 +107,23 @@ export async function processVendorReply(opts: {
   // A reply arrived: build the sender's trust score (anti-ban engagement).
   if (ctx.sender) await recordInboundEngagement(ctx.sender, from);
 
-  // Read the WHOLE recent thread so the agent has real memory.
+  // Read the WHOLE recent thread so the agent has real memory. Outbound rows
+  // from OTHER users to the same shop are dropped - each user has their own
+  // private thread with a shop (ask-once counters must never cross users).
   const threadRows = await sbSelect<ThreadMsg>(
     "whatsapp_messages",
     `select=direction,body,raw,received_at&or=(to_number.eq.${encodeURIComponent(
       from
-    )},from_number.eq.${encodeURIComponent(from)})&order=received_at.desc&limit=12`
+    )},from_number.eq.${encodeURIComponent(from)})&order=received_at.desc&limit=20`
   );
-  const thread = threadRows.reverse();
+  const mine = opts.senderEmail
+    ? threadRows.filter(
+        (m) =>
+          m.direction === "inbound" ||
+          (m.raw as { sender?: string } | null)?.sender === opts.senderEmail
+      )
+    : threadRows;
+  const thread = mine.slice(0, 12).reverse();
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
     .join("\n");
@@ -159,25 +177,26 @@ export async function processVendorReply(opts: {
 
   const cur =
     extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
-  await sbInsert("vendor_replies", [
-    {
-      user_email: ctx.sender ?? null,
-      vendor_id: ctx.vendorId ?? "",
-      vendor_name: ctx.vendorName ?? "",
-      reply_text: text.slice(0, 4000),
-      image_count: images.length,
-      found: extraction.found,
-      price_per_day: extraction.pricePerDay ?? null,
-      matches_spec: extraction.matchesSpec,
-      confidence: extraction.confidence,
-      auto: true,
-      // The shop's own money + confirmed conditions, so the app can show the
-      // real local price and honest tags (never a silent USD default).
-      currency: cur,
-      deposit: extraction.deposit ?? null,
-      delivers: extraction.delivers ?? null,
-    },
+  const replyBase = {
+    user_email: ctx.sender ?? null,
+    vendor_id: ctx.vendorId ?? "",
+    vendor_name: ctx.vendorName ?? "",
+    reply_text: text.slice(0, 4000),
+    image_count: images.length,
+    found: extraction.found,
+    price_per_day: extraction.pricePerDay ?? null,
+    matches_spec: extraction.matchesSpec,
+    confidence: extraction.confidence,
+    auto: true,
+  };
+  // The shop's own money + confirmed conditions, so the app can show the real
+  // local price and honest tags. sbInsert fails SILENTLY on an unknown column,
+  // so if the owner has not run the newest schema yet we retry without the new
+  // columns - a reply must NEVER vanish from the feed over a pending migration.
+  const fullOk = await sbInsert("vendor_replies", [
+    { ...replyBase, currency: cur, deposit: extraction.deposit ?? null, delivers: extraction.delivers ?? null },
   ]);
+  if (!fullOk) await sbInsert("vendor_replies", [replyBase]);
   if (usablePrice) {
     // Tag the offer with area + vehicle bucket + a delivery signal, so the
     // owner's shop-intelligence warehouse can aggregate real market data.
@@ -188,24 +207,26 @@ export async function processVendorReply(opts: {
     const delivers =
       extraction.delivers ??
       (/\b(deliver|drop off|bring it|to your hotel|free delivery)\b/i.test(text) ? true : null);
-    await sbInsert("offers", [
-      {
-        user_email: ctx.sender ?? null,
-        vendor_id: ctx.vendorId ?? "",
-        vendor_name: ctx.vendorName ?? "",
-        price_per_day: usablePrice,
-        list_price_per_day: usablePrice,
-        currency: cur,
-        round,
-        simulated: false,
-        verified,
-        region_key: regionKey,
-        vehicle_key: vehicleKey,
-        duration_days: rfq.durationDays ?? null,
-        delivers,
-        deposit_note: extraction.deposit ?? null,
-      },
+    const offerBase = {
+      user_email: ctx.sender ?? null,
+      vendor_id: ctx.vendorId ?? "",
+      vendor_name: ctx.vendorName ?? "",
+      price_per_day: usablePrice,
+      list_price_per_day: usablePrice,
+      currency: cur,
+      round,
+      simulated: false,
+      verified,
+      region_key: regionKey,
+      vehicle_key: vehicleKey,
+      duration_days: rfq.durationDays ?? null,
+      delivers,
+    };
+    // Retry without the newest column if the migration has not run yet.
+    const offerOk = await sbInsert("offers", [
+      { ...offerBase, deposit_note: extraction.deposit ?? null },
     ]);
+    if (!offerOk) await sbInsert("offers", [offerBase]);
   }
 
   // ---- Decide the ONE next move (or silence) --------------------------------

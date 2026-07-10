@@ -28,7 +28,7 @@ export async function GET() {
     /* best-effort */
   }
 
-  const rows = await sbSelect<{
+  interface ReplyRow {
     id: number;
     vendor_id: string;
     vendor_name: string;
@@ -38,16 +38,24 @@ export async function GET() {
     matches_spec: boolean;
     confidence: string;
     auto: boolean;
-    currency: string | null;
-    deposit: string | null;
-    delivers: boolean | null;
+    currency?: string | null;
+    deposit?: string | null;
+    delivers?: boolean | null;
     created_at: string;
-  }>(
+  }
+  const filter = `user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=40`;
+  let rows = await sbSelect<ReplyRow>(
     "vendor_replies",
-    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&user_email=eq.${encodeURIComponent(
-      session.email
-    )}&order=created_at.desc&limit=40`
+    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&${filter}`
   );
+  if (rows.length === 0) {
+    // A select naming a not-yet-migrated column fails SILENTLY as [] - the
+    // feed must keep working before the owner runs the newest schema.
+    rows = await sbSelect<ReplyRow>(
+      "vendor_replies",
+      `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,created_at&${filter}`
+    );
+  }
 
   return NextResponse.json({
     replies: rows.map((r) => ({
@@ -59,9 +67,9 @@ export async function GET() {
       pricePerDay: r.price_per_day,
       verified: r.matches_spec && r.confidence === "high",
       auto: r.auto,
-      currency: r.currency, // the shop's own money - never defaulted here
-      deposit: r.deposit,
-      delivers: r.delivers,
+      currency: r.currency ?? null, // the shop's own money - never defaulted here
+      deposit: r.deposit ?? null,
+      delivers: r.delivers ?? null,
       createdAt: r.created_at,
     })),
   });

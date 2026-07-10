@@ -384,7 +384,7 @@ export default function ProfilePage() {
         )}
 
         {/* Owner AI co-manager */}
-        {isOwner && (
+        {(isOwner || (session && session.plan !== "free")) && (
           <section className="surface rounded-blob border-2 !border-brandyellow p-4">
             <div className="mb-2 flex items-center gap-2">
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-brandyellow text-base">
@@ -392,10 +392,12 @@ export default function ProfilePage() {
               </span>
               <div>
                 <div className="text-[15px] font-extrabold text-strong">
-                  Deals - your AI co-manager
+                  {isOwner ? "Deals - your AI co-manager" : t("Your trip assistant")}
                 </div>
                 <div className="text-[11px] text-faint">
-                  Sees all agent memory, users, feedback & bookings
+                  {isOwner
+                    ? "Sees all agent memory, users, feedback & bookings"
+                    : t("Knows your searches, offers and bookings - ask it anything")}
                 </div>
               </div>
             </div>
@@ -408,18 +410,27 @@ export default function ProfilePage() {
                     className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow"
                   >
                     {thinking ? (
-                      <LoadingDots label="Analysing the business" />
-                    ) : (
+                      <LoadingDots label={isOwner ? "Analysing the business" : "Checking your orders"} />
+                    ) : isOwner ? (
                       "Brief me - what needs my attention?"
+                    ) : (
+                      t("What's the status of my requests?")
                     )}
                   </button>
                   <div className="flex flex-wrap gap-1.5">
-                    {[
-                      "Top issue right now?",
-                      "How are signups trending?",
-                      "Which shops convert best?",
-                      "Any API about to run out?",
-                    ].map((q) => (
+                    {(isOwner
+                      ? [
+                          "Top issue right now?",
+                          "How are signups trending?",
+                          "Which shops convert best?",
+                          "Any API about to run out?",
+                        ]
+                      : [
+                          "Which shop gave the best price?",
+                          "Did anyone reply yet?",
+                          "What should I do next?",
+                        ]
+                    ).map((q) => (
                       <button
                         key={q}
                         onClick={() => ask(q)}

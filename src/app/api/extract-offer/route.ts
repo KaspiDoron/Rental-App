@@ -27,27 +27,38 @@ export async function POST(req: Request) {
     if (m) images.push({ mime: m[1], base64: m[2] });
   }
 
+  // Region matters: a pasted "250 per day" from a Thai shop is 250 THB, never
+  // $250 - the extractor needs the local-currency context.
+  const region = String(body.region ?? "").trim() || undefined;
   const result = await extractOffer(
     body.rfq as StructuredRFQ,
     String(body.text ?? ""),
-    images
+    images,
+    undefined,
+    region
   );
+  const { currencyForRegion } = await import("@/lib/agents");
+  const cur = result.currency || currencyForRegion(region) || "USD";
 
   // Everything is saved: raw reply + extraction outcome feed agent memory.
+  // sbInsert fails silently on unknown columns, so retry without the newest
+  // ones if the owner has not run the latest schema yet.
   const { sbInsert } = await import("@/lib/runtime-config");
-  await sbInsert("vendor_replies", [
-    {
-      user_email: session.email,
-      vendor_id: String(body.vendorId ?? ""),
-      vendor_name: String(body.vendorName ?? ""),
-      reply_text: String(body.text ?? "").slice(0, 4000),
-      image_count: images.length,
-      found: result.found,
-      price_per_day: result.pricePerDay ?? null,
-      matches_spec: result.matchesSpec,
-      confidence: result.confidence,
-    },
+  const replyBase = {
+    user_email: session.email,
+    vendor_id: String(body.vendorId ?? ""),
+    vendor_name: String(body.vendorName ?? ""),
+    reply_text: String(body.text ?? "").slice(0, 4000),
+    image_count: images.length,
+    found: result.found,
+    price_per_day: result.pricePerDay ?? null,
+    matches_spec: result.matchesSpec,
+    confidence: result.confidence,
+  };
+  const replyOk = await sbInsert("vendor_replies", [
+    { ...replyBase, currency: cur, deposit: result.deposit ?? null, delivers: result.delivers ?? null },
   ]);
+  if (!replyOk) await sbInsert("vendor_replies", [replyBase]);
   if (result.found && result.pricePerDay) {
     await sbInsert("offers", [
       {
@@ -56,14 +67,14 @@ export async function POST(req: Request) {
         vendor_name: String(body.vendorName ?? ""),
         price_per_day: result.pricePerDay,
         list_price_per_day: body.firstQuote ?? result.pricePerDay,
-        currency: result.currency ?? "USD",
+        currency: cur,
         round: Number(body.round ?? 0),
         simulated: false,
         verified: result.matchesSpec && result.confidence === "high",
       },
     ]);
   }
-  return NextResponse.json(result);
+  return NextResponse.json({ ...result, currency: cur });
 }
 
 // Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).

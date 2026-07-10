@@ -244,10 +244,12 @@ export default function Home() {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   });
 
-  // Live loop: while agents are waiting on shops, poll the reply feed so
-  // offers ingested by the WhatsApp webhook pop into the cards automatically.
-  const waiting = vendors.some(
-    (v) => v.stage === "rfq-sent" || v.stage === "awaiting-response"
+  // Live loop: while agents are in ANY active conversation, poll the reply
+  // feed so shop answers pop into the cards automatically. This must include
+  // offer-received/negotiating - after a bargain is sent the shop's counter
+  // must still arrive without a manual refresh.
+  const waiting = vendors.some((v) =>
+    ["rfq-sent", "awaiting-response", "negotiating", "offer-received"].includes(v.stage ?? "")
   );
   useEffect(() => {
     if (!session || !waiting || !rfq) return;
@@ -678,8 +680,12 @@ export default function Home() {
                       }
                     }
                     setMassNote(
-                      d.sent > 0
-                        ? `${t("Agents are on it - shops asked:")} ${d.sent}`
+                      d.sent > 0 || d.queued > 0
+                        ? `${t("Agents are on it - shops asked:")} ${d.sent}${
+                            d.queued > 0
+                              ? ` · ${d.queued} ${t("queued for opening hours")}`
+                              : ""
+                          }`
                         : d.connect
                         ? t("Connect your WhatsApp in Profile first.")
                         : t("No shops could be messaged right now.")

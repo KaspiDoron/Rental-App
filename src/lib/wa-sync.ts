@@ -15,7 +15,10 @@ import { processVendorReply } from "./agent-loop";
 
 const SYNC_MIN_GAP_MS = 25_000; // at most one real sync per user per 25s
 const THREAD_WINDOW_H = 36; // only threads we messaged in the last 36h
-const MAX_THREADS = 8;
+const MAX_THREADS = 5;
+// Hard latency budget: the sync runs INSIDE the user's poll request, so it
+// must stay snappy - anything not reconciled this round is caught next poll.
+const RUN_BUDGET_MS = 8_000;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -50,7 +53,9 @@ export async function syncInboundReplies(email: string): Promise<number> {
   if (numbers.length === 0) return 0;
 
   let recovered = 0;
+  const deadline = Date.now() + RUN_BUDGET_MS;
   for (const digits of numbers) {
+    if (Date.now() > deadline) break; // stay snappy - next poll continues
     try {
       const msgs = await fetchMessagesRaw(email, `${digits}@s.whatsapp.net`, 10);
       const inbound = msgs.filter(
@@ -96,6 +101,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
           text: m.text,
           images,
           waMessageId: m.id,
+          senderEmail: email,
           send: (to, message) => sendFromUser(email, to, message),
         }).catch(() => {});
       }

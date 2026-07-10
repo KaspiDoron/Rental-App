@@ -592,9 +592,11 @@ export async function extractOffer(
   // The local currency of the shop. When a shop replies with a bare number and
   // no symbol ("250 per day"), it means 250 in THEIR money - never dollars.
   const localCur = currencyForRegion(region);
-  // Did the reply contain ANY explicit currency token? (Declared up-front so the
-  // nested normalizeExtraction can read it safely.)
-  const symbolMatch = text.match(/\$|usd|idr|\brp\b|eur|€|thb|฿|aud|\bnzd?\b|myr|\brm\b|php|₱|inr|₹|vnd|₫/i);
+  // Did the reply contain ANY explicit currency token? Word boundaries matter:
+  // "aud" must not match inside "audience", "rm" not inside "room".
+  const symbolMatch = text.match(
+    /\$|€|฿|₱|₹|₫|\b(?:usd|idr|rp|eur|thb|aud|nzd|myr|rm|php|inr|vnd)\b/i
+  );
 
   const system =
     "You extract rental price offers from a vendor's reply (text and/or a photo " +

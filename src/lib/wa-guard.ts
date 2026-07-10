@@ -583,7 +583,8 @@ export function humanizeVariant(text: string): string {
     if (i >= 0) {
       const w = words[i];
       const typo = w.slice(0, 1) + w.slice(2, 3) + w.slice(1, 2) + w.slice(3); // swap 2 chars
-      out = out.replace(w, `${typo} ${w}`);
+      // "*word" is how real humans correct a typo in chat.
+      out = out.replace(w, `${typo} *${w}`);
     }
   }
   return out;
@@ -687,11 +688,13 @@ export async function guardOutbound(opts: {
   //    tick). Delivered-but-ignored contacts are the #1 spam signal, so we do
   //    NOT keep pushing them.
   if (opts.auto && p.engagement_halt && !isNewContact) {
+    // Scoped to THIS sender: another user's thread with the same shop must
+    // never trip (or clear) this user's engagement halt.
     const lastOut = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
         opts.toDigits
-      )}&order=received_at.desc&limit=1`
+      )}&raw->>sender=eq.${encodeURIComponent(opts.senderKey)}&order=received_at.desc&limit=1`
     );
     if (lastOut[0]) {
       const inboundSince = await sbSelect<{ id: number }>(
