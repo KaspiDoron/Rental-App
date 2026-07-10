@@ -77,8 +77,10 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "sambanova",
       token: sambanova,
       endpoint: "https://api.sambanova.ai/v1/chat/completions",
+      // Meta-Llama-3.1-* were deprecated on SambaNova Cloud (HTTP 410).
+      // 3.3-70B is current; Llama-4 Maverick is the newer fallback.
       model: "Meta-Llama-3.3-70B-Instruct",
-      fallbackModel: "Meta-Llama-3.1-70B-Instruct",
+      fallbackModel: "Llama-4-Maverick-17B-128E-Instruct",
     },
     {
       name: "deepseek",

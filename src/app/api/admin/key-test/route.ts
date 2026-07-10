@@ -63,7 +63,7 @@ export async function GET(req: Request) {
       result = await testOpenAICompatible("https://api.together.xyz/v1/chat/completions", value!, "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free");
       break;
     case "SAMBANOVA_TOKEN":
-      result = await testOpenAICompatible("https://api.sambanova.ai/v1/chat/completions", value!, "Meta-Llama-3.1-8B-Instruct");
+      result = await testOpenAICompatible("https://api.sambanova.ai/v1/chat/completions", value!, "Meta-Llama-3.3-70B-Instruct");
       break;
     case "GEMINI_TOKEN": {
       try {

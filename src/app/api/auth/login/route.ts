@@ -69,28 +69,46 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
-      // A user CANNOT create an account without proving they own the email:
-      // email them a 6-digit code and hold the signup until it is confirmed.
-      const { startEmailVerification } = await import("@/lib/verify");
-      const started = await startEmailVerification({
+      // Normally a user must prove they own the email via a 6-digit code. In
+      // the private beta the account is ALREADY invited by the owner, so if no
+      // email provider is configured we let the invited tester in directly
+      // rather than block the whole beta on email setup. When email IS set up,
+      // we still send the code (extra proof, and it exercises the OTP flow).
+      const { startEmailVerification, emailVerificationAvailable } = await import("@/lib/verify");
+      if (!(await emailVerificationAvailable())) {
+        await registerUser({
+          email,
+          phone: phone || undefined,
+          password,
+          provider: "email",
+          acceptedTerms: true,
+          plan: invitedPlan,
+        });
+        // fall through to sign the user in below
+      } else {
+        const started = await startEmailVerification({
+          email,
+          phone: phone || undefined,
+          password,
+          acceptedTerms: true,
+        });
+        if (!started.ok) {
+          return NextResponse.json({ error: started.error }, { status: started.cooldown ? 429 : 400 });
+        }
+        return NextResponse.json({ needsVerification: true, email });
+      }
+    }
+    // Owner bootstrap: no email round-trip needed (invited testers were already
+    // registered above in the no-email-provider fall-through).
+    if (isOwner(email)) {
+      await registerUser({
         email,
         phone: phone || undefined,
-        password,
+        password: password || OWNER_DEFAULT_PASSWORD,
+        provider: "email",
         acceptedTerms: true,
       });
-      if (!started.ok) {
-        return NextResponse.json({ error: started.error }, { status: started.cooldown ? 429 : 400 });
-      }
-      return NextResponse.json({ needsVerification: true, email });
     }
-    // Owner bootstrap: no email round-trip needed.
-    await registerUser({
-      email,
-      phone: phone || undefined,
-      password: password || OWNER_DEFAULT_PASSWORD,
-      provider: "email",
-      acceptedTerms: true,
-    });
   } else {
     // Log in - always verify against the freshest durable record.
     let user = await getUser(email, { fresh: true });
