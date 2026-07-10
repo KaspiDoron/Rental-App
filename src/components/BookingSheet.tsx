@@ -27,6 +27,8 @@ export function BookingSheet({
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
   const [dealTerms, setDealTerms] = useState(false);
+  // Honest notify state: we only SAY the shop was told if it really was.
+  const [notify, setNotify] = useState<"sending" | "sent" | "queued" | "failed" | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -53,7 +55,9 @@ export function BookingSheet({
 
   async function confirm() {
     setStep("confirmed");
+    const when = `${date || defaultDate}T${time}:00`;
     // Persist the booking (saved to the database when Supabase is connected).
+    // No trailing Z: the pickup time is the SHOP's local time, not UTC.
     fetch("/api/bookings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,9 +68,38 @@ export function BookingSheet({
         totalPrice: vendor.offer?.totalPrice ?? 0,
         currency: vendor.offer?.currency ?? "USD",
         fulfillment: mode,
-        scheduledAt: `${date || defaultDate}T${time}:00Z`,
+        scheduledAt: when,
       }),
     }).catch(() => {});
+
+    // ACTUALLY tell the shop - a locked deal the shop never heard about is a
+    // traveller standing in front of a confused owner. Safety-screened custom
+    // send; the UI reports honestly whether it went out.
+    setNotify("sending");
+    try {
+      const price = vendor.offer
+        ? ` at the price we agreed (${moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day)`
+        : "";
+      const res = await fetch("/api/outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: vendor.whatsapp || undefined,
+          placeId: vendor.placeId,
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          message: `Great news - I'd like to confirm the rental${price}! I'll come by on ${
+            date || defaultDate
+          } around ${time}. See you then, thank you!`,
+          kind: "custom",
+          openNow: vendor.openNow,
+        }),
+      });
+      const d = await res.json();
+      setNotify(d.sent ? "sent" : d.queued ? "queued" : "failed");
+    } catch {
+      setNotify("failed");
+    }
   }
 
   return (
@@ -204,9 +237,30 @@ export function BookingSheet({
             </span>
             .
           </p>
-          <p className="mt-2 text-[12px] text-faint">
-            The agent notified the vendor and saved the booking to your profile.
-          </p>
+          {/* HONEST notify status - we never claim the shop was told unless it was */}
+          {notify === "sending" && (
+            <p className="mt-2 text-[12px] text-faint">
+              Saving your booking and messaging the shop your pickup time...
+            </p>
+          )}
+          {notify === "sent" && (
+            <p className="mt-2 text-[12px] font-bold text-savings">
+              ✓ The shop was messaged your pickup time. Booking saved to your profile.
+            </p>
+          )}
+          {notify === "queued" && (
+            <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[12px] font-bold text-brandblue">
+              🕒 The shop looks closed - your confirmation message is queued and
+              sends when they open. Booking saved to your profile.
+            </p>
+          )}
+          {notify === "failed" && (
+            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+              Booking saved, but the confirmation message could not be sent -
+              use &ldquo;Ask something custom&rdquo; on the card to tell the shop
+              your pickup time.
+            </p>
+          )}
           <button
             onClick={onClose}
             className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"

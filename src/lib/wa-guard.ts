@@ -890,6 +890,29 @@ export async function drainOutbox(
           raw: { ...(row.meta ?? {}), sender: row.sender_key, auto: true, queued: true },
         },
       ]);
+    } else {
+      // SEND FAILED after the row was deleted - without this, the message is
+      // silently LOST (e.g. the WhatsApp host was mid-restart). Re-queue with
+      // a backoff and a hard attempts cap; alert the owner when we give up.
+      const attempts = Number((row.meta as { attempts?: number } | null)?.attempts ?? 0) + 1;
+      if (attempts <= 5) {
+        await sbInsert("wa_outbox", [
+          {
+            sender_key: row.sender_key,
+            to_number: row.to_number,
+            body: row.body,
+            not_before: new Date(Date.now() + attempts * 10 * 60_000).toISOString(),
+            meta: { ...(row.meta ?? {}), attempts, reason: `send failed - retry ${attempts}/5` },
+          },
+        ]).catch(() => {});
+      } else {
+        await sbInsert("agent_events", [
+          {
+            kind: "wa-send-dropped",
+            detail: `Gave up on a queued message to +${row.to_number} after 5 failed sends (sender ${row.sender_key}).`,
+          },
+        ]).catch(() => {});
+      }
     }
   }
   return sent;
