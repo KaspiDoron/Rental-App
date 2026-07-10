@@ -293,18 +293,7 @@ export default function Home() {
     return () => clearInterval(id);
   }, [session, waiting, rfq]);
 
-  async function fetchStatus(vendor: Vendor, activeRfq: StructuredRFQ) {
-    const res = await fetch("/api/negotiate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vendor, rfq: activeRfq, round: 0 }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    patchVendor(vendor.id, { sentiment: data.sentiment });
-  }
-
-  function runFunnel(list: Vendor[], activeRfq: StructuredRFQ) {
+  function runFunnel(list: Vendor[], _activeRfq: StructuredRFQ) {
     timers.current.forEach(clearTimeout);
     timers.current = [];
     const schedule = (fn: () => void, ms: number) =>
@@ -312,8 +301,15 @@ export default function Home() {
 
     list.forEach((vendor, i) => {
       const base = i * 200;
-      schedule(() => patchVendor(vendor.id, { stage: "locating-contact" }), base + 300);
-      schedule(() => fetchStatus({ ...vendor }, activeRfq), base + 900);
+      schedule(() => {
+        // Sentiment is a pure function of rating - computing it here instead of
+        // one HTTP call PER VENDOR makes every search dramatically faster.
+        const warmth = Math.min(1, Math.max(0.1, (vendor.rating - 3.5) / 1.4));
+        patchVendor(vendor.id, {
+          stage: "locating-contact",
+          sentiment: Number(warmth.toFixed(2)),
+        });
+      }, base + 300);
     });
     schedule(() => setPhase("done"), list.length * 200 + 1400);
   }

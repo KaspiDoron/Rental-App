@@ -214,9 +214,13 @@ export async function aiStatus() {
 }
 
 /** fetch with a hard timeout so one slow provider cannot stall the request. */
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = CALL_TIMEOUT_MS
+): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: ctrl.signal });
   } finally {
@@ -240,7 +244,8 @@ async function callOpenAICompatible(
   cfg: ProviderConfig,
   messages: ChatMessage[],
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  timeoutMs = CALL_TIMEOUT_MS
 ): Promise<{ text: string; tokens: number }> {
   const res = await fetchWithTimeout(cfg.endpoint, {
     method: "POST",
@@ -254,7 +259,7 @@ async function callOpenAICompatible(
       temperature: 0.6,
       max_tokens: maxTokens,
     }),
-  });
+  }, timeoutMs);
   if (!res.ok) throw new Error(await errorDetail(res, cfg.name));
   const data = await res.json();
   return {
@@ -267,7 +272,8 @@ async function callGemini(
   cfg: ProviderConfig,
   messages: ChatMessage[],
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  timeoutMs = CALL_TIMEOUT_MS
 ): Promise<{ text: string; tokens: number }> {
   const system = messages.find((m) => m.role === "system")?.content ?? "";
   const contents = messages
@@ -286,7 +292,7 @@ async function callGemini(
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       generationConfig: { temperature: 0.6, maxOutputTokens: maxTokens },
     }),
-  });
+  }, timeoutMs);
   if (!res.ok) throw new Error(await errorDetail(res, "gemini"));
   const data = await res.json();
   return {
@@ -300,12 +306,13 @@ async function callGemini(
 async function callProvider(
   cfg: ProviderConfig,
   messages: ChatMessage[],
-  maxTokens: number
+  maxTokens: number,
+  timeoutMs = CALL_TIMEOUT_MS
 ): Promise<{ text: string; tokens: number }> {
   const run = (model: string) =>
     cfg.name === "gemini"
-      ? callGemini(cfg, messages, model, maxTokens)
-      : callOpenAICompatible(cfg, messages, model, maxTokens);
+      ? callGemini(cfg, messages, model, maxTokens, timeoutMs)
+      : callOpenAICompatible(cfg, messages, model, maxTokens, timeoutMs);
   try {
     return await run(cfg.model);
   } catch (e) {
@@ -324,7 +331,7 @@ async function callProvider(
  */
 export async function chat(
   messages: ChatMessage[],
-  opts?: { maxTokens?: number }
+  opts?: { maxTokens?: number; budgetMs?: number }
 ): Promise<string | null> {
   return (await chatDetailed(messages, opts)).text;
 }
@@ -336,7 +343,7 @@ export async function chat(
  */
 export async function chatDetailed(
   messages: ChatMessage[],
-  opts?: { maxTokens?: number }
+  opts?: { maxTokens?: number; budgetMs?: number }
 ): Promise<{ text: string | null; provider?: ProviderName; error?: string }> {
   const list = await providers();
   if (list.length === 0) {
@@ -345,8 +352,10 @@ export async function chatDetailed(
   const maxTokens = opts?.maxTokens ?? 900;
   const errors: string[] = [];
   // Total chain budget: however many providers are configured, the whole
-  // failover run must finish well inside the route's 60s maxDuration.
-  const deadline = Date.now() + 38_000;
+  // failover run must finish well inside the route's 60s maxDuration. Callers
+  // on a user-facing hot path (search start) pass a much tighter budget and
+  // fall back to their deterministic heuristic instead of making people wait.
+  const deadline = Date.now() + (opts?.budgetMs ?? 38_000);
 
   for (const cfg of list) {
     if (Date.now() > deadline) {
@@ -354,7 +363,9 @@ export async function chatDetailed(
       break;
     }
     try {
-      const { text, tokens } = await callProvider(cfg, messages, maxTokens);
+      // Never let one call overshoot the caller's total budget.
+      const remaining = Math.max(2_000, Math.min(CALL_TIMEOUT_MS, deadline - Date.now()));
+      const { text, tokens } = await callProvider(cfg, messages, maxTokens, remaining);
       await recordUsage(cfg.name, tokens);
       if (text) return { text, provider: cfg.name };
       errors.push(`${cfg.name}: empty reply`);

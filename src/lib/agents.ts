@@ -37,15 +37,21 @@ export async function runProfiler(
   ];
   const styleSeed = styles[Math.floor(Math.random() * styles.length)];
 
-  const llm = await chat([
-    {
-      role: "system",
-      content:
-        system +
-        ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.`,
-    },
-    { role: "user", content: input },
-  ]);
+  // Tight budget: this call blocks the START of every search. If the AI is
+  // slow, the deterministic heuristic (with its own message variety) takes
+  // over - a fast search beats a marginally prettier first message.
+  const llm = await chat(
+    [
+      {
+        role: "system",
+        content:
+          system +
+          ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.`,
+      },
+      { role: "user", content: input },
+    ],
+    { budgetMs: 9_000 }
+  );
 
   if (llm) {
     const parsed = extractJson<StructuredRFQ>(llm);
