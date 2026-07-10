@@ -194,7 +194,7 @@ export function VendorCard({
       {vendor.photoUrl && (
         <div className="relative h-32 w-full">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={vendor.photoUrl} alt="" className="h-full w-full object-cover" />
+          <img src={vendor.photoUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
           {vendor.openNow !== undefined && (
             <span
               className={`absolute left-3 top-3 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${

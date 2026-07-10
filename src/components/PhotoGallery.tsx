@@ -80,6 +80,8 @@ export function PhotoGallery({
                 <img
                   src={u}
                   alt=""
+                  loading={i === 0 ? "eager" : "lazy"}
+                  decoding="async"
                   className="max-h-full max-w-full rounded-2xl object-contain"
                   onError={() => setOk((prev) => prev.map((v, j) => (j === i ? false : v)))}
                 />

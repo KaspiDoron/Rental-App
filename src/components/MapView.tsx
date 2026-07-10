@@ -157,7 +157,7 @@ function ShopCard({
     >
       {v.photoUrl && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={v.photoUrl} alt="" className="h-24 w-full object-cover" />
+        <img src={v.photoUrl} alt="" loading="lazy" decoding="async" className="h-24 w-full object-cover" />
       )}
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
