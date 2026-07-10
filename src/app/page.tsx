@@ -24,6 +24,7 @@ import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
+import { moneyLocal } from "@/lib/currency";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -413,6 +414,24 @@ export default function Home() {
     [vendors]
   );
 
+  // The savings ticker's currency symbol comes from the offers themselves
+  // (they all share the search's local currency) - never a hardcoded "$".
+  const savingsSymbol = useMemo(() => {
+    const cur = vendors.find((v) => v.offer)?.offer?.currency;
+    return cur ? moneyLocal(0, cur).replace(/[\d.,\s]/g, "") || "$" : "$";
+  }, [vendors]);
+
+  // Live per-stage counts for the session status strip.
+  const stageCounts = useMemo(() => {
+    let asked = 0;
+    let waiting = 0;
+    for (const v of vendors) {
+      if (v.stage === "rfq-sent") asked += 1;
+      if (v.stage === "awaiting-response" || v.stage === "negotiating") waiting += 1;
+    }
+    return { asked, waiting };
+  }, [vendors]);
+
   const paidPlan = session ? session.plan !== "free" : false;
 
   return (
@@ -573,21 +592,39 @@ export default function Home() {
                 {t("Bargained")}
               </div>
               <div className="text-lg font-extrabold text-savings">
-                $<AnimatedNumber value={Math.round(totalSavings)} />
+                {/* Savings in the shops' LOCAL currency - never a forced $ */}
+                {savingsSymbol}
+                <AnimatedNumber value={Math.round(totalSavings)} />
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Live session status: what the agents are doing RIGHT NOW */}
+        {vendors.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-card2 px-3 py-2 text-[11px] font-bold text-soft">
+            {stageCounts.asked > 0 && <span>📤 {stageCounts.asked} {t("asked")}</span>}
+            {stageCounts.waiting > 0 && <span>⏳ {stageCounts.waiting} {t("awaiting reply")}</span>}
+            {offersIn > 0 && <span className="text-savings">💰 {offersIn} {t("offers")}</span>}
+            {stageCounts.asked + stageCounts.waiting + offersIn === 0 && (
+              <span>{t("Tap 'Ask for price' on a shop to start")}</span>
+            )}
           </div>
         )}
 
         {cheapest?.offer && (
           <div className="mt-3 flex items-center justify-between rounded-blob border-2 border-savings bg-savings-soft p-3 animate-slide-up">
             <div className="text-[12px]">
-              <div className="font-bold text-soft">{t("Cheapest confirmed price")}</div>
+              <div className="font-bold text-soft">
+                {cheapest.offer.verified
+                  ? t("Cheapest confirmed price")
+                  : t("Best price so far (unconfirmed)")}
+              </div>
               <div className="font-extrabold text-strong">{cheapest.name}</div>
             </div>
             <div className="text-right">
               <div className="text-xl font-extrabold text-savings">
-                ${cheapest.offer.pricePerDay}
+                {moneyLocal(cheapest.offer.pricePerDay, cheapest.offer.currency)}
                 <span className="text-xs text-soft">/{t("day")}</span>
               </div>
               <button
