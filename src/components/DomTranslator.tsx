@@ -19,6 +19,10 @@ const BRAND = /^(WheelDeal|Ultra|Pro|WhatsApp|Google|AI|OK|QR|km|cc|USD|EUR|ILS|
 
 // Remember each text node's English original so we can restore it.
 const originals = new WeakMap<Text, string>();
+// Same for translatable ATTRIBUTES (placeholder/title/aria-label) - inputs are
+// skipped as text nodes, but their placeholder is user-visible copy too.
+const attrOriginals = new WeakMap<Element, Record<string, string>>();
+const ATTRS = ["placeholder", "title", "aria-label"] as const;
 
 function translatable(node: Text): boolean {
   const parent = node.parentElement;
@@ -56,7 +60,7 @@ export function DomTranslator() {
   useEffect(() => {
     if (typeof document === "undefined") return;
 
-    // Restore English: put every remembered original back.
+    // Restore English: put every remembered original back (text + attributes).
     if (lang === "en") {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       let n: Node | null;
@@ -65,6 +69,10 @@ export function DomTranslator() {
         const orig = originals.get(t);
         if (orig !== undefined && t.nodeValue !== orig) t.nodeValue = orig;
       }
+      document.querySelectorAll("[placeholder],[title],[aria-label]").forEach((el) => {
+        const saved = attrOriginals.get(el);
+        if (saved) for (const [a, v] of Object.entries(saved)) el.setAttribute(a, v);
+      });
       return;
     }
 
@@ -83,6 +91,27 @@ export function DomTranslator() {
       }
     };
 
+    // Visible attribute copy (placeholders, tooltips, screen-reader labels).
+    const attrTargets = (): { el: Element; attr: string; orig: string }[] => {
+      const out: { el: Element; attr: string; orig: string }[] = [];
+      document.querySelectorAll("[placeholder],[title],[aria-label]").forEach((el) => {
+        if (el.closest("[data-no-translate]")) return;
+        for (const attr of ATTRS) {
+          const current = el.getAttribute(attr);
+          if (!current) continue;
+          const saved = attrOriginals.get(el) ?? {};
+          if (!(attr in saved)) {
+            saved[attr] = current;
+            attrOriginals.set(el, saved);
+          }
+          const orig = saved[attr].trim();
+          if (orig.length < 2 || !/[a-zA-Z]/.test(orig) || BRAND.test(orig)) continue;
+          out.push({ el, attr, orig });
+        }
+      });
+      return out;
+    };
+
     const collectAndTranslate = async (root: Node) => {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       const nodes: Text[] = [];
@@ -91,6 +120,13 @@ export function DomTranslator() {
         const t = n as Text;
         if (translatable(t)) nodes.push(t);
       }
+      const attrs = attrTargets();
+      const applyAttrs = () => {
+        for (const a of attrs) {
+          const hit = dict[a.orig];
+          if (hit && a.el.getAttribute(a.attr) !== hit) a.el.setAttribute(a.attr, hit);
+        }
+      };
       // Apply what we already have, and gather what we still need.
       const missing = new Set<string>();
       for (const node of nodes) {
@@ -98,6 +134,8 @@ export function DomTranslator() {
         if (dict[key]) apply(node);
         else missing.add(key);
       }
+      for (const a of attrs) if (!dict[a.orig]) missing.add(a.orig);
+      applyAttrs();
       const need = [...missing].slice(0, 400);
       if (!need.length) return;
 
@@ -115,6 +153,7 @@ export function DomTranslator() {
             dict = { ...dict, ...data.map };
             cacheSet(lang, dict);
             for (const node of nodes) apply(node);
+            applyAttrs();
           }
         } catch {
           /* network hiccup - try the rest */
