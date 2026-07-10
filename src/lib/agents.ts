@@ -173,6 +173,16 @@ function vehicleTerm(v: VehicleClass): string {
 
 const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
+/**
+ * A freshly-varied first message for ONE shop. Called PER SHOP server-side so
+ * that even within a single search, no two shops receive the same opening text
+ * (the client's single rfq.vendorMessage was being reused for every shop - the
+ * "all shops got the same message" bug). Hundreds of natural combinations.
+ */
+export function variedFirstMessage(rfq: StructuredRFQ): string {
+  return buildMessage(rfq, "");
+}
+
 function buildMessage(rfq: StructuredRFQ, raw: string): string {
   // Authentic first-person message from the traveller. VARIETY MATTERS: with
   // hundreds of users, identical first messages look like a bot blast (to the
@@ -513,9 +523,9 @@ export async function composeBargain(opts: {
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
       ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
-      : `Write in street-smart conversational English - the way real travellers haggle in chat: casual, warm, a little cheeky, contractions, no formal business tone. ` +
+      : `Write in SIMPLE, warm, everyday English - the way a friendly traveller actually types on WhatsApp. Use short sentences and common words a non-native speaker easily understands. Contractions are good. NO fancy or formal vocabulary, NO clever idioms or wordplay, NO business/salesy tone. Most rental shops here speak English as a second language, so keep it plain, kind and easy to read. ` +
         (opts.region
-          ? `The shop is in ${opts.region}; if English is a second language there, keep sentences extra short and simple. `
+          ? `The shop is in ${opts.region}; keep every sentence short and very simple. `
           : "")) +
     (training
       ? "Learn tone and moves from these REAL past bargains by the owner:\n" + training

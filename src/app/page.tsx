@@ -110,6 +110,11 @@ export default function Home() {
   const [restored, setRestored] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
+  // ATOMIC SESSION: a monotonic epoch stamped when a search starts. Only shop
+  // replies created AFTER this moment belong to THIS session - anything older
+  // (a previous search's offers/threads) is rejected, so a "New search" can
+  // never resurrect a stale bargain from a shop you already left.
+  const [searchEpoch, setSearchEpoch] = useState<number>(0);
 
   // Restore the local-language preference.
   useEffect(() => {
@@ -143,6 +148,7 @@ export default function Home() {
           if (s.origin) setOrigin(s.origin);
           if (typeof s.radiusKm === "number") setRadiusKm(s.radiusKm);
           if (s.filters) setFilters(s.filters);
+          if (typeof s.searchEpoch === "number") setSearchEpoch(s.searchEpoch);
           setPhase("done");
         }
       }
@@ -157,7 +163,7 @@ export default function Home() {
       if (vendors.length) {
         sessionStorage.setItem(
           "wd_search",
-          JSON.stringify({ vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters })
+          JSON.stringify({ vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters, searchEpoch })
         );
       } else {
         sessionStorage.removeItem("wd_search");
@@ -174,6 +180,8 @@ export default function Home() {
     setPhase("idle");
     setClearConfirm(false);
     appliedReplies.current = new Set();
+    // Future replies belong to a NEW session - anything before now is dead.
+    setSearchEpoch(Date.now());
     try {
       sessionStorage.removeItem("wd_search");
     } catch {}
@@ -256,10 +264,13 @@ export default function Home() {
     if (!session || !waiting || !rfq) return;
     const tick = async () => {
       try {
-        const res = await fetch("/api/replies", { cache: "no-store" });
+        // Scope to THIS session both server-side (since=) and client-side, so a
+        // previous search's replies can never render on the new results.
+        const res = await fetch(`/api/replies?since=${searchEpoch}`, { cache: "no-store" });
         const d = await res.json();
         for (const r of d.replies ?? []) {
           if (!r.found || !r.pricePerDay || appliedReplies.current.has(r.id)) continue;
+          if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < searchEpoch) continue;
           appliedReplies.current.add(r.id);
           setVendors((vs) =>
             vs.map((v) =>
@@ -292,7 +303,7 @@ export default function Home() {
     tick();
     const id = setInterval(tick, 15000);
     return () => clearInterval(id);
-  }, [session, waiting, rfq]);
+  }, [session, waiting, rfq, searchEpoch]);
 
   function runFunnel(list: Vendor[], _activeRfq: StructuredRFQ) {
     timers.current.forEach(clearTimeout);
@@ -322,6 +333,11 @@ export default function Home() {
     setRfq(null);
     setSource(null);
     setSourceError(null);
+    // Open a fresh atomic session: stamp the epoch and forget every reply id
+    // applied by the previous session.
+    const epoch = Date.now();
+    setSearchEpoch(epoch);
+    appliedReplies.current = new Set();
 
     const pRes = await fetch("/api/profile", {
       method: "POST",
@@ -796,6 +812,7 @@ export default function Home() {
                   waConnected={waConnected}
                   localLang={localLangActive}
                   region={origin.label}
+                  searchEpoch={searchEpoch}
                   onBook={setBookingVendor}
                   onReviews={setReviewsVendor}
                   onBargain={setBargainVendor}

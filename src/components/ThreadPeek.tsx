@@ -49,12 +49,16 @@ export function ThreadPeek({
   vendorId,
   fallbackSent,
   fallbackReceived,
+  since,
 }: {
   vendorId: string;
   // Shown until (or instead of) live thread data: the RFQ we composed and the
   // shop's offer message already on the card.
   fallbackSent?: string;
   fallbackReceived?: string;
+  // Session epoch - only show messages from the current search, never a
+  // previous session's thread with the same shop.
+  since?: number;
 }) {
   const { t } = useI18n();
   const [sent, setSent] = useState<Msg | null>(
@@ -66,7 +70,7 @@ export function ThreadPeek({
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/thread?vendorId=${encodeURIComponent(vendorId)}`)
+    fetch(`/api/thread?vendorId=${encodeURIComponent(vendorId)}${since ? `&since=${since}` : ""}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!alive || !d) return;
@@ -77,7 +81,7 @@ export function ThreadPeek({
     return () => {
       alive = false;
     };
-  }, [vendorId]);
+  }, [vendorId, since]);
 
   if (!sent && !received) return null;
 

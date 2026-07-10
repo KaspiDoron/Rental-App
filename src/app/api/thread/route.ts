@@ -13,11 +13,17 @@ export async function GET(req: Request) {
   const vendorId = url.searchParams.get("vendorId") ?? "";
   if (!vendorId) return NextResponse.json({ error: "vendorId required" }, { status: 400 });
 
+  // ATOMIC SESSION: only show this search's thread, never a previous session's
+  // conversation with the same shop.
+  const sinceMs = Number(url.searchParams.get("since") ?? 0);
+  const since =
+    sinceMs > 0 ? `&received_at=gte.${encodeURIComponent(new Date(sinceMs).toISOString())}` : "";
+
   const outbound = await sbSelect<{ body: string; received_at: string; to_number: string; raw: { englishGloss?: string } | null }>(
     "whatsapp_messages",
     `select=body,received_at,to_number,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       session.email
-    )}&raw->>vendorId=eq.${encodeURIComponent(vendorId)}&order=received_at.desc&limit=1`
+    )}&raw->>vendorId=eq.${encodeURIComponent(vendorId)}${since}&order=received_at.desc&limit=1`
   );
   const sent = outbound[0] ?? null;
 
@@ -27,7 +33,7 @@ export async function GET(req: Request) {
       "whatsapp_messages",
       `select=body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
         sent.to_number
-      )}&order=received_at.desc&limit=1`
+      )}${since}&order=received_at.desc&limit=1`
     );
     received = inbound[0] ?? null;
   }

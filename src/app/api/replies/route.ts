@@ -6,9 +6,18 @@ import { sbSelect } from "@/lib/runtime-config";
 // WhatsApp webhook or added manually). The app polls this while agents are
 // waiting on shops, so confirmed offers pop into the cards by themselves and
 // the traveller never leaves the app.
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+
+  // ATOMIC SESSION: the client passes the epoch its current search started at;
+  // only replies created since then belong to this session. This is what stops
+  // a previous search's offers/threads from resurfacing on a new search.
+  const sinceMs = Number(new URL(req.url).searchParams.get("since") ?? 0);
+  const sinceFilter =
+    sinceMs > 0
+      ? `&created_at=gte.${encodeURIComponent(new Date(sinceMs).toISOString())}`
+      : "";
 
   // Reliability core: reconcile replies the webhook may have MISSED (the
   // Evolution host can be restarting exactly when a shop answers). Throttled
@@ -43,7 +52,7 @@ export async function GET() {
     delivers?: boolean | null;
     created_at: string;
   }
-  const filter = `user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=40`;
+  const filter = `user_email=eq.${encodeURIComponent(session.email)}${sinceFilter}&order=created_at.desc&limit=40`;
   let rows = await sbSelect<ReplyRow>(
     "vendor_replies",
     `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&${filter}`

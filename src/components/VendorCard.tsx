@@ -22,6 +22,7 @@ export function VendorCard({
   waConnected,
   localLang,
   region,
+  searchEpoch,
   onBook,
   onReviews,
   onBargain,
@@ -34,6 +35,7 @@ export function VendorCard({
   waConnected: boolean;
   localLang?: boolean;
   region?: string;
+  searchEpoch?: number;
   onBook: (vendor: Vendor) => void;
   onReviews: (vendor: Vendor) => void;
   onBargain: (vendor: Vendor) => void;
@@ -286,6 +288,7 @@ export function VendorCard({
               vendorId={vendor.id}
               fallbackSent={rfq?.vendorMessage}
               fallbackReceived={offer?.message}
+              since={searchEpoch}
             />
           )}
         </div>

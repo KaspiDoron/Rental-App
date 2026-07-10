@@ -666,6 +666,29 @@ export async function guardOutbound(opts: {
     return { allow: false, reason, text };
   };
 
+  // -1. IDEMPOTENCY / DEDUP PRE-FLIGHT. Never send the EXACT same text to the
+  //     same shop twice in a short window - this is the hard stop against a
+  //     message loop (the "agent sent the same message again" bug). Compares
+  //     the normalized body against this sender's recent outbound to this
+  //     number.
+  {
+    const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+    const recentOut = await sbSelect<{ body: string | null }>(
+      "whatsapp_messages",
+      `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+        opts.toDigits
+      )}&raw->>sender=eq.${encodeURIComponent(opts.senderKey)}&received_at=gte.${encodeURIComponent(
+        new Date(now - 6 * 3600_000).toISOString()
+      )}&order=received_at.desc&limit=8`
+    );
+    const isDup = recentOut.some(
+      (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
+    );
+    if (isDup) {
+      return { allow: false, reason: "duplicate message suppressed (idempotency)", text };
+    }
+  }
+
   // Is this a brand-new cold contact (no prior message to this number)?
   const priorRecipient = await sbSelect<{ id: number }>(
     "wa_recipient_state",
