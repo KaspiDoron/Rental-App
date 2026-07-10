@@ -592,8 +592,9 @@ export default function Home() {
                 {t("Bargained")}
               </div>
               <div className="text-lg font-extrabold text-savings">
-                {/* Savings in the shops' LOCAL currency - never a forced $ */}
-                {savingsSymbol}
+                {/* Savings in the shops' LOCAL currency - no symbol before any
+                    offer exists (a "$0" would presume the wrong currency) */}
+                {offersIn > 0 ? savingsSymbol : ""}
                 <AnimatedNumber value={Math.round(totalSavings)} />
               </div>
             </div>

@@ -460,9 +460,19 @@ export async function composeBargain(opts: {
   ];
   const training = Array.from(new Set(examples)).slice(0, 4).join("\n---\n");
 
-  const spec = `${opts.rfq.engineSizeCc ? opts.rfq.engineSizeCc + "cc " : ""}${vehicleTerm(
-    opts.rfq.vehicleClass
-  )} for ${opts.rfq.durationDays} day(s)`;
+  const spec =
+    opts.rfq.vehicleClass === "car"
+      ? `${[
+          opts.rfq.transmission !== "any" ? opts.rfq.transmission : "",
+          opts.rfq.carType && opts.rfq.carType !== "any" ? opts.rfq.carType : "",
+          "car",
+          opts.rfq.seats ? `${opts.rfq.seats} seats` : "",
+        ]
+          .filter(Boolean)
+          .join(" ")} for ${opts.rfq.durationDays} day(s)`
+      : `${opts.rfq.engineSizeCc ? opts.rfq.engineSizeCc + "cc " : ""}${vehicleTerm(
+          opts.rfq.vehicleClass
+        )} for ${opts.rfq.durationDays} day(s)`;
 
   const system =
     "You write ONE short WhatsApp message from a real human traveller chatting " +
@@ -626,13 +636,21 @@ export async function extractOffer(
   region?: string
 ): Promise<ExtractedOffer> {
   const { chatVision } = await import("./ai");
-  const spec = `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
-    rfq.vehicleClass === "scooter"
-      ? "automatic scooter"
-      : rfq.vehicleClass === "motorbike"
-      ? "manual motorcycle"
-      : "car"
-  }${rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""}`;
+  // Full spec INCLUDING car details - "car" alone can never be verified
+  // against "automatic 5-seat SUV", so extraction was blind for car rentals.
+  const spec =
+    rfq.vehicleClass === "car"
+      ? [
+          rfq.transmission !== "any" ? rfq.transmission : "",
+          rfq.carType && rfq.carType !== "any" ? rfq.carType : "",
+          "car",
+          rfq.seats ? `${rfq.seats} seats` : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
+          rfq.vehicleClass === "scooter" ? "automatic scooter" : "manual motorcycle"
+        }${rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""}`;
 
   // The local currency of the shop. When a shop replies with a bare number and
   // no symbol ("250 per day"), it means 250 in THEIR money - never dollars.
