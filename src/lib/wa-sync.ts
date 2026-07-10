@@ -107,6 +107,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
           images,
           waMessageId: m.id,
           senderEmail: email,
+          humanDelay: true,
           send: (to, message) => sendFromUser(email, to, message),
         }).catch(() => {});
       }

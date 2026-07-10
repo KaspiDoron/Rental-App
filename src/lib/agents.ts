@@ -19,7 +19,8 @@ import { getTactics, recordOutcome } from "./memory";
 
 export async function runProfiler(
   input: string,
-  durationDaysHint?: number
+  durationDaysHint?: number,
+  voiceKey?: string
 ): Promise<StructuredRFQ> {
   const { getPrompt } = await import("./prompts");
   const system = await getPrompt("profiler");
@@ -37,6 +38,13 @@ export async function runProfiler(
   ];
   const styleSeed = styles[Math.floor(Math.random() * styles.length)];
 
+  // Stable persona: THIS user always sounds like the same distinct human.
+  let persona = "";
+  if (voiceKey) {
+    const { voiceProfileFor, voiceDirectives } = await import("./voice");
+    persona = ` ${voiceDirectives(voiceProfileFor(voiceKey))}`;
+  }
+
   // Tight budget: this call blocks the START of every search. If the AI is
   // slow, the deterministic heuristic (with its own message variety) takes
   // over - a fast search beats a marginally prettier first message.
@@ -46,7 +54,8 @@ export async function runProfiler(
         role: "system",
         content:
           system +
-          ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.`,
+          ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.` +
+          persona,
       },
       { role: "user", content: input },
     ],
@@ -369,9 +378,15 @@ export function money(amount: number, currency?: string): string {
  */
 export async function localizeMessage(
   message: string,
-  region?: string
+  region?: string,
+  voiceKey?: string
 ): Promise<{ text: string; english?: string }> {
   if (!region) return { text: message };
+  let persona = "";
+  if (voiceKey) {
+    const { voiceProfileFor, voiceDirectives } = await import("./voice");
+    persona = ` ${voiceDirectives(voiceProfileFor(voiceKey))}`;
+  }
   const out = await chat(
     [
       {
@@ -381,7 +396,8 @@ export async function localizeMessage(
           "the casual, friendly register a local customer uses with a rental shop (never formal, never a " +
           "literal translation; write it as a native would type it). Keep every fact (vehicle, days, " +
           "accessories, prices) exactly. Numbers stay in the local currency. " +
-          'Reply ONLY as JSON: { "message": "<local-language text>", "english": "<short plain-English gloss>" }.',
+          'Reply ONLY as JSON: { "message": "<local-language text>", "english": "<short plain-English gloss>" }.' +
+          persona,
       },
       { role: "user", content: message },
     ],
@@ -420,6 +436,9 @@ export async function composeBargain(opts: {
   // Recent conversation, oldest first, so the agent never re-asks anything
   // the shop already answered.
   history?: string;
+  // Identity of the human whose WhatsApp sends this - powers the stable
+  // per-user voice persona and the anti-repetition memory.
+  voiceKey?: string;
 }): Promise<{
   message: string;
   tacticId: string;
@@ -505,7 +524,34 @@ export async function composeBargain(opts: {
   // Owner-editable house rules for the bargaining agent (never removable).
   const { getPrompt } = await import("./prompts");
   const directives = await getPrompt("bargain_directives");
-  const systemWithDirectives = directives ? `${system}\nHOUSE RULES: ${directives}` : system;
+  let systemWithDirectives = directives ? `${system}\nHOUSE RULES: ${directives}` : system;
+
+  // ZERO-PATTERN AUTHENTICITY: (a) a stable per-user voice persona so every
+  // user's agent sounds like ONE consistent, distinct human; (b) the user's
+  // recent outbound messages injected as a DO-NOT-REPEAT list so no phrasing
+  // is ever recycled across shops.
+  if (opts.voiceKey) {
+    const { voiceProfileFor, voiceDirectives } = await import("./voice");
+    systemWithDirectives += `\n${voiceDirectives(voiceProfileFor(opts.voiceKey))}`;
+    try {
+      const recent = await sbSelect<{ body: string | null }>(
+        "whatsapp_messages",
+        `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+          opts.voiceKey
+        )}&order=received_at.desc&limit=5`
+      );
+      const lines = recent.map((r) => (r.body ?? "").slice(0, 160)).filter(Boolean);
+      if (lines.length) {
+        systemWithDirectives +=
+          "\nANTI-REPETITION (critical): these are messages this person sent recently. " +
+          "Your new message must NOT reuse their openings, sentence structures or phrasings - " +
+          "write something genuinely fresh:\n- " +
+          lines.join("\n- ");
+      }
+    } catch {
+      /* anti-repeat context is an enhancement */
+    }
+  }
 
   const user =
     `Vehicle: ${spec}. Currency: ${cur}. ` +

@@ -71,6 +71,10 @@ export async function processVendorReply(opts: {
   // correctness: two users can bargain with the SAME shop, and the reply must
   // attach to THIS user's thread, never someone else's.
   senderEmail?: string;
+  // Queue the agent's reply with a natural "thinking" delay instead of
+  // answering within seconds (instant replies are the biggest bot tell).
+  // Only for senders whose own session can deliver from the queue.
+  humanDelay?: boolean;
   send: SendFn;
 }): Promise<void> {
   const text = opts.text.trim();
@@ -296,6 +300,7 @@ export async function processVendorReply(opts: {
         targetPricePerDay: target,
         floorPricePerDay: floorPrice,
         history,
+        voiceKey: ctx.sender ?? undefined,
       });
       followUp = draft.message;
       followKind = "bargain";
@@ -327,6 +332,36 @@ export async function processVendorReply(opts: {
   // Anything else: stay silent. Silence is the most human move there is.
 
   if (followUp && (await runSafety(followUp)).allowed) {
+    // HUMAN THINKING TIME: a real person does not reply to a WhatsApp message
+    // in under two seconds - instant replies are THE robotic tell. When the
+    // sender has their own session (the queue can deliver for them), park the
+    // reply with a jittered natural delay; the drain re-runs the anti-ban gate
+    // at send time and uses the typing-presence path. Closers reply a bit
+    // faster (a quick "thanks!" is natural), bargains "think" longer.
+    if (opts.humanDelay && ctx.sender) {
+      const delayS =
+        followKind === "close"
+          ? 20 + Math.floor(Math.random() * 70) // 20-90s
+          : 45 + Math.floor(Math.random() * 195); // 45-240s
+      await sbInsert("wa_outbox", [
+        {
+          sender_key: ctx.sender,
+          to_number: from,
+          body: followUp,
+          not_before: new Date(Date.now() + delayS * 1000).toISOString(),
+          meta: {
+            ...ctx,
+            kind: `auto-${followKind}`,
+            round: nextRound,
+            auto: true,
+            ...(englishGloss ? { englishGloss } : {}),
+            reason: "human reply pacing (thinking time)",
+          },
+        },
+      ]);
+      return;
+    }
+
     // Anti-ban gate: engagement, business hours, reputation caps, variance.
     const verdict = await guardOutbound({
       senderKey: ctx.sender ?? "system",

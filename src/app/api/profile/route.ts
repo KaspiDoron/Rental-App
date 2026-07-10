@@ -14,10 +14,10 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  const rfq = await runProfiler(text, durationDays);
-
-  // Save the raw request to agent memory (no-op without Supabase).
+  // The session identity powers the stable per-user voice persona, so this
+  // user's first message always sounds like the same distinct human.
   const session = await getSession();
+  const rfq = await runProfiler(text, durationDays, session?.email);
   await sbInsert("searches", [
     {
       user_email: session?.email ?? null,

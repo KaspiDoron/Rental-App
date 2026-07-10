@@ -99,6 +99,7 @@ export async function POST(req: Request) {
         targetPricePerDay: target,
         floorPricePerDay: floorPrice,
         history,
+        voiceKey: session.email,
       });
       agentMessage = draft.message;
       action = "bargain (one ask)";

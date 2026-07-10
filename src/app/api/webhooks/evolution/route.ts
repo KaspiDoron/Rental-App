@@ -167,6 +167,7 @@ export async function POST(req: Request) {
         images,
         waMessageId: msgId,
         senderEmail: email ?? undefined,
+        humanDelay: Boolean(email),
         send: async (to, message) => {
           if (!email) return { ok: false, error: "unknown instance" };
           return sendFromUser(email, to, message);

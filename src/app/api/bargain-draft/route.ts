@@ -116,6 +116,7 @@ export async function POST(req: Request) {
     targetPricePerDay: target,
     floorPricePerDay: floorPrice,
     history,
+    voiceKey: session.email,
   });
 
   // Safety-screen even our own composed drafts before they can be sent.
