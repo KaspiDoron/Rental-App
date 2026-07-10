@@ -38,3 +38,6 @@ export async function POST(req: Request) {
   const result = await connectInstance(session.email, origin, phone);
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }
+
+// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

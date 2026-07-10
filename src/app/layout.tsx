@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/lib/i18n";
 import { NavVeil } from "@/components/NavVeil";
 import { DomTranslator } from "@/components/DomTranslator";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import "./globals.css";
 
 // Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
@@ -122,6 +123,7 @@ export default function RootLayout({
           {children}
           <NavVeil />
           <DomTranslator />
+          <OfflineBanner />
         </I18nProvider>
       </body>
     </html>

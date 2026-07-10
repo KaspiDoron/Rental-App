@@ -52,3 +52,6 @@ export async function GET() {
     reconnecting: paired && state !== "open",
   });
 }
+
+// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

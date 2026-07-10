@@ -17,3 +17,6 @@ export async function GET(req: Request) {
   const results = await searchPlaces(q);
   return NextResponse.json({ results });
 }
+
+// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

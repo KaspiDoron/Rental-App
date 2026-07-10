@@ -61,7 +61,12 @@ export async function syncInboundReplies(email: string): Promise<number> {
       const inbound = msgs.filter(
         (m) => !m.fromMe && (m.text.trim() || m.hasImage) &&
           // ignore ancient history - only the active window matters
-          m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000
+          m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
+          // RACE GUARD: give the webhook a 20s head start on brand-new
+          // messages. If both paths ingest the same message simultaneously,
+          // the dedupe makes NEITHER process it - so the sync only touches
+          // messages the webhook has clearly missed.
+          m.ts * 1000 < Date.now() - 20_000
       );
       if (inbound.length === 0) continue;
 
