@@ -52,6 +52,17 @@ export async function POST(req: Request) {
   // Resume a dropped session before the batch (best-effort).
   if (personal) await ensureConnected(session.email, 6000);
 
+  // ULTRA local-language: localize the batch message ONCE up front (the guard
+  // then varies it per shop). English fallback if the AI is unavailable.
+  let batchMessage = message;
+  let englishGloss: string | undefined;
+  if (Boolean(body.localLang) && session.plan === "ultra") {
+    const { localizeMessage } = await import("@/lib/agents");
+    const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
+    batchMessage = localized.text;
+    if (localized.english && localized.text !== message) englishGloss = localized.english;
+  }
+
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
   const results: { id: string; sent: boolean; queued?: boolean; reason?: string }[] = [];
   for (const v of vendors) {
@@ -80,7 +91,7 @@ export async function POST(req: Request) {
     const guard = await guardOutbound({
       senderKey: session.email,
       toDigits: digits,
-      text: message,
+      text: batchMessage,
       auto: true,
       queueIfBlocked: true,
       region: String(body.region ?? "") || undefined,
@@ -119,7 +130,12 @@ export async function POST(req: Request) {
           body: guard.text,
           type: "text",
           direction: "outbound",
-          raw: { channel: personal ? "personal-wa" : "cloud-api", ok: true, ...meta },
+          raw: {
+            channel: personal ? "personal-wa" : "cloud-api",
+            ok: true,
+            ...meta,
+            ...(englishGloss ? { englishGloss } : {}),
+          },
         },
       ]);
     }

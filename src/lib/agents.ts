@@ -361,6 +361,45 @@ export function money(amount: number, currency?: string): string {
   return sym.length > 1 ? `${sym} ${n}` : `${sym}${n}`;
 }
 
+/**
+ * Rewrite an outbound message NATIVELY in the main local language of the
+ * region (Ultra local-language mode). Returns the original text untouched if
+ * the AI is unavailable or the region is unknown - never blocks a send.
+ * The English gloss is kept so the traveller can read what was sent.
+ */
+export async function localizeMessage(
+  message: string,
+  region?: string
+): Promise<{ text: string; english?: string }> {
+  if (!region) return { text: message };
+  const out = await chat(
+    [
+      {
+        role: "system",
+        content:
+          `Rewrite the traveller's WhatsApp message NATIVELY in the main local language of ${region} - ` +
+          "the casual, friendly register a local customer uses with a rental shop (never formal, never a " +
+          "literal translation; write it as a native would type it). Keep every fact (vehicle, days, " +
+          "accessories, prices) exactly. Numbers stay in the local currency. " +
+          'Reply ONLY as JSON: { "message": "<local-language text>", "english": "<short plain-English gloss>" }.',
+      },
+      { role: "user", content: message },
+    ],
+    { budgetMs: 9_000 }
+  );
+  if (out) {
+    const parsed = extractJson<{ message?: string; english?: string }>(out);
+    if (parsed?.message && parsed.message.trim().length > 5) {
+      const { sanitizeAiText } = await import("./text");
+      return {
+        text: sanitizeAiText(parsed.message),
+        english: parsed.english ? sanitizeAiText(parsed.english) : message,
+      };
+    }
+  }
+  return { text: message }; // honest fallback: English beats a failed send
+}
+
 export async function composeBargain(opts: {
   rfq: StructuredRFQ;
   vendor: Vendor;

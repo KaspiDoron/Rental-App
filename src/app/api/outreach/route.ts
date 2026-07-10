@@ -95,11 +95,26 @@ export async function POST(req: Request) {
   // respect volume caps. Blocked-by-hours sends are QUEUED, not lost.
   const kind = String(body.kind ?? "custom");
   const isAuto = kind !== "custom";
+  const wantsLocal = Boolean(body.localLang) && session.plan === "ultra";
+
+  // ULTRA local-language: the FIRST message must also be in the shop's own
+  // language, not just later bargains (this was the "local language doesn't
+  // work" gap - the RFQ always went out in English). Bargain drafts arrive
+  // already localized by composeBargain, so only localize agent RFQs here.
+  let outboundText = message;
+  let englishGloss: string | undefined;
+  if (wantsLocal && isAuto && kind === "rfq") {
+    const { localizeMessage } = await import("@/lib/agents");
+    const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
+    outboundText = localized.text;
+    if (localized.english && localized.text !== message) englishGloss = localized.english;
+  }
+
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
   const guard = await guardOutbound({
     senderKey: session.email,
     toDigits: digits,
-    text: message,
+    text: outboundText,
     auto: isAuto,
     queueIfBlocked: true,
     region: String(body.region ?? "") || undefined,
@@ -203,7 +218,10 @@ export async function POST(req: Request) {
         rfq: body.rfq ?? null,
         region: String(body.region ?? ""),
         plan: session.plan,
-        localLang: Boolean(body.localLang) && session.plan === "ultra",
+        localLang: wantsLocal,
+        // English gloss of a localized message so the traveller can read what
+        // their agent sent on their behalf (shown by the card's thread peek).
+        ...(englishGloss ? { englishGloss } : {}),
       },
     },
   ]);
