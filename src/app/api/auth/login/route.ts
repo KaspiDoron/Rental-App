@@ -37,6 +37,14 @@ export async function POST(req: Request) {
       { status: 403 }
     );
   }
+  // PRIVATE-BETA LOCK: only the 26 invited accounts may proceed - refuse
+  // everyone else at the door (both login AND signup), before any account is
+  // created or any code is emailed.
+  const { allowedPlanFor, BETA_BLOCK_MESSAGE } = await import("@/lib/allowlist");
+  const invitedPlan = await allowedPlanFor(email);
+  if (invitedPlan === null) {
+    return NextResponse.json({ error: BETA_BLOCK_MESSAGE, betaBlocked: true }, { status: 403 });
+  }
 
   if (mode === "signup") {
     if (await getUser(email, { fresh: true })) {
@@ -109,6 +117,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Wrong password. Try again or use Forgot password." }, { status: 401 });
     }
     await touchUser(email);
+  }
+
+  // Pin the invited plan (5 pro / 5 ultra testers get their tier automatically;
+  // the owner/admins stay Ultra via role). No-op when it already matches.
+  if (!isOwner(email) && invitedPlan) {
+    const { getUser, setPlan } = await import("@/lib/access");
+    const current = await getUser(email, { fresh: true });
+    if (current && current.plan !== invitedPlan) await setPlan(email, invitedPlan);
   }
 
   setSessionCookie(email);

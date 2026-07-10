@@ -18,13 +18,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Tap Sign up again to get a fresh code." }, { status: 400 });
   }
 
+  // PRIVATE-BETA LOCK (defense in depth): even a valid code cannot create an
+  // account unless the email is invited.
+  const { allowedPlanFor, BETA_BLOCK_MESSAGE } = await import("@/lib/allowlist");
+  const invitedPlan = await allowedPlanFor(email);
+  if (invitedPlan === null) {
+    return NextResponse.json({ error: BETA_BLOCK_MESSAGE, betaBlocked: true }, { status: 403 });
+  }
+
   const code = String(body.code ?? "").trim();
   const result = await confirmEmailVerification(email, code);
   if (!result.ok || !result.pending) {
     return NextResponse.json({ error: result.error ?? "Verification failed." }, { status: 400 });
   }
 
-  // Email proven - create the real account now.
+  // Email proven - create the real account now (pinned to the invited plan).
   const p = result.pending;
   if (!(await getUser(email, { fresh: true }))) {
     await registerUser({
@@ -33,6 +41,7 @@ export async function POST(req: Request) {
       password: p.password,
       provider: "email",
       acceptedTerms: p.acceptedTerms,
+      plan: invitedPlan,
     });
   }
 

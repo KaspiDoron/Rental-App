@@ -255,18 +255,6 @@ export default function LoginPage() {
     }
   }
 
-  async function devLogin(persona: string) {
-    setStatus("loading");
-    const res = await fetch("/api/auth/dev", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona }),
-    });
-    const data = await res.json();
-    if (res.ok) enterApp(data.session);
-    else setStatus("idle");
-  }
-
   if (step === "whatsapp") {
     return (
       <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col justify-center px-5 pb-safe pt-safe">
@@ -556,29 +544,10 @@ export default function LoginPage() {
       </form>
       )}
 
-      {/* TEMPORARY dev entries - removed before public launch */}
-      <div className="mt-4">
-        <p className="mb-1.5 text-center text-[10px] font-extrabold uppercase tracking-wide text-faint">
-          Dev quick entry (temporary)
-        </p>
-        <div className="flex flex-wrap justify-center gap-1.5">
-          {[
-            ["owner", "👑 Dev owner"],
-            ["manager", "🛡 Dev manager"],
-            ["free", "🙂 Dev user free"],
-            ["pro", "⭐ Dev user pro"],
-            ["ultra", "⚡ Dev user ultra"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => devLogin(id)}
-              className="btn btn-sm chip rounded-full border-2 border-dashed border-line bg-card px-3 py-1.5 text-[11px] font-bold text-faint hover:border-brandblue hover:text-brandblue"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Private-beta note: this is an invite-only test. */}
+      <p className="mt-4 text-center text-[11px] text-faint">
+        🔒 {t("Private beta - access is limited to invited testers.")}
+      </p>
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </main>

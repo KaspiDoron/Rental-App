@@ -14,6 +14,12 @@ const PERSONAS: Record<string, { email: string; plan: PlanId; admin?: boolean }>
 };
 
 export async function POST(req: Request) {
+  // HERMETIC BETA: dev quick-entry is disabled by default. It only works when
+  // ENABLE_DEV_LOGIN=1 is set explicitly (for local development), so it can
+  // never be used to bypass the invite lock in the deployed beta.
+  if ((process.env.ENABLE_DEV_LOGIN ?? "") !== "1") {
+    return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
   const { persona } = await req.json().catch(() => ({}));
   const p = PERSONAS[String(persona)];
   if (!p) return NextResponse.json({ error: "Unknown persona" }, { status: 400 });

@@ -2081,6 +2081,9 @@ export default function AdminPage() {
 
       {loaded && tab === "users" && (
         <div className="space-y-3">
+          {/* Private-beta invite list (owner only) */}
+          {isOwner && <BetaManager />}
+
           {/* Add management */}
           <div className="surface rounded-blob p-4">
             <div className="mb-2 text-[13px] font-extrabold text-strong">
@@ -2736,6 +2739,114 @@ function FaqManager() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Private-beta invite manager (owner only). Paste the 25 tester emails with a
+// plan each; the app blocks everyone else at login. Stored in Supabase config,
+// applied instantly with no redeploy.
+function BetaManager() {
+  const [text, setText] = useState("");
+  const [counts, setCounts] = useState<{ total: number; free: number; pro: number; ultra: number } | null>(null);
+  const [lock, setLock] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function load() {
+    const d = await (await fetch("/api/admin/beta")).json();
+    setLock(Boolean(d.lockEnabled));
+    setCounts(d.counts ?? null);
+    // Owner is auto-included and not editable here - show only the testers.
+    const testers = (d.entries ?? []).filter(
+      (e: { plan: string; email: string }) => e.plan !== "ultra" || !e.email.includes("kaspidoron")
+    );
+    setText(
+      (d.entries ?? [])
+        .map((e: { email: string; plan: string }) => `${e.email}, ${e.plan}`)
+        .join("\n")
+    );
+    void testers;
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    setMsg(null);
+    const entries = text
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [email, plan] = line.split(/[,:|]/).map((x) => x.trim());
+        return { email: (email ?? "").toLowerCase(), plan: (plan ?? "free").toLowerCase() };
+      })
+      .filter((e) => e.email.includes("@"));
+    try {
+      const d = await (
+        await fetch("/api/admin/beta", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entries }),
+        })
+      ).json();
+      if (d.entries) {
+        setMsg(`Saved - ${d.entries.length} account(s) can log in (incl. you).`);
+        await load();
+      } else setMsg(d.error ?? "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="surface rounded-blob border-2 !border-brandblue p-4">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="text-[13px] font-extrabold text-strong">🔒 Private beta - invite list</div>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+            lock ? "bg-savings-soft text-savings" : "bg-brandred-soft text-brandred"
+          }`}
+        >
+          {lock ? "LOCK ON" : "LOCK OFF"}
+        </span>
+      </div>
+      <p className="mb-2 text-[11px] text-faint">
+        Only these accounts (plus you) can log in - everyone else is blocked at the
+        door. One per line: <span className="font-mono">email, plan</span> where plan
+        is free / pro / ultra. Up to 25 testers. Applies instantly, no redeploy.
+      </p>
+      {counts && (
+        <div className="mb-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
+          <span className="rounded-full bg-card2 px-2 py-0.5 text-faint">{counts.total} total</span>
+          <span className="rounded-full bg-card2 px-2 py-0.5 text-faint">{counts.free} free</span>
+          <span className="rounded-full bg-card2 px-2 py-0.5 text-brandblue">{counts.pro} pro</span>
+          <span className="rounded-full bg-card2 px-2 py-0.5 text-savings">{counts.ultra} ultra</span>
+        </div>
+      )}
+      <textarea
+        rows={8}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"tester1@gmail.com, free\ntester2@gmail.com, pro\ntester3@gmail.com, ultra"}
+        className="w-full rounded-xl border-2 border-line bg-card p-2 font-mono text-[12px] text-strong focus:border-brandblue focus:outline-none"
+      />
+      {msg && <p className="mt-1.5 text-[11px] font-bold text-savings">{msg}</p>}
+      <button
+        onClick={save}
+        disabled={busy}
+        className="btn btn-primary mt-2 w-full rounded-xl py-2.5 text-[13px] disabled:opacity-60"
+      >
+        {busy ? <LoadingDots light /> : "Save invite list"}
+      </button>
+      {!lock && (
+        <p className="mt-1.5 text-[10px] font-bold text-brandred">
+          Lock is OFF (BETA_LOCK=off) - anyone can sign up. Set BETA_LOCK=on in the
+          host env to enforce this list.
+        </p>
+      )}
     </div>
   );
 }

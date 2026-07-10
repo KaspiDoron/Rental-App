@@ -46,6 +46,13 @@ export async function POST(req: Request) {
       { status: 403 }
     );
   }
+  // PRIVATE-BETA LOCK: Google is a valid credential but the email must still be
+  // on the 26-account invite list.
+  const { allowedPlanFor, BETA_BLOCK_MESSAGE } = await import("@/lib/allowlist");
+  const invitedPlan = await allowedPlanFor(email);
+  if (invitedPlan === null) {
+    return NextResponse.json({ error: BETA_BLOCK_MESSAGE, betaBlocked: true }, { status: 403 });
+  }
 
   const existing = await getUser(email, { fresh: true });
   const isNew = !existing;
@@ -60,6 +67,13 @@ export async function POST(req: Request) {
     await registerUser({ email, name, provider: "google", acceptedTerms: true });
   } else {
     await touchUser(email);
+  }
+
+  // Pin the invited plan for tester accounts (owner stays Ultra via role).
+  if (!isOwner(email) && invitedPlan) {
+    const { getUser: getU, setPlan } = await import("@/lib/access");
+    const current = await getU(email, { fresh: true });
+    if (current && current.plan !== invitedPlan) await setPlan(email, invitedPlan);
   }
 
   setSessionCookie(email);
