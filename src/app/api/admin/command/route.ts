@@ -93,14 +93,14 @@ export async function GET() {
       level: "critical",
       title: `${overdue.length} queued WhatsApp message${overdue.length > 1 ? "s" : ""} overdue`,
       detail: "The outbox drain has not run for 30+ minutes - check the Evolution hosts.",
-      href: "whatsapp",
+      href: "keys",
     });
   } else if (outbox.length) {
     alerts.push({
       level: "info",
       title: `${outbox.length} message${outbox.length > 1 ? "s" : ""} queued for shop opening hours`,
       detail: "The anti-ban engine is pacing sends - all normal.",
-      href: "whatsapp",
+      href: "keys",
     });
   }
 

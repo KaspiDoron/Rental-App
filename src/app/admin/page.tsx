@@ -7,7 +7,7 @@ import { LoadingDots } from "@/components/LoadingDots";
 import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
-import { FunnelEditor } from "@/components/FunnelEditor";
+import { OrchestratorPanel } from "@/components/OrchestratorPanel";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -50,28 +50,8 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<
-    "command" | "analytics" | "agents" | "intel" | "keys" | "users" | "feedback" | "billing" | "data"
+    "command" | "analytics" | "agents" | "keys" | "users" | "feedback" | "billing" | "data"
   >("command");
-  const [intel, setIntel] = useState<{
-    areas: {
-      area: string;
-      areaLabel: string;
-      tagged: boolean;
-      samples: number;
-      shops: number;
-      vehicles: {
-        vehicle: string; vehicleLabel: string; currency: string; currencySymbol: string; samples: number; shops: number;
-        shopNames: string[];
-        low: number; median: number; high: number; avg: number; spreadPct: number;
-        typicalDays: number | null; minDays: number | null; maxDays: number | null;
-        delivers: number; deliverRate: number | null; verified: number;
-        firstSeen: string; lastSeen: string;
-      }[];
-    }[];
-    totalOffers: number;
-    areasCount: number;
-  } | null>(null);
-  const [intelOpen, setIntelOpen] = useState<string | null>(null);
   // Keys page: collapse each scope group so the long page is easy to walk.
   const [collapsedScopes, setCollapsedScopes] = useState<Record<string, boolean>>({
     maps: true,
@@ -80,10 +60,6 @@ export default function AdminPage() {
     auth: true,
     data: true,
   });
-  async function loadIntel() {
-    const r = await (await fetch("/api/admin/intelligence")).json();
-    if (r.areas) setIntel(r);
-  }
   // Command center + agent studio data
   const [command, setCommand] = useState<{
     alerts: { level: string; title: string; detail: string; href?: string }[];
@@ -118,11 +94,6 @@ export default function AdminPage() {
   const [spName, setSpName] = useState("");
   const [spPhone, setSpPhone] = useState("");
   const [spNotes, setSpNotes] = useState("");
-  const [prompts, setPrompts] = useState<
-    { id: string; label: string; agent: string; def: string; override: string | null }[]
-  >([]);
-  const [promptDraft, setPromptDraft] = useState<Record<string, string>>({});
-  const [promptSaved, setPromptSaved] = useState<string | null>(null);
   // Interactive train-the-agent studio (New#13)
   const [tcTurns, setTcTurns] = useState<{ role: "shop" | "agent"; text: string }[]>([]);
   const [tcInput, setTcInput] = useState("");
@@ -246,21 +217,21 @@ export default function AdminPage() {
     }
   }
 
+  // Command also hosts the foldable Anti-Ban + Sponsored sections (item #16).
   async function loadCommand() {
-    const r = await (await fetch("/api/admin/command")).json();
-    if (r.alerts) setCommand(r);
-  }
-  async function loadAgentStudio() {
-    const [m, s, sp, pr] = await Promise.all([
-      (await fetch("/api/admin/market")).json(),
+    const [r, s, sp] = await Promise.all([
+      (await fetch("/api/admin/command")).json(),
       (await fetch("/api/admin/wa-security")).json(),
       (await fetch("/api/admin/sponsored")).json(),
-      (await fetch("/api/admin/prompts")).json(),
     ]);
-    if (m.rows) setFloors(m.rows);
+    if (r.alerts) setCommand(r);
     if (s.policies) setWaSec(s);
     if (sp.rows) setSponsors(sp.rows);
-    if (pr.prompts) setPrompts(pr.prompts);
+  }
+  // Analytics hosts the foldable market-floors table (item #16).
+  async function loadFloors() {
+    const m = await (await fetch("/api/admin/market")).json();
+    if (m.rows) setFloors(m.rows);
   }
   const [dataTables, setDataTables] = useState<{ name: string; label: string; count: number }[]>([]);
   const [dataTable, setDataTable] = useState<string | null>(null);
@@ -450,8 +421,7 @@ export default function AdminPage() {
     if (tab === "keys" && waHosts === null && !waHostsBusy) loadWaHosts();
     if (tab === "data" && dataTables.length === 0) loadDataTables();
     if (tab === "command" && !command) loadCommand().catch(() => {});
-    if (tab === "agents" && floors.length === 0 && !waSec) loadAgentStudio().catch(() => {});
-    if (tab === "intel" && !intel) loadIntel().catch(() => {});
+    if (tab === "analytics" && floors.length === 0) loadFloors().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -617,7 +587,7 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
-        {(["command", "analytics", "agents", "intel", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
+        {(["command", "analytics", "agents", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -625,7 +595,7 @@ export default function AdminPage() {
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t === "intel" ? "📊 intel" : t}
+            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -658,8 +628,8 @@ export default function AdminPage() {
                 ))}
               </div>
 
-              {/* Queued WhatsApp messages: what is waiting, when, why + flush */}
-              <WaQueuePanel />
+              {/* Queued messages now live in the user-facing find-deals page
+                  (item #2) - every traveller manages their own queue there. */}
 
               {/* Popular-questions manager: add (AI or by hand) / remove (#18) */}
               <FaqManager />
@@ -1049,16 +1019,26 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* Market floor prices: the table the agent anchors its ONE ask to */}
-          <div className="surface rounded-blob p-4">
-            <div className="mb-1 flex items-center justify-between">
-              <div className="text-[13px] font-extrabold text-strong">
+          {/* The owner's full-control agent pipeline: stages, custom agents,
+              edge rules and live decision traces (replaces the old funnel map
+              + core-prompts editors). */}
+          <OrchestratorPanel isOwner={isOwner} />
+        </div>
+      )}
+
+      {/* Market floors - moved to Analytics (item #16), foldable */}
+      {loaded && tab === "analytics" && (
+        <div className="mb-3 space-y-3">
+          <details className="surface rounded-blob p-4">
+            <summary className="flex cursor-pointer list-none items-center justify-between">
+              <span className="text-[13px] font-extrabold text-strong">
                 📉 Cheapest-price table (market floors)
-              </div>
-              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
-                {floors.length} rows
               </span>
-            </div>
+              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+                {floors.length} rows ▾
+              </span>
+            </summary>
+            <div className="mt-2">
             <p className="mb-2 text-[11px] text-faint">
               The lowest realistic daily price per area and vehicle bucket. The AI
               researches each area weekly (first search triggers it); your manual
@@ -1178,13 +1158,19 @@ export default function AdminPage() {
                 );
               })()
             )}
-          </div>
-
-          {/* Anti-Ban engine: trust scores + every policy knob, live-editable */}
-          <div className="surface rounded-blob p-4">
-            <div className="mb-1 text-[13px] font-extrabold text-strong">
-              🛡 Anti-Ban engine
             </div>
+          </details>
+        </div>
+      )}
+
+      {/* Anti-Ban engine + Sponsored shops - moved to Command (item #16), foldable */}
+      {loaded && tab === "command" && (
+        <div className="mt-3 space-y-3">
+          <details className="surface rounded-blob p-4">
+            <summary className="cursor-pointer list-none text-[13px] font-extrabold text-strong">
+              🛡 Anti-Ban engine <span className="text-[10px] font-bold text-faint">▾</span>
+            </summary>
+            <div className="mt-2">
             <p className="mb-2 text-[11px] text-faint">
               Dynamic trust scores per connected number (replies build trust and
               relax hourly limits) and every policy knob - edits apply live, no
@@ -1241,7 +1227,7 @@ export default function AdminPage() {
                                     headers: { "Content-Type": "application/json" },
                                     body: JSON.stringify({ action: "clear-pause", senderKey: r.sender_key }),
                                   });
-                                  loadAgentStudio();
+                                  loadCommand();
                                 }}
                                 className="btn btn-sm rounded-lg bg-card px-2 text-[10px] font-extrabold text-brandblue"
                               >
@@ -1315,16 +1301,18 @@ export default function AdminPage() {
             ) : (
               <SkeletonList count={2} />
             )}
-          </div>
+            </div>
+          </details>
 
           {/* Sponsored shops: paid placements with the glowing Recommended card */}
-          <div className="surface rounded-blob p-4">
-            <div className="mb-1 flex items-center justify-between">
-              <div className="text-[13px] font-extrabold text-strong">⭐ Sponsored shops</div>
+          <details className="surface rounded-blob p-4">
+            <summary className="flex cursor-pointer list-none items-center justify-between">
+              <span className="text-[13px] font-extrabold text-strong">⭐ Sponsored shops</span>
               <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
-                {sponsors.filter((s) => s.active).length} live
+                {sponsors.filter((s) => s.active).length} live ▾
               </span>
-            </div>
+            </summary>
+            <div className="mt-2">
             <p className="mb-2 text-[11px] text-faint">
               Shops that pay for placement appear FIRST with a glowing frame and a
               &ldquo;Recommended shop&rdquo; tag. Match by the shop&apos;s Google Maps name
@@ -1420,221 +1408,11 @@ export default function AdminPage() {
                 ))}
               </div>
             )}
-          </div>
-
-          {/* Negotiation funnel tree - drag-to-pan if/else map (New#3/#10) */}
-          {isOwner && (
-            <div className="surface rounded-blob p-4">
-              <div className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
-                🗺 Negotiation funnel map
-                <span className="badge-flash rounded-full px-2 py-0.5 text-[9px] font-extrabold">
-                  Editable
-                </span>
-              </div>
-              <p className="mb-2 text-[11px] text-faint">
-                The agent&apos;s if/else negotiation flow as a map you can drag around and
-                edit. Tap a node to change its condition/action, add a branch, or ask
-                the AI to improve it. Vague shop replies auto-grow a ✨ branch here.
-              </p>
-              <FunnelEditor />
             </div>
-          )}
-
-          {/* Core prompts: view/edit every agent's brain (never removable) */}
-          {isOwner && (
-            <div className="surface rounded-blob p-4">
-              <div className="mb-1 text-[13px] font-extrabold text-strong">
-                🧬 Agent core prompts
-              </div>
-              <p className="mb-2 text-[11px] text-faint">
-                The exact instructions each agent runs on. Edit any of them - changes
-                apply live. You can never delete a prompt: clearing the box restores
-                the built-in default.
-              </p>
-              <div className="space-y-2">
-                {prompts.map((p) => {
-                  const val = promptDraft[p.id] ?? p.override ?? p.def;
-                  const overridden = Boolean(p.override);
-                  return (
-                    <details key={p.id} className="rounded-xl border-2 border-line p-2">
-                      <summary className="cursor-pointer text-[12px] font-extrabold text-strong">
-                        {p.label}{" "}
-                        {overridden && (
-                          <span className="rounded-full bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
-                            edited
-                          </span>
-                        )}
-                      </summary>
-                      <textarea
-                        rows={5}
-                        value={val}
-                        onChange={(e) =>
-                          setPromptDraft((d) => ({ ...d, [p.id]: e.target.value }))
-                        }
-                        className="mt-2 w-full rounded-lg border-2 border-line bg-card p-2 font-mono text-[11px] leading-relaxed text-strong focus:border-brandblue focus:outline-none"
-                      />
-                      <div className="mt-1.5 flex gap-2">
-                        <button
-                          onClick={async () => {
-                            const r = await (
-                              await fetch("/api/admin/prompts", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ id: p.id, text: val }),
-                              })
-                            ).json();
-                            if (r.prompts) setPrompts(r.prompts);
-                            setPromptSaved(p.id);
-                            setTimeout(() => setPromptSaved(null), 1500);
-                          }}
-                          className="btn btn-primary btn-sm flex-1 rounded-lg text-[11px]"
-                        >
-                          {promptSaved === p.id ? "Saved" : "Save prompt"}
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await fetch("/api/admin/prompts", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ id: p.id, text: "" }),
-                            });
-                            setPromptDraft((d) => ({ ...d, [p.id]: p.def }));
-                            const r = await (await fetch("/api/admin/prompts")).json();
-                            if (r.prompts) setPrompts(r.prompts);
-                          }}
-                          className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-3 text-[11px] font-extrabold text-brandred"
-                        >
-                          Reset to default
-                        </button>
-                      </div>
-                    </details>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          </details>
         </div>
       )}
 
-      {loaded && tab === "intel" && (
-        <div className="space-y-3">
-          <div className="surface rounded-blob p-4">
-            <div className="mb-1 flex items-center justify-between">
-              <div className="text-[13px] font-extrabold text-strong">
-                📊 Shop-price intelligence
-              </div>
-              <button
-                onClick={loadIntel}
-                className="btn btn-sm chip rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue"
-              >
-                ↻ Refresh
-              </button>
-            </div>
-            <p className="text-[11px] text-faint">
-              Every REAL price shops have quoted us, by area and vehicle type: lowest /
-              median / highest / average per day, price spread, rental-duration range,
-              how many shops, delivery rate and verified count. Built automatically from
-              the funnel.{" "}
-              {intel ? `${intel.totalOffers} offers across ${intel.areasCount} area(s).` : ""}
-            </p>
-          </div>
-          {!intel ? (
-            <SkeletonList count={3} />
-          ) : intel.areas.length === 0 ? (
-            <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
-              No offers yet - once shops start quoting through the funnel, their real
-              prices are aggregated here by area and vehicle type.
-            </div>
-          ) : (
-            intel.areas.map((a) => (
-              <div key={a.area} className="surface rounded-blob p-3">
-                <div className="mb-1.5 flex items-center justify-between">
-                  <div className="text-[12px] font-extrabold text-strong">
-                    📍 {a.areaLabel}
-                    {!a.tagged && (
-                      <span
-                        className="ml-1 rounded-full bg-card2 px-1.5 py-0.5 text-[8px] font-bold uppercase text-faint"
-                        title="These quotes were captured before area tagging - grouped by their currency's country. New quotes are tagged with the exact area automatically."
-                      >
-                        area pending ⓘ
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-faint">
-                    {a.shops} shop(s) · {a.samples} quote(s)
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  {a.vehicles.map((v) => {
-                    const key = `${a.area}:${v.vehicle}`;
-                    const open = intelOpen === key;
-                    // Local currency symbol (never the word "local", never a
-                    // forced "$") - e.g. "฿250", "Rp 90,000".
-                    const sym = v.currencySymbol || v.currency;
-                    const price = (n: number) =>
-                      sym.length > 1 ? `${sym} ${n.toLocaleString()}` : `${sym}${n.toLocaleString()}`;
-                    return (
-                      <div key={v.vehicle} className="rounded-xl bg-card2">
-                        {/* Tap a row to expand full detail (#6 expandable) */}
-                        <button
-                          onClick={() => setIntelOpen(open ? null : key)}
-                          className="flex w-full items-center gap-2 p-2 text-left"
-                        >
-                          <span className="text-[9px] text-faint">{open ? "▼" : "▶"}</span>
-                          <span className="flex-1 text-[11px] font-bold text-strong">
-                            {v.vehicleLabel}
-                          </span>
-                          <span className="text-[11px] text-savings">
-                            {price(v.low)}
-                            <span className="text-faint">-</span>
-                            <span className="text-brandred">{price(v.high)}</span>
-                          </span>
-                        </button>
-                        {open && (
-                          <div className="grid grid-cols-2 gap-1.5 border-t border-line p-2.5 text-[10px] text-soft">
-                            <Stat label="Lowest / day" value={price(v.low)} good />
-                            <Stat label="Highest / day" value={price(v.high)} bad />
-                            <Stat label="Median / day" value={price(v.median)} />
-                            <Stat label="Average / day" value={price(v.avg)} />
-                            <Stat label="Price spread" value={`${v.spreadPct}%`} />
-                            <Stat label="Quotes / shops" value={`${v.samples} / ${v.shops}`} />
-                            <Stat
-                              label="Rental length"
-                              value={
-                                v.typicalDays
-                                  ? `${v.minDays}-${v.maxDays}d (typ. ${v.typicalDays}d)`
-                                  : "-"
-                              }
-                            />
-                            <Stat
-                              label="Delivery"
-                              value={
-                                v.deliverRate === null
-                                  ? "unknown"
-                                  : `${v.deliverRate}% (${v.delivers})`
-                              }
-                            />
-                            <Stat label="Verified quotes" value={String(v.verified)} />
-                            <Stat
-                              label="Last seen"
-                              value={new Date(v.lastSeen).toLocaleDateString()}
-                            />
-                            {v.shopNames.length > 0 && (
-                              <div className="col-span-2 mt-0.5 text-[9px] text-faint">
-                                Shops: {v.shopNames.join(", ")}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
 
       {loaded && tab === "analytics" && analytics && (
         <div className="space-y-3">
@@ -2632,115 +2410,6 @@ function Stat({
   );
 }
 
-// Queued WhatsApp messages viewer (#10/#11). Lists what is waiting, to whom,
-// when it will send and WHY, with a one-tap flush of everything due now.
-function WaQueuePanel() {
-  const [items, setItems] = useState<
-    {
-      id: number;
-      to: string;
-      preview: string;
-      notBefore: string;
-      due: boolean;
-      overdue: boolean;
-      vendorName: string | null;
-      reason: string;
-    }[]
-  >([]);
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-
-  async function load() {
-    const d = await (await fetch("/api/admin/wa-queue")).json();
-    setItems(d.items ?? []);
-    setLoaded(true);
-  }
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function flush() {
-    setBusy(true);
-    setNote(null);
-    try {
-      const d = await (
-        await fetch("/api/admin/wa-queue", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "flush" }),
-        })
-      ).json();
-      setNote(`Sent ${d.sent ?? 0} due message(s).`);
-      await load();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function drop(id: number) {
-    await fetch("/api/admin/wa-queue", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete", id }),
-    });
-    await load();
-  }
-
-  if (loaded && items.length === 0) return null;
-
-  return (
-    <div className="surface rounded-blob p-4">
-      <div className="mb-1 flex items-center justify-between">
-        <div className="text-[13px] font-extrabold text-strong">🕘 Queued messages</div>
-        <button
-          onClick={flush}
-          disabled={busy}
-          className="btn btn-sm chip rounded-xl border-2 border-line px-3 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
-        >
-          {busy ? <LoadingDots label="Sending" /> : "Send due now"}
-        </button>
-      </div>
-      <p className="mb-2 text-[11px] text-faint">
-        Messages the anti-ban engine is holding so your number stays safe. Each one
-        shows who it is for, when it sends, and why it is waiting. Nothing is lost -
-        they send automatically, or tap Send due now.
-      </p>
-      {note && <p className="mb-2 text-[11px] font-bold text-savings">{note}</p>}
-      <div className="space-y-1.5">
-        {items.map((it) => (
-          <div key={it.id} className="rounded-xl bg-card2 p-2.5">
-            <div className="flex items-center justify-between">
-              <div className="text-[12px] font-bold text-strong">
-                {it.vendorName || `+${it.to}`}
-              </div>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${
-                  it.overdue
-                    ? "bg-brandred-soft text-brandred"
-                    : it.due
-                    ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
-                    : "bg-card text-faint"
-                }`}
-              >
-                {it.overdue ? "overdue" : it.due ? "due now" : "scheduled"}
-              </span>
-            </div>
-            <div className="mt-0.5 truncate text-[11px] text-soft">{it.preview}</div>
-            <div className="mt-1 flex items-center justify-between text-[10px] text-faint">
-              <span>
-                {it.due ? "Ready" : `Sends ${new Date(it.notBefore).toLocaleString()}`} · {it.reason}
-              </span>
-              <button onClick={() => drop(it.id)} className="font-bold text-brandred">
-                Cancel
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // FAQ manager (#18): owner adds popular questions (AI-written or typed) and
 // removes them. Travellers see them as an expandable section in the app.
