@@ -626,13 +626,14 @@ export default function Home() {
             {t("What do you want to rent?")}
           </label>
           <textarea
+            data-tour="request"
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
             rows={2}
             className="mt-1 w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
             placeholder={t("e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount")}
           />
-          <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
+          <div data-tour="examples" className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
             {examples.map((ex) => (
               <button
                 key={ex}
@@ -644,7 +645,7 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mt-3">
+          <div data-tour="stay" className="mt-3">
             <OriginPicker origin={origin} onChange={setOrigin} />
           </div>
 
@@ -666,7 +667,7 @@ export default function Home() {
             </div>
           )}
 
-          <label className="mt-3 block text-[12px] font-extrabold text-soft">
+          <label data-tour="radius" className="mt-3 block text-[12px] font-extrabold text-soft">
             {t("Search radius")} · {radiusKm} km
             <input
               type="range"
@@ -679,6 +680,7 @@ export default function Home() {
           </label>
 
           <button
+            data-tour="find"
             onClick={startSearch}
             disabled={phase === "profiling" || phase === "running"}
             className="btn btn-primary cta-sheen mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
@@ -779,7 +781,7 @@ export default function Home() {
             expand into per-shop detail - which shops were messaged, which held
             for opening hours (removable), which sent a deal, and exactly when. */}
         {vendors.length > 0 && (
-          <div className="mt-2 overflow-hidden rounded-2xl bg-card2">
+          <div data-tour="status" className="mt-2 overflow-hidden rounded-2xl bg-card2">
             <button
               onClick={() => setStatusOpen((o) => !o)}
               className="flex w-full items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] font-bold text-soft"
@@ -863,6 +865,44 @@ export default function Home() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* YOUR QUEUED MESSAGES (item #2): always-visible, per-user card driven
+            by the server queue - every traveller sees and manages exactly what
+            is waiting to be sent on their behalf (shop closed, human pacing,
+            strategist hold) and can remove any of it. */}
+        {queueItems.length > 0 && (
+          <div data-tour="queue" className="surface mt-3 rounded-blob p-3 animate-slide-up">
+            <div className="mb-1.5 flex items-center justify-between">
+              <div className="text-[13px] font-extrabold text-strong">
+                🕘 {t("Your queued messages")} ({queueItems.length})
+              </div>
+              <span className="text-[10px] font-bold text-faint">{t("auto-sends")}</span>
+            </div>
+            <div className="space-y-1.5">
+              {queueItems.map((q) => (
+                <div key={q.id} className="flex items-center justify-between gap-2 rounded-xl bg-card2 p-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-bold text-strong">
+                      {q.vendorName || q.toNumber}
+                    </span>
+                    <span className="block text-[10px] text-faint">
+                      {t(q.reason)}
+                      {q.notBefore
+                        ? ` · ~${new Date(q.notBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                        : ""}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => removeQueued(q.id, q.vendorId)}
+                    className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-1 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
+                  >
+                    {t("Remove")}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -1074,7 +1114,7 @@ export default function Home() {
             />
           </div>
         ) : (
-          <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+          <div data-tour="vendors" className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
             {filtered.map((v, i) => (
               <div key={v.id} className="rise-in" style={{ ["--i" as string]: i }}>
                 <VendorCard

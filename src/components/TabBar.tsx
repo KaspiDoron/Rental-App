@@ -48,6 +48,7 @@ export function TabBar({
             return (
               <button
                 key={it.id}
+                data-tour={it.id === "profile" ? "tab-profile" : undefined}
                 onClick={() => {
                   if (isFeedback) {
                     onFeedback();

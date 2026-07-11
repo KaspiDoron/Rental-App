@@ -8,6 +8,7 @@ import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { OrchestratorPanel } from "@/components/OrchestratorPanel";
+import { HealthPanel } from "@/components/HealthPanel";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -1568,6 +1569,9 @@ export default function AdminPage() {
 
       {loaded && tab === "keys" && (
         <div className="space-y-3">
+          {/* Live service health with 10-minute auto-refresh (item #12) */}
+          <HealthPanel />
+
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
               persistent
