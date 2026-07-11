@@ -13,13 +13,24 @@ comes first - five minutes that make the whole test smooth.
    "Test API" passes. With a key set, signups require a 6-digit email code.
    With NO email key, invited testers enter directly without a code (by
    design) - fine for a private test.
-3. **WhatsApp host**: check Admin -> Keys -> Service health: "WhatsApp hosts"
-   must be green. Free-tier hosts sleep - keep the cron-job.org ping on
-   `https://<your-app>/api/wa/ping` every 5-10 minutes (it also delivers
-   queued messages while nobody has the app open).
-4. **AI + Maps**: same health panel - "AI providers" and "Google Maps" green.
-5. Run `supabase/schema.sql` once in the Supabase SQL editor (idempotent) -
-   this test build added the `vendor_tag_signals` and `agent_traces` tables.
+3. **SESSION_SECRET (required in production)**: set a strong value (>= 16
+   chars) in the host env. Without it the app now refuses to create/validate
+   login sessions (this prevents forged owner cookies) - so logins will fail
+   until it is set. Rotate it if it was ever shared.
+4. **WhatsApp host + secured ping**: check Admin -> Keys -> Service health:
+   "WhatsApp hosts" must be green. Free-tier hosts sleep - keep the
+   cron-job.org ping running, but the ping URL now needs the security token:
+   `https://<your-app>/api/wa/ping?token=<token>`. The token is derived from
+   SESSION_SECRET (same one the Evolution webhook uses); an unauthenticated
+   ping is now rejected. It also delivers queued messages while nobody has the
+   app open.
+5. **Meta webhook signature (only if using the official Cloud API)**: set
+   `WHATSAPP_APP_SECRET` in Admin -> Keys so inbound webhooks are signature-
+   verified. The per-user Evolution path is unaffected.
+6. **AI + Maps**: same health panel - "AI providers" and "Google Maps" green.
+7. Run `supabase/schema.sql` once in the Supabase SQL editor (idempotent) -
+   this build added `vendor_tag_signals`, `agent_traces`, `wa_processed`, and
+   several rental columns on `bookings`/`offers`/`vendor_replies`.
 
 ## For your testers (copy-paste)
 
