@@ -109,13 +109,80 @@ function normalizeRFQ(
       ? rfq.transmission
       : "any") as Transmission,
     maxMileageKm: rfq.maxMileageKm,
-    durationDays: rfq.durationDays || durationHint || 3,
+    durationDays: clampDuration(rfq.durationDays || durationHint),
     accessories: Array.isArray(rfq.accessories) ? rfq.accessories.slice(0, 8) : [],
     fulfillment: (["hotel-delivery", "in-store", "any"].includes(rfq.fulfillment)
       ? rfq.fulfillment
       : "any") as Fulfillment,
     notes: rfq.notes,
-    vendorMessage: rfq.vendorMessage || buildMessage(rfq, input),
+    ...rentalFields(rfq, input),
+    vendorMessage: rfq.vendorMessage || buildMessage({ ...rfq, ...rentalFields(rfq, input) }, input),
+  };
+}
+
+// A rental duration must be sane - it directly multiplies into totalPrice.
+// 0 / negative / NaN / absurd values were passing straight through and
+// producing garbage totals. Clamp to 1..90 days.
+function clampDuration(n: number | undefined): number {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v) || v < 1) return 3;
+  return Math.min(v, 90);
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Sanitized real-world rental fields, merged from the LLM parse + free text. */
+function rentalFields(rfq: Partial<StructuredRFQ>, input: string): {
+  startDate?: string;
+  returnDate?: string;
+  driverAge?: number;
+  license?: { motorbike?: boolean; idp?: boolean };
+  insuranceTier?: StructuredRFQ["insuranceTier"];
+  oneWayDropOff?: string;
+  helmetCount?: number;
+} {
+  const t = (input || "").toLowerCase();
+  const startDate = rfq.startDate && ISO_DATE.test(rfq.startDate) ? rfq.startDate : undefined;
+  const returnDate = rfq.returnDate && ISO_DATE.test(rfq.returnDate) ? rfq.returnDate : undefined;
+  const ageM = t.match(/\b(1[6-9]|[2-9]\d)\s*(?:years?|yrs?|yo|y\/o)\b/);
+  const driverAge =
+    typeof rfq.driverAge === "number" && rfq.driverAge >= 16 && rfq.driverAge <= 99
+      ? Math.floor(rfq.driverAge)
+      : ageM
+      ? parseInt(ageM[1], 10)
+      : undefined;
+  const idp = rfq.license?.idp ?? /\b(idp|international (driving )?(permit|licen[cs]e))\b/.test(t) ? true : undefined;
+  const motorbike =
+    rfq.license?.motorbike ?? /\bmotor(bike|cycle) licen[cs]e\b/.test(t) ? true : undefined;
+  const license = idp || motorbike ? { ...(idp ? { idp: true } : {}), ...(motorbike ? { motorbike: true } : {}) } : undefined;
+  const insuranceTier = (["none", "basic", "full", "any"] as const).includes(
+    rfq.insuranceTier as never
+  )
+    ? rfq.insuranceTier
+    : /\bfull (insurance|cover)/.test(t)
+    ? "full"
+    : /\b(no|without) insurance/.test(t)
+    ? "none"
+    : undefined;
+  const helmetM = t.match(/(\d)\s*helmets?/);
+  const helmetCount =
+    typeof rfq.helmetCount === "number" && rfq.helmetCount > 0 && rfq.helmetCount <= 4
+      ? Math.floor(rfq.helmetCount)
+      : helmetM
+      ? Math.min(parseInt(helmetM[1], 10), 4)
+      : undefined;
+  const oneWayDropOff =
+    typeof rfq.oneWayDropOff === "string" && rfq.oneWayDropOff.trim()
+      ? rfq.oneWayDropOff.trim().slice(0, 80)
+      : undefined;
+  return {
+    ...(startDate ? { startDate } : {}),
+    ...(returnDate ? { returnDate } : {}),
+    ...(driverAge ? { driverAge } : {}),
+    ...(license ? { license } : {}),
+    ...(insuranceTier ? { insuranceTier } : {}),
+    ...(oneWayDropOff ? { oneWayDropOff } : {}),
+    ...(helmetCount ? { helmetCount } : {}),
   };
 }
 
@@ -155,8 +222,9 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
   let durationDays = durationHint || 3;
   if (daysMatch) {
     const n = parseInt(daysMatch[1], 10);
-    durationDays = /week/.test(daysMatch[2]) ? n * 7 : n;
+    durationDays = clampDuration(/week/.test(daysMatch[2]) ? n * 7 : n);
   }
+  durationDays = clampDuration(durationDays);
 
   const rfq: StructuredRFQ = {
     vehicleClass,
@@ -182,6 +250,7 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
       ? "in-store"
       : "any",
     notes: undefined,
+    ...rentalFields({}, input),
     vendorMessage: "",
   };
   rfq.vendorMessage = buildMessage(rfq, input);
@@ -226,15 +295,28 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   }
   const vehicle = `${vehicleTerm(rfq.vehicleClass)}${spec.length ? ` (${spec.join(", ")})` : ""}`;
   const days = `${rfq.durationDays} day${rfq.durationDays === 1 ? "" : "s"}`;
+  // WHEN the rental starts is what makes an availability quote real. Include it
+  // whenever the request captured a date, phrased naturally.
+  const when = rfq.startDate ? prettyDate(rfq.startDate) : "";
 
-  const opener = pick([
-    `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days}.`,
-    `Hello! Do you have a ${vehicle} available for ${days}?`,
-    `Hey there! I'm nearby and need a ${vehicle} for about ${days}.`,
-    `Hi, quick question - could I rent a ${vehicle} from you for ${days}?`,
-    `Good day! I'm in town for a bit and after a ${vehicle} for ${days}.`,
-    `Hey! Looking to rent a ${vehicle} for ${days} - do you have one free?`,
-  ]);
+  const opener = when
+    ? pick([
+        `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days} from ${when}.`,
+        `Hello! Do you have a ${vehicle} available for ${days} starting ${when}?`,
+        `Hey there! I need a ${vehicle} for ${days} from ${when} - is one free?`,
+        `Hi, could I rent a ${vehicle} from you for ${days} starting ${when}?`,
+      ])
+    : pick([
+        `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days}.`,
+        `Hello! Do you have a ${vehicle} available for ${days}?`,
+        `Hey there! I'm nearby and need a ${vehicle} for about ${days}.`,
+        `Hi, quick question - could I rent a ${vehicle} from you for ${days}?`,
+        `Good day! I'm in town for a bit and after a ${vehicle} for ${days}.`,
+        `Hey! Looking to rent a ${vehicle} for ${days} - do you have one free?`,
+      ]);
+  const dropOff = rfq.oneWayDropOff
+    ? ` I'd need to drop it off in ${rfq.oneWayDropOff} (one-way).`
+    : "";
   const extras =
     rfq.accessories.length > 0
       ? pick([
@@ -259,7 +341,14 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   ]);
   const thanks = pick(["Thanks!", "Thank you!", "Cheers!", "Thanks a lot!"]);
 
-  return [opener, extras, delivery, `${ask} ${thanks}`].filter(Boolean).join(" ");
+  return [opener + dropOff, extras, delivery, `${ask} ${thanks}`].filter(Boolean).join(" ");
+}
+
+/** Human-friendly date for messages: "Jan 20" (no year noise for near dates). */
+function prettyDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +818,11 @@ export interface ExtractedOffer {
   // ONLY set when the shop explicitly confirmed them - never guessed.
   deposit?: string; // e.g. "Passport only", "3,000 THB cash"
   delivers?: boolean | null;
+  // Extra rental terms, only when the shop explicitly stated them.
+  deliveryFee?: number | null; // in the reply's currency; 0 = free
+  insuranceIncluded?: boolean | null;
+  kmLimitPerDay?: number | "unlimited" | null;
+  fuelPolicy?: string | null;
   // Constrained fact tags (item #13) from the reply, e.g. "helmets-included".
   // Vocabulary is enforced in vendor-tags.ts; anything else is dropped.
   tags?: string[];
@@ -774,7 +868,9 @@ export async function extractOffer(
     ". Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
     '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
-    '"deposit": string, "delivers": boolean|null, "tags": string[] }. ' +
+    '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
+    '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
+    '"fuelPolicy": string|null, "tags": string[] }. ' +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
     "vehicle. Combine the reply with the conversation history: if the vehicle " +
     "and daily price are both clear from the thread as a whole, set matchesSpec " +
@@ -792,6 +888,13 @@ export async function extractOffer(
     "otherwise an empty string. NEVER guess. " +
     "delivers: true only if they clearly said they deliver / bring the vehicle, " +
     "false only if they clearly said no delivery, null when not mentioned. " +
+    "deliveryFee: the delivery charge as a plain number in the same currency " +
+    "(0 if they said delivery is free), null if not mentioned. " +
+    "insuranceIncluded: true only if they said insurance is included, false if " +
+    "they said it costs extra / is not included, null if not mentioned. " +
+    "kmLimitPerDay: the daily km/mileage limit as a number, \"unlimited\" if they " +
+    "said unlimited, null if not mentioned. fuelPolicy: a short label like " +
+    "'full-to-full' or 'same-to-same' only if stated, else null. NEVER guess any of these. " +
     "tags: facts the shop EXPLICITLY stated in this reply, chosen ONLY from: " +
     "delivery, pickup-only, airport-delivery, no-deposit, passport-deposit, " +
     "cash-deposit, helmets-included, insurance-included, cards-accepted, " +
@@ -867,12 +970,22 @@ export async function extractOffer(
       cur = localCur;
     }
     const deposit = typeof e.deposit === "string" ? e.deposit.trim().slice(0, 80) : "";
+    const km =
+      e.kmLimitPerDay === "unlimited"
+        ? "unlimited"
+        : typeof e.kmLimitPerDay === "number" && e.kmLimitPerDay > 0
+        ? Math.round(e.kmLimitPerDay)
+        : null;
     return {
       ...e,
       currency: cur,
       confidence: conf,
       deposit: deposit || undefined,
       delivers: typeof e.delivers === "boolean" ? e.delivers : null,
+      deliveryFee: typeof e.deliveryFee === "number" && e.deliveryFee >= 0 ? e.deliveryFee : null,
+      insuranceIncluded: typeof e.insuranceIncluded === "boolean" ? e.insuranceIncluded : null,
+      kmLimitPerDay: km,
+      fuelPolicy: typeof e.fuelPolicy === "string" && e.fuelPolicy.trim() ? e.fuelPolicy.trim().slice(0, 40) : null,
       tags: Array.isArray(e.tags)
         ? e.tags.filter((t) => typeof t === "string").map((t) => t.toLowerCase().trim()).slice(0, 10)
         : [],
@@ -995,10 +1108,26 @@ export async function writeFeedback(
 
 /** Final spec-verification message the agent sends before locking a booking. */
 export function verificationMessage(rfq: StructuredRFQ): string {
+  // For a CAR, seats + body type are the whole point of the check - the old
+  // message dropped them and just said "car". Include them, plus the dates.
+  const vehicle =
+    rfq.vehicleClass === "car"
+      ? [
+          rfq.carType && rfq.carType !== "any" ? rfq.carType : "",
+          rfq.seats ? `${rfq.seats}-seat` : "",
+          "car",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : `${vehicleTerm(rfq.vehicleClass)}${rfq.engineSizeCc ? ` (${rfq.engineSizeCc}cc)` : ""}`;
+  const period = rfq.startDate
+    ? `${rfq.durationDays} day${rfq.durationDays === 1 ? "" : "s"} from ${prettyDate(rfq.startDate)}`
+    : `${rfq.durationDays} day${rfq.durationDays === 1 ? "" : "s"}`;
   const checks = [
-    `${vehicleTerm(rfq.vehicleClass)}${rfq.engineSizeCc ? ` (${rfq.engineSizeCc}cc)` : ""}`,
+    vehicle,
     rfq.transmission !== "any" ? rfq.transmission : null,
     rfq.maxMileageKm ? `under ${rfq.maxMileageKm.toLocaleString()} km` : null,
+    period,
     ...rfq.accessories,
   ].filter(Boolean);
   return (

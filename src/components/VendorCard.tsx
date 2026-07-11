@@ -352,7 +352,7 @@ export function VendorCard({
                   )}
                 </div>
                 {/* Shop-CONFIRMED conditions only - never guessed */}
-                {(offer.deposit || offer.includesDelivery) && (
+                {(offer.deposit || offer.includesDelivery || offer.includesInsurance || offer.deliveryFee != null) && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {offer.deposit && (
                       <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">
@@ -361,7 +361,14 @@ export function VendorCard({
                     )}
                     {offer.includesDelivery && (
                       <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
-                        🛵 {t("Delivers")}
+                        🛵 {offer.deliveryFee != null && offer.deliveryFee > 0
+                          ? `${t("Delivery")} ${moneyLocal(offer.deliveryFee, offer.currency)}`
+                          : t("Free delivery")}
+                      </span>
+                    )}
+                    {offer.includesInsurance && (
+                      <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
+                        🛡 {t("Insurance included")}
                       </span>
                     )}
                   </div>

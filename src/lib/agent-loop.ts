@@ -315,9 +315,22 @@ export async function processVendorReply(opts: {
   // so if the owner has not run the newest schema yet we retry without the new
   // columns - a reply must NEVER vanish from the feed over a pending migration.
   const fullOk = await sbInsert("vendor_replies", [
-    { ...replyBase, currency: cur, deposit: extraction.deposit ?? null, delivers: extraction.delivers ?? null },
+    {
+      ...replyBase,
+      currency: cur,
+      deposit: extraction.deposit ?? null,
+      delivers: extraction.delivers ?? null,
+      insurance_included: extraction.insuranceIncluded ?? null,
+      delivery_fee: extraction.deliveryFee ?? null,
+    },
   ]);
-  if (!fullOk) await sbInsert("vendor_replies", [replyBase]);
+  // Retry without the newest columns as the schema rolls out (silent-fail).
+  if (!fullOk) {
+    const okBasic = await sbInsert("vendor_replies", [
+      { ...replyBase, currency: cur, deposit: extraction.deposit ?? null, delivers: extraction.delivers ?? null },
+    ]);
+    if (!okBasic) await sbInsert("vendor_replies", [replyBase]);
+  }
   // Verified shop tags (item #13): record what this reply explicitly stated.
   // A tag only ever SHOWS after >= 2 distinct replies confirm it.
   if (ctx.vendorId) {
@@ -354,11 +367,21 @@ export async function processVendorReply(opts: {
       duration_days: rfq.durationDays ?? null,
       delivers,
     };
-    // Retry without the newest column if the migration has not run yet.
+    // Retry without the newest columns if the migration has not run yet.
     const offerOk = await sbInsert("offers", [
-      { ...offerBase, deposit_note: extraction.deposit ?? null },
+      {
+        ...offerBase,
+        deposit_note: extraction.deposit ?? null,
+        delivery_fee: extraction.deliveryFee ?? null,
+        insurance_included: extraction.insuranceIncluded ?? null,
+        km_limit_per_day: extraction.kmLimitPerDay != null ? String(extraction.kmLimitPerDay) : null,
+        fuel_policy: extraction.fuelPolicy ?? null,
+      },
     ]);
-    if (!offerOk) await sbInsert("offers", [offerBase]);
+    if (!offerOk) {
+      const okDep = await sbInsert("offers", [{ ...offerBase, deposit_note: extraction.deposit ?? null }]);
+      if (!okDep) await sbInsert("offers", [offerBase]);
+    }
   }
 
   // ==== THE ORCHESTRATOR PIPELINE ============================================

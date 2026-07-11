@@ -17,6 +17,21 @@ export interface StructuredRFQ {
   accessories: string[];
   fulfillment: Fulfillment;
   notes?: string;
+  // ---- Rental parameters (real-world funnel) --------------------------------
+  // When the rental begins (YYYY-MM-DD). Availability quoted without a date is
+  // worthless, so this is sent to shops when known.
+  startDate?: string;
+  // Return date; when absent it is derived from startDate + durationDays.
+  returnDate?: string;
+  // Driver details that gate eligibility at many shops.
+  driverAge?: number;
+  license?: { motorbike?: boolean; idp?: boolean };
+  // Preferred insurance level (shops confirm what they actually offer).
+  insuranceTier?: "none" | "basic" | "full" | "any";
+  // One-way rentals: a different drop-off location (free text place).
+  oneWayDropOff?: string;
+  // Scooter/motorbike: how many helmets the traveller needs.
+  helmetCount?: number;
   // A polished, vendor-ready message produced by the Profiler agent.
   vendorMessage: string;
 }
@@ -47,6 +62,14 @@ export interface Offer {
   simulated: boolean;
   // Shop-confirmed conditions (shown as tags ONLY when explicitly stated).
   deposit?: string; // e.g. "Passport only", "3,000 THB cash"
+  // ---- Extra shop-confirmed rental terms (only when explicitly stated) ------
+  deliveryFee?: number; // in the offer's currency; 0 = free delivery
+  kmLimitPerDay?: number | "unlimited";
+  fuelPolicy?: string; // e.g. "full-to-full", "same-to-same"
+  // Effective daily rate for the traveller's actual duration when the shop
+  // quoted a better weekly/monthly rate (so long rentals do not collapse to a
+  // single flat day price).
+  effectiveDailyRate?: number;
 }
 
 export interface Vendor {

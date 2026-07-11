@@ -494,3 +494,19 @@ create table if not exists public.wa_processed (
   created_at    timestamptz not null default now()
 );
 alter table public.wa_processed enable row level security;
+
+-- ---- Rental funnel build-out: richer booking + offer terms ---------------------
+alter table public.bookings add column if not exists duration_days   int;
+alter table public.bookings add column if not exists start_date      date;
+alter table public.bookings add column if not exists return_date     date;
+alter table public.bookings add column if not exists delivery_address text;
+alter table public.bookings add column if not exists one_way_dropoff text;
+alter table public.bookings add column if not exists driver_age      int;
+alter table public.bookings add column if not exists scheduled_tz    text;
+alter table public.offers   add column if not exists delivery_fee     numeric;
+alter table public.offers   add column if not exists insurance_included boolean;
+alter table public.offers   add column if not exists km_limit_per_day text;
+alter table public.offers   add column if not exists fuel_policy      text;
+alter table public.offers   add column if not exists effective_daily_rate numeric;
+alter table public.vendor_replies add column if not exists insurance_included boolean;
+alter table public.vendor_replies add column if not exists delivery_fee        numeric;

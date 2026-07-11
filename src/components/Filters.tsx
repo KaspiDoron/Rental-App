@@ -14,6 +14,8 @@ export interface FilterState {
   deliveryOnly: boolean;
   openNowOnly: boolean;
   fastOnly: boolean; // Ultra: show only the fastest-replying shops
+  // Verified reply-based terms (>= 2 confirming replies) to require.
+  tag: "any" | "delivery" | "no-deposit" | "helmets-included" | "insurance-included";
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -26,6 +28,7 @@ export const DEFAULT_FILTERS: FilterState = {
   deliveryOnly: false,
   openNowOnly: false,
   fastOnly: false,
+  tag: "any",
 };
 
 function Chip({
@@ -155,6 +158,29 @@ export function Filters({
         >
           ⚡ Fast responders{!isUltra ? " ✦" : ""}
         </Chip>
+      </div>
+
+      {/* Verified reply-based terms (only shown once a shop confirmed them >=2x) */}
+      <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
+        <span className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide text-faint">
+          ✓ Verified
+        </span>
+        {(
+          [
+            ["delivery", "🛵 Delivers"],
+            ["no-deposit", "🎉 No deposit"],
+            ["helmets-included", "🪖 Helmets"],
+            ["insurance-included", "🛡 Insurance"],
+          ] as const
+        ).map(([id, label]) => (
+          <Chip
+            key={id}
+            active={filters.tag === id}
+            onClick={() => set({ tag: filters.tag === id ? "any" : id })}
+          >
+            {label}
+          </Chip>
+        ))}
       </div>
     </div>
   );

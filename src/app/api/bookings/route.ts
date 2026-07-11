@@ -11,23 +11,66 @@ export async function POST(req: Request) {
   if (!b?.vendorName) {
     return NextResponse.json({ error: "booking payload required" }, { status: 400 });
   }
+
+  // TRUST NOTHING NUMERIC FROM THE CLIENT. The daily price and duration define
+  // the total; recompute it server-side so a tampered/garbage client total can
+  // never be persisted as the money record.
+  const pricePerDay = Math.max(0, Number(b.pricePerDay) || 0);
+  const durationDays = Math.min(Math.max(Math.floor(Number(b.durationDays) || 1), 1), 90);
+  const totalPrice = Math.round(pricePerDay * durationDays);
+
+  // Validate the pickup date/time: a real format, and never in the past
+  // (compared in the shop's local wall-clock, which is how it is stored).
+  const scheduledAt = typeof b.scheduledAt === "string" ? b.scheduledAt : "";
+  if (scheduledAt && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(scheduledAt)) {
+    return NextResponse.json({ error: "Invalid pickup date/time." }, { status: 400 });
+  }
+  if (scheduledAt) {
+    const dayPart = scheduledAt.slice(0, 10);
+    const todayLocal = new Date().toISOString().slice(0, 10);
+    if (dayPart < todayLocal) {
+      return NextResponse.json({ error: "Pickup date cannot be in the past." }, { status: 400 });
+    }
+  }
+  // Return date, if given, must be after the pickup date.
+  const returnDate = typeof b.returnDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.returnDate) ? b.returnDate : null;
+  if (returnDate && scheduledAt && returnDate < scheduledAt.slice(0, 10)) {
+    return NextResponse.json({ error: "Return date must be after pickup." }, { status: 400 });
+  }
+
+  const fulfillment = ["in-store", "hotel-delivery"].includes(String(b.fulfillment))
+    ? String(b.fulfillment)
+    : "in-store";
+
   const bookingBase = {
     user_email: session.email,
     vendor_id: String(b.vendorId ?? ""),
     vendor_name: String(b.vendorName),
-    price_per_day: Number(b.pricePerDay ?? 0),
-    total_price: Number(b.totalPrice ?? 0),
-    fulfillment: String(b.fulfillment ?? "in-store"),
-    scheduled_at: b.scheduledAt ?? null,
+    price_per_day: pricePerDay,
+    total_price: totalPrice,
+    fulfillment,
+    scheduled_at: scheduledAt || null,
     status: "confirmed",
   };
-  // A booking must NEVER be lost to a pending schema migration: retry without
-  // the newest column when the full insert is rejected (sbInsert fails silently).
-  const ok = await sbInsert("bookings", [
-    { ...bookingBase, currency: String(b.currency ?? "USD").slice(0, 6) },
-  ]);
-  if (!ok) await sbInsert("bookings", [bookingBase]);
-  return NextResponse.json({ ok: true });
+  // Extra rental fields - added incrementally, so try the richest insert first
+  // and fall back through pending-migration column sets (sbInsert fails
+  // silently on an unknown column). A booking must NEVER be lost to a migration.
+  const extra = {
+    currency: String(b.currency ?? "USD").slice(0, 6),
+    duration_days: durationDays,
+    return_date: returnDate,
+    start_date: scheduledAt ? scheduledAt.slice(0, 10) : null,
+    delivery_address: fulfillment === "hotel-delivery" ? String(b.deliveryAddress ?? "").slice(0, 200) || null : null,
+    one_way_dropoff: b.oneWayDropOff ? String(b.oneWayDropOff).slice(0, 120) : null,
+    driver_age: Number.isFinite(Number(b.driverAge)) ? Math.floor(Number(b.driverAge)) : null,
+    scheduled_tz: "shop-local", // scheduled_at is the shop's wall-clock, no offset
+  };
+  const ok = await sbInsert("bookings", [{ ...bookingBase, ...extra }]);
+  if (!ok) {
+    const okCur = await sbInsert("bookings", [{ ...bookingBase, currency: extra.currency }]);
+    if (!okCur) await sbInsert("bookings", [bookingBase]);
+  }
+  return NextResponse.json({ ok: true, totalPrice, currency: extra.currency });
 }
 
 export async function GET() {
@@ -36,10 +79,16 @@ export async function GET() {
   const filter = `user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=25`;
   let rows = await sbSelect(
     "bookings",
-    `select=id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,status,created_at&${filter}`
+    `select=id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,return_date,delivery_address,driver_age,status,created_at&${filter}`
   );
   if (rows.length === 0) {
-    // Pre-migration fallback (a select naming an unknown column fails as []).
+    // Pre-migration fallbacks (a select naming an unknown column fails as []).
+    rows = await sbSelect(
+      "bookings",
+      `select=id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,status,created_at&${filter}`
+    );
+  }
+  if (rows.length === 0) {
     rows = await sbSelect(
       "bookings",
       `select=id,vendor_name,price_per_day,total_price,fulfillment,scheduled_at,status,created_at&${filter}`

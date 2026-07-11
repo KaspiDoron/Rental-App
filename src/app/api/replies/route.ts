@@ -50,16 +50,24 @@ export async function GET(req: Request) {
     currency?: string | null;
     deposit?: string | null;
     delivers?: boolean | null;
+    insurance_included?: boolean | null;
+    delivery_fee?: number | null;
     created_at: string;
   }
   const filter = `user_email=eq.${encodeURIComponent(session.email)}${sinceFilter}&order=created_at.desc&limit=40`;
   let rows = await sbSelect<ReplyRow>(
     "vendor_replies",
-    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&${filter}`
+    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,insurance_included,delivery_fee,created_at&${filter}`
   );
   if (rows.length === 0) {
     // A select naming a not-yet-migrated column fails SILENTLY as [] - the
     // feed must keep working before the owner runs the newest schema.
+    rows = await sbSelect<ReplyRow>(
+      "vendor_replies",
+      `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&${filter}`
+    );
+  }
+  if (rows.length === 0) {
     rows = await sbSelect<ReplyRow>(
       "vendor_replies",
       `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,created_at&${filter}`
@@ -79,6 +87,8 @@ export async function GET(req: Request) {
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,
       delivers: r.delivers ?? null,
+      insuranceIncluded: r.insurance_included ?? null,
+      deliveryFee: r.delivery_fee ?? null,
       createdAt: r.created_at,
     })),
   });

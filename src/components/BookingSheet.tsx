@@ -22,8 +22,12 @@ export function BookingSheet({
 }) {
   const [step, setStep] = useState<Step>("verify");
   const [verification, setVerification] = useState<string>("");
-  // Arrangement is confirmed with the shop over WhatsApp, not asserted here.
-  const mode: "in-store" = "in-store";
+  // Fulfillment defaults from the request: a hotel-delivery RFQ pre-selects
+  // delivery so the booking (and the shop message) match what was negotiated.
+  const [fulfillment, setFulfillment] = useState<"in-store" | "hotel-delivery">(
+    rfq?.fulfillment === "hotel-delivery" ? "hotel-delivery" : "in-store"
+  );
+  const [address, setAddress] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
   const [dealTerms, setDealTerms] = useState(false);
@@ -53,11 +57,20 @@ export function BookingSheet({
   const maxDate = freePlan ? today : undefined;
   const defaultDate = freePlan ? today : tomorrow;
 
+  const pickupDate = date || defaultDate;
+  const durationDays = rfq?.durationDays ?? 1;
+  // Return date derived from the pickup date + the rental length (shop-local).
+  const returnDate = new Date(`${pickupDate}T00:00:00`);
+  returnDate.setDate(returnDate.getDate() + Math.max(0, durationDays));
+  const returnDateStr = returnDate.toISOString().slice(0, 10);
+  const deliveryReady = fulfillment !== "hotel-delivery" || address.trim().length > 2;
+
   async function confirm() {
     setStep("confirmed");
-    const when = `${date || defaultDate}T${time}:00`;
-    // Persist the booking (saved to the database when Supabase is connected).
-    // No trailing Z: the pickup time is the SHOP's local time, not UTC.
+    const when = `${pickupDate}T${time}:00`;
+    // Persist the booking. total_price is recomputed server-side from the
+    // per-day price and duration - we don't send a trustable total. No trailing
+    // Z: the pickup time is the SHOP's local wall-clock, not UTC.
     fetch("/api/bookings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -65,21 +78,28 @@ export function BookingSheet({
         vendorId: vendor.id,
         vendorName: vendor.name,
         pricePerDay: vendor.offer?.pricePerDay ?? 0,
-        totalPrice: vendor.offer?.totalPrice ?? 0,
+        durationDays,
         currency: vendor.offer?.currency ?? "USD",
-        fulfillment: mode,
+        fulfillment,
+        deliveryAddress: fulfillment === "hotel-delivery" ? address.trim() : undefined,
+        oneWayDropOff: rfq?.oneWayDropOff,
         scheduledAt: when,
+        returnDate: returnDateStr,
       }),
     }).catch(() => {});
 
     // ACTUALLY tell the shop - a locked deal the shop never heard about is a
-    // traveller standing in front of a confused owner. Safety-screened custom
-    // send; the UI reports honestly whether it went out.
+    // traveller standing in front of a confused owner. The message matches the
+    // real arrangement: delivery says where, pickup says "I'll come by".
     setNotify("sending");
     try {
       const price = vendor.offer
         ? ` at the price we agreed (${moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day)`
         : "";
+      const arrange =
+        fulfillment === "hotel-delivery"
+          ? `Could you deliver it to ${address.trim()} on ${pickupDate} around ${time}?`
+          : `I'll come by on ${pickupDate} around ${time}.`;
       const res = await fetch("/api/outreach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -88,9 +108,7 @@ export function BookingSheet({
           placeId: vendor.placeId,
           vendorId: vendor.id,
           vendorName: vendor.name,
-          message: `Great news - I'd like to confirm the rental${price}! I'll come by on ${
-            date || defaultDate
-          } around ${time}. See you then, thank you!`,
+          message: `Great news - I'd like to confirm the rental${price}! ${arrange} See you then, thank you!`,
           kind: "custom",
           openNow: vendor.openNow,
         }),
@@ -169,6 +187,47 @@ export function BookingSheet({
             shop over WhatsApp - the agents will have asked already.
           </p>
 
+          {/* Fulfillment: pickup at the shop vs delivery to your stay */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(
+              [
+                { id: "in-store", label: "🏪 I'll pick up" },
+                { id: "hotel-delivery", label: "🛵 Deliver to me" },
+              ] as { id: "in-store" | "hotel-delivery"; label: string }[]
+            ).map((o) => (
+              <button
+                key={o.id}
+                onClick={() => setFulfillment(o.id)}
+                className={`btn chip rounded-2xl border-2 p-2.5 text-[13px] font-extrabold ${
+                  fulfillment === o.id
+                    ? "border-brandblue bg-brandblue-soft text-brandblue"
+                    : "border-line text-soft"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {fulfillment === "hotel-delivery" && (
+            <label className="mt-2 block text-[12px] font-bold text-soft">
+              Delivery address
+              <input
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Hotel name / address for delivery"
+                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-3 text-base text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+              />
+            </label>
+          )}
+
+          {/* Rental period the shop is being asked to hold */}
+          <div className="mt-3 rounded-2xl bg-card2 p-2.5 text-[12px] text-soft">
+            📅 {durationDays} day{durationDays === 1 ? "" : "s"} · pick up{" "}
+            <span className="font-bold text-strong">{pickupDate}</span> · return{" "}
+            <span className="font-bold text-strong">{returnDateStr}</span>
+            <div className="mt-0.5 text-[10px] text-faint">Times are the shop&apos;s local time.</div>
+          </div>
+
           {freePlan && (
             <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
               Free plan: pickup can be scheduled for TODAY only. Upgrade to Pro
@@ -217,10 +276,12 @@ export function BookingSheet({
           </label>
           <button
             onClick={confirm}
-            disabled={!dealTerms}
+            disabled={!dealTerms || !deliveryReady}
             className="btn btn-primary mt-3 w-full rounded-2xl py-2.5 text-sm disabled:opacity-50"
           >
-            Confirm booking
+            {fulfillment === "hotel-delivery" && !deliveryReady
+              ? "Add a delivery address"
+              : "Confirm booking"}
           </button>
         </div>
       )}

@@ -26,8 +26,13 @@ export const PROMPTS: PromptDef[] = [
       "JSON matching this TypeScript type: { vehicleClass: 'car'|'motorbike'|'scooter'," +
       " engineSizeCc?: number, seats?: number, carType?: 'economy'|'sedan'|'suv'|'van'|'luxury'|'any'," +
       " transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
-      " durationDays: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
-      " notes?: string, vendorMessage: string }. For cars use seats/carType (not engineSizeCc); " +
+      " durationDays: number, startDate?: string (YYYY-MM-DD, only if the traveller stated when)," +
+      " driverAge?: number, license?: { motorbike?: boolean, idp?: boolean }," +
+      " insuranceTier?: 'none'|'basic'|'full'|'any', oneWayDropOff?: string (a different return place)," +
+      " helmetCount?: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
+      " notes?: string, vendorMessage: string }. Only include startDate/driverAge/license/" +
+      "insuranceTier/oneWayDropOff/helmetCount when the traveller actually mentioned them - " +
+      "never invent a date or age. durationDays must be a sane 1-90. For cars use seats/carType (not engineSizeCc); " +
       "for scooters/motorbikes use engineSizeCc. CHEAPEST BY DEFAULT: when the " +
       "traveller names no size or model they want the cheapest option, which is the " +
       "smallest - scooters/motorbikes default to engineSizeCc 110, cars default to " +

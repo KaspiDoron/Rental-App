@@ -419,8 +419,12 @@ export default function Home() {
                       // never a silent USD default.
                       currency: r.currency ?? v.offer?.currency ?? "USD",
                       totalPrice: Math.round(r.pricePerDay * rfq.durationDays),
-                      includesInsurance: false,
+                      // Now wired from the shop's confirmed reply (was always
+                      // false, so an "insurance included" quote never showed).
+                      includesInsurance:
+                        r.insuranceIncluded === true || v.offer?.includesInsurance === true,
                       includesDelivery: r.delivers === true || v.offer?.includesDelivery === true,
+                      deliveryFee: r.deliveryFee ?? v.offer?.deliveryFee,
                       message: r.replyText?.slice(0, 200) ?? "",
                       round: v.offer ? v.offer.round + 1 : 0,
                       verified: Boolean(r.verified),
@@ -1310,6 +1314,8 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
     list = list.filter((v) => v.fulfillment.includes("in-store"));
   if (f.openNowOnly) list = list.filter((v) => v.openNow !== false);
   if (f.fastOnly) list = list.filter((v) => v.fastResponder);
+  if (f.tag && f.tag !== "any")
+    list = list.filter((v) => (v.verifiedTags ?? []).includes(f.tag));
   if (f.minRating > 0) list = list.filter((v) => v.rating >= f.minRating);
   if (f.maxPricePerDay)
     list = list.filter((v) => v.offer && v.offer.pricePerDay <= (f.maxPricePerDay as number));
