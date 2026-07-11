@@ -65,8 +65,11 @@ const DEFAULTS: SecurityPolicies = {
   min_gap_seconds: 50,
   gap_jitter_seconds: 70,
   warmup_days: 7,
-  business_hour_start: 9,
-  business_hour_end: 20,
+  // Wide default window (8-21): real rental shops open early and close late.
+  // Google "open now" (shopOpenNow) is the primary truth when the client has
+  // it; this clock window only gates sends when openNow is unknown.
+  business_hour_start: 8,
+  business_hour_end: 21,
   trust_reply_gain: 6,
   trust_send_decay: 1,
   engagement_halt: true,

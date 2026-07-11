@@ -129,21 +129,38 @@ export default function AdminPage() {
   const [tcRegion, setTcRegion] = useState("");
   const [tcRegionSug, setTcRegionSug] = useState<{ label: string }[]>([]);
   const [tcRegionOpen, setTcRegionOpen] = useState(false);
+  // Every state is visible: searching spinner, "no places found", or an error -
+  // a silent empty dropdown made this look broken (item #13).
+  const [tcRegionBusy, setTcRegionBusy] = useState(false);
+  const [tcRegionNote, setTcRegionNote] = useState<string | null>(null);
   const tcRegionTimer = useRef<ReturnType<typeof setTimeout>>();
   function tcRegionSearch(q: string) {
     setTcRegion(q);
     setTcRegionOpen(true);
+    setTcRegionNote(null);
     clearTimeout(tcRegionTimer.current);
     if (q.trim().length < 3) {
       setTcRegionSug([]);
       return;
     }
     tcRegionTimer.current = setTimeout(async () => {
+      setTcRegionBusy(true);
       try {
         const d = await (await fetch(`/api/geocode?q=${encodeURIComponent(q)}`)).json();
-        setTcRegionSug((d.results ?? []).slice(0, 5).map((r: { label: string }) => ({ label: r.label })));
+        const sug = (d.results ?? []).slice(0, 5).map((r: { label: string }) => ({ label: r.label }));
+        setTcRegionSug(sug);
+        if (!sug.length) {
+          setTcRegionNote(
+            d.error === "paused"
+              ? "Search is paused by the kill switch (Analytics -> Cost tracker)."
+              : "No places found - your typed text will be used as the area, which works fine."
+          );
+        }
       } catch {
         setTcRegionSug([]);
+        setTcRegionNote("Place search unreachable - your typed text will be used as the area.");
+      } finally {
+        setTcRegionBusy(false);
       }
     }, 350);
   }
@@ -788,6 +805,12 @@ export default function AdminPage() {
                 placeholder="Search the scenario area - e.g. Lisbon, Portugal / Bali, Indonesia"
                 className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
               />
+              {tcRegionBusy && (
+                <span className="absolute right-2 top-2.5 h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-brandblue" />
+              )}
+              {tcRegionNote && !tcRegionBusy && (
+                <p className="mt-1 text-[10px] font-bold text-brandblue">{tcRegionNote}</p>
+              )}
               {tcRegionOpen && tcRegionSug.length > 0 && (
                 <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-xl border-2 border-line bg-card shadow-lg">
                   {tcRegionSug.map((s, i) => (

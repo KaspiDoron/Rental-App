@@ -128,6 +128,28 @@ export async function POST(req: Request) {
     outboundText = localized.text;
   }
 
+  // CONNECTION FIRST (same rule as mass outreach): if the user has no WhatsApp
+  // channel at all, say exactly that - never queue the message and tell them
+  // "the shop is closed" when the real problem is on our side.
+  {
+    const { evolutionConfigured, wasEverConnected } = await import("@/lib/evolution");
+    const { whatsappConfigured } = await import("@/lib/whatsapp");
+    const personal =
+      (await evolutionConfigured()) && (await wasEverConnected(session.email));
+    const cloud = await whatsappConfigured();
+    if (!personal && !cloud) {
+      return NextResponse.json(
+        {
+          allowed: true,
+          sent: false,
+          connect: true,
+          error: "Your WhatsApp is not connected - open Profile and link it first.",
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
   const guard = await guardOutbound({
     senderKey: session.email,
@@ -164,7 +186,9 @@ export async function POST(req: Request) {
       error: halted
         ? "This shop was already asked - your agent keeps the existing conversation going instead of re-sending the question."
         : guard.queuedUntil
-        ? "The shop is closed right now - your message is queued and will be sent when they open."
+        ? /closed|business hours/i.test(guard.reason ?? "")
+          ? "The shop is closed right now - your message is queued and will be sent when they open."
+          : "Queued for a moment - your agent paces messages like a human so your number stays safe."
         : guard.reason,
     });
   }

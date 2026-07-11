@@ -90,8 +90,15 @@ export async function POST(req: Request) {
   // mistaken for "not connected" (this was why teaching failed while connected).
   const conn = await ensureConnected(session.email, 9000);
   if (!conn.ok && !(await hasSessionRow(session.email))) {
+    // Report the REAL state so "connected but told otherwise" can't happen
+    // silently again - if the app shows CONNECTED this branch is unreachable
+    // (hasSessionRow matches any past pairing, case-insensitively).
     return NextResponse.json(
-      { error: "Connect your WhatsApp first (Profile -> Your WhatsApp), then import." },
+      {
+        error: `WhatsApp link not found for ${session.email} (live state: ${
+          conn.state ?? "unknown"
+        }). Connect it in Profile -> Your WhatsApp, then import.`,
+      },
       { status: 400 }
     );
   }

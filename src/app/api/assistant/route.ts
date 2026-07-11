@@ -5,17 +5,18 @@ import { listUsers } from "@/lib/access";
 import { sbSelect } from "@/lib/runtime-config";
 import { chat, type ChatMessage } from "@/lib/ai";
 
-// Two assistants behind one route:
+// Two assistants behind one route, BOTH management-only (item #9 - plans
+// never grant the AI co-manager):
 //  - OWNER: the "Deals" co-manager with full operational visibility.
-//  - PRO/ULTRA traveller: an order-status assistant scoped STRICTLY to the
-//    caller's own offers, replies and bookings (the plan feature).
+//  - ADMIN: an order-status assistant scoped STRICTLY to the caller's own
+//    offers, replies and bookings.
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   const isOwner = session.role === "owner";
-  if (!isOwner && session.plan === "free") {
+  if (session.role === "user") {
     return NextResponse.json(
-      { error: "The AI assistant is a Pro/Ultra feature.", upgrade: true },
+      { error: "The AI co-manager is available to management only." },
       { status: 403 }
     );
   }

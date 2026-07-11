@@ -21,6 +21,16 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ items: [] }, { status: 401 });
 
+  // Opportunistic drain: this endpoint is polled every ~20s while the app is
+  // open, so due messages actually leave even without the external cron.
+  try {
+    const { drainOutbox } = await import("@/lib/wa-guard");
+    const { sendFromUser } = await import("@/lib/evolution");
+    void drainOutbox((email, to, text) => sendFromUser(email, to, text)).catch(() => {});
+  } catch {
+    /* draining is best-effort */
+  }
+
   const rows = await sbSelect<OutboxRow>(
     "wa_outbox",
     `select=id,sender_key,to_number,body,not_before,meta&sender_key=eq.${encodeURIComponent(

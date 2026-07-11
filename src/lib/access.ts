@@ -205,7 +205,23 @@ export async function registerUser(u: {
         addedAt: now,
         lastSeen: now,
       };
-  await mirror(rec);
+  // The durable write is what makes the account (and its phone) survive
+  // sign-out, new serverless instances and cache expiry. Never trust the
+  // 10s memory cache alone: retry once, then leave a visible trail.
+  let persisted = await mirror(rec);
+  if (!persisted && supabaseConfigured()) {
+    persisted = await mirror(rec);
+    if (!persisted) {
+      await sbInsert("agent_events", [
+        {
+          kind: "user-persist-failed",
+          vendor_id: "",
+          vendor_name: key,
+          detail: "app_users upsert failed twice - phone/profile may not survive this instance",
+        },
+      ]).catch(() => {});
+    }
+  }
   return rec;
 }
 

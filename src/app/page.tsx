@@ -947,7 +947,14 @@ export default function Home() {
                   const targets = filtered
                     .filter((v) => !v.offer && v.stage !== "rfq-sent" && v.stage !== "awaiting-response")
                     .slice(0, 6)
-                    .map((v) => ({ id: v.id, name: v.name, whatsapp: v.whatsapp, placeId: v.placeId }));
+                    .map((v) => ({
+                      id: v.id,
+                      name: v.name,
+                      whatsapp: v.whatsapp,
+                      placeId: v.placeId,
+                      // Google "open now" - so an open shop is never queued as closed.
+                      openNow: v.openNow,
+                    }));
                   const res = await fetch("/api/outreach/mass", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },

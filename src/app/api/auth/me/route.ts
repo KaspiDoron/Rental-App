@@ -12,7 +12,9 @@ export async function GET() {
     clearSessionCookie();
     return NextResponse.json({ session: null, profile: null, betaBlocked: true });
   }
-  const profile = session ? (await getUser(session.email)) ?? null : null;
+  // fresh: the profile (phone!) must come from the durable store, never a
+  // stale per-instance cache - this is what pages read right after login.
+  const profile = session ? (await getUser(session.email, { fresh: true })) ?? null : null;
   return NextResponse.json({
     session,
     profile: profile

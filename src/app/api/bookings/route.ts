@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbInsert, sbSelect } from "@/lib/runtime-config";
+import { sbInsert, sbSelect, sbDelete } from "@/lib/runtime-config";
 
 // Persist confirmed bookings and list the caller's booking history.
 export async function POST(req: Request) {
@@ -36,14 +36,31 @@ export async function GET() {
   const filter = `user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=25`;
   let rows = await sbSelect(
     "bookings",
-    `select=vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,status,created_at&${filter}`
+    `select=id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,status,created_at&${filter}`
   );
   if (rows.length === 0) {
     // Pre-migration fallback (a select naming an unknown column fails as []).
     rows = await sbSelect(
       "bookings",
-      `select=vendor_name,price_per_day,total_price,fulfillment,scheduled_at,status,created_at&${filter}`
+      `select=id,vendor_name,price_per_day,total_price,fulfillment,scheduled_at,status,created_at&${filter}`
     );
   }
   return NextResponse.json({ bookings: rows });
+}
+
+// Remove a past booking from the caller's own history (item #10). Strictly
+// scoped to the signed-in user - nobody can delete another user's row.
+export async function DELETE(req: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  const body = await req.json().catch(() => ({}));
+  const id = Number(body.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+  await sbDelete(
+    "bookings",
+    `id=eq.${id}&user_email=eq.${encodeURIComponent(session.email)}`
+  );
+  return NextResponse.json({ ok: true });
 }

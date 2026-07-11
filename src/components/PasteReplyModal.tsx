@@ -6,6 +6,7 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
+import { moneyLocal } from "@/lib/currency";
 
 // Manual FALLBACK for adding a shop's reply (text or a photo of a price list).
 // With WhatsApp connected, replies flow in automatically via the webhook and
@@ -35,6 +36,7 @@ export function PasteReplyModal({
   const [result, setResult] = useState<{
     found: boolean;
     pricePerDay?: number;
+    currency?: string;
     matchesSpec: boolean;
     confidence: string;
     clarifyMessage?: string;
@@ -197,7 +199,7 @@ export function PasteReplyModal({
               <div className="flex items-center justify-between">
                 <span className="text-[13px] font-bold text-soft">{t("Detected price")}</span>
                 <span className="text-xl font-extrabold text-strong">
-                  ${result.pricePerDay}/{t("day")}
+                  {moneyLocal(result.pricePerDay, result.currency)}/{t("day")}
                 </span>
               </div>
               {result.matchesSpec && result.confidence === "high" ? (

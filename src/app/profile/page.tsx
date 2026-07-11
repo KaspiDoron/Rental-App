@@ -15,6 +15,7 @@ import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/c
 import { useI18n } from "@/lib/i18n";
 
 interface Booking {
+  id?: number;
   vendor_name: string;
   price_per_day: number;
   total_price: number;
@@ -111,6 +112,22 @@ export default function ProfilePage() {
       setCurSource(localStorage.getItem("wd_currency") ? "saved" : "auto");
     } catch {}
   }, []);
+
+  // Remove a booking from history (item #10): optimistic, server-verified.
+  const [bookingDeleting, setBookingDeleting] = useState<number | null>(null);
+  async function removeBooking(id: number) {
+    setBookingDeleting(id);
+    try {
+      await fetch("/api/bookings", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      setBookings((bs) => bs.filter((b) => b.id !== id));
+    } finally {
+      setBookingDeleting(null);
+    }
+  }
 
   function pickCurrency(code: string) {
     setCur(code);
@@ -430,8 +447,8 @@ export default function ProfilePage() {
           </section>
         )}
 
-        {/* Owner AI co-manager */}
-        {(isOwner || (session && session.plan !== "free")) && (
+        {/* Owner AI co-manager - management ONLY (item #9): plans never grant it */}
+        {isMgmt && (
           <section className="surface rounded-blob border-2 !border-brandyellow p-4">
             <div className="mb-2 flex items-center gap-2">
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-brandyellow text-base">
@@ -667,7 +684,7 @@ export default function ProfilePage() {
           ) : (
             <div className="space-y-2">
               {bookings.map((b, i) => (
-                <div key={i} className="flex items-center justify-between rounded-2xl bg-card2 p-3">
+                <div key={b.id ?? i} className="flex items-center justify-between rounded-2xl bg-card2 p-3">
                   <div>
                     <div className="text-[13px] font-extrabold text-strong">{b.vendor_name}</div>
                     <div className="text-[11px] text-faint">
@@ -675,11 +692,28 @@ export default function ProfilePage() {
                       {b.fulfillment}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[14px] font-extrabold text-strong">
-                      {moneyLocal(b.total_price, b.currency ?? undefined)}
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <div className="text-[14px] font-extrabold text-strong">
+                        {moneyLocal(b.total_price, b.currency ?? undefined)}
+                      </div>
+                      <div className="text-[10px] font-bold uppercase text-savings">{b.status}</div>
                     </div>
-                    <div className="text-[10px] font-bold uppercase text-savings">{b.status}</div>
+                    {b.id != null && (
+                      <button
+                        onClick={() => removeBooking(b.id!)}
+                        disabled={bookingDeleting === b.id}
+                        aria-label={t("Remove from history")}
+                        title={t("Remove from history")}
+                        className="btn btn-ghost rounded-xl p-2 text-brandred disabled:opacity-50"
+                      >
+                        {bookingDeleting === b.id ? (
+                          <span className="block h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brandred" />
+                        ) : (
+                          <Icon name="x" className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

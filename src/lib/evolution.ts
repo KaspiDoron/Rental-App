@@ -476,7 +476,11 @@ async function saveSession(
     "wa_sessions",
     [
       {
-        email,
+        // ALWAYS lowercased: every read (hasSessionRow, storedStatus,
+        // resolveHost) queries email=eq.<lowercase>. A mixed-case email (e.g.
+        // from Google sign-in) written raw made a truly-connected user look
+        // "not connected" to the import/teach features.
+        email: email.trim().toLowerCase(),
         instance_name: instance,
         status,
         ...(hostUrl ? { host_url: hostUrl } : {}),
@@ -556,9 +560,11 @@ export async function pauseIdleSessions(): Promise<number> {
 
 /** Last durable status we recorded for this user's session. */
 async function storedStatus(email: string): Promise<string | null> {
+  // ilike = case-insensitive equality, so rows written before emails were
+  // normalised to lowercase still count as linked.
   const rows = await sbSelect<{ status: string }>(
     "wa_sessions",
-    `select=status&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+    `select=status&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
   return rows[0]?.status ?? null;
 }
@@ -576,7 +582,7 @@ export async function wasEverConnected(email: string): Promise<boolean> {
 export async function hasSessionRow(email: string): Promise<boolean> {
   const rows = await sbSelect<{ email: string }>(
     "wa_sessions",
-    `select=email&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+    `select=email&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
   return rows.length > 0;
 }

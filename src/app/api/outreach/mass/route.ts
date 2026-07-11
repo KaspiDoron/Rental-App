@@ -32,8 +32,13 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const message = String(body.message ?? "").trim();
-  const vendors: { id: string; name: string; whatsapp?: string; placeId?: string }[] =
-    Array.isArray(body.vendors) ? body.vendors.slice(0, MAX_BATCH) : [];
+  const vendors: {
+    id: string;
+    name: string;
+    whatsapp?: string;
+    placeId?: string;
+    openNow?: boolean; // Google "open now" - the same truth the card shows
+  }[] = Array.isArray(body.vendors) ? body.vendors.slice(0, MAX_BATCH) : [];
   if (!message || vendors.length === 0) {
     return NextResponse.json({ error: "message and vendors required" }, { status: 400 });
   }
@@ -103,6 +108,9 @@ export async function POST(req: Request) {
       auto: true,
       queueIfBlocked: true,
       region: String(body.region ?? "") || undefined,
+      // Google truth first: an open shop is NEVER queued as "closed". Only
+      // when openNow is unknown does the local-clock window apply.
+      shopOpenNow: typeof v.openNow === "boolean" ? v.openNow : undefined,
       meta,
     });
     if (!guard.allow) {
