@@ -152,7 +152,9 @@ export async function POST(req: Request) {
     },
   });
   if (!guard.allow) {
-    const halted = (guard.reason ?? "").startsWith("engagement-halt");
+    const halted =
+      (guard.reason ?? "").startsWith("engagement-halt") ||
+      (guard.reason ?? "").startsWith("rfq-dedup");
     return NextResponse.json({
       allowed: true,
       sent: false,
@@ -160,7 +162,7 @@ export async function POST(req: Request) {
       queuedUntil: guard.queuedUntil,
       halted,
       error: halted
-        ? "Message already sent - your agent is waiting for the shop to reply first."
+        ? "This shop was already asked - your agent keeps the existing conversation going instead of re-sending the question."
         : guard.queuedUntil
         ? "The shop is closed right now - your message is queued and will be sent when they open."
         : guard.reason,

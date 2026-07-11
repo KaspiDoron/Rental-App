@@ -100,12 +100,20 @@ export async function POST(req: Request) {
       ? Math.max(floorPrice, Math.round(usable * 0.6))
       : Math.round(usable * 0.85);
     if (floorPrice && usable <= floorPrice * 1.05) {
-      agentMessage = "Perfect, that works - thanks so much! I'll confirm shortly.";
+      // NEVER imply the deal is accepted - only the traveller confirms.
+      agentMessage = "Thanks so much for the info! Let me think it over and I'll message you again.";
       action = "close (already at floor)";
       reasoning = `They quoted ${money(usable, cur)}/day, at/under the local floor ${money(
         floorPrice,
         cur
-      )} - no point pushing, so I close warmly.`;
+      )} - no point pushing, so I close warmly (without committing to anything).`;
+    } else if (target >= usable * 0.95) {
+      agentMessage = "Thanks so much for the info! Let me think it over and I'll message you again.";
+      action = "close (no real saving to ask for)";
+      reasoning = `They quoted ${money(usable, cur)}/day and my floor-anchored target ${money(
+        target,
+        cur
+      )} is not meaningfully lower - asking would make no sense, so I close warmly.`;
     } else {
       const draft = await composeBargain({
         rfq,

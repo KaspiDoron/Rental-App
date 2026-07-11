@@ -735,6 +735,12 @@ export async function extractOffer(
     "true and confidence high. Only when something is genuinely still unknown, " +
     "write a short, polite clarifyMessage - and it must NEVER repeat a question " +
     "the vendor already answered anywhere in the thread. " +
+    `THE MOST IMPORTANT ARITHMETIC RULE: the traveller wants ${rfq.durationDays} day(s), ` +
+    "and shops OFTEN quote the TOTAL for the whole rental, not per day. " +
+    '"3 days 900" or "900 for 3 day" means 900 TOTAL, so pricePerDay is 300 (900/3). ' +
+    "pricePerDay MUST be the true PER-DAY price: when the quote covers the whole " +
+    "period, DIVIDE by the number of days. Only treat a number as per-day when the " +
+    'shop says so ("per day", "/day", "a day") or quotes for 1 day. ' +
     "deposit: ONLY if the shop explicitly stated a deposit requirement, a short " +
     "label like 'Passport only', '3,000 THB cash', 'Passport or 2,000 THB' - " +
     "otherwise an empty string. NEVER guess. " +
@@ -777,10 +783,13 @@ export async function extractOffer(
   // Heuristic fallback: find a price, but never auto-verify it. A bare number
   // is in the shop's LOCAL currency, never dollars.
   const m = text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿|rm|php|₱|₹|₫)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i);
-  if (m) {
+  // Guard: in "3 day 900" the regex catches the DURATION ("3 day"), not the
+  // price - never mistake the day count for a daily rate.
+  const heuristicPrice = m ? parseFloat(m[1].replace(/,/g, "")) : NaN;
+  if (m && heuristicPrice > 0 && heuristicPrice !== rfq.durationDays) {
     return {
       found: true,
-      pricePerDay: parseFloat(m[1].replace(/,/g, "")),
+      pricePerDay: heuristicPrice,
       currency: symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD",
       matchesSpec: false,
       confidence: "medium",

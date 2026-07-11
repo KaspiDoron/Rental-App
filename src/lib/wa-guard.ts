@@ -689,6 +689,32 @@ export async function guardOutbound(opts: {
     }
   }
 
+  // -0.5. ONE RFQ PER SHOP PER DAY. A fresh opening question into a thread
+  //       where we ALREADY asked recently ("do you have a 125cc scooter...?"
+  //       twice in one morning) screams bot - the text differs, the question
+  //       is the same. Auto RFQs to a number that already received an RFQ from
+  //       this sender in the last 24h are dropped (never queued); the existing
+  //       conversation is the place to continue.
+  if (opts.auto && opts.meta?.kind === "rfq") {
+    const priorRfq = await sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+        opts.toDigits
+      )}&raw->>sender=eq.${encodeURIComponent(
+        opts.senderKey
+      )}&raw->>kind=eq.rfq&received_at=gte.${encodeURIComponent(
+        new Date(now - 24 * 3600_000).toISOString()
+      )}&limit=1`
+    );
+    if (priorRfq.length > 0) {
+      return {
+        allow: false,
+        reason: "rfq-dedup - this shop was already asked in the last 24h",
+        text,
+      };
+    }
+  }
+
   // Is this a brand-new cold contact (no prior message to this number)?
   const priorRecipient = await sbSelect<{ id: number }>(
     "wa_recipient_state",

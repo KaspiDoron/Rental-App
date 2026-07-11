@@ -92,7 +92,7 @@ export function defaultFunnel(): FunnelNode {
           leaf(
             "At/under the floor",
             "Price is already at or below the local floor",
-            "Thank them and close warmly - it is a great price, do NOT push."
+            "Thank them warmly WITHOUT committing (the traveller decides) - do NOT push."
           ),
           {
             id: nid(),
@@ -103,7 +103,7 @@ export function defaultFunnel(): FunnelNode {
               leaf(
                 "They accepted",
                 "Shop agrees to our target (or close)",
-                "Confirm warmly, lock the details (dates, pickup), and stop."
+                "Thank them warmly and stop - the traveller confirms the booking, never the agent."
               ),
               leaf(
                 "Counter-offer",

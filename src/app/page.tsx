@@ -185,8 +185,12 @@ export default function Home() {
     setPhase("idle");
     setClearConfirm(false);
     appliedReplies.current = new Set();
+    setQueueItems([]);
     // Future replies belong to a NEW session - anything before now is dead.
     setSearchEpoch(Date.now());
+    // HARD close on the server too: purge every queued message and stamp the
+    // session-closed marker so the agents stop talking to the old shops.
+    fetch("/api/session/close", { method: "POST" }).catch(() => {});
     try {
       sessionStorage.removeItem("wd_search");
     } catch {}
@@ -398,6 +402,10 @@ export default function Home() {
     const epoch = Date.now();
     setSearchEpoch(epoch);
     appliedReplies.current = new Set();
+    setQueueItems([]);
+    // Close the PREVIOUS session on the server first: purge its queued
+    // messages and silence its shop threads before any new RFQ goes out.
+    await fetch("/api/session/close", { method: "POST" }).catch(() => {});
 
     const pRes = await fetch("/api/profile", {
       method: "POST",
@@ -874,6 +882,7 @@ export default function Home() {
                   });
                   const d = await res.json();
                   if (d.results) {
+                    let alreadyAsked = 0;
                     for (const r of d.results) {
                       if (r.sent) {
                         patchVendor(r.id, {
@@ -890,14 +899,27 @@ export default function Home() {
                           queuedUntil: r.queuedUntil ?? new Date().toISOString(),
                           lastEventAt: Date.now(),
                         });
+                      } else if (String(r.reason ?? "").startsWith("rfq-dedup")) {
+                        // This shop already has an open conversation from the last
+                        // 24h - the agent continues THAT thread instead of
+                        // re-sending the same question (never look like a bot).
+                        alreadyAsked += 1;
+                        patchVendor(r.id, {
+                          stage: "awaiting-response",
+                          lastEventAt: Date.now(),
+                        });
                       }
                     }
                     refreshQueue();
                     setMassNote(
-                      d.sent > 0 || d.queued > 0
+                      d.sent > 0 || d.queued > 0 || alreadyAsked > 0
                         ? `${t("Agents are on it - shops asked:")} ${d.sent}${
                             d.queued > 0
                               ? ` · ${d.queued} ${t("queued for opening hours")}`
+                              : ""
+                          }${
+                            alreadyAsked > 0
+                              ? ` · ${alreadyAsked} ${t("already in conversation")}`
                               : ""
                           }`
                         : d.connect
