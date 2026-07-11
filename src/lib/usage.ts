@@ -50,6 +50,7 @@ const LIMIT_DEFAULTS: Record<string, number> = {
   LIMIT_SEARCHES_PER_DAY: 15, // vendor discovery (Places searches)
   LIMIT_GEOCODE_PER_DAY: 40, // address lookups
   LIMIT_AI_PER_DAY: 120, // AI calls (extraction, drafts, translate sweeps)
+  LIMIT_TRANSLATE_PER_DAY: 60, // UI translate sweeps (cache means most are free)
   LIMIT_WA_PER_HOUR: 15, // personal WhatsApp sends
   LIMIT_WA_PER_DAY: 60,
 };

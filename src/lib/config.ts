@@ -81,6 +81,7 @@ const KEYS: {
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token (optional)", scope: "messaging", editable: true },
   { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID (optional)", scope: "messaging", editable: true },
   { name: "WHATSAPP_VERIFY_TOKEN", label: "WhatsApp Webhook Verify Token (optional)", scope: "messaging", editable: true },
+  { name: "WHATSAPP_APP_SECRET", label: "WhatsApp App Secret (verifies inbound webhook signatures)", scope: "messaging", editable: true },
   { name: "GOOGLE_MAPS_API_KEY", label: "Google Maps API Key", scope: "maps", editable: true },
   { name: "GOOGLE_OAUTH_CLIENT_ID", label: "Google OAuth Client ID", scope: "auth", editable: true },
   { name: "GMAIL_USER", label: "Gmail address (free SMTP - preferred)", scope: "email", editable: true },

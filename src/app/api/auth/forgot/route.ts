@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   };
   if (!user) return NextResponse.json(generic);
 
-  const temp = randomBytes(4).toString("hex").toUpperCase(); // 8 chars
+  const temp = randomBytes(6).toString("hex").toUpperCase(); // 12 chars, ~48 bits
 
   const result = await sendEmail({
     to: [key],

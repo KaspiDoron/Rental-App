@@ -158,3 +158,8 @@ async function clearRow(email: string): Promise<void> {
   if (supabaseConfigured()) await sbDelete("email_verifications", `email=eq.${encodeURIComponent(email)}`);
   else memStore().delete(email);
 }
+
+/** Discard a pending verification (e.g. after too many wrong-code attempts). */
+export async function clearEmailVerification(email: string): Promise<void> {
+  await clearRow(email.toLowerCase());
+}

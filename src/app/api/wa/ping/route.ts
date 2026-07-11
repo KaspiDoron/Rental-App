@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
-import { pingAllHosts } from "@/lib/evolution";
+import { pingAllHosts, webhookToken } from "@/lib/evolution";
 
 export const dynamic = "force-dynamic";
 
 // Keep-awake for the Evolution API host pool (free tiers sleep after ~15 min).
-// Point cron-job.org (and a couple of backup free cron pingers) at THIS url
-// every 5-10 minutes: we ping EVERY configured host server-side and return a
-// tiny JSON body, so cron-job.org never hits "output too large".
-export async function GET() {
+// Point cron-job.org (and a couple of backup free cron pingers) at
+//   https://<app>/api/wa/ping?token=<webhook token>
+// every 5-10 minutes. The token (same one the Evolution webhook uses, shown
+// in Admin -> Keys guidance) stops anonymous callers from forcing outbox
+// drains and host pings.
+export async function GET(req: Request) {
+  const expected = await webhookToken();
+  if (expected) {
+    const token = new URL(req.url).searchParams.get("token");
+    if (token !== expected) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
   const hosts = await pingAllHosts();
 
   // GUARANTEED queue drain: delayed agent replies (human thinking-time) and

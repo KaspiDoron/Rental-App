@@ -198,7 +198,13 @@ export function instanceNameFor(email: string): string {
 /** Webhook token derived from a stable secret so it works across all hosts. */
 export async function webhookToken(): Promise<string | null> {
   if ((await getHosts()).length === 0) return null;
-  const secret = process.env.SESSION_SECRET || "wd-fallback-secret";
+  const secret = process.env.SESSION_SECRET;
+  // A predictable fallback secret would make the webhook/ping token guessable.
+  // In production we require a real SESSION_SECRET (same one the sessions use).
+  if (!secret || secret.length < 16) {
+    if (process.env.NODE_ENV === "production") return null;
+    return createHash("sha256").update("wd-webhook:dev-only").digest("hex").slice(0, 32);
+  }
   return createHash("sha256").update(`wd-webhook:${secret}`).digest("hex").slice(0, 32);
 }
 

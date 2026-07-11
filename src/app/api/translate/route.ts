@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { chat, aiEnabled } from "@/lib/ai";
 import { getConfig, setConfig } from "@/lib/runtime-config";
+import { getSession } from "@/lib/session";
 
 // AI translation for the app UI. Uses the configured AI providers (with
 // automatic failover) - real context-aware translation, not word-by-word.
@@ -43,6 +44,16 @@ async function translateChunk(
 }
 
 export async function POST(req: Request) {
+  // Signed-in only + a generous daily cap: the cache means real users almost
+  // never hit the LLM (each string is translated once ever), but this stops
+  // an anonymous caller from turning the endpoint into an open LLM faucet and
+  // poisoning the durable translation cache.
+  const session = await getSession();
+  if (!session) return NextResponse.json({ map: {} }, { status: 401 });
+  const { checkDailyLimit } = await import("@/lib/usage");
+  const gate = await checkDailyLimit("translate", session.email, "LIMIT_TRANSLATE_PER_DAY");
+  if (!gate.allowed) return NextResponse.json({ map: {} }, { status: 429 });
+
   const body = await req.json().catch(() => ({}));
   const lang = String(body.lang ?? "").trim();
   const langName = String(body.langName ?? lang).slice(0, 40);
@@ -90,6 +101,9 @@ export async function POST(req: Request) {
       // Persist the growing dictionary (best effort - works without Supabase too).
       await setConfig(cacheKey, JSON.stringify(cached));
     }
+    // Count this LLM sweep against the daily cap (a cache hit costs nothing).
+    const { recordApi } = await import("@/lib/usage");
+    await recordApi("translate", 1, session.email);
   }
 
   return NextResponse.json({

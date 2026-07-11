@@ -18,8 +18,25 @@ import type { Session, Role } from "./types";
 const COOKIE = "wd_session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
+const INSECURE_DEFAULT = "dev-insecure-secret-change-me";
+
+/** True when a real signing secret is configured (always true off-production). */
+export function sessionSecretReady(): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  const s = process.env.SESSION_SECRET;
+  return Boolean(s && s.length >= 16 && s !== INSECURE_DEFAULT);
+}
+
 function secret(): string {
-  return process.env.SESSION_SECRET || "dev-insecure-secret-change-me";
+  const s = process.env.SESSION_SECRET;
+  if (s && s.length >= 16 && s !== INSECURE_DEFAULT) return s;
+  // In production a missing/weak secret would let ANYONE forge the wd_session
+  // cookie for any email (including the owner). Refuse to sign or validate
+  // rather than hand out forgeable tokens.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET must be set to a strong value (>= 16 chars) in production.");
+  }
+  return INSECURE_DEFAULT;
 }
 
 export function ownerEmail(): string {
@@ -113,7 +130,14 @@ function decode(token: string | undefined): { email: string; issuedAt: number } 
 
 /** Current session with a freshly-derived role and plan, or null. */
 export async function getSession(): Promise<Session | null> {
-  const raw = decode(cookies().get(COOKIE)?.value);
+  let raw: { email: string; issuedAt: number } | null = null;
+  try {
+    raw = decode(cookies().get(COOKIE)?.value);
+  } catch {
+    // secret() throws in production without a strong SESSION_SECRET - treat as
+    // no session (the app is locked until the secret is set) rather than 500.
+    return null;
+  }
   if (!raw?.email) return null;
   const role = await roleFor(raw.email);
   // Management holds the Ultra plan automatically, free of charge.

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { setSessionCookie, getSession } from "@/lib/session";
 import { registerUser, getUser } from "@/lib/access";
-import { confirmEmailVerification, startEmailVerification } from "@/lib/verify";
+import { confirmEmailVerification, startEmailVerification, clearEmailVerification } from "@/lib/verify";
 import { sbInsert } from "@/lib/runtime-config";
+import { authLockLeft, noteAuthFailure, clearAuthFailures } from "@/lib/cooldown";
 
 // Confirm the email-ownership code and ONLY THEN create + sign in the account.
 //   POST { email, code }            -> verify + create account
@@ -26,11 +27,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: BETA_BLOCK_MESSAGE, betaBlocked: true }, { status: 403 });
   }
 
+  // Throttle 6-digit code guessing: the code space is only 1e6, so without a
+  // cap it is brute-forceable within the 15-min TTL. Lock after 5 wrong codes
+  // and discard the pending record so it cannot be guessed further.
+  const lockLeft = await authLockLeft(email, "verify");
+  if (lockLeft > 0) {
+    await clearEmailVerification(email);
+    return NextResponse.json(
+      { error: `Too many wrong codes - tap Sign up again to get a fresh code.` },
+      { status: 429 }
+    );
+  }
+
   const code = String(body.code ?? "").trim();
   const result = await confirmEmailVerification(email, code);
   if (!result.ok || !result.pending) {
+    // Count only a genuine wrong-code guess (not an expired/corrupt record).
+    if (/wrong code/i.test(result.error ?? "")) {
+      const { locked } = await noteAuthFailure(email, "verify", 5, 15, 15);
+      if (locked) await clearEmailVerification(email);
+    }
     return NextResponse.json({ error: result.error ?? "Verification failed." }, { status: 400 });
   }
+  clearAuthFailures(email, "verify");
 
   // Email proven - create the real account now (pinned to the invited plan).
   const p = result.pending;

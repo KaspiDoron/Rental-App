@@ -10,9 +10,26 @@
 // Configure the callback URL in Meta as: https://<your-domain>/api/webhooks/whatsapp
 
 import { NextResponse } from "next/server";
+import { createHmac, timingSafeEqual } from "crypto";
 import { getConfig, sbInsert } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import { sendWhatsApp } from "@/lib/whatsapp";
+
+// Verify Meta's X-Hub-Signature-256 over the RAW request body. Returns true
+// when no app secret is configured (demo/dev) so the endpoint still works,
+// but once WHATSAPP_APP_SECRET is set an unsigned or forged POST is rejected -
+// closing the "anyone who knows the URL can inject vendor replies" hole.
+function signatureValid(raw: string, header: string | null, secret: string): boolean {
+  if (!header) return false;
+  const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
+  try {
+    const a = Buffer.from(header);
+    const b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -39,7 +56,22 @@ interface WaValue {
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
+  // Read the RAW body once - signature verification must run over the exact
+  // bytes Meta signed, so we cannot use req.json() first.
+  const raw = await req.text();
+  const appSecret = await getConfig("WHATSAPP_APP_SECRET");
+  if (appSecret) {
+    const sig = req.headers.get("x-hub-signature-256");
+    if (!signatureValid(raw, sig, appSecret)) {
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
+  }
+  let body: any = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
   if (!body) return NextResponse.json({ ok: true });
 
   try {

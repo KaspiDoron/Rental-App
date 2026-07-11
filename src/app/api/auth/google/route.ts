@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { setSessionCookie, getSession, isOwner } from "@/lib/session";
+import { setSessionCookie, getSession, isOwner, sessionSecretReady } from "@/lib/session";
 import { getConfig } from "@/lib/runtime-config";
 import { getUser, registerUser, isBlocked, touchUser } from "@/lib/access";
 
@@ -9,6 +9,12 @@ const PHONE_RX = /^\+?[\d\s\-()]{7,17}$/;
 // The client posts the ID token; we verify it against Google's tokeninfo
 // endpoint server-side, then apply the same signup rules as email login.
 export async function POST(req: Request) {
+  if (!sessionSecretReady()) {
+    return NextResponse.json(
+      { error: "Server is not configured securely yet (owner: set SESSION_SECRET)." },
+      { status: 503 }
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const credential = String(body.credential ?? "");
   const phone = String(body.phone ?? "").trim();

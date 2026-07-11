@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { setSessionCookie, getSession, isOwner } from "@/lib/session";
+import { setSessionCookie, getSession, isOwner, sessionSecretReady } from "@/lib/session";
 import {
   getUser,
   registerUser,
@@ -21,6 +21,12 @@ const OWNER_DEFAULT_PASSWORD = "KASPI123";
 //   mode "login"  : { email, password }
 //   mode "signup" : { email, phone, password, acceptTerms }
 export async function POST(req: Request) {
+  if (!sessionSecretReady()) {
+    return NextResponse.json(
+      { error: "Server is not configured securely yet (owner: set SESSION_SECRET). Try again shortly." },
+      { status: 503 }
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const mode = body.mode === "signup" ? "signup" : "login";
   const email = String(body.email ?? "").trim().toLowerCase();
@@ -110,16 +116,30 @@ export async function POST(req: Request) {
       });
     }
   } else {
+    // Brute-force throttle: a locked account refuses password attempts.
+    const { authLockLeft, noteAuthFailure, clearAuthFailures } = await import("@/lib/cooldown");
+    const lockLeft = await authLockLeft(email, "login");
+    if (lockLeft > 0) {
+      return NextResponse.json(
+        { error: `Too many attempts - try again in ${lockLeft} min or use Forgot password.` },
+        { status: 429 }
+      );
+    }
     // Log in - always verify against the freshest durable record.
     let user = await getUser(email, { fresh: true });
     if (!user && isOwner(email)) {
-      // Owner bootstrap on a fresh instance: create with the default password.
+      // Owner bootstrap on a fresh instance: create with the default password
+      // but FORCE a change on first login so the well-known default can never
+      // remain a live credential.
       user = await registerUser({
         email,
         password: OWNER_DEFAULT_PASSWORD,
         provider: "email",
         acceptedTerms: true,
       });
+      const { setPassword: setPw } = await import("@/lib/access");
+      await setPw(email, OWNER_DEFAULT_PASSWORD, true);
+      user = await getUser(email, { fresh: true });
     }
     if (!user) {
       return NextResponse.json(
@@ -132,8 +152,17 @@ export async function POST(req: Request) {
       user = await getUser(email, { fresh: true });
     }
     if (!verifyPassword(password, user?.passwordHash)) {
-      return NextResponse.json({ error: "Wrong password. Try again or use Forgot password." }, { status: 401 });
+      const { locked, lockedMinutes } = await noteAuthFailure(email, "login");
+      return NextResponse.json(
+        {
+          error: locked
+            ? `Too many attempts - locked for ${lockedMinutes} min. Use Forgot password.`
+            : "Wrong password. Try again or use Forgot password.",
+        },
+        { status: locked ? 429 : 401 }
+      );
     }
+    clearAuthFailures(email, "login");
     await touchUser(email);
   }
 

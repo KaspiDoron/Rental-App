@@ -71,3 +71,56 @@ const FUTURE_PICKUP =
 export function requestsFuturePickup(text: string): boolean {
   return FUTURE_PICKUP.test(text);
 }
+
+// ---- Brute-force throttle (login + verify-code) ------------------------------
+// Per-key failed-attempt counter with a rolling window. Backed by the same
+// in-memory map (per instance); combined with a durable cooldown row once the
+// threshold trips, so a lockout survives an instance rotation.
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_attempts__: Map<string, { n: number; first: number }> | undefined;
+}
+function attempts(): Map<string, { n: number; first: number }> {
+  if (!globalThis.__wd_attempts__) globalThis.__wd_attempts__ = new Map();
+  return globalThis.__wd_attempts__;
+}
+
+/**
+ * Record one failed attempt for (email, kind). After `max` failures within
+ * `windowMin`, sets a durable cooldown of `lockMin` and returns locked. Reads
+ * the durable cooldown too, so an existing lockout is honored immediately.
+ */
+export async function noteAuthFailure(
+  email: string,
+  kind: string,
+  max = 6,
+  windowMin = 15,
+  lockMin = 15
+): Promise<{ locked: boolean; lockedMinutes: number }> {
+  const existing = await cooldownLeft(email, `lock:${kind}`);
+  if (existing > 0) return { locked: true, lockedMinutes: existing };
+  const key = `${email}:${kind}`;
+  const now = Date.now();
+  const rec = attempts().get(key);
+  if (!rec || now - rec.first > windowMin * 60_000) {
+    attempts().set(key, { n: 1, first: now });
+    return { locked: false, lockedMinutes: 0 };
+  }
+  rec.n += 1;
+  if (rec.n >= max) {
+    attempts().delete(key);
+    await setCooldown(email, `lock:${kind}`, lockMin, `too many failed ${kind} attempts`);
+    return { locked: true, lockedMinutes: lockMin };
+  }
+  return { locked: false, lockedMinutes: 0 };
+}
+
+/** Minutes remaining on an auth lockout (0 if none). */
+export async function authLockLeft(email: string, kind: string): Promise<number> {
+  return cooldownLeft(email, `lock:${kind}`);
+}
+
+/** Clear the failed-attempt state on a successful auth. */
+export function clearAuthFailures(email: string, kind: string): void {
+  attempts().delete(`${email}:${kind}`);
+}
