@@ -238,6 +238,16 @@ export default function MapView({
   const [full, setFull] = useState(false);
   const stripRef = useRef<HTMLDivElement>(null);
 
+  // Lock the page behind the fullscreen map so touch-scroll doesn't move it.
+  useEffect(() => {
+    if (!full) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [full]);
+
   // CRITICAL pin fix: shops with a missing or duplicate Google location all
   // collapse onto ONE point and their rating bubbles stack unusably. Spread
   // exact-duplicate coordinates onto a small deterministic golden-angle fan

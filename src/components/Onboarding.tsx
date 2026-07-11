@@ -103,7 +103,19 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const ua = navigator.userAgent;
     setOs(/android/i.test(ua) ? "android" : "ios");
+    // Lock background scroll for the duration of the tour (like Modal).
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
   }, []);
+
+  // The keyboard-safe viewport height: iOS shrinks visualViewport (not
+  // window.innerHeight) when the keyboard opens, so tooltip math uses this.
+  const vh = () =>
+    (typeof window !== "undefined" && window.visualViewport?.height) ||
+    (typeof window !== "undefined" ? window.innerHeight : 800);
 
   // Measure the current step's anchor (after scrolling it into view). A step
   // whose element is missing (no search yet) renders as a centered card.
@@ -113,9 +125,16 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
       return;
     }
     const anchor = STEPS[step]?.anchor;
-    const el = anchor
+    const container = anchor
       ? (document.querySelector(`[data-tour="${anchor}"]`) as HTMLElement | null)
       : null;
+    // The "vendors" anchor wraps the WHOLE card list - a multi-viewport-tall
+    // element makes the spotlight math go off-screen. Spotlight just the FIRST
+    // card instead.
+    const el =
+      anchor === "vendors" && container?.firstElementChild
+        ? (container.firstElementChild as HTMLElement)
+        : container;
     if (!el) {
       setRect(null);
       return;
@@ -131,10 +150,13 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     };
     clearTimeout(measureTimer.current);
     measureTimer.current = setTimeout(measure, 350); // after smooth scroll
+    const vp = window.visualViewport;
     window.addEventListener("resize", measure);
+    vp?.addEventListener("resize", measure);
     return () => {
       clearTimeout(measureTimer.current);
       window.removeEventListener("resize", measure);
+      vp?.removeEventListener("resize", measure);
     };
   }, [step, osStep]);
 
@@ -148,7 +170,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   const s = STEPS[step];
   const spotlight = rect !== null;
   // Tooltip goes under the spotlight when there is room, else above it.
-  const spaceBelow = spotlight ? window.innerHeight - (rect!.top + rect!.height) : 0;
+  const spaceBelow = spotlight ? vh() - (rect!.top + rect!.height) : 0;
   const tooltipBelow = spotlight && spaceBelow > 230;
 
   const card = (
@@ -292,8 +314,8 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
         className="pointer-events-none absolute inset-x-3 flex justify-center"
         style={
           tooltipBelow
-            ? { top: Math.min(rect!.top + rect!.height + pad + 10, window.innerHeight - 240) }
-            : { bottom: Math.max(window.innerHeight - rect!.top + pad + 10, 16) }
+            ? { top: Math.min(rect!.top + rect!.height + pad + 10, vh() - 240) }
+            : { bottom: Math.max(vh() - rect!.top + pad + 10, 16) }
         }
       >
         {card}

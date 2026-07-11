@@ -74,8 +74,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // Pinch-zoom stays ENABLED for accessibility (WCAG 1.4.4). Form controls are
+  // all >= 16px so iOS never auto-zooms on focus - we don't need to disable it.
+  maximumScale: 5,
+  userScalable: true,
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f4f6f9" },

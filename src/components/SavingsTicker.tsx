@@ -17,27 +17,28 @@ export function AnimatedNumber({
   className?: string;
 }) {
   const [display, setDisplay] = useState(value);
-  const fromRef = useRef(value);
-  const startRef = useRef<number | null>(null);
+  const displayRef = useRef(value);
+  displayRef.current = display;
   const [pop, setPop] = useState(false);
 
   useEffect(() => {
-    const from = fromRef.current;
+    // Always start the new tween from the CURRENTLY DISPLAYED value and a fresh
+    // start timestamp. The old code reused a stale start time when a poll
+    // updated the value mid-animation, which made the number JUMP instead of
+    // animate.
+    const from = displayRef.current;
     const to = value;
     if (from === to) return;
     setPop(true);
     const t = setTimeout(() => setPop(false), 400);
     let raf = 0;
+    let start: number | null = null;
     const tick = (ts: number) => {
-      if (startRef.current === null) startRef.current = ts;
-      const p = Math.min(1, (ts - startRef.current) / duration);
+      if (start === null) start = ts;
+      const p = Math.min(1, (ts - start) / duration);
       const eased = 1 - Math.pow(1 - p, 3);
       setDisplay(from + (to - from) * eased);
       if (p < 1) raf = requestAnimationFrame(tick);
-      else {
-        fromRef.current = to;
-        startRef.current = null;
-      }
     };
     raf = requestAnimationFrame(tick);
     return () => {

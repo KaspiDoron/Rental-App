@@ -17,6 +17,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -213,11 +214,15 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     [lang, dict]
   );
 
-  return (
-    <I18nContext.Provider value={{ lang, setLang, t, busy, error }}>
-      {children}
-    </I18nContext.Provider>
+  // Memoize the context value so a `busy`/`error` toggle (or any provider
+  // re-render) does not hand every useI18n consumer in the tree a brand-new
+  // object and force a full-app re-render on each translate sweep.
+  const value = useMemo(
+    () => ({ lang, setLang, t, busy, error }),
+    [lang, setLang, t, busy, error]
   );
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 
 export function useI18n(): I18nValue {

@@ -13,8 +13,10 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: "/",
     display: "standalone",
     orientation: "portrait",
-    background_color: "#070b13",
-    theme_color: "#070b13",
+    // Match the app's real light background so the PWA launch splash doesn't
+    // flash a blue-black that belongs to neither theme.
+    background_color: "#f4f6f9",
+    theme_color: "#f4f6f9",
     categories: ["travel", "shopping", "productivity"],
     icons: [
       { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },

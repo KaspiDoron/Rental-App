@@ -850,32 +850,8 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Queued for opening hours - user decides: wait or remove (#9) */}
-                {statusGroups.queued.length > 0 && (
-                  <div>
-                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">🕘 {t("Waiting for the shop to open")}</div>
-                    {statusGroups.queued.map((v) => {
-                      const q = queueItems.find((i) => i.vendorId === v.id);
-                      return (
-                        <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
-                          <span className="min-w-0">
-                            <span className="block truncate font-bold text-strong">{v.name}</span>
-                            <span className="block text-[10px] text-faint">
-                              {t("Sends automatically when they open")}
-                              {v.queuedUntil ? ` · ~${new Date(v.queuedUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
-                            </span>
-                          </span>
-                          <button
-                            onClick={() => (q ? removeQueued(q.id, v.id) : patchVendor(v.id, { queuedUntil: undefined }))}
-                            className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-0.5 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
-                          >
-                            {t("Remove")}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Queued messages have their own always-visible card below the
+                    status panel (item #2) - not duplicated here. */}
               </div>
             )}
           </div>
@@ -1180,6 +1156,28 @@ export default function Home() {
             <p className="mx-auto max-w-[280px] text-sm text-soft">
               {t("Tell us what you want to rent - car, scooter or motorbike - and where you're staying. The agents find every rental shop around you and bargain authentically for the best price.")}
             </p>
+          </div>
+        )}
+
+        {/* Zero results after a completed search (was a blank screen) */}
+        {vendors.length === 0 && phase === "done" && (
+          <div className="mt-8 rounded-blob surface p-5 text-center animate-slide-up">
+            <div className="mb-2 text-3xl">🔍</div>
+            <div className="text-[15px] font-extrabold text-strong">
+              {t("No rental shops found near your stay")}
+            </div>
+            <p className="mx-auto mt-1 max-w-[300px] text-[13px] text-soft">
+              {t("Try widening the search radius, checking the location is right, or searching a nearby area.")}
+            </p>
+            <button
+              onClick={() => {
+                setRadiusKm((r) => Math.min(25, r + 5));
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="btn btn-primary mt-3 rounded-2xl px-5 py-2.5 text-[13px]"
+            >
+              {t("Widen radius +5 km")}
+            </button>
           </div>
         )}
 

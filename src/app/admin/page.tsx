@@ -1251,6 +1251,7 @@ export default function AdminPage() {
                           {h && (
                             <button
                               type="button"
+                              aria-label={`What is ${h?.label ?? k.replace(/_/g, " ")}?`}
                               onClick={(e) => {
                                 e.preventDefault();
                                 setWaHelp(waHelp === k ? null : k);
@@ -1279,7 +1280,7 @@ export default function AdminPage() {
                           className="mt-0.5 w-full rounded border border-line bg-card p-1 text-[12px] font-extrabold text-strong"
                         />
                         {waHelp === k && h && (
-                          <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-xl border-2 border-brandblue bg-card p-2.5 text-[11px] shadow-xl">
+                          <div className="absolute left-0 top-full z-20 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-xl border-2 border-brandblue bg-card p-2.5 text-[11px] shadow-xl">
                             <div className="font-extrabold text-strong">{h.label}</div>
                             <div className="mt-1 font-normal text-soft">{h.help}</div>
                             <div className="mt-1.5 font-bold text-savings">✓ {h.best}</div>

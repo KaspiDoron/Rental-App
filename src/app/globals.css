@@ -18,7 +18,8 @@
   --card2: #eef1f6;
   --text: #212837;
   --muted: #5a6577;
-  --faint: #939cad;
+  /* Darkened for AA contrast at the 10-11px sizes this is used at (was #939cad). */
+  --faint: #6b7486;
   --line: #e2e7ef;
 
   --blue: #2f6fed;
@@ -43,7 +44,8 @@
   --card2: #2a2e34;
   --text: #f3f5f8;
   --muted: #aab2bf;
-  --faint: #7d8695;
+  /* Lightened for AA contrast on the dark cards (was #7d8695). */
+  --faint: #99a2b1;
   --line: #33383f;
 
   --blue: #6ea2ff;
@@ -86,6 +88,18 @@ h1, h2, h3, .font-display {
 input, textarea, select, button {
   font-size: 16px;
   font-family: var(--font-body);
+}
+
+/* HARD guarantee on phones: text inputs never render below 16px, even when a
+   Tailwind text-sm/text-[12px] utility is applied - otherwise iOS auto-zooms
+   on focus (and we keep pinch-zoom enabled for accessibility). Checkboxes,
+   radios and buttons are exempt (their size is not a zoom trigger). */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }
 
 .app-shell { min-height: 100dvh; }
