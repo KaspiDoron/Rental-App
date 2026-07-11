@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
@@ -8,7 +8,7 @@ import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
-import { moneyLocal } from "@/lib/currency";
+import { moneyLocal, convertApprox, savedCurrency } from "@/lib/currency";
 import { ThreadPeek } from "./ThreadPeek";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
@@ -68,6 +68,12 @@ export function VendorCard({
   const offer = vendor.offer;
   // The offer's own currency symbol - prices display in the shop's money.
   const curSymbol = offer ? moneyLocal(0, offer.currency).replace(/[\d.,\s]/g, "") || "$" : "$";
+  // Traveller's own currency (item #6) - set after mount so SSR markup stays
+  // deterministic. Used only for the "≈ in your money" hint under the total.
+  const [myCur, setMyCur] = useState<string | null>(null);
+  useEffect(() => setMyCur(savedCurrency()), []);
+  const approxTotal =
+    offer && myCur ? convertApprox(offer.totalPrice, offer.currency, myCur) : null;
   const savings =
     offer && rfq
       ? Math.max(0, (offer.listPricePerDay - offer.pricePerDay) * rfq.durationDays)
@@ -323,6 +329,11 @@ export function VendorCard({
                 </div>
                 <div className="text-[12px] text-soft">
                   {moneyLocal(offer.totalPrice, offer.currency)} {t("total")} · {rfq?.durationDays}d
+                  {approxTotal !== null && myCur && (
+                    <span className="ml-1 text-[11px] font-bold text-faint">
+                      ≈ {moneyLocal(approxTotal, myCur)}
+                    </span>
+                  )}
                 </div>
                 {/* Shop-CONFIRMED conditions only - never guessed */}
                 {(offer.deposit || offer.includesDelivery) && (

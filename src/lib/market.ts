@@ -111,6 +111,54 @@ export async function floorPriceFor(
   return defaultFloor(region, vkey);
 }
 
+// Researched per-country seed: the LOWEST realistic walk-in price for a 125cc
+// automatic scooter, per day, in LOCAL currency (low season, multi-day, cash).
+// Keys match the lowercase country name regionKeysFor() extracts from labels.
+// These seed the hints and the agent's sanity floor before the weekly AI
+// research replaces them with area-accurate rows.
+const COUNTRY_SCOOTER_FLOOR: Record<string, { cur: string; perDay: number }> = {
+  thailand: { cur: "THB", perDay: 150 },
+  indonesia: { cur: "IDR", perDay: 50000 },
+  vietnam: { cur: "VND", perDay: 100000 },
+  philippines: { cur: "PHP", perDay: 350 },
+  malaysia: { cur: "MYR", perDay: 25 },
+  india: { cur: "INR", perDay: 400 },
+  "sri lanka": { cur: "LKR", perDay: 2500 },
+  nepal: { cur: "NPR", perDay: 1000 },
+  taiwan: { cur: "TWD", perDay: 400 },
+  japan: { cur: "JPY", perDay: 4000 },
+  "south korea": { cur: "KRW", perDay: 30000 },
+  singapore: { cur: "SGD", perDay: 50 },
+  greece: { cur: "EUR", perDay: 15 },
+  spain: { cur: "EUR", perDay: 18 },
+  portugal: { cur: "EUR", perDay: 15 },
+  italy: { cur: "EUR", perDay: 20 },
+  france: { cur: "EUR", perDay: 25 },
+  croatia: { cur: "EUR", perDay: 20 },
+  cyprus: { cur: "EUR", perDay: 15 },
+  malta: { cur: "EUR", perDay: 18 },
+  turkey: { cur: "TRY", perDay: 400 },
+  israel: { cur: "ILS", perDay: 120 },
+  mexico: { cur: "MXN", perDay: 350 },
+  brazil: { cur: "BRL", perDay: 80 },
+  morocco: { cur: "MAD", perDay: 150 },
+  egypt: { cur: "EGP", perDay: 250 },
+  "south africa": { cur: "ZAR", perDay: 250 },
+  australia: { cur: "AUD", perDay: 40 },
+  "new zealand": { cur: "NZD", perDay: 40 },
+  "united states": { cur: "USD", perDay: 35 },
+  usa: { cur: "USD", perDay: 35 },
+  "united arab emirates": { cur: "AED", perDay: 100 },
+};
+
+// How each vehicle bucket prices relative to a 125cc scooter (=1.0). Rough but
+// consistent worldwide - real area rows from the AI refresh override these.
+const VEHICLE_RATIO: Record<string, number> = {
+  "scooter-110": 0.8, "scooter-125": 1, "scooter-160": 1.4,
+  "motorbike-150": 1.2, "motorbike-300": 2.4, "motorbike-500": 4, "motorbike-big": 6,
+  "car-economy": 3.6, "car-sedan": 5, "car-suv": 6.4, "car-van": 7.6, "car-luxury": 12,
+};
+
 // Conservative built-in floors (per day, LOCAL currency) so the agent is sane
 // even before the AI has researched an area. Deliberately on the low-but-real
 // side; the AI refresh replaces them with area-accurate numbers.
@@ -118,8 +166,17 @@ function defaultFloor(
   region: string | undefined,
   vkey: string
 ): { floor: number; typical: number | null; currency: string } | null {
+  const ratio = VEHICLE_RATIO[vkey];
+  if (!ratio) return null;
+  // Country-researched seed first - the most accurate zero-AI answer we have.
+  const country = regionKeysFor(region).pop();
+  const seed = country ? COUNTRY_SCOOTER_FLOOR[country] : undefined;
+  if (seed) {
+    const floor = Math.round(seed.perDay * ratio);
+    return { floor, typical: Math.round(floor * 1.6), currency: seed.cur };
+  }
   const cur = currencyForRegion(region) ?? "USD";
-  // Baseline in USD, converted by rough purchasing-power multipliers.
+  // Fallback: USD baseline converted by rough purchasing-power multipliers.
   const usd: Record<string, number> = {
     "scooter-110": 4, "scooter-125": 5, "scooter-160": 7,
     "motorbike-150": 6, "motorbike-300": 12, "motorbike-500": 20, "motorbike-big": 30,

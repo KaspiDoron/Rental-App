@@ -113,6 +113,12 @@ export default function Home() {
   const [queueItems, setQueueItems] = useState<
     { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
   >([]);
+  // Local going-rate hint (item #6): what the cheapest scooter / economy car
+  // honestly costs per day around the chosen stay, in the LOCAL currency.
+  const [priceHint, setPriceHint] = useState<{
+    scooter: { floor: number; typical: number | null; currency: string } | null;
+    car: { floor: number; typical: number | null; currency: string } | null;
+  } | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
   // ATOMIC SESSION: a monotonic epoch stamped when a search starts. Only shop
@@ -127,6 +133,27 @@ export default function Home() {
       setLocalLang(localStorage.getItem("wd_local_lang") === "1");
     } catch {}
   }, []);
+
+  // Refresh the going-rate hint whenever the stay changes. Best-effort only -
+  // a missing hint never blocks the search.
+  useEffect(() => {
+    const label = origin?.label?.trim();
+    if (!label || label === "My current location") {
+      setPriceHint(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/market/hint?region=${encodeURIComponent(label)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setPriceHint(d.scooter || d.car ? { scooter: d.scooter ?? null, car: d.car ?? null } : null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [origin?.label]);
   const localLangActive = localLang && session?.plan === "ultra";
 
   // Fresh random suggestion chips on every visit (client-only so SSR markup
@@ -586,6 +613,24 @@ export default function Home() {
           <div className="mt-3">
             <OriginPicker origin={origin} onChange={setOrigin} />
           </div>
+
+          {priceHint && (priceHint.scooter || priceHint.car) && (
+            <div className="mt-2 rounded-2xl bg-brandblue-soft p-2.5 text-[11px] font-bold leading-relaxed text-brandblue animate-slide-up">
+              💡 {t("Local going rate here:")}{" "}
+              {priceHint.scooter && (
+                <>
+                  {t("scooters from")} ~{moneyLocal(priceHint.scooter.floor, priceHint.scooter.currency)}/{t("day")}
+                </>
+              )}
+              {priceHint.scooter && priceHint.car && " · "}
+              {priceHint.car && (
+                <>
+                  {t("economy cars from")} ~{moneyLocal(priceHint.car.floor, priceHint.car.currency)}/{t("day")}
+                </>
+              )}
+              . {t("Your agents bargain toward the real local floor.")}
+            </div>
+          )}
 
           <label className="mt-3 block text-[12px] font-extrabold text-soft">
             {t("Search radius")} · {radiusKm} km

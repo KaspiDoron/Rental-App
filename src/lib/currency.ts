@@ -77,9 +77,83 @@ export function moneyLocal(amount: number, code?: string): string {
   return c.symbol.length > 1 ? `${c.symbol} ${n}` : `${c.symbol}${n}`;
 }
 
+// ---- Geo currency detection (item #6) --------------------------------------
+// Country (ISO 3166-1 alpha-2) -> catalogue currency, for zero-permission
+// detection from the device locale. Only codes present in CURRENCIES appear.
+const COUNTRY_CURRENCY: Record<string, string> = {
+  US: "USD", IL: "ILS", GB: "GBP", AU: "AUD", CA: "CAD", CH: "CHF", JP: "JPY",
+  CN: "CNY", IN: "INR", TH: "THB", ID: "IDR", VN: "VND", SG: "SGD", AE: "AED",
+  TR: "TRY", MX: "MXN", BR: "BRL", ZA: "ZAR", RU: "RUB", PL: "PLN", PH: "PHP",
+  MY: "MYR", NZ: "NZD", HK: "HKD", TW: "TWD", KR: "KRW", SA: "SAR", MA: "MAD",
+  EG: "EGP", LK: "LKR", NP: "NPR", CZ: "CZK", HU: "HUF", SE: "SEK", NO: "NOK",
+  DK: "DKK",
+  // Eurozone
+  AT: "EUR", BE: "EUR", CY: "EUR", DE: "EUR", EE: "EUR", ES: "EUR", FI: "EUR",
+  FR: "EUR", GR: "EUR", HR: "EUR", IE: "EUR", IT: "EUR", LT: "EUR", LU: "EUR",
+  LV: "EUR", MT: "EUR", NL: "EUR", PT: "EUR", SI: "EUR", SK: "EUR",
+};
+
+// Timezone -> currency, for devices whose locale has no region ("en"). Small
+// on purpose - the locale path covers most phones; this catches the rest.
+const TZ_CURRENCY: Record<string, string> = {
+  "Asia/Bangkok": "THB", "Asia/Jerusalem": "ILS", "Asia/Tel_Aviv": "ILS",
+  "Asia/Jakarta": "IDR", "Asia/Makassar": "IDR", "Asia/Ho_Chi_Minh": "VND",
+  "Asia/Saigon": "VND", "Asia/Manila": "PHP", "Asia/Kuala_Lumpur": "MYR",
+  "Asia/Singapore": "SGD", "Asia/Tokyo": "JPY", "Asia/Seoul": "KRW",
+  "Asia/Taipei": "TWD", "Asia/Hong_Kong": "HKD", "Asia/Kolkata": "INR",
+  "Asia/Calcutta": "INR", "Asia/Colombo": "LKR", "Asia/Kathmandu": "NPR",
+  "Asia/Dubai": "AED", "Asia/Riyadh": "SAR", "Asia/Shanghai": "CNY",
+  "Europe/London": "GBP", "Europe/Istanbul": "TRY", "Europe/Moscow": "RUB",
+  "Europe/Warsaw": "PLN", "Europe/Prague": "CZK", "Europe/Budapest": "HUF",
+  "Europe/Stockholm": "SEK", "Europe/Oslo": "NOK", "Europe/Copenhagen": "DKK",
+  "Europe/Zurich": "CHF", "Europe/Paris": "EUR", "Europe/Berlin": "EUR",
+  "Europe/Madrid": "EUR", "Europe/Rome": "EUR", "Europe/Amsterdam": "EUR",
+  "Europe/Brussels": "EUR", "Europe/Vienna": "EUR", "Europe/Lisbon": "EUR",
+  "Europe/Dublin": "EUR", "Europe/Athens": "EUR", "Europe/Helsinki": "EUR",
+  "Africa/Casablanca": "MAD", "Africa/Cairo": "EGP",
+  "Africa/Johannesburg": "ZAR", "America/Mexico_City": "MXN",
+  "America/Sao_Paulo": "BRL", "Pacific/Auckland": "NZD",
+};
+
+/**
+ * Best-effort detection of the traveller's home currency from the device -
+ * locale region first (e.g. "he-IL" -> ILS), then timezone. Never throws,
+ * never asks for permissions; falls back to USD.
+ */
+export function detectCurrency(): string {
+  try {
+    if (typeof navigator !== "undefined") {
+      const locales = [...(navigator.languages ?? []), navigator.language].filter(Boolean);
+      for (const l of locales) {
+        // Region subtag: 2 letters after a separator ("en-US", "zh-Hant-TW").
+        const m = /[-_]([A-Za-z]{2})(?:[-_]|$)/.exec(l);
+        const region = m?.[1]?.toUpperCase();
+        if (region && COUNTRY_CURRENCY[region]) return COUNTRY_CURRENCY[region];
+      }
+    }
+  } catch {}
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+    if (TZ_CURRENCY[tz]) return TZ_CURRENCY[tz];
+    if (tz.startsWith("Australia/")) return "AUD";
+  } catch {}
+  return "USD";
+}
+
+/**
+ * Rough conversion between two catalogue currencies (via the ILS anchor).
+ * Display-only ("≈ ..."): null when either code is unknown or they match.
+ */
+export function convertApprox(amount: number, from?: string, to?: string): number | null {
+  const f = CURRENCIES.find((c) => c.code === (from ?? "").toUpperCase());
+  const t = CURRENCIES.find((c) => c.code === (to ?? "").toUpperCase());
+  if (!f || !t || f.code === t.code) return null;
+  return (amount / f.perIls) * t.perIls;
+}
+
 export function savedCurrency(): string {
   try {
-    return localStorage.getItem("wd_currency") || "USD";
+    return localStorage.getItem("wd_currency") || detectCurrency();
   } catch {
     return "USD";
   }

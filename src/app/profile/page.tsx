@@ -11,7 +11,7 @@ import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
-import { CURRENCIES, setSavedCurrency, moneyLocal } from "@/lib/currency";
+import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
 interface Booking {
@@ -37,6 +37,10 @@ export default function ProfilePage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [prefs, setPrefs] = useState({ currency: "USD", homeCity: "", ride: "scooter" });
+  // Prominent currency picker (item #6): auto-detected from the device until
+  // the traveller explicitly picks one.
+  const [cur, setCur] = useState("");
+  const [curSource, setCurSource] = useState<"auto" | "saved">("auto");
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNext, setPwNext] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -103,8 +107,17 @@ export default function ProfilePage() {
       setTheme(t2);
       const p = localStorage.getItem("wd_prefs");
       if (p) setPrefs(JSON.parse(p));
+      setCur(savedCurrency());
+      setCurSource(localStorage.getItem("wd_currency") ? "saved" : "auto");
     } catch {}
   }, []);
+
+  function pickCurrency(code: string) {
+    setCur(code);
+    setCurSource("saved");
+    setSavedCurrency(code);
+    savePrefs({ ...prefs, currency: code });
+  }
 
   function switchTheme(t2: "light" | "dark") {
     setTheme(t2);
@@ -291,6 +304,40 @@ export default function ProfilePage() {
           {phoneMsg && (
             <p className="mt-2 text-[12px] font-bold text-savings">{phoneMsg}</p>
           )}
+        </section>
+
+        {/* Currency - prominent (item #6): detected from the device, one tap to change */}
+        <section className="surface rounded-blob p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-[13px] font-extrabold text-strong">💱 {t("Your currency")}</div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                curSource === "auto"
+                  ? "bg-brandblue-soft text-brandblue"
+                  : "bg-savings-soft text-savings"
+              }`}
+            >
+              {curSource === "auto" ? `✨ ${t("Auto-detected")}` : `✓ ${t("Saved")}`}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] text-faint">
+            {t("Used for plan prices and the ≈ conversions next to offers. Shops are always quoted in their own local money.")}
+          </p>
+          <div className="no-scrollbar mt-2 flex gap-1.5 overflow-x-auto pb-1">
+            {CURRENCIES.map((c) => (
+              <button
+                key={c.code}
+                onClick={() => pickCurrency(c.code)}
+                className={`chip shrink-0 rounded-full border-2 px-2.5 py-1.5 text-[12px] font-extrabold ${
+                  cur === c.code
+                    ? "border-brandblue bg-brandblue-soft text-brandblue"
+                    : "border-line bg-card text-soft"
+                }`}
+              >
+                {c.flag} {c.code}
+              </button>
+            ))}
+          </div>
         </section>
 
         {/* Personal WhatsApp connection (Evolution API QR session) */}
@@ -587,37 +634,18 @@ export default function ProfilePage() {
         {/* Travel preferences */}
         <section className="surface rounded-blob p-4">
           <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Travel preferences")}</div>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-[11px] font-bold text-faint">
-              {t("Currency")}
-              <select
-                value={prefs.currency}
-                onChange={(e) => {
-                  savePrefs({ ...prefs, currency: e.target.value });
-                  setSavedCurrency(e.target.value);
-                }}
-                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm font-bold text-strong"
-              >
-                {CURRENCIES.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.flag} {c.code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-[11px] font-bold text-faint">
-              {t("Favourite ride")}
-              <select
-                value={prefs.ride}
-                onChange={(e) => savePrefs({ ...prefs, ride: e.target.value })}
-                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm font-bold text-strong"
-              >
-                <option value="scooter">{t("Automatic scooter")}</option>
-                <option value="motorbike">{t("Manual motorcycle")}</option>
-                <option value="car">{t("Car")}</option>
-              </select>
-            </label>
-          </div>
+          <label className="text-[11px] font-bold text-faint">
+            {t("Favourite ride")}
+            <select
+              value={prefs.ride}
+              onChange={(e) => savePrefs({ ...prefs, ride: e.target.value })}
+              className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm font-bold text-strong"
+            >
+              <option value="scooter">{t("Automatic scooter")}</option>
+              <option value="motorbike">{t("Manual motorcycle")}</option>
+              <option value="car">{t("Car")}</option>
+            </select>
+          </label>
           <label className="mt-2 block text-[11px] font-bold text-faint">
             {t("Home city")}
             <input

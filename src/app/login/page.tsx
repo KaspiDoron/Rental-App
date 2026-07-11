@@ -9,6 +9,7 @@ import { WaConnect } from "@/components/WaConnect";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LanguageButton } from "@/components/LanguageButton";
 import { LoadingDots } from "@/components/LoadingDots";
+import { CURRENCIES, savedCurrency, setSavedCurrency } from "@/lib/currency";
 import { startNav } from "@/components/NavVeil";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -38,6 +39,10 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [showTerms, setShowTerms] = useState(false);
   const [step, setStep] = useState<"auth" | "whatsapp" | "plans">("auth");
+  // Currency is asked at signup (item #6): auto-detected from the device,
+  // one dropdown to correct it. Persisted the moment the account is created.
+  const [currencyChoice, setCurrencyChoice] = useState("USD");
+  useEffect(() => setCurrencyChoice(savedCurrency()), []);
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [subBusy, setSubBusy] = useState(false);
   const googleDiv = useRef<HTMLDivElement>(null);
@@ -91,6 +96,8 @@ export default function LoginPage() {
   }
 
   async function afterAuth(data: any, isNew: boolean) {
+    // Lock in the (auto-detected or corrected) currency for this traveller.
+    if (isNew) setSavedCurrency(currencyChoice);
     if (data.mustChangePassword) {
       enterApp(data.session, { changePw: true });
       return;
@@ -479,6 +486,26 @@ export default function LoginPage() {
             <div className="mt-1">
               <CountryPhoneInput value={phone} onChange={setPhone} />
             </div>
+            <label className="mt-3 block text-[12px] font-extrabold text-soft">
+              {t("Your currency")}{" "}
+              <span className="font-bold text-faint">
+                ({t("auto-detected - fix it if we guessed wrong")})
+              </span>
+            </label>
+            <select
+              value={currencyChoice}
+              onChange={(e) => {
+                setCurrencyChoice(e.target.value);
+                setSavedCurrency(e.target.value);
+              }}
+              className="mt-1 w-full rounded-2xl border-2 border-line bg-card p-3 text-sm font-bold text-strong focus:border-brandblue focus:outline-none"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.flag} {c.code}
+                </option>
+              ))}
+            </select>
             <label className="mt-3 flex items-start gap-2.5 text-[13px] text-soft">
               <input
                 type="checkbox"
