@@ -226,16 +226,20 @@ export default function Home() {
 
   useEffect(() => {
     // Middleware already gates unauthenticated visitors; here we just load the
-    // session (with one retry - never cached).
+    // session (with one retry - never cached). Track the retry timers and a
+    // mounted flag so a late retry can't setState after unmount.
+    let mounted = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const loadMe = async (attempt = 0) => {
       try {
         const r = await fetch("/api/auth/me", { cache: "no-store" });
         const d = await r.json();
+        if (!mounted) return;
         if (d.session) setSession(d.session);
-        else if (attempt < 2) setTimeout(() => loadMe(attempt + 1), 700);
+        else if (attempt < 2) retry = setTimeout(() => loadMe(attempt + 1), 700);
         else window.location.href = "/login";
       } catch {
-        if (attempt < 2) setTimeout(() => loadMe(attempt + 1), 700);
+        if (mounted && attempt < 2) retry = setTimeout(() => loadMe(attempt + 1), 700);
       }
     };
     loadMe();
@@ -257,7 +261,12 @@ export default function Home() {
       }).then(() => window.history.replaceState({}, "", "/"));
     }
 
-    return () => timers.current.forEach(clearTimeout);
+    const scheduled = timers.current;
+    return () => {
+      mounted = false;
+      if (retry) clearTimeout(retry);
+      scheduled.forEach(clearTimeout);
+    };
   }, []);
 
   // Default the search to the phone's location once signed in (covered by the

@@ -484,3 +484,13 @@ create index if not exists agent_traces_created_idx
 create index if not exists agent_traces_decision_idx
   on public.agent_traces (decision_id);
 alter table public.agent_traces enable row level security;
+
+-- ---- Inbound webhook dedupe claim (exactly-once processing) --------------------
+-- One row per processed inbound WhatsApp message id. processVendorReply claims
+-- a message by inserting here; the primary key makes the claim atomic so two
+-- concurrent webhook deliveries can never both reply (or both bail).
+create table if not exists public.wa_processed (
+  wa_message_id text primary key,
+  created_at    timestamptz not null default now()
+);
+alter table public.wa_processed enable row level security;

@@ -848,15 +848,25 @@ export async function guardOutbound(opts: {
       new Date(now - 24 * 3600_000).toISOString()
     )}&order=received_at.desc&limit=300`
   );
+  // Count messages ALREADY PARKED in the outbox for this sender toward the
+  // caps too - they are committed sends that just haven't left yet. Without
+  // this, concurrent auto-replies all read the same pre-send count and blow
+  // past the cap (the core ban protection). Pending rows have no send time, so
+  // count them against both the hour and day windows conservatively.
+  const pendingForSender = await sbSelect<{ id: number }>(
+    "wa_outbox",
+    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}&limit=300`
+  ).catch(() => []);
+  const pendingCount = pendingForSender.length;
   const hourAgo = new Date(now - 3600_000).toISOString();
-  const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length;
+  const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingCount;
   if (lastHour >= hourCap) {
     return await queue(
       new Date(now + 15 * 60_000).toISOString(),
       `hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`
     );
   }
-  if (sentRows.length >= dayCap) {
+  if (sentRows.length + pendingCount >= dayCap) {
     return { allow: false, reason: `daily cap reached (${dayCap}/day)`, text };
   }
 
@@ -908,17 +918,22 @@ interface OutboxRow {
 export async function drainOutbox(
   send: (senderKey: string, to: string, text: string) => Promise<{ ok: boolean }>
 ): Promise<number> {
-  const due = await sbSelect<OutboxRow>(
+  const candidates = await sbSelect<OutboxRow>(
     "wa_outbox",
     `select=id,sender_key,to_number,body,not_before,meta&not_before=lte.${encodeURIComponent(
       new Date().toISOString()
     )}&order=not_before.asc&limit=5`
   );
+  const { sbDeleteReturning } = await import("./runtime-config");
   let sent = 0;
-  for (const row of due) {
-    // Delete FIRST so a crash can only lose a message, never double-send it.
-    const { sbDelete } = await import("./runtime-config");
-    await sbDelete("wa_outbox", `id=eq.${row.id}`);
+  for (const cand of candidates) {
+    // ATOMIC CLAIM: delete-with-return. Only the caller that actually deletes
+    // this row gets it back; a concurrent drainer (webhook + poll + cron all
+    // fire this) gets [] and skips - so a queued message is sent exactly once,
+    // never duplicated (a duplicate blast is a ban signal).
+    const claimed = await sbDeleteReturning<OutboxRow>("wa_outbox", `id=eq.${cand.id}`);
+    if (claimed.length === 0) continue; // another drainer won this row
+    const row = claimed[0];
     // Re-check the gate (caps/hours may have changed while queued).
     const verdict = await guardOutbound({
       senderKey: row.sender_key,

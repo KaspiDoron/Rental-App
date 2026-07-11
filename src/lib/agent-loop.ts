@@ -121,13 +121,30 @@ export async function processVendorReply(opts: {
     ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`
     : "";
 
-  // Dedupe: providers retry webhooks - never process the same message twice.
+  // Dedupe via an ATOMIC CLAIM. Providers retry webhooks and two deliveries of
+  // the same message can arrive concurrently; a count-based check let BOTH
+  // proceed (double reply) or BOTH bail (no reply). Claim the message id by
+  // inserting into wa_processed (primary key = wa_message_id): exactly one
+  // insert wins. Falls back to the legacy count check when the table is not
+  // migrated yet, so un-migrated deployments never silently go silent.
   if (opts.waMessageId) {
-    const dup = await sbSelect(
-      "whatsapp_messages",
-      `select=id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&direction=eq.inbound&limit=2`
-    );
-    if (dup.length > 1) return;
+    const { sbInsertReturning } = await import("./runtime-config");
+    const claimed = await sbInsertReturning<{ wa_message_id: string }>("wa_processed", [
+      { wa_message_id: opts.waMessageId },
+    ]);
+    if (claimed.length === 0) {
+      const existing = await sbSelect(
+        "wa_processed",
+        `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&limit=1`
+      ).catch(() => []);
+      if (existing.length > 0) return; // another delivery already owns it
+      // wa_processed missing/unreachable -> legacy best-effort dedupe.
+      const dup = await sbSelect(
+        "whatsapp_messages",
+        `select=id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&direction=eq.inbound&limit=2`
+      );
+      if (dup.length > 1) return;
+    }
   }
 
   // Find the thread: the last outbound THIS USER sent this number.
@@ -184,24 +201,43 @@ export async function processVendorReply(opts: {
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
     .join("\n");
-  const autoClarifies = thread.filter(
-    (m) => m.direction === "outbound" && m.raw?.kind === "auto-clarify"
-  ).length;
+  // PENDING REPLIES COUNT TOO. A reply parked in wa_outbox with a human
+  // "thinking" delay is NOT yet in whatsapp_messages. Without counting it, a
+  // SECOND shop message arriving inside that 45-240s window reads the counters
+  // as zero and queues ANOTHER bargain/clarify - the exact double-ask this
+  // discipline exists to prevent. Include the pending outbox for this thread.
+  const pendingOutbox = ctx.sender
+    ? await sbSelect<{ meta: { kind?: string } | null }>(
+        "wa_outbox",
+        `select=meta&sender_key=eq.${encodeURIComponent(
+          ctx.sender
+        )}&to_number=eq.${encodeURIComponent(from)}&limit=20`
+      ).catch(() => [])
+    : [];
+  const pendingKind = (k: string) =>
+    pendingOutbox.filter((r) => r.meta?.kind === k).length;
+
+  const autoClarifies =
+    thread.filter((m) => m.direction === "outbound" && m.raw?.kind === "auto-clarify").length +
+    pendingKind("auto-clarify");
   // COUNT EVERY BARGAIN, including the ones the USER tapped from the app
   // (kind "bargain"). Counting only auto-bargains made the loop push a SECOND
   // ask after a user-initiated one - the "asked twice after the shop said no"
   // bug. One ask per shop means one ask, whoever triggered it.
-  const autoBargains = thread.filter(
-    (m) =>
-      m.direction === "outbound" &&
-      (m.raw?.kind === "auto-bargain" || m.raw?.kind === "bargain")
-  ).length;
-  const autoAnswers = thread.filter(
-    (m) => m.direction === "outbound" && m.raw?.kind === "auto-answer"
-  ).length;
-  const autoCloses = thread.filter(
-    (m) => m.direction === "outbound" && m.raw?.kind === "auto-close"
-  ).length;
+  const autoBargains =
+    thread.filter(
+      (m) =>
+        m.direction === "outbound" &&
+        (m.raw?.kind === "auto-bargain" || m.raw?.kind === "bargain")
+    ).length +
+    pendingKind("auto-bargain") +
+    pendingKind("bargain");
+  const autoAnswers =
+    thread.filter((m) => m.direction === "outbound" && m.raw?.kind === "auto-answer").length +
+    pendingKind("auto-answer");
+  const autoCloses =
+    thread.filter((m) => m.direction === "outbound" && m.raw?.kind === "auto-close").length +
+    pendingKind("auto-close");
 
   // Funnel-gap detector: shops that dodge with "come to the shop and we'll
   // talk" / "depends" answers need a NEW branch in the negotiation funnel.

@@ -255,6 +255,34 @@ export async function sbDelete(table: string, filter: string): Promise<boolean> 
   }
 }
 
+/**
+ * Delete rows and return the ones actually deleted (PostgREST
+ * `return=representation`). This is an ATOMIC CLAIM: two concurrent callers
+ * deleting the same rows each get back only the rows THEY deleted - exactly
+ * one wins per row. Used to make outbox draining exactly-once.
+ */
+export async function sbDeleteReturning<T = Record<string, unknown>>(
+  table: string,
+  filter: string
+): Promise<T[]> {
+  const conn = supabase();
+  if (!conn) return [];
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+      method: "DELETE",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        Prefer: "return=representation",
+      },
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as T[];
+  } catch {
+    return [];
+  }
+}
+
 /** Patch rows matching a PostgREST filter with the given values. */
 export async function sbUpdate(
   table: string,
