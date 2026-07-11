@@ -18,6 +18,7 @@ import { sbInsert, sbSelect } from "./runtime-config";
 import { extractOffer, composeBargain, runSafety, currencyForRegion } from "./agents";
 import { floorPriceFor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
+import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
 
 export interface ThreadContext {
@@ -324,63 +325,67 @@ export async function processVendorReply(opts: {
     if (!offerOk) await sbInsert("offers", [offerBase]);
   }
 
-  // ---- Decide the ONE next move (or silence) --------------------------------
-  let followUp: string | null = null;
-  let followKind = "clarify";
-  let nextRound = round;
-  let englishGloss: string | undefined;
+  // ==== THE ORCHESTRATOR PIPELINE ============================================
+  // Stage order per reply: extract (done above) -> deterministic discipline
+  // ladder (what is ALLOWED) -> strategist (session-wide thinking + timing) ->
+  // drafting agent (reply/price) -> validator (critique/revise) -> localize ->
+  // deliver. Every stage writes a trace row; with no AI key every stage
+  // degrades to the deterministic behavior.
+  const {
+    getOrchestratorConfig,
+    runStrategist,
+    validateDraft,
+    sessionDigestFor,
+    ownerDirectives,
+    registerRules,
+    stripGreeting,
+    newDecisionId,
+    writeTrace,
+  } = await import("./orchestrator");
+  const cfg = await getOrchestratorConfig();
+  const decisionId = newDecisionId();
+  const traces: TraceRow[] = [];
+  const traceBase = {
+    decisionId,
+    userEmail: ctx.sender ?? undefined,
+    vendorId: ctx.vendorId ?? undefined,
+    vendorName: ctx.vendorName ?? undefined,
+  };
+  traces.push({
+    ...traceBase,
+    stage: "extract",
+    input: text.slice(0, 600) || "(price-list photo)",
+    reasoning: `found=${extraction.found} matchesSpec=${extraction.matchesSpec} confidence=${extraction.confidence}`,
+    output: usablePrice ? `${usablePrice} ${cur}/day` : "(no usable price)",
+  });
 
-  const useLocalLang = Boolean(ctx.localLang) && ctx.plan === "ultra";
+  // ---- Discipline ladder: decide the ALLOWED move (never composes text) -----
+  type Direction = "clarify" | "answer" | "bargain" | "close" | "silent";
+  let direction: Direction = "silent";
+  let ladderWhy = "nothing owed - silence is the most human move";
+  let closeVariants = CLOSE_OK;
+  let floorPrice: number | undefined;
+  let rivalPrice: number | undefined;
+  let target: number | undefined;
+  let nextRound = round;
 
   if (sessionClosed) {
-    // The user ended this search session: the reply is stored above, the deal
-    // data is safe, and the agent stays SILENT. No clarify, no bargain, no
-    // closer - a dead session never talks.
-    followUp = null;
+    direction = "silent";
+    ladderWhy = "search session closed by the user - a dead session never talks";
   } else if (shopAskedQuestion(text) && autoAnswers < 2) {
-    // The shop asked US something ("you mean motorbike or car?"). ANSWER it -
-    // never thank-and-close over an open question. Restate only what the RFQ
-    // actually says; the deterministic fallback covers an AI outage.
-    const { chat } = await import("./ai");
-    const spec = fallbackAnswer(rfq);
-    const llm = await chat([
-      {
-        role: "system",
-        content:
-          "You are the traveller in a WhatsApp chat with a vehicle rental shop. " +
-          "The shop just asked a question. Answer ONLY that question in ONE short, " +
-          "casual, friendly sentence (max 25 words), strictly using these facts - " +
-          `never invent anything: ${spec} ` +
-          "Do not re-ask for the price if the shop already gave one for our exact vehicle. " +
-          "HARD RULE: NEVER accept a deal, never confirm a booking, never say a price " +
-          "'works' - only the traveller decides that. If the shop is asking whether we " +
-          "take their offer, say you will think it over and get back to them. " +
-          "Reply with the message text only.",
-      },
-      { role: "user", content: `Conversation so far:\n${history}\n\nShop's question: ${text}` },
-    ]);
-    followUp = (llm ?? "").trim().slice(0, 300) || spec;
-    followKind = "answer";
+    direction = "answer";
+    ladderWhy = "the shop asked us a question - it must be answered, never thanked away";
   } else if (!usablePrice && !verified && extraction.clarifyMessage && autoClarifies === 0) {
-    // Genuinely no price yet and we have never clarified: ask once, politely.
-    followUp = extraction.clarifyMessage;
+    direction = "clarify";
+    ladderWhy = "no usable price yet and we never clarified - one polite ask";
   } else if (usablePrice && extraction.matchesSpec !== false && autoBargains === 0) {
-    // First real quote for OUR vehicle: our single, floor-anchored ask. A price
-    // for a DIFFERENT vehicle (matchesSpec false) is never bargained on.
-    const floorPrice = floorSameCur?.floor;
-    // If they already quoted at/below the local floor, there is nothing to
-    // bargain - close warmly instead of insulting a great price.
+    floorPrice = floorSameCur?.floor;
     if (floorPrice && usablePrice <= floorPrice * 1.05) {
-      if (autoCloses === 0) {
-        followUp = `${CLOSE_OK[Math.floor(Math.random() * CLOSE_OK.length)]}`;
-        followKind = "close";
-      }
+      direction = autoCloses === 0 ? "close" : "silent";
+      ladderWhy = "quote already at/below the local floor - close warmly, never insult a great price";
     } else {
-      // CROSS-SHOP LEVERAGE (same search session): if ANOTHER shop already
-      // quoted this traveller a lower price for the SAME vehicle, use it as real
-      // negotiating leverage - "I have an offer at 180, can you beat it?". This
-      // is the smart, competitive move a human would make.
-      let rivalPrice: number | undefined;
+      // CROSS-SHOP LEVERAGE (same search session): a lower real offer from
+      // another shop is honest negotiating power.
       if (ctx.sender) {
         const { vehicleKeyFor } = await import("./market");
         const vkey = vehicleKeyFor(rfq);
@@ -399,81 +404,190 @@ export async function processVendorReply(opts: {
         );
         rivalPrice = rivals[0]?.price_per_day;
       }
-
       const baseTarget = floorPrice
         ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
         : Math.round(usablePrice * 0.85);
-      // With a real rival price, aim the ask at (or just under) it - but never
-      // below the local floor. Without one, use the standard target.
-      const target = rivalPrice
+      target = rivalPrice
         ? Math.max(floorPrice ?? 0, Math.min(baseTarget, rivalPrice))
         : baseTarget;
-      // ARITHMETIC SANITY: a bargain ask must be BELOW what the shop asks.
-      // If the computed target is not a real saving (>= ~95% of the quote),
-      // asking would be nonsense ("they said 300, we ask 540") - close warmly
-      // instead.
+      // ARITHMETIC SANITY: an ask must be truly BELOW the quote.
       if (target >= usablePrice * 0.95) {
-        if (autoCloses === 0) {
-          followUp = CLOSE_OK[Math.floor(Math.random() * CLOSE_OK.length)];
-          followKind = "close";
-        }
+        direction = autoCloses === 0 ? "close" : "silent";
+        ladderWhy = "target is not a real saving vs the quote - asking would be nonsense";
       } else {
-      const draft = await composeBargain({
-        rfq,
-        vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
-        currentPricePerDay: usablePrice,
-        rivalPricePerDay: rivalPrice,
-        region: ctx.region || undefined,
-        round: 1,
-        currency: cur,
-        localLanguage: useLocalLang,
-        targetPricePerDay: target,
-        floorPricePerDay: floorPrice,
-        history,
-        voiceKey: ctx.sender ?? undefined,
-      });
-      followUp = draft.message;
-      followKind = "bargain";
-      nextRound = 1;
-      // Ultra local-language: also keep a plain-English gloss so the user can
-      // read what the agent is saying on their behalf.
-      if (useLocalLang && draft.english) englishGloss = draft.english;
-      await sbInsert("bargain_drafts", [
-        {
-          user_email: ctx.sender ?? null,
-          vendor_id: ctx.vendorId ?? "",
-          tactic: draft.tacticId,
-          message: draft.message,
-        },
-      ]);
+        direction = "bargain";
+        nextRound = 1;
+        ladderWhy = `first quote for our vehicle - the single floor-anchored ask at ${target} ${cur}`;
       }
     }
   } else if (autoBargains >= 1 && autoCloses === 0) {
-    // The shop answered our one ask. Whatever they said - accepted, countered
-    // or refused - we thank them ONCE and stop. No pushing, ever. The closer
-    // NEVER implies the deal is taken - only the traveller confirms a booking.
+    direction = "close";
+    nextRound = round + 1;
     const saidYes =
       usablePrice !== undefined ||
       /\b(ok|okay|yes|sure|deal|can do|no problem)\b/i.test(text);
-    followUp = saidYes
-      ? CLOSE_OK[Math.floor(Math.random() * CLOSE_OK.length)]
-      : CLOSE_NO[Math.floor(Math.random() * CLOSE_NO.length)];
-    followKind = "close";
-    nextRound = round + 1;
+    closeVariants = saidYes ? CLOSE_OK : CLOSE_NO;
+    ladderWhy = "our one ask was answered - thank once and stop, never push twice";
   }
-  // Anything else: stay silent. Silence is the most human move there is.
+  traces.push({
+    ...traceBase,
+    stage: "discipline",
+    input: `counters: clarifies=${autoClarifies} bargains=${autoBargains} answers=${autoAnswers} closes=${autoCloses} sessionClosed=${sessionClosed}`,
+    reasoning: ladderWhy,
+    output: direction,
+  });
+
+  // ---- Strategist: the whole search session + reply timing ------------------
+  const sessionDigest = ctx.sender
+    ? await sessionDigestFor(ctx.sender, ctx.vendorId).catch(() => "")
+    : "";
+  const strat = await runStrategist({
+    cfg,
+    history,
+    sessionDigest,
+    shopMessage: text,
+    ladderDirection: direction,
+    quotedPerDay: usablePrice,
+    targetPerDay: target,
+    rivalPerDay: rivalPrice,
+    currency: cur,
+  });
+  traces.push({
+    ...traceBase,
+    stage: "strategist",
+    input: sessionDigest || "(only this shop in session)",
+    reasoning: strat.reasoning,
+    output:
+      strat.action + (strat.waitSeconds ? ` ${strat.waitSeconds}s` : "") +
+      (strat.leverageNote ? ` | leverage: ${strat.leverageNote}` : ""),
+    verdict: strat.fromAi ? undefined : "deterministic",
+  });
+  if (strat.action === "silent" || direction === "silent") {
+    await writeTrace(traces);
+    return;
+  }
+
+  // ---- Drafting agent (reply / price) ---------------------------------------
+  let followUp: string | null = null;
+  let followKind: string = direction;
+  let englishGloss: string | undefined;
+  const useLocalLang = Boolean(ctx.localLang) && ctx.plan === "ultra";
+  const register = registerRules(cfg, cur);
+
+  if (direction === "answer") {
+    const { chat } = await import("./ai");
+    const spec = fallbackAnswer(rfq);
+    const llm = await chat([
+      {
+        role: "system",
+        content:
+          "You are the traveller in a WhatsApp chat with a vehicle rental shop. " +
+          "The shop just asked a question. Answer ONLY that question in ONE short, " +
+          "casual, friendly sentence (max 25 words), strictly using these facts - " +
+          `never invent anything: ${spec} ` +
+          "You are MID-CONVERSATION: never greet again (no hey/hi/hello). " +
+          "Do not re-ask for the price if the shop already gave one for our exact vehicle. " +
+          "HARD RULE: NEVER accept a deal, never confirm a booking, never say a price " +
+          "'works' - only the traveller decides that. If the shop is asking whether we " +
+          "take their offer, say you will think it over and get back to them. " +
+          (register ? register + " " : "") +
+          ownerDirectives(cfg, "reply") +
+          " Reply with the message text only.",
+      },
+      { role: "user", content: `Conversation so far:\n${history}\n\nShop's question: ${text}` },
+    ]);
+    followUp = (llm ?? "").trim().slice(0, 300) || spec;
+  } else if (direction === "clarify") {
+    followUp = extraction.clarifyMessage ?? null;
+  } else if (direction === "close") {
+    followUp = closeVariants[Math.floor(Math.random() * closeVariants.length)];
+  } else if (direction === "bargain" && usablePrice && target) {
+    const draft = await composeBargain({
+      rfq,
+      vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
+      currentPricePerDay: usablePrice,
+      rivalPricePerDay: rivalPrice,
+      region: ctx.region || undefined,
+      round: 1,
+      currency: cur,
+      localLanguage: useLocalLang,
+      targetPricePerDay: target,
+      floorPricePerDay: floorPrice,
+      history,
+      voiceKey: ctx.sender ?? undefined,
+      extraDirectives: [register, ownerDirectives(cfg, "price"), strat.leverageNote ? `Real leverage you may mention: ${strat.leverageNote}.` : ""]
+        .filter(Boolean)
+        .join("\n"),
+    });
+    followUp = draft.message;
+    if (useLocalLang && draft.english) englishGloss = draft.english;
+    await sbInsert("bargain_drafts", [
+      {
+        user_email: ctx.sender ?? null,
+        vendor_id: ctx.vendorId ?? "",
+        tactic: draft.tacticId,
+        message: draft.message,
+      },
+    ]);
+  }
+  traces.push({
+    ...traceBase,
+    stage: direction === "bargain" ? "price-agent" : "reply-agent",
+    input: `direction=${direction}${target ? ` target=${target} ${cur}` : ""}${rivalPrice ? ` rival=${rivalPrice}` : ""}`,
+    reasoning: ladderWhy,
+    output: followUp ?? "(no draft)",
+  });
+  if (!followUp) {
+    await writeTrace(traces);
+    return;
+  }
+
+  // ---- Validator: critique + revise before anything sends -------------------
+  const priorOutbound = thread
+    .filter((m) => m.direction === "outbound")
+    .map((m) => m.body ?? "")
+    .filter(Boolean);
+  // Mid-thread messages never greet again (deterministic, runs even with AI).
+  if (priorOutbound.length > 0) followUp = stripGreeting(followUp);
+  // Localized bargains are validated deterministically only (an English
+  // critique pass on Thai text risks flipping the language - stickiness wins).
+  const skipAiValidation = direction === "bargain" && useLocalLang;
+  const validation = await validateDraft({
+    cfg: skipAiValidation
+      ? { ...cfg, stages: cfg.stages.map((s) => (s.id === "validator" ? { ...s, enabled: false } : s)) }
+      : cfg,
+    history,
+    draft: followUp,
+    shopMessage: text,
+    priorOutbound,
+    currency: cur,
+  });
+  traces.push({
+    ...traceBase,
+    stage: "validator",
+    input: followUp,
+    reasoning: validation.reasons.join("; ") || "clean",
+    output: validation.verdict === "veto" ? "(vetoed)" : validation.text,
+    verdict: validation.verdict,
+  });
+  if (validation.verdict === "veto" || !validation.text) {
+    await writeTrace(traces);
+    return;
+  }
+  followUp = validation.text;
 
   // LANGUAGE STICKINESS: a thread that started in the shop's local language
   // NEVER flips to English mid-conversation (the "agent suddenly switched to
   // English" bug). Bargains come localized from composeBargain already; the
   // clarify / answer / close paths are localized here, keeping the faithful
-  // English gloss for the traveller.
+  // English gloss for the traveller. Street register applies (orchestrator).
   if (followUp && useLocalLang && followKind !== "bargain") {
     const { localizeMessage } = await import("./agents");
     const localized = await localizeMessage(
       followUp,
       ctx.region || undefined,
-      ctx.sender
+      ctx.sender,
+      cfg.streetLocal
     );
     if (localized.text && localized.text !== followUp) {
       englishGloss = localized.english ?? followUp;
@@ -487,10 +601,13 @@ export async function processVendorReply(opts: {
     // sender has their own session (the queue can deliver for them), park the
     // reply with a jittered natural delay; the drain re-runs the anti-ban gate
     // at send time and uses the typing-presence path. Closers reply a bit
-    // faster (a quick "thanks!" is natural), bargains "think" longer.
+    // faster (a quick "thanks!" is natural), bargains "think" longer. A
+    // strategist WAIT extends the hold - patience is a deliberate tactic.
     if (opts.humanDelay && ctx.sender) {
       const delayS =
-        followKind === "close" || followKind === "answer"
+        strat.action === "wait" && strat.waitSeconds
+          ? strat.waitSeconds
+          : followKind === "close" || followKind === "answer"
           ? 20 + Math.floor(Math.random() * 70) // 20-90s
           : 45 + Math.floor(Math.random() * 195); // 45-240s
       await sbInsert("wa_outbox", [
@@ -505,10 +622,24 @@ export async function processVendorReply(opts: {
             round: nextRound,
             auto: true,
             ...(englishGloss ? { englishGloss } : {}),
-            reason: "human reply pacing (thinking time)",
+            reason:
+              strat.action === "wait"
+                ? "strategist hold - choosing the best reply order"
+                : "human reply pacing (thinking time)",
           },
         },
       ]);
+      traces.push({
+        ...traceBase,
+        stage: "deliver",
+        input: followUp,
+        reasoning:
+          strat.action === "wait"
+            ? `strategist hold for ${delayS}s`
+            : `parked with human thinking delay ${delayS}s`,
+        output: `queued until +${delayS}s`,
+      });
+      await writeTrace(traces);
       return;
     }
 
@@ -521,7 +652,17 @@ export async function processVendorReply(opts: {
       queueIfBlocked: true,
       meta: { ...ctx, kind: `auto-${followKind}`, round: nextRound, auto: true },
     });
-    if (!verdict.allow) return; // queued for later or held by the guard
+    if (!verdict.allow) {
+      traces.push({
+        ...traceBase,
+        stage: "deliver",
+        input: followUp,
+        reasoning: verdict.reason ?? "held by the anti-ban gate",
+        output: "(queued/held)",
+      });
+      await writeTrace(traces);
+      return;
+    }
     const result = await opts.send(from, verdict.text);
     if (result.ok) {
       await afterSend(ctx.sender ?? "system", from);
@@ -541,5 +682,13 @@ export async function processVendorReply(opts: {
         },
       ]);
     }
+    traces.push({
+      ...traceBase,
+      stage: "deliver",
+      input: followUp,
+      reasoning: result.ok ? "sent through the user's WhatsApp" : `send failed: ${result.error ?? "unknown"}`,
+      output: verdict.text,
+    });
   }
+  await writeTrace(traces);
 }

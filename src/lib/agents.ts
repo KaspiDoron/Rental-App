@@ -45,6 +45,17 @@ export async function runProfiler(
     persona = ` ${voiceDirectives(voiceProfileFor(voiceKey))}`;
   }
 
+  // Orchestrator opener stage: owner instructions apply to the first message.
+  let openerRules = "";
+  try {
+    const { getOrchestratorConfig, ownerDirectives } = await import("./orchestrator");
+    const ocfg = await getOrchestratorConfig();
+    openerRules = ownerDirectives(ocfg, "opener");
+    if (openerRules) openerRules = ` ${openerRules}`;
+  } catch {
+    /* opener rules are an enhancement */
+  }
+
   // Tight budget: this call blocks the START of every search. If the AI is
   // slow, the deterministic heuristic (with its own message variety) takes
   // over - a fast search beats a marginally prettier first message.
@@ -55,6 +66,8 @@ export async function runProfiler(
         content:
           system +
           ` VARIETY: for the vendorMessage, ${styleSeed}. Never reuse a stock template - each message must read like a different real person wrote it.` +
+          " REGISTER: vendorMessage in SIMPLE everyday English - short words, short sentences; most shops speak English as a second language." +
+          openerRules +
           persona,
       },
       { role: "user", content: input },
@@ -80,9 +93,18 @@ function normalizeRFQ(
     vehicleClass: (["car", "motorbike", "scooter"].includes(rfq.vehicleClass)
       ? rfq.vehicleClass
       : "car") as VehicleClass,
-    engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc,
-    seats: rfq.vehicleClass === "car" ? rfq.seats : undefined,
-    carType: rfq.vehicleClass === "car" ? rfq.carType : undefined,
+    // CHEAPEST BY DEFAULT (item #14): when the traveller names no size/model,
+    // they want the cheapest option - which is the smallest. Scooters and
+    // motorbikes default to 110cc; cars to a regular 4-seat economy car. The
+    // agents then ask shops for a CONCRETE vehicle, never a vague "a bike".
+    engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc ?? 110,
+    seats: rfq.vehicleClass === "car" ? rfq.seats ?? 4 : undefined,
+    carType:
+      rfq.vehicleClass === "car"
+        ? rfq.carType && rfq.carType !== "any"
+          ? rfq.carType
+          : "economy"
+        : undefined,
     transmission: (["automatic", "manual", "any"].includes(rfq.transmission)
       ? rfq.transmission
       : "any") as Transmission,
@@ -138,9 +160,12 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
 
   const rfq: StructuredRFQ = {
     vehicleClass,
-    engineSizeCc: vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : undefined,
-    seats: vehicleClass === "car" ? seats : undefined,
-    carType: vehicleClass === "car" ? carType : undefined,
+    // Cheapest by default (item #14): no size named = smallest 110cc; no car
+    // spec named = regular 4-seat economy.
+    engineSizeCc:
+      vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : 110,
+    seats: vehicleClass === "car" ? seats ?? 4 : undefined,
+    carType: vehicleClass === "car" ? (carType !== "any" ? carType : "economy") : undefined,
     transmission: /manual|stick/.test(t)
       ? "manual"
       : /auto/.test(t)
@@ -389,7 +414,8 @@ export function money(amount: number, currency?: string): string {
 export async function localizeMessage(
   message: string,
   region?: string,
-  voiceKey?: string
+  voiceKey?: string,
+  street = true
 ): Promise<{ text: string; english?: string }> {
   void voiceKey; // persona intentionally not applied to local-language output
   if (!region) return { text: message };
@@ -402,7 +428,12 @@ export async function localizeMessage(
         role: "system",
         content:
           `Rewrite the traveller's WhatsApp message ENTIRELY in the everyday local language of ${region}, ` +
-          "the casual friendly way a local customer messages a rental shop. CRITICAL RULES:\n" +
+          "the casual friendly way a local customer messages a rental shop. " +
+          (street
+            ? "REGISTER: street-level everyday spoken language - short sentences, the words " +
+              "people actually type in chats. NEVER formal or written-speech register. "
+            : "") +
+          "CRITICAL RULES:\n" +
           "1. Translate the WHOLE message including the greeting and sign-off. Do NOT leave ANY English " +
           "words (no 'Hey', 'Hi', 'Thanks', etc.) - use a natural LOCAL greeting instead.\n" +
           "2. Keep every fact exactly (vehicle, cc, days, accessories, prices); numbers stay as given.\n" +
@@ -453,6 +484,9 @@ export async function composeBargain(opts: {
   // Identity of the human whose WhatsApp sends this - powers the stable
   // per-user voice persona and the anti-repetition memory.
   voiceKey?: string;
+  // Orchestrator additions: owner stage instructions, edge rules, language
+  // register and strategist leverage notes, appended to the system prompt.
+  extraDirectives?: string;
 }): Promise<{
   message: string;
   tacticId: string;
@@ -539,6 +573,15 @@ export async function composeBargain(opts: {
   const { getPrompt } = await import("./prompts");
   const directives = await getPrompt("bargain_directives");
   let systemWithDirectives = directives ? `${system}\nHOUSE RULES: ${directives}` : system;
+  // Orchestrator: owner stage instructions, edge rules, register, leverage.
+  if (opts.extraDirectives?.trim()) {
+    systemWithDirectives += `\n${opts.extraDirectives.trim()}`;
+  }
+  // Mid-conversation bargains never greet again - we are already talking.
+  if (opts.history) {
+    systemWithDirectives +=
+      "\nYou are MID-CONVERSATION: do NOT start with a greeting (no hey/hi/hello) - go straight into the message.";
+  }
 
   // ZERO-PATTERN AUTHENTICITY: (a) a stable per-user voice persona so every
   // user's agent sounds like ONE consistent, distinct human; (b) the user's
@@ -753,6 +796,9 @@ export async function extractOffer(
     "delivery, pickup-only, airport-delivery, no-deposit, passport-deposit, " +
     "cash-deposit, helmets-included, insurance-included, cards-accepted, " +
     "flexible-dates. Empty array when nothing applies - NEVER guess or infer. " +
+    "clarifyMessage register: SIMPLE everyday English a non-native shop owner " +
+    "instantly understands - short words, short sentences, never formal, and " +
+    "never a greeting (we are mid-conversation). " +
     (localCur
       ? `IMPORTANT: this shop is in a place whose local currency is ${localCur}. ` +
         `If the reply gives a bare number with no currency symbol, the currency is ` +

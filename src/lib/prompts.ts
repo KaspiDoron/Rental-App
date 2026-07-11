@@ -28,7 +28,11 @@ export const PROMPTS: PromptDef[] = [
       " transmission: 'automatic'|'manual'|'any', maxMileageKm?: number," +
       " durationDays: number, accessories: string[], fulfillment: 'hotel-delivery'|'in-store'|'any'," +
       " notes?: string, vendorMessage: string }. For cars use seats/carType (not engineSizeCc); " +
-      "for scooters/motorbikes use engineSizeCc. The vendorMessage must read like a " +
+      "for scooters/motorbikes use engineSizeCc. CHEAPEST BY DEFAULT: when the " +
+      "traveller names no size or model they want the cheapest option, which is the " +
+      "smallest - scooters/motorbikes default to engineSizeCc 110, cars default to " +
+      "seats 4 and carType 'economy'. State that concrete spec in vendorMessage " +
+      "(shops need a concrete vehicle, never a vague 'a bike'). The vendorMessage must read like a " +
       "natural, friendly first-person WhatsApp message from the traveller asking for " +
       "availability and the best daily price - authentic and human, plain text, no " +
       "markdown. Write as a REAL human traveller messaging a shop - never mention " +

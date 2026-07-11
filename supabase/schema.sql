@@ -461,3 +461,26 @@ create table if not exists public.vendor_tag_signals (
 create index if not exists vendor_tag_signals_idx
   on public.vendor_tag_signals (vendor_id, tag);
 alter table public.vendor_tag_signals enable row level security;
+
+-- ---- Agent orchestrator traces (full decision visibility) ---------------------
+-- One row per pipeline stage per decision: input -> reasoning -> output, plus
+-- validator verdicts and strategist wait choices. Powers the owner's live
+-- decisions viewer in Admin -> Agents.
+create table if not exists public.agent_traces (
+  id          bigint generated always as identity primary key,
+  decision_id text not null,
+  user_email  text,
+  vendor_id   text,
+  vendor_name text,
+  stage       text not null,
+  input       text,
+  reasoning   text,
+  output      text,
+  verdict     text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists agent_traces_created_idx
+  on public.agent_traces (created_at desc);
+create index if not exists agent_traces_decision_idx
+  on public.agent_traces (decision_id);
+alter table public.agent_traces enable row level security;
