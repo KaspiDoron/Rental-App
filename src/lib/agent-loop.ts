@@ -281,6 +281,17 @@ export async function processVendorReply(opts: {
     { ...replyBase, currency: cur, deposit: extraction.deposit ?? null, delivers: extraction.delivers ?? null },
   ]);
   if (!fullOk) await sbInsert("vendor_replies", [replyBase]);
+  // Verified shop tags (item #13): record what this reply explicitly stated.
+  // A tag only ever SHOWS after >= 2 distinct replies confirm it.
+  if (ctx.vendorId) {
+    const { tagsFromExtraction, recordTagSignals } = await import("./vendor-tags");
+    await recordTagSignals(
+      ctx.vendorId,
+      ctx.sender ?? undefined,
+      text,
+      tagsFromExtraction(extraction, text)
+    ).catch(() => {});
+  }
   if (usablePrice) {
     // Tag the offer with area + vehicle bucket + a delivery signal, so the
     // owner's shop-intelligence warehouse can aggregate real market data.

@@ -446,3 +446,18 @@ alter table public.vendor_replies add column if not exists deposit  text;
 alter table public.vendor_replies add column if not exists delivers boolean;
 alter table public.offers         add column if not exists deposit_note text;
 alter table public.bookings add column if not exists currency text;
+
+-- ---- Verified reply-based shop tags (item #13) --------------------------------
+-- One row per (reply, tag) fact a shop explicitly stated. A tag is shown to
+-- travellers only after >= 2 DISTINCT replies (reply_hash) confirmed it.
+create table if not exists public.vendor_tag_signals (
+  id         bigint generated always as identity primary key,
+  vendor_id  text not null,
+  tag        text not null,
+  user_email text,
+  reply_hash text,
+  created_at timestamptz not null default now()
+);
+create index if not exists vendor_tag_signals_idx
+  on public.vendor_tag_signals (vendor_id, tag);
+alter table public.vendor_tag_signals enable row level security;

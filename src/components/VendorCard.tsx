@@ -9,6 +9,7 @@ import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency } from "@/lib/currency";
+import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
@@ -271,6 +272,21 @@ export function VendorCard({
                   ⚡ {t("Fast responder")}
                 </span>
               )}
+              {/* Reply-VERIFIED facts (item #13): the shop stated each of these
+                  in at least TWO different replies before it earns a badge. */}
+              {(vendor.verifiedTags ?? []).map((tg) => {
+                const meta = VENDOR_TAG_LABELS[tg];
+                if (!meta) return null;
+                return (
+                  <span
+                    key={tg}
+                    title={t("Confirmed by the shop in multiple replies")}
+                    className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[10px] font-extrabold text-savings"
+                  >
+                    {meta.emoji} {t(meta.label)} ✓
+                  </span>
+                );
+              })}
             </div>
             {vendor.address && (
               <div className="mt-1 truncate text-[12px] text-faint">{vendor.address}</div>

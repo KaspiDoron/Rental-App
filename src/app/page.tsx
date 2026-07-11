@@ -344,6 +344,40 @@ export default function Home() {
     return () => clearInterval(id);
   }, [session, vendors.length, refreshQueue]);
 
+  // Reply-VERIFIED shop tags (item #13): one batched fetch per result set,
+  // plus a slow refresh while the search is on screen - a shop's second
+  // confirming reply can promote a tag mid-session.
+  const vendorIdsKey = useMemo(
+    () => vendors.map((v) => v.id).filter(Boolean).sort().join(","),
+    [vendors]
+  );
+  useEffect(() => {
+    if (!session || !vendorIdsKey) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const d = await (
+          await fetch(`/api/vendors/tags?ids=${encodeURIComponent(vendorIdsKey)}`)
+        ).json();
+        if (cancelled || !d?.tags) return;
+        setVendors((vs) =>
+          vs.map((v) => {
+            const next = (Array.isArray(d.tags[v.id]) ? d.tags[v.id] : []).slice().sort();
+            const curTags = (v.verifiedTags ?? []).slice().sort();
+            if (next.join("|") === curTags.join("|")) return v;
+            return { ...v, verifiedTags: next };
+          })
+        );
+      } catch {}
+    };
+    load();
+    const id = setInterval(load, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [session, vendorIdsKey]);
+
   // Live loop: while agents are in ANY active conversation, poll the reply
   // feed so shop answers pop into the cards automatically. This must include
   // offer-received/negotiating - after a bargain is sent the shop's counter

@@ -59,6 +59,17 @@ export async function POST(req: Request) {
     { ...replyBase, currency: cur, deposit: result.deposit ?? null, delivers: result.delivers ?? null },
   ]);
   if (!replyOk) await sbInsert("vendor_replies", [replyBase]);
+  // Verified shop tags (item #13): store this reply's explicit facts; a tag is
+  // only shown after >= 2 distinct replies confirm it.
+  if (body.vendorId) {
+    const { tagsFromExtraction, recordTagSignals } = await import("@/lib/vendor-tags");
+    await recordTagSignals(
+      String(body.vendorId),
+      session.email,
+      String(body.text ?? ""),
+      tagsFromExtraction(result, String(body.text ?? ""))
+    ).catch(() => {});
+  }
   if (result.found && result.pricePerDay) {
     await sbInsert("offers", [
       {

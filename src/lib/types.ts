@@ -72,6 +72,9 @@ export interface Vendor {
   priceLevel?: number;
   distanceKm?: number;
   fastResponder?: boolean; // in the fastest-replying quartile (Ultra insight)
+  // Reply-VERIFIED shop facts (item #13): each tag was explicitly stated by
+  // the shop in >= 2 different replies before it is ever shown.
+  verifiedTags?: string[];
   sponsored?: boolean; // paid placement: glowing card, pinned to the top
   // live state (client-side)
   stage?: TrackerStage;

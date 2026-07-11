@@ -686,6 +686,9 @@ export interface ExtractedOffer {
   // ONLY set when the shop explicitly confirmed them - never guessed.
   deposit?: string; // e.g. "Passport only", "3,000 THB cash"
   delivers?: boolean | null;
+  // Constrained fact tags (item #13) from the reply, e.g. "helmets-included".
+  // Vocabulary is enforced in vendor-tags.ts; anything else is dropped.
+  tags?: string[];
 }
 
 export async function extractOffer(
@@ -728,7 +731,7 @@ export async function extractOffer(
     ". Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
     '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
-    '"deposit": string, "delivers": boolean|null }. ' +
+    '"deposit": string, "delivers": boolean|null, "tags": string[] }. ' +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
     "vehicle. Combine the reply with the conversation history: if the vehicle " +
     "and daily price are both clear from the thread as a whole, set matchesSpec " +
@@ -746,6 +749,10 @@ export async function extractOffer(
     "otherwise an empty string. NEVER guess. " +
     "delivers: true only if they clearly said they deliver / bring the vehicle, " +
     "false only if they clearly said no delivery, null when not mentioned. " +
+    "tags: facts the shop EXPLICITLY stated in this reply, chosen ONLY from: " +
+    "delivery, pickup-only, airport-delivery, no-deposit, passport-deposit, " +
+    "cash-deposit, helmets-included, insurance-included, cards-accepted, " +
+    "flexible-dates. Empty array when nothing applies - NEVER guess or infer. " +
     (localCur
       ? `IMPORTANT: this shop is in a place whose local currency is ${localCur}. ` +
         `If the reply gives a bare number with no currency symbol, the currency is ` +
@@ -820,6 +827,9 @@ export async function extractOffer(
       confidence: conf,
       deposit: deposit || undefined,
       delivers: typeof e.delivers === "boolean" ? e.delivers : null,
+      tags: Array.isArray(e.tags)
+        ? e.tags.filter((t) => typeof t === "string").map((t) => t.toLowerCase().trim()).slice(0, 10)
+        : [],
       clarifyMessage: verifiedEnough
         ? undefined
         : e.clarifyMessage ||
