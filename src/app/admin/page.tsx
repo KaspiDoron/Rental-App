@@ -840,7 +840,7 @@ export default function AdminPage() {
                 <div className="mt-0.5">{tcInfo.reasoning}</div>
                 <div className="mt-1 text-faint">
                   Understood: price{" "}
-                  {tcInfo.understood.foundPrice ?? "—"} {tcInfo.understood.currency} ·
+                  {tcInfo.understood.foundPrice ?? "-"} {tcInfo.understood.currency} ·
                   matches vehicle: {String(tcInfo.understood.matchesVehicle)} · confidence{" "}
                   {tcInfo.understood.confidence}
                 </div>

@@ -53,7 +53,7 @@ export function WaTermsModal({ onClose }: { onClose: () => void }) {
       <div dir="ltr" className="text-left">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-[16px] font-extrabold text-strong">
-            WhatsApp Linking — Terms &amp; Release of Liability
+            WhatsApp Linking - Terms &amp; Release of Liability
           </h2>
           <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
             ✕

@@ -111,7 +111,7 @@ export function BargainDraftModal({
         // Safety filter blocked the wording.
         setSendState("blocked");
         setStatusMsg(
-          `${d.reason}${d.suggestion ? ` — ${t("Try:")} "${d.suggestion}"` : ""}`
+          `${d.reason}${d.suggestion ? ` - ${t("Try:")} "${d.suggestion}"` : ""}`
         );
       } else if (d.queued) {
         setSendState("queued");
