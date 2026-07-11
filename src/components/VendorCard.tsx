@@ -274,6 +274,13 @@ export function VendorCard({
         </div>
 
         <div className="mt-3">
+          {/* Held for the shop's opening hours - it sends automatically then.
+              The user can also remove it from the status panel above. */}
+          {vendor.queuedUntil && !offer && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              🕘 {t("Waiting for the shop to open - sends automatically")}
+            </div>
+          )}
           <Pipeline stage={vendor.stage ?? "queued"} />
           {vendor.stage && vendor.stage !== "offer-received" && (
             <div className="mt-2 flex items-start gap-1.5 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">

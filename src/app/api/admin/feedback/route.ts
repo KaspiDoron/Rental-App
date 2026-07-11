@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { sbSelect, sbUpdate } from "@/lib/runtime-config";
+import { sbSelect, sbUpdate, sbDelete } from "@/lib/runtime-config";
 
 // In-app feedback inbox with a triage WORKFLOW: every report has a status
 // (open / in-progress / resolved / dismissed) and an owner note, so feedback
@@ -56,5 +56,20 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "nothing to update" }, { status: 400 });
   }
   await sbUpdate("feedback", `id=eq.${id}`, patch);
+  return NextResponse.json({ ok: true });
+}
+
+// Permanently delete a feedback report (and its screenshots). Owner/management
+// only - for spam or resolved noise the owner wants gone for good.
+export async function DELETE(req: Request) {
+  const session = await requireManagement();
+  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const id = Number(new URL(req.url).searchParams.get("id"));
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+  // Remove any attached screenshots first (best-effort), then the row itself.
+  await sbDelete("feedback_images", `feedback_id=eq.${id}`).catch(() => {});
+  await sbDelete("feedback", `id=eq.${id}`);
   return NextResponse.json({ ok: true });
 }

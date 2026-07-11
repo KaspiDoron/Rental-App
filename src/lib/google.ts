@@ -151,6 +151,74 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
   }
 }
 
+/**
+ * Reverse-geocode a lat/lng into a human place label that ENDS in the country
+ * (so `currencyForRegion` and the local-language agents work). Google first,
+ * OpenStreetMap Nominatim as the free fallback. Returns null on total failure
+ * so callers can keep the raw coordinates. Cached for a day per rounded point.
+ */
+export async function reverseGeocode(
+  lat: number,
+  lng: number
+): Promise<{ label: string; country?: string } | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const rlat = Math.round(lat * 1000) / 1000;
+  const rlng = Math.round(lng * 1000) / 1000;
+  const ck = `rev:${rlat},${rlng}`;
+  const cached = cacheGet<{ label: string; country?: string }>(ck);
+  if (cached) return cached;
+
+  const key = await mapsKey();
+  if (key) {
+    try {
+      const res = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${rlat},${rlng}&key=${key}`,
+        { cache: "no-store" }
+      );
+      const data = await res.json();
+      await recordApi("geocoding");
+      if (data.status === "OK" && data.results?.length) {
+        // Prefer a locality-level result; fall back to the first (most precise).
+        const pick =
+          (data.results as any[]).find((r) =>
+            r.types?.some((t: string) => ["locality", "postal_town", "administrative_area_level_2"].includes(t))
+          ) ?? data.results[0];
+        const country = (pick.address_components as any[])?.find((c) =>
+          c.types?.includes("country")
+        )?.long_name;
+        const out = { label: pick.formatted_address as string, country };
+        cacheSet(ck, out, 24 * 3600_000);
+        return out;
+      }
+    } catch {
+      /* fall through to OSM */
+    }
+  }
+
+  // OpenStreetMap Nominatim reverse - free, real data, no key.
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=12&lat=${rlat}&lon=${rlng}`,
+      {
+        headers: { "User-Agent": "WheelDeal/1.0 (rental savings app)" },
+        cache: "no-store",
+      }
+    );
+    const data = (await res.json()) as any;
+    if (data?.display_name) {
+      const out = {
+        label: data.display_name as string,
+        country: data.address?.country as string | undefined,
+      };
+      cacheSet(ck, out, 24 * 3600_000);
+      return out;
+    }
+  } catch {
+    /* give up - caller keeps the raw coordinates */
+  }
+  return null;
+}
+
 // ---- Vendor discovery ----------------------------------------------------------
 
 const KEYWORDS: Record<VehicleClass, string> = {

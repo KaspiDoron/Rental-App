@@ -64,7 +64,15 @@ export async function POST(req: Request) {
   }
 
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
-  const results: { id: string; sent: boolean; queued?: boolean; reason?: string }[] = [];
+  const results: {
+    id: string;
+    sent: boolean;
+    queued?: boolean;
+    queuedUntil?: string;
+    reason?: string;
+    text?: string;
+    gloss?: string;
+  }[] = [];
   for (const v of vendors) {
     let to = (v.whatsapp ?? "").trim();
     if (!to && v.placeId) to = (await placeDetails(v.placeId))?.phone ?? "";
@@ -102,6 +110,7 @@ export async function POST(req: Request) {
         id: v.id,
         sent: false,
         queued: Boolean(guard.queuedUntil),
+        queuedUntil: guard.queuedUntil ? new Date(guard.queuedUntil).toISOString() : undefined,
         reason: guard.queuedUntil ? "queued" : guard.reason,
       });
       continue;
@@ -139,7 +148,15 @@ export async function POST(req: Request) {
         },
       ]);
     }
-    results.push({ id: v.id, sent: ok, reason: ok ? undefined : reason ?? "not-on-whatsapp" });
+    results.push({
+      id: v.id,
+      sent: ok,
+      reason: ok ? undefined : reason ?? "not-on-whatsapp",
+      // Give the traveller the EXACT text we sent + its faithful English gloss
+      // so the status panel shows what really went out (never a paraphrase).
+      text: ok ? guard.text : undefined,
+      gloss: ok ? englishGloss : undefined,
+    });
   }
 
   return NextResponse.json({

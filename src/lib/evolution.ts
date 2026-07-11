@@ -862,6 +862,78 @@ export interface WaMessage {
   ts: number;
 }
 
+// Pull readable text out of ANY Evolution/Baileys message object. WhatsApp nests
+// the real payload under wrappers (disappearing messages -> ephemeralMessage,
+// view-once -> viewOnceMessage, edits -> editedMessage) and spreads text across
+// many subtypes - missing these made real shop chats look "empty", which was the
+// "no readable conversation found" bug. Media-only messages return a short
+// placeholder so a photo-heavy price chat still counts as a real conversation.
+function waMessageText(message: any): string {
+  if (!message || typeof message !== "object") return "";
+  // Unwrap the common envelopes first (they hold a nested `message`).
+  const inner =
+    message.ephemeralMessage?.message ??
+    message.viewOnceMessage?.message ??
+    message.viewOnceMessageV2?.message ??
+    message.viewOnceMessageV2Extension?.message ??
+    message.editedMessage?.message?.protocolMessage?.editedMessage ??
+    message.documentWithCaptionMessage?.message ??
+    null;
+  if (inner) return waMessageText(inner);
+
+  const text =
+    message.conversation ??
+    message.extendedTextMessage?.text ??
+    message.imageMessage?.caption ??
+    message.videoMessage?.caption ??
+    message.documentMessage?.caption ??
+    message.buttonsResponseMessage?.selectedDisplayText ??
+    message.templateButtonReplyMessage?.selectedDisplayText ??
+    message.listResponseMessage?.title ??
+    message.reactionMessage?.text ??
+    "";
+  if (String(text).trim()) return String(text);
+
+  // Media with no caption is still a real turn (often a price-list photo).
+  if (message.imageMessage) return "[photo]";
+  if (message.videoMessage) return "[video]";
+  if (message.audioMessage) return "[voice note]";
+  if (message.documentMessage) return "[document]";
+  if (message.stickerMessage) return "[sticker]";
+  if (message.locationMessage) return "[location]";
+  return "";
+}
+
+// Evolution's findMessages body shape varies across versions; try each so a
+// real chat is never wrongly reported empty.
+async function findMessagesRecords(
+  email: string,
+  jid: string,
+  limit: number
+): Promise<any[]> {
+  const instance = instanceNameFor(email);
+  const bodies = [
+    { where: { key: { remoteJid: jid } }, limit },
+    { where: { remoteJid: jid }, limit },
+    { remoteJid: jid, limit },
+  ];
+  for (const body of bodies) {
+    try {
+      const res = await evo(email, `/chat/findMessages/${instance}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const arr: any[] = Array.isArray(res.data)
+        ? res.data
+        : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
+      if (arr.length) return arr;
+    } catch {
+      /* try the next body shape */
+    }
+  }
+  return [];
+}
+
 /**
  * Resolve a pasted phone number to the exact JID WhatsApp stores for it. This
  * fixes "no chat found" when the owner types the number in a slightly different
@@ -905,28 +977,13 @@ export async function fetchMessages(
   jid: string,
   limit = 60
 ): Promise<WaMessage[]> {
-  const instance = instanceNameFor(email);
-  const res = await evo(email, `/chat/findMessages/${instance}`, {
-    method: "POST",
-    body: JSON.stringify({ where: { key: { remoteJid: jid } }, limit }),
-  });
-  const arr: any[] = Array.isArray(res.data)
-    ? res.data
-    : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
+  const arr = await findMessagesRecords(email, jid, limit);
   return arr
-    .map((m) => {
-      const msg = m.message ?? {};
-      const text =
-        msg.conversation ??
-        msg.extendedTextMessage?.text ??
-        msg.imageMessage?.caption ??
-        "";
-      return {
-        fromMe: Boolean(m.key?.fromMe),
-        text: String(text),
-        ts: Number(m.messageTimestamp ?? 0),
-      };
-    })
+    .map((m) => ({
+      fromMe: Boolean(m.key?.fromMe),
+      text: waMessageText(m.message ?? {}),
+      ts: Number(m.messageTimestamp ?? 0),
+    }))
     .filter((m) => m.text.trim().length > 0)
     .sort((a, b) => a.ts - b.ts);
 }
@@ -950,28 +1007,16 @@ export async function fetchMessagesRaw(
   jid: string,
   limit = 10
 ): Promise<WaMessageRaw[]> {
-  const instance = instanceNameFor(email);
-  const res = await evo(email, `/chat/findMessages/${instance}`, {
-    method: "POST",
-    body: JSON.stringify({ where: { key: { remoteJid: jid } }, limit }),
-  });
-  const arr: any[] = Array.isArray(res.data)
-    ? res.data
-    : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
+  const arr = await findMessagesRecords(email, jid, limit);
   return arr
     .map((m) => {
       const msg = m.message ?? {};
-      const text =
-        msg.conversation ??
-        msg.extendedTextMessage?.text ??
-        msg.imageMessage?.caption ??
-        "";
       return {
         id: String(m.key?.id ?? ""),
         fromMe: Boolean(m.key?.fromMe),
-        text: String(text),
+        text: waMessageText(msg),
         ts: Number(m.messageTimestamp ?? 0),
-        hasImage: Boolean(msg.imageMessage),
+        hasImage: Boolean(msg.imageMessage ?? msg.ephemeralMessage?.message?.imageMessage),
         record: m,
       };
     })

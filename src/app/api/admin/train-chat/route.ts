@@ -28,8 +28,9 @@ const DEFAULT_RFQ: StructuredRFQ = {
 };
 
 export async function POST(req: Request) {
-  const session = await requireManagement();
-  if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireManagement();
+  if (!auth) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const session = auth; // non-null capture so nested closures keep the type
 
   const body = await req.json().catch(() => ({}));
   // Global: no country is baked in. If the owner leaves the area blank the agent
@@ -60,7 +61,24 @@ export async function POST(req: Request) {
   const lastShop = [...turns].reverse().find((t) => t.role === "shop")?.text ?? "";
   const cur = currencyForRegion(region) || "USD";
 
-  // Read what the shop said (price? matches the vehicle? still unclear?).
+  // Read what the shop said (price? matches the vehicle? still unclear?). The
+  // whole brain is wrapped so a transient AI hiccup NEVER leaves the trainer
+  // silent - the agent always replies with something sensible.
+  try {
+    return await runBrain();
+  } catch (err) {
+    return NextResponse.json({
+      agentMessage:
+        "Thanks! Could you share your best daily price for that exact vehicle? (The AI provider hiccuped just now - try once more if this repeats.)",
+      action: "clarify (fallback)",
+      reasoning:
+        "The AI provider was momentarily unavailable, so I fell back to a safe clarifying ask. Add or check an AI key in Admin -> Keys if this keeps happening.",
+      understood: { foundPrice: null, currency: cur, matchesVehicle: false, confidence: "low" },
+      warning: err instanceof Error ? err.message : "AI temporarily unavailable",
+    });
+  }
+
+  async function runBrain() {
   const extraction = await extractOffer(rfq, lastShop || "(no message yet)", [], history, region);
   const priorBargains = turns.filter(
     (t) => t.role === "agent" && /best|deal|discount|possible|\bfor\b.*\bday/i.test(t.text)
@@ -124,6 +142,7 @@ export async function POST(req: Request) {
       confidence: extraction.confidence,
     },
   });
+  }
 }
 
 // Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).

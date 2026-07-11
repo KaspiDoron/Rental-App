@@ -391,23 +391,25 @@ export async function localizeMessage(
   region?: string,
   voiceKey?: string
 ): Promise<{ text: string; english?: string }> {
+  void voiceKey; // persona intentionally not applied to local-language output
   if (!region) return { text: message };
-  let persona = "";
-  if (voiceKey) {
-    const { voiceProfileFor, voiceDirectives } = await import("./voice");
-    persona = ` ${voiceDirectives(voiceProfileFor(voiceKey))}`;
-  }
+  // NB: we deliberately do NOT inject the English voice persona here - its
+  // literal greeting ("Hey") was leaking into the local-language output. The
+  // local register itself carries the human tone.
   const out = await chat(
     [
       {
         role: "system",
         content:
-          `Rewrite the traveller's WhatsApp message NATIVELY in the main local language of ${region} - ` +
-          "the casual, friendly register a local customer uses with a rental shop (never formal, never a " +
-          "literal translation; write it as a native would type it). Keep every fact (vehicle, days, " +
-          "accessories, prices) exactly. Numbers stay in the local currency. " +
-          'Reply ONLY as JSON: { "message": "<local-language text>", "english": "<short plain-English gloss>" }.' +
-          persona,
+          `Rewrite the traveller's WhatsApp message ENTIRELY in the everyday local language of ${region}, ` +
+          "the casual friendly way a local customer messages a rental shop. CRITICAL RULES:\n" +
+          "1. Translate the WHOLE message including the greeting and sign-off. Do NOT leave ANY English " +
+          "words (no 'Hey', 'Hi', 'Thanks', etc.) - use a natural LOCAL greeting instead.\n" +
+          "2. Keep every fact exactly (vehicle, cc, days, accessories, prices); numbers stay as given.\n" +
+          "3. The \"english\" field MUST be a FAITHFUL, COMPLETE English translation of the local-language " +
+          "message you wrote - the SAME meaning and detail, sentence for sentence, NOT a shortened summary. " +
+          "The traveller reads it to know EXACTLY what was sent on their behalf.\n" +
+          'Reply ONLY as JSON: { "message": "<full local-language text>", "english": "<faithful full English translation of that exact text>" }.',
       },
       { role: "user", content: message },
     ],
@@ -419,6 +421,8 @@ export async function localizeMessage(
       const { sanitizeAiText } = await import("./text");
       return {
         text: sanitizeAiText(parsed.message),
+        // The gloss is the faithful translation of what we actually sent; if
+        // the model omitted it, fall back to the original English source.
         english: parsed.english ? sanitizeAiText(parsed.english) : message,
       };
     }

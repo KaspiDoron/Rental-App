@@ -77,6 +77,13 @@ export interface Vendor {
   stage?: TrackerStage;
   offer?: Offer;
   sentiment?: number; // 0..1 from the Sentiment agent
+  // Status-panel detail (client-side): the EXACT text we sent, its faithful
+  // English gloss, when the last state change happened, and - when the shop was
+  // closed - the ISO time the queued message will auto-send.
+  sentText?: string;
+  sentGloss?: string;
+  lastEventAt?: number;
+  queuedUntil?: string;
 }
 
 export interface VendorReview {

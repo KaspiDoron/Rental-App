@@ -51,13 +51,27 @@ const CURRENCY_COUNTRY: Record<string, string> = {
 };
 
 // "koh phangan, thailand" -> "Koh Phangan, Thailand". When the region was never
-// tagged we fall back to the country implied by the quote's currency.
+// tagged we show the country implied by the quote's currency (clear + useful)
+// instead of a cryptic "area pending".
 function areaLabel(key: string, currencyHint?: string): string {
   if (!key || key === "unknown area") {
     const c = currencyHint ? CURRENCY_COUNTRY[currencyHint.toUpperCase()] : undefined;
-    return c ? `${c} (area pending)` : "Area pending";
+    return c ? `${c} - area not tagged` : "Area not tagged yet";
   }
   return key.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// The display symbol for a currency ISO code (falls back to the code itself).
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: "$", EUR: "€", GBP: "£", THB: "฿", ILS: "₪", JPY: "¥", INR: "₹",
+  IDR: "Rp", VND: "₫", PHP: "₱", MYR: "RM", SGD: "S$", AUD: "A$", NZD: "NZ$",
+  CAD: "C$", CHF: "CHF", CNY: "¥", HKD: "HK$", TWD: "NT$", KRW: "₩", TRY: "₺",
+  MXN: "$", BRL: "R$", AED: "د.إ", SAR: "﷼", MAD: "DH", EGP: "E£", ZAR: "R",
+  KES: "KSh", LKR: "Rs", NPR: "Rs", PLN: "zł", CZK: "Kč", HUF: "Ft",
+  SEK: "kr", NOK: "kr", DKK: "kr", RUB: "₽",
+};
+function symbolFor(code: string): string {
+  return CURRENCY_SYMBOL[(code || "").toUpperCase()] || code.toUpperCase();
 }
 
 function median(sorted: number[]): number {
@@ -140,6 +154,7 @@ export async function GET() {
             vehicle,
             vehicleLabel: vehicleLabel(vehicle),
             currency: b.currency,
+            currencySymbol: symbolFor(b.currency),
             samples: b.total,
             shops: b.vendors.size,
             shopNames: [...b.vendorNames].slice(0, 8),

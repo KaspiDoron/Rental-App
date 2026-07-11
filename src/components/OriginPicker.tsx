@@ -51,19 +51,32 @@ export function OriginPicker({
     return () => clearTimeout(timer.current);
   }, [query]);
 
+  const [locating, setLocating] = useState(false);
+
   function useMyLocation() {
     if (!navigator.geolocation) return;
+    setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        onChange({
-          label: "My current location",
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        });
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        // Turn the raw GPS point into a REAL named place so the local currency
+        // and language resolve correctly (never leave it as "My current
+        // location", which no country/currency map can read).
+        let label = "My current location";
+        try {
+          const res = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
+          const data = await res.json();
+          if (data?.place?.label) label = data.place.label;
+        } catch {
+          /* keep the fallback label - coordinates still drive the search */
+        }
+        onChange({ label, lat, lng });
+        setLocating(false);
         setOpen(false);
         setQuery("");
       },
-      () => {},
+      () => setLocating(false),
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }
@@ -96,9 +109,15 @@ export function OriginPicker({
         <div className="absolute inset-x-0 top-full z-40 mt-2 overflow-hidden rounded-2xl surface-strong">
           <button
             onClick={useMyLocation}
-            className="btn btn-sm flex w-full items-center gap-2 px-4 py-3 text-left text-[14px] font-bold text-brandblue hover:bg-brandblue-soft"
+            disabled={locating}
+            className="btn btn-sm flex w-full items-center gap-2 px-4 py-3 text-left text-[14px] font-bold text-brandblue hover:bg-brandblue-soft disabled:opacity-60"
           >
-            <Icon name="spark" className="h-4 w-4" /> Use my current location
+            {locating ? (
+              <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brandblue/30 border-t-brandblue" />
+            ) : (
+              <Icon name="spark" className="h-4 w-4" />
+            )}
+            {locating ? "Finding your location..." : "Use my current location"}
           </button>
           {results.map((r, i) => (
             <button

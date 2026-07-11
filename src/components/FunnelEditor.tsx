@@ -81,6 +81,7 @@ export function FunnelEditor() {
   const [view, setView] = useState({ x: 10, y: 0, scale: 1 });
   const [saving, setSaving] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const suppressClick = useRef(false);
   // Active pointers (id -> position) so one finger pans and two pinch-zoom.
@@ -112,6 +113,23 @@ export function FunnelEditor() {
     const scale = Math.min(2, Math.max(0.3, Math.min(vw / (width + 20), vh / (height + 20), 1)));
     setView({ x: (vw - width * scale) / 2, y: 12, scale });
   }, [tree]);
+
+  // Re-fit the tree whenever we enter/leave fullscreen (the canvas size changed).
+  useEffect(() => {
+    if (!tree || !canvasRef.current) return;
+    const { width, height } = layout(tree);
+    const el = canvasRef.current;
+    // Defer one frame so the layout has settled at the new size.
+    const id = requestAnimationFrame(() => {
+      const vw = el.clientWidth;
+      const vh = el.clientHeight;
+      if (!vw || !vh) return;
+      const scale = Math.min(2, Math.max(0.3, Math.min(vw / (width + 20), vh / (height + 20), 1)));
+      setView({ x: (vw - width * scale) / 2, y: 12, scale });
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullscreen]);
 
   const save = useCallback(async (next: Node) => {
     setTree(next);
@@ -216,11 +234,18 @@ export function FunnelEditor() {
   };
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between">
+    <div className={fullscreen ? "fixed inset-0 z-[60] flex flex-col bg-card p-3 pt-safe" : ""}>
+      <div className="mb-2 flex items-center justify-between gap-2">
         <div className="text-[11px] font-bold text-faint">
           Drag to pan · pinch/scroll to zoom · tap a node {saving && "· saving…"}
         </div>
+        <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => setFullscreen((f) => !f)}
+          className="btn btn-ghost btn-sm rounded-lg border-2 border-line px-2 text-[10px] font-extrabold text-brandblue"
+        >
+          {fullscreen ? "✕ Close" : "⤢ Expand"}
+        </button>
         <button
           onClick={async () => {
             const r = await (
@@ -236,12 +261,15 @@ export function FunnelEditor() {
         >
           Reset to default
         </button>
+        </div>
       </div>
 
       {/* Pannable + zoomable canvas */}
       <div
         ref={canvasRef}
-        className="relative h-80 touch-none select-none overflow-hidden rounded-xl border-2 border-line bg-card2"
+        className={`relative ${
+          fullscreen ? "min-h-0 flex-1" : "h-80"
+        } touch-none select-none overflow-hidden rounded-xl border-2 border-line bg-card2`}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}

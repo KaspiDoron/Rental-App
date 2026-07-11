@@ -108,6 +108,11 @@ export default function Home() {
   const [localLang, setLocalLang] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [restored, setRestored] = useState(false);
+  // Live status panel (expandable) + user-facing queued-message list (bug #1/#9).
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [queueItems, setQueueItems] = useState<
+    { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
+  >([]);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
   // ATOMIC SESSION: a monotonic epoch stamped when a search starts. Only shop
@@ -239,12 +244,18 @@ export default function Home() {
     } catch {}
     if (hasSaved) return;
     navigator.geolocation?.getCurrentPosition(
-      (pos) =>
-        setOrigin({
-          label: "My current location",
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        }),
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        // Show the point instantly, then resolve it to a REAL named place so the
+        // local currency + language work (a bare "My current location" has no
+        // country to read).
+        setOrigin({ label: "My current location", lat, lng });
+        try {
+          const d = await (await fetch(`/api/geocode?lat=${lat}&lng=${lng}`)).json();
+          if (d?.place?.label) setOrigin({ label: d.place.label, lat, lng });
+        } catch {}
+      },
       () => {}
     );
   }, [session]);
@@ -252,6 +263,55 @@ export default function Home() {
   const patchVendor = useCallbackRef((id: string, patch: Partial<Vendor>) => {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   });
+
+  // The traveller's own held-for-opening-hours queue (bug #9). They can see it
+  // and remove any queued message; the matching card clears its queued badge.
+  const refreshQueue = useCallbackRef(async () => {
+    if (!session) return;
+    try {
+      const d = await (await fetch("/api/queue")).json();
+      const items: { vendorId: string | null; notBefore: string }[] = Array.isArray(d.items) ? d.items : [];
+      setQueueItems(d.items ?? []);
+      // Reconcile the cards with the SERVER (single source of truth for the
+      // queued badge, covering every send path): set the badge for shops with a
+      // held message, clear it once that message leaves the outbox (sent/removed).
+      const byVendor = new Map<string, string>();
+      for (const i of items) if (i.vendorId) byVendor.set(i.vendorId, i.notBefore);
+      setVendors((vs) =>
+        vs.map((v) => {
+          if (v.offer || !v.id) return v; // an offer supersedes any queue badge
+          const until = byVendor.get(v.id);
+          if (until && v.queuedUntil !== until) return { ...v, queuedUntil: until };
+          if (!until && v.queuedUntil) return { ...v, queuedUntil: undefined };
+          return v;
+        })
+      );
+    } catch {
+      /* keep the last snapshot */
+    }
+  });
+
+  async function removeQueued(id: number, vendorId: string | null) {
+    setQueueItems((items) => items.filter((i) => i.id !== id));
+    if (vendorId) patchVendor(vendorId, { queuedUntil: undefined, lastEventAt: Date.now() });
+    try {
+      await fetch("/api/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", id }),
+      });
+    } finally {
+      refreshQueue();
+    }
+  }
+
+  // Poll the queue while there are vendors on screen (cheap, user-scoped).
+  useEffect(() => {
+    if (!session || vendors.length === 0) return;
+    refreshQueue();
+    const id = setInterval(refreshQueue, 20000);
+    return () => clearInterval(id);
+  }, [session, vendors.length, refreshQueue]);
 
   // Live loop: while agents are in ANY active conversation, poll the reply
   // feed so shop answers pop into the cards automatically. This must include
@@ -437,16 +497,27 @@ export default function Home() {
     return cur ? moneyLocal(0, cur).replace(/[\d.,\s]/g, "") || "$" : "$";
   }, [vendors]);
 
-  // Live per-stage counts for the session status strip.
-  const stageCounts = useMemo(() => {
-    let asked = 0;
-    let waiting = 0;
+  // Live status for the session strip (bug #1). Three HONEST buckets that never
+  // contradict each other:
+  //   messaged = the shop was actually contacted (delivered, now awaiting reply)
+  //   queued   = the message is held for the shop's opening hours (auto-sends)
+  //   offers   = a price is in
+  const statusGroups = useMemo(() => {
+    const messaged: Vendor[] = [];
+    const queued: Vendor[] = [];
+    const deals: Vendor[] = [];
     for (const v of vendors) {
-      if (v.stage === "rfq-sent") asked += 1;
-      if (v.stage === "awaiting-response" || v.stage === "negotiating") waiting += 1;
+      if (v.offer) deals.push(v);
+      else if (v.queuedUntil) queued.push(v);
+      else if (["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")) messaged.push(v);
     }
-    return { asked, waiting };
+    return { messaged, queued, deals };
   }, [vendors]);
+  const stageCounts = {
+    messaged: statusGroups.messaged.length,
+    queued: statusGroups.queued.length,
+    offers: statusGroups.deals.length,
+  };
 
   const paidPlan = session ? session.plan !== "free" : false;
 
@@ -617,14 +688,93 @@ export default function Home() {
           </div>
         )}
 
-        {/* Live session status: what the agents are doing RIGHT NOW */}
+        {/* Live session status: what the agents are doing RIGHT NOW. Tappable to
+            expand into per-shop detail - which shops were messaged, which held
+            for opening hours (removable), which sent a deal, and exactly when. */}
         {vendors.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-card2 px-3 py-2 text-[11px] font-bold text-soft">
-            {stageCounts.asked > 0 && <span>📤 {stageCounts.asked} {t("asked")}</span>}
-            {stageCounts.waiting > 0 && <span>⏳ {stageCounts.waiting} {t("awaiting reply")}</span>}
-            {offersIn > 0 && <span className="text-savings">💰 {offersIn} {t("offers")}</span>}
-            {stageCounts.asked + stageCounts.waiting + offersIn === 0 && (
-              <span>{t("Tap 'Ask for price' on a shop to start")}</span>
+          <div className="mt-2 overflow-hidden rounded-2xl bg-card2">
+            <button
+              onClick={() => setStatusOpen((o) => !o)}
+              className="flex w-full items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] font-bold text-soft"
+            >
+              {stageCounts.messaged > 0 && <span>📤 {stageCounts.messaged} {t("messaged")}</span>}
+              {stageCounts.queued > 0 && <span>🕘 {stageCounts.queued} {t("queued")}</span>}
+              {stageCounts.offers > 0 && <span className="text-savings">💰 {stageCounts.offers} {t("offers")}</span>}
+              {stageCounts.messaged + stageCounts.queued + stageCounts.offers === 0 && (
+                <span>{t("Tap 'Ask for price' on a shop to start")}</span>
+              )}
+              {stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0 && (
+                <span className="ml-auto text-[10px] text-faint">{statusOpen ? "▲" : "▼"}</span>
+              )}
+            </button>
+
+            {statusOpen && (stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0) && (
+              <div className="space-y-2 border-t border-line px-3 py-2.5">
+                {/* Deals in - from whom, price, exact time */}
+                {statusGroups.deals.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-savings">💰 {t("Deals in")}</div>
+                    {statusGroups.deals.map((v) => (
+                      <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+                        <span className="truncate font-bold text-strong">{v.name}</span>
+                        <span className="shrink-0 text-soft">
+                          {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
+                          {v.lastEventAt ? ` · ${new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Messaged - and the EXACT text/gloss we sent on their behalf */}
+                {statusGroups.messaged.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">📤 {t("Messaged")}</div>
+                    {statusGroups.messaged.map((v) => (
+                      <div key={v.id} className="py-0.5 text-[11px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-bold text-strong">{v.name}</span>
+                          <span className="shrink-0 text-faint">
+                            {v.lastEventAt ? new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : t("awaiting reply")}
+                          </span>
+                        </div>
+                        {v.sentGloss && (
+                          <div className="mt-0.5 rounded-lg bg-card px-2 py-1 text-[10px] text-soft">
+                            🌐 {v.sentGloss}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Queued for opening hours - user decides: wait or remove (#9) */}
+                {statusGroups.queued.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">🕘 {t("Waiting for the shop to open")}</div>
+                    {statusGroups.queued.map((v) => {
+                      const q = queueItems.find((i) => i.vendorId === v.id);
+                      return (
+                        <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+                          <span className="min-w-0">
+                            <span className="block truncate font-bold text-strong">{v.name}</span>
+                            <span className="block text-[10px] text-faint">
+                              {t("Sends automatically when they open")}
+                              {v.queuedUntil ? ` · ~${new Date(v.queuedUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                            </span>
+                          </span>
+                          <button
+                            onClick={() => (q ? removeQueued(q.id, v.id) : patchVendor(v.id, { queuedUntil: undefined }))}
+                            className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-0.5 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
+                          >
+                            {t("Remove")}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -726,9 +876,23 @@ export default function Home() {
                   if (d.results) {
                     for (const r of d.results) {
                       if (r.sent) {
-                        patchVendor(r.id, { stage: "awaiting-response" });
+                        patchVendor(r.id, {
+                          stage: "awaiting-response",
+                          sentText: r.text,
+                          sentGloss: r.gloss,
+                          lastEventAt: Date.now(),
+                          queuedUntil: undefined,
+                        });
+                      } else if (r.queued) {
+                        // Held for the shop's opening hours - show it on the card
+                        // and in the user-facing queue (they can wait or remove).
+                        patchVendor(r.id, {
+                          queuedUntil: r.queuedUntil ?? new Date().toISOString(),
+                          lastEventAt: Date.now(),
+                        });
                       }
                     }
+                    refreshQueue();
                     setMassNote(
                       d.sent > 0 || d.queued > 0
                         ? `${t("Agents are on it - shops asked:")} ${d.sent}${

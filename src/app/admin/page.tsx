@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -60,7 +60,7 @@ export default function AdminPage() {
       samples: number;
       shops: number;
       vehicles: {
-        vehicle: string; vehicleLabel: string; currency: string; samples: number; shops: number;
+        vehicle: string; vehicleLabel: string; currency: string; currencySymbol: string; samples: number; shops: number;
         shopNames: string[];
         low: number; median: number; high: number; avg: number; spreadPct: number;
         typicalDays: number | null; minDays: number | null; maxDays: number | null;
@@ -127,6 +127,26 @@ export default function AdminPage() {
   const [tcTurns, setTcTurns] = useState<{ role: "shop" | "agent"; text: string }[]>([]);
   const [tcInput, setTcInput] = useState("");
   const [tcRegion, setTcRegion] = useState("");
+  const [tcRegionSug, setTcRegionSug] = useState<{ label: string }[]>([]);
+  const [tcRegionOpen, setTcRegionOpen] = useState(false);
+  const tcRegionTimer = useRef<ReturnType<typeof setTimeout>>();
+  function tcRegionSearch(q: string) {
+    setTcRegion(q);
+    setTcRegionOpen(true);
+    clearTimeout(tcRegionTimer.current);
+    if (q.trim().length < 3) {
+      setTcRegionSug([]);
+      return;
+    }
+    tcRegionTimer.current = setTimeout(async () => {
+      try {
+        const d = await (await fetch(`/api/geocode?q=${encodeURIComponent(q)}`)).json();
+        setTcRegionSug((d.results ?? []).slice(0, 5).map((r: { label: string }) => ({ label: r.label })));
+      } catch {
+        setTcRegionSug([]);
+      }
+    }, 350);
+  }
   const [tcBusy, setTcBusy] = useState(false);
   const [tcInfo, setTcInfo] = useState<{
     action: string; reasoning: string;
@@ -142,17 +162,32 @@ export default function AdminPage() {
     setTcInput("");
     setTcBusy(true);
     try {
-      const r = await (
-        await fetch("/api/admin/train-chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ turns, region: tcRegion }),
-        })
-      ).json();
+      const res = await fetch("/api/admin/train-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turns, region: tcRegion }),
+      });
+      const r = await res.json().catch(() => ({}));
       if (r.agentMessage) {
         setTcTurns([...turns, { role: "agent", text: r.agentMessage }]);
         setTcInfo({ action: r.action, reasoning: r.reasoning, understood: r.understood });
+      } else {
+        // Never leave the trainer silent - always show WHY the agent could not reply.
+        setTcTurns([
+          ...turns,
+          {
+            role: "agent",
+            text:
+              r.error ??
+              "The agent could not respond just now. Check that an AI key is set in Admin -> Keys, then try again.",
+          },
+        ]);
       }
+    } catch {
+      setTcTurns([
+        ...turns,
+        { role: "agent", text: "Network hiccup reaching the agent - please try again." },
+      ]);
     } finally {
       setTcBusy(false);
     }
@@ -745,15 +780,35 @@ export default function AdminPage() {
               negotiates: what it understood, its target, and its next move. Save the
               session to teach it. (This runs the exact funnel brain.)
             </p>
-            <input
-              value={tcRegion}
-              onChange={(e) => setTcRegion(e.target.value)}
-              placeholder="Scenario area (any country) - e.g. Lisbon, Portugal / Bali, Indonesia"
-              className="mb-2 w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
-            />
+            <div className="relative mb-2">
+              <input
+                value={tcRegion}
+                onChange={(e) => tcRegionSearch(e.target.value)}
+                onFocus={() => tcRegionSug.length && setTcRegionOpen(true)}
+                placeholder="Search the scenario area - e.g. Lisbon, Portugal / Bali, Indonesia"
+                className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+              />
+              {tcRegionOpen && tcRegionSug.length > 0 && (
+                <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-xl border-2 border-line bg-card shadow-lg">
+                  {tcRegionSug.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setTcRegion(s.label);
+                        setTcRegionOpen(false);
+                      }}
+                      className="btn btn-sm block w-full border-t border-line px-3 py-2 text-left text-[11px] text-strong first:border-t-0 hover:bg-card2"
+                    >
+                      📍 {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <p className="mb-2 text-[10px] text-faint">
               Set the area and the agent bargains in that country&rsquo;s currency and
-              style - it is not tied to any single country.
+              style - it is not tied to any single country. The currency is read from
+              the area, so pick a real place for accurate floors.
             </p>
             <div className="mb-2 max-h-64 space-y-1.5 overflow-y-auto rounded-xl bg-card2 p-2">
               {tcTurns.length === 0 ? (
@@ -1490,6 +1545,11 @@ export default function AdminPage() {
                   {a.vehicles.map((v) => {
                     const key = `${a.area}:${v.vehicle}`;
                     const open = intelOpen === key;
+                    // Local currency symbol (never the word "local", never a
+                    // forced "$") - e.g. "฿250", "Rp 90,000".
+                    const sym = v.currencySymbol || v.currency;
+                    const price = (n: number) =>
+                      sym.length > 1 ? `${sym} ${n.toLocaleString()}` : `${sym}${n.toLocaleString()}`;
                     return (
                       <div key={v.vehicle} className="rounded-xl bg-card2">
                         {/* Tap a row to expand full detail (#6 expandable) */}
@@ -1502,18 +1562,17 @@ export default function AdminPage() {
                             {v.vehicleLabel}
                           </span>
                           <span className="text-[11px] text-savings">
-                            {v.low}
+                            {price(v.low)}
                             <span className="text-faint">-</span>
-                            <span className="text-brandred">{v.high}</span>{" "}
-                            <span className="text-faint">{v.currency}</span>
+                            <span className="text-brandred">{price(v.high)}</span>
                           </span>
                         </button>
                         {open && (
                           <div className="grid grid-cols-2 gap-1.5 border-t border-line p-2.5 text-[10px] text-soft">
-                            <Stat label="Lowest / day" value={`${v.low} ${v.currency}`} good />
-                            <Stat label="Highest / day" value={`${v.high} ${v.currency}`} bad />
-                            <Stat label="Median / day" value={`${v.median} ${v.currency}`} />
-                            <Stat label="Average / day" value={`${v.avg} ${v.currency}`} />
+                            <Stat label="Lowest / day" value={price(v.low)} good />
+                            <Stat label="Highest / day" value={price(v.high)} bad />
+                            <Stat label="Median / day" value={price(v.median)} />
+                            <Stat label="Average / day" value={price(v.avg)} />
                             <Stat label="Price spread" value={`${v.spreadPct}%`} />
                             <Stat label="Quotes / shops" value={`${v.samples} / ${v.shops}`} />
                             <Stat
@@ -2435,6 +2494,21 @@ export default function AdminPage() {
                 }}
                 className="mt-1.5 w-full rounded-lg border-2 border-line bg-card p-1.5 text-[11px] text-strong focus:border-brandblue focus:outline-none"
               />
+              {/* Delete this report for good (spam / resolved noise) */}
+              <div className="mt-1.5 flex justify-end">
+                <button
+                  onClick={async () => {
+                    if (!confirm("Delete this feedback permanently? This cannot be undone.")) return;
+                    const res = await fetch(`/api/admin/feedback?id=${f.id}`, { method: "DELETE" });
+                    if (res.ok) {
+                      setFeedbackRows((rows) => rows.filter((r) => r.id !== f.id));
+                    }
+                  }}
+                  className="btn btn-sm rounded-lg border-2 border-line px-2.5 py-0.5 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
+                >
+                  🗑 Delete
+                </button>
+              </div>
             </div>
           ))}
         </div>
