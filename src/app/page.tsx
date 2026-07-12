@@ -119,6 +119,7 @@ export default function Home() {
     scooter: { floor: number; typical: number | null; currency: string } | null;
     car: { floor: number; typical: number | null; currency: string } | null;
   } | null>(null);
+  const [priceHintLoading, setPriceHintLoading] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appliedReplies = useRef<Set<number>>(new Set());
   // ATOMIC SESSION: a monotonic epoch stamped when a search starts. Only shop
@@ -143,13 +144,17 @@ export default function Home() {
       return;
     }
     let cancelled = false;
+    setPriceHintLoading(true);
     fetch(`/api/market/hint?region=${encodeURIComponent(label)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
         setPriceHint(d.scooter || d.car ? { scooter: d.scooter ?? null, car: d.car ?? null } : null);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setPriceHintLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -665,6 +670,11 @@ export default function Home() {
             <OriginPicker origin={origin} onChange={setOrigin} />
           </div>
 
+          {priceHintLoading && !priceHint && (
+            <div className="mt-2 rounded-2xl bg-brandblue-soft p-2.5">
+              <LoadingDots label={t("Researching local going rates...")} />
+            </div>
+          )}
           {priceHint && (priceHint.scooter || priceHint.car) && (
             <div className="mt-2 rounded-2xl bg-brandblue-soft p-2.5 text-[11px] font-bold leading-relaxed text-brandblue animate-slide-up">
               💡 {t("Local going rate here:")}{" "}

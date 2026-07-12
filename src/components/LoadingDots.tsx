@@ -11,7 +11,13 @@ export function LoadingDots({
   light?: boolean;
 }) {
   return (
-    <span className={`inline-flex items-center gap-2 ${className}`}>
+    <span
+      className={`inline-flex items-center gap-2 ${className}`}
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label={label || "Loading"}
+    >
       <span className="inline-flex items-end gap-1">
         {[0, 1, 2].map((i) => (
           <span

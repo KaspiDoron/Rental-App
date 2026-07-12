@@ -1,15 +1,26 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { Icon } from "@/components/icons";
 import { BrandMark } from "@/components/BrandMark";
 import { LoadingDots } from "@/components/LoadingDots";
 import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
-import { OrchestratorPanel } from "@/components/OrchestratorPanel";
-import { HealthPanel } from "@/components/HealthPanel";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
+
+// The agents + keys sub-panels are heavy (trace viewer, simulator, health
+// probes) and only appear on two tabs, so code-split them out of the initial
+// admin bundle - first paint of the common tabs no longer pays for them.
+const OrchestratorPanel = dynamic(
+  () => import("@/components/OrchestratorPanel").then((m) => m.OrchestratorPanel),
+  { ssr: false, loading: () => <LoadingDots label="Loading the agent pipeline" /> }
+);
+const HealthPanel = dynamic(
+  () => import("@/components/HealthPanel").then((m) => m.HealthPanel),
+  { ssr: false, loading: () => <LoadingDots label="Loading service health" /> }
+);
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -354,6 +365,9 @@ export default function AdminPage() {
 
   useEffect(() => {
     (async () => {
+      // Analytics doubles as the auth gate, so it runs first. Everything else
+      // then loads IN PARALLEL - the panel used to await nine round-trips one
+      // after another, so first paint waited on the SUM of every latency.
       const a = await fetch("/api/admin/analytics");
       if (a.status === 403) {
         setAuthorized(false);
@@ -361,25 +375,34 @@ export default function AdminPage() {
       }
       setAuthorized(true);
       setAnalytics(await a.json());
-      const cfg = await (await fetch("/api/admin/config")).json();
+
+      const j = (r: PromiseSettledResult<Response>) =>
+        r.status === "fulfilled" ? r.value.json().catch(() => ({})) : Promise.resolve({});
+      const [cfgR, uR, billR, meR, aiR, trR, fbR] = await Promise.allSettled([
+        fetch("/api/admin/config"),
+        fetch("/api/admin/users"),
+        fetch("/api/billing/checkout"),
+        fetch("/api/auth/me"),
+        fetch("/api/admin/ai-status"),
+        fetch("/api/admin/training"),
+        fetch("/api/admin/feedback"),
+      ]);
+      const [cfg, u, bill, me, ai, tr, fb] = await Promise.all([
+        j(cfgR), j(uR), j(billR), j(meR), j(aiR), j(trR), j(fbR),
+      ]);
       setKeys(cfg.keys ?? []);
       setPersistent(Boolean(cfg.persistent));
-      const u = await (await fetch("/api/admin/users")).json();
       setUsers(u.users ?? []);
-      const bill = await (await fetch("/api/billing/checkout")).json();
       setPlans(bill.plans ?? []);
       setStripeOn(Boolean(bill.configured));
-      const me = await (await fetch("/api/auth/me")).json();
       setIsOwner(me.session?.role === "owner");
-      const ai = await (await fetch("/api/admin/ai-status")).json();
       setAiProviders(ai.providers ?? []);
-      const tr = await (await fetch("/api/admin/training")).json();
       setTrainingCount((tr.examples ?? []).length);
       setMemory(tr.examples ?? []);
-      const fb = await (await fetch("/api/admin/feedback")).json();
       setFeedbackRows(fb.feedback ?? []);
-      await refreshCosts();
       setLoaded(true);
+      // Costs are non-blocking - never make first paint wait on them.
+      refreshCosts().catch(() => {});
     })().catch(() => setAuthorized(false));
   }, []);
 

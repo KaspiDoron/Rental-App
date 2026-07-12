@@ -7,6 +7,7 @@ import { moneyLocal } from "@/lib/currency";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { PlaceAutocomplete } from "./PlaceAutocomplete";
+import { LoadingDots } from "./LoadingDots";
 
 type Step = "verify" | "schedule" | "confirmed";
 
@@ -34,6 +35,7 @@ export function BookingSheet({
   const [dealTerms, setDealTerms] = useState(false);
   // Honest notify state: we only SAY the shop was told if it really was.
   const [notify, setNotify] = useState<"sending" | "sent" | "queued" | "failed" | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +69,8 @@ export function BookingSheet({
   const deliveryReady = fulfillment !== "hotel-delivery" || address.trim().length > 2;
 
   async function confirm() {
+    if (submitting) return; // guard against a double-tap firing two bookings
+    setSubmitting(true);
     setStep("confirmed");
     const when = `${pickupDate}T${time}:00`;
     // Persist the booking. total_price is recomputed server-side from the
@@ -276,12 +280,16 @@ export function BookingSheet({
           </label>
           <button
             onClick={confirm}
-            disabled={!dealTerms || !deliveryReady}
-            className="btn btn-primary mt-3 w-full rounded-2xl py-2.5 text-sm disabled:opacity-50"
+            disabled={!dealTerms || !deliveryReady || submitting}
+            className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-2.5 text-sm disabled:opacity-50"
           >
-            {fulfillment === "hotel-delivery" && !deliveryReady
-              ? "Add a delivery address"
-              : "Confirm booking"}
+            {submitting ? (
+              <LoadingDots light label="Saving & messaging the shop" />
+            ) : fulfillment === "hotel-delivery" && !deliveryReady ? (
+              "Add a delivery address"
+            ) : (
+              "Confirm booking"
+            )}
           </button>
         </div>
       )}
