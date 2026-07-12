@@ -6,12 +6,13 @@
 //
 // Smart storage: we do NOT save prices for every town on earth. Prices are
 // keyed at two levels - a coarse AREA key (e.g. "koh samui, thailand") and a
-// COUNTRY key ("thailand") as fallback - and rows are refreshed by the AI at
-// most once a week, lazily, the first time someone searches in that area.
+// COUNTRY key ("thailand") as fallback - and rows are refreshed by real web
+// research at most once every 3 weeks, lazily, the first time someone searches
+// in that area (then re-used instantly on every later visit to that area).
 
 import "server-only";
 import { sbSelect, sbInsert, sbUpdate } from "./runtime-config";
-import { chat, extractJson } from "./ai";
+import { chat, chatGrounded, extractJson } from "./ai";
 import { currencyForRegion } from "./agents";
 import type { StructuredRFQ } from "./types";
 
@@ -72,7 +73,7 @@ export function regionKeysFor(region?: string): string[] {
   return area === country ? [country] : [area, country];
 }
 
-const FRESH_MS = 7 * 24 * 3600_000; // AI refresh cadence: weekly
+const FRESH_MS = 21 * 24 * 3600_000; // web-research refresh cadence: every 3 weeks
 
 /**
  * Lowest realistic daily price for this spec near this region.
@@ -193,26 +194,43 @@ function defaultFloor(
 }
 
 /**
- * AI weekly research: estimate the honest LOWEST and typical daily rental
- * price for every vehicle bucket in one area, in the local currency, and
- * upsert the rows. Owner can override any row from the admin table.
+ * Web-grounded research (every 3 weeks per area): find the honest LOWEST and
+ * typical daily rental price for every vehicle bucket in one area, in the local
+ * currency, by SEARCHING THE WEB, and upsert the rows. Anchored to the cheapest
+ * real vehicles - a 110cc automatic scooter and a small 4-seat economy car.
+ * Prefers Gemini's Google-Search grounding (real listings); falls back to an
+ * ungrounded model estimate when no Gemini key is set. Owner edits always win.
  */
 export async function refreshRegionFloors(regionKey: string): Promise<boolean> {
   const cur = currencyForRegion(regionKey) ?? "USD";
   const system =
-    "You are a vehicle-rental market analyst. For the given area, estimate the " +
-    "LOWEST realistic daily rental price a local shop would ever accept (low " +
-    "season, week-long rental, cash) and the TYPICAL walk-in daily price, in " +
-    `${cur}, for each vehicle key. Be realistic - never quote fantasy lows a ` +
-    "shop would laugh at. Reply ONLY as JSON: { \"prices\": [ { \"key\": string, " +
-    '"floor": number, "typical": number } ] } covering exactly these keys: ' +
+    "You are a vehicle-rental market analyst. SEARCH THE WEB for current rental " +
+    "listings and prices in the given area, then report the LOWEST realistic " +
+    "daily price a local shop actually accepts (low season, multi-day, cash) and " +
+    `the TYPICAL walk-in daily price, in ${cur}, for each vehicle key. Anchor the ` +
+    "cheapest tiers on the smallest real vehicles: 'scooter-110' = a 110cc " +
+    "automatic scooter (Honda Click / Scoopy class), 'car-economy' = a small " +
+    "4-seat economy hatchback. Never quote fantasy lows a shop would laugh at. " +
+    'Reply ONLY as JSON: { "prices": [ { "key": string, "floor": number, ' +
+    '"typical": number } ] } covering exactly these keys: ' +
     VEHICLE_KEYS.join(", ") + ".";
-  const llm = await chat([
-    { role: "system", content: system },
-    { role: "user", content: `Area: ${regionKey}. Currency: ${cur}.` },
-  ]);
-  if (!llm) return false;
-  const parsed = extractJson<{ prices: { key: string; floor: number; typical: number }[] }>(llm);
+  const userMsg = `Area: ${regionKey}. Currency: ${cur}. Search the web for today's real rental prices there.`;
+
+  // 1) Real web grounding (Gemini + Google Search). 2) Ungrounded estimate.
+  let text: string | null = null;
+  let source = "web";
+  const grounded = await chatGrounded(system, userMsg);
+  if (grounded?.text) {
+    text = grounded.text;
+  } else {
+    text = await chat([
+      { role: "system", content: system },
+      { role: "user", content: userMsg },
+    ]);
+    source = "ai";
+  }
+  if (!text) return false;
+  const parsed = extractJson<{ prices: { key: string; floor: number; typical: number }[] }>(text);
   if (!parsed?.prices?.length) return false;
 
   const existing = await sbSelect<FloorRow>(
@@ -230,7 +248,7 @@ export async function refreshRegionFloors(regionKey: string): Promise<boolean> {
       currency: cur,
       floor_per_day: Math.round(p.floor),
       typical_per_day: p.typical > 0 ? Math.round(p.typical) : null,
-      source: "ai",
+      source,
       updated_at: new Date().toISOString(),
     };
     if (prior?.id) {

@@ -27,6 +27,7 @@ import "server-only";
 import { randomBytes } from "crypto";
 import { getConfig, setConfig, sbInsert } from "./runtime-config";
 import { chat, extractJson } from "./ai";
+import { isLowEnglish } from "./locale";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -174,20 +175,21 @@ function stageEnabled(cfg: OrchestratorConfig, id: string): boolean {
 // Language register
 // ---------------------------------------------------------------------------
 
-// Currencies where plain "low English" lands far better than formal English.
-const LOW_ENGLISH_CURRENCIES = new Set([
-  "THB", "IDR", "VND", "PHP", "INR", "LKR", "NPR", "MYR", "LAK", "KHR",
-  "MAD", "EGP", "KES", "TRY", "MXN", "COP", "PEN", "BRL",
-]);
-
-export function isLowEnglishRegion(currency?: string): boolean {
-  return Boolean(currency && LOW_ENGLISH_CURRENCIES.has(currency.toUpperCase()));
+// Low-English is decided by COUNTRY first (region label), then currency - so
+// USD-quoting ESL markets like Cambodia still get the simple register. The
+// currency/country tables live in ./locale (single source of truth).
+export function isLowEnglishRegion(currency?: string, region?: string): boolean {
+  return isLowEnglish(region, currency);
 }
 
 /** Register directives appended to every drafting prompt. */
-export function registerRules(cfg: OrchestratorConfig, currency?: string): string {
+export function registerRules(
+  cfg: OrchestratorConfig,
+  currency?: string,
+  region?: string
+): string {
   const parts: string[] = [];
-  if (cfg.lowEnglish && isLowEnglishRegion(currency)) {
+  if (cfg.lowEnglish && isLowEnglishRegion(currency, region)) {
     parts.push(
       "LANGUAGE REGISTER: write SIMPLE, low-level English that a local shop " +
         "owner instantly understands - short words, short sentences, like " +

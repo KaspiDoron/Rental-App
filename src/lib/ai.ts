@@ -430,6 +430,57 @@ export async function chatVision(
   return null;
 }
 
+/**
+ * Grounded chat: a single Gemini call with Google Search grounding enabled, so
+ * the model answers from REAL current web results (used to research live rental
+ * market floors). Returns the text plus any source URLs Gemini cites. Null when
+ * no Gemini key is set, so callers fall back to an ungrounded estimate.
+ */
+export async function chatGrounded(
+  system: string,
+  user: string
+): Promise<{ text: string; sources: string[] } | null> {
+  const key = await getConfig("GEMINI_TOKEN");
+  if (!key) return null;
+  // 2.5-flash supports the google_search tool; lite is the higher-quota fallback.
+  const models = [GEMINI_MODEL, "gemini-2.5-flash-lite"];
+  for (const model of models) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: "user", parts: [{ text: user }] }],
+            tools: [{ google_search: {} }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 900 },
+          }),
+        }
+      );
+      if (!res.ok) continue; // 429/404 - try the next model
+      const data = await res.json();
+      const cand = data.candidates?.[0];
+      const text = cand?.content?.parts
+        ?.map((p: any) => p?.text ?? "")
+        .join("")
+        .trim();
+      if (!text) continue;
+      const chunks = cand?.groundingMetadata?.groundingChunks ?? [];
+      const sources: string[] = chunks
+        .map((c: any) => c?.web?.uri)
+        .filter(Boolean)
+        .slice(0, 6);
+      await recordUsage("gemini", data.usageMetadata?.totalTokenCount ?? 0);
+      return { text, sources };
+    } catch {
+      /* try next model */
+    }
+  }
+  return null;
+}
+
 /** Extract the first JSON object from an LLM response, tolerating code fences. */
 export function extractJson<T>(text: string): T | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);

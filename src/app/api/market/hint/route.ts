@@ -24,8 +24,10 @@ export async function GET(req: Request) {
   const region = (new URL(req.url).searchParams.get("region") ?? "").trim();
   if (!region) return NextResponse.json({ scooter: null, car: null });
 
+  // Anchor the hint on the CHEAPEST real vehicles the market floor tracks: a
+  // 110cc automatic scooter and a small 4-seat economy car.
   const [scooter, car] = await Promise.all([
-    floorPriceFor(region, { ...baseRfq, vehicleClass: "scooter", engineSizeCc: 125 }).catch(() => null),
+    floorPriceFor(region, { ...baseRfq, vehicleClass: "scooter", engineSizeCc: 110 }).catch(() => null),
     floorPriceFor(region, { ...baseRfq, vehicleClass: "car", carType: "economy" }).catch(() => null),
   ]);
 

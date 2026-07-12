@@ -531,7 +531,7 @@ export async function processVendorReply(opts: {
   let followKind: string = direction;
   let englishGloss: string | undefined;
   const useLocalLang = Boolean(ctx.localLang) && ctx.plan === "ultra";
-  const register = registerRules(cfg, cur);
+  const register = registerRules(cfg, cur, ctx.region || undefined);
 
   if (direction === "answer") {
     const { chat } = await import("./ai");

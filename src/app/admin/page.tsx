@@ -983,9 +983,10 @@ export default function AdminPage() {
             </summary>
             <div className="mt-2">
             <p className="mb-2 text-[11px] text-faint">
-              The lowest realistic daily price per area and vehicle bucket. The AI
-              researches each area weekly (first search triggers it); your manual
-              edits always win. The bargaining agent never asks below these floors.
+              The lowest realistic daily price per area and vehicle bucket, from
+              live web research (first search in an area triggers it), refreshed
+              every 3 weeks; your manual edits always win. The bargaining agent
+              never asks below these floors.
             </p>
             <div className="mb-2 flex items-start gap-2">
               <div className="flex-1">
@@ -1023,12 +1024,13 @@ export default function AdminPage() {
             </div>
             {floorMsg && <p className="mb-2 text-[11px] font-bold text-savings">{floorMsg}</p>}
             <div className="mb-2 rounded-xl bg-card2 p-2 text-[10px] leading-relaxed text-faint">
-              🤖 <b>Autonomous:</b> a new area is researched and saved the first
-              time a user searches there (or when you research it above), then
-              refreshed weekly. We store ONE row per area + vehicle bucket - never
-              per town - so the database stays small. Prices are always in the
-              area&apos;s <b>local currency</b>. 👑 = your manual edit (survives AI
-              refreshes), 🤖 = AI estimate.
+              🌐 <b>Autonomous:</b> a new area is researched from the live web and
+              saved the first time a user searches there (or when you research it
+              above), then refreshed every 3 weeks. We store ONE row per area +
+              vehicle bucket - never per town - so the database stays small and
+              every later visit to that area is instant. Prices are always in the
+              area&apos;s <b>local currency</b>. 👑 = your manual edit (survives
+              refreshes), 🌐 = web research, 🤖 = model estimate.
             </div>
             {floors.length === 0 ? (
               <p className="rounded-xl bg-card2 p-3 text-center text-[11px] font-bold text-faint">
@@ -1091,7 +1093,7 @@ export default function AdminPage() {
                                   />
                                 </td>
                                 <td className="p-1.5">{f.typical_per_day ?? "-"}</td>
-                                <td className="p-1.5">{f.source === "owner" ? "👑" : "🤖"}</td>
+                                <td className="p-1.5">{f.source === "owner" ? "👑" : f.source === "web" ? "🌐" : "🤖"}</td>
                               </tr>
                             ))}
                           </tbody>

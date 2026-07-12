@@ -667,16 +667,18 @@ export default function Home() {
               💡 {t("Local going rate here:")}{" "}
               {priceHint.scooter && (
                 <>
-                  {t("scooters from")} ~{moneyLocal(priceHint.scooter.floor, priceHint.scooter.currency)}/{t("day")}
+                  {t("scooters from")} ~{moneyLocal(priceHint.scooter.floor, priceHint.scooter.currency)}/{t("day")}{" "}
+                  <span className="font-normal opacity-80">({t("110cc")})</span>
                 </>
               )}
               {priceHint.scooter && priceHint.car && " · "}
               {priceHint.car && (
                 <>
-                  {t("economy cars from")} ~{moneyLocal(priceHint.car.floor, priceHint.car.currency)}/{t("day")}
+                  {t("economy cars from")} ~{moneyLocal(priceHint.car.floor, priceHint.car.currency)}/{t("day")}{" "}
+                  <span className="font-normal opacity-80">({t("small 4-seat")})</span>
                 </>
               )}
-              . {t("Your agents bargain toward the real local floor.")}
+              . {t("Real local floor from live web research - your agents bargain toward it.")}
             </div>
           )}
 
