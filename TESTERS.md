@@ -28,9 +28,31 @@ comes first - five minutes that make the whole test smooth.
    `WHATSAPP_APP_SECRET` in Admin -> Keys so inbound webhooks are signature-
    verified. The per-user Evolution path is unaffected.
 6. **AI + Maps**: same health panel - "AI providers" and "Google Maps" green.
-7. Run `supabase/schema.sql` once in the Supabase SQL editor (idempotent) -
-   this build added `vendor_tag_signals`, `agent_traces`, `wa_processed`, and
-   several rental columns on `bookings`/`offers`/`vendor_replies`.
+   - **Google Maps key is what powers location autocomplete everywhere** (the
+     hotel/stay box, booking delivery address, profile home city, and the admin
+     area fields). Without it, typing falls back to OpenStreetMap, which is
+     rate-limited from cloud IPs, so suggestions can look empty - set the key.
+   - A **Gemini** key is recommended: it grounds the market-floor "going rate"
+     box in REAL web search and lets the agents READ shop photos (price sheets
+     vs the actual vehicle). Market floors now refresh every 3 weeks per area.
+7. **Reply alerts (optional, all plans)**: to notify testers when a shop replies
+   even with the app closed, generate a VAPID key pair (`npx web-push
+   generate-vapid-keys`) and paste both into Admin -> Keys (`VAPID_PUBLIC_KEY` /
+   `VAPID_PRIVATE_KEY`). Testers then tap "Notify me" on the search screen.
+   Without the keys the opt-in simply hides - nothing breaks.
+8. Run `supabase/schema.sql` once in the Supabase SQL editor (idempotent) -
+   this build added `push_subscriptions`, deposit columns
+   (`deposit_type`/`deposit_amount`/`deposit_currency`) on `offers` /
+   `vendor_replies`, and earlier `vendor_tag_signals`, `agent_traces`,
+   `wa_processed` and the rental columns.
+
+**New owner tools in this build (Admin -> Agents):** the negotiation brain is
+now a data-driven, editable **branching engine** (rename any agent, reorder or
+disable stages, add "when X -> then Y" edge rules), a **dry-run simulator**
+(type a hypothetical shop reply or pick a preset scenario and watch every stage
+run, WITHOUT sending anything), and a **single-prompt tester**. Deposits a shop
+asks for now show as a precise tag next to the price ("Passport", "THB 3,000
+cash"). Testers waiting on shops can play the built-in mini-game.
 
 ## For your testers (copy-paste)
 
