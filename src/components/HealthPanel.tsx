@@ -131,6 +131,77 @@ export function HealthPanel() {
           })}
         </div>
       )}
+
+      <CronUrlCard />
+    </div>
+  );
+}
+
+// Ready-made cron ping URL (with the derived security token) to paste straight
+// into cron-job.org - so the owner never has to compute the token by hand.
+function CronUrlCard() {
+  const [data, setData] = useState<
+    { tokenReady: boolean; pingUrl?: string; webhookUrl?: string; reason?: string } | null
+  >(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/ping-url")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setData(d))
+      .catch(() => {});
+  }, []);
+
+  async function copy(text: string, which: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      /* clipboard blocked - the field is selectable anyway */
+    }
+  }
+
+  if (!data) return null;
+
+  return (
+    <div className="mt-3 rounded-2xl border-2 border-line p-3">
+      <div className="text-[12px] font-extrabold text-strong">⏰ Cron keep-alive URL</div>
+      {!data.tokenReady ? (
+        <p className="mt-1 text-[11px] font-bold text-brandred">{data.reason}</p>
+      ) : (
+        <>
+          <p className="mt-1 text-[10px] text-faint">
+            Point cron-job.org (or any free pinger) at this every 5-10 minutes. It keeps the
+            WhatsApp hosts awake and sends any queued messages. The token is built in - do NOT
+            change it.
+          </p>
+          {(
+            [
+              ["Ping URL", data.pingUrl!, "ping"],
+              ["Evolution webhook URL", data.webhookUrl!, "hook"],
+            ] as [string, string, string][]
+          ).map(([label, url, key]) => (
+            <div key={key} className="mt-2">
+              <div className="text-[10px] font-bold text-faint">{label}</div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <input
+                  readOnly
+                  value={url}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="min-w-0 flex-1 rounded-lg border-2 border-line bg-card p-2 font-mono text-[11px] text-strong"
+                />
+                <button
+                  onClick={() => copy(url, key)}
+                  className="btn btn-sm shrink-0 rounded-lg bg-brandblue px-3 py-2 text-[11px] font-extrabold text-white"
+                >
+                  {copied === key ? "Copied ✓" : "Copy"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }

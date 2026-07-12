@@ -18,12 +18,12 @@ comes first - five minutes that make the whole test smooth.
    login sessions (this prevents forged owner cookies) - so logins will fail
    until it is set. Rotate it if it was ever shared.
 4. **WhatsApp host + secured ping**: check Admin -> Keys -> Service health:
-   "WhatsApp hosts" must be green. Free-tier hosts sleep - keep the
-   cron-job.org ping running, but the ping URL now needs the security token:
-   `https://<your-app>/api/wa/ping?token=<token>`. The token is derived from
-   SESSION_SECRET (same one the Evolution webhook uses); an unauthenticated
-   ping is now rejected. It also delivers queued messages while nobody has the
-   app open.
+   "WhatsApp hosts" must be green. Free-tier hosts sleep - keep a cron-job.org
+   ping running. The ping URL now carries a security token, so DON'T invent
+   one: on the same Keys page there's a "⏰ Cron keep-alive URL" card - tap
+   Copy and paste that exact URL into cron-job.org (every 5-10 min). The token
+   is derived from SESSION_SECRET; an unauthenticated ping is rejected. The
+   ping also delivers queued messages while nobody has the app open.
 5. **Meta webhook signature (only if using the official Cloud API)**: set
    `WHATSAPP_APP_SECRET` in Admin -> Keys so inbound webhooks are signature-
    verified. The per-user Evolution path is unaffected.
