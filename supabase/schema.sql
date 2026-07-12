@@ -523,3 +523,17 @@ alter table public.vendor_replies add column if not exists deposit_currency text
 
 -- Market floors gained a 'web' source (live web research) alongside 'ai'/'owner'.
 -- (source is already a free-text column; no migration needed - noted for clarity.)
+
+-- ---- Web Push subscriptions (shop-reply alerts, all plans) --------------------
+-- One row per browser/device a user opted in from. The reply webhook sends a
+-- push to every row for that user so alerts arrive even when the app is closed.
+create table if not exists public.push_subscriptions (
+  id         bigint generated always as identity primary key,
+  user_email text not null,
+  endpoint   text not null unique,
+  p256dh     text not null,
+  auth       text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists push_subs_user_idx on public.push_subscriptions (user_email);
+alter table public.push_subscriptions enable row level security;

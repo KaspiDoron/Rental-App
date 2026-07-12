@@ -22,6 +22,7 @@ import { BargainDraftModal } from "@/components/BargainDraftModal";
 import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
+import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal } from "@/lib/currency";
@@ -79,6 +80,16 @@ const DEFAULT_ORIGIN: Origin = {
   lng: 115.1385,
 };
 
+// VAPID public keys are base64url; the browser's pushManager needs a Uint8Array.
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
 export default function Home() {
   const { t } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
@@ -110,6 +121,53 @@ export default function Home() {
   const [restored, setRestored] = useState(false);
   // Live status panel (expandable) + user-facing queued-message list (bug #1/#9).
   const [statusOpen, setStatusOpen] = useState(false);
+  // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
+  const [showGame, setShowGame] = useState(false);
+  const [pushState, setPushState] = useState<"idle" | "on" | "denied" | "off">("idle");
+
+  // Jump straight to a shop's card from the status panel: switch to the list,
+  // highlight it, and smooth-scroll it into view.
+  function scrollToVendor(id: string) {
+    setView("list");
+    setSelectedId(id);
+    requestAnimationFrame(() => {
+      document.getElementById(`vendor-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  // Opt in to browser push so a shop reply reaches the traveller with the app
+  // closed. No-op (button hidden) when the server has no VAPID keys configured.
+  async function enablePush() {
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        setPushState("off");
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        setPushState("denied");
+        return;
+      }
+      const { key } = await (await fetch("/api/push/vapid")).json();
+      if (!key) {
+        setPushState("off");
+        return;
+      }
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+      });
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: sub }),
+      });
+      setPushState("on");
+    } catch {
+      setPushState("off");
+    }
+  }
   const [queueItems, setQueueItems] = useState<
     { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
   >([]);
@@ -833,7 +891,14 @@ export default function Home() {
                     <div className="mb-1 text-[10px] font-extrabold uppercase text-savings">💰 {t("Deals in")}</div>
                     {statusGroups.deals.map((v) => (
                       <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
-                        <span className="truncate font-bold text-strong">{v.name}</span>
+                        <button
+                          onClick={() => scrollToVendor(v.id)}
+                          className="flex min-w-0 items-center gap-1 text-left font-bold text-strong hover:text-brandblue"
+                          title={t("Jump to this shop")}
+                        >
+                          <span className="shrink-0 text-brandblue">↧</span>
+                          <span className="truncate">{v.name}</span>
+                        </button>
                         <span className="shrink-0 text-soft">
                           {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
                           {v.lastEventAt ? ` · ${new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
@@ -850,7 +915,14 @@ export default function Home() {
                     {statusGroups.messaged.map((v) => (
                       <div key={v.id} className="py-0.5 text-[11px]">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-bold text-strong">{v.name}</span>
+                          <button
+                            onClick={() => scrollToVendor(v.id)}
+                            className="flex min-w-0 items-center gap-1 text-left font-bold text-strong hover:text-brandblue"
+                            title={t("Jump to this shop")}
+                          >
+                            <span className="shrink-0 text-brandblue">↧</span>
+                            <span className="truncate">{v.name}</span>
+                          </button>
                           <span className="shrink-0 text-faint">
                             {v.lastEventAt ? new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : t("awaiting reply")}
                           </span>
@@ -864,6 +936,44 @@ export default function Home() {
                     ))}
                   </div>
                 )}
+
+                {/* How many shops are still to respond, honestly counted. */}
+                {stageCounts.messaged > 0 && (
+                  <div className="rounded-lg bg-card px-2 py-1 text-[11px] font-bold text-soft">
+                    ⏳ {stageCounts.messaged} {t("shop(s) still to respond")}
+                  </div>
+                )}
+
+                {/* Wait-with-us: play the game, or leave and get alerted. Works on
+                    every plan (free / pro / ultra). */}
+                <div className="rounded-xl bg-brandblue-soft p-2.5 text-[11px] leading-relaxed text-brandblue">
+                  {t("Replies can take a few minutes during the shop's business hours. You can wait here and play our game, or leave the app - we'll alert you when a new shop replies (all plans).")}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      onClick={() => setShowGame(true)}
+                      className="btn btn-sm rounded-xl bg-brandblue px-2.5 py-1 text-[11px] font-extrabold text-white"
+                    >
+                      🎮 {t("Play while you wait")}
+                    </button>
+                    {pushState !== "on" ? (
+                      <button
+                        onClick={enablePush}
+                        className="btn btn-sm rounded-xl border-2 border-brandblue px-2.5 py-1 text-[11px] font-extrabold text-brandblue"
+                      >
+                        🔔 {t("Notify me")}
+                      </button>
+                    ) : (
+                      <span className="rounded-xl bg-savings-soft px-2.5 py-1 text-[11px] font-extrabold text-savings">
+                        ✅ {t("Alerts on")}
+                      </span>
+                    )}
+                  </div>
+                  {pushState === "denied" && (
+                    <p className="mt-1 text-[10px] font-bold text-brandred">
+                      {t("Notifications are blocked - enable them in your browser settings.")}
+                    </p>
+                  )}
+                </div>
 
                 {/* Queued messages have their own always-visible card below the
                     status panel (item #2) - not duplicated here. */}
@@ -1120,7 +1230,14 @@ export default function Home() {
         ) : (
           <div data-tour="vendors" className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
             {filtered.map((v, i) => (
-              <div key={v.id} className="rise-in" style={{ ["--i" as string]: i }}>
+              <div
+                key={v.id}
+                id={`vendor-${v.id}`}
+                className={`rise-in scroll-mt-24 rounded-blob transition-shadow ${
+                  selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
+                }`}
+                style={{ ["--i" as string]: i }}
+              >
                 <VendorCard
                   vendor={v}
                   rfq={rfq}
@@ -1209,6 +1326,7 @@ export default function Home() {
         />
       )}
       {reviewsVendor && <ReviewsSheet vendor={reviewsVendor} onClose={() => setReviewsVendor(null)} />}
+      {showGame && <WaitGame onClose={() => setShowGame(false)} />}
       {bargainVendor && rfq && (
         <BargainDraftModal
           vendor={bargainVendor}

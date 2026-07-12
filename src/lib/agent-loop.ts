@@ -386,6 +386,18 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // Web Push: alert the traveller a shop replied even if the app is CLOSED, so
+  // they can leave the app and come back. Fire-and-forget; no-op without VAPID.
+  if (ctx.sender) {
+    const shop = ctx.vendorName || "A rental shop";
+    const body = usablePrice
+      ? `${shop} offered ${usablePrice} ${cur}/day - tap to see the deal.`
+      : `${shop} just replied - tap to open WheelDeal.`;
+    import("./push")
+      .then((m) => m.sendPushToUser(ctx.sender!, { title: "New reply 🛵", body, url: "/" }))
+      .catch(() => {});
+  }
+
   // ==== THE ORCHESTRATOR PIPELINE ============================================
   // Stage order per reply: extract (done above) -> deterministic discipline
   // ladder (what is ALLOWED) -> strategist (session-wide thinking + timing) ->
