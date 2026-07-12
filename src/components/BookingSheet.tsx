@@ -6,6 +6,7 @@ import { vehicleLabel } from "@/lib/labels";
 import { moneyLocal } from "@/lib/currency";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
+import { PlaceAutocomplete } from "./PlaceAutocomplete";
 
 type Step = "verify" | "schedule" | "confirmed";
 
@@ -209,15 +210,14 @@ export function BookingSheet({
             ))}
           </div>
           {fulfillment === "hotel-delivery" && (
-            <label className="mt-2 block text-[12px] font-bold text-soft">
-              Delivery address
-              <input
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
+            <div className="mt-2">
+              <PlaceAutocomplete
+                label="Delivery address"
                 placeholder="Hotel name / address for delivery"
-                className="mt-1 w-full rounded-xl border-2 border-line bg-card p-3 text-base text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+                value={address}
+                onText={setAddress}
               />
-            </label>
+            </div>
           )}
 
           {/* Rental period the shop is being asked to hold */}

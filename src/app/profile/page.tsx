@@ -11,6 +11,7 @@ import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
+import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -663,15 +664,14 @@ export default function ProfilePage() {
               <option value="car">{t("Car")}</option>
             </select>
           </label>
-          <label className="mt-2 block text-[11px] font-bold text-faint">
+          <div className="mt-2 text-[11px] font-bold text-faint">
             {t("Home city")}
-            <input
-              value={prefs.homeCity}
-              onChange={(e) => savePrefs({ ...prefs, homeCity: e.target.value })}
+            <PlaceAutocomplete
               placeholder="e.g. Tel Aviv"
-              className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2.5 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+              value={prefs.homeCity}
+              onText={(v) => savePrefs({ ...prefs, homeCity: v })}
             />
-          </label>
+          </div>
         </section>
 
         {/* Booking history */}

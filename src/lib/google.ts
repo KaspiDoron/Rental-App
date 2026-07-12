@@ -73,23 +73,46 @@ async function newTextSearch(
   }
 }
 
-export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
+export interface PlaceSearchResult {
+  results: PlaceSuggestion[];
+  // When a Maps key IS set but every Google path failed, this carries the exact
+  // Google reason so the picker can tell the owner how to fix the key (instead
+  // of a mute empty dropdown). Never set when we have results.
+  error?: string;
+}
+
+// Up to 10 rich suggestions per query so 2-letter typing shows a full list.
+const MAX_SUGGESTIONS = 10;
+
+// A descriptive, contactable User-Agent keeps Nominatim from throttling us as
+// aggressively (their policy requires identifying the app). Include the deploy
+// origin when we know it.
+function nominatimUA(): string {
+  const site =
+    process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL || "wheeldeal.app";
+  return `WheelDeal/1.0 (vehicle-rental app; ${site})`;
+}
+
+export async function searchPlaces(q: string): Promise<PlaceSearchResult> {
   const key = await mapsKey();
 
   // Cache identical queries for a day - address text never changes that fast,
   // and every cache hit is a free request.
   const ck = `sp:${q.trim().toLowerCase()}`;
   const cached = cacheGet<PlaceSuggestion[]>(ck);
-  if (cached) return cached;
+  if (cached) return { results: cached };
+
+  let googleError: string | undefined;
 
   if (key) {
     // 1) Places API (New) Text Search: finds hotels, businesses, addresses.
-    const { places } = await newTextSearch(
+    const { places, error } = await newTextSearch(
       key,
-      { textQuery: q, maxResultCount: 6 },
+      { textQuery: q, maxResultCount: MAX_SUGGESTIONS },
       "places.displayName,places.formattedAddress,places.location"
     );
     await recordApi("places_search");
+    if (error) googleError = error;
     if (places && places.length) {
       const out = places.map((p) => ({
         label: [p.displayName?.text, p.formattedAddress]
@@ -100,7 +123,7 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
         source: "google" as const,
       }));
       cacheSet(ck, out, 24 * 3600_000);
-      return out;
+      return { results: out };
     }
 
     // 2) Legacy Geocoding (works on older keys).
@@ -114,14 +137,19 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
       const data = await res.json();
       await recordApi("geocoding");
       if (data.status === "OK") {
-        const out = (data.results as any[]).slice(0, 6).map((r) => ({
+        const out = (data.results as any[]).slice(0, MAX_SUGGESTIONS).map((r) => ({
           label: r.formatted_address,
           lat: r.geometry.location.lat,
           lng: r.geometry.location.lng,
           source: "google" as const,
         }));
         cacheSet(ck, out, 24 * 3600_000);
-        return out;
+        return { results: out };
+      }
+      if (data.status && data.status !== "ZERO_RESULTS") {
+        googleError =
+          googleError ??
+          `${data.status}${data.error_message ? `: ${data.error_message}` : ""}`;
       }
     } catch {
       /* fall through to OSM */
@@ -131,23 +159,26 @@ export async function searchPlaces(q: string): Promise<PlaceSuggestion[]> {
   // 3) OpenStreetMap Nominatim - free, real data, no key needed.
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=${encodeURIComponent(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${MAX_SUGGESTIONS}&q=${encodeURIComponent(
         q
       )}`,
       {
-        headers: { "User-Agent": "WheelDeal/1.0 (rental savings app)" },
+        headers: { "User-Agent": nominatimUA() },
         cache: "no-store",
       }
     );
     const data = (await res.json()) as any[];
-    return data.map((r) => ({
+    const out = data.map((r) => ({
       label: r.display_name,
       lat: parseFloat(r.lat),
       lng: parseFloat(r.lon),
       source: "osm" as const,
     }));
+    // Surface the Google error only when BOTH tiers came up empty - so the owner
+    // learns the key needs "Places API (New)" enabled even though OSM saved the UX.
+    return { results: out, error: out.length ? undefined : googleError };
   } catch {
-    return [];
+    return { results: [], error: googleError };
   }
 }
 

@@ -9,6 +9,7 @@ import { LanguageButton } from "@/components/LanguageButton";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { OrchestratorPanel } from "@/components/OrchestratorPanel";
 import { HealthPanel } from "@/components/HealthPanel";
+import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -98,44 +99,9 @@ export default function AdminPage() {
   // Interactive train-the-agent studio (New#13)
   const [tcTurns, setTcTurns] = useState<{ role: "shop" | "agent"; text: string }[]>([]);
   const [tcInput, setTcInput] = useState("");
+  // The scenario area for the live trainer. Location suggestions now come from
+  // the shared PlaceAutocomplete; typed free-text still works as the area.
   const [tcRegion, setTcRegion] = useState("");
-  const [tcRegionSug, setTcRegionSug] = useState<{ label: string }[]>([]);
-  const [tcRegionOpen, setTcRegionOpen] = useState(false);
-  // Every state is visible: searching spinner, "no places found", or an error -
-  // a silent empty dropdown made this look broken (item #13).
-  const [tcRegionBusy, setTcRegionBusy] = useState(false);
-  const [tcRegionNote, setTcRegionNote] = useState<string | null>(null);
-  const tcRegionTimer = useRef<ReturnType<typeof setTimeout>>();
-  function tcRegionSearch(q: string) {
-    setTcRegion(q);
-    setTcRegionOpen(true);
-    setTcRegionNote(null);
-    clearTimeout(tcRegionTimer.current);
-    if (q.trim().length < 3) {
-      setTcRegionSug([]);
-      return;
-    }
-    tcRegionTimer.current = setTimeout(async () => {
-      setTcRegionBusy(true);
-      try {
-        const d = await (await fetch(`/api/geocode?q=${encodeURIComponent(q)}`)).json();
-        const sug = (d.results ?? []).slice(0, 5).map((r: { label: string }) => ({ label: r.label }));
-        setTcRegionSug(sug);
-        if (!sug.length) {
-          setTcRegionNote(
-            d.error === "paused"
-              ? "Search is paused by the kill switch (Analytics -> Cost tracker)."
-              : "No places found - your typed text will be used as the area, which works fine."
-          );
-        }
-      } catch {
-        setTcRegionSug([]);
-        setTcRegionNote("Place search unreachable - your typed text will be used as the area.");
-      } finally {
-        setTcRegionBusy(false);
-      }
-    }, 350);
-  }
   const [tcBusy, setTcBusy] = useState(false);
   const [tcInfo, setTcInfo] = useState<{
     action: string; reasoning: string;
@@ -768,36 +734,12 @@ export default function AdminPage() {
               negotiates: what it understood, its target, and its next move. Save the
               session to teach it. (This runs the exact funnel brain.)
             </p>
-            <div className="relative mb-2">
-              <input
-                value={tcRegion}
-                onChange={(e) => tcRegionSearch(e.target.value)}
-                onFocus={() => tcRegionSug.length && setTcRegionOpen(true)}
+            <div className="mb-2">
+              <PlaceAutocomplete
                 placeholder="Search the scenario area - e.g. Lisbon, Portugal / Bali, Indonesia"
-                className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+                value={tcRegion}
+                onText={setTcRegion}
               />
-              {tcRegionBusy && (
-                <span className="absolute right-2 top-2.5 h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-brandblue" />
-              )}
-              {tcRegionNote && !tcRegionBusy && (
-                <p className="mt-1 text-[10px] font-bold text-brandblue">{tcRegionNote}</p>
-              )}
-              {tcRegionOpen && tcRegionSug.length > 0 && (
-                <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-xl border-2 border-line bg-card shadow-lg">
-                  {tcRegionSug.map((s, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        setTcRegion(s.label);
-                        setTcRegionOpen(false);
-                      }}
-                      className="btn btn-sm block w-full border-t border-line px-3 py-2 text-left text-[11px] text-strong first:border-t-0 hover:bg-card2"
-                    >
-                      📍 {s.label}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
             <p className="mb-2 text-[10px] text-faint">
               Set the area and the agent bargains in that country&rsquo;s currency and
@@ -1045,13 +987,14 @@ export default function AdminPage() {
               researches each area weekly (first search triggers it); your manual
               edits always win. The bargaining agent never asks below these floors.
             </p>
-            <div className="mb-2 flex gap-2">
-              <input
-                value={floorRegion}
-                onChange={(e) => setFloorRegion(e.target.value)}
-                placeholder="Research an area now, e.g. koh samui, thailand"
-                className="flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
-              />
+            <div className="mb-2 flex items-start gap-2">
+              <div className="flex-1">
+                <PlaceAutocomplete
+                  placeholder="Research an area now, e.g. koh samui, thailand"
+                  value={floorRegion}
+                  onText={setFloorRegion}
+                />
+              </div>
               <button
                 onClick={async () => {
                   if (!floorRegion.trim()) return;

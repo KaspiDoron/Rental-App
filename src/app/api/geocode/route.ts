@@ -29,9 +29,10 @@ export async function GET(req: Request) {
   }
 
   const q = url.searchParams.get("q")?.trim() ?? "";
-  if (q.length < 3) return NextResponse.json({ results: [] });
-  const results = await searchPlaces(q);
-  return NextResponse.json({ results });
+  // Suggest from 2 characters up (owner request: the most responsive autocomplete).
+  if (q.length < 2) return NextResponse.json({ results: [] });
+  const { results, error } = await searchPlaces(q);
+  return NextResponse.json({ results, error });
 }
 
 // Vercel: allow slow upstreams (Hobby default is ~10s - too short).
