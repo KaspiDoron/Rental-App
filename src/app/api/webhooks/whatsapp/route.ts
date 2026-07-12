@@ -44,15 +44,52 @@ export async function GET(req: Request) {
   return new Response("Forbidden", { status: 403 });
 }
 
+interface WaMedia {
+  id?: string;
+  mime_type?: string;
+  caption?: string;
+}
+interface WaMessage {
+  id: string;
+  from: string;
+  timestamp?: string;
+  text?: { body?: string };
+  image?: WaMedia;
+  document?: WaMedia;
+  type?: string;
+}
 interface WaValue {
   metadata?: { phone_number_id?: string };
-  messages?: {
-    id: string;
-    from: string;
-    timestamp?: string;
-    text?: { body?: string };
-    type?: string;
-  }[];
+  messages?: WaMessage[];
+}
+
+// Download an inbound Cloud API media object as base64 (two-step Graph API
+// flow: media-id -> temporary URL -> bytes). Best-effort; returns null on any
+// failure so a photo never breaks the webhook. Enables photo understanding on
+// the official channel too, not just Evolution.
+async function fetchCloudMedia(
+  mediaId: string
+): Promise<{ mime: string; base64: string } | null> {
+  const token = await getConfig("WHATSAPP_ACCESS_TOKEN");
+  if (!token) return null;
+  try {
+    const metaRes = await fetch(`https://graph.facebook.com/v20.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!metaRes.ok) return null;
+    const meta = await metaRes.json();
+    if (!meta?.url) return null;
+    const binRes = await fetch(meta.url, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!binRes.ok) return null;
+    const buf = Buffer.from(await binRes.arrayBuffer());
+    return { mime: meta.mime_type || "image/jpeg", base64: buf.toString("base64") };
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req: Request) {
@@ -75,22 +112,26 @@ export async function POST(req: Request) {
   if (!body) return NextResponse.json({ ok: true });
 
   try {
-    const inbound: { id: string; from: string; text?: { body?: string } }[] = [];
+    const inbound: WaMessage[] = [];
     const rows: Record<string, unknown>[] = [];
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
         const value = change.value as WaValue;
         for (const msg of value.messages ?? []) {
+          const kind = msg.type ?? "text";
+          const caption = msg.image?.caption ?? msg.document?.caption;
           rows.push({
             wa_message_id: msg.id,
             from_number: msg.from,
             to_number: value.metadata?.phone_number_id ?? null,
-            body: msg.text?.body ?? "",
-            type: msg.type ?? "text",
+            body: msg.text?.body ?? caption ?? (kind === "image" ? "[photo]" : ""),
+            type: kind,
             direction: "inbound",
             raw: msg,
           });
-          if ((msg.type ?? "text") === "text") inbound.push(msg);
+          // Text AND image/document messages are now processed (a shop that
+          // replies with a price-list or vehicle photo must be understood).
+          if (kind === "text" || kind === "image" || kind === "document") inbound.push(msg);
         }
       }
     }
@@ -98,10 +139,16 @@ export async function POST(req: Request) {
 
     // Agentic processing (bounded so Meta always gets a fast 200).
     for (const msg of inbound.slice(0, 3)) {
+      const media = msg.image ?? msg.document;
+      const images =
+        media?.id && (media.mime_type ?? "").startsWith("image/")
+          ? await fetchCloudMedia(media.id).then((m) => (m ? [m] : []))
+          : [];
       await processVendorReply({
         fromDigits: msg.from,
-        text: msg.text?.body ?? "",
+        text: msg.text?.body ?? media?.caption ?? "",
         waMessageId: msg.id,
+        images,
         send: async (to, message) => {
           const r = await sendWhatsApp(to, message);
           return { ok: r.ok && r.channel === "cloud-api", error: r.error };

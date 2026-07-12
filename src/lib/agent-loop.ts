@@ -546,26 +546,53 @@ export async function processVendorReply(opts: {
   if (direction === "answer") {
     const { chat } = await import("./ai");
     const spec = fallbackAnswer(rfq);
-    const llm = await chat([
-      {
-        role: "system",
-        content:
-          "You are the traveller in a WhatsApp chat with a vehicle rental shop. " +
-          "The shop just asked a question. Answer ONLY that question in ONE short, " +
-          "casual, friendly sentence (max 25 words), strictly using these facts - " +
-          `never invent anything: ${spec} ` +
-          "You are MID-CONVERSATION: never greet again (no hey/hi/hello). " +
-          "Do not re-ask for the price if the shop already gave one for our exact vehicle. " +
-          "HARD RULE: NEVER accept a deal, never confirm a booking, never say a price " +
-          "'works' - only the traveller decides that. If the shop is asking whether we " +
-          "take their offer, say you will think it over and get back to them. " +
-          (register ? register + " " : "") +
-          ownerDirectives(cfg, "reply") +
-          " Reply with the message text only.",
-      },
-      { role: "user", content: `Conversation so far:\n${history}\n\nShop's question: ${text}` },
-    ]);
-    followUp = (llm ?? "").trim().slice(0, 300) || spec;
+    // A photo of the actual VEHICLE (not a price sheet) is not a question - it
+    // is the shop showing off the ride. Thank them warmly and keep the door open.
+    const vehiclePhoto = extraction.imageKind === "vehicle" && !shopAskedQuestion(text);
+    if (vehiclePhoto) {
+      const veh =
+        rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass === "scooter" ? "scooter" : "bike";
+      const thanksFallback = `Thanks for the photo, the ${veh} looks great! Could you confirm your best daily price for it?`;
+      const llm = await chat([
+        {
+          role: "system",
+          content:
+            "You are the traveller in a WhatsApp chat with a vehicle rental shop. " +
+            "The shop just sent a PHOTO of the actual vehicle (not a price list). " +
+            "Reply in ONE short, warm, casual sentence (max 25 words): thank them for " +
+            "the photo and, only if we do not already have a price for our exact " +
+            "vehicle, gently ask their best daily price. " +
+            "You are MID-CONVERSATION: never greet again. NEVER accept a deal or " +
+            "confirm a booking - only the traveller decides. " +
+            (register ? register + " " : "") +
+            ownerDirectives(cfg, "reply") +
+            " Reply with the message text only.",
+        },
+        { role: "user", content: `Conversation so far:\n${history}\n\nThe shop sent a photo of the ${veh}.` },
+      ]);
+      followUp = (llm ?? "").trim().slice(0, 300) || thanksFallback;
+    } else {
+      const llm = await chat([
+        {
+          role: "system",
+          content:
+            "You are the traveller in a WhatsApp chat with a vehicle rental shop. " +
+            "The shop just asked a question. Answer ONLY that question in ONE short, " +
+            "casual, friendly sentence (max 25 words), strictly using these facts - " +
+            `never invent anything: ${spec} ` +
+            "You are MID-CONVERSATION: never greet again (no hey/hi/hello). " +
+            "Do not re-ask for the price if the shop already gave one for our exact vehicle. " +
+            "HARD RULE: NEVER accept a deal, never confirm a booking, never say a price " +
+            "'works' - only the traveller decides that. If the shop is asking whether we " +
+            "take their offer, say you will think it over and get back to them. " +
+            (register ? register + " " : "") +
+            ownerDirectives(cfg, "reply") +
+            " Reply with the message text only.",
+        },
+        { role: "user", content: `Conversation so far:\n${history}\n\nShop's question: ${text}` },
+      ]);
+      followUp = (llm ?? "").trim().slice(0, 300) || spec;
+    }
   } else if (direction === "clarify") {
     followUp = extraction.clarifyMessage ?? null;
   } else if (direction === "close") {

@@ -878,7 +878,13 @@ export async function extractOffer(
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
     '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
     '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
-    '"fuelPolicy": string|null, "tags": string[] }. ' +
+    '"fuelPolicy": string|null, "imageKind": "vehicle"|"price_sheet"|"document"|"other"|null, ' +
+    '"tags": string[] }. ' +
+    "imageKind: ONLY when a photo is attached, classify it - \"vehicle\" if it is " +
+    "a photo of the actual scooter/motorbike/car, \"price_sheet\" if it shows " +
+    "prices/rates/a menu, \"document\" for papers/contracts/IDs, else \"other\"; " +
+    "null when there is no image. If the photo is just the VEHICLE (no prices), " +
+    "set found=false and do NOT invent a price - we will simply thank the shop. " +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
     "vehicle. Combine the reply with the conversation history: if the vehicle " +
     "and daily price are both clear from the thread as a whole, set matchesSpec " +
@@ -995,6 +1001,10 @@ export async function extractOffer(
       depositType: depositStruct?.type,
       depositAmount: depositStruct?.amount,
       depositCurrency: depositStruct?.currency,
+      imageKind:
+        e.imageKind && ["vehicle", "price_sheet", "document", "other"].includes(e.imageKind)
+          ? e.imageKind
+          : undefined,
       delivers: typeof e.delivers === "boolean" ? e.delivers : null,
       deliveryFee: typeof e.deliveryFee === "number" && e.deliveryFee >= 0 ? e.deliveryFee : null,
       insuranceIncluded: typeof e.insuranceIncluded === "boolean" ? e.insuranceIncluded : null,

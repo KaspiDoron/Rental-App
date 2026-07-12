@@ -72,6 +72,63 @@ export function OrchestratorPanel({ isOwner }: { isOwner: boolean }) {
   const [tracesBusy, setTracesBusy] = useState(false);
   const filterTimer = useRef<ReturnType<typeof setTimeout>>();
 
+  // ---- Dry-run simulator (test the funnel without sending) -----------------
+  interface SimStage { stage: string; input: string; reasoning: string; output: string; verdict?: string }
+  interface SimResult { direction: string; finalMessage: string | null; currency: string; stages: SimStage[] }
+  const [scenarios, setScenarios] = useState<{ id: string; label: string }[]>([]);
+  const [simReply, setSimReply] = useState("");
+  const [simRegion, setSimRegion] = useState("");
+  const [simResult, setSimResult] = useState<SimResult | null>(null);
+  const [simBusy, setSimBusy] = useState(false);
+  const [promptId, setPromptId] = useState("bargain_directives");
+  const [promptSample, setPromptSample] = useState("");
+  const [promptOut, setPromptOut] = useState<string | null>(null);
+  const [promptBusy, setPromptBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/admin/orchestrator/simulate")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.scenarios && setScenarios(d.scenarios))
+      .catch(() => {});
+  }, []);
+
+  async function runSim(scenarioId?: string) {
+    setSimBusy(true);
+    setSimResult(null);
+    try {
+      const d = await (
+        await fetch("/api/admin/orchestrator/simulate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            scenarioId ? { scenarioId } : { shopReply: simReply, region: simRegion }
+          ),
+        })
+      ).json();
+      if (d.result) setSimResult(d.result);
+      else setSimResult({ direction: "error", finalMessage: d.error ?? "Failed", currency: "", stages: [] });
+    } finally {
+      setSimBusy(false);
+    }
+  }
+
+  async function runPrompt() {
+    setPromptBusy(true);
+    setPromptOut(null);
+    try {
+      const d = await (
+        await fetch("/api/admin/orchestrator/simulate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "prompt", promptId, sampleInput: promptSample }),
+        })
+      ).json();
+      setPromptOut(d.output ?? d.error ?? "(no output)");
+    } finally {
+      setPromptBusy(false);
+    }
+  }
+
   async function load(filter = "") {
     setTracesBusy(true);
     try {
@@ -412,7 +469,125 @@ export function OrchestratorPanel({ isOwner }: { isOwner: boolean }) {
         )}
       </section>
 
-      {/* 3. Live decisions - full visibility */}
+      {/* 3. Test the funnel - dry-run simulator + single-prompt tester */}
+      <section className="surface rounded-blob p-4">
+        <div className="mb-1 text-[15px] font-extrabold text-strong">🧪 Test the funnel</div>
+        <p className="mb-2 text-[11px] text-faint">
+          Run a hypothetical shop reply through the REAL pipeline - every stage&apos;s
+          input, reasoning, output and verdict - without sending any WhatsApp message.
+        </p>
+
+        {/* Preset scenarios */}
+        {scenarios.length > 0 && (
+          <div className="no-scrollbar mb-2 flex gap-1.5 overflow-x-auto pb-1">
+            {scenarios.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => runSim(s.id)}
+                disabled={simBusy}
+                className="btn btn-sm chip shrink-0 whitespace-nowrap rounded-full border-2 border-line px-2.5 py-1 text-[11px] font-bold text-soft disabled:opacity-60"
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Free-text reply + region */}
+        <div className="space-y-1.5">
+          <textarea
+            value={simReply}
+            onChange={(e) => setSimReply(e.target.value)}
+            rows={2}
+            placeholder="Type a shop reply to test, e.g. '500 baht per day, passport deposit'"
+            className="w-full rounded-xl border-2 border-line bg-card p-2 text-[13px] text-strong focus:border-brandblue focus:outline-none"
+          />
+          <div className="flex gap-2">
+            <input
+              value={simRegion}
+              onChange={(e) => setSimRegion(e.target.value)}
+              placeholder="Area (currency/floor), e.g. Bali, Indonesia"
+              className="min-w-0 flex-1 rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+            />
+            <button
+              onClick={() => runSim()}
+              disabled={simBusy || (!simReply.trim() && !simRegion.trim())}
+              className="btn btn-primary btn-sm shrink-0 rounded-xl px-3 text-[12px] disabled:opacity-60"
+            >
+              {simBusy ? <LoadingDots light /> : "▶ Run"}
+            </button>
+          </div>
+        </div>
+
+        {/* Simulation result */}
+        {simResult && (
+          <div className="mt-2 rounded-2xl bg-card2 p-2.5">
+            <div className="mb-1.5 flex items-center gap-2 text-[12px] font-extrabold text-strong">
+              Decision:{" "}
+              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[11px] text-brandblue">
+                {simResult.direction}
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {simResult.stages.map((st, i) => (
+                <div key={i} className="rounded-xl bg-card p-2 text-[11px]">
+                  <div className="flex items-center gap-1.5 font-extrabold text-strong">
+                    <span>{STAGE_EMOJI[st.stage] ?? "🧩"}</span>
+                    {st.stage}
+                    {st.verdict && (
+                      <span className="rounded-full bg-card2 px-1.5 py-0.5 text-[9px] text-faint">{st.verdict}</span>
+                    )}
+                  </div>
+                  {st.input && <div className="mt-0.5 text-faint">in: {st.input}</div>}
+                  {st.reasoning && <div className="mt-0.5 text-soft">why: {st.reasoning}</div>}
+                  {st.output && <div className="mt-0.5 font-bold text-strong">out: {st.output}</div>}
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[12px] text-brandblue">
+              <span className="font-extrabold">Message the shop would get:</span>{" "}
+              {simResult.finalMessage ?? "(nothing - the agent stays silent)"}
+            </div>
+          </div>
+        )}
+
+        {/* Single-prompt tester */}
+        <details className="mt-3 rounded-2xl bg-card2 p-2.5">
+          <summary className="cursor-pointer list-none text-[12px] font-extrabold text-strong">
+            🔬 Test a single prompt
+          </summary>
+          <div className="mt-2 space-y-1.5">
+            <select
+              value={promptId}
+              onChange={(e) => setPromptId(e.target.value)}
+              className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] font-bold text-strong"
+            >
+              {["profiler", "bargain_directives", "safety", "triage", "writer", "transcribe"].map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <textarea
+              value={promptSample}
+              onChange={(e) => setPromptSample(e.target.value)}
+              rows={2}
+              placeholder="Sample input for the prompt..."
+              className="w-full rounded-xl border-2 border-line bg-card p-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+            />
+            <button
+              onClick={runPrompt}
+              disabled={promptBusy}
+              className="btn btn-ghost btn-sm w-full rounded-xl py-1.5 text-[12px] font-extrabold disabled:opacity-60"
+            >
+              {promptBusy ? <LoadingDots /> : "Run prompt"}
+            </button>
+            {promptOut && (
+              <div className="rounded-xl bg-card p-2 text-[12px] text-strong whitespace-pre-wrap">{promptOut}</div>
+            )}
+          </div>
+        </details>
+      </section>
+
+      {/* 4. Live decisions - full visibility */}
       <section className="surface rounded-blob p-4">
         <div className="mb-1 flex items-center justify-between">
           <div className="text-[15px] font-extrabold text-strong">🔍 Live decisions</div>
