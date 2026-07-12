@@ -240,8 +240,8 @@ export async function processVendorReply(opts: {
     pendingKind("auto-close");
 
   // Funnel-gap detector: shops that dodge with "come to the shop and we'll
-  // talk" / "depends" answers need a NEW branch in the negotiation funnel.
-  // Log an owner notification so the funnel keeps learning from real gaps.
+  // talk" / "depends" answers are logged as an owner signal, so real gaps can
+  // be turned into new branching rules in the decision graph (Admin -> Agents).
   const vague =
     /\b(come (to|by|visit)|visit (us|our shop|the shop)|see for yourself|talk (at|in) the shop|depends|not sure|we'?ll see|call us|stop by)\b/i.test(
       text
@@ -255,10 +255,6 @@ export async function processVendorReply(opts: {
         detail: text.slice(0, 500),
       },
     ]).catch(() => {});
-    // Auto-grow a branch on the funnel tree for this vague case (New#10).
-    import("./funnel")
-      .then((m) => m.autoBranchVague(text.slice(0, 120)))
-      .catch(() => {});
   }
 
   const extraction = await extractOffer(
@@ -319,6 +315,9 @@ export async function processVendorReply(opts: {
       ...replyBase,
       currency: cur,
       deposit: extraction.deposit ?? null,
+      deposit_type: extraction.depositType ?? null,
+      deposit_amount: extraction.depositAmount ?? null,
+      deposit_currency: extraction.depositCurrency ?? null,
       delivers: extraction.delivers ?? null,
       insurance_included: extraction.insuranceIncluded ?? null,
       delivery_fee: extraction.deliveryFee ?? null,
@@ -372,6 +371,9 @@ export async function processVendorReply(opts: {
       {
         ...offerBase,
         deposit_note: extraction.deposit ?? null,
+        deposit_type: extraction.depositType ?? null,
+        deposit_amount: extraction.depositAmount ?? null,
+        deposit_currency: extraction.depositCurrency ?? null,
         delivery_fee: extraction.deliveryFee ?? null,
         insurance_included: extraction.insuranceIncluded ?? null,
         km_limit_per_day: extraction.kmLimitPerDay != null ? String(extraction.kmLimitPerDay) : null,
@@ -418,81 +420,89 @@ export async function processVendorReply(opts: {
     output: usablePrice ? `${usablePrice} ${cur}/day` : "(no usable price)",
   });
 
-  // ---- Discipline ladder: decide the ALLOWED move (never composes text) -----
-  type Direction = "clarify" | "answer" | "bargain" | "close" | "silent";
-  let direction: Direction = "silent";
-  let ladderWhy = "nothing owed - silence is the most human move";
-  let closeVariants = CLOSE_OK;
-  let floorPrice: number | undefined;
+  // ---- Negotiation numbers: pure inputs to the branching engine -------------
+  // These are computed here (they need the DB for cross-shop leverage) and fed
+  // to the pure decide() engine as plain booleans, so the DECISION itself is
+  // fully owner-editable and testable.
+  const floorPrice: number | undefined = floorSameCur?.floor;
+  const priceAtOrBelowFloor = Boolean(usablePrice && floorPrice && usablePrice <= floorPrice * 1.05);
   let rivalPrice: number | undefined;
   let target: number | undefined;
-  let nextRound = round;
-
-  if (sessionClosed) {
-    direction = "silent";
-    ladderWhy = "search session closed by the user - a dead session never talks";
-  } else if (shopAskedQuestion(text) && autoAnswers < 2) {
-    direction = "answer";
-    ladderWhy = "the shop asked us a question - it must be answered, never thanked away";
-  } else if (!usablePrice && !verified && extraction.clarifyMessage && autoClarifies === 0) {
-    direction = "clarify";
-    ladderWhy = "no usable price yet and we never clarified - one polite ask";
-  } else if (usablePrice && extraction.matchesSpec !== false && autoBargains === 0) {
-    floorPrice = floorSameCur?.floor;
-    if (floorPrice && usablePrice <= floorPrice * 1.05) {
-      direction = autoCloses === 0 ? "close" : "silent";
-      ladderWhy = "quote already at/below the local floor - close warmly, never insult a great price";
-    } else {
-      // CROSS-SHOP LEVERAGE (same search session): a lower real offer from
-      // another shop is honest negotiating power.
-      if (ctx.sender) {
-        const { vehicleKeyFor } = await import("./market");
-        const vkey = vehicleKeyFor(rfq);
-        const since = new Date(Date.now() - 18 * 3600_000).toISOString();
-        const rivals = await sbSelect<{ price_per_day: number }>(
-          "offers",
-          `select=price_per_day&user_email=eq.${encodeURIComponent(
-            ctx.sender
-          )}&simulated=eq.false&currency=eq.${encodeURIComponent(
-            cur
-          )}&vehicle_key=eq.${encodeURIComponent(vkey)}&vendor_id=neq.${encodeURIComponent(
-            ctx.vendorId ?? ""
-          )}&price_per_day=lt.${usablePrice}&created_at=gte.${encodeURIComponent(
-            since
-          )}&order=price_per_day.asc&limit=1`
-        );
-        rivalPrice = rivals[0]?.price_per_day;
-      }
-      const baseTarget = floorPrice
-        ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
-        : Math.round(usablePrice * 0.85);
-      target = rivalPrice
-        ? Math.max(floorPrice ?? 0, Math.min(baseTarget, rivalPrice))
-        : baseTarget;
-      // ARITHMETIC SANITY: an ask must be truly BELOW the quote.
-      if (target >= usablePrice * 0.95) {
-        direction = autoCloses === 0 ? "close" : "silent";
-        ladderWhy = "target is not a real saving vs the quote - asking would be nonsense";
-      } else {
-        direction = "bargain";
-        nextRound = 1;
-        ladderWhy = `first quote for our vehicle - the single floor-anchored ask at ${target} ${cur}`;
-      }
+  if (usablePrice && !priceAtOrBelowFloor && extraction.matchesSpec !== false && autoBargains === 0) {
+    // CROSS-SHOP LEVERAGE (same search session): a lower real offer from
+    // another shop is honest negotiating power.
+    if (ctx.sender) {
+      const { vehicleKeyFor } = await import("./market");
+      const vkey = vehicleKeyFor(rfq);
+      const since = new Date(Date.now() - 18 * 3600_000).toISOString();
+      const rivals = await sbSelect<{ price_per_day: number }>(
+        "offers",
+        `select=price_per_day&user_email=eq.${encodeURIComponent(
+          ctx.sender
+        )}&simulated=eq.false&currency=eq.${encodeURIComponent(
+          cur
+        )}&vehicle_key=eq.${encodeURIComponent(vkey)}&vendor_id=neq.${encodeURIComponent(
+          ctx.vendorId ?? ""
+        )}&price_per_day=lt.${usablePrice}&created_at=gte.${encodeURIComponent(
+          since
+        )}&order=price_per_day.asc&limit=1`
+      );
+      rivalPrice = rivals[0]?.price_per_day;
     }
-  } else if (autoBargains >= 1 && autoCloses === 0) {
-    direction = "close";
+    const baseTarget = floorPrice
+      ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
+      : Math.round(usablePrice * 0.85);
+    target = rivalPrice
+      ? Math.max(floorPrice ?? 0, Math.min(baseTarget, rivalPrice))
+      : baseTarget;
+  }
+  const targetIsRealSaving = Boolean(usablePrice && target && target < usablePrice * 0.95);
+
+  // ---- The branching engine decides the ALLOWED move (never composes text) --
+  const { decide } = await import("./branching");
+  const { getDecisionGraph } = await import("./orchestrator");
+  const graph = await getDecisionGraph();
+  const decisionCtx = {
+    sessionClosed,
+    shopAskedQuestion: shopAskedQuestion(text),
+    shopSentVehiclePhoto: extraction.imageKind === "vehicle",
+    hasUsablePrice: Boolean(usablePrice),
+    verified,
+    hasClarifyMessage: Boolean(extraction.clarifyMessage),
+    matchesSpecNotFalse: extraction.matchesSpec !== false,
+    priceAtOrBelowFloor,
+    targetIsRealSaving,
+    rivalCheaper: Boolean(rivalPrice),
+    counts: {
+      clarify: autoClarifies,
+      bargain: autoBargains,
+      answer: autoAnswers,
+      close: autoCloses,
+    },
+  };
+  const decision = decide(decisionCtx, graph);
+  const direction = decision.direction;
+  const ladderWhy = decision.why;
+
+  // Deterministic post-decision details the engine intentionally leaves out:
+  // the close copy (warm-yes vs polite-no) and the round bump.
+  let closeVariants = CLOSE_OK;
+  let nextRound = round;
+  if (direction === "bargain") {
+    nextRound = 1;
+  } else if (direction === "close" && autoBargains >= 1) {
+    // A close that FOLLOWS our single ask: match the shop's answer's tone.
     nextRound = round + 1;
     const saidYes =
       usablePrice !== undefined ||
       /\b(ok|okay|yes|sure|deal|can do|no problem)\b/i.test(text);
     closeVariants = saidYes ? CLOSE_OK : CLOSE_NO;
-    ladderWhy = "our one ask was answered - thank once and stop, never push twice";
   }
   traces.push({
     ...traceBase,
     stage: "discipline",
     input: `counters: clarifies=${autoClarifies} bargains=${autoBargains} answers=${autoAnswers} closes=${autoCloses} sessionClosed=${sessionClosed}`,
-    reasoning: ladderWhy,
+    reasoning: `rule: ${decision.ruleId ?? "default"} - ${ladderWhy}`,
     output: direction,
   });
 

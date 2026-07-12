@@ -15,7 +15,14 @@ export interface FilterState {
   openNowOnly: boolean;
   fastOnly: boolean; // Ultra: show only the fastest-replying shops
   // Verified reply-based terms (>= 2 confirming replies) to require.
-  tag: "any" | "delivery" | "no-deposit" | "helmets-included" | "insurance-included";
+  tag:
+    | "any"
+    | "delivery"
+    | "no-deposit"
+    | "passport-deposit"
+    | "cash-deposit"
+    | "helmets-included"
+    | "insurance-included";
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -169,6 +176,8 @@ export function Filters({
           [
             ["delivery", "🛵 Delivers"],
             ["no-deposit", "🎉 No deposit"],
+            ["passport-deposit", "🛂 Passport deposit"],
+            ["cash-deposit", "🔒 Cash deposit"],
             ["helmets-included", "🪖 Helmets"],
             ["insurance-included", "🛡 Insurance"],
           ] as const

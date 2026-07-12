@@ -27,6 +27,7 @@ import "server-only";
 import { randomBytes } from "crypto";
 import { getConfig, setConfig, sbInsert } from "./runtime-config";
 import { chat, extractJson } from "./ai";
+import { defaultDecisionGraph, type DecisionGraph } from "./branching";
 import { isLowEnglish } from "./locale";
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,39 @@ export async function getOrchestratorConfig(): Promise<OrchestratorConfig> {
 
 export async function saveOrchestratorConfig(cfg: OrchestratorConfig): Promise<void> {
   await setConfig(CONFIG_KEY, JSON.stringify(cfg));
+}
+
+// ---------------------------------------------------------------------------
+// Decision graph (the branching engine's owner-editable rules) - loaded/saved
+// with the same override-or-default pattern. The pure engine lives in
+// ./branching; these are the only Supabase-backed accessors.
+// ---------------------------------------------------------------------------
+
+const GRAPH_KEY = "decision_graph";
+
+export async function getDecisionGraph(): Promise<DecisionGraph> {
+  const def = defaultDecisionGraph();
+  try {
+    const raw = await getConfig(GRAPH_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as DecisionGraph;
+      if (parsed?.version === 1 && Array.isArray(parsed.rules)) {
+        // Merge: any NEW built-in rule the owner's saved copy lacks comes back
+        // with its default, so a pipeline upgrade never drops a branch.
+        for (const d of def.rules) {
+          if (!parsed.rules.some((r) => r.id === d.id)) parsed.rules.push(d);
+        }
+        return parsed;
+      }
+    }
+  } catch {
+    /* fall through to defaults */
+  }
+  return def;
+}
+
+export async function saveDecisionGraph(graph: DecisionGraph): Promise<void> {
+  await setConfig(GRAPH_KEY, JSON.stringify(graph));
 }
 
 export function stageOf(cfg: OrchestratorConfig, id: string): StageConfig | undefined {

@@ -352,13 +352,39 @@ export function VendorCard({
                   )}
                 </div>
                 {/* Shop-CONFIRMED conditions only - never guessed */}
-                {(offer.deposit || offer.includesDelivery || offer.includesInsurance || offer.deliveryFee != null) && (
+                {(offer.deposit || offer.depositType || offer.includesDelivery || offer.includesInsurance || offer.deliveryFee != null) && (
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {offer.deposit && (
-                      <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">
-                        🛂 {t("Deposit:")} {offer.deposit}
-                      </span>
-                    )}
+                    {(() => {
+                      // Special deposit tag by the price: the exact kind the shop
+                      // wants held (cash amount / passport / etc.), from the
+                      // structured deposit, falling back to the raw label.
+                      const type = offer.depositType;
+                      const amt = offer.depositAmount;
+                      const dCur = offer.depositCurrency || offer.currency;
+                      if (!type && !offer.deposit) return null;
+                      if (type === "none") {
+                        return (
+                          <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
+                            ✅ {t("No deposit")}
+                          </span>
+                        );
+                      }
+                      const doc =
+                        type === "passport" ? t("Passport")
+                        : type === "id" ? t("ID card")
+                        : type === "license" ? t("Licence")
+                        : "";
+                      const parts: string[] = [];
+                      if (doc) parts.push(doc);
+                      if (amt) parts.push(`${moneyLocal(amt, dCur)} ${t("cash")}`);
+                      const text = parts.length ? parts.join(` ${t("or")} `) : offer.deposit;
+                      const emoji = doc ? "🛂" : "🔒";
+                      return (
+                        <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">
+                          {emoji} {t("Deposit:")} {text}
+                        </span>
+                      );
+                    })()}
                     {offer.includesDelivery && (
                       <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
                         🛵 {offer.deliveryFee != null && offer.deliveryFee > 0

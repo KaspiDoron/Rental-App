@@ -12,6 +12,7 @@ import type {
   Offer,
 } from "./types";
 import { getTactics, recordOutcome } from "./memory";
+import { parseDeposit } from "./deposit";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -817,6 +818,13 @@ export interface ExtractedOffer {
   clarifyMessage?: string;
   // ONLY set when the shop explicitly confirmed them - never guessed.
   deposit?: string; // e.g. "Passport only", "3,000 THB cash"
+  // Structured deposit derived from the label (see lib/deposit.ts).
+  depositType?: import("./deposit").DepositType;
+  depositAmount?: number;
+  depositCurrency?: string;
+  // What KIND of image the shop sent (set by the vision classifier). Lets the
+  // branching engine thank the shop for a vehicle photo vs read a price sheet.
+  imageKind?: "vehicle" | "price_sheet" | "document" | "other";
   delivers?: boolean | null;
   // Extra rental terms, only when the shop explicitly stated them.
   deliveryFee?: number | null; // in the reply's currency; 0 = free
@@ -970,6 +978,9 @@ export async function extractOffer(
       cur = localCur;
     }
     const deposit = typeof e.deposit === "string" ? e.deposit.trim().slice(0, 80) : "";
+    // Derive a structured deposit from the label so the app can show a precise
+    // "cash amount / passport" tag next to the price and filter by kind.
+    const depositStruct = deposit ? parseDeposit(deposit, cur) : null;
     const km =
       e.kmLimitPerDay === "unlimited"
         ? "unlimited"
@@ -981,6 +992,9 @@ export async function extractOffer(
       currency: cur,
       confidence: conf,
       deposit: deposit || undefined,
+      depositType: depositStruct?.type,
+      depositAmount: depositStruct?.amount,
+      depositCurrency: depositStruct?.currency,
       delivers: typeof e.delivers === "boolean" ? e.delivers : null,
       deliveryFee: typeof e.deliveryFee === "number" && e.deliveryFee >= 0 ? e.deliveryFee : null,
       insuranceIncluded: typeof e.insuranceIncluded === "boolean" ? e.insuranceIncluded : null,

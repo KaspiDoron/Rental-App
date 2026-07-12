@@ -430,6 +430,9 @@ export default function Home() {
                       verified: Boolean(r.verified),
                       simulated: false,
                       deposit: r.deposit ?? v.offer?.deposit,
+                      depositType: r.depositType ?? v.offer?.depositType,
+                      depositAmount: r.depositAmount ?? v.offer?.depositAmount,
+                      depositCurrency: r.depositCurrency ?? v.offer?.depositCurrency,
                     },
                   }
                 : v

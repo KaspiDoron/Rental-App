@@ -244,6 +244,17 @@ export function OrchestratorPanel({ isOwner }: { isOwner: boolean }) {
                 </span>
               </summary>
               <div className="mt-2">
+                {isOwner && (
+                  <label className="mb-1.5 block text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                    Agent name
+                    <input
+                      value={s.label}
+                      onChange={(e) => patchStage(s.id, { label: e.target.value.slice(0, 40) })}
+                      className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-[13px] font-bold text-strong focus:border-brandblue focus:outline-none"
+                      placeholder="Rename this agent..."
+                    />
+                  </label>
+                )}
                 <textarea
                   value={s.instructions}
                   onChange={(e) => patchStage(s.id, { instructions: e.target.value })}

@@ -49,6 +49,9 @@ export async function GET(req: Request) {
     auto: boolean;
     currency?: string | null;
     deposit?: string | null;
+    deposit_type?: string | null;
+    deposit_amount?: number | null;
+    deposit_currency?: string | null;
     delivers?: boolean | null;
     insurance_included?: boolean | null;
     delivery_fee?: number | null;
@@ -57,7 +60,7 @@ export async function GET(req: Request) {
   const filter = `user_email=eq.${encodeURIComponent(session.email)}${sinceFilter}&order=created_at.desc&limit=40`;
   let rows = await sbSelect<ReplyRow>(
     "vendor_replies",
-    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,insurance_included,delivery_fee,created_at&${filter}`
+    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,deposit_type,deposit_amount,deposit_currency,delivers,insurance_included,delivery_fee,created_at&${filter}`
   );
   if (rows.length === 0) {
     // A select naming a not-yet-migrated column fails SILENTLY as [] - the
@@ -86,6 +89,9 @@ export async function GET(req: Request) {
       auto: r.auto,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,
+      depositType: r.deposit_type ?? null,
+      depositAmount: r.deposit_amount ?? null,
+      depositCurrency: r.deposit_currency ?? null,
       delivers: r.delivers ?? null,
       insuranceIncluded: r.insurance_included ?? null,
       deliveryFee: r.delivery_fee ?? null,

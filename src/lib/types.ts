@@ -61,7 +61,12 @@ export interface Offer {
   verified: boolean;
   simulated: boolean;
   // Shop-confirmed conditions (shown as tags ONLY when explicitly stated).
-  deposit?: string; // e.g. "Passport only", "3,000 THB cash"
+  deposit?: string; // human label, e.g. "Passport only", "3,000 THB cash"
+  // Structured deposit so the app can show a precise tag next to the price:
+  // the KIND the shop wants held and (for cash) the exact amount + currency.
+  depositType?: "cash" | "passport" | "id" | "license" | "other" | "none";
+  depositAmount?: number; // when a cash figure was stated
+  depositCurrency?: string; // currency of depositAmount (defaults to the offer's)
   // ---- Extra shop-confirmed rental terms (only when explicitly stated) ------
   deliveryFee?: number; // in the offer's currency; 0 = free delivery
   kmLimitPerDay?: number | "unlimited";

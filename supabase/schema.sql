@@ -510,3 +510,16 @@ alter table public.offers   add column if not exists fuel_policy      text;
 alter table public.offers   add column if not exists effective_daily_rate numeric;
 alter table public.vendor_replies add column if not exists insurance_included boolean;
 alter table public.vendor_replies add column if not exists delivery_fee        numeric;
+
+-- Structured deposit (from lib/deposit.ts): the KIND the shop wants held plus a
+-- cash figure + its currency, so the app shows a precise deposit tag next to the
+-- price ("Passport", "THB 3,000 cash") and can filter by deposit kind.
+alter table public.offers         add column if not exists deposit_type     text;
+alter table public.offers         add column if not exists deposit_amount   numeric;
+alter table public.offers         add column if not exists deposit_currency text;
+alter table public.vendor_replies add column if not exists deposit_type     text;
+alter table public.vendor_replies add column if not exists deposit_amount   numeric;
+alter table public.vendor_replies add column if not exists deposit_currency text;
+
+-- Market floors gained a 'web' source (live web research) alongside 'ai'/'owner'.
+-- (source is already a free-text column; no migration needed - noted for clarity.)
