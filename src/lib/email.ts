@@ -14,6 +14,39 @@ export interface EmailResult {
   id?: string;
   error?: string;
   reason?: "unconfigured" | "error";
+  // Which provider handled (or attempted) the send - surfaced by the live test.
+  provider?: "gmail" | "brevo" | "resend";
+}
+
+/** Which email providers are configured right now (never leaks the values). */
+export async function emailProviderStatus(): Promise<{
+  gmail: boolean;
+  brevo: boolean;
+  resend: boolean;
+  anyConfigured: boolean;
+  resendSandbox: boolean;
+  sender: string | null;
+}> {
+  const [gmailUser, gmailPass, brevo, resend, from, brevoSender] = await Promise.all([
+    getConfig("GMAIL_USER"),
+    getConfig("GMAIL_APP_PASSWORD"),
+    getConfig("BREVO_API_KEY"),
+    getConfig("RESEND_API_KEY"),
+    getConfig("FEEDBACK_FROM_EMAIL"),
+    getConfig("BREVO_SENDER"),
+  ]);
+  const gmail = Boolean(gmailUser && gmailPass);
+  const sender = from || brevoSender || (gmailUser ? `WheelDeal <${gmailUser}>` : null);
+  return {
+    gmail,
+    brevo: Boolean(brevo),
+    resend: Boolean(resend),
+    anyConfigured: gmail || Boolean(brevo) || Boolean(resend),
+    // Resend's shared sandbox sender only delivers to the account owner until a
+    // domain is verified - the #1 "I set the key but got no email" gotcha.
+    resendSandbox: Boolean(resend) && (!from || /onboarding@resend\.dev/i.test(from)),
+    sender,
+  };
 }
 
 // Brevo (formerly Sendinblue): REST API, 300 free emails/day, single verified
@@ -100,14 +133,14 @@ export async function sendEmail(opts: {
   ]);
   if (gmailUser && gmailPass) {
     const gmail = await sendViaGmail(gmailUser, gmailPass, opts);
-    if (gmail.sent) return gmail;
+    if (gmail.sent) return { ...gmail, provider: "gmail" };
     // On a hard Gmail failure fall through to the other providers.
   }
 
   const brevoKey = await getConfig("BREVO_API_KEY");
   if (brevoKey && !opts.attachments?.length) {
     const brevo = await sendViaBrevo(brevoKey, opts);
-    if (brevo.sent || brevo.reason === "error") return brevo;
+    if (brevo.sent || brevo.reason === "error") return { ...brevo, provider: "brevo" };
   }
 
   const apiKey = await getConfig("RESEND_API_KEY");
@@ -132,14 +165,15 @@ export async function sendEmail(opts: {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { sent: false, reason: "error", error: data?.message ?? `resend ${res.status}` };
+      return { sent: false, reason: "error", error: data?.message ?? `resend ${res.status}`, provider: "resend" };
     }
-    return { sent: true, id: data?.id };
+    return { sent: true, id: data?.id, provider: "resend" };
   } catch (e) {
     return {
       sent: false,
       reason: "error",
       error: e instanceof Error ? e.message : "network error",
+      provider: "resend",
     };
   }
 }

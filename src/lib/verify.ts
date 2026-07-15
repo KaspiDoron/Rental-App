@@ -88,8 +88,10 @@ export async function startEmailVerification(
       ok: false,
       error:
         res.reason === "unconfigured"
-          ? "Email verification is not set up yet (owner: add a Resend API key in Owner -> Keys)."
-          : `Could not send the verification email: ${res.error ?? "unknown error"}.`,
+          ? "Email sending is not set up yet (owner: add Gmail, Brevo or Resend keys in Admin -> Keys, then tap 'Send live test email')."
+          : `Could not send the verification email${res.provider ? ` via ${res.provider}` : ""}: ${
+              res.error ?? "unknown error"
+            }. Please try again in a moment.`,
     };
   }
   return { ok: true };

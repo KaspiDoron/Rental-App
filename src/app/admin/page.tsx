@@ -435,10 +435,29 @@ export default function AdminPage() {
     return list;
   }, [users, userSearch, userSort]);
 
-  async function runDiag(kind: "supabase" | "maps") {
+  async function runDiag(kind: "supabase" | "maps" | "email") {
     setDiagBusy(kind);
     setDiag(null);
     try {
+      if (kind === "email") {
+        // Sends a REAL email through the production chain to the admin's own
+        // address, so "I entered the env values" becomes a verified fact.
+        const res = await fetch("/api/admin/email-test", { method: "POST" });
+        const d = await res.json();
+        const s = d.status ?? {};
+        const providers = `Providers configured - Gmail: ${s.gmail ? "yes" : "no"}, Brevo: ${
+          s.brevo ? "yes" : "no"
+        }, Resend: ${s.resend ? "yes" : "no"}.`;
+        const outcome = d.sent
+          ? `✅ Sent via ${d.provider} to ${d.to}. Check that inbox (and spam).`
+          : `❌ Not sent${d.provider ? ` (tried ${d.provider})` : ""}: ${d.error ?? "unknown"}`;
+        setDiag({
+          kind,
+          ok: Boolean(d.sent),
+          text: [outcome, d.hint ? `Hint: ${d.hint}` : "", providers].filter(Boolean).join("\n"),
+        });
+        return;
+      }
       const res = await fetch(kind === "supabase" ? "/api/admin/supabase-test" : "/api/admin/maps-test");
       const d = await res.json();
       if (kind === "supabase") {
@@ -1581,6 +1600,13 @@ export default function AdminPage() {
                 className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
               >
                 {diagBusy === "maps" ? <LoadingDots label="Testing" /> : "Test Google key"}
+              </button>
+              <button
+                onClick={() => runDiag("email")}
+                disabled={diagBusy !== null}
+                className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+              >
+                {diagBusy === "email" ? <LoadingDots label="Sending" /> : "Send live test email"}
               </button>
             </div>
             {diag && (
