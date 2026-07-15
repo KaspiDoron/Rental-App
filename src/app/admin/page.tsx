@@ -446,6 +446,7 @@ export default function AdminPage() {
       } else {
         const lines = [
           `Places API (New): ${d.placesNew?.ok ? "OK" : "FAILED"} - ${d.placesNew?.detail}`,
+          `Places Autocomplete (New): ${d.placesAutocomplete?.ok ? "OK" : "FAILED"} - ${d.placesAutocomplete?.detail}`,
           `Places API (legacy): ${d.placesLegacy?.ok ? "OK" : "FAILED"} - ${d.placesLegacy?.detail}`,
           `Geocoding: ${d.geocoding?.ok ? "OK" : "FAILED"} - ${d.geocoding?.detail}`,
         ];

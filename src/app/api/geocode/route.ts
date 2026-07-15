@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
-import { searchPlaces, reverseGeocode } from "@/lib/google";
+import { searchPlaces, reverseGeocode, resolvePlaceLocation } from "@/lib/google";
 
-// Address / hotel search: Google Geocoding when configured, OpenStreetMap
-// Nominatim otherwise. Real data either way - no dummy dropdowns.
+// Address / hotel search: Places (New) Autocomplete first (true prefix
+// typeahead), then Text Search / Geocoding / OpenStreetMap Nominatim. Real
+// data either way - no dummy dropdowns.
 // With ?lat=&lng= it REVERSE-geocodes the traveller's GPS point into a real,
-// named place (so "My current location" becomes e.g. "Bophut, Koh Samui,
+// named place (so "My location" resolves to e.g. "Bophut, Koh Samui,
 // Thailand" and the local currency / language can be resolved from it).
+// With ?placeId= it resolves a picked Autocomplete prediction to coordinates
+// (one cheap Place Details call, closed under the same session token ?st=).
 export async function GET(req: Request) {
   const { getSession } = await import("@/lib/session");
   const session = await getSession();
@@ -21,6 +24,15 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
+  const st = url.searchParams.get("st")?.trim() || undefined;
+
+  const placeId = url.searchParams.get("placeId")?.trim();
+  if (placeId) {
+    const label = url.searchParams.get("label")?.trim() || undefined;
+    const place = await resolvePlaceLocation(placeId, label, st);
+    return NextResponse.json({ place });
+  }
+
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -31,7 +43,7 @@ export async function GET(req: Request) {
   const q = url.searchParams.get("q")?.trim() ?? "";
   // Suggest from 2 characters up (owner request: the most responsive autocomplete).
   if (q.length < 2) return NextResponse.json({ results: [] });
-  const { results, error } = await searchPlaces(q);
+  const { results, error } = await searchPlaces(q, st);
   return NextResponse.json({ results, error });
 }
 

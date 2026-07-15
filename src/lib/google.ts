@@ -36,6 +36,10 @@ export interface PlaceSuggestion {
   lat: number;
   lng: number;
   source: "google" | "osm";
+  // Places API (New) Autocomplete predictions carry a placeId instead of
+  // coordinates; the client resolves lat/lng on pick via /api/geocode?placeId=
+  // (one cheap Place Details call, closed under the same session token).
+  placeId?: string;
 }
 
 /** Places API (New) Text Search - also the best "find my hotel" search. */
@@ -81,6 +85,107 @@ export interface PlaceSearchResult {
   error?: string;
 }
 
+/**
+ * Places API (New) Autocomplete - the purpose-built prefix typeahead. Returns
+ * predictions with placeIds (no coordinates - those come from one Place
+ * Details call when the traveller picks). With a sessionToken the whole typing
+ * session bills as ONE autocomplete session instead of per keystroke.
+ */
+async function newAutocomplete(
+  key: string,
+  input: string,
+  sessionToken?: string
+): Promise<{ predictions: PlaceSuggestion[] | null; error?: string }> {
+  try {
+    const body: Record<string, unknown> = { input };
+    if (sessionToken) body.sessionToken = sessionToken;
+    const res = await fetch(`${NEW_BASE}/places:autocomplete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        predictions: null,
+        error:
+          data?.error?.message ??
+          `Places Autocomplete responded ${res.status} - enable "Places API (New)" for this key.`,
+      };
+    }
+    const predictions = ((data.suggestions as any[]) ?? [])
+      .map((s) => s?.placePrediction)
+      .filter((p) => p?.placeId && p?.text?.text)
+      .slice(0, MAX_SUGGESTIONS)
+      .map((p) => ({
+        label: p.text.text as string,
+        lat: 0,
+        lng: 0,
+        source: "google" as const,
+        placeId: p.placeId as string,
+      }));
+    return { predictions };
+  } catch (e) {
+    return {
+      predictions: null,
+      error: e instanceof Error ? e.message : "network error reaching Google",
+    };
+  }
+}
+
+/**
+ * Resolve a picked Autocomplete prediction to coordinates via Place Details
+ * (New) with a location-only field mask (cheapest Details SKU). Passing the
+ * same sessionToken closes the autocomplete billing session. Falls back to a
+ * Text Search on the label so a pick NEVER dead-ends.
+ */
+export async function resolvePlaceLocation(
+  placeId: string,
+  label?: string,
+  sessionToken?: string
+): Promise<{ label: string; lat: number; lng: number } | null> {
+  const key = await mapsKey();
+  const ck = `pd:${placeId}`;
+  const cached = cacheGet<{ label: string; lat: number; lng: number }>(ck);
+  if (cached) return cached;
+  if (key) {
+    try {
+      const st = sessionToken ? `?sessionToken=${encodeURIComponent(sessionToken)}` : "";
+      const res = await fetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}${st}`, {
+        headers: {
+          "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask": "location,formattedAddress,displayName",
+        },
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      await recordApi("place_details");
+      const lat = data?.location?.latitude;
+      const lng = data?.location?.longitude;
+      if (res.ok && Number.isFinite(lat) && Number.isFinite(lng)) {
+        const out = {
+          label:
+            label ??
+            [data.displayName?.text, data.formattedAddress].filter(Boolean).join(" - "),
+          lat: lat as number,
+          lng: lng as number,
+        };
+        cacheSet(ck, out, 24 * 3600_000);
+        return out;
+      }
+    } catch {
+      /* fall through to text search on the label */
+    }
+  }
+  if (label) {
+    const { results } = await searchPlaces(label, undefined, { skipAutocomplete: true });
+    const hit = results.find((r) => Number.isFinite(r.lat) && (r.lat !== 0 || r.lng !== 0));
+    if (hit) return { label: hit.label, lat: hit.lat, lng: hit.lng };
+  }
+  return null;
+}
+
 // Up to 10 rich suggestions per query so 2-letter typing shows a full list.
 const MAX_SUGGESTIONS = 10;
 
@@ -93,7 +198,11 @@ function nominatimUA(): string {
   return `WheelDeal/1.0 (vehicle-rental app; ${site})`;
 }
 
-export async function searchPlaces(q: string): Promise<PlaceSearchResult> {
+export async function searchPlaces(
+  q: string,
+  sessionToken?: string,
+  opts?: { skipAutocomplete?: boolean }
+): Promise<PlaceSearchResult> {
   const key = await mapsKey();
 
   // Cache identical queries for a day - address text never changes that fast,
@@ -104,8 +213,21 @@ export async function searchPlaces(q: string): Promise<PlaceSearchResult> {
 
   let googleError: string | undefined;
 
+  if (key && !opts?.skipAutocomplete) {
+    // 1) Places API (New) Autocomplete: THE prefix typeahead - matches partial
+    // input ("Cangg") far better than Text Search and, with a session token,
+    // an entire typing session bills as a single request.
+    const { predictions, error } = await newAutocomplete(key, q, sessionToken);
+    await recordApi("places_autocomplete");
+    if (error) googleError = error;
+    if (predictions && predictions.length) {
+      cacheSet(ck, predictions, 24 * 3600_000);
+      return { results: predictions };
+    }
+  }
+
   if (key) {
-    // 1) Places API (New) Text Search: finds hotels, businesses, addresses.
+    // 2) Places API (New) Text Search: finds hotels, businesses, addresses.
     const { places, error } = await newTextSearch(
       key,
       { textQuery: q, maxResultCount: MAX_SUGGESTIONS },
@@ -126,7 +248,7 @@ export async function searchPlaces(q: string): Promise<PlaceSearchResult> {
       return { results: out };
     }
 
-    // 2) Legacy Geocoding (works on older keys).
+    // 3) Legacy Geocoding (works on older keys).
     try {
       const res = await fetch(
         `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
@@ -156,7 +278,7 @@ export async function searchPlaces(q: string): Promise<PlaceSearchResult> {
     }
   }
 
-  // 3) OpenStreetMap Nominatim - free, real data, no key needed.
+  // 4) OpenStreetMap Nominatim - free, real data, no key needed.
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${MAX_SUGGESTIONS}&q=${encodeURIComponent(
@@ -512,6 +634,7 @@ export async function placeDetails(placeId: string): Promise<PlaceDetailsResult 
 export interface MapsDiagnostics {
   keyConfigured: boolean;
   placesNew: { ok: boolean; detail: string };
+  placesAutocomplete: { ok: boolean; detail: string };
   placesLegacy: { ok: boolean; detail: string };
   geocoding: { ok: boolean; detail: string };
 }
@@ -521,12 +644,18 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
   const key = await mapsKey();
   if (!key) {
     const off = { ok: false, detail: "No key configured." };
-    return { keyConfigured: false, placesNew: off, placesLegacy: off, geocoding: off };
+    return {
+      keyConfigured: false,
+      placesNew: off,
+      placesAutocomplete: off,
+      placesLegacy: off,
+      geocoding: off,
+    };
   }
 
   const probe = { lat: -8.6478, lng: 115.1385 }; // Canggu, Bali
 
-  const [n, l, g] = await Promise.all([
+  const [n, a, l, g] = await Promise.all([
     (async () => {
       const { places, error } = await newTextSearch(
         key,
@@ -541,6 +670,12 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
       );
       return places
         ? { ok: true, detail: `OK - found ${places.length} result(s).` }
+        : { ok: false, detail: error ?? "failed" };
+    })(),
+    (async () => {
+      const { predictions, error } = await newAutocomplete(key, "Canggu");
+      return predictions
+        ? { ok: true, detail: `OK - ${predictions.length} suggestion(s).` }
         : { ok: false, detail: error ?? "failed" };
     })(),
     (async () => {
@@ -573,5 +708,5 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
     })(),
   ]);
 
-  return { keyConfigured: true, placesNew: n, placesLegacy: l, geocoding: g };
+  return { keyConfigured: true, placesNew: n, placesAutocomplete: a, placesLegacy: l, geocoding: g };
 }

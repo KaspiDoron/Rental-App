@@ -74,11 +74,10 @@ function pickExamples(plan?: string): string[] {
   return shuffled.slice(0, 3 + Math.floor(Math.random() * 2)); // 3-4 chips
 }
 
-const DEFAULT_ORIGIN: Origin = {
-  label: "Canggu, Bali, Indonesia",
-  lat: -8.6478,
-  lng: 115.1385,
-};
+// Every traveller starts from "My location" - GPS is requested on load and the
+// point is reverse-geocoded into a REAL place (which drives local currency +
+// language). There is NO silent city fallback: without coordinates the search
+// nudges the traveller to allow location or type their hotel.
 
 // VAPID public keys are base64url; the browser's pushManager needs a Uint8Array.
 function urlBase64ToUint8Array(base64: string): Uint8Array {
@@ -93,7 +92,8 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
 export default function Home() {
   const { t } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
-  const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
+  const [origin, setOrigin] = useState<Origin | null>(null);
+  const [originHint, setOriginHint] = useState<string | null>(null);
   const [radiusKm, setRadiusKm] = useState(8);
   const [examples, setExamples] = useState<string[]>(ALL_EXAMPLES.slice(0, 4));
   const [rawText, setRawText] = useState(ALL_EXAMPLES[0]);
@@ -332,36 +332,58 @@ export default function Home() {
     };
   }, []);
 
-  // Default the search to the phone's location once signed in (covered by the
-  // Terms of Use the user accepted at signup).
   useEffect(() => {
     if (!session) return;
     fetch("/api/wa/status")
       .then((r) => r.json())
       .then((d) => setWaConnected(Boolean(d.connected)))
       .catch(() => {});
+  }, [session]);
+
+  // EVERY traveller defaults to "My location": ask for GPS as soon as the page
+  // is up (covered by the Terms of Use accepted at signup). The point is shown
+  // instantly, then reverse-geocoded to a REAL named place so local currency +
+  // language work (a bare "My location" has no country to read). A restored
+  // search keeps its own origin; a manual pick made while GPS was still
+  // resolving always wins.
+  useEffect(() => {
+    if (!restored) return;
     // Don't override a restored search's origin with the phone location.
     let hasSaved = false;
     try {
       hasSaved = Boolean(sessionStorage.getItem("wd_search"));
     } catch {}
     if (hasSaved) return;
+    let cancelled = false;
     navigator.geolocation?.getCurrentPosition(
       async (pos) => {
+        if (cancelled) return;
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-        // Show the point instantly, then resolve it to a REAL named place so the
-        // local currency + language work (a bare "My current location" has no
-        // country to read).
-        setOrigin({ label: "My current location", lat, lng });
+        setOrigin((prev) =>
+          prev ? prev : { label: "My current location", lat, lng, myLocation: true }
+        );
+        setOriginHint(null);
         try {
           const d = await (await fetch(`/api/geocode?lat=${lat}&lng=${lng}`)).json();
-          if (d?.place?.label) setOrigin({ label: d.place.label, lat, lng });
+          if (!cancelled && d?.place?.label) {
+            setOrigin((prev) =>
+              // Only refine the GPS origin - never clobber a manual pick.
+              !prev || prev.myLocation
+                ? { label: d.place.label, lat, lng, myLocation: true }
+                : prev
+            );
+          }
         } catch {}
       },
-      () => {}
+      () => {
+        /* Permission denied / unavailable: the picker's hint takes over. */
+      }
     );
-  }, [session]);
+    return () => {
+      cancelled = true;
+    };
+  }, [restored]);
 
   const patchVendor = useCallbackRef((id: string, patch: Partial<Vendor>) => {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
@@ -532,6 +554,15 @@ export default function Home() {
 
   async function startSearch() {
     if (!rawText.trim()) return;
+    // No coordinates, no search - there is no silent default city anymore.
+    if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
+      setOriginHint("Set your location first - allow GPS or type your hotel / area.");
+      document
+        .querySelector("[data-tour='stay']")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    setOriginHint(null);
     setPhase("profiling");
     setVendors([]);
     setRfq(null);
@@ -601,7 +632,7 @@ export default function Home() {
         message,
         kind: "custom",
         rfq,
-        region: origin.label || undefined,
+        region: origin?.label || undefined,
         openNow: vendor?.openNow,
       }),
     });
@@ -725,7 +756,14 @@ export default function Home() {
           </div>
 
           <div data-tour="stay" className="mt-3">
-            <OriginPicker origin={origin} onChange={setOrigin} />
+            <OriginPicker
+              origin={origin}
+              onChange={(o) => {
+                setOrigin(o);
+                setOriginHint(null);
+              }}
+              hint={originHint}
+            />
           </div>
 
           {priceHintLoading && !priceHint && (
@@ -1116,7 +1154,7 @@ export default function Home() {
                       vendors: targets,
                       message: rfq.vendorMessage,
                       rfq,
-                      region: origin.label,
+                      region: origin?.label ?? "",
                       localLang: localLangActive,
                     }),
                   });
@@ -1213,7 +1251,7 @@ export default function Home() {
           </>
         )}
 
-        {view === "map" && vendors.length > 0 ? (
+        {view === "map" && vendors.length > 0 && origin ? (
           <div className="relative z-0 mt-3">
             <MapView
               origin={origin}
@@ -1244,7 +1282,7 @@ export default function Home() {
                   plan={session?.plan}
                   waConnected={waConnected}
                   localLang={localLangActive}
-                  region={origin.label}
+                  region={origin?.label ?? ""}
                   searchEpoch={searchEpoch}
                   onBook={setBookingVendor}
                   onReviews={setReviewsVendor}
@@ -1331,7 +1369,7 @@ export default function Home() {
         <BargainDraftModal
           vendor={bargainVendor}
           rfq={rfq}
-          region={origin.label}
+          region={origin?.label ?? ""}
           round={bargainVendor.offer ? bargainVendor.offer.round + 1 : 0}
           plan={session?.plan}
           currentPricePerDay={bargainVendor.offer?.pricePerDay}

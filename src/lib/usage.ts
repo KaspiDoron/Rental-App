@@ -48,7 +48,10 @@ export async function monthlyUsage(): Promise<Record<string, number>> {
 
 const LIMIT_DEFAULTS: Record<string, number> = {
   LIMIT_SEARCHES_PER_DAY: 15, // vendor discovery (Places searches)
-  LIMIT_GEOCODE_PER_DAY: 40, // address lookups
+  // Address lookups: every debounced keystroke pause is one call, so 40/day
+  // made the dropdown go silently empty mid-trip. Autocomplete + session
+  // tokens are the cheap SKU - 300 keeps typing fluid while still bounded.
+  LIMIT_GEOCODE_PER_DAY: 300,
   LIMIT_AI_PER_DAY: 120, // AI calls (extraction, drafts, translate sweeps)
   LIMIT_TRANSLATE_PER_DAY: 60, // UI translate sweeps (cache means most are free)
   LIMIT_WA_PER_HOUR: 15, // personal WhatsApp sends
