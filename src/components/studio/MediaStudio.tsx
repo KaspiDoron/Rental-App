@@ -12,6 +12,7 @@ interface MediaResult {
   floor?: { floor: number; typical?: number; currency: string } | null;
   note?: string;
   error?: string;
+  visionAttempts?: { provider: string; model: string; ok: boolean; error?: string }[];
 }
 
 // The Media Testing Lab: upload a price-table / odometer / vehicle image OR a
@@ -130,6 +131,27 @@ export function MediaStudio() {
           {result.note && (
             <div className="rounded-xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
               {result.note}
+            </div>
+          )}
+          {result.visionAttempts && result.visionAttempts.length > 0 && (
+            <div className="rounded-xl border border-line bg-card p-2.5">
+              <div className="mb-1 text-[11px] font-extrabold text-strong">
+                📡 Vision providers tried (exact upstream answers)
+              </div>
+              <div className="space-y-1">
+                {result.visionAttempts.map((a, i) => (
+                  <div key={i} className="flex items-start gap-1.5 text-[11px]">
+                    <span className="shrink-0">{a.ok ? "✅" : "❌"}</span>
+                    <span className="min-w-0">
+                      <span className="font-bold text-strong">
+                        {a.provider} · {a.model}
+                      </span>
+                      {a.error && <span className="block break-words text-brandred">{a.error}</span>}
+                      {a.ok && <span className="block text-savings">answered - this reading is below</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {result.transcript && (

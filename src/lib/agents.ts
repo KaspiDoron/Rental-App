@@ -874,6 +874,41 @@ export function readNegotiationSignals(text: string): {
   };
 }
 
+/**
+ * Deterministic deposit reader - the no-LLM backstop. Only fires when the
+ * message actually talks about a deposit/passport/cash-guarantee (never turns
+ * a daily price into a deposit), then reuses the same parseDeposit the LLM
+ * path uses so "Passport only" / "Deposit 3000 cash" / "3000 cash is fine"
+ * register even when every AI provider is down.
+ */
+export function heuristicDepositFields(
+  text: string,
+  fallbackCurrency?: string
+): Pick<ExtractedOffer, "deposit" | "depositType" | "depositAmount" | "depositCurrency"> {
+  const t = (text || "").trim();
+  if (!t || !/(deposit|passport|id card|licen[cs]e|\bcash\b)/i.test(t)) return {};
+  // Work sentence-by-sentence so we grab the deposit clause, not the price.
+  const sentence = t
+    .split(/[.!?\n]+/)
+    .map((s) => s.trim())
+    .find((s) => {
+      if (!/(deposit|passport|id card|licen[cs]e|\bcash\b)/i.test(s)) return false;
+      // "200 per day cash" is a PRICE clause - only accept a cash-only clause
+      // when it cannot be the daily rate.
+      if (/per\s*day|\/\s*day|a day|daily/i.test(s) && !/deposit|passport/i.test(s)) return false;
+      return true;
+    });
+  if (!sentence) return {};
+  const parsed = parseDeposit(sentence, fallbackCurrency);
+  if (!parsed || parsed.type === "other") return {};
+  return {
+    deposit: sentence.slice(0, 80),
+    depositType: parsed.type,
+    depositAmount: parsed.amount,
+    depositCurrency: parsed.currency,
+  };
+}
+
 export async function extractOffer(
   rfq: StructuredRFQ,
   text: string,
@@ -992,9 +1027,12 @@ export async function extractOffer(
     }
     return {
       found: false,
-      matchesSpec: false,
+      // "unknown" must never read as "wrong vehicle": matchesSpec=false is the
+      // WRONG-vehicle signal and freezes every director move downstream.
+      matchesSpec: true,
       confidence: "low",
       clarifyMessage: `Thanks for the photo! Could you confirm in text the daily price for the ${spec}? Just want to be sure we quote the right vehicle.`,
+      ...heuristicDepositFields(text, localCur),
       ...readNegotiationSignals(text),
     };
   }
@@ -1011,7 +1049,11 @@ export async function extractOffer(
 
   // Heuristic fallback: find a price, but never auto-verify it. A bare number
   // is in the shop's LOCAL currency, never dollars.
-  const m = text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿|rm|php|₱|₹|₫)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i);
+  const m =
+    text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿|rm|php|₱|₹|₫)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i) ??
+    // "170 last price" / "final price 400" - a firm quote is still a quote.
+    text.match(/(\d{2,3}(?:[.,]\d{3})*)\s*(?:is\s*)?(?:my\s*|the\s*)?(?:last|final|best)\s*price/i) ??
+    text.match(/(?:last|final|best)\s*price\s*(?:is\s*)?[,:]?\s*(\d{2,3}(?:[.,]\d{3})*)/i);
   // Guard: in "3 day 900" the regex catches the DURATION ("3 day"), not the
   // price - never mistake the day count for a daily rate.
   const heuristicPrice = m ? parseFloat(m[1].replace(/,/g, "")) : NaN;
@@ -1020,17 +1062,22 @@ export async function extractOffer(
       found: true,
       pricePerDay: heuristicPrice,
       currency: symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD",
-      matchesSpec: false,
+      // The regex cannot judge the vehicle, and "unknown" must not read as
+      // "wrong vehicle" (false blocks bargain/probe/present entirely - the
+      // engine would go 100% mute whenever every LLM provider is down).
+      matchesSpec: true,
       confidence: "medium",
       clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
+      ...heuristicDepositFields(text, localCur),
       ...readNegotiationSignals(text),
     };
   }
   return {
     found: false,
-    matchesSpec: false,
+    matchesSpec: true,
     confidence: "low",
     clarifyMessage: `Could you share your best daily price for the ${spec}? Thank you!`,
+    ...heuristicDepositFields(text, localCur),
     ...readNegotiationSignals(text),
   };
 
@@ -1047,7 +1094,12 @@ export async function extractOffer(
     if (localCur && (!cur || (cur.toUpperCase() === "USD" && localCur !== "USD" && !hadSymbol))) {
       cur = localCur;
     }
-    const deposit = typeof e.deposit === "string" ? e.deposit.trim().slice(0, 80) : "";
+    // The deterministic deposit reader backs the model here too - a model that
+    // skips "Passport only" must not erase a deposit the regex clearly sees.
+    const deposit =
+      (typeof e.deposit === "string" ? e.deposit.trim().slice(0, 80) : "") ||
+      heuristicDepositFields(text, localCur).deposit ||
+      "";
     // Derive a structured deposit from the label so the app can show a precise
     // "cash amount / passport" tag next to the price and filter by kind.
     const depositStruct = deposit ? parseDeposit(deposit, cur) : null;

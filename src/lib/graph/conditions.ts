@@ -139,6 +139,135 @@ export function factsFromLegacy(
   };
 }
 
+// ---- plain-language explanations ---------------------------------------------
+//
+// Turns a condition tree + the live facts into the short human reason the
+// Studio shows on the Director's ladder ("skipped - the shop already said
+// last price"). Pure and client-safe; unknown kinds degrade to their label.
+
+function leafText(cond: GraphCondition): string {
+  const c = cond as Record<string, unknown> & { kind: string };
+  switch (c.kind) {
+    case "always":
+      return "always";
+    case "hasUsablePrice":
+      return c.value === false ? "no usable price yet" : "we have a usable price";
+    case "fieldKnown":
+      return `the ${c.field} is ${c.value === false ? "still unknown" : "known"}`;
+    case "dealComplete":
+      return c.value === false
+        ? "the deal is not complete yet"
+        : "price + deposit + fulfillment are all known";
+    case "firmCountAtLeast":
+      return `the shop said last price / cannot lower${Number(c.min) > 1 ? ` ${c.min}+ times` : ""}`;
+    case "roundsBelow":
+      return `we still have bargain rounds left${c.max != null ? ` (under ${c.max})` : ""}`;
+    case "depositPassportOnly":
+      return "the deposit is passport-only";
+    case "cashAlternativeAskedAlready":
+      return "we already asked for a cash deposit instead";
+    case "toneDegraded":
+      return "the shop sounds annoyed";
+    case "priceAtOrBelowFloor":
+      return c.value === false
+        ? "the price is still above the market floor"
+        : "the price is already at/below the market floor";
+    case "targetIsRealSaving":
+      return c.value === false ? "a lower ask would not save real money" : "a lower ask saves real money";
+    case "rivalCheaper":
+      return "another shop in this session offered less";
+    case "shopAskedQuestion":
+      return "the shop asked us a question";
+    case "shopSentVehiclePhoto":
+      return "the shop sent a vehicle photo";
+    case "hasClarifyMessage":
+      return "something needs clarifying";
+    case "matchesSpecNotFalse":
+      return "the offer is for the right vehicle";
+    case "sessionClosed":
+      return "the search session is closed";
+    case "pickupOffered":
+      return "the shop offered to pick the traveller up";
+    case "pickupConsentGiven":
+      return "the traveller approved sharing their location";
+    case "hasMedia":
+      return `the message carried ${c.media === "any" ? "media" : c.media}`;
+    case "mediaCoherent":
+      return c.value === false ? "the media reading looks inconsistent" : "the media reading is coherent";
+    case "eventIs":
+      return `this is a ${c.event} event`;
+    case "phaseIs":
+      return `the thread is in the "${c.phase}" phase`;
+    case "nodeRanBelow":
+      return `"${c.nodeId}" ran fewer than ${c.max} times`;
+    case "counterBelow":
+      return `${c.counter} used fewer than ${c.max} times`;
+    case "counterAtLeast":
+      return `${c.counter} used at least ${c.min} times`;
+    default: {
+      const v = CONDITION_VOCABULARY.find((x) => x.kind === c.kind);
+      return v?.label ?? String(c.kind);
+    }
+  }
+}
+
+/**
+ * Render a condition tree as one plain-language guard sentence (no facts
+ * needed) - the static "when: ..." line under each ladder rung in the Studio.
+ */
+export function describeConditionText(cond: GraphCondition): string {
+  const c = cond as Record<string, unknown> & { kind: string; of?: GraphCondition | GraphCondition[] };
+  const kids = Array.isArray(c.of) ? (c.of as GraphCondition[]) : undefined;
+  const kid = !Array.isArray(c.of) ? (c.of as GraphCondition | undefined) : undefined;
+  if ((c.kind === "notG" || c.kind === "not") && kid) return `NOT (${describeConditionText(kid)})`;
+  if ((c.kind === "allG" || c.kind === "all") && kids)
+    return kids.map((k) => describeConditionText(k)).join(" AND ");
+  if ((c.kind === "anyG" || c.kind === "any") && kids)
+    return kids.map((k) => describeConditionText(k)).join(" OR ");
+  return leafText(cond);
+}
+
+/**
+ * Evaluate a condition AND explain the outcome in one plain sentence. On a
+ * pass, `why` states what held; on a fail, `why` names the FIRST blocker -
+ * exactly what a non-technical owner needs to read on a skipped ladder rung.
+ */
+export function explainCondition(
+  cond: GraphCondition,
+  facts: GraphFacts
+): { pass: boolean; why: string } {
+  const c = cond as Record<string, unknown> & { kind: string; of?: GraphCondition | GraphCondition[] };
+  const kids = Array.isArray(c.of) ? (c.of as GraphCondition[]) : undefined;
+  const kid = !Array.isArray(c.of) ? (c.of as GraphCondition | undefined) : undefined;
+
+  if ((c.kind === "notG" || c.kind === "not") && kid) {
+    const inner = explainCondition(kid, facts);
+    return inner.pass
+      ? { pass: false, why: `blocked: ${inner.why}` }
+      : { pass: true, why: `ok: not (${leafText(kid)})` };
+  }
+  if ((c.kind === "allG" || c.kind === "all") && kids) {
+    for (const k of kids) {
+      const r = explainCondition(k, facts);
+      if (!r.pass) return { pass: false, why: r.why };
+    }
+    return { pass: true, why: kids.map((k) => leafText(k)).join(" + ") };
+  }
+  if ((c.kind === "anyG" || c.kind === "any") && kids) {
+    for (const k of kids) {
+      const r = explainCondition(k, facts);
+      if (r.pass) return { pass: true, why: r.why };
+    }
+    return {
+      pass: false,
+      why: `none of: ${kids.map((k) => leafText(k)).join(" / ")}`,
+    };
+  }
+  const pass = evalGraphCondition(cond, facts);
+  const text = leafText(cond);
+  return pass ? { pass: true, why: text } : { pass: false, why: `not true: ${text}` };
+}
+
 /** Every condition kind the Studio's edge builder offers, with its params. */
 export const CONDITION_VOCABULARY: {
   kind: string;

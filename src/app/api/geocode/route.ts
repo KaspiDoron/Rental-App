@@ -33,11 +33,20 @@ export async function GET(req: Request) {
     return NextResponse.json({ place });
   }
 
-  const lat = Number(url.searchParams.get("lat"));
-  const lng = Number(url.searchParams.get("lng"));
-  if (Number.isFinite(lat) && Number.isFinite(lng)) {
-    const place = await reverseGeocode(lat, lng);
-    return NextResponse.json({ place });
+  // CRITICAL: only treat this as a GPS reverse-geocode when lat/lng are
+  // actually present. Number(null) is 0 (finite!), so checking Number(...)
+  // alone silently hijacked EVERY ?q= text search into a reverse-geocode of
+  // (0,0) - that single line was why autocomplete showed "No matches" in
+  // production while the Google key itself tested green.
+  const latRaw = url.searchParams.get("lat");
+  const lngRaw = url.searchParams.get("lng");
+  if (latRaw !== null && lngRaw !== null) {
+    const lat = Number(latRaw);
+    const lng = Number(lngRaw);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const place = await reverseGeocode(lat, lng);
+      return NextResponse.json({ place });
+    }
   }
 
   const q = url.searchParams.get("q")?.trim() ?? "";

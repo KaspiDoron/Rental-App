@@ -380,25 +380,61 @@ export async function chatDetailed(
   return { text: null, error: errors[errors.length - 1] ?? "All AI providers failed." };
 }
 
+// ---- vision ------------------------------------------------------------------
+
+export interface VisionAttempt {
+  provider: "gemini" | "groq";
+  model: string;
+  ok: boolean;
+  /** Exact upstream error (status + body excerpt) when the attempt failed. */
+  error?: string;
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_vision_diag__: { at: number; attempts: VisionAttempt[] } | undefined;
+}
+
 /**
- * Vision chat: text + images (data URLs or raw base64+mime). Uses Gemini when
- * available (best free-tier vision); returns null when no vision provider is
- * configured so callers fall back to a low-confidence heuristic.
+ * The attempt log of the most recent vision call on this instance - which
+ * providers/models were tried and the VERBATIM upstream error of each failure.
+ * The Media Lab reads this so "the image agent is broken" always comes with
+ * the exact reason (e.g. Gemini 429 quota, Groq 400 model decommissioned).
+ */
+export function lastVisionDiagnostics(): VisionAttempt[] {
+  return globalThis.__wd_vision_diag__?.attempts ?? [];
+}
+
+// Groq's multimodal Llama-4 models (Scout first - faster; Maverick fallback).
+const GROQ_VISION_MODELS = [
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+];
+const GEMINI_VISION_MODELS = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+
+/**
+ * Vision chat: text + images (raw base64+mime). Tries every Gemini vision
+ * model, then every Groq Llama-4 vision model - NO silent failures: each
+ * attempt's exact upstream error is recorded (see lastVisionDiagnostics).
+ * Returns null only when every configured provider genuinely failed.
  */
 export async function chatVision(
   system: string,
   userText: string,
   images: { mime: string; base64: string }[]
 ): Promise<string | null> {
-  const key = await getConfig("GEMINI_TOKEN");
-  if (key) {
-    // Try the primary vision model, then the higher-quota lite model if the
-    // first is rate-limited/unavailable, so a busy free tier still reads it.
-    const models = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
-    for (const model of models) {
+  const attempts: VisionAttempt[] = [];
+  globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
+
+  const [gemini, groq] = await Promise.all([getConfig("GEMINI_TOKEN"), getConfig("GROQ_TOKEN")]);
+  if (!gemini) attempts.push({ provider: "gemini", model: "(all)", ok: false, error: "GEMINI_TOKEN is not configured" });
+  if (!groq) attempts.push({ provider: "groq", model: "(all)", ok: false, error: "GROQ_TOKEN is not configured" });
+
+  if (gemini) {
+    for (const model of GEMINI_VISION_MODELS) {
       try {
         const res = await fetchWithTimeout(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemini}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -419,55 +455,83 @@ export async function chatVision(
             }),
           }
         );
-        if (!res.ok) continue; // 429/404 - try the next model
+        if (!res.ok) {
+          attempts.push({ provider: "gemini", model, ok: false, error: await errorDetail(res, "gemini") });
+          continue;
+        }
         const data = await res.json();
         const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (out) return out;
-      } catch {
-        /* try next model */
+        if (out) {
+          attempts.push({ provider: "gemini", model, ok: true });
+          await recordUsage("gemini", data.usageMetadata?.totalTokenCount ?? 0);
+          return out;
+        }
+        attempts.push({ provider: "gemini", model, ok: false, error: "empty reply (possibly safety-blocked)" });
+      } catch (e) {
+        attempts.push({
+          provider: "gemini",
+          model,
+          ok: false,
+          error: e instanceof Error ? e.message : "network error",
+        });
       }
     }
   }
 
-  // Groq vision fallback (Llama 4 Scout is multimodal): image reading must not
-  // depend on Gemini alone - most deployments have a GROQ_TOKEN. Images only;
-  // audio keeps its own Groq-Whisper path in graph/transcribe.ts.
-  const groq = await getConfig("GROQ_TOKEN");
-  const imageOnly = images.every((i) => (i.mime || "").startsWith("image/"));
-  if (groq && images.length > 0 && imageOnly) {
-    try {
-      const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${groq}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "meta-llama/llama-4-scout-17b-16e-instruct",
-          temperature: 0.2,
-          max_tokens: 700,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: `${system}\n\n${userText}` },
-                ...images.map((img) => ({
-                  type: "image_url",
-                  image_url: { url: `data:${img.mime || "image/jpeg"};base64,${img.base64}` },
-                })),
-              ],
-            },
-          ],
-        }),
-      });
-      if (res.ok) {
+  // Groq vision (Llama-4 is multimodal): image reading must never depend on
+  // Gemini alone - most deployments have a GROQ_TOKEN. Only image parts are
+  // sent (audio has its own Groq-Whisper path in graph/transcribe.ts).
+  const groqImages = images.filter((i) => (i.mime || "").startsWith("image/"));
+  if (groq && groqImages.length > 0) {
+    for (const model of GROQ_VISION_MODELS) {
+      try {
+        const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${groq}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.2,
+            max_tokens: 700,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: `${system}\n\n${userText}` },
+                  ...groqImages.map((img) => ({
+                    type: "image_url",
+                    image_url: { url: `data:${img.mime || "image/jpeg"};base64,${img.base64}` },
+                  })),
+                ],
+              },
+            ],
+          }),
+        });
+        if (!res.ok) {
+          attempts.push({ provider: "groq", model, ok: false, error: await errorDetail(res, "groq") });
+          continue;
+        }
         const data = await res.json();
         const out = data.choices?.[0]?.message?.content?.trim();
-        if (out) return out;
+        if (out) {
+          attempts.push({ provider: "groq", model, ok: true });
+          await recordUsage("groq", data.usage?.total_tokens ?? 0);
+          return out;
+        }
+        attempts.push({ provider: "groq", model, ok: false, error: "empty reply" });
+      } catch (e) {
+        attempts.push({
+          provider: "groq",
+          model,
+          ok: false,
+          error: e instanceof Error ? e.message : "network error",
+        });
       }
-    } catch {
-      /* no vision available */
     }
+  } else if (groq && images.length > 0 && groqImages.length === 0) {
+    attempts.push({ provider: "groq", model: "(vision)", ok: false, error: "no image parts (audio-only input)" });
   }
   return null;
 }

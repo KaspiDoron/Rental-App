@@ -140,6 +140,14 @@ describe("engine end-to-end (deterministic)", () => {
     expect(res.action).toBe("bargain");
     expect(sends.length).toBe(1);
     expect(sends[0].text.length).toBeGreaterThan(0);
+    // The decision ladder explains every rung: the chosen one and why the
+    // earlier (skipped) rungs did not fire - the Playground's "why?" view.
+    expect(res.ladder && res.ladder.length).toBeTruthy();
+    const chosen = res.ladder!.find((r) => r.chosen);
+    expect(chosen?.toNodeId).toBe("bargain");
+    const skipped = res.ladder!.filter((r) => !r.legal);
+    expect(skipped.length).toBeGreaterThan(0);
+    expect(skipped.every((r) => r.why.length > 0)).toBe(true);
   });
 
   it("a settled (at-floor) price with deposit unknown -> probes the deposit", async () => {

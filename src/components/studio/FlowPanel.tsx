@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { EdgeSpec, GraphSpec, NodeSpec } from "@/lib/graph/types";
+import { describeConditionText } from "@/lib/graph/conditions";
 import { LoadingDots } from "../LoadingDots";
 
 // THE answer to "who is first, what comes next": a plain-language storyline of
@@ -125,31 +126,44 @@ export function FlowPanel({
 
       {/* 2. The Director's real priority ladder */}
       <div>
-        <div className="mb-1.5 text-[12px] font-extrabold text-strong">
-          🧠 The Director&apos;s decision order (live, first match wins)
+        <div className="mb-1 text-[12px] font-extrabold text-strong">
+          🧠 The Director&apos;s ladder (live)
         </div>
-        <div className="rounded-2xl border border-line bg-card p-1.5">
+        <p className="mb-1.5 text-[11px] leading-relaxed text-soft">
+          On every shop message the Director reads this list <b>top to bottom</b> and takes the{" "}
+          <b>first move whose &quot;when&quot; is true</b>. That is the whole branching logic.
+        </p>
+        <div className="space-y-1">
           {directorOrder.map((e, i) => (
-            <button
-              key={e.id}
-              onClick={() => onEdge(e)}
-              className="btn flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-card2"
-            >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brandblue-soft text-[10px] font-extrabold text-brandblue">
-                {i + 1}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-strong">
-                {e.label ?? e.id}
-              </span>
-              <span className="shrink-0 text-[11px] text-faint">
-                → {nodeById(e.to)?.emoji} {nodeName(e.to)}
-              </span>
-            </button>
+            <div key={e.id}>
+              <button
+                onClick={() => onEdge(e)}
+                className="btn w-full rounded-xl border border-line bg-card px-2.5 py-2 text-left hover:border-brandblue"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brandblue-soft text-[10px] font-extrabold text-brandblue">
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-strong">
+                    {nodeById(e.to)?.emoji} {e.label ?? e.id}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-faint">→ {nodeName(e.to)}</span>
+                </span>
+                <span className="mt-0.5 block pl-7 text-[10px] leading-snug text-faint">
+                  when: {describeConditionText(e.when)}
+                </span>
+              </button>
+              {i < directorOrder.length - 1 && (
+                <div className="pl-4 text-[9px] font-bold text-faint">otherwise ↓</div>
+              )}
+            </div>
           ))}
         </div>
         <p className="mt-1 text-[10px] text-faint">
           Tap a rule to edit its condition or order. With an AI key the Director may also WAIT
-          strategically; without one it takes the first matching rule - exactly this list.
+          strategically; without one it takes the first matching rule - exactly this list. Try it
+          live in the 🎭 Playground tab: you type as the shop, then tap &quot;Why this move?&quot;
+          on any reply to see this ladder with the picked/skipped reasons.
         </p>
       </div>
 

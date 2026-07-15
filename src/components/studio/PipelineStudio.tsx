@@ -8,6 +8,7 @@ import { GraphCanvas } from "./GraphCanvas";
 import { GraphList } from "./GraphList";
 import { FlowPanel } from "./FlowPanel";
 import { BackendPanel } from "./BackendPanel";
+import { PlaygroundPanel } from "./PlaygroundPanel";
 import { NodeSheet } from "./NodeSheet";
 import { EdgeSheet } from "./EdgeSheet";
 import { SimulatorPanel } from "./SimulatorPanel";
@@ -16,7 +17,7 @@ import { MediaStudio } from "./MediaStudio";
 import { ScoresPanel } from "./ScoresPanel";
 import { LoadingDots } from "../LoadingDots";
 
-type Tab = "flow" | "graph" | "simulator" | "replay" | "media" | "scores" | "backend";
+type Tab = "flow" | "playground" | "graph" | "simulator" | "replay" | "media" | "scores" | "backend";
 type Vocab = Parameters<typeof EdgeSheet>[0]["vocabulary"];
 
 // The Pipeline Studio - the owner's 100%-visibility, 100%-editable control
@@ -163,6 +164,7 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "flow", label: "📖 Flow" },
+    { id: "playground", label: "🎭 Playground" },
     { id: "graph", label: "🕸️ Pipeline" },
     { id: "simulator", label: "🧪 Simulator" },
     { id: "replay", label: "🎬 Replay" },
@@ -313,6 +315,7 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
           onEdge={(e) => setEditEdge(e)}
         />
       )}
+      {tab === "playground" && <PlaygroundPanel />}
       {tab === "backend" && <BackendPanel />}
 
       {editNode && (

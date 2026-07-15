@@ -81,12 +81,18 @@ export async function POST(req: Request) {
   }
 
   // An all-nulls extraction on an image means NO vision model answered (not a
-  // bad photo). Say so explicitly - a silent shrug made a perfectly readable
-  // price sheet look like an agent failure.
+  // bad photo). Say so explicitly WITH each provider's verbatim error - a
+  // silent shrug made a perfectly readable price sheet look like an agent
+  // failure when the real story was e.g. a Gemini quota error.
+  const { lastVisionDiagnostics } = await import("@/lib/ai");
+  const visionAttempts = kind === "image" ? lastVisionDiagnostics() : [];
   const visionSilent =
     kind === "image" && !extraction.found && !extraction.pricePerDay && !extraction.imageKind;
   const note = visionSilent
-    ? "No vision model answered. Image reading needs a working GEMINI_TOKEN or GROQ_TOKEN in Keys (Groq Llama-4 vision is the fallback). Check both with the key Test buttons, then retry."
+    ? "No vision model answered - every attempt is listed below with its exact error. " +
+      (visionAttempts.some((a) => a.error?.includes("not configured"))
+        ? "Add the missing key in Admin -> Keys, then retry."
+        : "Fix the reported provider error (quota / key restriction), then retry.")
     : undefined;
 
   const coherence = await validateMediaCoherence({
@@ -107,6 +113,7 @@ export async function POST(req: Request) {
     extraction,
     coherence,
     note,
+    visionAttempts,
     floor: floor ? { floor: floor.floor, typical: floor.typical, currency: floor.currency } : null,
   });
 }

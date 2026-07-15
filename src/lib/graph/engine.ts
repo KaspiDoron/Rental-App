@@ -30,7 +30,7 @@ import {
   sanitizeGraphSpec,
   validateGraphSpec,
 } from "./default-graph";
-import { evalGraphCondition } from "./conditions";
+import { evalGraphCondition, explainCondition } from "./conditions";
 import { deterministicChoice, runDirector } from "./director";
 import { composeForNode, computeRoundTarget } from "./nodes";
 import {
@@ -253,12 +253,31 @@ function legalEdgesFrom(
 // The turn
 // ---------------------------------------------------------------------------
 
+/**
+ * One rung of the Director's priority ladder AT DECISION TIME: was this move
+ * legal, was it the one picked, and - in plain language - why or why not.
+ * This is what the Studio's Playground renders so a non-technical owner can
+ * read exactly why the agent did what it did.
+ */
+export interface DecisionLadderRung {
+  edgeId: string;
+  label: string;
+  toNodeId: string;
+  toKind: string;
+  emoji?: string;
+  legal: boolean;
+  chosen: boolean;
+  why: string;
+}
+
 export interface GraphTurnResult {
   decisionId: string;
   action: string; // silent | deferred | node id that composed | ...
   message?: string;
   delivered?: DeliverResult;
   traces: TraceRow[];
+  // The first (inbound) director decision's full ladder, for explain-why UIs.
+  ladder?: DecisionLadderRung[];
 }
 
 export async function runGraphTurn(
@@ -424,10 +443,45 @@ export async function runGraphTurn(
   // ---- the director loop -------------------------------------------------------
   let facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent });
   let steps = 0;
+  let ladder: DecisionLadderRung[] | undefined;
   let lastResult: GraphTurnResult = { decisionId, action: "silent", traces };
 
   while (steps++ < spec.settings.maxStepsPerEvent) {
     const legal = legalEdgesFrom(spec, "director", facts);
+    // Capture the FIRST decision's full ladder (every rung, pass or fail, with
+    // a plain-language reason) - the Playground's "why did it do that" view.
+    if (steps === 1) {
+      ladder = spec.edges
+        .filter((e) => e.enabled && e.from === "director")
+        .sort((a, b) => a.priority - b.priority)
+        .map((e) => {
+          const node = nodesById.get(e.to);
+          let pass = false;
+          let why: string;
+          if (!node || !node.enabled) {
+            why = "this move is switched off";
+          } else if (
+            node.maxRunsPerThread != null &&
+            (facts.nodeRuns[node.id] ?? 0) >= node.maxRunsPerThread
+          ) {
+            why = `already used ${node.maxRunsPerThread}x with this shop`;
+          } else {
+            const r = explainCondition(e.when, facts);
+            pass = r.pass;
+            why = r.why;
+          }
+          return {
+            edgeId: e.id,
+            label: e.label ?? e.id,
+            toNodeId: e.to,
+            toKind: node?.kind ?? "?",
+            emoji: node?.emoji,
+            legal: pass,
+            chosen: false, // stamped below once the director picks
+            why,
+          };
+        });
+    }
     let choice: DirectorChoice;
     if (nodeOn("director")) {
       choice = await runDirector({
@@ -447,6 +501,9 @@ export async function runGraphTurn(
       });
     } else {
       choice = deterministicChoice(legal, "director disabled - deterministic ladder");
+    }
+    if (steps === 1 && ladder && choice.edgeId) {
+      for (const r of ladder) r.chosen = r.edgeId === choice.edgeId;
     }
     push({
       stage: "director",
@@ -473,7 +530,7 @@ export async function runGraphTurn(
       state.phase = derivePhase(state);
       await io.saveState(state);
       await io.writeTrace(traces);
-      return { ...lastResult, action: "silent" };
+      return { ...lastResult, action: "silent", ladder };
     }
 
     if (choice.action === "wait-defer") {
@@ -494,7 +551,7 @@ export async function runGraphTurn(
       });
       await io.saveState(state);
       await io.writeTrace(traces);
-      return { ...lastResult, action: "deferred" };
+      return { ...lastResult, action: "deferred", ladder };
     }
 
     const edge = spec.edges.find((x) => x.id === choice.edgeId)!;
@@ -539,7 +596,7 @@ export async function runGraphTurn(
       state.phase = derivePhase(state);
       // present loops back to the director (t-present-back) for a warm close.
       facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent });
-      lastResult = { decisionId, action: "present", traces };
+      lastResult = { decisionId, action: "present", traces, ladder };
       continue;
     }
 
@@ -547,7 +604,7 @@ export async function runGraphTurn(
       state.phase = derivePhase(state);
       await io.saveState(state);
       await io.writeTrace(traces);
-      return { decisionId, action: node.id, traces };
+      return { decisionId, action: node.id, traces, ladder };
     }
 
     // ---- tail gates ----------------------------------------------------------
@@ -592,6 +649,7 @@ export async function runGraphTurn(
       message: delivered.finalText ?? result.message,
       delivered,
       traces,
+      ladder,
     };
   }
 
@@ -605,7 +663,7 @@ export async function runGraphTurn(
   });
   await io.saveState(state);
   await io.writeTrace(traces);
-  return { decisionId, action: "silent", traces };
+  return { decisionId, action: "silent", traces, ladder };
 }
 
 // ---------------------------------------------------------------------------

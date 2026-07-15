@@ -3,6 +3,7 @@ import { requireManagement } from "@/lib/session";
 import {
   simulatePipeline,
   simulateConversation,
+  playgroundTurn,
   SIM_SCENARIOS,
   CONVERSATION_SCRIPTS,
   type SimInput,
@@ -37,6 +38,28 @@ export async function POST(req: Request) {
       region: script.region,
     });
     return NextResponse.json({ conversation: result, script: { id: script.id, label: script.label } });
+  }
+
+  // Interactive Playground: the owner acts as the rental shop (or lets an AI
+  // persona play the shop). Thread state + history round-trip through the
+  // client so consecutive calls continue the same negotiation - dry-run IO,
+  // zero WhatsApp traffic.
+  if (body.action === "playground") {
+    const result = await playgroundTurn({
+      shopSays: body.shopSays ? String(body.shopSays).slice(0, 1000) : undefined,
+      voice: Boolean(body.voice),
+      imageKind:
+        body.imageKind === "vehicle" || body.imageKind === "price_sheet" ? body.imageKind : undefined,
+      rivalPricePerDay:
+        Number(body.rivalPricePerDay) > 0 ? Number(body.rivalPricePerDay) : undefined,
+      rfq: body.rfq && typeof body.rfq === "object" ? body.rfq : undefined,
+      region: body.region ? String(body.region).slice(0, 120) : undefined,
+      carried: body.carried,
+      historyLines: Array.isArray(body.historyLines) ? body.historyLines : undefined,
+      aiShop: Boolean(body.aiShop),
+      persona: body.persona ? String(body.persona).slice(0, 1200) : undefined,
+    });
+    return NextResponse.json({ playground: result });
   }
 
   let input: SimInput;
