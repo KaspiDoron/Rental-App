@@ -831,9 +831,47 @@ export interface ExtractedOffer {
   insuranceIncluded?: boolean | null;
   kmLimitPerDay?: number | "unlimited" | null;
   fuelPolicy?: string | null;
+  // ---- Negotiation-state signals for the graph engine (never guessed) -------
+  // The shop offered to COME PICK THE TRAVELLER UP (by car/bike) - distinct
+  // from delivering the vehicle to the hotel.
+  pickupOffered?: boolean | null;
+  // The shop explicitly said in-store only ("come to shop", "no delivery").
+  onShopOnly?: boolean | null;
+  // The shop is holding firm on price ("last price", "cannot go lower").
+  shopFirm?: boolean | null;
+  // The shop's tone in THIS reply - "annoyed" stops further pushing.
+  shopTone?: "warm" | "neutral" | "annoyed" | null;
   // Constrained fact tags (item #13) from the reply, e.g. "helmets-included".
   // Vocabulary is enforced in vendor-tags.ts; anything else is dropped.
   tags?: string[];
+}
+
+// Deterministic negotiation-signal readers - the no-LLM fallback AND the
+// arithmetic backstop that always runs (a model can miss "last price"; the
+// regex never does). Word boundaries keep "no discount" from matching inside
+// unrelated text.
+const FIRM_RX =
+  /\b(last price|final price|best price already|fix(?:ed)? price|cannot (?:go )?lower|can'?t (?:go )?lower|no discount|no lower|lowest (?:price|already)|same price for everyone|price is firm)\b/i;
+const PICKUP_RX =
+  /\b(pick you up|come pick you|we pick you|i pick you|pick[- ]?up service|we (?:can )?come (?:get|take) you)\b/i;
+const ON_SHOP_RX =
+  /\b(only (?:at|in) (?:the )?shop|come (?:to|at) (?:the )?shop|no delivery|pick ?up at (?:the )?shop|you come (?:to )?(?:the )?shop|at shop only|in[- ]store only)\b/i;
+const ANNOYED_RX =
+  /\b(go (?:to )?(them|others?)( then)?|stop asking|already told you|how many times|waste (?:my|our) time|no more|enough|final answer)\b/i;
+
+export function readNegotiationSignals(text: string): {
+  pickupOffered: boolean | null;
+  onShopOnly: boolean | null;
+  shopFirm: boolean | null;
+  shopTone: "warm" | "neutral" | "annoyed" | null;
+} {
+  const t = text || "";
+  return {
+    pickupOffered: PICKUP_RX.test(t) ? true : null,
+    onShopOnly: ON_SHOP_RX.test(t) ? true : null,
+    shopFirm: FIRM_RX.test(t) ? true : null,
+    shopTone: ANNOYED_RX.test(t) ? "annoyed" : null,
+  };
 }
 
 export async function extractOffer(
@@ -879,7 +917,18 @@ export async function extractOffer(
     '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
     '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
     '"fuelPolicy": string|null, "imageKind": "vehicle"|"price_sheet"|"document"|"other"|null, ' +
+    '"pickupOffered": boolean|null, "onShopOnly": boolean|null, ' +
+    '"shopFirm": boolean|null, "shopTone": "warm"|"neutral"|"annoyed"|null, ' +
     '"tags": string[] }. ' +
+    "pickupOffered: true ONLY if the shop offered to come pick the TRAVELLER up " +
+    "(by car or motorbike) and bring them to the shop - this is different from " +
+    "delivering the vehicle; null when not mentioned. " +
+    "onShopOnly: true only if the shop clearly said in-store only / come to the " +
+    "shop / no delivery; null otherwise. " +
+    "shopFirm: true only if the shop is clearly refusing to lower the price " +
+    "('last price', 'cannot lower', 'fixed price'); null otherwise. " +
+    "shopTone: how the shop sounds in THIS reply - 'annoyed' if irritated or " +
+    "telling us to stop asking, 'warm' if friendly, else 'neutral'. " +
     "imageKind: ONLY when a photo is attached, classify it - \"vehicle\" if it is " +
     "a photo of the actual scooter/motorbike/car, \"price_sheet\" if it shows " +
     "prices/rates/a menu, \"document\" for papers/contracts/IDs, else \"other\"; " +
@@ -937,6 +986,7 @@ export async function extractOffer(
       matchesSpec: false,
       confidence: "low",
       clarifyMessage: `Thanks for the photo! Could you confirm in text the daily price for the ${spec}? Just want to be sure we quote the right vehicle.`,
+      ...readNegotiationSignals(text),
     };
   }
 
@@ -964,6 +1014,7 @@ export async function extractOffer(
       matchesSpec: false,
       confidence: "medium",
       clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
+      ...readNegotiationSignals(text),
     };
   }
   return {
@@ -971,11 +1022,15 @@ export async function extractOffer(
     matchesSpec: false,
     confidence: "low",
     clarifyMessage: `Could you share your best daily price for the ${spec}? Thank you!`,
+    ...readNegotiationSignals(text),
   };
 
   function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
     const conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
     const verifiedEnough = e.found && e.matchesSpec && conf === "high";
+    // Negotiation signals: the deterministic regex layer ALWAYS backs the model
+    // (true from either source wins; the model can add what the regex missed).
+    const sig = readNegotiationSignals(text);
     // If the model returned no currency (or defaulted to USD for a bare number
     // in a non-USD country), stamp the real local currency.
     let cur = e.currency;
@@ -1010,6 +1065,17 @@ export async function extractOffer(
       insuranceIncluded: typeof e.insuranceIncluded === "boolean" ? e.insuranceIncluded : null,
       kmLimitPerDay: km,
       fuelPolicy: typeof e.fuelPolicy === "string" && e.fuelPolicy.trim() ? e.fuelPolicy.trim().slice(0, 40) : null,
+      pickupOffered: e.pickupOffered === true || sig.pickupOffered === true ? true : null,
+      onShopOnly: e.onShopOnly === true || sig.onShopOnly === true ? true : null,
+      shopFirm: e.shopFirm === true || sig.shopFirm === true ? true : null,
+      shopTone:
+        e.shopTone === "annoyed" || sig.shopTone === "annoyed"
+          ? "annoyed"
+          : e.shopTone === "warm"
+          ? "warm"
+          : e.shopTone === "neutral"
+          ? "neutral"
+          : null,
       tags: Array.isArray(e.tags)
         ? e.tags.filter((t) => typeof t === "string").map((t) => t.toLowerCase().trim()).slice(0, 10)
         : [],

@@ -102,6 +102,11 @@ export async function processVendorReply(opts: {
   text: string;
   waMessageId?: string;
   images?: { mime: string; base64: string }[];
+  // Voice notes: the raw audio (transcribed here) and/or a pre-computed
+  // transcript. The webhook downloads the audio; the engine's transcribe node
+  // and the media-coherence validator handle the rest.
+  audios?: { mime: string; base64: string }[];
+  transcript?: { text: string; language?: string; source: string } | null;
   // The user whose WhatsApp received this reply. CRITICAL for multi-user
   // correctness: two users can bargain with the SAME shop, and the reply must
   // attach to THIS user's thread, never someone else's.
@@ -112,9 +117,14 @@ export async function processVendorReply(opts: {
   humanDelay?: boolean;
   send: SendFn;
 }): Promise<void> {
-  const text = opts.text.trim();
+  let text = opts.text.trim();
   const images = opts.images ?? [];
-  // A price-list PHOTO with no caption is still a real reply we must read.
+  const transcript = opts.transcript ?? null;
+  // A voice note carries its transcript as the message text so the whole
+  // pipeline (extract -> coherence -> director) treats it exactly like an
+  // inbound text, marked so the reasoning is transparent in traces.
+  if (!text && transcript?.text) text = `(voice note) ${transcript.text}`.trim();
+  // A price-list PHOTO or voice note with no caption is still a real reply.
   if (!text && images.length === 0) return;
   const from = opts.fromDigits.replace(/[^\d]/g, "");
   const senderFilter = opts.senderEmail
@@ -398,7 +408,57 @@ export async function processVendorReply(opts: {
       .catch(() => {});
   }
 
-  // ==== THE ORCHESTRATOR PIPELINE ============================================
+  // ==== THE DIGRAPH NEGOTIATION ENGINE (v2) ==================================
+  // The default path: a true directed graph of specialized agents driven by a
+  // chief Negotiation Director (multi-round bargaining, deposit + fulfillment
+  // probing, strategic waits, media coherence, judge scoring). The legacy
+  // inline pipeline below is kept behind GRAPH_ENGINE=off for one release.
+  const { graphEngineEnabled } = await import("./graph/engine");
+  if (await graphEngineEnabled()) {
+    const { runGraphTurn, liveGraphIO } = await import("./graph/engine");
+    const { threadKeyFor } = await import("./graph/state");
+    const eventKind: "inbound-text" | "inbound-image" =
+      images.length > 0 ? "inbound-image" : "inbound-text";
+    await runGraphTurn(
+      {
+        event: {
+          kind: eventKind,
+          threadKey: threadKeyFor(ctx.sender ?? undefined, from),
+          userEmail: ctx.sender ?? undefined,
+          toDigits: from,
+          shopMessage: text,
+          images,
+          audios: [],
+        },
+        ctx,
+        rfq,
+        extraction,
+        usablePrice,
+        currency: cur,
+        floorPrice: floorSameCur?.floor,
+        floorTypical: floorSameCur?.typical ?? undefined,
+        sessionClosed,
+        history,
+        priorOutbound: thread
+          .filter((m) => m.direction === "outbound")
+          .map((m) => m.body ?? "")
+          .filter(Boolean),
+        legacyCounts: {
+          clarify: autoClarifies,
+          bargain: autoBargains,
+          answer: autoAnswers,
+          close: autoCloses,
+        },
+        humanDelay: Boolean(opts.humanDelay && ctx.sender),
+        transcript: opts.transcript ?? null,
+        deadlineAt: Date.now() + 45_000,
+      },
+      liveGraphIO(opts.send)
+    );
+    return;
+  }
+
+  // ==== THE LEGACY ORCHESTRATOR PIPELINE (GRAPH_ENGINE=off) ===================
   // Stage order per reply: extract (done above) -> deterministic discipline
   // ladder (what is ALLOWED) -> strategist (session-wide thinking + timing) ->
   // drafting agent (reply/price) -> validator (critique/revise) -> localize ->

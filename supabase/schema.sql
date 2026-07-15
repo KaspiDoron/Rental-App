@@ -537,3 +537,84 @@ create table if not exists public.push_subscriptions (
 );
 create index if not exists push_subs_user_idx on public.push_subscriptions (user_email);
 alter table public.push_subscriptions enable row level security;
+
+-- ================================================================================
+-- DIGRAPH NEGOTIATION ENGINE (graph orchestration v2)
+-- ================================================================================
+
+-- ---- Per-thread durable negotiation state (the engine's checkpoint) -----------
+-- One row per user<->shop WhatsApp thread. The graph engine loads it on every
+-- event, mutates phase/fields/node_runs, and writes it back with an optimistic
+-- version check - serverless-safe resume between webhook invocations.
+create table if not exists public.negotiation_threads (
+  thread_key       text primary key,            -- user_email:to_digits
+  user_email       text not null,
+  vendor_id        text,
+  vendor_name      text,
+  to_number        text not null,
+  phase            text not null default 'opening',
+  version          int  not null default 0,
+  fields           jsonb not null default '{}'::jsonb,
+  node_runs        jsonb not null default '{}'::jsonb,
+  waiting_until    timestamptz,
+  last_decision_id text,
+  updated_at       timestamptz not null default now()
+);
+create index if not exists negotiation_threads_user_idx
+  on public.negotiation_threads (user_email, updated_at desc);
+alter table public.negotiation_threads enable row level security;
+
+-- ---- Deferred-decision wakeups (strategic waits + judge jobs) ------------------
+-- The engine parks a "decide again later" marker here; every opportunistic
+-- drain site (webhook, wa/status poll, replies poll, queue, ping) claims due
+-- rows atomically (delete-returning) and re-runs the graph with FRESH context,
+-- so a rival offer that arrived during the wait changes the leverage math.
+create table if not exists public.graph_wakeups (
+  id         bigint generated always as identity primary key,
+  kind       text not null default 'tick',      -- 'tick' | 'judge' | 'session-judge'
+  thread_key text not null,
+  not_before timestamptz not null,
+  payload    jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists graph_wakeups_due_idx on public.graph_wakeups (not_before asc);
+alter table public.graph_wakeups enable row level security;
+
+-- ---- Judge team scores ----------------------------------------------------------
+-- Move judges grade every automated outbound (tactic fit / tone / uniqueness,
+-- 1-5 each); the chief judge aggregates per thread with the hard outcome math
+-- (discount %, floor gap, deal complete). Feeds tactic learning + the Studio.
+create table if not exists public.agent_scores (
+  id             bigint generated always as identity primary key,
+  decision_id    text,
+  thread_key     text,
+  node_id        text,
+  scorer         text not null,                 -- 'move-judge' | 'chief-judge' | 'deterministic'
+  rubric_version text not null default 'v1',
+  scores         jsonb not null,                -- {tacticFit,tone,uniqueness,outcomeDelta}
+  tactic_id      text,
+  provider       text,                          -- which LLM judged (family-bias audit)
+  verdict        text,                          -- one-line justification
+  created_at     timestamptz not null default now()
+);
+create index if not exists agent_scores_thread_idx
+  on public.agent_scores (thread_key, created_at desc);
+create index if not exists agent_scores_decision_idx
+  on public.agent_scores (decision_id);
+alter table public.agent_scores enable row level security;
+
+-- ---- Trace path stamps: which graph node/edge produced each trace row ----------
+alter table public.agent_traces add column if not exists node_id text;
+alter table public.agent_traces add column if not exists edge_id text;
+
+-- ---- Deal completeness gating on offers ----------------------------------------
+-- An offer is PRESENTED to the traveller only once price + deposit + how to
+-- get the vehicle (pickup/delivery/on-shop) are known (or probing timed out).
+alter table public.offers add column if not exists presentable boolean default false;
+alter table public.offers add column if not exists fulfillment text;   -- pickup|delivery|on-shop
+
+-- ---- Terms acceptance (legal shield) --------------------------------------------
+alter table public.app_users add column if not exists terms_version text;
+alter table public.app_users add column if not exists terms_accepted_at timestamptz;
+alter table public.app_users add column if not exists wa_risk_accepted_at timestamptz;
+alter table public.app_users add column if not exists ai_responsibility_accepted_at timestamptz;

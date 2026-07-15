@@ -1,0 +1,136 @@
+// Voice-note transcription - the locals have very heavy accents, so this is
+// primed hard for accuracy on prices and rental vocabulary.
+//
+//   Groq whisper-large-v3 (NOT -turbo: strongest on accents) via multipart,
+//   temperature 0, verbose_json (detected language), an accent-primer prompt,
+//   and a language hint ONLY when the thread is local-language (shops code-
+//   switch - auto-detect otherwise).
+//     -> Gemini audio (inline_data through chatVision) fallback
+//       -> null (the engine then sends a polite "could you type it?" clarify)
+
+import "server-only";
+import { getConfig } from "../runtime-config";
+import { chatVision } from "../ai";
+import { recordApi } from "../usage";
+
+export interface Transcription {
+  text: string;
+  language?: string;
+  source: "groq" | "gemini";
+}
+
+// Region -> local language name + ISO-639-1 code. Reuses the country-string
+// style of locale.ts / REGION_CURRENCY (kept local to avoid coupling).
+const REGION_LANG: [RegExp, { name: string; iso: string }][] = [
+  [/\bthai|\bthailand/i, { name: "Thai", iso: "th" }],
+  [/\bindonesia|\bbali|\bjakarta|\blombok/i, { name: "Indonesian", iso: "id" }],
+  [/\bvietnam|\bhanoi|\bsaigon|\bda ?nang/i, { name: "Vietnamese", iso: "vi" }],
+  [/\bcambodia|\bphnom|\bsiem reap/i, { name: "Khmer", iso: "km" }],
+  [/\bphilippin|\bmanila|\bcebu/i, { name: "Filipino", iso: "tl" }],
+  [/\bmalaysia|\bkuala|\blangkawi/i, { name: "Malay", iso: "ms" }],
+  [/\bindia\b|\bgoa\b/i, { name: "Hindi", iso: "hi" }],
+  [/\bsri lanka|\bcolombo/i, { name: "Sinhala", iso: "si" }],
+  [/\bnepal|\bkathmandu/i, { name: "Nepali", iso: "ne" }],
+  [/\bmexico|\bspain|\bcolombia|\bperu|\bargentin|\bchile/i, { name: "Spanish", iso: "es" }],
+  [/\bbrazil|\bbrasil|\bportugal/i, { name: "Portuguese", iso: "pt" }],
+  [/\bmorocco|\begypt|\bdubai|\bemirates|\bsaudi/i, { name: "Arabic", iso: "ar" }],
+  [/\bturkey|\btürkiye/i, { name: "Turkish", iso: "tr" }],
+];
+
+function langFor(region?: string): { name: string; iso: string } | null {
+  if (!region) return null;
+  for (const [rx, v] of REGION_LANG) if (rx.test(region)) return v;
+  return null;
+}
+
+/** <= 224-token domain primer - the single biggest accuracy lever for accents. */
+export function accentPrimerFor(region?: string): string {
+  const lang = langFor(region);
+  const place = region ? region.split(",").slice(-2).join(",").trim() : "Southeast Asia";
+  const accent = lang ? `${lang.name}-accented English, may mix ${lang.name} words` : "heavily accented English";
+  return (
+    `WhatsApp voice note from a vehicle rental shop in ${place}. ${accent}, casual and fast. ` +
+    `Vocabulary: scooter, motorbike, cc, per day, baht, rupiah, dong, peso, deposit, passport, ` +
+    `helmet, delivery, pickup, insurance, mileage, kilometre. Numbers and prices matter most - ` +
+    `transcribe every digit exactly.`
+  );
+}
+
+const TRANSCRIBE_SYSTEM =
+  "Transcribe this vehicle-rental voice note from a shop owner EXACTLY, word for word. " +
+  "The speaker has a heavy local accent and speaks fast, casual English possibly mixed with " +
+  "local words. Prices and numbers are the most important - get every digit right. " +
+  "Output ONLY the transcription text, nothing else.";
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function transcribeAudio(opts: {
+  mime: string;
+  base64: string;
+  region?: string;
+  localLang?: boolean;
+}): Promise<Transcription | null> {
+  const token = await getConfig("GROQ_TOKEN");
+  if (token) {
+    try {
+      const bytes = Buffer.from(opts.base64, "base64");
+      const fd = new FormData();
+      const ext = opts.mime.includes("ogg")
+        ? "ogg"
+        : opts.mime.includes("mp4") || opts.mime.includes("m4a")
+        ? "m4a"
+        : opts.mime.includes("mpeg") || opts.mime.includes("mp3")
+        ? "mp3"
+        : opts.mime.includes("wav")
+        ? "wav"
+        : "ogg";
+      fd.append(
+        "file",
+        new Blob([bytes], { type: opts.mime || "audio/ogg" }),
+        `note.${ext}`
+      );
+      fd.append("model", "whisper-large-v3"); // NOT -turbo: strongest on accents
+      fd.append("temperature", "0");
+      fd.append("response_format", "verbose_json");
+      const lang = opts.localLang ? langFor(opts.region) : null;
+      if (lang) fd.append("language", lang.iso); // hint only when confident
+      fd.append("prompt", accentPrimerFor(opts.region));
+      const res = await fetchWithTimeout(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
+        { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd },
+        20_000
+      );
+      await recordApi("groq_whisper").catch(() => {});
+      if (res.ok) {
+        const data = (await res.json()) as { text?: string; language?: string };
+        const text = (data.text ?? "").trim();
+        if (text) return { text, language: data.language, source: "groq" };
+      }
+    } catch {
+      /* fall through to Gemini */
+    }
+  }
+
+  // Gemini audio through the existing inline_data path (chatVision accepts any
+  // mime; audio mimes are valid inline_data for Gemini).
+  try {
+    const out = await chatVision(
+      TRANSCRIBE_SYSTEM + " " + accentPrimerFor(opts.region),
+      "Transcribe this voice note exactly.",
+      [{ mime: opts.mime || "audio/ogg", base64: opts.base64 }]
+    );
+    const text = (out ?? "").trim();
+    if (text) return { text, source: "gemini" };
+  } catch {
+    /* no transcription available */
+  }
+  return null;
+}

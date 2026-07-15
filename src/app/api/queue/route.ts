@@ -27,6 +27,8 @@ export async function GET() {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
     void drainOutbox((email, to, text) => sendFromUser(email, to, text)).catch(() => {});
+    const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    void drainGraphWakeups((email, to, text) => sendFromUser(email, to, text)).catch(() => {});
   } catch {
     /* draining is best-effort */
   }

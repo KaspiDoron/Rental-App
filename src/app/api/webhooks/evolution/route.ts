@@ -27,13 +27,38 @@ async function isVendorThread(fromDigits: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+// The region of the last outbound to this shop - primes the voice transcriber
+// for the local accent (best-effort; undefined just means no language hint).
+async function regionForThread(fromDigits: string): Promise<string | undefined> {
+  const rows = await sbSelect<{ raw: { region?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+      fromDigits
+    )}&order=received_at.desc&limit=1`
+  ).catch(() => []);
+  const r = rows[0]?.raw?.region;
+  return typeof r === "string" && r ? r : undefined;
+}
+
 function extractText(data: any): string {
+  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
   return (
-    data?.message?.conversation ??
-    data?.message?.extendedTextMessage?.text ??
-    data?.message?.imageMessage?.caption ??
+    m?.conversation ??
+    m?.extendedTextMessage?.text ??
+    m?.imageMessage?.caption ??
     ""
   );
+}
+
+// WhatsApp voice notes arrive as audioMessage (audio/ogg; codecs=opus), also
+// wrapped in ephemeralMessage on disappearing chats.
+function hasAudioMessage(data: any): boolean {
+  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
+  return Boolean(m?.audioMessage);
+}
+function hasImageMessage(data: any): boolean {
+  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
+  return Boolean(m?.imageMessage);
 }
 
 export async function POST(req: Request) {
@@ -125,15 +150,16 @@ export async function POST(req: Request) {
 
       const text = extractText(data);
       const msgId = String(data.key.id ?? "");
-      const hasImage = Boolean(data?.message?.imageMessage);
+      const hasImage = hasImageMessage(data);
+      const hasAudio = hasAudioMessage(data);
 
       await sbInsert("whatsapp_messages", [
         {
           wa_message_id: msgId,
           from_number: from,
           to_number: instance,
-          body: text || (hasImage ? "[photo]" : ""),
-          type: hasImage ? "image" : "text",
+          body: text || (hasImage ? "[photo]" : hasAudio ? "[voice note]" : ""),
+          type: hasImage ? "image" : hasAudio ? "audio" : "text",
           direction: "inbound",
           raw: { instance, pushName: data.pushName ?? null, channel: "evolution" },
         },
@@ -142,9 +168,9 @@ export async function POST(req: Request) {
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
-      // A shop that sends ONLY a price-list photo (no caption) is the common
-      // case - read the image, don't skip it.
-      if (!text && !hasImage) continue;
+      // A shop that sends ONLY a price-list photo or a voice note (no caption)
+      // is the common case - read the media, don't skip it.
+      if (!text && !hasImage && !hasAudio) continue;
 
       const email = await emailForInstance(instance);
       // A real inbound proves the socket is live: persist "open" durably.
@@ -161,10 +187,32 @@ export async function POST(req: Request) {
         if (media) images.push(media);
       }
 
+      // Voice note? Download + transcribe (heavy-accent primed) so the whole
+      // pipeline treats it exactly like an inbound text.
+      let transcript: { text: string; language?: string; source: string } | null = null;
+      if (hasAudio && email && !text) {
+        try {
+          const { fetchMediaBase64 } = await import("@/lib/evolution");
+          const media = await fetchMediaBase64(email, data);
+          if (media) {
+            const { transcribeAudio } = await import("@/lib/graph/transcribe");
+            const rfqRegion = await regionForThread(from);
+            transcript = await transcribeAudio({
+              mime: media.mime || "audio/ogg",
+              base64: media.base64,
+              region: rfqRegion,
+            });
+          }
+        } catch {
+          /* transcription is best-effort - engine sends a polite fallback */
+        }
+      }
+
       await processVendorReply({
         fromDigits: from,
         text,
         images,
+        transcript,
         waMessageId: msgId,
         senderEmail: email ?? undefined,
         humanDelay: Boolean(email),
@@ -179,10 +227,17 @@ export async function POST(req: Request) {
   }
 
   // Opportunistic queue drain: any webhook activity flushes due outbox
-  // messages (business-hours / pacing queue) without a dedicated worker.
+  // messages (business-hours / pacing queue) AND due graph wakeups (strategic
+  // waits + judge jobs) without a dedicated worker.
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text));
+  } catch {
+    /* best-effort */
+  }
+  try {
+    const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text));
   } catch {
     /* best-effort */
   }

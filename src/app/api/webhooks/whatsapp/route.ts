@@ -56,6 +56,7 @@ interface WaMessage {
   text?: { body?: string };
   image?: WaMedia;
   document?: WaMedia;
+  audio?: WaMedia;
   type?: string;
 }
 interface WaValue {
@@ -124,14 +125,19 @@ export async function POST(req: Request) {
             wa_message_id: msg.id,
             from_number: msg.from,
             to_number: value.metadata?.phone_number_id ?? null,
-            body: msg.text?.body ?? caption ?? (kind === "image" ? "[photo]" : ""),
+            body:
+              msg.text?.body ??
+              caption ??
+              (kind === "image" ? "[photo]" : kind === "audio" ? "[voice note]" : ""),
             type: kind,
             direction: "inbound",
             raw: msg,
           });
-          // Text AND image/document messages are now processed (a shop that
-          // replies with a price-list or vehicle photo must be understood).
-          if (kind === "text" || kind === "image" || kind === "document") inbound.push(msg);
+          // Text, image/document AND voice notes are processed (a shop that
+          // replies with a price-list photo or an audio price must be understood).
+          if (kind === "text" || kind === "image" || kind === "document" || kind === "audio") {
+            inbound.push(msg);
+          }
         }
       }
     }
@@ -144,16 +150,40 @@ export async function POST(req: Request) {
         media?.id && (media.mime_type ?? "").startsWith("image/")
           ? await fetchCloudMedia(media.id).then((m) => (m ? [m] : []))
           : [];
+      // Voice note? Download + transcribe (heavy-accent primed).
+      let transcript: { text: string; language?: string; source: string } | null = null;
+      const txt = msg.text?.body ?? media?.caption ?? "";
+      if (msg.audio?.id && !txt) {
+        const audio = await fetchCloudMedia(msg.audio.id);
+        if (audio) {
+          const { transcribeAudio } = await import("@/lib/graph/transcribe");
+          transcript = await transcribeAudio({
+            mime: audio.mime || "audio/ogg",
+            base64: audio.base64,
+          });
+        }
+      }
       await processVendorReply({
         fromDigits: msg.from,
-        text: msg.text?.body ?? media?.caption ?? "",
+        text: txt,
         waMessageId: msg.id,
         images,
+        transcript,
         send: async (to, message) => {
           const r = await sendWhatsApp(to, message);
           return { ok: r.ok && r.channel === "cloud-api", error: r.error };
         },
       });
+    }
+    // Drain due graph wakeups (strategic waits + judge jobs) opportunistically.
+    try {
+      const { drainGraphWakeups } = await import("@/lib/graph/engine");
+      await drainGraphWakeups(async (_s, to, message) => {
+        const r = await sendWhatsApp(to, message);
+        return { ok: r.ok && r.channel === "cloud-api", error: r.error };
+      });
+    } catch {
+      /* best-effort */
     }
   } catch {
     // Never fail the webhook - Meta retries and will disable a flaky endpoint.

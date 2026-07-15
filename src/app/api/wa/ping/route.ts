@@ -28,6 +28,10 @@ export async function GET(req: Request) {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
     drained = await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+      () => {}
+    );
   } catch {
     /* best-effort */
   }

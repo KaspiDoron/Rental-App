@@ -267,6 +267,11 @@ export interface TraceRow {
   reasoning: string;
   output: string;
   verdict?: string;
+  // Digraph engine (v2): the exact graph node + edge that produced this row, so
+  // the Pipeline Studio replays the traversed path 1:1. Optional - legacy rows
+  // (and the old pipeline) leave them null and still render as a list.
+  nodeId?: string;
+  edgeId?: string;
 }
 
 export function newDecisionId(): string {
@@ -275,20 +280,30 @@ export function newDecisionId(): string {
 
 export async function writeTrace(rows: TraceRow[]): Promise<void> {
   if (!rows.length) return;
-  await sbInsert(
-    "agent_traces",
-    rows.map((r) => ({
-      decision_id: r.decisionId,
-      user_email: r.userEmail ?? null,
-      vendor_id: r.vendorId ?? "",
-      vendor_name: r.vendorName ?? "",
-      stage: r.stage,
-      input: r.input.slice(0, 2000),
-      reasoning: r.reasoning.slice(0, 2000),
-      output: r.output.slice(0, 1000),
-      verdict: r.verdict ?? null,
-    }))
-  ).catch(() => {});
+  const withPath = rows.map((r) => ({
+    decision_id: r.decisionId,
+    user_email: r.userEmail ?? null,
+    vendor_id: r.vendorId ?? "",
+    vendor_name: r.vendorName ?? "",
+    stage: r.stage,
+    input: r.input.slice(0, 2000),
+    reasoning: r.reasoning.slice(0, 2000),
+    output: r.output.slice(0, 1000),
+    verdict: r.verdict ?? null,
+    node_id: r.nodeId ?? null,
+    edge_id: r.edgeId ?? null,
+  }));
+  // sbInsert fails SILENTLY on an unknown column, so before the graph
+  // migration runs (node_id/edge_id absent) the whole trace would vanish.
+  // Retry without the path columns so visibility never depends on a pending
+  // migration - same graceful-degradation pattern as vendor_replies.
+  const ok = await sbInsert("agent_traces", withPath).catch(() => false);
+  if (ok === false) {
+    await sbInsert(
+      "agent_traces",
+      withPath.map(({ node_id: _n, edge_id: _e, ...rest }) => rest)
+    ).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------

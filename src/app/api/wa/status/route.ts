@@ -39,6 +39,10 @@ export async function GET() {
     drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
       () => {}
     );
+    const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
+      () => {}
+    );
   } catch {
     /* best-effort */
   }
