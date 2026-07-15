@@ -375,6 +375,11 @@ export default function AdminPage() {
       }
       setAuthorized(true);
       setAnalytics(await a.json());
+      // FIRST PAINT NOW: the shell + tabs render after ONE round trip. The
+      // batch below fills each section in as it lands - one slow lambda
+      // (ai-status probing providers, a cold users query) must never hold the
+      // whole workspace hostage on skeletons.
+      setLoaded(true);
 
       const j = (r: PromiseSettledResult<Response>) =>
         r.status === "fulfilled" ? r.value.json().catch(() => ({})) : Promise.resolve({});
@@ -400,7 +405,6 @@ export default function AdminPage() {
       setTrainingCount((tr.examples ?? []).length);
       setMemory(tr.examples ?? []);
       setFeedbackRows(fb.feedback ?? []);
-      setLoaded(true);
       // Costs are non-blocking - never make first paint wait on them.
       refreshCosts().catch(() => {});
     })().catch(() => setAuthorized(false));

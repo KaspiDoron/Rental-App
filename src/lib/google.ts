@@ -212,6 +212,13 @@ export async function searchPlaces(
   if (cached) return { results: cached };
 
   let googleError: string | undefined;
+  // A missing server-side key must NEVER read as a mute "No matches" - the
+  // owner needs to see WHY the dropdown is empty (this exact silence made
+  // production autocomplete look broken while the key sat unset).
+  if (!key) {
+    googleError =
+      "Google Maps key is not reaching the server - check GOOGLE_MAPS_API_KEY in Admin -> Keys (or Vercel env), then run 'Test Google key'";
+  }
 
   if (key && !opts?.skipAutocomplete) {
     // 1) Places API (New) Autocomplete: THE prefix typeahead - matches partial
@@ -278,7 +285,9 @@ export async function searchPlaces(
     }
   }
 
-  // 4) OpenStreetMap Nominatim - free, real data, no key needed.
+  // 4) OpenStreetMap Nominatim - free, real data, no key needed. NOTE: it
+  // often throttles/blocks datacenter IPs (Vercel), so its failure must also
+  // surface instead of masquerading as "no matches".
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${MAX_SUGGESTIONS}&q=${encodeURIComponent(
@@ -289,8 +298,14 @@ export async function searchPlaces(
         cache: "no-store",
       }
     );
+    if (!res.ok) {
+      return {
+        results: [],
+        error: googleError ?? `fallback place search rejected the request (${res.status})`,
+      };
+    }
     const data = (await res.json()) as any[];
-    const out = data.map((r) => ({
+    const out = (Array.isArray(data) ? data : []).map((r) => ({
       label: r.display_name,
       lat: parseFloat(r.lat),
       lng: parseFloat(r.lon),
@@ -300,7 +315,7 @@ export async function searchPlaces(
     // learns the key needs "Places API (New)" enabled even though OSM saved the UX.
     return { results: out, error: out.length ? undefined : googleError };
   } catch {
-    return { results: [], error: googleError };
+    return { results: [], error: googleError ?? "place search is unreachable right now" };
   }
 }
 

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { EdgeSpec, GraphSpec, NodeSpec } from "@/lib/graph/types";
+import { defaultGraphSpec } from "@/lib/graph/default-graph";
+import { CONDITION_VOCABULARY } from "@/lib/graph/conditions";
 import { GraphCanvas } from "./GraphCanvas";
 import { NodeSheet } from "./NodeSheet";
 import { EdgeSheet } from "./EdgeSheet";
@@ -18,8 +20,10 @@ type Vocab = Parameters<typeof EdgeSheet>[0]["vocabulary"];
 // centre for the digraph negotiation engine. Replaces the old OrchestratorPanel.
 export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
   const [tab, setTab] = useState<Tab>("graph");
-  const [spec, setSpec] = useState<GraphSpec | null>(null);
-  const [vocab, setVocab] = useState<Vocab>([]);
+  // Render the DEFAULT graph instantly (no round-trip) so the Agents tab is
+  // interactive at once; hydrate with the owner's saved spec when it lands.
+  const [spec, setSpec] = useState<GraphSpec>(() => defaultGraphSpec());
+  const [vocab, setVocab] = useState<Vocab>(() => CONDITION_VOCABULARY as unknown as Vocab);
   const [vertical, setVertical] = useState(true);
   const [editNode, setEditNode] = useState<NodeSpec | null>(null);
   const [editEdge, setEditEdge] = useState<EdgeSpec | null>(null);
@@ -151,14 +155,6 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
     for (const id of replayPath) c[id] = (c[id] ?? 0) + 1;
     return c;
   }, [replayPath]);
-
-  if (!spec) {
-    return (
-      <div className="surface rounded-blob p-6">
-        <LoadingDots label="Loading the Pipeline Studio" />
-      </div>
-    );
-  }
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "graph", label: "🕸️ Graph" },
