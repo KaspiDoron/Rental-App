@@ -396,6 +396,33 @@ export async function runGraphTurn(
       output: verdict.coherent ? "coherent" : "NOT coherent - confirm in text",
       verdict: verdict.fromAi ? undefined : "deterministic",
     });
+
+    // Gap Validator: what did this media give us, what does the deal still
+    // need (deposit tiers, mileage, condition...)? Deterministic in the hot
+    // path - the trace makes it 100% visible in Replay/Playground.
+    try {
+      const { assessMediaGaps } = await import("./gaps");
+      const gaps = await assessMediaGaps({
+        kind: input.transcript ? "audio" : "image",
+        extraction: input.extraction,
+        fields: state.fields,
+        rfq: input.rfq,
+        history: input.history,
+        llmAllowed: false,
+      });
+      push({
+        stage: "media-gap",
+        nodeId: "coherence",
+        input: `gained: ${gaps.gained.join("; ") || "(nothing usable)"}`,
+        reasoning: gaps.stillMissing.length
+          ? `still missing: ${gaps.stillMissing.join("; ")}`
+          : "nothing missing - the deal fields are covered",
+        output: gaps.followUp ?? "(no follow-up needed)",
+        verdict: "deterministic",
+      });
+    } catch {
+      /* gap check is an insight layer - never blocks the turn */
+    }
   }
 
   // ---- comparator (floor + rival + round target) ------------------------------

@@ -269,7 +269,8 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
         currentPricePerDay: f.pricePerDay,
         rivalPricePerDay: args.rivalPrice,
         region: input.ctx.region || undefined,
-        round: rounds + 1,
+        // 0-based: round 0 IS the playbook opener (days leverage, ask the floor).
+        round: rounds,
         currency: input.currency,
         localLanguage: Boolean(input.ctx.localLang) && input.ctx.plan === "ultra",
         targetPricePerDay: args.target,

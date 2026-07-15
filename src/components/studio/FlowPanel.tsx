@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { EdgeSpec, GraphSpec, NodeSpec } from "@/lib/graph/types";
 import { describeConditionText } from "@/lib/graph/conditions";
 import { LoadingDots } from "../LoadingDots";
+import { CoachBox } from "./CoachBox";
 
 // THE answer to "who is first, what comes next": a plain-language storyline of
 // a search session, the Director's REAL decision order (from the live spec, by
@@ -246,6 +247,9 @@ export function FlowPanel({
           </div>
         )}
       </div>
+
+      {/* 4. The Coach - plain-text lessons that rewrite the live pipeline */}
+      <CoachBox />
     </div>
   );
 }

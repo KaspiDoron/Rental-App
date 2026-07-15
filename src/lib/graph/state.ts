@@ -122,7 +122,19 @@ export function applyExtractionToState(
   }
   if (typeof extraction.deliveryFee === "number") f.deliveryFee = extraction.deliveryFee;
 
-  if (extraction.shopFirm === true) f.firmCount = (f.firmCount ?? 0) + 1;
+  // Extract-everything media memory: what a photo showed once stays known
+  // (mileage and scratches become honest bargaining leverage later).
+  if (typeof extraction.mileageKm === "number" && extraction.mileageKm > 0) {
+    f.mileageKm = extraction.mileageKm;
+  }
+  if (extraction.conditionNotes) f.conditionNotes = extraction.conditionNotes.slice(0, 200);
+  if (extraction.imageSummary) f.mediaSummary = extraction.imageSummary.slice(0, 500);
+
+  // "Last price / cannot lower" only counts as FIRM when the shop is
+  // defending a price we actually know. A firm-sounding line BEFORE any quote
+  // ("cannot lower, last price" with no number yet) must not end the bargain
+  // before it started - that exact case froze a 300-vs-160-floor negotiation.
+  if (extraction.shopFirm === true && f.pricePerDay) f.firmCount = (f.firmCount ?? 0) + 1;
   if (extraction.shopTone === "annoyed") f.toneDegraded = true;
 
   const next = { ...state, fields: f };

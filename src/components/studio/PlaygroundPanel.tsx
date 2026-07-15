@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PlaceAutocomplete } from "../PlaceAutocomplete";
 import { LoadingDots } from "../LoadingDots";
+import { CoachBox } from "./CoachBox";
 
 // The interactive Playground: YOU are the rental shop (or an AI persona is),
 // chatting against the REAL negotiation engine turn by turn - same graph, same
@@ -58,6 +59,17 @@ const DEFAULT_PERSONA =
   "starts at 250 baht/day for a 125cc, real bottom is 160. Prefers passport deposit " +
   "but accepts 3000 cash if pushed. Only shop pickup.";
 
+interface SuggestedScenario {
+  id: string;
+  label: string;
+  region: string;
+  rfq: { vehicleClass?: string; engineSizeCc?: number; durationDays?: number };
+  rivalPricePerDay?: number;
+  persona: string;
+  opening: string;
+  fromAi: boolean;
+}
+
 export function PlaygroundPanel() {
   const [mode, setMode] = useState<"me" | "ai">("me");
   const [persona, setPersona] = useState(DEFAULT_PERSONA);
@@ -76,11 +88,40 @@ export function PlaygroundPanel() {
   const carried = useRef<unknown>(null);
   const historyLines = useRef<string[] | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // AI-suggested test scenarios: each tested one is replaced by a fresh one.
+  const [suggestions, setSuggestions] = useState<SuggestedScenario[]>([]);
+  const testedLabels = useRef<string[]>([]);
 
-  async function sendTurn(args: { shopSays?: string; imageKind?: "vehicle" | "price_sheet"; aiShop?: boolean }) {
+  async function fetchSuggestion(extraExclude: string[] = []) {
+    try {
+      const res = await fetch("/api/admin/graph/scenario-gen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exclude: [...testedLabels.current, ...extraExclude] }),
+      });
+      const d = await res.json();
+      if (d.scenario) setSuggestions((old) => [...old.filter((s) => s.id !== d.scenario.id), d.scenario].slice(-2));
+    } catch {
+      /* suggestions are an enhancement */
+    }
+  }
+
+  useEffect(() => {
+    // Two live suggestions at a time.
+    fetchSuggestion().then(() => fetchSuggestion());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function sendTurn(args: {
+    shopSays?: string;
+    imageKind?: "vehicle" | "price_sheet";
+    aiShop?: boolean;
+    setup?: { region: string; vehicle: string; cc: number; days: number; rival?: number; persona: string };
+  }) {
     setBusy(true);
     setErr(null);
     setSetupOpen(false);
+    const s = args.setup;
     try {
       const res = await fetch("/api/admin/graph/simulate", {
         method: "POST",
@@ -91,10 +132,14 @@ export function PlaygroundPanel() {
           voice: voice && !args.imageKind,
           imageKind: args.imageKind,
           aiShop: args.aiShop,
-          persona: args.aiShop ? persona : undefined,
-          region,
-          rivalPricePerDay: Number(rival) > 0 ? Number(rival) : undefined,
-          rfq: { vehicleClass: vehicle, engineSizeCc: cc, durationDays: days },
+          persona: args.aiShop ? s?.persona ?? persona : undefined,
+          region: s?.region ?? region,
+          rivalPricePerDay: (s ? s.rival : Number(rival) > 0 ? Number(rival) : undefined) || undefined,
+          rfq: {
+            vehicleClass: s?.vehicle ?? vehicle,
+            engineSizeCc: s?.cc ?? cc,
+            durationDays: s?.days ?? days,
+          },
           carried: carried.current,
           historyLines: historyLines.current,
         }),
@@ -142,8 +187,82 @@ export function PlaygroundPanel() {
     setSetupOpen(true);
   }
 
+  // Start a suggested scenario: load its setup, let the AI persona take over,
+  // play the shop's opening line immediately - and replace the used suggestion
+  // with a freshly generated one.
+  function playScenario(s: SuggestedScenario) {
+    carried.current = null;
+    historyLines.current = undefined;
+    setLog([]);
+    setErr(null);
+    setWhyOpen(null);
+    setMode("ai");
+    setRegion(s.region);
+    setVehicle(s.rfq.vehicleClass === "motorbike" ? "motorbike" : "scooter");
+    setCc(s.rfq.engineSizeCc ?? 125);
+    setDays(s.rfq.durationDays ?? 3);
+    setRival(s.rivalPricePerDay ? String(s.rivalPricePerDay) : "");
+    setPersona(s.persona);
+    testedLabels.current = [...testedLabels.current, s.label].slice(-24);
+    setSuggestions((old) => old.filter((x) => x.id !== s.id));
+    fetchSuggestion(suggestions.map((x) => x.label));
+    sendTurn({
+      shopSays: s.opening,
+      setup: {
+        region: s.region,
+        vehicle: s.rfq.vehicleClass === "motorbike" ? "motorbike" : "scooter",
+        cc: s.rfq.engineSizeCc ?? 125,
+        days: s.rfq.durationDays ?? 3,
+        rival: s.rivalPricePerDay,
+        persona: s.persona,
+      },
+    });
+  }
+
+  // A readable transcript of the current run - what the Coach scores.
+  function transcript(): string {
+    return log
+      .map((e) =>
+        e.role === "shop"
+          ? `Shop: ${e.text}`
+          : `Agent [${e.action}]: ${e.text || "(silent)"}`
+      )
+      .join("\n")
+      .slice(0, 3500);
+  }
+
   return (
     <div className="space-y-3">
+      {/* AI-suggested scenarios - each tested one is replaced by a fresh one */}
+      {suggestions.length > 0 && (
+        <div>
+          <div className="mb-1 text-[12px] font-extrabold text-strong">
+            🎲 Suggested test scenarios (AI-generated - tap to play)
+          </div>
+          <div className="space-y-1.5">
+            {suggestions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => playScenario(s)}
+                disabled={busy}
+                className="btn w-full rounded-2xl border border-line bg-card p-2.5 text-left hover:border-brandblue disabled:opacity-50"
+              >
+                <span className="flex items-center gap-1.5 text-[12px] font-extrabold text-strong">
+                  {s.label}
+                  <span className="rounded-full bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-bold text-brandblue">
+                    {s.fromAi ? "AI" : "pool"}
+                  </span>
+                </span>
+                <span className="mt-0.5 block text-[10px] leading-snug text-faint">
+                  {s.region} · {s.rfq.engineSizeCc}cc {s.rfq.vehicleClass} · {s.rfq.durationDays} days
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-snug text-soft">{s.persona.slice(0, 120)}...</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Mode toggle */}
       <div className="flex gap-2">
         <button
@@ -414,12 +533,19 @@ export function PlaygroundPanel() {
       )}
 
       {log.length > 0 && (
-        <button
-          onClick={reset}
-          className="btn btn-sm w-full rounded-xl border border-line py-2 text-[12px] font-bold text-soft"
-        >
-          ↺ Start a new negotiation
-        </button>
+        <>
+          <CoachBox
+            title="🏅 Score this negotiation - the pipeline learns from it"
+            placeholder="Your verdict on this run: what was good, what was wrong, what should the agents do differently next time?"
+            context={transcript}
+          />
+          <button
+            onClick={reset}
+            className="btn btn-sm w-full rounded-xl border border-line py-2 text-[12px] font-bold text-soft"
+          >
+            ↺ Start a new negotiation
+          </button>
+        </>
       )}
     </div>
   );

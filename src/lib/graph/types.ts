@@ -162,6 +162,10 @@ export interface ThreadFields {
   lastTarget?: number; // our last asked price (concession ladder)
   lastLeverage?: string;
   presented?: boolean;
+  // ---- extract-everything media memory (facts photos gave us for later) ----
+  mileageKm?: number; // odometer seen in a photo - bargaining leverage
+  conditionNotes?: string; // visible condition (scratches, worn tires...)
+  mediaSummary?: string; // everything informative the last photo showed
 }
 
 export interface NegotiationThreadState {

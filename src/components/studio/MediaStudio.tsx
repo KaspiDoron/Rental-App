@@ -13,6 +13,7 @@ interface MediaResult {
   note?: string;
   error?: string;
   visionAttempts?: { provider: string; model: string; ok: boolean; error?: string }[];
+  gaps?: { gained: string[]; stillMissing: string[]; followUp?: string; fromAi: boolean };
 }
 
 // The Media Testing Lab: upload a price-table / odometer / vehicle image OR a
@@ -169,6 +170,34 @@ export function MediaStudio() {
               <pre className="overflow-x-auto rounded-lg bg-card2 p-2 text-[11px] text-soft">
                 {JSON.stringify(result.extraction, null, 2)}
               </pre>
+            </div>
+          )}
+          {result.gaps && (
+            <div className="rounded-xl border border-line bg-card p-2.5">
+              <div className="mb-1 text-[11px] font-extrabold text-strong">
+                🧩 Gap check - did the media give us what the deal needs?
+              </div>
+              {result.gaps.gained.length > 0 && (
+                <div className="text-[12px] text-soft">
+                  <span className="font-bold text-savings">Gained:</span>{" "}
+                  {result.gaps.gained.join(" · ")}
+                </div>
+              )}
+              {result.gaps.stillMissing.length > 0 ? (
+                <div className="mt-1 text-[12px] text-soft">
+                  <span className="font-bold text-brandred">Still missing:</span>{" "}
+                  {result.gaps.stillMissing.join(" · ")}
+                </div>
+              ) : (
+                <div className="mt-1 text-[12px] font-bold text-savings">
+                  Nothing missing - the deal fields are covered. ✅
+                </div>
+              )}
+              {result.gaps.followUp && (
+                <div className="mt-1.5 rounded-lg bg-brandblue-soft p-2 text-[12px] text-brandblue">
+                  <span className="font-extrabold">Suggested follow-up:</span> {result.gaps.followUp}
+                </div>
+              )}
             </div>
           )}
           {result.coherence && (

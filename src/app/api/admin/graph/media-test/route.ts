@@ -4,6 +4,7 @@ import { extractOffer, type ExtractedOffer } from "@/lib/agents";
 import { floorPriceFor } from "@/lib/market";
 import { transcribeAudio } from "@/lib/graph/transcribe";
 import { validateMediaCoherence } from "@/lib/graph/coherence";
+import { assessMediaGaps } from "@/lib/graph/gaps";
 import type { StructuredRFQ } from "@/lib/types";
 
 // The Media Testing Lab (owner/manager only): upload a price-table / odometer /
@@ -107,11 +108,22 @@ export async function POST(req: Request) {
     llmAllowed: true,
   });
 
+  // The Gap Validator: did this media give the negotiation what it needs, and
+  // what is still missing (deposit tiers, mileage, condition...)?
+  const gaps = await assessMediaGaps({
+    kind,
+    extraction,
+    rfq,
+    history,
+    llmAllowed: true,
+  });
+
   return NextResponse.json({
     kind,
     transcript,
     extraction,
     coherence,
+    gaps,
     note,
     visionAttempts,
     floor: floor ? { floor: floor.floor, typical: floor.typical, currency: floor.currency } : null,

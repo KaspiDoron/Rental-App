@@ -39,9 +39,15 @@ export function directorSystemPrompt(instructions: string): string {
     "wait-defer to postpone the WHOLE decision (other shops may answer meanwhile and change " +
     "the leverage).\n" +
     "- Use a lower rival offer honestly; NEVER invent one.\n" +
+    "- The LEGAL moves are listed in the launch playbook's priority order - take the FIRST one " +
+    "unless you have a strong strategic reason to deviate (say it in reasoning).\n" +
+    "- NEVER settle, probe terms, or present while the quote is still far above the real market " +
+    "floor, bargain rounds remain and the shop has not said last price - PUSH THE PRICE FIRST. " +
+    "Accepting an opening quote near double the floor is the one unforgivable mistake.\n" +
     "- Before the traveller sees an offer we must know price, deposit (prefer cash over " +
     "passport) and fulfillment - prioritize probe moves when those are missing.\n" +
     "- Stop pushing the INSTANT the shop says last price / cannot lower, or sounds annoyed; close warmly instead.\n" +
+    "- High mileage or visible scratches/damage from photos are honest, polite leverage.\n" +
     (instructions ? `OWNER GUIDANCE: ${instructions}\n` : "") +
     'Reply ONLY as JSON: { "edgeId": string|null, "action": "act"|"wait-hold"|"wait-defer"|"silent", ' +
     '"waitMinutes": number, "leverageNote": string, "reasoning": string }. ' +
@@ -107,6 +113,8 @@ export async function runDirector(args: {
     `bargain rounds used ${f.rounds}/${settings.maxRoundsPerShop}`,
     f.firmCount ? `shop held firm ${f.firmCount}x` : "",
     f.toneDegraded ? "shop tone: annoyed - stop pushing" : "",
+    f.mileageKm ? `photo showed mileage ${f.mileageKm} km` : "",
+    f.conditionNotes ? `photo condition: ${f.conditionNotes}` : "",
   ]
     .filter(Boolean)
     .join(" | ");

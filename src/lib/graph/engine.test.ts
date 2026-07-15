@@ -266,18 +266,20 @@ describe("engine end-to-end (deterministic)", () => {
 
     const r1 = await t("250 per day, high season now.", extraction({ pricePerDay: 250 }), 250, 200);
     expect(r1.action).toBe("bargain");
+    // The playbook opener asks the FLOOR itself (150), not a compromise.
+    expect(bag.getState().fields.lastTarget).toBe(150);
 
-    // The shop concedes to 170 with no firm signal - a second, softer push is
-    // exactly what the Shop C human did ("if you give lower I come").
+    // The shop concedes to 170 - that already BEATS our round-1 ask of
+    // floor+15% (~173), so pushing again would be irrational: the playbook
+    // moves straight to collecting the missing deal term (the deposit).
     const r2 = await t(
       "Okay, I give you 170 per day. You come pick up at shop.",
       extraction({ pricePerDay: 170, onShopOnly: true }),
       170
     );
-    expect(r2.action).toBe("bargain");
+    expect(r2.action).toBe("deposit-probe");
 
-    // An explicit "last price" ends the price push instantly; the deposit came
-    // back passport-only, so the next move is the polite cash push.
+    // Passport-only comes back - the polite one-time cash push follows.
     const r3 = await t(
       "Cannot lower, 170 last price. Passport deposit only.",
       extraction({ found: false, shopFirm: true, depositType: "passport", deposit: "Passport only" }),
@@ -295,6 +297,36 @@ describe("engine end-to-end (deterministic)", () => {
     expect(["present", "close"]).toContain(r4.action);
     expect(bag.getState().fields.presented).toBe(true);
     expect(bag.getState().fields.fulfillment).toBe("on-shop");
+  });
+
+  it("a firm line BEFORE any price never freezes the bargain (owner's screenshot bug)", async () => {
+    // "Cannot lower, last price" arrived before any number existed - that must
+    // NOT count as firm, and the 300-vs-150-floor quote right after MUST be
+    // pushed, not accepted.
+    const bag = makeIO(seed());
+    await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "Cannot lower, last price", images: [], audios: [] },
+        extraction: extraction({ found: false, shopFirm: true }),
+        usablePrice: undefined,
+      }),
+      bag.io,
+      spec
+    );
+    expect(bag.getState().fields.firmCount).toBe(0);
+
+    const r2 = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "300 per day", images: [], audios: [] },
+        extraction: extraction({ pricePerDay: 300 }),
+        usablePrice: 300,
+      }),
+      bag.io,
+      spec
+    );
+    expect(r2.action).toBe("bargain");
+    // The opener asks the real floor itself.
+    expect(bag.getState().fields.lastTarget).toBe(150);
   });
 
   it("a closed session stays completely silent", async () => {

@@ -98,6 +98,17 @@ describe("concession ladder (computeRoundTarget)", () => {
     const t = computeRoundTarget({ quoted: 500, floorPrice: 200, rivalPrice: 300, rounds: 0 });
     expect(t).toBeLessThanOrEqual(300);
   });
+  it("round 0 asks the REAL floor itself (the playbook opener)", () => {
+    expect(computeRoundTarget({ quoted: 300, floorPrice: 160, rounds: 0 })).toBe(160);
+  });
+  it("round 1 comes back ~15% above the floor, as a clean round number", () => {
+    const t = computeRoundTarget({ quoted: 300, floorPrice: 160, rounds: 1, lastTarget: 160 });
+    expect(t).toBe(185); // 160 * 1.15 = 184 -> nice 185
+  });
+  it("never re-asks below an earlier ask (the ladder concedes upward)", () => {
+    const t = computeRoundTarget({ quoted: 300, floorPrice: 100, rounds: 1, lastTarget: 200 });
+    expect(t).toBeGreaterThanOrEqual(200);
+  });
 });
 
 describe("global uniqueness", () => {

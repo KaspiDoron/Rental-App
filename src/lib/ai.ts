@@ -124,7 +124,7 @@ async function allProviders(): Promise<ProviderConfig[]> {
       // gemini-2.0-flash lost its free tier (limit 0). 2.5-flash still has a
       // free tier; 2.5-flash-lite is the higher-quota fallback.
       model: "gemini-2.5-flash",
-      fallbackModel: "gemini-2.5-flash-lite",
+      fallbackModel: "gemini-flash-latest",
     },
   ];
 }
@@ -410,7 +410,15 @@ const GROQ_VISION_MODELS = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "meta-llama/llama-4-maverick-17b-128e-instruct",
 ];
-const GEMINI_VISION_MODELS = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+// gemini-2.5-flash-lite 404s for NEW API keys ("no longer available to new
+// users" - seen verbatim in the owner's Media Lab), so the rolling aliases
+// come right after the pinned primary.
+const GEMINI_VISION_MODELS = [
+  GEMINI_MODEL,
+  "gemini-flash-latest",
+  "gemini-flash-lite-latest",
+  "gemini-2.0-flash",
+];
 
 /**
  * Vision chat: text + images (raw base64+mime). Tries every Gemini vision
@@ -549,7 +557,7 @@ export async function chatGrounded(
   const key = await getConfig("GEMINI_TOKEN");
   if (!key) return null;
   // 2.5-flash supports the google_search tool; lite is the higher-quota fallback.
-  const models = [GEMINI_MODEL, "gemini-2.5-flash-lite"];
+  const models = [GEMINI_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest"];
   for (const model of models) {
     try {
       const res = await fetchWithTimeout(

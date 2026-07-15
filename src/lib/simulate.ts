@@ -483,7 +483,11 @@ async function aiShopReply(args: {
         content:
           `${(args.persona ?? "").trim() || DEFAULT_PERSONA}\n` +
           "Reply with ONE short WhatsApp message AS THE SHOP - no quotes, no explanations, " +
-          "never break character, never mention being an AI.",
+          "never break character, never mention being an AI.\n" +
+          "PRICE DISCIPLINE (critical): a real shop NEVER lowers its price unprompted. " +
+          "Only concede when the traveller explicitly pushed back on price or named a rival " +
+          "offer - and then concede in SMALL steps toward your real bottom, never below it. " +
+          "If the traveller did not push, repeat or defend your last price.",
       },
       {
         role: "user",

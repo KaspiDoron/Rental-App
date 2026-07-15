@@ -587,14 +587,16 @@ export async function composeBargain(opts: {
 }> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
   // Sane target: the market floor when we know it, otherwise a modest 15% cut.
-  // Clamped so we never ask below the floor or below 60% of the quote.
+  // The REAL floor is the honest lower bound - when we know it we may ask it
+  // outright (the playbook's first push IS the floor); only without a floor
+  // does the 60%-of-quote guard protect against absurd lowballs.
   const quoted = opts.currentPricePerDay;
   let target = opts.targetPricePerDay;
   if (!target && quoted) {
     target = Math.round(quoted * 0.85);
   }
   if (target && quoted) {
-    const lowest = Math.max(opts.floorPricePerDay ?? 0, Math.round(quoted * 0.6));
+    const lowest = opts.floorPricePerDay ?? Math.round(quoted * 0.6);
     if (target < lowest) target = lowest;
     // Ask for a clean, human number (220, not 213) - odd figures read as robotic
     // and weaken the ask.
@@ -631,14 +633,29 @@ export async function composeBargain(opts: {
           opts.rfq.vehicleClass
         )} for ${opts.rfq.durationDays} day(s)`;
 
+  // Round-aware playbook directives - the owner's launch scripts, generalized.
+  const roundPlay =
+    opts.round <= 0
+      ? `FIRST PUSH (the owner's playbook): their opening quote is above the fair local price. ` +
+        `Use the rental DAYS as leverage: warmly apologize that the quote is really expensive for you, ` +
+        `mention you are renting for ${opts.rfq.durationDays} days (a long time), and ask for the target ` +
+        `price per day like a friend would. The SHAPE to follow (NEVER these exact words - always fresh phrasing): ` +
+        `"oh so sorry, <their price> is really expensive for me. I rent for <days> days, long time. ` +
+        `Can you give me <target> a day my friend? <one warm emoji>". `
+      : opts.round === 1
+      ? `SECOND PUSH: they refused the first ask ("cannot give that price"). Come back relaxed and friendly ` +
+        `with the new, slightly higher round-number target - meet them partway, make it feel easy to say yes, ` +
+        `hint you are ready to book today. Never apologize twice, never sound needy. `
+      : `FINAL NUDGE: one last tiny, warm ask at the target - fully relaxed, zero pressure, ` +
+        `and make clear you are happy either way. `;
+
   const system =
     "You write ONE short WhatsApp message from a real human traveller chatting " +
     "with a rental shop. Rules: plain text only, no markdown, no asterisks, no " +
     "emoji spam (max one), 1-3 sentences, warm and polite, never robotic, never " +
     "mention an app or assistant. Never invent prices we were not given. " +
-    "ASK-ONCE DISCIPLINE: this is our ONE and ONLY price ask for this shop - " +
-    "make it friendly and easy to say yes to, and make clear we're happy either " +
-    "way. Never pressure, never repeat a question the shop already answered. " +
+    roundPlay +
+    "Never repeat a question the shop already answered. " +
     (opts.history
       ? "Conversation so far (oldest first) - do NOT re-ask anything answered here:\n" +
         opts.history +
@@ -646,7 +663,7 @@ export async function composeBargain(opts: {
       : "") +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
     (target
-      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(Math.max(opts.floorPricePerDay ?? target, Math.round((quoted ?? target) * 0.6)), cur)} - unrealistic lowballs insult the shop. `
+      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(opts.floorPricePerDay ?? Math.round((quoted ?? target) * 0.6), cur)} - unrealistic lowballs insult the shop. `
       : "Do NOT propose any specific number - just warmly ask for their best price. ") +
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
@@ -756,16 +773,24 @@ export async function composeBargain(opts: {
   const rival = opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : undefined;
   const days = opts.rfq.durationDays;
   const vt = vehicleTerm(opts.rfq.vehicleClass);
+  const q = quoted ? money(quoted, cur) : undefined;
   const fallbackPool = rival
     ? [
         `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${days} days?`,
         `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${days} days?`,
       ]
+    : t && opts.round <= 0
+    ? [
+        // The owner's opener: days as leverage, ask the floor, warm as a friend.
+        `Oh sorry${q ? `, ${q}` : ""} is really expensive for me 🫶 I'm renting ${days} days, long time - could you do ${t} a day my friend?`,
+        `Ah that's a bit much for me honestly! Since I take it for ${days} days, can you make it ${t}/day? Would book right away 🙏`,
+        `Ouch${q ? `, ${q}/day` : ""} is over my budget 😅 For ${days} days straight, would ${t} a day work? I'd confirm today.`,
+      ]
     : t
     ? [
-        `Thanks for the price! Since it's ${days} days, would ${t}/day be possible? If yes, I'm ready to confirm.`,
-        `That sounds close! For the full ${days} days, could you do ${t}/day? Happy to lock it in today if so.`,
-        `Thanks! I'm comparing a couple of places - if you could do ${t}/day for the ${days} days, you'd have a deal.`,
+        `Okay I understand! Let's meet in the middle - ${t}/day for the ${days} days and I book now? 🙂`,
+        `Fair enough! Could we say ${t}/day since it's ${days} full days? If yes I'm in.`,
+        `Got it - what about ${t}/day for the ${days} days? That would seal it for me today 🤝`,
       ]
     : [
         `Thanks! What's the very best daily rate you could do for the ${days} days? I'm ready to book if it works.`,
@@ -844,6 +869,13 @@ export interface ExtractedOffer {
   // Constrained fact tags (item #13) from the reply, e.g. "helmets-included".
   // Vocabulary is enforced in vendor-tags.ts; anything else is dropped.
   tags?: string[];
+  // ---- Extract-everything media fields (photos carry facts nobody asked yet) --
+  // Odometer reading in km when visible in a photo (never confused with price).
+  mileageKm?: number | null;
+  // Honest visible-condition note (scratches, worn tires, clean/new...).
+  conditionNotes?: string | null;
+  // 1-3 sentences listing EVERYTHING informative seen in the photo.
+  imageSummary?: string | null;
 }
 
 // Deterministic negotiation-signal readers - the no-LLM fallback AND the
@@ -954,14 +986,19 @@ export async function extractOffer(
     '"fuelPolicy": string|null, "imageKind": "vehicle"|"price_sheet"|"document"|"other"|null, ' +
     '"pickupOffered": boolean|null, "onShopOnly": boolean|null, ' +
     '"shopFirm": boolean|null, "shopTone": "warm"|"neutral"|"annoyed"|null, ' +
+    '"mileageKm": number|null, "conditionNotes": string|null, "imageSummary": string|null, ' +
     '"tags": string[] }. ' +
     "pickupOffered: true ONLY if the shop offered to come pick the TRAVELLER up " +
     "(by car or motorbike) and bring them to the shop - this is different from " +
     "delivering the vehicle; null when not mentioned. " +
     "onShopOnly: true only if the shop clearly said in-store only / come to the " +
     "shop / no delivery; null otherwise. " +
-    "shopFirm: true only if the shop is clearly refusing to lower the price " +
-    "('last price', 'cannot lower', 'fixed price'); null otherwise. " +
+    "CRITICAL for the signals pickupOffered/onShopOnly/shopFirm/shopTone: they " +
+    "describe ONLY the NEWEST reply above, NEVER earlier messages in the " +
+    "history. shopFirm: true only if THIS reply refuses to lower a price it " +
+    "already gave ('last price', 'cannot lower', 'fixed price'); a firm-sounding " +
+    "line with NO price quoted yet is null, and a reply that LOWERS the price " +
+    "is never firm. " +
     "shopTone: how the shop sounds in THIS reply - 'annoyed' if irritated or " +
     "telling us to stop asking, 'warm' if friendly, else 'neutral'. " +
     "imageKind: ONLY when a photo is attached, classify it - \"vehicle\" if it is " +
@@ -969,6 +1006,14 @@ export async function extractOffer(
     "prices/rates/a menu, \"document\" for papers/contracts/IDs, else \"other\"; " +
     "null when there is no image. If the photo is just the VEHICLE (no prices), " +
     "set found=false and do NOT invent a price - we will simply thank the shop. " +
+    "EXTRACT EVERYTHING FROM PHOTOS, even facts nobody asked about yet - they " +
+    "become leverage or save a question later: mileageKm = the odometer reading " +
+    "in km if visible (never a price); conditionNotes = a short honest note on " +
+    "visible condition (scratches, dents, worn tires, broken mirror, clean/new " +
+    "look, interior state for cars); imageSummary = 1-3 plain sentences listing " +
+    "EVERYTHING informative you can see (every model + its price, deposit lines, " +
+    "opening hours, phone numbers, shop name, insurance/helmet notes...). All " +
+    "three are null when there is no image or nothing visible. " +
     "PRICE-SHEET PHOTOS: rental shops post boards listing MANY models, each with " +
     "its own per-day price (e.g. Honda Click 125cc 300, Yamaha NMAX 155cc 500). " +
     "Pick the model row that MATCHES the traveller's request above (same class " +
@@ -1140,6 +1185,18 @@ export async function extractOffer(
       tags: Array.isArray(e.tags)
         ? e.tags.filter((t) => typeof t === "string").map((t) => t.toLowerCase().trim()).slice(0, 10)
         : [],
+      mileageKm:
+        typeof e.mileageKm === "number" && e.mileageKm > 0 && e.mileageKm < 1_000_000
+          ? Math.round(e.mileageKm)
+          : null,
+      conditionNotes:
+        typeof e.conditionNotes === "string" && e.conditionNotes.trim()
+          ? e.conditionNotes.trim().slice(0, 200)
+          : null,
+      imageSummary:
+        typeof e.imageSummary === "string" && e.imageSummary.trim()
+          ? e.imageSummary.trim().slice(0, 500)
+          : null,
       clarifyMessage: verifiedEnough
         ? undefined
         : e.clarifyMessage ||
