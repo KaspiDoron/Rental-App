@@ -33,6 +33,9 @@ export async function POST(req: Request) {
   const phone = String(body.phone ?? "").trim();
   const password = String(body.password ?? "");
   const acceptTerms = Boolean(body.acceptTerms);
+  // Two additional mandatory consents (WhatsApp ban risk + AI responsibility).
+  const acceptWaRisk = Boolean(body.acceptWaRisk);
+  const acceptAiResp = Boolean(body.acceptAiResp);
 
   if (!EMAIL_RX.test(email)) {
     return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
@@ -69,9 +72,9 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
-      if (!acceptTerms) {
+      if (!acceptTerms || !acceptWaRisk || !acceptAiResp) {
         return NextResponse.json(
-          { error: "Please accept the Terms of Use to continue." },
+          { error: "Please tick all three required consents to continue." },
           { status: 400 }
         );
       }
@@ -88,6 +91,8 @@ export async function POST(req: Request) {
           password,
           provider: "email",
           acceptedTerms: true,
+          acceptedWaRisk: true,
+          acceptedAiResp: true,
           plan: invitedPlan,
         });
         // fall through to sign the user in below
@@ -97,6 +102,8 @@ export async function POST(req: Request) {
           phone: phone || undefined,
           password,
           acceptedTerms: true,
+          acceptedWaRisk: true,
+          acceptedAiResp: true,
         });
         if (!started.ok) {
           return NextResponse.json({ error: started.error }, { status: started.cooldown ? 429 : 400 });

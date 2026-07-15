@@ -60,6 +60,8 @@ export async function POST(req: Request) {
       password: p.password,
       provider: "email",
       acceptedTerms: p.acceptedTerms,
+      acceptedWaRisk: p.acceptedWaRisk ?? p.acceptedTerms,
+      acceptedAiResp: p.acceptedAiResp ?? p.acceptedTerms,
       plan: invitedPlan,
     });
   }

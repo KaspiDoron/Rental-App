@@ -29,6 +29,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [acceptTerms, setAcceptTerms] = useState(false);
+  // Two extra mandatory, separately-ticked consents (WhatsApp ban risk + AI
+  // responsibility) required to create an account. All three are enforced
+  // server-side too.
+  const [acceptWaRisk, setAcceptWaRisk] = useState(false);
+  const [acceptAiResp, setAcceptAiResp] = useState(false);
   const [googleCredential, setGoogleCredential] = useState<string | null>(null);
   const [googleName, setGoogleName] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -148,7 +153,15 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, email, password, phone, acceptTerms }),
+        body: JSON.stringify({
+          mode,
+          email,
+          password,
+          phone,
+          acceptTerms,
+          acceptWaRisk,
+          acceptAiResp,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -204,7 +217,9 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          withProfile ? { credential, phone, acceptTerms } : { credential }
+          withProfile
+            ? { credential, phone, acceptTerms, acceptWaRisk, acceptAiResp }
+            : { credential }
         ),
       });
       const data = await res.json();
@@ -506,26 +521,58 @@ export default function LoginPage() {
                 </option>
               ))}
             </select>
-            <label className="mt-3 flex items-start gap-2.5 text-[13px] text-soft">
-              <input
-                type="checkbox"
-                checked={acceptTerms}
-                onChange={(e) => setAcceptTerms(e.target.checked)}
-                className="mt-0.5 h-5 w-5 accent-[var(--blue)]"
-                required
-              />
-              <span>
-                {t("I agree to the")}{" "}
-                <button
-                  type="button"
-                  onClick={() => setShowTerms(true)}
-                  className="font-extrabold text-brandblue underline"
-                >
-                  {t("Terms of Use")}
-                </button>{" "}
-                {t("and to the app using my phone's location to find rental shops near me.")}
-              </span>
-            </label>
+            <div className="mt-3 space-y-2.5">
+              <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
+                <input
+                  type="checkbox"
+                  checked={acceptTerms}
+                  onChange={(e) => setAcceptTerms(e.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
+                  required
+                />
+                <span>
+                  I have read and accept the{" "}
+                  <button
+                    type="button"
+                    onClick={() => setShowTerms(true)}
+                    className="font-extrabold text-brandblue underline"
+                  >
+                    Terms of Use and Privacy Policy
+                  </button>
+                  , including the liability cap, class-action waiver, and
+                  exclusive Tel Aviv, Israel jurisdiction.
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
+                <input
+                  type="checkbox"
+                  checked={acceptWaRisk}
+                  onChange={(e) => setAcceptWaRisk(e.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
+                  required
+                />
+                <span>
+                  I understand WheelDeal connects to WhatsApp with an unofficial
+                  method; Meta may block or <b>permanently ban</b> my number, and
+                  I assume 100% of that risk with zero liability to the Operator.
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
+                <input
+                  type="checkbox"
+                  checked={acceptAiResp}
+                  onChange={(e) => setAcceptAiResp(e.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
+                  required
+                />
+                <span>
+                  I understand the AI can make mistakes and I am solely
+                  responsible for every message it sends from my account; I have
+                  the right to process my contacts&apos; messages and will not
+                  submit sensitive data or use the service for spam.
+                </span>
+              </label>
+            </div>
           </>
         )}
 
@@ -540,7 +587,13 @@ export default function LoginPage() {
 
         <button
           type="submit"
-          disabled={status === "loading"}
+          disabled={
+            status === "loading" ||
+            // Signup (including Google-profile completion) requires all three
+            // mandatory consents. Login never shows them.
+            ((mode === "signup" || googleCredential !== null) &&
+              !(acceptTerms && acceptWaRisk && acceptAiResp))
+          }
           className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
         >
           {status === "loading" ? (

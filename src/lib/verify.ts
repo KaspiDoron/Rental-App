@@ -23,6 +23,8 @@ export interface PendingSignup {
   phone?: string;
   password?: string;
   acceptedTerms: boolean;
+  acceptedWaRisk?: boolean;
+  acceptedAiResp?: boolean;
 }
 
 function hashCode(email: string, code: string): string {

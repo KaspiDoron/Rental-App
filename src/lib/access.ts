@@ -37,6 +37,9 @@ export interface UserRecord {
   passwordHash?: string;
   mustChangePassword?: boolean;
   termsAcceptedAt?: number;
+  // The two additional mandatory consents (WhatsApp ban risk + AI responsibility).
+  waRiskAcceptedAt?: number;
+  aiResponsibilityAcceptedAt?: number;
   addedAt: number;
   lastSeen: number;
 }
@@ -95,6 +98,8 @@ interface UserRow {
   password_hash: string | null;
   must_change_password: boolean | null;
   terms_accepted_at: string | null;
+  wa_risk_accepted_at: string | null;
+  ai_responsibility_accepted_at: string | null;
   added_at: string | null;
   last_seen: string | null;
 }
@@ -112,6 +117,10 @@ function fromRow(r: UserRow): UserRecord {
     passwordHash: r.password_hash ?? undefined,
     mustChangePassword: Boolean(r.must_change_password),
     termsAcceptedAt: r.terms_accepted_at ? Date.parse(r.terms_accepted_at) : undefined,
+    waRiskAcceptedAt: r.wa_risk_accepted_at ? Date.parse(r.wa_risk_accepted_at) : undefined,
+    aiResponsibilityAcceptedAt: r.ai_responsibility_accepted_at
+      ? Date.parse(r.ai_responsibility_accepted_at)
+      : undefined,
     addedAt: r.added_at ? Date.parse(r.added_at) : Date.now(),
     lastSeen: r.last_seen ? Date.parse(r.last_seen) : Date.now(),
   };
@@ -120,26 +129,32 @@ function fromRow(r: UserRow): UserRecord {
 /** Write a record to Supabase. Returns false when the durable write failed. */
 async function mirror(rec: UserRecord): Promise<boolean> {
   remember(rec);
-  return sbInsert(
-    "app_users",
-    [
-      {
-        email: rec.email,
-        phone: rec.phone ?? null,
-        name: rec.name ?? null,
-        provider: rec.provider,
-        status: rec.status,
-        plan: dbPlan(rec.plan),
-        password_hash: rec.passwordHash ?? null,
-        must_change_password: rec.mustChangePassword ?? false,
-        terms_accepted_at: rec.termsAcceptedAt
-          ? new Date(rec.termsAcceptedAt).toISOString()
-          : null,
-        last_seen: new Date(rec.lastSeen).toISOString(),
-      },
-    ],
-    "email"
-  );
+  const base = {
+    email: rec.email,
+    phone: rec.phone ?? null,
+    name: rec.name ?? null,
+    provider: rec.provider,
+    status: rec.status,
+    plan: dbPlan(rec.plan),
+    password_hash: rec.passwordHash ?? null,
+    must_change_password: rec.mustChangePassword ?? false,
+    terms_accepted_at: rec.termsAcceptedAt ? new Date(rec.termsAcceptedAt).toISOString() : null,
+    last_seen: new Date(rec.lastSeen).toISOString(),
+  };
+  const withConsents = {
+    ...base,
+    wa_risk_accepted_at: rec.waRiskAcceptedAt ? new Date(rec.waRiskAcceptedAt).toISOString() : null,
+    ai_responsibility_accepted_at: rec.aiResponsibilityAcceptedAt
+      ? new Date(rec.aiResponsibilityAcceptedAt).toISOString()
+      : null,
+  };
+  // sbInsert fails silently on an unknown column, so before the consent-column
+  // migration runs the whole upsert (and thus signup) would break. Retry
+  // without the new columns so registration never depends on a pending
+  // migration - same graceful-degradation pattern used across the app.
+  const ok = await sbInsert("app_users", [withConsents], "email");
+  if (ok) return true;
+  return sbInsert("app_users", [base], "email");
 }
 
 // ---- CRUD ---------------------------------------------------------------------
@@ -179,6 +194,8 @@ export async function registerUser(u: {
   password?: string;
   provider: "email" | "google" | "dev";
   acceptedTerms: boolean;
+  acceptedWaRisk?: boolean;
+  acceptedAiResp?: boolean;
   plan?: PlanId;
 }): Promise<UserRecord> {
   const key = u.email.trim().toLowerCase();
@@ -202,6 +219,8 @@ export async function registerUser(u: {
         plan: u.plan ?? "free",
         passwordHash: u.password ? hashPassword(u.password) : undefined,
         termsAcceptedAt: u.acceptedTerms ? now : undefined,
+        waRiskAcceptedAt: u.acceptedWaRisk ? now : undefined,
+        aiResponsibilityAcceptedAt: u.acceptedAiResp ? now : undefined,
         addedAt: now,
         lastSeen: now,
       };

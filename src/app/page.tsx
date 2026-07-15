@@ -843,6 +843,13 @@ export default function Home() {
             />
           </label>
 
+          {/* Persistent AI + liability disclaimer across the funnel. */}
+          <p className="mt-2 text-center text-[10px] leading-relaxed text-faint">
+            {t("AI agents negotiate on your behalf and can make mistakes - final terms are always the shop's. WheelDeal is not a party to any rental.")}{" "}
+            <a href="/terms" className="underline">{t("Terms")}</a> ·{" "}
+            <a href="/privacy" className="underline">{t("Privacy")}</a>
+          </p>
+
           <button
             data-tour="find"
             onClick={startSearch}

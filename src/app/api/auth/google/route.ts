@@ -19,6 +19,8 @@ export async function POST(req: Request) {
   const credential = String(body.credential ?? "");
   const phone = String(body.phone ?? "").trim();
   const acceptTerms = Boolean(body.acceptTerms);
+  const acceptWaRisk = Boolean(body.acceptWaRisk);
+  const acceptAiResp = Boolean(body.acceptAiResp);
 
   if (!credential) {
     return NextResponse.json({ error: "Missing Google credential." }, { status: 400 });
@@ -63,14 +65,29 @@ export async function POST(req: Request) {
   const existing = await getUser(email, { fresh: true });
   const isNew = !existing;
   if (!existing && !isOwner(email)) {
-    if (!phone || !PHONE_RX.test(phone) || !acceptTerms) {
-      // Client should collect phone + terms, then re-post with the credential.
-      // Google accounts never need a password - Google is the credential.
+    if (!phone || !PHONE_RX.test(phone) || !acceptTerms || !acceptWaRisk || !acceptAiResp) {
+      // Client should collect phone + all three consents, then re-post with the
+      // credential. Google accounts never need a password - Google is the credential.
       return NextResponse.json({ needsSignup: true, email, name });
     }
-    await registerUser({ email, phone, name, provider: "google", acceptedTerms: true });
+    await registerUser({
+      email,
+      phone,
+      name,
+      provider: "google",
+      acceptedTerms: true,
+      acceptedWaRisk: true,
+      acceptedAiResp: true,
+    });
   } else if (!existing && isOwner(email)) {
-    await registerUser({ email, name, provider: "google", acceptedTerms: true });
+    await registerUser({
+      email,
+      name,
+      provider: "google",
+      acceptedTerms: true,
+      acceptedWaRisk: true,
+      acceptedAiResp: true,
+    });
   } else {
     await touchUser(email);
   }
