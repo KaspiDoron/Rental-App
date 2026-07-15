@@ -14,8 +14,8 @@ import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 // probes) and only appear on two tabs, so code-split them out of the initial
 // admin bundle - first paint of the common tabs no longer pays for them.
 const OrchestratorPanel = dynamic(
-  () => import("@/components/OrchestratorPanel").then((m) => m.OrchestratorPanel),
-  { ssr: false, loading: () => <LoadingDots label="Loading the agent pipeline" /> }
+  () => import("@/components/studio/PipelineStudio").then((m) => m.PipelineStudio),
+  { ssr: false, loading: () => <LoadingDots label="Loading the Pipeline Studio" /> }
 );
 const HealthPanel = dynamic(
   () => import("@/components/HealthPanel").then((m) => m.HealthPanel),
