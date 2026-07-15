@@ -355,3 +355,55 @@ VM can resume any user's session, so even a reboot never strands a traveller. If
 a truly free provider ever re-appears with no card, add it to the pool the same
 way (public image, port 8080, shared env + DB). A single ~$7/mo box running the
 same image is always a drop-in if you want zero setup.
+
+---
+
+## Digraph negotiation engine (v2) - what changed
+
+The AI reply pipeline is now a true **directed graph** of specialized agents
+(sense -> Negotiation Director -> act -> tail gates), not a fixed ladder. It is
+fully editable, testable and replayable from **Admin -> Agents (Pipeline
+Studio)**.
+
+**After deploying this build, run `supabase/schema.sql` once more** - it adds
+the engine's tables/columns (idempotent `create table if not exists` /
+`add column if not exists`, safe to re-run):
+`negotiation_threads`, `graph_wakeups`, `agent_scores`,
+`agent_traces.node_id/edge_id`, `offers.presentable/fulfillment`, and the
+`app_users` consent columns (`wa_risk_accepted_at`,
+`ai_responsibility_accepted_at`). Everything degrades gracefully before the
+migration runs (the code retries writes without the new columns), but the
+Studio replay, scores and deal-completeness chips need the tables.
+
+**Config knobs (Admin -> Agents -> Pipeline Studio):**
+- Add/rewire nodes and edges, edit each agent's instructions, add custom LLM
+  nodes - all hot-applied, no redeploy.
+- Settings: max bargain rounds/shop (default 3), strategic-wait cap, judge
+  sample rate, warm-emoji tone.
+- **Kill switch:** set `GRAPH_ENGINE=off` in Keys to fall back to the legacy
+  inline pipeline for one release if needed.
+
+**Voice notes:** shops' WhatsApp voice notes are transcribed with Groq
+`whisper-large-v3` (heavy-accent primed) - add a **`GROQ_TOKEN`** in Keys.
+Falls back to Gemini audio, then a polite "please type it" reply.
+
+**Testing (Admin -> Agents):**
+- *Simulator* - dry-run the real engine on any shop reply / preset scenario and
+  see the exact traversed node path.
+- *Replay* - real inbound decisions, each replaying its graph path + judge
+  scores.
+- *Media Lab* - upload a price-table / odometer / vehicle image OR a voice note
+  and see exactly what the vision/transcription agent read + the coherence
+  verdict.
+
+**Email test (Admin -> Keys):** "Send live test email" fires a real message
+through the Gmail -> Brevo -> Resend chain to your own address and reports which
+provider handled it + the exact error/fix.
+
+**Location:** the traveller now defaults to "My location" (GPS on load), and
+address autocomplete uses Google Places (New) Autocomplete with session tokens.
+Keep the `GOOGLE_MAPS_API_KEY` in Keys and enable "Places API (New)".
+
+**Legal:** public `/terms` and `/privacy` pages, three mandatory signup
+consents (enforced server-side), and disclaimers across the funnel. Set the real
+legal entity name in `OPERATOR_NAME` (`src/lib/legal.ts`) when you have one.
