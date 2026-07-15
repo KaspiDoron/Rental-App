@@ -36,6 +36,10 @@ export function BookingSheet({
   // Honest notify state: we only SAY the shop was told if it really was.
   const [notify, setNotify] = useState<"sending" | "sent" | "queued" | "failed" | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // The wa.me deep link to the shop's chat + whether WheelDeal disconnected the
+  // traveller's WhatsApp on close (they continue in their own app).
+  const [waLink, setWaLink] = useState<string | null>(null);
+  const [disconnected, setDisconnected] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -93,33 +97,30 @@ export function BookingSheet({
       }),
     }).catch(() => {});
 
-    // ACTUALLY tell the shop - a locked deal the shop never heard about is a
-    // traveller standing in front of a confused owner. The message matches the
-    // real arrangement: delivery says where, pickup says "I'll come by".
+    // Close the deal: the engine's closing-message node tells the shop, then we
+    // DISCONNECT the traveller's WhatsApp so they continue in their own app.
     setNotify("sending");
     try {
-      const price = vendor.offer
-        ? ` at the price we agreed (${moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day)`
-        : "";
-      const arrange =
-        fulfillment === "hotel-delivery"
-          ? `Could you deliver it to ${address.trim()} on ${pickupDate} around ${time}?`
-          : `I'll come by on ${pickupDate} around ${time}.`;
-      const res = await fetch("/api/outreach", {
+      const res = await fetch("/api/negotiate/close-deal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
-          vendorId: vendor.id,
-          vendorName: vendor.name,
-          message: `Great news - I'd like to confirm the rental${price}! ${arrange} See you then, thank you!`,
-          kind: "custom",
-          openNow: vendor.openNow,
+          pricePerDay: vendor.offer?.pricePerDay,
+          currency: vendor.offer?.currency,
+          fulfillment:
+            fulfillment === "hotel-delivery"
+              ? "delivery"
+              : vendor.offer?.fulfillment ?? "on-shop",
+          when: `${pickupDate} around ${time}`,
+          address: fulfillment === "hotel-delivery" ? address.trim() : undefined,
         }),
       });
       const d = await res.json();
-      setNotify(d.sent ? "sent" : d.queued ? "queued" : "failed");
+      setNotify(d.sent ? "sent" : "queued");
+      setDisconnected(Boolean(d.disconnected));
+      setWaLink(d.waLink ?? (vendor.whatsapp ? `https://wa.me/${vendor.whatsapp.replace(/[^\d]/g, "")}` : null));
     } catch {
       setNotify("failed");
     }
@@ -262,6 +263,34 @@ export function BookingSheet({
             </label>
           </div>
 
+          {/* The full deal you are about to close, so there are no surprises. */}
+          <div className="mt-3 rounded-2xl border-2 border-brandblue/30 bg-brandblue-soft p-3 text-[12px]">
+            <div className="font-extrabold text-strong">Do you really want to close this deal?</div>
+            <div className="mt-1.5 space-y-0.5 text-soft">
+              {vendor.offer && (
+                <div>
+                  💰 <span className="font-bold text-strong">{moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day</span>
+                  {" · "}
+                  {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} total ({durationDays}d)
+                </div>
+              )}
+              {vendor.offer?.deposit && <div>🔒 Deposit: {vendor.offer.deposit}</div>}
+              <div>
+                {fulfillment === "hotel-delivery"
+                  ? `🛵 Delivery to ${address.trim() || "your stay"}`
+                  : vendor.offer?.fulfillment === "pickup"
+                  ? "🚗 The shop picks you up"
+                  : "🏪 Pick up at the shop"}
+              </div>
+              <div>📅 {pickupDate} around {time}</div>
+            </div>
+            <div className="mt-2 rounded-xl bg-card p-2 text-[11px] font-bold text-brandblue">
+              After you confirm, we send the shop a final message and disconnect
+              WheelDeal from your WhatsApp - you continue the chat in your own
+              WhatsApp. You can reconnect anytime from Profile.
+            </div>
+          </div>
+
           {/* Liability acknowledgement - required before any deal is locked. */}
           <label className="mt-3 flex items-start gap-2 rounded-2xl bg-card2 p-2.5 text-[11px] leading-relaxed text-soft">
             <input
@@ -274,8 +303,10 @@ export function BookingSheet({
               I understand that WheelDeal only connects me with independent
               rental shops and takes NO responsibility whatsoever for the
               vehicle, its condition, pricing, insurance, deposits, accidents,
-              damages, disputes or the rental transaction itself. The agreement
-              is strictly between me and the shop, at my own risk.
+              damages, disputes or the rental transaction itself. AI-negotiated
+              summaries may contain errors - I will verify all terms with the
+              shop. The agreement is strictly between me and the shop, at my own
+              risk.
             </span>
           </label>
           <button
@@ -284,11 +315,11 @@ export function BookingSheet({
             className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-2.5 text-sm disabled:opacity-50"
           >
             {submitting ? (
-              <LoadingDots light label="Saving & messaging the shop" />
+              <LoadingDots light label="Closing the deal & messaging the shop" />
             ) : fulfillment === "hotel-delivery" && !deliveryReady ? (
               "Add a delivery address"
             ) : (
-              "Confirm booking"
+              "Yes, close this deal"
             )}
           </button>
         </div>
@@ -314,25 +345,50 @@ export function BookingSheet({
           )}
           {notify === "sent" && (
             <p className="mt-2 text-[12px] font-bold text-savings">
-              ✓ The shop was messaged your pickup time. Booking saved to your profile.
+              ✓ The shop was messaged that you want the deal. Booking saved to your profile.
             </p>
           )}
           {notify === "queued" && (
             <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[12px] font-bold text-brandblue">
-              🕒 The shop looks closed - your confirmation message is queued and
-              sends when they open. Booking saved to your profile.
+              🕒 The shop looks closed - your message is queued and sends when
+              they open. Booking saved to your profile.
             </p>
           )}
           {notify === "failed" && (
             <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
-              Booking saved, but the confirmation message could not be sent -
-              use &ldquo;Ask something custom&rdquo; on the card to tell the shop
-              your pickup time.
+              Booking saved, but the message could not be sent - open the chat
+              below and tell the shop yourself.
             </p>
           )}
+
+          {/* Handoff: continue in your OWN WhatsApp. WheelDeal has stepped out. */}
+          <div className="mt-3 rounded-2xl bg-card2 p-3 text-left text-[12px] text-soft">
+            <div className="font-extrabold text-strong">Finish in your WhatsApp 💬</div>
+            <p className="mt-1">
+              {disconnected
+                ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. "
+                : "Continue the conversation directly with the shop. "}
+              You can reconnect the agents anytime from{" "}
+              <a href="/profile" className="font-bold text-brandblue underline">
+                Profile
+              </a>
+              .
+            </p>
+            {waLink && (
+              <a
+                href={waLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-primary mt-2 block w-full rounded-xl py-2.5 text-center text-[13px]"
+              >
+                Open WhatsApp chat with {vendor.name}
+              </a>
+            )}
+          </div>
+
           <button
             onClick={onClose}
-            className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
+            className="btn mt-3 w-full rounded-2xl border-2 border-line py-2.5 text-sm font-bold text-soft"
           >
             Done
           </button>

@@ -308,6 +308,14 @@ export async function runGraphTurn(
     await io.clearWakeups(state.threadKey, "tick");
   }
   state = applyExtractionToState(state, input.extraction, input.usablePrice, input.currency);
+  // User-action events carry their own state facts (the app already gated the
+  // consent / close), so stamp them before the director evaluates.
+  if (input.event.kind === "user-consent-pickup") {
+    state = {
+      ...state,
+      fields: { ...state.fields, pickupOffered: true, pickupConsent: true },
+    };
+  }
   state.lastDecisionId = decisionId;
 
   // ---- sense traces ----------------------------------------------------------

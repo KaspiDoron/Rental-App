@@ -71,6 +71,16 @@ export interface Offer {
   deliveryFee?: number; // in the offer's currency; 0 = free delivery
   kmLimitPerDay?: number | "unlimited";
   fuelPolicy?: string; // e.g. "full-to-full", "same-to-same"
+  // How the traveller gets the vehicle, once the shop has told us (item: show
+  // the "on shop" / "delivery" / "pickup" chip only when confirmed).
+  fulfillment?: "pickup" | "delivery" | "on-shop";
+  // The deal is complete enough to PRESENT (price + deposit + fulfillment all
+  // known). undefined = unknown (legacy / pre-migration) -> treated as ready.
+  presentable?: boolean;
+  // The shop offered to come PICK THE TRAVELLER up; consent gates sharing the
+  // exact location with the shop.
+  pickupOffered?: boolean;
+  pickupConsent?: boolean;
   // Effective daily rate for the traveller's actual duration when the shop
   // quoted a better weekly/monthly rate (so long rentals do not collapse to a
   // single flat day price).

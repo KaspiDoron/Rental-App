@@ -518,6 +518,14 @@ export default function Home() {
                       depositType: r.depositType ?? v.offer?.depositType,
                       depositAmount: r.depositAmount ?? v.offer?.depositAmount,
                       depositCurrency: r.depositCurrency ?? v.offer?.depositCurrency,
+                      // Digraph engine: how the traveller gets the vehicle, deal
+                      // completeness gating, and pickup-consent status.
+                      fulfillment: r.fulfillment ?? v.offer?.fulfillment ?? undefined,
+                      presentable: r.presentable ?? v.offer?.presentable,
+                      pickupOffered:
+                        r.pickupOffered === true || v.offer?.pickupOffered === true || undefined,
+                      pickupConsent:
+                        r.pickupConsent === true || v.offer?.pickupConsent === true || undefined,
                     },
                   }
                 : v
@@ -617,6 +625,38 @@ export default function Home() {
 
   function applyOffer(vendorId: string, offer: Offer) {
     patchVendor(vendorId, { stage: "offer-received", offer });
+  }
+
+  // Pickup consent: the traveller approved sharing their EXACT location with a
+  // shop that offered to pick them up. Prefer a fresh precise GPS fix; fall back
+  // to the search origin's coordinates. The location is sent ONLY from here.
+  async function pickupConsent(vendor: Vendor): Promise<{ ok: boolean; reason?: string }> {
+    const coords = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+      if (!navigator.geolocation) return resolve(origin ? { lat: origin.lat, lng: origin.lng } : null);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(origin ? { lat: origin.lat, lng: origin.lng } : null),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    });
+    if (!coords) return { ok: false, reason: "no-location" };
+    try {
+      const res = await fetch("/api/negotiate/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: vendor.whatsapp || undefined,
+          placeId: vendor.placeId,
+          lat: coords.lat,
+          lng: coords.lng,
+        }),
+      });
+      const d = await res.json();
+      if (d.ok) patchVendor(vendor.id, { offer: { ...vendor.offer!, pickupConsent: true } });
+      return { ok: Boolean(d.ok), reason: d.reason };
+    } catch {
+      return { ok: false, reason: "network" };
+    }
   }
 
   async function customMessage(vendorId: string, message: string) {
@@ -1289,6 +1329,7 @@ export default function Home() {
                   onBargain={setBargainVendor}
                   onStage={(id, stage) => patchVendor(id, { stage })}
                   onCustomMessage={customMessage}
+                  onPickupConsent={pickupConsent}
                 />
               </div>
             ))}

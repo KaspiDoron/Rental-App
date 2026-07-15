@@ -29,6 +29,7 @@ export function VendorCard({
   onBargain,
   onStage,
   onCustomMessage,
+  onPickupConsent,
 }: {
   vendor: Vendor;
   rfq: StructuredRFQ | null;
@@ -45,6 +46,9 @@ export function VendorCard({
     vendorId: string,
     message: string
   ) => Promise<{ allowed: boolean; reason?: string; suggestion?: string }>;
+  // Pickup consent: the shop offered to pick the traveller up; sending the
+  // exact location happens ONLY after the traveller approves it here.
+  onPickupConsent?: (vendor: Vendor) => Promise<{ ok: boolean; reason?: string }>;
 }) {
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
@@ -65,6 +69,7 @@ export function VendorCard({
   );
   const askDone = alreadyAsked || rfqState === "sent" || rfqState === "queued";
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [pickupState, setPickupState] = useState<"idle" | "sending" | "shared" | "failed">("idle");
 
   const offer = vendor.offer;
   // The offer's own currency symbol - prices display in the shop's money.
@@ -392,6 +397,18 @@ export function VendorCard({
                           : t("Free delivery")}
                       </span>
                     )}
+                    {/* How the traveller gets the vehicle - only when the shop
+                        confirmed it. Delivery already shows via includesDelivery. */}
+                    {offer.fulfillment === "on-shop" && (
+                      <span className="rounded-full bg-card px-2 py-0.5 text-[9px] font-extrabold text-soft">
+                        🏪 {t("On shop")}
+                      </span>
+                    )}
+                    {offer.fulfillment === "pickup" && (
+                      <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">
+                        🚗 {t("Pickup offered")}
+                      </span>
+                    )}
                     {offer.includesInsurance && (
                       <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
                         🛡 {t("Insurance included")}
@@ -412,6 +429,59 @@ export function VendorCard({
                 </div>
               )}
             </div>
+
+            {/* Deal completeness: the agents keep confirming the deposit and
+                how you get the vehicle before the deal is fully ready. We never
+                hide the price - just flag what is still being confirmed. */}
+            {offer.presentable === false && (
+              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                💬 {t("Your agent is still confirming the deposit and how you get the vehicle.")}
+              </div>
+            )}
+
+            {/* Pickup consent: the shop offered to come get you. We share your
+                EXACT location only after you approve it here. */}
+            {offer.pickupOffered && !offer.pickupConsent && onPickupConsent && (
+              <div className="mt-2 rounded-xl border-2 border-brandblue/30 bg-brandblue-soft p-2.5">
+                <div className="text-[12px] font-bold text-brandblue">
+                  🚗 {t("This shop offers to pick you up. Share your exact location so they can come to you?")}
+                </div>
+                {pickupState === "shared" ? (
+                  <div className="mt-1.5 text-[11px] font-bold text-savings">
+                    ✓ {t("Location shared - the shop will arrange your pickup.")}
+                  </div>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={async () => {
+                        setPickupState("sending");
+                        const r = await onPickupConsent(vendor);
+                        setPickupState(r.ok ? "shared" : "failed");
+                      }}
+                      disabled={pickupState === "sending"}
+                      className="btn btn-primary flex-1 rounded-xl py-2 text-[12px] disabled:opacity-60"
+                    >
+                      {pickupState === "sending" ? (
+                        <LoadingDots light label={t("Sharing")} />
+                      ) : (
+                        `📍 ${t("Share my location")}`
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setPickupState("idle")}
+                      className="btn btn-sm rounded-xl border-2 border-line px-3 py-2 text-[12px] font-bold text-soft"
+                    >
+                      {t("No thanks")}
+                    </button>
+                  </div>
+                )}
+                {pickupState === "failed" && (
+                  <div className="mt-1.5 text-[11px] font-bold text-brandred">
+                    {t("Could not share your location - allow location access and retry.")}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-3 flex items-center gap-2">
               <button

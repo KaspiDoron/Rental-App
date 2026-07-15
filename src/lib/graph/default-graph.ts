@@ -136,7 +136,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
       "director",
       "pickup-location",
       14,
-      A([{ kind: "eventIs", event: "user-consent-pickup" }, { kind: "pickupConsentGiven" }]),
+      { kind: "eventIs", event: "user-consent-pickup" },
       "traveller approved sharing their location"
     ),
     e(

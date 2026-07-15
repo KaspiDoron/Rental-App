@@ -79,8 +79,49 @@ export async function GET(req: Request) {
     );
   }
 
+  // Merge the digraph engine's per-thread state so the card can show the
+  // fulfillment chip (delivery / pickup / on-shop), whether the deal is
+  // complete enough to PRESENT, and the pickup-consent status. Best-effort:
+  // before the migration this returns [] and the feed behaves exactly as
+  // before (offers show immediately).
+  interface ThreadRow {
+    vendor_id: string | null;
+    fields: {
+      fulfillment?: string;
+      depositType?: string;
+      depositNote?: string;
+      pricePerDay?: number;
+      pickupOffered?: boolean;
+      pickupConsent?: boolean;
+    } | null;
+  }
+  const threads = await sbSelect<ThreadRow>(
+    "negotiation_threads",
+    `select=vendor_id,fields&user_email=eq.${encodeURIComponent(
+      session.email
+    )}&order=updated_at.desc&limit=40`
+  ).catch(() => [] as ThreadRow[]);
+  const stateByVendor = new Map<string, ThreadRow["fields"]>();
+  for (const th of threads) {
+    if (th.vendor_id && !stateByVendor.has(th.vendor_id)) stateByVendor.set(th.vendor_id, th.fields);
+  }
+  const isComplete = (f: ThreadRow["fields"], depositLabel?: string | null) =>
+    Boolean(
+      f?.pricePerDay &&
+        (f?.depositType || f?.depositNote || depositLabel) &&
+        (f?.fulfillment === "pickup" || f?.fulfillment === "delivery" || f?.fulfillment === "on-shop")
+    );
+
   return NextResponse.json({
-    replies: rows.map((r) => ({
+    replies: rows.map((r) => {
+      const st = stateByVendor.get(r.vendor_id);
+      const fulfillment =
+        st?.fulfillment === "pickup" || st?.fulfillment === "delivery" || st?.fulfillment === "on-shop"
+          ? st.fulfillment
+          : r.delivers === true
+          ? "delivery"
+          : undefined;
+      return {
       id: r.id,
       vendorId: r.vendor_id,
       vendorName: r.vendor_name,
@@ -97,8 +138,14 @@ export async function GET(req: Request) {
       delivers: r.delivers ?? null,
       insuranceIncluded: r.insurance_included ?? null,
       deliveryFee: r.delivery_fee ?? null,
+      // Digraph engine state (undefined before migration -> card treats as ready).
+      fulfillment: fulfillment ?? null,
+      presentable: st ? isComplete(st, r.deposit) : undefined,
+      pickupOffered: st?.pickupOffered ?? null,
+      pickupConsent: st?.pickupConsent ?? null,
       createdAt: r.created_at,
-    })),
+      };
+    }),
   });
 }
 
