@@ -6,6 +6,8 @@ import { defaultGraphSpec } from "@/lib/graph/default-graph";
 import { CONDITION_VOCABULARY } from "@/lib/graph/conditions";
 import { GraphCanvas } from "./GraphCanvas";
 import { GraphList } from "./GraphList";
+import { FlowPanel } from "./FlowPanel";
+import { BackendPanel } from "./BackendPanel";
 import { NodeSheet } from "./NodeSheet";
 import { EdgeSheet } from "./EdgeSheet";
 import { SimulatorPanel } from "./SimulatorPanel";
@@ -14,13 +16,13 @@ import { MediaStudio } from "./MediaStudio";
 import { ScoresPanel } from "./ScoresPanel";
 import { LoadingDots } from "../LoadingDots";
 
-type Tab = "graph" | "simulator" | "replay" | "media" | "scores";
+type Tab = "flow" | "graph" | "simulator" | "replay" | "media" | "scores" | "backend";
 type Vocab = Parameters<typeof EdgeSheet>[0]["vocabulary"];
 
 // The Pipeline Studio - the owner's 100%-visibility, 100%-editable control
 // centre for the digraph negotiation engine. Replaces the old OrchestratorPanel.
 export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
-  const [tab, setTab] = useState<Tab>("graph");
+  const [tab, setTab] = useState<Tab>("flow");
   // Render the DEFAULT graph instantly (no round-trip) so the Agents tab is
   // interactive at once; hydrate with the owner's saved spec when it lands.
   const [spec, setSpec] = useState<GraphSpec>(() => defaultGraphSpec());
@@ -160,11 +162,13 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
   }, [replayPath]);
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: "graph", label: "🕸️ Graph" },
+    { id: "flow", label: "📖 Flow" },
+    { id: "graph", label: "🕸️ Pipeline" },
     { id: "simulator", label: "🧪 Simulator" },
     { id: "replay", label: "🎬 Replay" },
     { id: "media", label: "🖼️ Media Lab" },
     { id: "scores", label: "🏅 Scores" },
+    { id: "backend", label: "🔧 Backend" },
   ];
 
   return (
@@ -302,6 +306,14 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
       )}
       {tab === "media" && <MediaStudio />}
       {tab === "scores" && <ScoresPanel />}
+      {tab === "flow" && (
+        <FlowPanel
+          spec={spec}
+          onNode={(n) => setEditNode(n)}
+          onEdge={(e) => setEditEdge(e)}
+        />
+      )}
+      {tab === "backend" && <BackendPanel />}
 
       {editNode && (
         <NodeSheet

@@ -80,6 +80,15 @@ export async function POST(req: Request) {
     );
   }
 
+  // An all-nulls extraction on an image means NO vision model answered (not a
+  // bad photo). Say so explicitly - a silent shrug made a perfectly readable
+  // price sheet look like an agent failure.
+  const visionSilent =
+    kind === "image" && !extraction.found && !extraction.pricePerDay && !extraction.imageKind;
+  const note = visionSilent
+    ? "No vision model answered. Image reading needs a working GEMINI_TOKEN or GROQ_TOKEN in Keys (Groq Llama-4 vision is the fallback). Check both with the key Test buttons, then retry."
+    : undefined;
+
   const coherence = await validateMediaCoherence({
     kind,
     interpretation,
@@ -97,6 +106,7 @@ export async function POST(req: Request) {
     transcript,
     extraction,
     coherence,
+    note,
     floor: floor ? { floor: floor.floor, typical: floor.typical, currency: floor.currency } : null,
   });
 }

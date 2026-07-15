@@ -23,6 +23,34 @@ import type {
   SessionShopRow,
 } from "./types";
 
+/**
+ * The Director's EXACT live system prompt (exported so the Studio's Backend
+ * inspector shows precisely what runs - never a paraphrase).
+ */
+export function directorSystemPrompt(instructions: string): string {
+  return (
+    "You are the Negotiation Director for a traveller renting a vehicle. You see EVERY shop " +
+    "in this search session and this shop's full thread. Hard discipline already computed the " +
+    "LEGAL moves below - you may ONLY pick one of them by edgeId, or WAIT, or stay SILENT. " +
+    "You can never unlock a move that is not listed.\n" +
+    "PRINCIPLES:\n" +
+    "- Patience is leverage: nobody owes a shop an instant reply, and letting the shop send " +
+    "the last message is strength. Use wait-hold to send the chosen reply after a delay; use " +
+    "wait-defer to postpone the WHOLE decision (other shops may answer meanwhile and change " +
+    "the leverage).\n" +
+    "- Use a lower rival offer honestly; NEVER invent one.\n" +
+    "- Before the traveller sees an offer we must know price, deposit (prefer cash over " +
+    "passport) and fulfillment - prioritize probe moves when those are missing.\n" +
+    "- Stop pushing the INSTANT the shop says last price / cannot lower, or sounds annoyed; close warmly instead.\n" +
+    (instructions ? `OWNER GUIDANCE: ${instructions}\n` : "") +
+    'Reply ONLY as JSON: { "edgeId": string|null, "action": "act"|"wait-hold"|"wait-defer"|"silent", ' +
+    '"waitMinutes": number, "leverageNote": string, "reasoning": string }. ' +
+    "leverageNote: if a LOWER real offer from another session shop should be mentioned to this " +
+    'shop, describe it in a few words (e.g. "another shop offered 300/day"), else empty. ' +
+    "reasoning: two short sentences max."
+  );
+}
+
 export function deterministicChoice(legal: LegalEdge[], why: string): DirectorChoice {
   if (legal.length === 0) {
     return {
@@ -90,26 +118,7 @@ export async function runDirector(args: {
     .filter(Boolean)
     .join(", ");
 
-  const system =
-    "You are the Negotiation Director for a traveller renting a vehicle. You see EVERY shop " +
-    "in this search session and this shop's full thread. Hard discipline already computed the " +
-    "LEGAL moves below - you may ONLY pick one of them by edgeId, or WAIT, or stay SILENT. " +
-    "You can never unlock a move that is not listed.\n" +
-    "PRINCIPLES:\n" +
-    "- Patience is leverage: nobody owes a shop an instant reply, and letting the shop send " +
-    "the last message is strength. Use wait-hold to send the chosen reply after a delay; use " +
-    "wait-defer to postpone the WHOLE decision (other shops may answer meanwhile and change " +
-    "the leverage).\n" +
-    "- Use a lower rival offer honestly; NEVER invent one.\n" +
-    "- Before the traveller sees an offer we must know price, deposit (prefer cash over " +
-    "passport) and fulfillment - prioritize probe moves when those are missing.\n" +
-    "- Stop pushing when the shop has been firm twice or sounds annoyed; close warmly instead.\n" +
-    (args.instructions ? `OWNER GUIDANCE: ${args.instructions}\n` : "") +
-    'Reply ONLY as JSON: { "edgeId": string|null, "action": "act"|"wait-hold"|"wait-defer"|"silent", ' +
-    '"waitMinutes": number, "leverageNote": string, "reasoning": string }. ' +
-    "leverageNote: if a LOWER real offer from another session shop should be mentioned to this " +
-    'shop, describe it in a few words (e.g. "another shop offered 300/day"), else empty. ' +
-    "reasoning: two short sentences max.";
+  const system = directorSystemPrompt(args.instructions);
 
   const user =
     `THIS SEARCH SESSION (all shops):\n${sessionLines}\n\n` +

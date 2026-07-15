@@ -934,6 +934,15 @@ export async function extractOffer(
     "prices/rates/a menu, \"document\" for papers/contracts/IDs, else \"other\"; " +
     "null when there is no image. If the photo is just the VEHICLE (no prices), " +
     "set found=false and do NOT invent a price - we will simply thank the shop. " +
+    "PRICE-SHEET PHOTOS: rental shops post boards listing MANY models, each with " +
+    "its own per-day price (e.g. Honda Click 125cc 300, Yamaha NMAX 155cc 500). " +
+    "Pick the model row that MATCHES the traveller's request above (same class " +
+    "and closest cc) and return THAT price with found=true, matchesSpec=true and " +
+    "the model name in vehicleDescription. The sheet may be in ANY language " +
+    "(Thai, Hungarian, Indonesian...) - deposit lines like 'Letet: Utlevel vagy " +
+    "3000 Baht' mean 'Deposit: passport or 3000 baht', so read deposit tiers per " +
+    "model size too. Opening hours on the sheet (e.g. OPEN 08.00AM) are context, " +
+    "never a price. An odometer/mileage number (e.g. 45,000 km) is NEVER a price. " +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
     "vehicle. Combine the reply with the conversation history: if the vehicle " +
     "and daily price are both clear from the thread as a whole, set matchesSpec " +

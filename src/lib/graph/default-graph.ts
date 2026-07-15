@@ -67,7 +67,7 @@ export function defaultGraphNodes(): NodeSpec[] {
     // ---- chief ----
     n("director", "director", "Negotiation Director", "🧠", {
       instructions:
-        "You see EVERY shop in the search at once and this shop's full thread. Patience is leverage: you do not owe any shop an instant reply - when a shop says 'no deal', WAIT a few minutes to see if they break before you answer, and let the shop send the last message. Push toward the real ground-floor using the cheapest rival offer as leverage. Before showing the traveller a deal you must know price + deposit + how they get the vehicle. Prefer cash deposit over passport. Stop pushing once the shop is firm twice or sounds annoyed, then close warmly. Always warm, human, with a friendly 'my friend' tone and one emoji.",
+        "You see EVERY shop in the search at once and this shop's full thread. Patience is leverage: you do not owe any shop an instant reply - when a shop says 'no deal', WAIT a few minutes to see if they break before you answer, and let the shop send the last message. Push toward the real ground-floor using the cheapest rival offer as leverage. Before showing the traveller a deal you must know price + deposit + how they get the vehicle. Prefer cash deposit over passport. Stop pushing the instant the shop says last price / cannot lower, or sounds annoyed, then close warmly. Always warm, human, with a friendly 'my friend' tone and one emoji.",
     }),
     // ---- act ----
     n("answer", "answer", "Answer the shop", "💬", {
@@ -82,7 +82,7 @@ export function defaultGraphNodes(): NodeSpec[] {
     }),
     n("bargain", "bargain", "Bargainer", "🥊", {
       instructions:
-        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors near the floor; round 2 softens and meets closer to their new number; the final round is a tiny nudge. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). Never push after they are firm twice or annoyed.",
+        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors near the floor; round 2 softens and meets closer to their new number; the final round is a tiny nudge. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). Never push after an explicit last price / cannot lower, or when they sound annoyed.",
     }),
     n("deposit-probe", "deposit-probe", "Deposit Negotiator", "🛂", {
       maxRunsPerThread: 3,
@@ -231,7 +231,9 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "priceAtOrBelowFloor", value: false },
         { kind: "targetIsRealSaving", value: true },
         { kind: "roundsBelow" }, // settings.maxRoundsPerShop
-        { kind: "notG", of: { kind: "firmCountAtLeast", min: 2 } },
+        // ONE explicit firm signal ("last price", "cannot lower") ends the
+        // price push - in the launch playbook nobody bargains past it.
+        { kind: "notG", of: { kind: "firmCountAtLeast", min: 1 } },
         { kind: "notG", of: { kind: "toneDegraded" } },
       ]),
       "push toward the floor (round-aware)"

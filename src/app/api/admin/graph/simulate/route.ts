@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { simulatePipeline, SIM_SCENARIOS, type SimInput } from "@/lib/simulate";
+import {
+  simulatePipeline,
+  simulateConversation,
+  SIM_SCENARIOS,
+  CONVERSATION_SCRIPTS,
+  type SimInput,
+} from "@/lib/simulate";
 
 // Dry-run the REAL digraph engine against a hypothetical shop reply / preset
 // scenario, returning the exact traversed node path + every stage's trace -
@@ -10,6 +16,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   return NextResponse.json({
     scenarios: SIM_SCENARIOS.map((s) => ({ id: s.id, label: s.label, input: s.input })),
+    conversations: CONVERSATION_SCRIPTS.map((c) => ({ id: c.id, label: c.label })),
   });
 }
 
@@ -17,6 +24,20 @@ export async function POST(req: Request) {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const body = await req.json().catch(() => ({}));
+
+  // Full multi-turn negotiation playback (the Scenario Player): plays one of
+  // the owner's example shop scripts against the REAL engine, carrying state
+  // across turns, and returns every turn's path + reply + deal state.
+  if (body.action === "conversation") {
+    const script = CONVERSATION_SCRIPTS.find((c) => c.id === body.scriptId);
+    if (!script) return NextResponse.json({ error: "Unknown conversation script." }, { status: 400 });
+    const result = await simulateConversation({
+      turns: script.turns,
+      rfq: script.rfq,
+      region: script.region,
+    });
+    return NextResponse.json({ conversation: result, script: { id: script.id, label: script.label } });
+  }
 
   let input: SimInput;
   if (body.scenarioId) {

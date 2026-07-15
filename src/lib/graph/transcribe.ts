@@ -56,7 +56,7 @@ export function accentPrimerFor(region?: string): string {
   );
 }
 
-const TRANSCRIBE_SYSTEM =
+export const TRANSCRIBE_SYSTEM =
   "Transcribe this vehicle-rental voice note from a shop owner EXACTLY, word for word. " +
   "The speaker has a heavy local accent and speaks fast, casual English possibly mixed with " +
   "local words. Prices and numbers are the most important - get every digit right. " +

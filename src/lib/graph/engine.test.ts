@@ -231,6 +231,64 @@ describe("engine end-to-end (deterministic)", () => {
     expect(res.action).not.toBe("bargain");
   });
 
+  it("plays the whole Shop B script: bargain -> deposit -> cash push -> accept -> present", async () => {
+    // The owner's Shop B example, end to end with carried state:
+    //   "250/day" -> we bargain (rival 200 as leverage)
+    //   "170, you come pick up" -> price settles + on-shop known -> deposit probe
+    //   "Passport only" -> the cash push
+    //   "3000 cash is fine" -> deal complete -> present (no more pushing)
+    const bag = makeIO(seed());
+    const t = async (
+      shopMessage: string,
+      ex: ExtractedOffer,
+      usablePrice: number | undefined,
+      rival?: number
+    ) => {
+      bag.io.cheapestRival = async () => rival;
+      return runGraphTurn(
+        input({
+          event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage, images: [], audios: [] },
+          extraction: ex,
+          usablePrice,
+        }),
+        bag.io,
+        spec
+      );
+    };
+
+    const r1 = await t("250 per day, high season now.", extraction({ pricePerDay: 250 }), 250, 200);
+    expect(r1.action).toBe("bargain");
+
+    // The shop concedes to 170 with no firm signal - a second, softer push is
+    // exactly what the Shop C human did ("if you give lower I come").
+    const r2 = await t(
+      "Okay, I give you 170 per day. You come pick up at shop.",
+      extraction({ pricePerDay: 170, onShopOnly: true }),
+      170
+    );
+    expect(r2.action).toBe("bargain");
+
+    // An explicit "last price" ends the price push instantly; the deposit came
+    // back passport-only, so the next move is the polite cash push.
+    const r3 = await t(
+      "Cannot lower, 170 last price. Passport deposit only.",
+      extraction({ found: false, shopFirm: true, depositType: "passport", deposit: "Passport only" }),
+      undefined
+    );
+    expect(r3.action).toBe("deposit-probe"); // the cash push
+    expect(bag.getState().fields.cashAlternativeAsked).toBe(true);
+
+    const r4 = await t(
+      "Okay, 3000 cash is fine.",
+      extraction({ found: false, depositType: "cash", depositAmount: 3000, deposit: "3000 cash" }),
+      undefined
+    );
+    // Deal complete (170 + cash 3000 + on-shop) -> present, then a warm close.
+    expect(["present", "close"]).toContain(r4.action);
+    expect(bag.getState().fields.presented).toBe(true);
+    expect(bag.getState().fields.fulfillment).toBe("on-shop");
+  });
+
   it("a closed session stays completely silent", async () => {
     const { io, sends } = makeIO(seed());
     const res = await runGraphTurn(

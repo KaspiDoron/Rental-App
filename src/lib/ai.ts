@@ -391,40 +391,82 @@ export async function chatVision(
   images: { mime: string; base64: string }[]
 ): Promise<string | null> {
   const key = await getConfig("GEMINI_TOKEN");
-  if (!key) return null;
-  // Try the primary vision model, then the higher-quota lite model if the first
-  // is rate-limited/unavailable, so a busy free tier still reads the photo.
-  const models = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
-  for (const model of models) {
+  if (key) {
+    // Try the primary vision model, then the higher-quota lite model if the
+    // first is rate-limited/unavailable, so a busy free tier still reads it.
+    const models = [GEMINI_MODEL, "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    for (const model of models) {
+      try {
+        const res = await fetchWithTimeout(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: system }] },
+              contents: [
+                {
+                  role: "user",
+                  parts: [
+                    { text: userText },
+                    ...images.map((img) => ({
+                      inline_data: { mime_type: img.mime, data: img.base64 },
+                    })),
+                  ],
+                },
+              ],
+              generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+            }),
+          }
+        );
+        if (!res.ok) continue; // 429/404 - try the next model
+        const data = await res.json();
+        const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (out) return out;
+      } catch {
+        /* try next model */
+      }
+    }
+  }
+
+  // Groq vision fallback (Llama 4 Scout is multimodal): image reading must not
+  // depend on Gemini alone - most deployments have a GROQ_TOKEN. Images only;
+  // audio keeps its own Groq-Whisper path in graph/transcribe.ts.
+  const groq = await getConfig("GROQ_TOKEN");
+  const imageOnly = images.every((i) => (i.mime || "").startsWith("image/"));
+  if (groq && images.length > 0 && imageOnly) {
     try {
-      const res = await fetchWithTimeout(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system }] },
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: userText },
-                  ...images.map((img) => ({
-                    inline_data: { mime_type: img.mime, data: img.base64 },
-                  })),
-                ],
-              },
-            ],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
-          }),
-        }
-      );
-      if (!res.ok) continue; // 429/404 - try the next model
-      const data = await res.json();
-      const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (out) return out;
+      const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${groq}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          temperature: 0.2,
+          max_tokens: 700,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `${system}\n\n${userText}` },
+                ...images.map((img) => ({
+                  type: "image_url",
+                  image_url: { url: `data:${img.mime || "image/jpeg"};base64,${img.base64}` },
+                })),
+              ],
+            },
+          ],
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const out = data.choices?.[0]?.message?.content?.trim();
+        if (out) return out;
+      }
     } catch {
-      /* try next model */
+      /* no vision available */
     }
   }
   return null;

@@ -23,8 +23,23 @@ import { haversineKm } from "./geo";
 import { cacheGet, cacheSet, recordApi } from "./usage";
 import type { Vendor, VehicleClass, VendorReview } from "./types";
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_last_maps_key__: string | undefined;
+}
+
 export async function mapsKey(): Promise<string | undefined> {
-  return getConfig("GOOGLE_MAPS_API_KEY");
+  // Trim defensively: a key pasted into Vercel with a trailing newline/space
+  // breaks the X-Goog-Api-Key header while LOOKING configured.
+  const k = (await getConfig("GOOGLE_MAPS_API_KEY"))?.trim();
+  if (k) {
+    // Last-known-good memo: if a later Supabase config read hiccups on this
+    // instance (cold start, transient network), the key must NOT vanish -
+    // that intermittent loss is what made autocomplete "randomly" empty.
+    globalThis.__wd_last_maps_key__ = k;
+    return k;
+  }
+  return globalThis.__wd_last_maps_key__;
 }
 
 const NEW_BASE = "https://places.googleapis.com/v1";
