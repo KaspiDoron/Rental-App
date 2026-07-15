@@ -20,8 +20,8 @@ export interface Layout {
   layers: number;
 }
 
-const NODE_W = 150;
-const NODE_H = 54;
+const NODE_W = 156;
+const NODE_H = 58;
 
 export function layoutGraph(spec: GraphSpec, vertical: boolean): Layout {
   const ids = spec.nodes.map((n) => n.id);
@@ -32,26 +32,25 @@ export function layoutGraph(spec: GraphSpec, vertical: boolean): Layout {
     outAdj.set(id, []);
     inDeg.set(id, 0);
   }
-  // "inbound" is the virtual entry; treat edges from it as roots.
+  // "inbound" is a real entry node (kind "entry") in the spec, so its edges are
+  // kept - dropping them made every node it points to a layer-0 root that then
+  // OVERLAPPED the inbound node. We only skip self-loops and the present->
+  // director back-edge (a cycle) so layering terminates.
   const enabledEdges = spec.edges.filter((e) => e.enabled !== false);
+  const BACK_EDGES = new Set(["t-present-back"]);
   for (const e of enabledEdges) {
-    if (!idSet.has(e.to)) continue;
-    if (e.from === "inbound") continue; // virtual source
-    if (!idSet.has(e.from)) continue;
+    if (!idSet.has(e.to) || !idSet.has(e.from)) continue;
+    if (e.from === e.to) continue;
+    if (BACK_EDGES.has(e.id)) continue;
     outAdj.get(e.from)!.push(e.to);
     inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1);
   }
 
-  // Longest-path layering from roots (nodes with no real in-edges, plus the
-  // targets of inbound edges). BFS relaxation; cycles are broken by the visited
-  // guard so a back-edge (present -> director) never loops forever.
+  // Longest-path layering from roots. BFS relaxation; a visited guard breaks any
+  // residual cycle so it never loops forever.
   const layer = new Map<string, number>();
   for (const id of ids) layer.set(id, 0);
-  const roots = ids.filter(
-    (id) =>
-      inDeg.get(id) === 0 ||
-      enabledEdges.some((e) => e.from === "inbound" && e.to === id)
-  );
+  const roots = ids.filter((id) => (inDeg.get(id) ?? 0) === 0);
   const queue = [...new Set(roots.length ? roots : ids.slice(0, 1))];
   const seen = new Set<string>();
   let guard = 0;
@@ -75,24 +74,28 @@ export function layoutGraph(spec: GraphSpec, vertical: boolean): Layout {
   const buckets: string[][] = Array.from({ length: maxLayer + 1 }, () => []);
   for (const id of ids) buckets[layer.get(id) ?? 0].push(id);
 
-  // One barycenter ordering pass: order each layer by the average position of
-  // its predecessors in the previous layer (reduces edge crossings).
+  // A couple of barycenter ordering passes reduce edge crossings (within-layer
+  // order follows the average position of predecessors in the layer above).
   const pos = new Map<string, number>();
   buckets[0].forEach((id, i) => pos.set(id, i));
-  for (let L = 1; L < buckets.length; L++) {
-    const prevPos = (id: string) => pos.get(id) ?? 0;
-    buckets[L].sort((a, b) => {
-      const pa = enabledEdges.filter((e) => e.to === a).map((e) => prevPos(e.from));
-      const pb = enabledEdges.filter((e) => e.to === b).map((e) => prevPos(e.from));
-      const ba = pa.length ? pa.reduce((s, x) => s + x, 0) / pa.length : 0;
-      const bb = pb.length ? pb.reduce((s, x) => s + x, 0) / pb.length : 0;
-      return ba - bb;
-    });
-    buckets[L].forEach((id, i) => pos.set(id, i));
+  for (let pass = 0; pass < 2; pass++) {
+    for (let L = 1; L < buckets.length; L++) {
+      const prevPos = (id: string) => pos.get(id) ?? 0;
+      buckets[L] = [...buckets[L]].sort((a, b) => {
+        const pa = enabledEdges.filter((e) => e.to === a).map((e) => prevPos(e.from));
+        const pb = enabledEdges.filter((e) => e.to === b).map((e) => prevPos(e.from));
+        const ba = pa.length ? pa.reduce((s, x) => s + x, 0) / pa.length : 0;
+        const bb = pb.length ? pb.reduce((s, x) => s + x, 0) / pb.length : 0;
+        return ba - bb;
+      });
+      buckets[L].forEach((id, i) => pos.set(id, i));
+    }
   }
 
-  const gapMain = vertical ? 110 : 210; // between layers
-  const gapCross = vertical ? 170 : 78; // within a layer
+  // Generous spacing so 156px-wide cards never touch and the edge-condition
+  // chips have room to sit on the connector without covering a node.
+  const gapMain = vertical ? 132 : 230; // between layers (the flow direction)
+  const gapCross = vertical ? NODE_W + 26 : NODE_H + 40; // within a layer
   const nodes = new Map<string, LaidOutNode>();
   let maxCross = 0;
   for (let L = 0; L < buckets.length; L++) {

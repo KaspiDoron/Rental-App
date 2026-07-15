@@ -84,40 +84,47 @@ export function GraphCanvas({
 
           {/* edges */}
           {spec.edges
-            .filter((e) => e.enabled && nodesById.has(e.to) && (e.from === "inbound" || nodesById.has(e.from)))
-            .map((e) => {
+            .filter((e) => e.enabled && nodesById.has(e.to) && nodesById.has(e.from))
+            .map((e, i) => {
               const from = layout.nodes.get(e.from);
               const to = layout.nodes.get(e.to);
-              if (!to) return null;
-              // inbound (virtual) edges start just above/left of the target.
-              const sx = from ? from.x + STUDIO_NODE_W / 2 : to.x + STUDIO_NODE_W / 2;
-              const sy = from ? from.y + STUDIO_NODE_H : to.y - 30;
+              if (!to || !from) return null;
+              const backward = to.layer <= from.layer; // e.g. present -> director
+              const sx = from.x + STUDIO_NODE_W / 2;
+              const sy = from.y + STUDIO_NODE_H;
               const tx = to.x + STUDIO_NODE_W / 2;
               const ty = to.y;
               const midY = (sy + ty) / 2;
               const inPath = pathEdges.has(e.id);
               const dim = path && path.length > 0 && !inPath;
-              const mx = (sx + tx) / 2;
-              const my = (sy + ty) / 2;
+              // A backward/side edge bows out to the side so it never runs
+              // straight through the nodes stacked between its endpoints.
+              const bow = backward ? (i % 2 ? 70 : -70) : 0;
+              const d = backward
+                ? `M ${sx} ${sy} C ${sx + bow} ${midY}, ${tx + bow} ${midY}, ${tx} ${ty}`
+                : `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`;
+              const mx = (sx + tx) / 2 + bow / 2;
+              const my = midY;
               return (
                 <g key={e.id}>
                   <path
-                    d={`M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`}
+                    d={d}
                     fill="none"
                     stroke={inPath ? "var(--blue)" : "var(--line)"}
                     strokeWidth={inPath ? 3 : 1.5}
-                    strokeOpacity={dim ? 0.3 : 1}
+                    strokeOpacity={dim ? 0.25 : backward ? 0.5 : 0.9}
+                    strokeDasharray={backward ? "5 4" : undefined}
                     markerEnd={`url(#${dim ? "wd-arrow-dim" : "wd-arrow"})`}
                   />
-                  {e.label && onEdge && (
-                    <foreignObject x={mx - 55} y={my - 11} width={110} height={22}>
+                  {onEdge && !dim && (
+                    <foreignObject x={mx - 11} y={my - 11} width={22} height={22}>
                       <button
                         onClick={() => onEdge(e)}
-                        className="pointer-events-auto mx-auto block max-w-full truncate rounded-full border border-line bg-card px-2 py-0.5 text-[9px] font-bold text-soft hover:border-brandblue"
-                        style={{ opacity: dim ? 0.4 : 1 }}
                         title={e.label}
+                        aria-label={`Edit edge: ${e.label ?? e.id}`}
+                        className="pointer-events-auto flex h-[22px] w-[22px] items-center justify-center rounded-full border border-line bg-card text-[10px] text-soft hover:border-brandblue"
                       >
-                        {e.label}
+                        ✎
                       </button>
                     </foreignObject>
                   )}

@@ -5,6 +5,7 @@ import type { EdgeSpec, GraphSpec, NodeSpec } from "@/lib/graph/types";
 import { defaultGraphSpec } from "@/lib/graph/default-graph";
 import { CONDITION_VOCABULARY } from "@/lib/graph/conditions";
 import { GraphCanvas } from "./GraphCanvas";
+import { GraphList } from "./GraphList";
 import { NodeSheet } from "./NodeSheet";
 import { EdgeSheet } from "./EdgeSheet";
 import { SimulatorPanel } from "./SimulatorPanel";
@@ -25,6 +26,8 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
   const [spec, setSpec] = useState<GraphSpec>(() => defaultGraphSpec());
   const [vocab, setVocab] = useState<Vocab>(() => CONDITION_VOCABULARY as unknown as Vocab);
   const [vertical, setVertical] = useState(true);
+  // On phones the readable LIST view is the default; the SVG canvas is opt-in.
+  const [view, setView] = useState<"list" | "graph">("list");
   const [editNode, setEditNode] = useState<NodeSpec | null>(null);
   const [editEdge, setEditEdge] = useState<EdgeSpec | null>(null);
   const [replayPath, setReplayPath] = useState<string[] | undefined>();
@@ -198,18 +201,34 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
       {tab === "graph" && (
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
+            {/* List is the readable phone default; Graph is the SVG canvas. */}
+            <div className="flex rounded-lg border border-line p-0.5">
+              {(["list", "graph"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`btn btn-sm rounded-md px-2.5 py-1 text-[12px] font-bold ${
+                    view === v ? "bg-brandblue text-white" : "text-soft"
+                  }`}
+                >
+                  {v === "list" ? "☰ List" : "🕸 Graph"}
+                </button>
+              ))}
+            </div>
             <button onClick={addCustomNode} className="btn btn-sm rounded-lg border border-line px-2.5 py-1 text-[12px] font-bold text-brandblue">
               + Custom node
             </button>
             <button onClick={addEdge} className="btn btn-sm rounded-lg border border-line px-2.5 py-1 text-[12px] font-bold text-brandblue">
               + Edge
             </button>
-            <button
-              onClick={() => setVertical((v) => !v)}
-              className="btn btn-sm rounded-lg border border-line px-2.5 py-1 text-[12px] font-bold text-soft"
-            >
-              {vertical ? "↔ Horizontal" : "↕ Vertical"}
-            </button>
+            {view === "graph" && (
+              <button
+                onClick={() => setVertical((v) => !v)}
+                className="btn btn-sm rounded-lg border border-line px-2.5 py-1 text-[12px] font-bold text-soft"
+              >
+                {vertical ? "↔ Horizontal" : "↕ Vertical"}
+              </button>
+            )}
             {replayPath && (
               <button
                 onClick={() => setReplayPath(undefined)}
@@ -232,15 +251,24 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
             </div>
           </div>
 
-          <GraphCanvas
-            spec={spec}
-            vertical={vertical}
-            runCounts={runCounts}
-            path={replayPath}
-            selectedNode={editNode?.id}
-            onNode={(n) => setEditNode(n)}
-            onEdge={(e) => setEditEdge(e)}
-          />
+          {view === "list" ? (
+            <GraphList
+              spec={spec}
+              runCounts={runCounts}
+              onNode={(n) => setEditNode(n)}
+              onEdge={(e) => setEditEdge(e)}
+            />
+          ) : (
+            <GraphCanvas
+              spec={spec}
+              vertical={vertical}
+              runCounts={runCounts}
+              path={replayPath}
+              selectedNode={editNode?.id}
+              onNode={(n) => setEditNode(n)}
+              onEdge={(e) => setEditEdge(e)}
+            />
+          )}
 
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
             <Knob label="Max bargain rounds / shop" value={spec.settings.maxRoundsPerShop} min={1} max={6}

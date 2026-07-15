@@ -12,6 +12,11 @@ import { evalGraphCondition } from "./conditions";
 
 export const GRAPH_SPEC_VERSION = 2 as const;
 
+// Bump when the shipped default node prompts / edges change in a way that
+// should reach already-saved graphs. Currently informational (the sanitizer
+// backfills empty prompts on every load regardless).
+export const DEFAULT_GRAPH_REVISION = 2;
+
 export function defaultGraphSettings(): GraphSettings {
   return {
     maxStepsPerEvent: 8,
@@ -38,62 +43,97 @@ function n(
 
 export function defaultGraphNodes(): NodeSpec[] {
   return [
-    n("inbound", "entry", "Inbound event", "📥"),
+    n("inbound", "entry", "Inbound event", "📥", {
+      instructions:
+        "Every shop reply enters here - a text, a price-list or vehicle photo, or a voice note - and flows into the sense agents below.",
+    }),
     // ---- sense ----
     n("transcribe", "transcribe", "Voice Transcriber - heavy-accent voice notes", "🎙️", {
       instructions:
-        "Transcribe shop voice notes exactly, digit-perfect on prices. Expect heavy local accents and mixed local words.",
+        "Shop owners often reply with a voice note in a HEAVY local accent, fast and casual, mixing local words. Transcribe it EXACTLY and digit-perfect on every price, cc, and deposit number (e.g. '200 baht', '35,000 km', '3000 deposit'). Never summarise - a wrong digit becomes a wrong offer.",
     }),
     n("extract", "extract", "Offer Extractor - reads text + photos", "🔎", {
       instructions:
-        "Read prices from text and photos (price tables, odometer, condition). Total quotes divide into per-day. Never invent.",
+        "Pull the real per-day price, deposit, and how-to-get-it from the reply. A TOTAL quote divides into per-day ('900 for 3 day' = 300/day). Read price-list photos, odometer/mileage photos ('45,000 km' is mileage, NOT a price), and note vehicle condition (scratches, old vs new model). Never invent a price - only what the shop actually stated.",
     }),
     n("coherence", "media-coherence", "Media Coherence Validator", "🧿", {
       instructions:
-        "Check every image/voice interpretation against the WHOLE conversation - currency scale, vehicle match, numbers consistent.",
+        "After every photo or voice reading, sanity-check it against the WHOLE conversation before we act on it: does the currency scale fit (300 vs 30,000), is it the vehicle we asked for, do the numbers match earlier turns, is a mileage number being mistaken for a price? If it does not line up, flag it so we confirm in text instead of trusting a bad read.",
     }),
     n("comparator", "comparator", "Market & Rival Comparator", "⚖️", {
       instructions:
-        "Anchor on the real local floor. Use the cheapest rival offer from THIS search session as honest leverage.",
+        "Anchor on the REAL local ground-floor for this exact vehicle (e.g. 150/day for a 125cc here) and push toward it. If another shop in THIS search already gave a lower real price, that is honest leverage ('I have an offer for 170 for the same bike') - use it, but NEVER invent a rival number.",
     }),
     // ---- chief ----
     n("director", "director", "Negotiation Director", "🧠", {
       instructions:
-        "Patience is leverage. Only respond when we hold the best position; let the shop send the last message. Prefer cash deposits over passport.",
+        "You see EVERY shop in the search at once and this shop's full thread. Patience is leverage: you do not owe any shop an instant reply - when a shop says 'no deal', WAIT a few minutes to see if they break before you answer, and let the shop send the last message. Push toward the real ground-floor using the cheapest rival offer as leverage. Before showing the traveller a deal you must know price + deposit + how they get the vehicle. Prefer cash deposit over passport. Stop pushing once the shop is firm twice or sounds annoyed, then close warmly. Always warm, human, with a friendly 'my friend' tone and one emoji.",
     }),
     // ---- act ----
-    n("answer", "answer", "Answer the shop", "💬", { maxRunsPerThread: 4 }),
-    n("clarify", "clarify", "Clarify the offer", "❓", { maxRunsPerThread: 2 }),
+    n("answer", "answer", "Answer the shop", "💬", {
+      maxRunsPerThread: 4,
+      instructions:
+        "Answer exactly what the shop asked in one short, casual sentence using only the real request facts - never invent, never re-ask something already answered. If they sent a photo of the actual bike/car, thank them warmly. Never accept a deal or say a price 'works' - only the traveller decides.",
+    }),
+    n("clarify", "clarify", "Clarify the offer", "❓", {
+      maxRunsPerThread: 2,
+      instructions:
+        "Only when something real is still unclear (which model, is that per day, did I understand your voice message), ask ONE short, simple question a non-native shop owner instantly understands. Never a greeting - we are mid-chat.",
+    }),
     n("bargain", "bargain", "Bargainer", "🥊", {
       instructions:
-        "One friendly ask per round, anchored to the floor and the best rival offer. Warm, casual, one emoji, easy to say yes to.",
+        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors near the floor; round 2 softens and meets closer to their new number; the final round is a tiny nudge. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). Never push after they are firm twice or annoyed.",
     }),
     n("deposit-probe", "deposit-probe", "Deposit Negotiator", "🛂", {
       maxRunsPerThread: 3,
       instructions:
-        "Always learn the deposit before the traveller sees the deal. Prefer cash over passport - if passport-only, ask nicely ONCE for a cash alternative.",
+        "Always learn the deposit before the traveller sees the deal ('what deposit you need?'). We strongly prefer CASH over passport. If the shop wants passport only, ask nicely ONCE for a cash alternative ('I cannot leave my passport, I need it - can I give 3000 cash instead? 😊'). If they still insist passport-only, accept it and record it.",
     }),
     n("fulfillment-probe", "fulfillment-probe", "Fulfillment Prober", "🛵", {
       maxRunsPerThread: 2,
       instructions:
-        "Learn how the traveller gets the vehicle: delivery to the hotel, shop pickup service, or on-shop only.",
+        "Learn how the traveller gets the vehicle before presenting: does the shop deliver to the hotel (free or a fee), come PICK THE TRAVELLER UP by car/bike, or is it on-shop only? Ask simply ('you deliver to my hotel, or I come to shop?').",
     }),
-    n("present", "present", "Present deal to traveller", "🎁"),
-    n("close", "close", "Warm closer", "🤝", { maxRunsPerThread: 2 }),
+    n("present", "present", "Present deal to traveller", "🎁", {
+      instructions:
+        "No shop message - this marks the deal ready to show the traveller once price + deposit + how-to-get-it are all known, with the right tags (on shop / free delivery / pickup, and the deposit amount or passport).",
+    }),
+    n("close", "close", "Warm closer", "🤝", {
+      maxRunsPerThread: 2,
+      instructions:
+        "End the exchange warmly after our asks - thank them and say we will think it over and message again. NEVER imply the deal is accepted or booked; only the traveller closes a deal. Match their tone (warm yes vs polite no).",
+    }),
     n("pickup-location", "pickup-location", "Share pickup location", "📍", {
       maxRunsPerThread: 2,
-      instructions: "Send the traveller's exact location ONLY after they approved it on the card.",
+      instructions:
+        "Send the traveller's exact location as a maps link ONLY after they approved it on the card, and ask when the shop can come pick them up.",
     }),
-    n("closing-message", "closing-message", "Deal-close messenger", "✅", { maxRunsPerThread: 2 }),
-    n("silent", "silent", "Deliberate silence", "🤫"),
+    n("closing-message", "closing-message", "Deal-close messenger", "✅", {
+      maxRunsPerThread: 2,
+      instructions:
+        "The traveller locked this deal - tell the shop warmly that we want it at the agreed price and arrange pickup/delivery, then the traveller continues in their own WhatsApp.",
+    }),
+    n("silent", "silent", "Deliberate silence", "🤫", {
+      instructions:
+        "A first-class move: sometimes the strongest play is to say nothing and let the shop send the next (or last) message. Also used when the search session is closed.",
+    }),
     // ---- tail gates ----
     n("style-validator", "style-validator", "Style & Uniqueness Validator", "🎨", {
       instructions:
-        "No repeated greetings, no repeated questions, never imply acceptance, never two identical messages anywhere in the app, exactly one warm emoji.",
+        "Before anything sends: no repeated greeting mid-chat, no question the shop already answered, never imply acceptance, stay in the conversation's language, and - critically at scale - NEVER send a message that matches one already sent anywhere in the app. Exactly one warm emoji.",
     }),
-    n("localize", "localize", "Local-language Localizer", "🌏"),
-    n("safety", "safety", "Safety Gate", "🛡️"),
-    n("deliver", "deliver", "Anti-ban Delivery Gate", "📤"),
+    n("localize", "localize", "Local-language Localizer", "🌏", {
+      instructions:
+        "When the thread is in the shop's local language (Ultra), rewrite the outbound natively in that language in a casual street register, and keep a faithful English gloss for the traveller. A thread that started local never flips to English.",
+    }),
+    n("safety", "safety", "Safety Gate", "🛡️", {
+      instructions:
+        "Final content screen - block anything unsafe, offensive, or that makes a promise/commitment on the traveller's behalf.",
+    }),
+    n("deliver", "deliver", "Anti-ban Delivery Gate", "📤", {
+      instructions:
+        "Human pacing (never reply in under a couple of seconds), business-hours + reputation caps, and content variance so no two sends look automated. A director 'wait' extends the delay on purpose.",
+    }),
   ];
 }
 
@@ -449,22 +489,35 @@ export function sanitizeGraphSpec(raw: GraphSpec): GraphSpec {
     const x = Math.round(Number(v));
     return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : fallback;
   };
+  const defById = new Map(def.nodes.map((d) => [d.id, d]));
   const nodes = (Array.isArray(raw.nodes) ? raw.nodes : [])
     .filter((x) => x && typeof x.id === "string" && typeof x.kind === "string")
     .slice(0, 60)
-    .map((x) => ({
-      id: x.id.slice(0, 40),
-      kind: x.kind,
-      label: String(x.label ?? x.id).slice(0, 80),
-      emoji: typeof x.emoji === "string" ? x.emoji.slice(0, 8) : undefined,
-      enabled: Boolean(x.enabled),
-      instructions: String(x.instructions ?? "").slice(0, 1200),
-      maxRunsPerThread:
-        x.maxRunsPerThread != null ? clampInt(x.maxRunsPerThread, 0, 20, 2) : undefined,
-      custom: Boolean(x.custom),
-      promptTemplate:
-        typeof x.promptTemplate === "string" ? x.promptTemplate.slice(0, 4000) : undefined,
-    })) as NodeSpec[];
+    .map((x) => {
+      const id = x.id.slice(0, 40);
+      const builtin = defById.get(id);
+      const savedInstr = String(x.instructions ?? "").slice(0, 1200);
+      return {
+        id,
+        kind: x.kind,
+        label: String(x.label ?? x.id).slice(0, 80),
+        // A built-in node that was shipped with an empty prompt gets the rich
+        // launch-ready default backfilled - so improved defaults reach an
+        // already-saved production graph WITHOUT overwriting the owner's own
+        // edits (a non-empty saved prompt always wins).
+        emoji:
+          typeof x.emoji === "string" && x.emoji ? x.emoji.slice(0, 8) : builtin?.emoji,
+        enabled: Boolean(x.enabled),
+        instructions: savedInstr || (builtin && !x.custom ? builtin.instructions : ""),
+        maxRunsPerThread:
+          x.maxRunsPerThread != null
+            ? clampInt(x.maxRunsPerThread, 0, 20, 2)
+            : builtin?.maxRunsPerThread,
+        custom: Boolean(x.custom),
+        promptTemplate:
+          typeof x.promptTemplate === "string" ? x.promptTemplate.slice(0, 4000) : undefined,
+      };
+    }) as NodeSpec[];
   // Built-in nodes the save is missing come back with defaults (an old copy
   // never breaks a new pipeline stage - same pattern as orchestrator config).
   for (const d of def.nodes) if (!nodes.some((x) => x.id === d.id)) nodes.push(d);
