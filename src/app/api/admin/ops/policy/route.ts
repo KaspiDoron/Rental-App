@@ -1,0 +1,96 @@
+import { NextResponse } from "next/server";
+import { requireOwner } from "@/lib/session";
+import { setConfig, sbSelect } from "@/lib/runtime-config";
+import { getPolicyOverlay, clampOverlay } from "@/lib/ops/overlay";
+import { saveVersionedSpec, activateVersion, listVersions } from "@/lib/policy";
+import { runGoldenSuite } from "@/lib/ops/golden";
+import { opsLearningEnabled, bustOpsLearningCache } from "@/lib/ops/learning";
+import { sanitizeGraphSpec } from "@/lib/graph/default-graph";
+import { getActiveRev } from "@/lib/ops/rev";
+import type { GraphSpec } from "@/lib/graph/types";
+
+// The Policy tab's backend: the active overlay, the version history, the
+// learning kill switch - and the EVAL GATE: a behavior change (overlay save
+// or rollback) only activates after every enabled golden case passes under
+// the candidate. The passing report is stored on the version row (audit).
+
+export async function GET() {
+  const session = await requireOwner();
+  if (!session) return NextResponse.json({ error: "Owner only." }, { status: 403 });
+  const [overlay, versions, learning, activeRev, golden] = await Promise.all([
+    getPolicyOverlay(),
+    listVersions(undefined, 40),
+    opsLearningEnabled(),
+    getActiveRev(),
+    sbSelect<{ id: number }>("agent_golden_cases", "select=id&enabled=eq.true&limit=24").catch(
+      () => []
+    ),
+  ]);
+  return NextResponse.json({
+    overlay,
+    versions,
+    learningEnabled: learning,
+    activeRev,
+    goldenCount: golden.length,
+  });
+}
+
+export async function POST(req: Request) {
+  const session = await requireOwner();
+  if (!session) return NextResponse.json({ error: "Owner only." }, { status: 403 });
+  const body = await req.json().catch(() => ({}));
+
+  // Kill switch for the whole compiled-learning channel.
+  if (body.action === "learning") {
+    await setConfig("OPS_LEARNING", body.on ? "on" : "off").catch(() => {});
+    bustOpsLearningCache();
+    return NextResponse.json({ ok: true, learningEnabled: Boolean(body.on) });
+  }
+
+  if (body.action === "save" && body.kind === "policy_overlay") {
+    const candidate = clampOverlay(body.spec);
+    // EVAL GATE: the candidate must keep every golden case green.
+    const report = await runGoldenSuite({ overlay: candidate });
+    if (report.total > 0 && report.passed < report.total) {
+      return NextResponse.json(
+        { error: "The golden suite failed under this overlay - not activated.", report },
+        { status: 409 }
+      );
+    }
+    const res = await saveVersionedSpec({
+      kind: "policy_overlay",
+      spec: candidate,
+      note: String(body.note ?? "Overlay update").slice(0, 300),
+      author: session.email,
+      replayReport: report,
+    });
+    return NextResponse.json({ ok: res.ok, versionId: res.versionId, report });
+  }
+
+  if (body.action === "rollback" && Number.isFinite(Number(body.versionId))) {
+    const id = Number(body.versionId);
+    const rows = await sbSelect<{ kind: string; spec: unknown }>(
+      "policy_versions",
+      `select=kind,spec&id=eq.${id}&limit=1`
+    ).catch(() => []);
+    if (!rows[0]) return NextResponse.json({ error: "Version not found." }, { status: 404 });
+    // Even a rollback passes the gate - an OLD spec can still break NEW cases.
+    const report =
+      rows[0].kind === "graph_spec"
+        ? await runGoldenSuite({ spec: sanitizeGraphSpec(rows[0].spec as GraphSpec) })
+        : await runGoldenSuite({ overlay: clampOverlay(rows[0].spec) });
+    if (report.total > 0 && report.passed < report.total) {
+      return NextResponse.json(
+        { error: "The golden suite fails under that version - rollback blocked.", report },
+        { status: 409 }
+      );
+    }
+    const res = await activateVersion(id, report);
+    if (!res.ok) return NextResponse.json({ error: res.problems.join("; ") }, { status: 400 });
+    return NextResponse.json({ ok: true, report });
+  }
+
+  return NextResponse.json({ error: "Unknown action." }, { status: 400 });
+}
+
+export const maxDuration = 60;

@@ -406,6 +406,180 @@ async function playSingleTurn(args: {
   return { played, carried };
 }
 
+// ---------------------------------------------------------------------------
+// DETERMINISTIC replay - the golden regression suite's runner.
+//
+// Unlike simulateConversation/playSingleTurn above (which call the live
+// extractor + floor lookup and allow LLMs), this variant is BIT-STABLE:
+// extraction and floor are frozen stubs captured when the golden case was
+// created, llmAllowed is false (the director is the pure first-legal-edge
+// function of spec+facts), the clock is frozen, and the policy overlay is
+// pinned. Same case + same spec + same overlay => byte-identical output,
+// which is what makes it usable as an eval gate for behavior changes.
+// ---------------------------------------------------------------------------
+
+export async function replayConversation(args: {
+  turns: import("./ops/types").GoldenTurn[];
+  rfq?: Partial<StructuredRFQ>;
+  region?: string;
+  floor?: { floor?: number; typical?: number; currency?: string } | null;
+  spec?: GraphSpec;
+  overlay?: import("./ops/overlay").PolicyOverlay;
+}): Promise<{ turns: PlayedTurn[] }> {
+  const rfq: StructuredRFQ = { ...DEFAULT_RFQ, ...(args.rfq ?? {}) };
+  const region = (args.region ?? "").trim() || undefined;
+  const threadKey = threadKeyFor("replay@wheeldeal", "0000");
+  const spec: GraphSpec = args.spec ?? (await getGraphSpec());
+  const { DEFAULT_OVERLAY } = await import("./ops/overlay");
+  const overlay = args.overlay ?? DEFAULT_OVERLAY;
+
+  let carried = newThreadState({
+    threadKey,
+    userEmail: "replay@wheeldeal",
+    vendorId: "replay-shop",
+    vendorName: "Golden Shop",
+    toNumber: "0000",
+  });
+  const historyLines: string[] = ["Us: (opening request sent)"];
+  const played: PlayedTurn[] = [];
+
+  for (const turn of args.turns.slice(0, 10)) {
+    const shopText = turn.voice ? `(voice note) ${turn.shopSays}` : turn.shopSays;
+    historyLines.push(`Shop: ${turn.shopSays || "(photo)"}`);
+    const history = historyLines.join("\n");
+
+    // FROZEN extraction - exactly what the live extractor said at capture time.
+    const stub = (turn.stubExtraction ?? {}) as Record<string, unknown>;
+    const extraction = {
+      found: false,
+      confidence: "medium",
+      ...stub,
+    } as unknown as import("./agents").ExtractedOffer;
+    if (turn.imageKind) extraction.imageKind = turn.imageKind as typeof extraction.imageKind;
+
+    const cur =
+      extraction.currency || carried.fields.currency || currencyForRegion(region) || "USD";
+    const floorSameCur =
+      args.floor && typeof args.floor.floor === "number" && (!args.floor.currency || args.floor.currency === cur)
+        ? { floor: args.floor.floor, typical: args.floor.typical ?? undefined }
+        : null;
+    let usablePrice =
+      extraction.found && extraction.pricePerDay ? extraction.pricePerDay : undefined;
+    if (usablePrice && rfq.durationDays > 1 && floorSameCur) {
+      // Same total-vs-per-day disambiguation as the live path, on frozen data.
+      const typical = floorSameCur.typical ?? Math.round(floorSameCur.floor * 1.6);
+      const perDayIfTotal = Math.round(usablePrice / rfq.durationDays);
+      if (usablePrice >= typical * 2 && perDayIfTotal >= floorSameCur.floor * 0.55) {
+        usablePrice = perDayIfTotal;
+      }
+    }
+
+    const traces: TraceRow[] = [];
+    const io: GraphIO = {
+      loadState: async () => ({ ...carried }),
+      saveState: async (s) => {
+        carried = s;
+      },
+      cheapestRival: async () => turn.rivalPricePerDay,
+      sessionTable: async (): Promise<SessionShopRow[]> =>
+        turn.rivalPricePerDay
+          ? [{ vendorId: "rival", vendorName: "Another shop", pricePerDay: turn.rivalPricePerDay, currency: cur }]
+          : [],
+      insertWakeup: async () => {},
+      clearWakeups: async () => {},
+      queueOutbox: async () => {},
+      guardAndSend: async ({ text }): Promise<DeliverResult> => ({
+        delivered: "sent",
+        detail: "(golden replay)",
+        finalText: text,
+      }),
+      markPresentable: async () => {},
+      insertBargainDraft: async () => {},
+      recentOutboundGlobal: async () => [],
+      writeTrace: async (rows) => {
+        traces.push(...rows);
+      },
+      llmAllowed: false, // deterministic director + composers, always
+      now: () => 1_700_000_000_000,
+    };
+
+    const result = await runGraphTurn(
+      {
+        event: {
+          kind: turn.voice ? "inbound-audio" : turn.imageKind ? "inbound-image" : "inbound-text",
+          threadKey,
+          userEmail: "replay@wheeldeal",
+          toDigits: "0000",
+          shopMessage: shopText,
+          images: turn.imageKind ? [{ mime: "image/jpeg", base64: "" }] : [],
+          audios: turn.voice ? [{ mime: "audio/ogg", base64: "" }] : [],
+        },
+        ctx: {
+          sender: "replay@wheeldeal",
+          vendorId: "replay-shop",
+          vendorName: "Golden Shop",
+          rfq,
+          region,
+          plan: "ultra",
+        },
+        rfq,
+        extraction,
+        usablePrice,
+        currency: cur,
+        floorPrice: floorSameCur?.floor,
+        floorTypical: floorSameCur?.typical,
+        sessionClosed: false,
+        history,
+        priorOutbound: historyLines.filter((l) => l.startsWith("Us: ")).map((l) => l.slice(4)),
+        legacyCounts: { clarify: 0, bargain: 0, answer: 0, close: 0 },
+        humanDelay: false,
+        transcript: turn.voice ? { text: turn.shopSays, source: "golden" } : null,
+        deadlineAt: 1_700_000_000_000 + 60_000,
+        overlay,
+      },
+      io,
+      spec
+    );
+
+    if (result.message) historyLines.push(`Us: ${result.message}`);
+    const f = carried.fields;
+    played.push({
+      shopSays: turn.shopSays,
+      voice: turn.voice,
+      imageKind: turn.imageKind,
+      action: result.action,
+      ourReply: result.message ?? null,
+      path: traces.filter((t) => t.nodeId).map((t) => t.nodeId!) as string[],
+      ladder: result.ladder,
+      state: {
+        pricePerDay: f.pricePerDay,
+        currency: f.currency,
+        depositType: f.depositType,
+        depositAmount: f.depositAmount,
+        fulfillment: f.fulfillment ?? null,
+        rounds: f.rounds ?? 0,
+        firmCount: f.firmCount ?? 0,
+        dealComplete: Boolean(f.pricePerDay && (f.depositType || f.depositNote) && f.fulfillment),
+        lastTarget: f.lastTarget,
+        lastLeverage: f.lastLeverage,
+        phase: carried.phase,
+        waitingUntil: carried.waitingUntil ?? null,
+      },
+      stages: traces.map((t) => ({
+        stage: t.stage,
+        nodeId: t.nodeId,
+        edgeId: t.edgeId,
+        input: t.input,
+        reasoning: t.reasoning,
+        output: t.output,
+        verdict: t.verdict,
+        ms: t.ms,
+      })),
+    });
+  }
+  return { turns: played };
+}
+
 export async function simulateConversation(args: {
   turns: ConversationTurn[];
   rfq?: Partial<StructuredRFQ>;

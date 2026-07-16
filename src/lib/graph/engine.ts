@@ -327,8 +327,9 @@ export async function runGraphTurn(
   };
 
   // Owner-tuned thresholds (defaults = the historical literals; 30s-cached
-  // config read, so this costs nothing on the hot path).
-  const overlay = await getPolicyOverlay().catch(() => DEFAULT_OVERLAY);
+  // config read, so this costs nothing on the hot path). Replays pin their
+  // own overlay so the golden suite is bit-stable regardless of live config.
+  const overlay = input.overlay ?? (await getPolicyOverlay().catch(() => DEFAULT_OVERLAY));
 
   // ---- state ---------------------------------------------------------------
   let state =
@@ -846,8 +847,7 @@ async function runTailGates(args: {
   // Owner-banned phrases (policy overlay) - deterministic scrub, so a phrase
   // the owner outlawed in the Ops Center can never reach a shop again.
   try {
-    const { getPolicyOverlay } = await import("../ops/overlay");
-    const banned = (await getPolicyOverlay()).bannedPhrases;
+    const banned = (input.overlay ?? (await getPolicyOverlay())).bannedPhrases;
     const hits: string[] = [];
     for (const phrase of banned) {
       const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");

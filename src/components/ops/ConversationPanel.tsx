@@ -96,6 +96,30 @@ export function ConversationPanel({
   const [data, setData] = useState<Transcript | null>(null);
   const [openDecision, setOpenDecision] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [goldenNote, setGoldenNote] = useState<string | null>(null);
+
+  const addToGolden = async () => {
+    setGoldenNote("Freezing this conversation...");
+    try {
+      const res = await fetch("/api/admin/ops/golden", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create-from-thread",
+          threadKey,
+          name: `${vendorName} - ${new Date().toISOString().slice(0, 10)}`,
+        }),
+      });
+      const d = await res.json();
+      setGoldenNote(
+        d?.ok
+          ? `Frozen as a golden case (${d.turnCount} turns) - every future change must keep it green.`
+          : d?.error ?? "Could not create the case."
+      );
+    } catch {
+      setGoldenNote("Could not reach the server.");
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -151,6 +175,12 @@ export function ConversationPanel({
             <p className="truncate text-[11px] text-faint">
               {data.userEmail} · {data.thread?.phase ?? "no state"}
             </p>
+            <button
+              onClick={addToGolden}
+              className="mt-1 chip rounded-full border border-line px-2.5 py-1 text-[10px] font-extrabold text-soft"
+            >
+              🏅 Add to golden set
+            </button>
           </div>
           <div className="flex flex-wrap justify-end gap-1">
             {f.pricePerDay ? (
@@ -175,6 +205,8 @@ export function ConversationPanel({
             )}
           </div>
         </div>
+
+        {goldenNote && <p className="mt-1.5 text-[11px] font-bold text-savings">{goldenNote}</p>}
 
         {/* Price impact timeline */}
         {data.offers.length > 0 && (
@@ -316,11 +348,11 @@ function DecisionRecord({
   threadKey: string;
   onSaved: () => void;
 }) {
-  const [view, setView] = useState<"ladder" | "trace" | "review">("ladder");
+  const [view, setView] = useState<"ladder" | "trace" | "review" | "rule">("ladder");
   return (
     <div className="mb-1 ml-2 mt-1 rounded-2xl border border-line bg-card2 p-2.5">
       <div className="mb-2 flex flex-wrap items-center gap-1">
-        {(["ladder", "trace", "review"] as const).map((v) => (
+        {(["ladder", "trace", "review", "rule"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -328,7 +360,7 @@ function DecisionRecord({
               view === v ? "bg-brandblue text-white" : "text-soft hover:bg-card"
             }`}
           >
-            {v === "ladder" ? "🪜 Why this move" : v === "trace" ? "⚙️ Execution" : "⭐ Review"}
+            {v === "ladder" ? "🪜 Why this move" : v === "trace" ? "⚙️ Execution" : v === "review" ? "⭐ Review" : "➕ Rule"}
           </button>
         ))}
         <span className="ml-auto flex items-center gap-1 text-[9px] text-faint">
@@ -421,6 +453,107 @@ function DecisionRecord({
           onSaved={onSaved}
         />
       )}
+
+      {view === "rule" && <RuleForm decisionId={decisionId} />}
+    </div>
+  );
+}
+
+// Create a new branching rule straight from this real situation - it lands as
+// a typed director edge (sanitized + validated + golden-gated + versioned).
+function RuleForm({ decisionId }: { decisionId: string }) {
+  const [to, setTo] = useState("bargain");
+  const [label, setLabel] = useState("");
+  const [priority, setPriority] = useState(500);
+  const [when, setWhen] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      let cond: unknown;
+      if (when.trim()) {
+        try {
+          cond = JSON.parse(when);
+        } catch {
+          setNote("The condition is not valid JSON.");
+          setBusy(false);
+          return;
+        }
+      }
+      const res = await fetch("/api/admin/ops/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fromDecisionId: decisionId,
+          edge: { to, label, when: cond, priority },
+          note: `from decision ${decisionId.slice(0, 8)}`,
+        }),
+      });
+      const d = await res.json();
+      setNote(
+        d?.ok
+          ? `Rule applied as edge ${d.edgeId} (version ${d.versionId ?? "-"}) - golden suite green.`
+          : d?.error ?? "Rule rejected."
+      );
+    } catch {
+      setNote("Could not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[10px] text-soft">
+        New director edge, born from this exact situation. It must pass validation AND the
+        golden suite before it goes live; fine-tune it later in the Pipeline Studio.
+      </p>
+      <div className="flex gap-1.5">
+        <label className="min-w-0 flex-1">
+          <span className="text-[9px] font-extrabold uppercase text-faint">Target node</span>
+          <input
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder="bargain / clarify / close / deposit-probe..."
+            className="h-9 w-full rounded-xl border-2 border-line bg-card px-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+          />
+        </label>
+        <label className="w-20 shrink-0">
+          <span className="text-[9px] font-extrabold uppercase text-faint">Priority</span>
+          <input
+            type="number"
+            value={priority}
+            onChange={(e) => setPriority(Number(e.target.value))}
+            className="h-9 w-full rounded-xl border-2 border-line bg-card px-2 text-[12px] text-strong focus:border-brandblue focus:outline-none"
+          />
+        </label>
+      </div>
+      <input
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="Rule name, e.g. 'push again when rival is cheaper'"
+        className="h-9 w-full rounded-xl border-2 border-line bg-card px-2 text-[12px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+      />
+      <textarea
+        value={when}
+        onChange={(e) => setWhen(e.target.value)}
+        rows={2}
+        placeholder='Condition JSON, e.g. {"kind":"allG","of":[{"kind":"rivalCheaper"},{"kind":"priceFarAboveFloor"}]} - empty = always legal'
+        className="w-full rounded-xl border-2 border-line bg-card px-2 py-1.5 font-mono text-[10px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={submit}
+          disabled={busy || !label.trim() || !to.trim()}
+          className="btn btn-primary btn-sm rounded-xl px-3"
+        >
+          {busy ? "Gating..." : "Validate, gate & apply"}
+        </button>
+        {note && <p className="text-[10px] font-bold text-soft">{note}</p>}
+      </div>
     </div>
   );
 }

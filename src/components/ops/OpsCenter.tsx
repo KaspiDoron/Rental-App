@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LoadingDots } from "../LoadingDots";
 import { ConversationPanel } from "./ConversationPanel";
+import { PolicyPanel } from "./PolicyPanel";
 
 interface ThreadCard {
   threadKey: string;
@@ -44,7 +45,7 @@ interface InboxRow {
 }
 
 export function OpsCenter() {
-  const [tab, setTab] = useState<"inbox" | "threads">("inbox");
+  const [tab, setTab] = useState<"inbox" | "threads" | "policy">("inbox");
   const [open, setOpen] = useState<{ threadKey: string; vendorName: string } | null>(null);
 
   return (
@@ -71,6 +72,7 @@ export function OpsCenter() {
               [
                 ["inbox", "📥 Review inbox"],
                 ["threads", "💬 All conversations"],
+                ["policy", "🗂️ Policy & versions"],
               ] as const
             ).map(([t, label]) => (
               <button
@@ -88,6 +90,7 @@ export function OpsCenter() {
           {tab === "threads" && (
             <ThreadsPanel onOpen={(tk, vn) => setOpen({ threadKey: tk, vendorName: vn })} />
           )}
+          {tab === "policy" && <PolicyPanel />}
         </>
       )}
     </div>

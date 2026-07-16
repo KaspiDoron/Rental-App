@@ -32,11 +32,34 @@ export async function POST(req: Request) {
   if (!body.spec || body.spec.version !== 2) {
     return NextResponse.json({ error: "Send a version 2 graph spec." }, { status: 400 });
   }
+  // EVAL GATE: the edited graph must keep every golden case green before it
+  // takes over live traffic (deterministic replay - fast, no LLM calls).
+  let gateReport = null;
+  try {
+    const { runGoldenSuite } = await import("@/lib/ops/golden");
+    const { sanitizeGraphSpec } = await import("@/lib/graph/default-graph");
+    gateReport = await runGoldenSuite({ spec: sanitizeGraphSpec(body.spec) });
+    if (gateReport.total > 0 && gateReport.passed < gateReport.total) {
+      return NextResponse.json(
+        {
+          error: `Golden suite failed (${gateReport.passed}/${gateReport.total}) - the edit was NOT applied.`,
+          problems: gateReport.cases
+            .filter((c) => !c.pass)
+            .map((c) => `${c.name}: ${c.turns.flatMap((t) => t.failures).join("; ")}`),
+          report: gateReport,
+        },
+        { status: 409 }
+      );
+    }
+  } catch {
+    /* no golden infra yet - save proceeds ungated */
+  }
   const res = await saveVersionedSpec({
     kind: "graph_spec",
     spec: body.spec,
     note: String(body.note ?? "Studio: graph edit").slice(0, 300),
     author: session.email,
+    replayReport: gateReport,
   });
   if (!res.ok) {
     return NextResponse.json({ error: "Invalid graph", problems: res.problems }, { status: 400 });

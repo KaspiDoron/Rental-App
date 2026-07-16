@@ -291,6 +291,9 @@ export interface GraphTurnInput {
   // Transcription result when the event carried audio (task: voice agent).
   transcript?: { text: string; language?: string; source: string } | null;
   deadlineAt: number; // Date.now() + remaining serverless budget
+  // Pinned policy overlay for DETERMINISTIC replay (golden regression suite);
+  // live traffic omits it and the engine reads the active overlay from config.
+  overlay?: import("../ops/overlay").PolicyOverlay;
 }
 
 // ---------------------------------------------------------------------------
