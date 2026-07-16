@@ -65,6 +65,13 @@ supabase/schema.sql  Run once; RLS on, service-role only
   Market-Rate Analyst). Swap in real WhatsApp threads later via the webhook +
   `whatsapp_messages` table.
 
+## Operations
+
+`PRODUCTION-READINESS.md` is the living scale/ops review: queue mechanics,
+anti-ban budgets, the honest TEST_MODE truth table, tester/host capacity and
+the P1/P2 launch roadmap. Read it before changing wa-guard, usage limits or
+the outbox/wakeup draining.
+
 ## Deploy
 
 Bootstrap env vars in Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
