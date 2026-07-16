@@ -21,6 +21,10 @@ const HealthPanel = dynamic(
   () => import("@/components/HealthPanel").then((m) => m.HealthPanel),
   { ssr: false, loading: () => <LoadingDots label="Loading service health" /> }
 );
+const OpsCenterPanel = dynamic(
+  () => import("@/components/ops/OpsCenter").then((m) => m.OpsCenter),
+  { ssr: false, loading: () => <LoadingDots label="Loading the Ops Center" /> }
+);
 import type { AnalyticsSnapshot } from "@/lib/types";
 
 interface KeyInfo {
@@ -63,7 +67,7 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<
-    "command" | "analytics" | "agents" | "keys" | "users" | "feedback" | "billing" | "data"
+    "command" | "analytics" | "agents" | "ops" | "keys" | "users" | "feedback" | "billing" | "data"
   >("command");
   // Keys page: collapse each scope group so the long page is easy to walk.
   const [collapsedScopes, setCollapsedScopes] = useState<Record<string, boolean>>({
@@ -601,7 +605,9 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
-        {(["command", "analytics", "agents", "keys", "users", "feedback", "billing", "data"] as const).map((t) => (
+        {(["command", "analytics", "agents", "ops", "keys", "users", "feedback", "billing", "data"] as const)
+          .filter((t) => t !== "ops" || isOwner)
+          .map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -609,7 +615,7 @@ export default function AdminPage() {
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t}
+            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t === "ops" ? "🧠 ops" : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -765,6 +771,8 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 
       {loaded && tab === "agents" && (
         <div className="space-y-3">

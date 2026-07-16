@@ -148,7 +148,7 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
     n: "3",
     title: "How and why we process it",
     body:
-      "We process this data to operate the service: to find shops near you, to let the AI agents read shop replies and negotiate on your behalf, to transcribe voice notes and read photos, to detect abuse, and to improve the service. Message content, images and voice notes are sent to third-party AI providers (large-language-model and speech/vision providers) for processing. Location you share for pickup is sent to the specific shop only after you explicitly consent on that shop's card.",
+      "We process this data to operate the service: to find shops near you, to let the AI agents read shop replies and negotiate on your behalf, to transcribe voice notes and read photos, to detect abuse, and to improve the service. Message content, images and voice notes are sent to third-party AI providers (large-language-model and speech/vision providers) for processing. Negotiation conversations and the agents' decision logs may additionally be reviewed internally by the operator for quality assurance and to improve the AI agents' behaviour; they are never shared with other users. Location you share for pickup is sent to the specific shop only after you explicitly consent on that shop's card.",
   },
   {
     n: "4",
