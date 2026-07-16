@@ -501,6 +501,51 @@ export function money(amount: number, currency?: string): string {
  * the AI is unavailable or the region is unknown - never blocks a send.
  * The English gloss is kept so the traveller can read what was sent.
  */
+/**
+ * Latin-dominant, real-sentence English detector. Used for LANGUAGE
+ * ADAPTATION: when a shop writes an actual English sentence ("Hi Doron, do
+ * you speak English?") on a local-language thread, the agent answers in
+ * English - matching the human on the other side always beats a setting.
+ * Emoji/punctuation are ignored; a bare "ok" (under 3 words) never flips.
+ */
+export function looksEnglish(text: string): boolean {
+  const t = (text || "").trim();
+  const letters = t.replace(/[^\p{L}]/gu, "");
+  if (!letters) return false;
+  const ascii = letters.replace(/[^A-Za-z]/g, "");
+  if (ascii.length / letters.length < 0.9) return false; // another script dominates
+  const words = t.split(/\s+/).filter((w) => /[A-Za-z]{2,}/.test(w));
+  return words.length >= 3;
+}
+
+/**
+ * English gloss for an INBOUND local-language shop reply, so the traveller
+ * always understands the conversation their agent is having. Returns null
+ * for already-Latin/English text (nothing to translate) or on LLM failure.
+ */
+export async function translateToEnglish(text: string): Promise<string | null> {
+  const t = (text || "").trim();
+  if (!t) return null;
+  const letters = t.replace(/[^\p{L}]/gu, "");
+  const ascii = letters.replace(/[^A-Za-z]/g, "");
+  if (!letters || ascii.length / letters.length > 0.7) return null;
+  const out = await chat(
+    [
+      {
+        role: "system",
+        content:
+          "Translate this rental-shop WhatsApp message into natural, plain English. " +
+          "Keep every number, price, currency and model name EXACTLY as written. " +
+          "Reply with the translation only - no notes.",
+      },
+      { role: "user", content: t },
+    ],
+    { budgetMs: 8_000 }
+  );
+  const res = (out ?? "").trim().slice(0, 600);
+  return res || null;
+}
+
 export async function localizeMessage(
   message: string,
   region?: string,
@@ -1086,9 +1131,13 @@ export async function extractOffer(
     "model size too. Opening hours on the sheet (e.g. OPEN 08.00AM) are context, " +
     "never a price. An odometer/mileage number (e.g. 45,000 km) is NEVER a price. " +
     "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
-    "vehicle. Combine the reply with the conversation history: if the vehicle " +
-    "and daily price are both clear from the thread as a whole, set matchesSpec " +
-    "true and confidence high. Only when something is genuinely still unknown, " +
+    "vehicle. Combine the reply with the conversation history for CONTEXT, but " +
+    "NEVER attribute a number to the shop that appears only in OUR (traveller) " +
+    "messages - our own asks and counter-offers are NOT the shop's price. " +
+    "pricePerDay must come from the SHOP's own words or photo; the ONE " +
+    "exception is when the shop explicitly AGREES to a number we proposed " +
+    "('ok', 'deal', 'yes can do') - then that agreed number is their price. " +
+    "Only when something is genuinely still unknown, " +
     "write a short, polite clarifyMessage - and it must NEVER repeat a question " +
     "the vendor already answered anywhere in the thread. " +
     `THE MOST IMPORTANT ARITHMETIC RULE: the traveller wants ${rfq.durationDays} day(s), ` +
@@ -1189,7 +1238,27 @@ export async function extractOffer(
   };
 
   function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
-    const conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+    let conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+    // VERIFIED-GATE: a "high confidence" price that appears NOWHERE in the
+    // shop's actual reply (no photo carried it either) is at best an
+    // inference from the thread - and in the worst observed case it was OUR
+    // OWN counter-offer read back as the shop's quote (350 asked at 315 ->
+    // card showed "315 VERIFIED"). Unless the shop explicitly agreed to a
+    // proposed number, such a price can never rank as verified.
+    if (
+      e.found &&
+      typeof e.pricePerDay === "number" &&
+      conf === "high" &&
+      images.length === 0
+    ) {
+      const plain = (text || "").replace(/(\d)[,.\s](?=\d{3}\b)/g, "$1");
+      const perDay = String(Math.round(e.pricePerDay));
+      const total = String(Math.round(e.pricePerDay * Math.max(1, rfq.durationDays)));
+      const tokenRx = (n: string) => new RegExp(`(^|[^\\d])${n}([^\\d]|$)`);
+      const inReply = tokenRx(perDay).test(plain) || tokenRx(total).test(plain);
+      const agreed = /\b(ok(?:ay)?|yes|deal|sure|fine|no problem|agreed|can do)\b/i.test(text || "");
+      if (!inReply && !agreed) conf = "medium";
+    }
     const verifiedEnough = e.found && e.matchesSpec && conf === "high";
     // Negotiation signals: the deterministic regex layer ALWAYS backs the model
     // (true from either source wins; the model can add what the regex missed).

@@ -25,11 +25,31 @@ const SAFE_LINK_HOSTS = [
   "instagram.com",
 ];
 
-export function screenInboundDeterministic(text: string): InboundRisk {
+/**
+ * Slugs of the shop's own name ("CityGlide Scooter Rental Chiang Mai" ->
+ * ["cityglide", "cityglidescooter"]). A link whose host contains the shop's
+ * own name is their website, not phishing - flagging a shop's real site
+ * ("cityglide.co.th may be a phishing site") destroys trust in the screen.
+ * Advisory only: this never whitelists payment/document asks.
+ */
+function shopNameSlugs(vendorName?: string): string[] {
+  const words = (vendorName ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !["rental", "rent", "shop", "motorbike", "scooter", "bike", "car"].includes(w));
+  const out = new Set<string>();
+  for (const w of words) out.add(w);
+  if (words.length >= 2) out.add(words.slice(0, 2).join(""));
+  return [...out].filter((s) => s.length >= 5);
+}
+
+export function screenInboundDeterministic(text: string, vendorName?: string): InboundRisk {
   const reasons: string[] = [];
   let risk: InboundRisk["risk"] = "none";
   const s = text.toLowerCase();
   if (!s.trim()) return { risk: "none", reasons };
+  const ownSlugs = shopNameSlugs(vendorName);
 
   const bump = (level: "caution" | "high", why: string) => {
     reasons.push(why);
@@ -57,7 +77,10 @@ export function screenInboundDeterministic(text: string): InboundRisk {
   for (const link of links.slice(0, 3)) {
     try {
       const host = new URL(link).hostname.replace(/^www\./, "");
-      const safe = SAFE_LINK_HOSTS.some((h) => host === h || host.endsWith("." + h));
+      const safe =
+        SAFE_LINK_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
+        // The shop's own website (host carries the shop's name).
+        ownSlugs.some((slug) => host.replace(/[^a-z0-9]/g, "").includes(slug));
       if (!safe) {
         bump("caution", `sent a link to ${host} - don't enter card or account details on pages a chat sent you`);
       }
@@ -87,9 +110,9 @@ export function screenInboundDeterministic(text: string): InboundRisk {
  */
 export async function screenInbound(
   text: string,
-  opts?: { llmAllowed?: boolean }
+  opts?: { llmAllowed?: boolean; vendorName?: string }
 ): Promise<InboundRisk> {
-  const det = screenInboundDeterministic(text);
+  const det = screenInboundDeterministic(text, opts?.vendorName);
   if (det.risk === "high" || opts?.llmAllowed === false) return det;
   try {
     const { chat, extractJson } = await import("./ai");
@@ -98,7 +121,9 @@ export async function screenInbound(
         {
           role: "system",
           content:
-            'You screen a rental shop\'s WhatsApp message for risks TO THE TRAVELLER (scams, document harvesting, off-platform payment pressure, phishing links). Reply ONLY JSON: {"risk":"none"|"caution"|"high","reasons":["short plain-language warning"...]}. Normal haggling, prices, deposits paid in person at pickup are NOT risks.',
+            'You screen a rental shop\'s WhatsApp message for risks TO THE TRAVELLER (scams, document harvesting, off-platform payment pressure, phishing links). Reply ONLY JSON: {"risk":"none"|"caution"|"high","reasons":["short plain-language warning"...]}. Normal haggling, prices, deposits paid in person at pickup are NOT risks. A link to the shop\'s OWN website' +
+            (opts?.vendorName ? ` (the shop is "${opts.vendorName}")` : "") +
+            " is NOT a risk.",
         },
         { role: "user", content: text.slice(0, 800) },
       ],

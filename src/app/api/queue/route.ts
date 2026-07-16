@@ -68,11 +68,16 @@ export async function POST(req: Request) {
 
   if (body.action === "delete" && body.id) {
     // Ownership guard: only delete a row that belongs to THIS user.
-    await sbDelete(
+    // ATOMIC TRUTH: delete-with-return tells us whether WE actually removed
+    // the row. If a concurrent drainer already claimed it (delete-returning
+    // is the claim), the message is on its way - the client must know the
+    // removal LOST the race instead of silently pretending it worked.
+    const { sbDeleteReturning } = await import("@/lib/runtime-config");
+    const removed = await sbDeleteReturning<{ id: number }>(
       "wa_outbox",
       `id=eq.${Number(body.id)}&sender_key=eq.${encodeURIComponent(session.email)}`
-    );
-    return NextResponse.json({ ok: true });
+    ).catch(() => []);
+    return NextResponse.json({ ok: true, removed: removed.length > 0 });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });

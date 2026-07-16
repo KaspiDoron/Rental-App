@@ -93,6 +93,7 @@ export async function GET(req: Request) {
       pricePerDay?: number;
       pickupOffered?: boolean;
       pickupConsent?: boolean;
+      declined?: boolean;
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -141,6 +142,9 @@ export async function GET(req: Request) {
       // Digraph engine state (undefined before migration -> card treats as ready).
       fulfillment: fulfillment ?? null,
       presentable: st ? isComplete(st, r.deposit) : undefined,
+      // The shop walked away - the card must say so instead of pretending
+      // the agent is still working ("still confirming the deposit...").
+      declined: st?.declined === true,
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
       createdAt: r.created_at,

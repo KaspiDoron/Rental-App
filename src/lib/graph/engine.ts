@@ -771,7 +771,15 @@ async function runTailGates(args: {
   const { input, io, spec, cfg, nodeOn, push } = args;
   let text = args.draft;
   let englishGloss = args.englishGloss;
-  const useLocalLang = Boolean(input.ctx.localLang) && input.ctx.plan === "ultra";
+  // LANGUAGE ADAPTATION: when the shop writes an actual English sentence
+  // ("Hi, do you speak English?") we answer in English for THIS reply -
+  // matching the human beats the local-language setting. A bare "ok" or a
+  // local-script reply keeps the thread local as configured.
+  const { looksEnglish } = await import("../agents");
+  const shopWroteEnglish =
+    input.event.kind !== "tick" && looksEnglish(input.event.shopMessage);
+  const useLocalLang =
+    Boolean(input.ctx.localLang) && input.ctx.plan === "ultra" && !shopWroteEnglish;
   const isLocalizedBargain = args.nodeId === "bargain" && useLocalLang;
 
   // ---- style-validator -------------------------------------------------------

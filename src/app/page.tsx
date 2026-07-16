@@ -558,11 +558,19 @@ export default function Home() {
     setQueueItems((items) => items.filter((i) => i.id !== id));
     if (vendorId) patchVendor(vendorId, { queuedUntil: undefined, lastEventAt: Date.now() });
     try {
-      await fetch("/api/queue", {
+      // SERVER-AUTHORITATIVE: the response says whether WE removed the row.
+      // If a drainer claimed it first, the message already left - tell the
+      // user honestly instead of letting a "removed" item send later.
+      const res = await fetch("/api/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", id }),
       });
+      const d = await res.json().catch(() => ({ removed: true }));
+      if (d.removed === false) {
+        setMassNote(t("Too late to remove that one - it had already left for the shop."));
+        if (vendorId) patchVendor(vendorId, { stage: "rfq-sent", lastEventAt: Date.now() });
+      }
     } finally {
       refreshQueue();
     }
@@ -646,6 +654,18 @@ export default function Home() {
         // previous search's replies can never render on the new results.
         const res = await fetch(`/api/replies?since=${searchEpoch}`, { cache: "no-store" });
         const d = await res.json();
+        // Shops that walked away: the card says so honestly - it never keeps
+        // pretending the agent is "still confirming" a dead conversation.
+        const declinedIds = new Set<string>(
+          (d.replies ?? []).filter((r: { declined?: boolean }) => r.declined).map((r: { vendorId: string }) => r.vendorId)
+        );
+        if (declinedIds.size > 0) {
+          setVendors((vs) =>
+            vs.map((v) =>
+              declinedIds.has(v.id) && v.stage !== "declined" ? { ...v, stage: "declined" } : v
+            )
+          );
+        }
         for (const r of d.replies ?? []) {
           if (!r.found || !r.pricePerDay || appliedReplies.current.has(r.id)) continue;
           if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < searchEpoch) continue;
@@ -655,7 +675,9 @@ export default function Home() {
               v.id === r.vendorId
                 ? {
                     ...v,
-                    stage: "offer-received" as TrackerStage,
+                    stage: declinedIds.has(r.vendorId)
+                      ? ("declined" as TrackerStage)
+                      : ("offer-received" as TrackerStage),
                     offer: {
                       pricePerDay: r.pricePerDay,
                       listPricePerDay: v.offer?.listPricePerDay ?? r.pricePerDay,

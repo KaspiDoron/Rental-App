@@ -475,10 +475,16 @@ function VendorCardInner({
             {/* Deal completeness: the agents keep confirming the deposit and
                 how you get the vehicle before the deal is fully ready. We never
                 hide the price - just flag what is still being confirmed. */}
-            {offer.presentable === false && (
-              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
-                💬 {t("Your agent is still confirming the deposit and how you get the vehicle.")}
+            {vendor.stage === "declined" ? (
+              <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
+                🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
+            ) : (
+              offer.presentable === false && (
+                <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                  💬 {t("Your agent is still confirming the deposit and how you get the vehicle.")}
+                </div>
+              )
             )}
 
             {/* Pickup consent: the shop offered to come get you. We share your
@@ -532,12 +538,14 @@ function VendorCardInner({
               >
                 {t("Lock this deal")}
               </button>
-              <button
-                onClick={() => onBargain(vendor)}
-                className="btn btn-sm chip rounded-2xl border-2 border-brandred/30 bg-brandred-soft px-3 py-2.5 text-[12px] font-extrabold text-brandred"
-              >
-                🥊 {t("Bargain")}
-              </button>
+              {vendor.stage !== "declined" && (
+                <button
+                  onClick={() => onBargain(vendor)}
+                  className="btn btn-sm chip rounded-2xl border-2 border-brandred/30 bg-brandred-soft px-3 py-2.5 text-[12px] font-extrabold text-brandred"
+                >
+                  🥊 {t("Bargain")}
+                </button>
+              )}
             </div>
           </div>
         ) : (

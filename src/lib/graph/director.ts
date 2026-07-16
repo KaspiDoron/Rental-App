@@ -184,7 +184,29 @@ export async function runDirector(args: {
   if (action === "wait-defer") {
     // Defer only once per inbound; ticks must decide.
     if (facts.event === "tick") return { ...fallback, reasoning: "tick must decide - " + fallback.reasoning };
-    const mins = clampNum(parsed.waitMinutes, 2, settings.strategicWaitMaxMin, 10);
+    // NEVER STALL ON FRESH SUBSTANCE: when the shop just asked us something,
+    // gave price info, offered options ("I have different 125cc available")
+    // or sent a photo, they are engaged and expect a prompt reply - a
+    // strategic wait here reads as rude and stalls a live deal for minutes.
+    // Waits stay legitimate after a pure refusal ("cannot lower") where
+    // silence is real leverage.
+    const freshSubstance =
+      facts.shopAskedQuestion ||
+      facts.hasClarifyMessage ||
+      facts.shopSentVehiclePhoto ||
+      Boolean(input.extraction?.found);
+    if (freshSubstance) {
+      return {
+        ...fallback,
+        reasoning: "the shop just engaged with substance - answering promptly beats waiting",
+      };
+    }
+    // Mid-qualification waits stay SHORT (a deal in flight goes cold fast);
+    // only a complete deal earns the long endgame patience.
+    const capMin = facts.dealComplete
+      ? settings.strategicWaitMaxMin
+      : Math.min(8, settings.strategicWaitMaxMin);
+    const mins = clampNum(parsed.waitMinutes, 2, capMin, 5);
     return {
       action: "wait-defer",
       edgeId: null,

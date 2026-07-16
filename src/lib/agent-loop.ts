@@ -14,7 +14,7 @@
 //     humanized content variance.
 
 import "server-only";
-import { sbInsert, sbSelect } from "./runtime-config";
+import { sbInsert, sbSelect, sbUpdate } from "./runtime-config";
 import { extractOffer, composeBargain, runSafety, currencyForRegion } from "./agents";
 import { floorPriceFor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
@@ -408,6 +408,39 @@ export async function processVendorReply(opts: {
       .catch(() => {});
   }
 
+  // INBOUND GLOSS (fire-and-forget): translate a local-language shop reply to
+  // English and stamp it on the stored inbound row (raw.english), so every
+  // surface (card peek, transcript) shows the translation under the original.
+  // The traveller must always understand the conversation their agent is
+  // having - that IS the product.
+  if (ctx.sender && text) {
+    void (async () => {
+      try {
+        const { translateToEnglish } = await import("./agents");
+        const english = await translateToEnglish(text);
+        if (!english) return;
+        const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+          "whatsapp_messages",
+          opts.waMessageId
+            ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
+                opts.waMessageId
+              )}&limit=1`
+            : `select=id,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+                from
+              )}&order=received_at.desc&limit=1`
+        );
+        const row = rows[0];
+        if (row) {
+          await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
+            raw: { ...(row.raw ?? {}), english },
+          });
+        }
+      } catch {
+        /* gloss is an enhancement - never blocks the loop */
+      }
+    })();
+  }
+
   // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
   // photos, off-platform transfers, shady links - for the USER. Never touches
   // what the engine replies.
@@ -431,7 +464,7 @@ export async function processVendorReply(opts: {
         ).catch(() => [] as { body: string }[]);
         if (ours.some((o) => norm(o.body || "") === norm(text))) return;
         const { screenInbound } = await import("./inbound-risk");
-        const verdict = await screenInbound(text);
+        const verdict = await screenInbound(text, { vendorName: ctx.vendorName ?? undefined });
         if (verdict.risk === "none") return;
         await sbInsert("agent_events", [
           {
@@ -686,7 +719,11 @@ export async function processVendorReply(opts: {
   let followUp: string | null = null;
   let followKind: string = direction;
   let englishGloss: string | undefined;
-  const useLocalLang = Boolean(ctx.localLang) && ctx.plan === "ultra";
+  // LANGUAGE ADAPTATION: a shop writing real English gets English back for
+  // this reply - matching the human beats the local-language setting.
+  const { looksEnglish } = await import("./agents");
+  const useLocalLang =
+    Boolean(ctx.localLang) && ctx.plan === "ultra" && !looksEnglish(text);
   const register = registerRules(cfg, cur, ctx.region || undefined);
 
   if (direction === "answer") {

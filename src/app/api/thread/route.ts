@@ -40,9 +40,9 @@ export async function GET(req: Request) {
           digits
         )}&raw->>sender=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
       ).catch(() => []),
-      sbSelect<{ id: number; body: string; received_at: string }>(
+      sbSelect<{ id: number; body: string; received_at: string; raw: { english?: string } | null }>(
         "whatsapp_messages",
-        `select=id,body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+        `select=id,body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           digits
         )}${since}&order=received_at.asc&limit=60`
       ).catch(() => []),
@@ -60,6 +60,9 @@ export async function GET(req: Request) {
         id: `i${m.id}`,
         dir: "in" as const,
         text: m.body,
+        // English gloss of a local-language shop reply (stamped async by the
+        // agent loop) - the traveller always understands the conversation.
+        english: m.raw?.english,
         at: m.received_at,
       })),
     ]
@@ -68,11 +71,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ messages });
   }
 
-  let received: { body: string; received_at: string } | null = null;
+  let received: { body: string; received_at: string; raw?: { english?: string } | null } | null =
+    null;
   if (sent?.to_number) {
-    const inbound = await sbSelect<{ body: string; received_at: string }>(
+    const inbound = await sbSelect<{
+      body: string;
+      received_at: string;
+      raw: { english?: string } | null;
+    }>(
       "whatsapp_messages",
-      `select=body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+      `select=body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
         sent.to_number
       )}${since}&order=received_at.desc&limit=1`
     );
@@ -104,6 +112,8 @@ export async function GET(req: Request) {
       : queued
         ? { ...queued, queued: true }
         : null,
-    received: received ? { text: received.body, at: received.received_at } : null,
+    received: received
+      ? { text: received.body, at: received.received_at, english: received.raw?.english }
+      : null,
   });
 }
