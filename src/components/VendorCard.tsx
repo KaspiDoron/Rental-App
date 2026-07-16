@@ -28,6 +28,7 @@ function VendorCardInner({
   onReviews,
   onBargain,
   onStage,
+  onQueued,
   onCustomMessage,
   onPickupConsent,
   whyDecisionId,
@@ -45,6 +46,9 @@ function VendorCardInner({
   onReviews: (vendor: Vendor) => void;
   onBargain: (vendor: Vendor) => void;
   onStage: (vendorId: string, stage: Vendor["stage"]) => void;
+  // A send was parked in the outbox - stamp queuedUntil instantly so every
+  // surface (status strip, card button) agrees without waiting for a poll.
+  onQueued?: (vendorId: string, queuedUntil?: string) => void;
   onCustomMessage: (
     vendorId: string,
     message: string
@@ -76,6 +80,12 @@ function VendorCardInner({
     vendor.stage ?? ""
   );
   const askDone = alreadyAsked || rfqState === "sent" || rfqState === "queued";
+  // TRUTH RULE: a message held in the outbox is QUEUED, never "Sent".
+  // vendor.queuedUntil is the server-reconciled source (survives remounts),
+  // rfqState covers the instant before the first poll.
+  const queuedActive =
+    rfqState === "queued" ||
+    Boolean(vendor.queuedUntil && Date.parse(vendor.queuedUntil) > Date.now() && !vendor.offer);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [pickupState, setPickupState] = useState<"idle" | "sending" | "shared" | "failed">("idle");
 
@@ -123,15 +133,20 @@ function VendorCardInner({
         setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200);
       } else if (d.queued) {
         // Shop is closed: the anti-ban engine queued the message for their
-        // opening hours - it WILL go out, so the ask is spent.
+        // opening hours - it WILL go out, so the ask is spent. Stamp the
+        // queued-until immediately so the status strip and this card agree
+        // NOW, not after the next poll.
         setRfqState("queued");
         onStage(vendor.id, "rfq-sent");
+        onQueued?.(vendor.id, d.queuedUntil);
       } else if (d.halted) {
         // Already asked and awaiting the reply (server-side truth).
         setRfqState("sent");
         onStage(vendor.id, "awaiting-response");
       } else if (d.reason === "no-phone") {
+        // Honest terminal state: this shop cannot be messaged at all.
         setRfqState("no-phone");
+        onStage(vendor.id, "no-contact");
       } else if (d.rateLimited) {
         setRfqState("rate-limited");
         setRfqError(d.error ?? null);
@@ -341,15 +356,17 @@ function VendorCardInner({
             </div>
           )}
           {/* Control: the last message we sent + the shop's last reply, each
-              collapsible on its own, newest at the bottom. */}
-          {vendor.stage && vendor.stage !== "queued" && vendor.stage !== "locating-contact" && (
-            <ThreadPeek
-              vendorId={vendor.id}
-              fallbackSent={rfq?.vendorMessage}
-              fallbackReceived={offer?.message}
-              since={searchEpoch}
-            />
-          )}
+              collapsible on its own, newest at the bottom. Server truth ONLY -
+              the card never shows a client draft as "sent" (the real message
+              may be localized/rewritten before it leaves). */}
+          {vendor.stage &&
+            !["queued", "locating-contact", "found", "no-contact"].includes(vendor.stage) && (
+              <ThreadPeek
+                vendorId={vendor.id}
+                fallbackReceived={offer?.message}
+                since={searchEpoch}
+              />
+            )}
         </div>
 
         {offer ? (
@@ -544,7 +561,9 @@ function VendorCardInner({
               >
                 {rfqState === "sending" ? (
                   <LoadingDots light label={t("Sending")} />
-                ) : rfqState === "queued" ? (
+                ) : queuedActive ? (
+                  // Queued is queued - it must NEVER read as "Sent", even
+                  // after a remount (queuedActive derives from server state).
                   `🕘 ${t("Queued - sends when the shop opens")}`
                 ) : askDone ? (
                   `✓ ${t("Sent - reply lands here")}`

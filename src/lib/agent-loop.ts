@@ -411,9 +411,25 @@ export async function processVendorReply(opts: {
   // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
   // photos, off-platform transfers, shady links - for the USER. Never touches
   // what the engine replies.
+  //
+  // NEVER SELF-FLAG: a message the user wrote themselves (a lost fromMe flag
+  // upstream can mislabel it inbound) must not be screened as "the shop's
+  // reply" - anything matching our recent outbound to this number is skipped.
   if (ctx.sender && text) {
     void (async () => {
       try {
+        const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+        const ours = await sbSelect<{ body: string }>(
+          "whatsapp_messages",
+          `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+            from
+          )}&raw->>sender=eq.${encodeURIComponent(
+            ctx.sender!
+          )}&received_at=gte.${encodeURIComponent(
+            new Date(Date.now() - 24 * 3600_000).toISOString()
+          )}&order=received_at.desc&limit=30`
+        ).catch(() => [] as { body: string }[]);
+        if (ours.some((o) => norm(o.body || "") === norm(text))) return;
         const { screenInbound } = await import("./inbound-risk");
         const verdict = await screenInbound(text);
         if (verdict.risk === "none") return;

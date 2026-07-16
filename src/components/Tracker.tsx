@@ -13,6 +13,7 @@ const FLOW: { key: TrackerStage; label: string }[] = [
 const ORDER: TrackerStage[] = [
   "queued",
   "locating-contact",
+  "found",
   "rfq-sent",
   "awaiting-response",
   "negotiating",
@@ -23,6 +24,8 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
   const map: Record<TrackerStage, { text: string; cls: string }> = {
     queued: { text: "Queued", cls: "bg-card2 text-faint" },
     "locating-contact": { text: "Locating", cls: "bg-brandblue-soft text-brandblue" },
+    found: { text: "Ready", cls: "bg-card2 text-soft" },
+    "no-contact": { text: "No WhatsApp", cls: "bg-card2 text-faint" },
     "rfq-sent": { text: "RFQ sent", cls: "bg-brandblue-soft text-brandblue" },
     "awaiting-response": {
       text: "Awaiting reply",
@@ -64,6 +67,10 @@ export function stageCaption(stage: TrackerStage): { emoji: string; text: string
       return { emoji: "🕓", text: "Queued - your agent starts on this shop in a moment." };
     case "locating-contact":
       return { emoji: "🔎", text: "Your agent is finding this shop's WhatsApp number." };
+    case "found":
+      return { emoji: "🎯", text: "Shop found - ask for the price and your agent takes it from there." };
+    case "no-contact":
+      return { emoji: "📵", text: "No WhatsApp number found for this shop - a nearby shop may work better." };
     case "rfq-sent":
       return { emoji: "📨", text: "Your agent messaged the shop asking for the best price." };
     case "awaiting-response":
@@ -84,7 +91,7 @@ export function stageCaption(stage: TrackerStage): { emoji: string; text: string
 /** Horizontal pipeline showing progress through the negotiation flow. */
 export function Pipeline({ stage }: { stage: TrackerStage }) {
   const idx = ORDER.indexOf(stage);
-  const failed = stage === "no-response" || stage === "declined";
+  const failed = stage === "no-response" || stage === "declined" || stage === "no-contact";
   return (
     <div className="flex items-center gap-1">
       {FLOW.map((step) => {

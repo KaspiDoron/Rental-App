@@ -39,6 +39,8 @@ export interface StructuredRFQ {
 export type TrackerStage =
   | "queued"
   | "locating-contact"
+  | "found" // discovered + ready to ask (the honest resting state)
+  | "no-contact" // no WhatsApp number could be found - cannot be messaged
   | "rfq-sent"
   | "awaiting-response"
   | "negotiating"

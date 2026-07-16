@@ -79,10 +79,31 @@ export async function GET(req: Request) {
     received = inbound[0] ?? null;
   }
 
+  // Nothing delivered yet? Surface the QUEUED outbox body (the exact text
+  // that WILL go out) flagged as queued - the card never shows a client
+  // draft, and never claims "sent" for a held message.
+  let queued: { text: string; at: string; english?: string } | null = null;
+  if (!sent) {
+    const rows = await sbSelect<{
+      body: string;
+      not_before: string;
+      meta: { vendorId?: string; englishGloss?: string } | null;
+    }>(
+      "wa_outbox",
+      `select=body,not_before,meta&sender_key=eq.${encodeURIComponent(
+        session.email
+      )}&meta->>vendorId=eq.${encodeURIComponent(vendorId)}&order=not_before.asc&limit=1`
+    ).catch(() => []);
+    const q = rows[0];
+    if (q) queued = { text: q.body, at: q.not_before, english: q.meta?.englishGloss };
+  }
+
   return NextResponse.json({
     sent: sent
       ? { text: sent.body, at: sent.received_at, english: sent.raw?.englishGloss }
-      : null,
+      : queued
+        ? { ...queued, queued: true }
+        : null,
     received: received ? { text: received.body, at: received.received_at } : null,
   });
 }

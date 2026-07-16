@@ -16,7 +16,12 @@ import { can } from "@/lib/entitlements";
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
 // stops when the budget runs out (the UI shows how many actually went).
-const MAX_BATCH = 6;
+//
+// BETA LIMIT: each search session contacts at most 10 rental shops in total
+// (sent + queued), enforced HERE - the UI cap is a courtesy, this is the
+// truth. Raised automatically in a future update once scaling lands.
+const MAX_BATCH = 10;
+const SESSION_SHOP_CAP = 10;
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -33,7 +38,7 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const message = String(body.message ?? "").trim();
-  const vendors: {
+  let vendors: {
     id: string;
     name: string;
     whatsapp?: string;
@@ -42,6 +47,48 @@ export async function POST(req: Request) {
   }[] = Array.isArray(body.vendors) ? body.vendors.slice(0, MAX_BATCH) : [];
   if (!message || vendors.length === 0) {
     return NextResponse.json({ error: "message and vendors required" }, { status: 400 });
+  }
+
+  // Per-SESSION cap (backend truth, cannot be bypassed by repeat taps): count
+  // the distinct shops already contacted or queued since this search session
+  // started, and only allow the remainder. The session boundary is the user's
+  // latest `searches` row - the same signal the deals dashboard groups by.
+  try {
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const enc = encodeURIComponent(session.email);
+    const lastSearch = await sbSelect<{ created_at: string }>(
+      "searches",
+      `select=created_at&user_email=eq.${enc}&order=created_at.desc&limit=1`
+    );
+    const sinceIso = lastSearch[0]?.created_at ?? new Date(Date.now() - 86400000).toISOString();
+    const [sentRows, queuedRows] = await Promise.all([
+      sbSelect<{ to_number: string }>(
+        "whatsapp_messages",
+        `select=to_number&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover)&received_at=gte.${sinceIso}&limit=200`
+      ).catch(() => []),
+      sbSelect<{ to_number: string }>(
+        "wa_outbox",
+        `select=to_number&sender_key=eq.${enc}&limit=50`
+      ).catch(() => []),
+    ]);
+    const contacted = new Set([
+      ...sentRows.map((r) => r.to_number),
+      ...queuedRows.map((r) => r.to_number),
+    ]);
+    const allowance = Math.max(0, SESSION_SHOP_CAP - contacted.size);
+    if (allowance === 0) {
+      return NextResponse.json({
+        results: [],
+        sent: 0,
+        queued: 0,
+        capReached: true,
+        cap: SESSION_SHOP_CAP,
+        error: `This search already reached its ${SESSION_SHOP_CAP}-shop beta limit - replies from the contacted shops keep flowing in.`,
+      });
+    }
+    vendors = vendors.slice(0, allowance);
+  } catch {
+    /* cap check is best-effort - the MAX_BATCH slice still bounds the run */
   }
 
   const verdict = await runSafety(message);
@@ -67,6 +114,21 @@ export async function POST(req: Request) {
     const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
     batchMessage = localized.text;
     if (localized.english && localized.text !== message) englishGloss = localized.english;
+    if (!localized.localized) {
+      // Documented English fallback (after retry) - never a silent flip.
+      await sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          vendor_id: "",
+          vendor_name: "(mass bargain)",
+          detail: JSON.stringify({
+            email: session.email,
+            region: String(body.region ?? ""),
+            reason: "AI localization unavailable after retry - batch sent in English",
+          }).slice(0, 800),
+        },
+      ]).catch(() => {});
+    }
   }
 
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
@@ -101,6 +163,8 @@ export async function POST(req: Request) {
       region: String(body.region ?? ""),
       plan: session.plan,
       localLang: Boolean(body.localLang) && session.plan === "ultra",
+      // On queued rows the thread peek reads the gloss from outbox meta.
+      ...(englishGloss ? { englishGloss } : {}),
     };
     const guard = await guardOutbound({
       senderKey: session.email,
@@ -152,7 +216,6 @@ export async function POST(req: Request) {
             channel: personal ? "personal-wa" : "cloud-api",
             ok: true,
             ...meta,
-            ...(englishGloss ? { englishGloss } : {}),
           },
         },
       ]);

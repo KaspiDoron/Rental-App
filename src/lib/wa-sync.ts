@@ -80,8 +80,27 @@ export async function syncInboundReplies(email: string): Promise<number> {
       ).catch(() => []);
       const seenIds = new Set(seen.map((s) => s.wa_message_id));
 
+      // SELF-ECHO GUARD (mirrors the webhook's): if Evolution's stored record
+      // lost the fromMe flag, a message the USER typed would come back here
+      // labelled inbound - and the risk screen would then "flag the shop" for
+      // the user's own words. Anything matching OUR recent outbound (agent or
+      // human-manual) in this thread is skipped.
+      const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+      const ours = await sbSelect<{ body: string; wa_message_id: string | null }>(
+        "whatsapp_messages",
+        `select=body,wa_message_id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+          digits
+        )}&raw->>sender=eq.${encodeURIComponent(email)}&received_at=gte.${encodeURIComponent(
+          new Date(Date.now() - 24 * 3600_000).toISOString()
+        )}&order=received_at.desc&limit=30`
+      ).catch(() => []);
+      const ourBodies = new Set(ours.map((o) => norm(o.body || "")).filter(Boolean));
+      const ourIds = new Set(ours.map((o) => o.wa_message_id).filter(Boolean));
+
       for (const m of inbound) {
         if (seenIds.has(m.id)) continue;
+        if (ourIds.has(m.id)) continue; // our own send, mislabelled inbound
+        if (m.text.trim() && ourBodies.has(norm(m.text))) continue; // self-echo
         recovered += 1;
         // Mirror the webhook's insert so the thread history stays coherent.
         await sbInsert("whatsapp_messages", [

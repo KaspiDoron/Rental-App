@@ -1023,9 +1023,16 @@ export async function fetchMessagesRaw(
   return arr
     .map((m) => {
       const msg = m.message ?? {};
+      // ROBUST fromMe: Evolution stores it in different spots depending on
+      // version/endpoint. Missing the flag once misattributes the user's OWN
+      // message as a shop reply (and the risk screen then "flags" it), so we
+      // check every known location before defaulting to false.
+      const fromMe = Boolean(
+        m.key?.fromMe ?? (m as { fromMe?: boolean }).fromMe ?? m.message?.key?.fromMe
+      );
       return {
         id: String(m.key?.id ?? ""),
-        fromMe: Boolean(m.key?.fromMe),
+        fromMe,
         text: waMessageText(msg),
         ts: Number(m.messageTimestamp ?? 0),
         hasImage: Boolean(msg.imageMessage ?? msg.ephemeralMessage?.message?.imageMessage),

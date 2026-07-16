@@ -125,6 +125,23 @@ export async function POST(req: Request) {
       session.email
     );
     if (localized.english && localized.text !== outboundText) englishGloss = localized.english;
+    // DOCUMENTED fallback: if localization failed (after its retry), the
+    // opener goes out in English and the reason is durably recorded - a
+    // language flip is never a silent mystery.
+    if (!localized.localized) {
+      await sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          vendor_id: String(body.vendorId ?? ""),
+          vendor_name: String(body.vendorName ?? ""),
+          detail: JSON.stringify({
+            email: session.email,
+            region: String(body.region ?? ""),
+            reason: "AI localization unavailable after retry - sent in English",
+          }).slice(0, 800),
+        },
+      ]).catch(() => {});
+    }
     outboundText = localized.text;
   }
 
@@ -171,6 +188,9 @@ export async function POST(req: Request) {
       region: String(body.region ?? ""),
       plan: session.plan,
       localLang: Boolean(body.localLang) && session.plan === "ultra",
+      // Carried on the queued outbox row so the card's thread peek can show
+      // the English reading of a held local-language message.
+      ...(englishGloss ? { englishGloss } : {}),
     },
   });
   if (!guard.allow) {
@@ -243,32 +263,53 @@ export async function POST(req: Request) {
   }
   if (result.ok) await afterSend(session.email, digits);
 
-  // Log the outbound message WITH thread context (vendor + rfq), so the
-  // webhook can match the inbound reply and keep the loop fully in-app.
-  await sbInsert("whatsapp_messages", [
-    {
-      to_number: digits,
-      body: guardedMessage,
-      type: "text",
-      direction: "outbound",
-      raw: {
-        channel: configured ? result.channel : "unconfigured",
-        sender: session.email,
-        ok: result.ok,
-        vendorId: String(body.vendorId ?? ""),
-        vendorName: String(body.vendorName ?? ""),
-        kind: String(body.kind ?? "custom"),
-        round: Number(body.round ?? 0),
-        rfq: body.rfq ?? null,
-        region: String(body.region ?? ""),
-        plan: session.plan,
-        localLang: wantsLocal,
-        // English gloss of a localized message so the traveller can read what
-        // their agent sent on their behalf (shown by the card's thread peek).
-        ...(englishGloss ? { englishGloss } : {}),
+  // TRUTH RULE: the outbound whatsapp_messages row is the record every
+  // surface (thread peek, activity feed, deals dashboard, contacted counts)
+  // treats as "a message reached this shop". A FAILED send must therefore
+  // never write one - it used to (raw.ok:false), which made the UI count
+  // shops as contacted when nothing was delivered.
+  if (result.ok) {
+    // Log the outbound message WITH thread context (vendor + rfq), so the
+    // webhook can match the inbound reply and keep the loop fully in-app.
+    await sbInsert("whatsapp_messages", [
+      {
+        to_number: digits,
+        body: guardedMessage,
+        type: "text",
+        direction: "outbound",
+        raw: {
+          channel: result.channel,
+          sender: session.email,
+          ok: true,
+          vendorId: String(body.vendorId ?? ""),
+          vendorName: String(body.vendorName ?? ""),
+          kind: String(body.kind ?? "custom"),
+          round: Number(body.round ?? 0),
+          rfq: body.rfq ?? null,
+          region: String(body.region ?? ""),
+          plan: session.plan,
+          localLang: wantsLocal,
+          // English gloss of a localized message so the traveller can read
+          // what their agent sent on their behalf (card thread peek).
+          ...(englishGloss ? { englishGloss } : {}),
+        },
       },
-    },
-  ]);
+    ]);
+  } else {
+    // Keep the failure observable without polluting the "sent" record.
+    await sbInsert("agent_events", [
+      {
+        kind: "send-failed",
+        vendor_id: String(body.vendorId ?? ""),
+        vendor_name: String(body.vendorName ?? ""),
+        detail: JSON.stringify({
+          email: session.email,
+          channel: result.channel,
+          error: result.error ?? "unknown",
+        }).slice(0, 800),
+      },
+    ]).catch(() => {});
+  }
 
   return NextResponse.json({
     allowed: true,

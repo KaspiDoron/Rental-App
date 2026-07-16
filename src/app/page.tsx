@@ -127,6 +127,8 @@ export default function Home() {
   const [waConnected, setWaConnected] = useState(false);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
+  // The premium beta-quality note shown before a mass bargain runs.
+  const [massInfoOpen, setMassInfoOpen] = useState(false);
   // Ultra option: let the agents bargain in the shop's LOCAL language. OFF by
   // default (optional), persisted, and gated - free/pro see the upgrade sheet.
   const [localLang, setLocalLang] = useState(false);
@@ -446,6 +448,11 @@ export default function Home() {
   const handleStage = useCallbackRef((id: string, stage: Vendor["stage"]) =>
     patchVendor(id, { stage })
   );
+  // A send was parked in the outbox: stamp queuedUntil NOW so the status
+  // strip and the card agree instantly (the activity poll keeps it fresh).
+  const handleQueued = useCallbackRef((id: string, queuedUntil?: string) =>
+    patchVendor(id, { queuedUntil: queuedUntil ?? new Date().toISOString() })
+  );
   const openWhy = useCallbackRef((decisionId: string) => setWhyDecision(decisionId));
 
   // ---- Will's bridge: natural language -> the EXISTING setters ------------
@@ -692,6 +699,17 @@ export default function Home() {
           sentiment: Number(warmth.toFixed(2)),
         });
       }, base + 300);
+      // HONESTY: "Locating" is a brief transition, never a resting state - a
+      // card must not claim ongoing work that isn't happening. The real number
+      // resolution runs inside /api/outreach when the user (or Will) asks.
+      // Only advance locating -> found; never stomp a stage that moved on.
+      schedule(() => {
+        setVendors((vs) =>
+          vs.map((v) =>
+            v.id === vendor.id && v.stage === "locating-contact" ? { ...v, stage: "found" } : v
+          )
+        );
+      }, base + 1500);
     });
     schedule(() => setPhase("done"), list.length * 200 + 1400);
   }
@@ -832,8 +850,14 @@ export default function Home() {
     setMassNote(null);
     try {
       const targets = filtered
-        .filter((v) => !v.offer && v.stage !== "rfq-sent" && v.stage !== "awaiting-response")
-        .slice(0, 6)
+        .filter(
+          (v) =>
+            !v.offer &&
+            v.stage !== "rfq-sent" &&
+            v.stage !== "awaiting-response" &&
+            v.stage !== "no-contact"
+        )
+        .slice(0, 10)
         .map((v) => ({
           id: v.id,
           name: v.name,
@@ -854,6 +878,12 @@ export default function Home() {
         }),
       });
       const d = await res.json();
+      if (d.capReached) {
+        setMassNote(
+          t("This hunt already reached its 10-shop beta limit - replies from the contacted shops keep flowing in.")
+        );
+        return;
+      }
       if (d.results) {
         let alreadyAsked = 0;
         for (const r of d.results) {
@@ -881,6 +911,10 @@ export default function Home() {
               stage: "awaiting-response",
               lastEventAt: Date.now(),
             });
+          } else if (r.reason === "no-phone") {
+            // Honest terminal state - this shop cannot be messaged at all,
+            // so it must never look contacted anywhere.
+            patchVendor(r.id, { stage: "no-contact", lastEventAt: Date.now() });
           }
         }
         refreshQueue();
@@ -1449,7 +1483,12 @@ export default function Home() {
         {vendors.length > 1 && rfq && (
           <div className="mt-3">
             <button
-              onClick={runMassBargain}
+              onClick={() => {
+                // Premium beta note first (backend enforces the same cap) -
+                // non-subscribers go straight to the upgrade path as before.
+                if (can(session?.plan, "mass-bargain")) setMassInfoOpen(true);
+                else runMassBargain();
+              }}
               disabled={massState === "running"}
               className={`btn w-full rounded-2xl py-3 text-[14px] font-extrabold text-white disabled:opacity-70 ${
                 !can(session?.plan, "mass-bargain") ? "bg-faint" : "badge-flash"
@@ -1540,6 +1579,7 @@ export default function Home() {
                   onReviews={setReviewsVendor}
                   onBargain={setBargainVendor}
                   onStage={handleStage}
+                  onQueued={handleQueued}
                   onCustomMessage={customMessage}
                   onPickupConsent={pickupConsent}
                   whyDecisionId={whyByVendor[v.id]}
@@ -1668,6 +1708,41 @@ export default function Home() {
         />
       )}
       {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
+      {massInfoOpen && (
+        <Modal onClose={() => setMassInfoOpen(false)} center>
+          <div className="text-center">
+            <div className="mx-auto mb-3 w-fit">
+              <WillAvatar size={56} />
+            </div>
+            <h2 className="text-lg font-extrabold text-strong">
+              {t("Up to 10 shops per hunt")}
+            </h2>
+            <p className="mx-auto mt-2 max-w-[300px] text-[13px] leading-relaxed text-soft">
+              {t("During the beta, each search contacts up to 10 rental shops. This keeps every negotiation sharp and your number perfectly paced while we scale the platform.")}
+            </p>
+            <p className="mx-auto mt-1.5 max-w-[300px] text-[12px] font-bold text-faint">
+              {t("Future updates raise this limit automatically - nothing for you to do.")}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setMassInfoOpen(false)}
+                className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-sm"
+              >
+                {t("Not now")}
+              </button>
+              <button
+                onClick={() => {
+                  setMassInfoOpen(false);
+                  runMassBargain();
+                }}
+                className="btn btn-primary flex-1 rounded-2xl py-2.5 text-sm"
+              >
+                {t("Let's go")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {clearConfirm && (
         <Modal onClose={() => setClearConfirm(false)} center>
           <div className="text-center">
