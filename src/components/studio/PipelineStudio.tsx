@@ -12,12 +12,13 @@ import { PlaygroundPanel } from "./PlaygroundPanel";
 import { NodeSheet } from "./NodeSheet";
 import { EdgeSheet } from "./EdgeSheet";
 import { SimulatorPanel } from "./SimulatorPanel";
+import { LiveDrillPanel } from "./LiveDrillPanel";
 import { ReplayPanel } from "./ReplayPanel";
 import { MediaStudio } from "./MediaStudio";
 import { ScoresPanel } from "./ScoresPanel";
 import { LoadingDots } from "../LoadingDots";
 
-type Tab = "flow" | "playground" | "graph" | "simulator" | "replay" | "media" | "scores" | "backend";
+type Tab = "flow" | "playground" | "graph" | "simulator" | "drill" | "replay" | "media" | "scores" | "backend";
 type Vocab = Parameters<typeof EdgeSheet>[0]["vocabulary"];
 
 // The Pipeline Studio - the owner's 100%-visibility, 100%-editable control
@@ -167,6 +168,7 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
     { id: "playground", label: "🎭 Playground" },
     { id: "graph", label: "🕸️ Pipeline" },
     { id: "simulator", label: "🧪 Simulator" },
+    { id: "drill", label: "📞 Live Drill" },
     { id: "replay", label: "🎬 Replay" },
     { id: "media", label: "🖼️ Media Lab" },
     { id: "scores", label: "🏅 Scores" },
@@ -297,6 +299,7 @@ export function PipelineStudio({ isOwner }: { isOwner: boolean }) {
       )}
 
       {tab === "simulator" && <SimulatorPanel />}
+      {tab === "drill" && <LiveDrillPanel />}
       {tab === "replay" && (
         <ReplayPanel
           onPreviewPath={(path) => {
