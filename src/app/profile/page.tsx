@@ -13,6 +13,7 @@ import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import { SiteFooter } from "@/components/SiteFooter";
+import { WillCompanion } from "@/components/will/WillCompanion";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -755,6 +756,9 @@ export default function ProfilePage() {
 
         <SiteFooter />
       </div>
+
+      {/* Will follows the journey - one tap back to the workspace chat */}
+      <WillCompanion note={t("I'm right here when you need wheels.")} />
     </main>
   );
 }

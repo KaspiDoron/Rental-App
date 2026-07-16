@@ -361,6 +361,11 @@ export default function Home() {
         setOnboarding(true);
       }
     } catch {}
+    // Deep link from Will's edge companion (?will=1): open his chat directly.
+    if (params.get("will") === "1") {
+      setWillOpen(true);
+      window.history.replaceState({}, "", "/");
+    }
     // Returning from Stripe Checkout.
     const plan = params.get("plan");
     if (params.get("billing") === "success" && plan) {
