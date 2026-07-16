@@ -968,7 +968,7 @@ export async function drainOutbox(
           body: verdict.text,
           type: "text",
           direction: "outbound",
-          raw: { ...(row.meta ?? {}), sender: row.sender_key, auto: true, queued: true },
+          raw: { ...(row.meta ?? {}), sender: row.sender_key, ok: true, auto: true, queued: true },
         },
       ]);
     } else {
