@@ -35,6 +35,14 @@ create index if not exists whatsapp_messages_received_idx
 -- sent that number (powers the fully automatic in-app reply loop).
 create index if not exists whatsapp_messages_thread_idx
   on public.whatsapp_messages (to_number, received_at desc);
+-- Hot paths at scale: nearly every outbound guard/feed query filters by the
+-- sender email stored in raw->>'sender', and the engagement check filters by
+-- from_number - without these two, both become sequential scans as the table
+-- grows (this is the app's hottest table).
+create index if not exists whatsapp_messages_sender_idx
+  on public.whatsapp_messages ((raw->>'sender'), received_at desc);
+create index if not exists whatsapp_messages_from_idx
+  on public.whatsapp_messages (from_number, received_at desc);
 
 -- ---- App users (access control + signup details) -----------------------------
 create table if not exists public.app_users (
@@ -346,6 +354,8 @@ create table if not exists public.wa_outbox (
   created_at timestamptz not null default now()
 );
 create index if not exists wa_outbox_due_idx on public.wa_outbox (not_before asc);
+-- The per-sender pending-count check in the outbound guard runs on every send.
+create index if not exists wa_outbox_sender_idx on public.wa_outbox (sender_key);
 alter table public.wa_outbox enable row level security;
 
 -- ---- WA idle pause (session quiets down while the app is not in use) ----------

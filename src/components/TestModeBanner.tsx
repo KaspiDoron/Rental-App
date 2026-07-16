@@ -23,7 +23,7 @@ export function TestModeBanner() {
       style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 2px)" }}
       role="status"
     >
-      Test mode - no real charges · data may be reset
+      Test mode - subscriptions sandboxed · WhatsApp + searches are REAL · data may be reset
     </div>
   );
 }
