@@ -163,3 +163,9 @@ export async function requireManagement(): Promise<Session | null> {
   const s = await getSession();
   return s && s.role !== "user" ? s : null;
 }
+
+/** Owner ONLY - the Ops Center (cross-user review + learning) gate. */
+export async function requireOwner(): Promise<Session | null> {
+  const s = await getSession();
+  return s && s.role === "owner" ? s : null;
+}

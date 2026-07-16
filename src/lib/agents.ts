@@ -660,11 +660,14 @@ export async function composeBargain(opts: {
     if (!opts.targetPricePerDay) target = roundNice(target);
     if (target >= quoted) target = undefined; // quote already at/below target
   }
+  // Refresh the durable tactic table first (30s-cached, one query at most) so
+  // win-rate learning from other instances/deploys reaches this compose.
+  const { listTraining, hydrateTactics } = await import("./memory");
+  await hydrateTactics();
   const tactics = getTactics();
   const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
 
   // Training examples: durable (Supabase) first, then this instance's memory.
-  const { listTraining } = await import("./memory");
   const { sbSelect } = await import("./runtime-config");
   const durable = await sbSelect<{ text: string }>(
     "agent_training",

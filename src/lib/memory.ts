@@ -1,10 +1,12 @@
 // Continuous Learning Engine - shared negotiation-tactic memory.
 //
-// In production this table lives in Supabase so learning accumulates across all
-// users and server instances. Here we keep a process-level singleton that seeds
-// a starter playbook and updates win-rates as negotiations resolve. The API
-// surface is identical, so swapping in a Supabase-backed implementation is a
-// drop-in change (see db.ts).
+// The synchronous read API (getTactics/recordOutcome) keeps serving from a
+// process-level singleton so hot callers never await a query - but the table
+// is now DURABLE: hydrateTactics() (called from the async entry points)
+// refreshes the singleton from Supabase agent_tactics every 30s, and
+// recordOutcome writes each learning update through fire-and-forget. Learning
+// therefore accumulates across users, instances and deploys; without Supabase
+// everything degrades to the old in-process behavior.
 
 import type { NegotiationTactic } from "./types";
 
@@ -74,6 +76,63 @@ export function getTactics(): NegotiationTactic[] {
   );
 }
 
+let hydratedAt = 0;
+
+/**
+ * Refresh the in-process tactic table from the durable agent_tactics table
+ * (seeding it with the starter playbook on first contact). Callers on async
+ * paths await this once before getTactics(); 30s cache keeps it one query.
+ */
+export async function hydrateTactics(): Promise<void> {
+  if (Date.now() - hydratedAt < 30_000) return;
+  hydratedAt = Date.now();
+  try {
+    const { sbSelect, sbInsert, supabaseConfigured } = await import("./runtime-config");
+    if (!supabaseConfigured()) return;
+    const rows = await sbSelect<{
+      id: string;
+      label: string;
+      script: string;
+      uses: number | null;
+      wins: number | null;
+      avg_discount_pct: number | null;
+    }>("agent_tactics", "select=id,label,script,uses,wins,avg_discount_pct&limit=50");
+    if (rows.length === 0) {
+      // First contact: persist the starter playbook so learning has a durable home.
+      await sbInsert(
+        "agent_tactics",
+        STARTER.map((t) => ({
+          id: t.id,
+          label: t.label,
+          script: t.script,
+          uses: t.uses,
+          wins: t.wins,
+          avg_discount_pct: t.avgDiscountPct,
+        })),
+        "id"
+      );
+      return;
+    }
+    const s = store();
+    for (const r of rows) {
+      if (!r.id) continue;
+      const mapped: NegotiationTactic = {
+        id: r.id,
+        label: r.label ?? r.id,
+        script: r.script ?? "",
+        uses: r.uses ?? 0,
+        wins: r.wins ?? 0,
+        avgDiscountPct: Number(r.avg_discount_pct ?? 0),
+      };
+      const existing = s.tactics.find((t) => t.id === r.id);
+      if (existing) Object.assign(existing, mapped);
+      else s.tactics.push(mapped);
+    }
+  } catch {
+    /* durable memory is best-effort - the in-process table still serves */
+  }
+}
+
 function score(t: NegotiationTactic): number {
   const winRate = t.uses > 0 ? t.wins / t.uses : 0;
   return winRate * 0.6 + (t.avgDiscountPct / 20) * 0.4;
@@ -93,6 +152,22 @@ export function recordOutcome(
   t.avgDiscountPct = Number(
     (t.avgDiscountPct * 0.8 + discountPct * 0.2).toFixed(1)
   );
+  // Write-through so the learning survives cold starts and reaches every
+  // instance. Fire-and-forget: the caller never waits on durability.
+  void (async () => {
+    try {
+      const { sbUpdate, supabaseConfigured } = await import("./runtime-config");
+      if (!supabaseConfigured()) return;
+      await sbUpdate("agent_tactics", `id=eq.${encodeURIComponent(t.id)}`, {
+        uses: t.uses,
+        wins: t.wins,
+        avg_discount_pct: t.avgDiscountPct,
+        updated_at: new Date().toISOString(),
+      });
+    } catch {
+      /* best-effort */
+    }
+  })();
 }
 
 export function recordRun(offers: number, cycleSeconds: number) {

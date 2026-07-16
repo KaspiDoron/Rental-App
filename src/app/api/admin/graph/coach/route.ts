@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { chat, extractJson } from "@/lib/ai";
-import { getGraphSpec, saveGraphSpec } from "@/lib/graph/engine";
+import { getGraphSpec } from "@/lib/graph/engine";
+import { saveVersionedSpec } from "@/lib/policy";
 import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import type { GraphSpec } from "@/lib/graph/types";
 
@@ -120,7 +121,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not apply the feedback to any node." }, { status: 500 });
   }
 
-  const saved = await saveGraphSpec(spec);
+  const saved = await saveVersionedSpec({
+    kind: "graph_spec",
+    spec,
+    note: `Coach: ${(summary || feedback).slice(0, 200)}`,
+    author: session.email,
+  });
   if (!saved.ok) {
     return NextResponse.json(
       { error: `The updated pipeline failed validation: ${saved.problems.join("; ")}` },

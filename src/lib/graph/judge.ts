@@ -13,31 +13,36 @@
 // rule-scores with no LLM key.
 
 import "server-only";
-import { chat, extractJson } from "../ai";
+import { chatDetailed, extractJson } from "../ai";
 import { sbInsert, sbSelect } from "../runtime-config";
 import { trigramOverlap } from "./uniqueness";
+import { getActiveRev } from "../ops/rev";
 import type { ScoreRecord } from "./types";
 
 export const JUDGE_RUBRIC_VERSION = "v1" as const;
 
 const EMOJI_ANY = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/u;
 
-function persistScore(rec: ScoreRecord): Promise<void> {
-  return sbInsert("agent_scores", [
-    {
-      decision_id: rec.decisionId,
-      thread_key: rec.threadKey,
-      node_id: rec.nodeId,
-      scorer: rec.scorer,
-      rubric_version: rec.rubricVersion,
-      scores: rec.scores,
-      tactic_id: rec.tacticId ?? null,
-      provider: rec.provider ?? null,
-      verdict: rec.verdict,
-    },
-  ])
-    .then(() => undefined)
-    .catch(() => undefined);
+async function persistScore(rec: ScoreRecord): Promise<void> {
+  const row = {
+    decision_id: rec.decisionId,
+    thread_key: rec.threadKey,
+    node_id: rec.nodeId,
+    scorer: rec.scorer,
+    rubric_version: rec.rubricVersion,
+    scores: rec.scores,
+    tactic_id: rec.tacticId ?? null,
+    provider: rec.provider ?? null,
+    verdict: rec.verdict,
+    spec_rev: await getActiveRev().catch(() => null),
+  };
+  // Same silent-fail-on-unknown-column hazard as agent_traces: retry without
+  // the Ops column so scores never vanish before the migration runs.
+  const ok = await sbInsert("agent_scores", [row]).catch(() => false);
+  if (ok === false) {
+    const { spec_rev: _s, ...bare } = row;
+    await sbInsert("agent_scores", [bare]).catch(() => {});
+  }
 }
 
 /** Deterministic move scores - the always-available floor. */
@@ -76,7 +81,7 @@ async function scoreMove(args: {
     .catch(() => []);
   const det = deterministicMoveScores(args.text, recent);
 
-  const out = await chat([
+  const detail = await chatDetailed([
     {
       role: "system",
       content:
@@ -94,8 +99,10 @@ async function scoreMove(args: {
       content: `Move type: ${args.kind}\nConversation so far:\n${args.history}\n\nThe agent's message: ${args.text}`,
     },
   ]);
-  const parsed = out
-    ? extractJson<{ tacticFit?: number; tone?: number; uniqueness?: number; why?: string }>(out)
+  const parsed = detail.text
+    ? extractJson<{ tacticFit?: number; tone?: number; uniqueness?: number; why?: string }>(
+        detail.text
+      )
     : null;
 
   const clamp = (v: unknown, fallback: number) => {
@@ -117,6 +124,7 @@ async function scoreMove(args: {
     rubricVersion: JUDGE_RUBRIC_VERSION,
     scores,
     tacticId: args.tacticId,
+    provider: parsed ? detail.provider : undefined,
     verdict: (parsed?.why ?? "deterministic rule scores").slice(0, 300),
   };
   await persistScore(rec);
@@ -205,7 +213,8 @@ async function judgeThread(threadKey: string): Promise<ScoreRecord | null> {
   // Feed tactic learning: every bargain tactic used in this thread gets the
   // realized outcome (won = a real discount landed). Durable EMA in memory.ts.
   try {
-    const { recordOutcome } = await import("../memory");
+    const { recordOutcome, hydrateTactics } = await import("../memory");
+    await hydrateTactics();
     const drafts = await sbSelect<{ tactic: string }>(
       "bargain_drafts",
       `select=tactic&user_email=eq.${encodeURIComponent(
@@ -280,6 +289,7 @@ export async function scoresSummary(): Promise<{
     "agent_scores",
     "select=thread_key,node_id,scorer,scores,verdict,created_at&order=created_at.desc&limit=40"
   ).catch(() => []);
-  const { getTactics } = await import("../memory");
+  const { getTactics, hydrateTactics } = await import("../memory");
+  await hydrateTactics();
   return { recent, tactics: getTactics() };
 }

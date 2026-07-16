@@ -628,3 +628,83 @@ alter table public.app_users add column if not exists terms_version text;
 alter table public.app_users add column if not exists terms_accepted_at timestamptz;
 alter table public.app_users add column if not exists wa_risk_accepted_at timestamptz;
 alter table public.app_users add column if not exists ai_responsibility_accepted_at timestamptz;
+
+-- ================================================================================
+-- AI OPERATIONS CENTER - owner review console + learning loop
+-- ================================================================================
+
+-- ---- Owner reviews of agent decisions -------------------------------------------
+-- One row per reviewed decision (decision_id null = a thread-level review, e.g.
+-- an auto-flag from the weak-conversation detector). Powers the Ops inbox,
+-- the exemplar channel, edge priors and judge calibration.
+create table if not exists public.agent_reviews (
+  id              bigint generated always as identity primary key,
+  decision_id     text,                           -- null = thread-level review
+  thread_key      text not null,
+  user_email      text,
+  vendor_id       text,
+  vendor_name     text,
+  node_id         text,                           -- denormalized from the trace
+  edge_id         text,                           -- chosen edge (priors/heatmap)
+  rating          int,                            -- 1..5
+  verdict         text,                           -- 'approve' | 'reject'
+  branch_correct  boolean,
+  outcome_impact  text,                           -- 'improved'|'worsened'|'neutral'
+  better_response text,                           -- what SHOULD have been sent
+  feedback        text,
+  tags            text[] not null default '{}',   -- failure-pattern labels
+  bookmark        boolean not null default false, -- exemplar negotiation
+  status          text not null default 'open',   -- open|flagged|auto_flagged|resolved
+  source          text not null default 'owner',  -- 'owner' | 'auto'
+  auto_reason     text,                           -- detector explanation
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists agent_reviews_decision_idx
+  on public.agent_reviews (decision_id);
+create index if not exists agent_reviews_thread_idx
+  on public.agent_reviews (thread_key, created_at desc);
+create index if not exists agent_reviews_status_idx
+  on public.agent_reviews (status, created_at desc);
+alter table public.agent_reviews enable row level security;
+
+-- ---- Versioned behavior changes (audit trail + one-click rollback) ---------------
+-- Every graph-spec or policy-overlay write lands here as a full snapshot; the
+-- active row is what production runs, and rollback re-activates an old row.
+create table if not exists public.policy_versions (
+  id           bigint generated always as identity primary key,
+  kind         text not null,          -- 'graph_spec' | 'policy_overlay'
+  version      int  not null,          -- monotonic per kind
+  spec         jsonb not null,         -- full snapshot
+  note         text,                   -- why (audit trail)
+  author       text,
+  replay_score jsonb,                  -- golden replay report at activation
+  active       boolean not null default false,
+  created_at   timestamptz not null default now()
+);
+create index if not exists policy_versions_kind_idx
+  on public.policy_versions (kind, version desc);
+alter table public.policy_versions enable row level security;
+
+-- ---- Golden replay cases ----------------------------------------------------------
+-- Deterministic regression suite snapshotted from REAL conversations: frozen
+-- extraction stubs + floor make each case bit-stable, so spec/policy changes
+-- can be gated on "every golden case still passes".
+create table if not exists public.agent_golden_cases (
+  id         bigint generated always as identity primary key,
+  name       text not null,
+  thread_key text,                     -- provenance (real conversation source)
+  rfq        jsonb not null,
+  region     text,
+  floor      jsonb,                    -- frozen {floor, typical, currency}
+  turns      jsonb not null,           -- [{shopSays, stubExtraction, rival...}]
+  expects    jsonb not null,           -- [{action?, edgeId?, pathContains?...}]
+  enabled    boolean not null default true,
+  created_at timestamptz not null default now()
+);
+alter table public.agent_golden_cases enable row level security;
+
+-- ---- Latency + attribution stamps on decisions ------------------------------------
+alter table public.agent_traces add column if not exists ms int;
+alter table public.agent_traces add column if not exists spec_rev int;
+alter table public.agent_scores add column if not exists spec_rev int;

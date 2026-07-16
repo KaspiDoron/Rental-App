@@ -272,8 +272,8 @@ export interface TraceRow {
   // (and the old pipeline) leave them null and still render as a list.
   nodeId?: string;
   edgeId?: string;
-  // Milliseconds spent since the previous stage - per-stage latency for the
-  // Studio debugger. In-memory only (writeTrace never persists it).
+  // Milliseconds spent since the previous stage - per-stage latency, persisted
+  // for the Ops Center's execution timeline (falls back silently pre-migration).
   ms?: number;
 }
 
@@ -283,7 +283,16 @@ export function newDecisionId(): string {
 
 export async function writeTrace(rows: TraceRow[]): Promise<void> {
   if (!rows.length) return;
-  const withPath = rows.map((r) => ({
+  // Active behavior revision (policy_versions.id) stamps every decision so the
+  // Ops Center can split quality metrics by "which version produced this".
+  let specRev: number | null = null;
+  try {
+    const { getActiveRev } = await import("./ops/rev");
+    specRev = await getActiveRev();
+  } catch {
+    /* stamps are best-effort */
+  }
+  const full = rows.map((r) => ({
     decision_id: r.decisionId,
     user_email: r.userEmail ?? null,
     vendor_id: r.vendorId ?? "",
@@ -295,17 +304,23 @@ export async function writeTrace(rows: TraceRow[]): Promise<void> {
     verdict: r.verdict ?? null,
     node_id: r.nodeId ?? null,
     edge_id: r.edgeId ?? null,
+    ms: typeof r.ms === "number" && Number.isFinite(r.ms) ? Math.round(r.ms) : null,
+    spec_rev: specRev,
   }));
-  // sbInsert fails SILENTLY on an unknown column, so before the graph
-  // migration runs (node_id/edge_id absent) the whole trace would vanish.
-  // Retry without the path columns so visibility never depends on a pending
-  // migration - same graceful-degradation pattern as vendor_replies.
-  const ok = await sbInsert("agent_traces", withPath).catch(() => false);
+  // sbInsert fails SILENTLY on an unknown column, so a pending migration must
+  // never make the whole trace vanish. Degrade in steps: full row -> without
+  // the Ops columns (ms/spec_rev) -> without the graph path columns too -
+  // same graceful-degradation pattern as vendor_replies.
+  const ok = await sbInsert("agent_traces", full).catch(() => false);
   if (ok === false) {
-    await sbInsert(
-      "agent_traces",
-      withPath.map(({ node_id: _n, edge_id: _e, ...rest }) => rest)
-    ).catch(() => {});
+    const noOps = full.map(({ ms: _m, spec_rev: _s, ...rest }) => rest);
+    const ok2 = await sbInsert("agent_traces", noOps).catch(() => false);
+    if (ok2 === false) {
+      await sbInsert(
+        "agent_traces",
+        noOps.map(({ node_id: _n, edge_id: _e, ...rest }) => rest)
+      ).catch(() => {});
+    }
   }
 }
 
