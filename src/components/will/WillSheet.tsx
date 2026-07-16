@@ -8,6 +8,7 @@ import { Modal } from "../Modal";
 import { Icon } from "../icons";
 import { LoadingDots } from "../LoadingDots";
 import { WillMessage } from "./WillMessage";
+import { WillAvatar } from "./WillAvatar";
 import type { WillMsg } from "@/lib/useWill";
 import { useI18n } from "@/lib/i18n";
 
@@ -50,9 +51,7 @@ export function WillSheet({
     <Modal onClose={onClose}>
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brandblue text-[16px] text-white">
-            🤝
-          </span>
+          <WillAvatar size={38} />
           <div>
             <h2 className="text-[16px] font-extrabold text-strong">Will</h2>
             <p className="text-[11px] text-faint">{t("Your rental specialist - steer everything by chat")}</p>

@@ -3,9 +3,13 @@
 // The sticky one-row composer that makes conversation the dominant interface:
 // always reachable above the TabBar, one thumb, with voice input where the
 // browser supports it (Web Speech API - progressive enhancement, no deps).
+// Will himself leans over the left edge of the bar - a tiny living avatar
+// (blinks, waves) - so typing here feels like chatting with a companion, not
+// filling out a form. Placeholders rotate through short conversational hooks.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../icons";
+import { WillAvatar } from "./WillAvatar";
 import { useI18n } from "@/lib/i18n";
 
 // Minimal typing for the vendor-prefixed Web Speech API.
@@ -34,12 +38,15 @@ export function WillDock({
   busy,
   paused,
   lastSay,
+  hints,
   onSend,
   onOpen,
 }: {
   busy: boolean;
   paused: boolean;
   lastSay?: string;
+  /** Contextual placeholder hooks - the dock rotates through them. */
+  hints?: string[];
   onSend: (text: string) => void;
   onOpen: () => void;
 }) {
@@ -47,11 +54,31 @@ export function WillDock({
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const [hintIdx, setHintIdx] = useState(0);
   const recRef = useRef<SpeechRecognitionLike | null>(null);
 
   useEffect(() => {
     setVoiceAvailable(Boolean(getRecognizer()));
   }, []);
+
+  // Short, conversational, contextual - never instructional.
+  const prompts = useMemo(() => {
+    const base = hints?.length
+      ? hints
+      : [
+          t("Ask Will anything..."),
+          t("Need the cheapest scooter?"),
+          t("What should I negotiate?"),
+          t("Where are you staying?"),
+        ];
+    return base.filter(Boolean);
+  }, [hints, t]);
+
+  useEffect(() => {
+    if (prompts.length < 2) return;
+    const id = setInterval(() => setHintIdx((i) => i + 1), 4200);
+    return () => clearInterval(id);
+  }, [prompts.length]);
 
   const toggleVoice = () => {
     if (listening) {
@@ -81,6 +108,12 @@ export function WillDock({
     setDraft("");
   };
 
+  const placeholder = listening
+    ? t("Listening...")
+    : busy
+      ? t("Will is on it...")
+      : prompts[hintIdx % Math.max(1, prompts.length)] ?? t("Ask Will anything...");
+
   return (
     <div
       data-tour="will"
@@ -91,56 +124,63 @@ export function WillDock({
         {lastSay && (
           <button
             onClick={onOpen}
-            className="mb-1.5 block w-full truncate rounded-2xl bg-card2/95 px-3 py-1.5 text-left text-[11px] font-bold text-soft shadow-md backdrop-blur animate-slide-up"
+            className="relative mb-2 ml-9 block w-[calc(100%-2.25rem)] rounded-2xl rounded-bl-md bg-card2/95 px-3 py-2 text-left text-[12px] font-bold leading-snug text-soft shadow-md backdrop-blur animate-slide-up"
           >
-            🤝 {lastSay}
+            <span className="line-clamp-2">{lastSay}</span>
+            <span
+              aria-hidden
+              className="absolute -bottom-1 left-3 h-2.5 w-2.5 rotate-45 bg-card2/95"
+            />
           </button>
         )}
-        <div className="surface-strong flex items-center gap-1.5 rounded-full p-1.5 shadow-xl">
+        <div className="relative">
+          {/* Will leans over the edge of the bar - tap him to open the chat */}
           <button
             onClick={onOpen}
-            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brandblue text-[15px] text-white"
+            className="absolute -left-1.5 -top-2.5 z-10 transition-transform active:scale-95"
             aria-label={t("Open Will")}
           >
-            🤝
+            <WillAvatar size={48} wave={!busy} className="drop-shadow-lg" />
             {busy && (
-              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-ping rounded-full bg-brandyellow" />
+              <span className="absolute -right-0.5 top-0 h-2.5 w-2.5 animate-ping rounded-full bg-brandyellow" />
             )}
             {paused && !busy && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-brandyellow text-[8px]">
-                ⏸
+              <span className="absolute -right-1 top-0 flex h-4 w-4 items-center justify-center rounded-full bg-brandyellow text-black shadow">
+                <Icon name="pause" className="h-2.5 w-2.5" />
               </span>
             )}
           </button>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            placeholder={listening ? t("Listening...") : t("Tell Will what to do...")}
-            className="h-9 min-w-0 flex-1 bg-transparent px-1 text-sm text-strong placeholder:text-faint focus:outline-none"
-            style={{ fontSize: "16px" }}
-          />
-          {voiceAvailable && !draft.trim() && (
+          <div className="surface-strong flex items-center gap-1.5 rounded-full py-1.5 pl-12 pr-1.5 shadow-xl">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+              placeholder={placeholder}
+              className="h-9 min-w-0 flex-1 bg-transparent px-1 text-sm text-strong placeholder:text-faint focus:outline-none"
+              style={{ fontSize: "16px" }}
+            />
+            {voiceAvailable && !draft.trim() && (
+              <button
+                onClick={toggleVoice}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                  listening ? "bg-brandred text-white soft-pulse" : "bg-card2 text-soft"
+                }`}
+                aria-label={t("Voice input")}
+              >
+                <Icon name="mic" className="h-4 w-4" />
+              </button>
+            )}
             <button
-              onClick={toggleVoice}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                listening ? "bg-brandred text-white soft-pulse" : "bg-card2 text-soft"
-              }`}
-              aria-label={t("Voice input")}
+              onClick={submit}
+              disabled={busy || !draft.trim()}
+              className="btn btn-primary flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0 disabled:opacity-40"
+              aria-label={t("Send")}
             >
-              <Icon name="mic" className="h-4 w-4" />
+              <Icon name="send" className="h-4 w-4" />
             </button>
-          )}
-          <button
-            onClick={submit}
-            disabled={busy || !draft.trim()}
-            className="btn btn-primary flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0 disabled:opacity-40"
-            aria-label={t("Send")}
-          >
-            <Icon name="send" className="h-4 w-4" />
-          </button>
+          </div>
         </div>
       </div>
     </div>

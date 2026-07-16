@@ -1666,6 +1666,25 @@ export default function Home() {
           busy={will.busy}
           paused={paused}
           lastSay={lastWillSay}
+          hints={
+            phase === "idle"
+              ? [
+                  t("Need the cheapest scooter?"),
+                  t("Where are you staying?"),
+                  t("Ask Will anything..."),
+                ]
+              : phase === "running" || phase === "profiling"
+                ? [
+                    t("What's happening right now?"),
+                    t("Ask Will anything..."),
+                    t("Try: pause the search"),
+                  ]
+                : [
+                    t("Compare the top 3 for me"),
+                    t("What should I negotiate?"),
+                    t("Why was this shop picked?"),
+                  ]
+          }
           onSend={(text) => {
             setWillOpen(true);
             will.send(text);
