@@ -408,6 +408,18 @@ export async function processVendorReply(opts: {
       .catch(() => {});
   }
 
+  // SESSION PAUSE GATE (pre-engine, same philosophy as sessionClosed): the
+  // user told Will to hold everything. The reply was stored and the push sent
+  // above - the agents just say NOTHING until the user resumes.
+  if (ctx.sender && !sessionClosed) {
+    try {
+      const { isSessionPaused } = await import("./session-flags");
+      if (await isSessionPaused(ctx.sender)) return;
+    } catch {
+      /* flags unreadable - fail open, the engine's own guards still apply */
+    }
+  }
+
   // ==== THE DIGRAPH NEGOTIATION ENGINE (v2) ==================================
   // The default path: a true directed graph of specialized agents driven by a
   // chief Negotiation Director (multi-round bargaining, deposit + fulfillment

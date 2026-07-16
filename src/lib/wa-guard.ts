@@ -735,6 +735,20 @@ export async function guardOutbound(opts: {
     return { allow: false, reason: "This number is paused for safety recovery.", text };
   }
 
+  // 0.1 USER SESSION PAUSE - "Will, hold everything". Automated sends queue
+  //     for an hour with an honest reason; the user's own explicit sends
+  //     (custom messages) still go through - the pause binds the AGENTS.
+  if (opts.auto) {
+    try {
+      const { isSessionPaused } = await import("./session-flags");
+      if (await isSessionPaused(opts.senderKey)) {
+        return await queue(new Date(now + 60 * 60_000).toISOString(), "paused by you");
+      }
+    } catch {
+      /* flags unreadable - fail open */
+    }
+  }
+
   // 1. TWO-WAY ENGAGEMENT HALT. Never send a second AUTOMATED message to a
   //    number until it has engaged - a reply OR at least a read receipt (blue
   //    tick). Delivered-but-ignored contacts are the #1 spam signal, so we do

@@ -23,6 +23,11 @@ import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed"
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
+import { useWill } from "@/lib/useWill";
+import type { WillContext } from "@/lib/will-commands";
+import { WillDock } from "@/components/will/WillDock";
+import { WillSheet } from "@/components/will/WillSheet";
+import { CompareSheet } from "@/components/will/CompareSheet";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { BargainDraftModal } from "@/components/BargainDraftModal";
@@ -144,6 +149,10 @@ export default function Home() {
   const [whyByVendor, setWhyByVendor] = useState<Record<string, string>>({});
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
+  // Will - the conversational layer. Session pause + compare live here too.
+  const [willOpen, setWillOpen] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
 
   // Fold the search card away when the agents take over the screen; a phase
   // transition re-collapses it, a tap on the summary row re-opens it.
@@ -423,6 +432,74 @@ export default function Home() {
   );
   const openWhy = useCallbackRef((decisionId: string) => setWhyDecision(decisionId));
 
+  // ---- Will's bridge: natural language -> the EXISTING setters ------------
+  // Will can only ever do what the visible controls can do; every command
+  // lands on the same state the buttons use.
+  const willBridge = useMemo(
+    () => ({
+      getContext: (): WillContext => ({
+        phase,
+        radiusKm,
+        vehicleClass: filters.vehicleClass,
+        maxPricePerDay: filters.maxPricePerDay,
+        vendors: vendors.slice(0, 12).map((v) => ({
+          id: v.id,
+          name: v.name,
+          stage: v.stage,
+          pricePerDay: v.offer?.pricePerDay,
+          currency: v.offer?.currency,
+          verified: v.offer?.verified,
+        })),
+        offersIn: vendors.filter((v) => v.offer).length,
+        waConnected,
+        plan: session?.plan ?? "free",
+        originLabel: origin?.label,
+        paused,
+        notes: [],
+      }),
+      setRadius: (km: number) => setRadiusKm(km),
+      patchFilters: (patch: Record<string, unknown>) =>
+        setFilters((f) => ({ ...f, ...(patch as Partial<FilterState>) })),
+      setBudget: (v: number | null) => setFilters((f) => ({ ...f, maxPricePerDay: v })),
+      startSearch: (text?: string) => void startSearch(text),
+      clearSearch: () => setClearConfirm(true), // always through the confirm dialog
+      pause: async () => {
+        setPaused(true);
+        await fetch("/api/session/pause", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "pause" }),
+        }).catch(() => {});
+      },
+      resume: async () => {
+        setPaused(false);
+        await fetch("/api/session/pause", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "resume" }),
+        }).catch(() => {});
+      },
+      massBargain: () => runMassBargain(),
+      openVendor: (id: string) => scrollToVendor(id),
+      compare: (ids: string[]) => setCompareIds(ids),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [phase, radiusKm, filters, vendors, waConnected, session, origin, paused]
+  );
+  const will = useWill(willBridge);
+  const lastWillSay = will.messages.length
+    ? [...will.messages].reverse().find((m) => m.role === "will")?.text
+    : undefined;
+
+  // Restore the pause flag from the server once per session (survives reloads).
+  useEffect(() => {
+    if (!session) return;
+    fetch("/api/session/pause")
+      .then((r) => r.json())
+      .then((d) => setPaused(Boolean(d.paused)))
+      .catch(() => {});
+  }, [session]);
+
   // The traveller's own held-for-opening-hours queue (bug #9). They can see it
   // and remove any queued message; the matching card clears its queued badge.
   const refreshQueue = useCallbackRef(async () => {
@@ -603,8 +680,13 @@ export default function Home() {
     schedule(() => setPhase("done"), list.length * 200 + 1400);
   }
 
-  async function startSearch() {
-    if (!rawText.trim()) return;
+  async function startSearch(overrideText?: string) {
+    // Will can hand in fresh request text ("find me a 125cc scooter...") -
+    // it becomes the visible textarea value AND this search's request.
+    const ov = typeof overrideText === "string" ? overrideText.trim() : "";
+    if (ov) setRawText(ov);
+    const requestText = ov || rawText;
+    if (!requestText.trim()) return;
     // No coordinates, no search - there is no silent default city anymore.
     if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
       setOriginHint("Set your location first - allow GPS or type your hotel / area.");
@@ -632,7 +714,7 @@ export default function Home() {
     const pRes = await fetch("/api/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: rawText }),
+      body: JSON.stringify({ text: requestText }),
     });
     const pData = await pRes.json();
     if (!pRes.ok) {
@@ -868,7 +950,7 @@ export default function Home() {
   const paidPlan = session ? session.plan !== "free" : false;
 
   return (
-    <main className="mx-auto min-h-[100dvh] max-w-md pb-36 sm:max-w-lg md:max-w-3xl">
+    <main className="mx-auto min-h-[100dvh] max-w-md pb-52 sm:max-w-lg md:max-w-3xl">
       <div className="topbar">
         <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
           <div className="flex items-center gap-2">
@@ -987,7 +1069,7 @@ export default function Home() {
 
           <button
             data-tour="find"
-            onClick={startSearch}
+            onClick={() => startSearch()}
             disabled={phase === "profiling" || phase === "running"}
             className="btn btn-primary cta-sheen mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
@@ -1553,6 +1635,40 @@ export default function Home() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Will - the conversational steering wheel, always one thumb away */}
+      {session && !willOpen && (
+        <WillDock
+          busy={will.busy}
+          paused={paused}
+          lastSay={lastWillSay}
+          onSend={(text) => {
+            setWillOpen(true);
+            will.send(text);
+          }}
+          onOpen={() => setWillOpen(true)}
+        />
+      )}
+      {willOpen && (
+        <WillSheet
+          messages={will.messages}
+          notes={will.notes}
+          busy={will.busy}
+          onSend={will.send}
+          onClose={() => setWillOpen(false)}
+        />
+      )}
+      {compareIds.length >= 2 && (
+        <CompareSheet
+          vendors={vendors.filter((v) => compareIds.includes(v.id))}
+          durationDays={rfq?.durationDays ?? 1}
+          onLock={(v) => {
+            setCompareIds([]);
+            setBookingVendor(v);
+          }}
+          onClose={() => setCompareIds([])}
+        />
       )}
 
       <TabBar
