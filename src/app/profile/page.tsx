@@ -737,11 +737,11 @@ export default function ProfilePage() {
 
         <AdBanner plan={session?.plan} />
 
-        {/* Legal - the aggressive zero-liability terms the traveller accepted. */}
+        {/* Legal - friendly pointer; the full accepted documents stay linked. */}
         <section className="surface rounded-blob p-4">
           <div className="text-[13px] font-extrabold text-strong">⚖️ Legal</div>
           <p className="mt-1 text-[12px] text-soft">
-            {t("WheelDeal connects you with independent rental shops via an unofficial WhatsApp method and AI agents that can make mistakes. You are responsible for every message and rental; the Operator's liability is capped and disputes are governed by the laws of Israel (Tel Aviv courts).")}
+            {t("WheelDeal finds independent rental shops and negotiates on your behalf. Every rental is directly between you and the shop - the full Terms and Privacy Policy you accepted live here.")}
           </p>
           <div className="mt-2 flex gap-3 text-[13px] font-bold text-brandblue">
             <a href="/terms" className="underline">{t("Terms of Use")}</a>

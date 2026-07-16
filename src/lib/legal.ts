@@ -11,9 +11,14 @@ export const OPERATOR_NAME = "the Operator"; // TODO: replace with the legal ent
 export const GOVERNING_LAW = "the State of Israel";
 export const JURISDICTION = "the competent courts of Tel Aviv, Israel";
 
-// The three mandatory, separately-ticked consent checkboxes shown at signup.
-// Each maps to a durable acceptance column on app_users so consent is
-// provable per user, per version.
+// The three mandatory consents recorded at signup. Since 2026-07 they are
+// collected through ONE clearly-labelled acceptance action (the label names
+// the WhatsApp-connection and AI-assistant acknowledgements and links the
+// full text; a plain-English summary sits right below it) - standard
+// clickwrap. Each consent still stamps its own durable acceptance column on
+// app_users, so consent stays provable per user, per version. The `label`
+// strings below are the canonical legal wording of WHAT was accepted and are
+// rendered inside the Terms (sections 2-3 cover the same ground).
 export interface Consent {
   id: "terms" | "wa_risk" | "ai_responsibility";
   column: "terms_accepted_at" | "wa_risk_accepted_at" | "ai_responsibility_accepted_at";

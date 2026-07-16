@@ -35,6 +35,9 @@ export default function LoginPage() {
   // server-side too.
   const [acceptWaRisk, setAcceptWaRisk] = useState(false);
   const [acceptAiResp, setAcceptAiResp] = useState(false);
+  // Progressive disclosure: the plain-English summary of what acceptance
+  // covers, expanded only when the user wants the detail.
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [googleCredential, setGoogleCredential] = useState<string | null>(null);
   const [googleName, setGoogleName] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -525,17 +528,27 @@ export default function LoginPage() {
                 </option>
               ))}
             </select>
-            <div className="mt-3 space-y-2.5">
+            <div className="mt-3 space-y-2">
+              {/* ONE clear acceptance. It covers the Terms, the WhatsApp
+                  connection method and the AI-assistant acknowledgements in a
+                  single clearly-labelled action - the full text is one tap
+                  away, and all three durable consent stamps are still
+                  recorded server-side (nothing legally changed, only the
+                  anxiety). */}
               <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
                 <input
                   type="checkbox"
                   checked={acceptTerms}
-                  onChange={(e) => setAcceptTerms(e.target.checked)}
+                  onChange={(e) => {
+                    setAcceptTerms(e.target.checked);
+                    setAcceptWaRisk(e.target.checked);
+                    setAcceptAiResp(e.target.checked);
+                  }}
                   className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
                   required
                 />
                 <span>
-                  I have read and accept the{" "}
+                  I accept the{" "}
                   <button
                     type="button"
                     onClick={() => setShowTerms(true)}
@@ -543,39 +556,38 @@ export default function LoginPage() {
                   >
                     Terms of Use and Privacy Policy
                   </button>
-                  , including the liability cap, class-action waiver, and
-                  exclusive Tel Aviv, Israel jurisdiction.
+                  , including how the WhatsApp connection and the AI assistant
+                  work on my behalf ({t("summary below, full text in the Terms")}
+                  ).
                 </span>
               </label>
-              <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
-                <input
-                  type="checkbox"
-                  checked={acceptWaRisk}
-                  onChange={(e) => setAcceptWaRisk(e.target.checked)}
-                  className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
-                  required
+              <button
+                type="button"
+                onClick={() => setShowHowItWorks((v) => !v)}
+                className="flex w-full items-center justify-between rounded-xl bg-card2 px-3 py-2 text-left text-[11px] font-extrabold text-soft"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Icon name="shieldCheck" className="h-3.5 w-3.5 text-brandblue" />
+                  {t("The short, honest version")}
+                </span>
+                <Icon
+                  name="chevron"
+                  className={`h-3.5 w-3.5 transition-transform ${showHowItWorks ? "rotate-90" : ""}`}
                 />
-                <span>
-                  I understand WheelDeal connects to WhatsApp with an unofficial
-                  method; Meta may block or <b>permanently ban</b> my number, and
-                  I assume 100% of that risk with zero liability to the Operator.
-                </span>
-              </label>
-              <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-soft">
-                <input
-                  type="checkbox"
-                  checked={acceptAiResp}
-                  onChange={(e) => setAcceptAiResp(e.target.checked)}
-                  className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
-                  required
-                />
-                <span>
-                  I understand the AI can make mistakes and I am solely
-                  responsible for every message it sends from my account; I have
-                  the right to process my contacts&apos; messages and will not
-                  submit sensitive data or use the service for spam.
-                </span>
-              </label>
+              </button>
+              {showHowItWorks && (
+                <ul className="space-y-1.5 rounded-xl bg-card2 px-3 py-2.5 text-[11px] leading-relaxed text-soft pop-in">
+                  <li>
+                    · {t("Messages send from your own WhatsApp, paced carefully like a human. WhatsApp doesn't officially support assistants like Will, so a spare SIM is a smart choice - our pacing engine exists to protect your number.")}
+                  </li>
+                  <li>
+                    · {t("Will drafts and sends messages for you. You see every move live, can pause everything or take over any chat - and what's sent from your account is yours.")}
+                  </li>
+                  <li>
+                    · {t("Your chats stay private: we only ever read the rental-shop threads you open through WheelDeal, never your personal conversations.")}
+                  </li>
+                </ul>
+              )}
             </div>
           </>
         )}

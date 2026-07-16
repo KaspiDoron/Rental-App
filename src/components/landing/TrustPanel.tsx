@@ -37,7 +37,7 @@ export function TrustPanel({
     },
     {
       icon: "shieldCheck",
-      title: t("An anti-ban engine paces every send"),
+      title: t("A safe-pacing engine guards your number"),
       body: t("Trust-scored warm-up, human rhythm, hard daily budgets and an automatic safety pause."),
     },
     {

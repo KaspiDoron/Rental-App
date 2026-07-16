@@ -197,8 +197,11 @@ export function WaConnect({
                 }}
                 className="font-extrabold text-brandblue underline"
               >
-                {t("WhatsApp Linking Terms, Waiver & Release of Liability")}
+                {t("WhatsApp Linking Terms")}
               </button>
+              <span className="mt-0.5 block text-[11px] text-faint">
+                {t("The short version: your number, your control - disconnect any time.")}
+              </span>
             </span>
           </label>
           {showTerms && <WaTermsModal onClose={() => setShowTerms(false)} />}

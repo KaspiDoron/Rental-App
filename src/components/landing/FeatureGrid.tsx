@@ -24,7 +24,7 @@ const STEPS = [
 const PERKS = [
   { icon: "sparkles", title: "Knows the real price", body: "Live market research anchors every negotiation to the true local floor - not the tourist price." },
   { icon: "clock", title: "Patient on purpose", body: "Will waits, times replies to opening hours and lets shops make the last move - patience is leverage." },
-  { icon: "shieldCheck", title: "Careful with your number", body: "An anti-ban engine paces every message with human rhythm and hard daily budgets." },
+  { icon: "shieldCheck", title: "Careful with your number", body: "A safe-pacing engine sends every message with human rhythm and hard daily budgets." },
   { icon: "compare", title: "100% transparent", body: "Every message, every decision, every wait - visible live, with the reasoning behind it." },
 ];
 

@@ -60,9 +60,9 @@ export function WaTermsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p className="mb-2 text-[12px] font-bold text-soft">
-          Please read carefully. By ticking the box and linking your WhatsApp you
-          agree to every clause below without exception, and you accept full and
-          sole responsibility for any consequence to your number.
+          The full legal text, in one place. By ticking the box and linking your
+          WhatsApp you agree to every clause below and accept responsibility for
+          what is sent from your number.
         </p>
         <ol className="max-h-[58dvh] list-none space-y-3 overflow-y-auto rounded-2xl bg-card2 p-3">
           {CLAUSES.map(([title, body], i) => (
