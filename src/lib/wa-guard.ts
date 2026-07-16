@@ -984,3 +984,71 @@ export async function drainOutbox(
   }
   return sent;
 }
+
+// ---------------------------------------------------------------------------
+// Read-only safety surface for the UI (item: anti-ban VISIBILITY).
+// Zero behaviour change - this only REPORTS what the guard above is doing, so
+// the app can stop saying "connected" while sending is actually paused.
+// ---------------------------------------------------------------------------
+
+export interface SenderSafety {
+  state: "healthy" | "pacing" | "paused" | "recovering";
+  reason?: string;
+  pausedUntil?: string;
+  trustScore: number;
+  riskScore: number;
+  queued: number;
+  queueReasons: string[];
+}
+
+export async function senderSafety(senderKey: string): Promise<SenderSafety> {
+  const [rep, outbox] = await Promise.all([
+    getReputation(senderKey).catch(() => null),
+    sbSelect<{ meta: { reason?: string } | null }>(
+      "wa_outbox",
+      `select=meta&sender_key=eq.${encodeURIComponent(senderKey)}&limit=50`
+    ).catch(() => [] as { meta: { reason?: string } | null }[]),
+  ]);
+
+  const queued = outbox.length;
+  const queueReasons = [
+    ...new Set(outbox.map((r) => r.meta?.reason).filter((x): x is string => Boolean(x))),
+  ].slice(0, 4);
+
+  const trustScore = rep?.trust_score ?? 20;
+  const riskScore = rep?.risk_score ?? 0;
+  const pausedUntil =
+    rep?.paused_until && Date.parse(rep.paused_until) > Date.now()
+      ? rep.paused_until
+      : undefined;
+
+  if (pausedUntil) {
+    // Ban recovery drops trust to 10 (enterBanRecovery); a plain risk pause
+    // keeps whatever trust the number had.
+    const recovering = trustScore <= 10;
+    return {
+      state: recovering ? "recovering" : "paused",
+      reason: recovering
+        ? "recovering after a ban-risk signal - all automated sends are held while your number cools down"
+        : "sending paused automatically to protect your number from ban risk",
+      pausedUntil,
+      trustScore,
+      riskScore,
+      queued,
+      queueReasons,
+    };
+  }
+  if (queued > 0) {
+    return {
+      state: "pacing",
+      reason:
+        queueReasons[0] ??
+        "messages are queued and will send at a safe, human pace",
+      trustScore,
+      riskScore,
+      queued,
+      queueReasons,
+    };
+  }
+  return { state: "healthy", trustScore, riskScore, queued, queueReasons };
+}

@@ -1,0 +1,315 @@
+import { NextResponse } from "next/server";
+import { getSession } from "@/lib/session";
+import { sbSelect } from "@/lib/runtime-config";
+import { senderSafety, type SenderSafety } from "@/lib/wa-guard";
+
+// The living-workspace feed: one endpoint that tells the user everything
+// their agents are doing, chronologically, across every shop - built ENTIRELY
+// from data the engine already persists on the live path (agent_traces,
+// whatsapp_messages, vendor_replies, offers, wa_outbox, graph_wakeups,
+// agent_scores, agent_events). Strictly scoped to the signed-in user.
+//
+// Also serves:
+//   ?why=<decisionId>  -> the persisted director ladder for that decision
+//   queue              -> same shape as /api/queue (this poll REPLACES it)
+//   waHealth           -> the anti-ban guard's honest safety state
+
+export interface ActivityItem {
+  id: string;
+  at: string; // ISO
+  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert";
+  vendorId?: string;
+  vendorName?: string;
+  title: string;
+  detail?: string;
+  decisionId?: string;
+  meta?: Record<string, unknown>;
+}
+
+// Friendly titles for pipeline stages a traveller should actually see.
+// Anything not listed here is engine plumbing and stays out of the feed.
+const STAGE_TITLES: Record<string, string> = {
+  transcribe: "Listened to the shop's voice note",
+  extract: "Read the shop's reply",
+  "media-coherence": "Double-checked the photo against the conversation",
+  "media-gap": "Checked what the deal is still missing",
+  director: "Chose the next move",
+  bargain: "Bargained for a better price",
+  clarify: "Asked the shop to clarify",
+  answer: "Answered the shop's question",
+  "deposit-probe": "Asked about the deposit",
+  "fulfillment-probe": "Asked how you get the vehicle",
+  "pickup-location": "Shared your pickup location (with your consent)",
+  close: "Wrapped up the conversation",
+  present: "Marked this offer ready for you",
+  "closing-message": "Sent the closing message",
+  deliver: "Message on its way to the shop",
+};
+
+interface TraceRow {
+  id: number;
+  decision_id: string;
+  vendor_id: string | null;
+  vendor_name: string | null;
+  stage: string;
+  reasoning: string | null;
+  output: string | null;
+  created_at: string;
+}
+
+export async function GET(req: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  const email = session.email;
+  const enc = encodeURIComponent(email);
+  const url = new URL(req.url);
+
+  // ---- "Why this move?" lookup (ownership-verified) -------------------------
+  const why = url.searchParams.get("why");
+  if (why) {
+    const rows = await sbSelect<TraceRow & { user_email: string | null }>(
+      "agent_traces",
+      `select=id,decision_id,user_email,vendor_id,vendor_name,stage,reasoning,output,created_at&decision_id=eq.${encodeURIComponent(
+        why
+      )}&stage=eq.ladder&limit=1`
+    ).catch(() => []);
+    const row = rows[0];
+    if (!row || (row.user_email && row.user_email !== email)) {
+      return NextResponse.json({ ladder: null });
+    }
+    let ladder: unknown = null;
+    try {
+      ladder = JSON.parse(row.output ?? "null");
+    } catch {}
+    return NextResponse.json({ ladder, at: row.created_at, vendorName: row.vendor_name });
+  }
+
+  // Opportunistic drain: this endpoint is polled while the app is open, so it
+  // inherits the queue-poll's job of actually sending due messages.
+  try {
+    const { drainOutbox } = await import("@/lib/wa-guard");
+    const { sendFromUser } = await import("@/lib/evolution");
+    void drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch(() => {});
+    const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    void drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch(() => {});
+  } catch {
+    /* best-effort */
+  }
+
+  const sinceMs = Number(url.searchParams.get("since")) || Date.now() - 24 * 60 * 60 * 1000;
+  const sinceIso = new Date(sinceMs).toISOString();
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 40, 10), 80);
+
+  const [traces, outbound, replies, offers, outbox, wakeups, events] = await Promise.all([
+    sbSelect<TraceRow>(
+      "agent_traces",
+      `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=120`
+    ).catch(() => [] as TraceRow[]),
+    sbSelect<{
+      id: number;
+      to_number: string;
+      body: string;
+      raw: { vendorId?: string; vendorName?: string; english?: string; kind?: string } | null;
+      received_at: string;
+    }>(
+      "whatsapp_messages",
+      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
+    ).catch(() => []),
+    sbSelect<{
+      id: number;
+      vendor_id: string | null;
+      vendor_name: string | null;
+      reply_text: string | null;
+      image_count: number | null;
+      created_at: string;
+    }>(
+      "vendor_replies",
+      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=40`
+    ).catch(() => []),
+    sbSelect<{
+      id: number;
+      vendor_id: string | null;
+      vendor_name: string | null;
+      price_per_day: number | null;
+      currency: string | null;
+      round: number | null;
+      verified: boolean | null;
+      created_at: string;
+    }>(
+      "offers",
+      `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${sinceIso}&order=created_at.desc&limit=30`
+    ).catch(() => []),
+    sbSelect<{
+      id: number;
+      to_number: string;
+      not_before: string;
+      meta: { reason?: string; vendorName?: string; vendorId?: string } | null;
+    }>(
+      "wa_outbox",
+      `select=id,to_number,not_before,meta&sender_key=eq.${enc}&order=not_before.asc&limit=50`
+    ).catch(() => []),
+    sbSelect<{
+      id: number;
+      kind: string;
+      thread_key: string;
+      not_before: string;
+      payload: { reason?: string; vendorName?: string } | null;
+      created_at: string;
+    }>(
+      "graph_wakeups",
+      `select=id,kind,thread_key,not_before,payload,created_at&thread_key=like.${encodeURIComponent(
+        email + ":*"
+      )}&kind=eq.tick&order=not_before.asc&limit=10`
+    ).catch(() => []),
+    sbSelect<{
+      id: number;
+      kind: string;
+      vendor_id: string | null;
+      vendor_name: string | null;
+      detail: string | null;
+      created_at: string;
+    }>(
+      "agent_events",
+      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=eq.inbound-risk&detail=like.${encodeURIComponent(
+        "*" + email + "*"
+      )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=10`
+    ).catch(() => []),
+  ]);
+
+  // decisionId per vendor (newest first) so cards can open "Why this move?".
+  const ladderByDecision = new Set(
+    traces.filter((t) => t.stage === "ladder").map((t) => t.decision_id)
+  );
+  const whyByVendor: Record<string, string> = {};
+  for (const t of traces) {
+    if (t.stage === "ladder" && t.vendor_id && !whyByVendor[t.vendor_id]) {
+      whyByVendor[t.vendor_id] = t.decision_id;
+    }
+  }
+
+  const items: ActivityItem[] = [];
+
+  for (const t of traces) {
+    const title = STAGE_TITLES[t.stage];
+    if (!title) continue; // plumbing stages stay out of the feed
+    items.push({
+      id: `trace:${t.id}`,
+      at: t.created_at,
+      kind: "trace",
+      vendorId: t.vendor_id ?? undefined,
+      vendorName: t.vendor_name ?? undefined,
+      title,
+      detail: (t.reasoning ?? "").slice(0, 220) || undefined,
+      decisionId: ladderByDecision.has(t.decision_id) ? t.decision_id : undefined,
+    });
+  }
+  for (const m of outbound) {
+    items.push({
+      id: `sent:${m.id}`,
+      at: m.received_at,
+      kind: "sent",
+      vendorId: m.raw?.vendorId,
+      vendorName: m.raw?.vendorName,
+      title: "Message sent to the shop",
+      detail: (m.raw?.english || m.body || "").slice(0, 220) || undefined,
+    });
+  }
+  for (const r of replies) {
+    items.push({
+      id: `reply:${r.id}`,
+      at: r.created_at,
+      kind: "reply",
+      vendorId: r.vendor_id ?? undefined,
+      vendorName: r.vendor_name ?? undefined,
+      title: r.image_count ? "The shop replied (with a photo)" : "The shop replied",
+      detail: (r.reply_text ?? "").slice(0, 220) || undefined,
+    });
+  }
+  for (const o of offers) {
+    if (!o.price_per_day) continue;
+    items.push({
+      id: `offer:${o.id}`,
+      at: o.created_at,
+      kind: "offer",
+      vendorId: o.vendor_id ?? undefined,
+      vendorName: o.vendor_name ?? undefined,
+      title: o.verified ? "Confirmed offer in" : "Offer in (unconfirmed)",
+      detail: undefined,
+      meta: {
+        pricePerDay: o.price_per_day,
+        currency: o.currency ?? "USD",
+        round: o.round ?? 0,
+        verified: Boolean(o.verified),
+      },
+    });
+  }
+  const now = Date.now();
+  for (const w of wakeups) {
+    if (Date.parse(w.not_before) <= now) continue;
+    items.push({
+      id: `wait:${w.id}`,
+      at: w.created_at,
+      kind: "wait",
+      vendorName: w.payload?.vendorName,
+      title: "Will is waiting on purpose",
+      detail:
+        (w.payload?.reason ??
+          "replying too fast reads as desperate - the next move is timed for leverage") +
+        ` (until ${new Date(w.not_before).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+    });
+  }
+  for (const e of events) {
+    let excerpt = "";
+    let risk = "high";
+    try {
+      const d = JSON.parse(e.detail ?? "{}");
+      excerpt = String(d.excerpt ?? "");
+      risk = String(d.risk ?? "high");
+    } catch {}
+    items.push({
+      id: `alert:${e.id}`,
+      at: e.created_at,
+      kind: "alert",
+      vendorId: e.vendor_id ?? undefined,
+      vendorName: e.vendor_name ?? undefined,
+      title: "Will flagged this reply - please review",
+      detail: excerpt.slice(0, 220) || undefined,
+      meta: { risk },
+    });
+  }
+
+  items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+
+  // Same shape as /api/queue so the existing queue card keeps working.
+  const queue = outbox.map((r) => {
+    const at = Date.parse(r.not_before);
+    return {
+      id: r.id,
+      vendorId: r.meta?.vendorId ?? null,
+      vendorName: r.meta?.vendorName ?? null,
+      toNumber: r.to_number,
+      notBefore: r.not_before,
+      due: at <= now,
+      reason:
+        at > now
+          ? "Waiting for the shop to open - it sends automatically then."
+          : "Sending shortly - open shops are messaged first.",
+    };
+  });
+
+  let waHealth: SenderSafety | null = null;
+  try {
+    waHealth = await senderSafety(email);
+  } catch {}
+
+  return NextResponse.json({
+    items: items.slice(0, limit),
+    queue,
+    waHealth,
+    whyByVendor,
+    now: new Date().toISOString(),
+  });
+}
+
+// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+export const maxDuration = 60;

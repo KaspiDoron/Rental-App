@@ -30,6 +30,8 @@ function VendorCardInner({
   onStage,
   onCustomMessage,
   onPickupConsent,
+  whyDecisionId,
+  onWhy,
 }: {
   vendor: Vendor;
   rfq: StructuredRFQ | null;
@@ -49,6 +51,9 @@ function VendorCardInner({
   // Pickup consent: the shop offered to pick the traveller up; sending the
   // exact location happens ONLY after the traveller approves it here.
   onPickupConsent?: (vendor: Vendor) => Promise<{ ok: boolean; reason?: string }>;
+  // "Why this move?" - the latest director decision for this shop (live data).
+  whyDecisionId?: string;
+  onWhy?: (decisionId: string) => void;
 }) {
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
@@ -312,7 +317,15 @@ function VendorCardInner({
           {vendor.stage && vendor.stage !== "offer-received" && (
             <div className="mt-2 flex items-start gap-1.5 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
               <span className="shrink-0">{stageCaption(vendor.stage).emoji}</span>
-              <span>{t(stageCaption(vendor.stage).text)}</span>
+              <span className="flex-1">{t(stageCaption(vendor.stage).text)}</span>
+              {whyDecisionId && onWhy && (
+                <button
+                  onClick={() => onWhy(whyDecisionId)}
+                  className="chip shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandblue"
+                >
+                  {t("Why?")}
+                </button>
+              )}
             </div>
           )}
           {/* Control: the last message we sent + the shop's last reply, each

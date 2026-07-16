@@ -27,6 +27,47 @@ export async function GET(req: Request) {
   );
   const sent = outbound[0] ?? null;
 
+  // FULL transcript mode (?full=1): every message both ways for this thread,
+  // oldest first - powers the TranscriptSheet chat view. The default 2-message
+  // shape below stays untouched (ThreadPeek relies on it).
+  if (url.searchParams.get("full") === "1") {
+    if (!sent?.to_number) return NextResponse.json({ messages: [] });
+    const digits = sent.to_number;
+    const [outs, ins] = await Promise.all([
+      sbSelect<{ id: number; body: string; received_at: string; raw: { englishGloss?: string; kind?: string } | null }>(
+        "whatsapp_messages",
+        `select=id,body,received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+          digits
+        )}&raw->>sender=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
+      ).catch(() => []),
+      sbSelect<{ id: number; body: string; received_at: string }>(
+        "whatsapp_messages",
+        `select=id,body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+          digits
+        )}${since}&order=received_at.asc&limit=60`
+      ).catch(() => []),
+    ]);
+    const messages = [
+      ...outs.map((m) => ({
+        id: `o${m.id}`,
+        dir: "out" as const,
+        text: m.body,
+        english: m.raw?.englishGloss,
+        kind: m.raw?.kind,
+        at: m.received_at,
+      })),
+      ...ins.map((m) => ({
+        id: `i${m.id}`,
+        dir: "in" as const,
+        text: m.body,
+        at: m.received_at,
+      })),
+    ]
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+      .slice(-80);
+    return NextResponse.json({ messages });
+  }
+
   let received: { body: string; received_at: string } | null = null;
   if (sent?.to_number) {
     const inbound = await sbSelect<{ body: string; received_at: string }>(

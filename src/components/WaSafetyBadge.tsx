@@ -1,0 +1,87 @@
+"use client";
+
+// Honest anti-ban visibility: a compact pill that tells the traveller what
+// the safety engine is doing with their number RIGHT NOW - healthy, pacing,
+// paused, or recovering. Ends the "connected but silently held" confusion.
+
+import { useState } from "react";
+import { Icon } from "./icons";
+import { useI18n } from "@/lib/i18n";
+
+export interface WaSafety {
+  state: "healthy" | "pacing" | "paused" | "recovering";
+  reason?: string;
+  pausedUntil?: string;
+  trustScore: number;
+  riskScore: number;
+  queued: number;
+  queueReasons: string[];
+}
+
+export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  if (!safety) return null;
+
+  const cfg =
+    safety.state === "healthy"
+      ? {
+          cls: "bg-savings-soft text-savings",
+          icon: "shieldCheck",
+          label: t("Safe pacing"),
+        }
+      : safety.state === "pacing"
+      ? {
+          cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+          icon: "clock",
+          label: `${t("Pacing")} · ${safety.queued} ${t("queued")}`,
+        }
+      : {
+          cls: "bg-brandred-soft text-brandred",
+          icon: "shield",
+          label: safety.state === "recovering" ? t("Cooling down") : t("Safety pause"),
+        };
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`chip flex w-full items-center gap-1.5 rounded-2xl px-3 py-2 text-[11px] font-extrabold ${cfg.cls}`}
+      >
+        <Icon name={cfg.icon} className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {t("WhatsApp protection")}: {cfg.label}
+        </span>
+        <Icon name="chevron" className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded-2xl bg-card2 p-3 text-[11px] leading-relaxed text-soft animate-slide-up">
+          {safety.state === "healthy" && (
+            <p>{t("All clear - your number is healthy and messages send at a natural, human pace.")}</p>
+          )}
+          {safety.reason && safety.state !== "healthy" && <p>{t(safety.reason)}</p>}
+          {safety.pausedUntil && (
+            <p className="mt-1 font-bold">
+              {t("Sending resumes")}:{" "}
+              {new Date(safety.pausedUntil).toLocaleString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                day: "numeric",
+                month: "short",
+              })}
+            </p>
+          )}
+          {safety.queued > 0 && (
+            <p className="mt-1">
+              {safety.queued} {t("message(s) held")}
+              {safety.queueReasons.length > 0 ? ` - ${safety.queueReasons.join(" · ")}` : ""}
+            </p>
+          )}
+          <p className="mt-1.5 text-[10px] text-faint">
+            {t("Trust score")} {safety.trustScore}/100 · {t("Pauses are automatic protection for your number - never an error.")}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

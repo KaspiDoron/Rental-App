@@ -531,6 +531,25 @@ export async function runGraphTurn(
     }
     if (steps === 1 && ladder && choice.edgeId) {
       for (const r of ladder) r.chosen = r.edgeId === choice.edgeId;
+      // Persist the full ladder as its own trace row (observability only -
+      // decisions are already made). This is what lets the USER-facing
+      // "Why this move?" view work on live threads, not just the Playground.
+      push({
+        stage: "ladder",
+        nodeId: "director",
+        input: "",
+        reasoning: "director decision ladder (why each move was taken or skipped)",
+        output: JSON.stringify(
+          ladder.map((r) => ({
+            e: r.edgeId,
+            l: r.label,
+            k: r.toKind,
+            legal: r.legal,
+            chosen: r.chosen,
+            why: r.why,
+          }))
+        ).slice(0, 8000),
+      });
     }
     push({
       stage: "director",

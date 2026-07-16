@@ -19,6 +19,10 @@ import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
+import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
+import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
+import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
+import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { BargainDraftModal } from "@/components/BargainDraftModal";
@@ -105,7 +109,7 @@ export default function Home() {
   const [source, setSource] = useState<"google" | "demo" | "google-error" | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "profiling" | "running" | "done">("idle");
-  const [view, setView] = useState<"list" | "map">("list");
+  const [view, setView] = useState<"list" | "map" | "activity">("list");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
@@ -133,6 +137,13 @@ export default function Home() {
   // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
   const [showGame, setShowGame] = useState(false);
   const [pushState, setPushState] = useState<"idle" | "on" | "denied" | "off">("idle");
+  // Living workspace: the cross-shop activity feed + honest WA safety state,
+  // all from ONE /api/activity poll (which also replaced the queue poll).
+  const [activityItems, setActivityItems] = useState<FeedItem[]>([]);
+  const [waHealth, setWaHealth] = useState<WaSafety | null>(null);
+  const [whyByVendor, setWhyByVendor] = useState<Record<string, string>>({});
+  const [whyDecision, setWhyDecision] = useState<string | null>(null);
+  const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
 
   // Fold the search card away when the agents take over the screen; a phase
   // transition re-collapses it, a tap on the summary row re-opens it.
@@ -410,15 +421,20 @@ export default function Home() {
   const handleStage = useCallbackRef((id: string, stage: Vendor["stage"]) =>
     patchVendor(id, { stage })
   );
+  const openWhy = useCallbackRef((decisionId: string) => setWhyDecision(decisionId));
 
   // The traveller's own held-for-opening-hours queue (bug #9). They can see it
   // and remove any queued message; the matching card clears its queued badge.
   const refreshQueue = useCallbackRef(async () => {
     if (!session) return;
     try {
-      const d = await (await fetch("/api/queue")).json();
-      const items: { vendorId: string | null; notBefore: string }[] = Array.isArray(d.items) ? d.items : [];
-      setQueueItems(d.items ?? []);
+      // One consolidated poll: activity feed + queue + WA safety state.
+      const d = await (await fetch(`/api/activity?since=${searchEpoch || Date.now() - 86400000}`)).json();
+      if (Array.isArray(d.items)) setActivityItems(d.items);
+      if (d.waHealth) setWaHealth(d.waHealth);
+      if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
+      const items: { vendorId: string | null; notBefore: string }[] = Array.isArray(d.queue) ? d.queue : [];
+      setQueueItems(d.queue ?? []);
       // Reconcile the cards with the SERVER (single source of truth for the
       // queued badge, covering every send path): set the badge for shops with a
       // held message, clear it once that message leaves the outbox (sent/removed).
@@ -452,11 +468,16 @@ export default function Home() {
     }
   }
 
-  // Poll the queue while there are vendors on screen (cheap, user-scoped).
+  // Poll the consolidated activity endpoint while there are vendors on
+  // screen (cheap, user-scoped). Pauses in hidden tabs - no wasted requests.
   useEffect(() => {
     if (!session || vendors.length === 0) return;
-    refreshQueue();
-    const id = setInterval(refreshQueue, 20000);
+    const tick = () => {
+      if (document.hidden) return;
+      refreshQueue();
+    };
+    tick();
+    const id = setInterval(tick, 12000);
     return () => clearInterval(id);
   }, [session, vendors.length, refreshQueue]);
 
@@ -487,7 +508,7 @@ export default function Home() {
       } catch {}
     };
     load();
-    const id = setInterval(load, 60000);
+    const id = setInterval(load, 120000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1084,6 +1105,15 @@ export default function Home() {
 
             {statusOpen && (stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0) && (
               <div className="space-y-2 border-t border-line px-3 py-2.5">
+                <button
+                  onClick={() => {
+                    setView("activity");
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className="chip flex items-center gap-1 text-[11px] font-extrabold text-brandblue"
+                >
+                  <Icon name="sparkles" className="h-3 w-3" /> {t("See the full live activity feed")} →
+                </button>
                 {/* Deals in - from whom, price, exact time */}
                 {statusGroups.deals.length > 0 && (
                   <div>
@@ -1319,7 +1349,11 @@ export default function Home() {
               <ToggleBtn active={view === "map"} onClick={() => setView("map")}>
                 <Icon name="map" className="h-4 w-4" /> {t("Map")}
               </ToggleBtn>
+              <ToggleBtn active={view === "activity"} onClick={() => setView("activity")}>
+                <Icon name="sparkles" className="h-4 w-4" /> {t("Activity")}
+              </ToggleBtn>
             </div>
+            <WaSafetyBadge safety={waHealth} />
             <div className="mt-3">
               <Filters
                 filters={filters}
@@ -1332,7 +1366,14 @@ export default function Home() {
           </>
         )}
 
-        {view === "map" && vendors.length > 0 && origin ? (
+        {view === "activity" && vendors.length > 0 ? (
+          <ActivityFeed
+            items={activityItems}
+            onWhy={(id) => setWhyDecision(id)}
+            onJump={(vendorId) => scrollToVendor(vendorId)}
+            onTranscript={(id, name) => setTranscriptFor({ id, name })}
+          />
+        ) : view === "map" && vendors.length > 0 && origin ? (
           <div className="relative z-0 mt-3">
             <MapView
               origin={origin}
@@ -1371,6 +1412,8 @@ export default function Home() {
                   onStage={handleStage}
                   onCustomMessage={customMessage}
                   onPickupConsent={pickupConsent}
+                  whyDecisionId={whyByVendor[v.id]}
+                  onWhy={openWhy}
                 />
               </div>
             ))}
@@ -1474,6 +1517,15 @@ export default function Home() {
       )}
       {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
+      {whyDecision && <WhyThisSheet decisionId={whyDecision} onClose={() => setWhyDecision(null)} />}
+      {transcriptFor && (
+        <TranscriptSheet
+          vendorId={transcriptFor.id}
+          vendorName={transcriptFor.name}
+          since={searchEpoch || undefined}
+          onClose={() => setTranscriptFor(null)}
+        />
+      )}
       {onboarding && <Onboarding onClose={() => setOnboarding(false)} />}
       {clearConfirm && (
         <Modal onClose={() => setClearConfirm(false)} center>
