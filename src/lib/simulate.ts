@@ -45,6 +45,8 @@ export interface SimStage {
   reasoning: string;
   output: string;
   verdict?: string;
+  // Milliseconds this stage took (the Studio debugger's latency column).
+  ms?: number;
 }
 export interface SimResult {
   direction: string;
@@ -242,6 +244,15 @@ export interface PlayedTurn {
     rounds: number;
     firmCount: number;
     dealComplete: boolean;
+    // Full deal memory (Studio debugger): what the thread remembers.
+    lastTarget?: number;
+    lastLeverage?: string;
+    mileageKm?: number;
+    conditionNotes?: string;
+    toneDegraded?: boolean;
+    nodeRuns?: Record<string, number>;
+    phase?: string;
+    waitingUntil?: string | null;
   };
   stages: SimStage[];
 }
@@ -370,6 +381,16 @@ async function playSingleTurn(args: {
       dealComplete: Boolean(
         f.pricePerDay && (f.depositType || f.depositNote) && f.fulfillment
       ),
+      // Full deal memory for the Studio debugger - everything the thread
+      // remembers that shapes the next decision.
+      lastTarget: f.lastTarget,
+      lastLeverage: f.lastLeverage,
+      mileageKm: f.mileageKm,
+      conditionNotes: f.conditionNotes,
+      toneDegraded: Boolean(f.toneDegraded),
+      nodeRuns: { ...carried.nodeRuns },
+      phase: carried.phase,
+      waitingUntil: carried.waitingUntil ?? null,
     },
     stages: traces.map((t) => ({
       stage: t.stage,
@@ -379,6 +400,7 @@ async function playSingleTurn(args: {
       reasoning: t.reasoning,
       output: t.output,
       verdict: t.verdict,
+      ms: t.ms,
     })),
   };
   return { played, carried };

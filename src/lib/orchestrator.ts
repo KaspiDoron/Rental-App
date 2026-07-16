@@ -272,6 +272,9 @@ export interface TraceRow {
   // (and the old pipeline) leave them null and still render as a list.
   nodeId?: string;
   edgeId?: string;
+  // Milliseconds spent since the previous stage - per-stage latency for the
+  // Studio debugger. In-memory only (writeTrace never persists it).
+  ms?: number;
 }
 
 export function newDecisionId(): string {

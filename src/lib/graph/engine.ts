@@ -303,7 +303,15 @@ export async function runGraphTurn(
     vendorId: input.ctx.vendorId ?? undefined,
     vendorName: input.ctx.vendorName ?? undefined,
   };
-  const push = (row: Omit<TraceRow, keyof typeof base>) => traces.push({ ...base, ...row });
+  // Per-stage latency: each trace row records the wall time spent since the
+  // previous stage - the Studio debugger's timeline. Real clock, not io.now()
+  // (which tests freeze), so latency is honest even in the simulator.
+  let lastPushAt = Date.now();
+  const push = (row: Omit<TraceRow, keyof typeof base>) => {
+    const t = Date.now();
+    traces.push({ ...base, ...row, ms: t - lastPushAt });
+    lastPushAt = t;
+  };
 
   // LLM budget: hard cap per event + the serverless deadline.
   let llmCalls = 0;

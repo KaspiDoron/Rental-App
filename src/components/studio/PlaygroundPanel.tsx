@@ -30,6 +30,25 @@ interface TurnState {
   rounds: number;
   firmCount: number;
   dealComplete: boolean;
+  lastTarget?: number;
+  lastLeverage?: string;
+  mileageKm?: number;
+  conditionNotes?: string;
+  toneDegraded?: boolean;
+  nodeRuns?: Record<string, number>;
+  phase?: string;
+  waitingUntil?: string | null;
+}
+
+interface TurnStage {
+  stage: string;
+  nodeId?: string;
+  edgeId?: string;
+  input: string;
+  reasoning: string;
+  output: string;
+  verdict?: string;
+  ms?: number;
 }
 
 interface ChatEntry {
@@ -41,6 +60,8 @@ interface ChatEntry {
   action?: string;
   ladder?: LadderRung[];
   state?: TurnState;
+  stages?: TurnStage[];
+  path?: string[];
 }
 
 const QUICK_SHOP_LINES = [
@@ -84,6 +105,7 @@ export function PlaygroundPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [log, setLog] = useState<ChatEntry[]>([]);
   const [whyOpen, setWhyOpen] = useState<number | null>(null);
+  const [debugOpen, setDebugOpen] = useState<number | null>(null);
   const [setupOpen, setSetupOpen] = useState(true);
   const carried = useRef<unknown>(null);
   const historyLines = useRef<string[] | undefined>(undefined);
@@ -167,6 +189,8 @@ export function PlaygroundPanel() {
           action: p.turn.action,
           ladder: p.turn.ladder,
           state: p.turn.state,
+          stages: p.turn.stages,
+          path: p.turn.path,
         },
       ]);
       setText("");
@@ -412,14 +436,90 @@ export function PlaygroundPanel() {
                     )}
                   </div>
                 )}
-                {e.ladder && e.ladder.length > 0 && (
-                  <div className="mt-1 text-right">
-                    <button
-                      onClick={() => setWhyOpen(whyOpen === i ? null : i)}
-                      className="btn btn-sm rounded-full border border-line px-2 py-0.5 text-[10px] font-bold text-brandblue"
-                    >
-                      {whyOpen === i ? "Hide why" : "Why this move?"}
-                    </button>
+                {(e.ladder?.length || e.stages?.length) && (
+                  <div className="mt-1 flex justify-end gap-1.5">
+                    {e.stages && e.stages.length > 0 && (
+                      <button
+                        onClick={() => setDebugOpen(debugOpen === i ? null : i)}
+                        className="btn btn-sm rounded-full border border-line px-2 py-0.5 text-[10px] font-bold text-soft"
+                      >
+                        {debugOpen === i ? "Hide debug" : "🔬 Debug"}
+                      </button>
+                    )}
+                    {e.ladder && e.ladder.length > 0 && (
+                      <button
+                        onClick={() => setWhyOpen(whyOpen === i ? null : i)}
+                        className="btn btn-sm rounded-full border border-line px-2 py-0.5 text-[10px] font-bold text-brandblue"
+                      >
+                        {whyOpen === i ? "Hide why" : "Why this move?"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {debugOpen === i && e.stages && (
+                  <div className="mt-1 rounded-xl border border-line bg-card p-2 text-left">
+                    <div className="mb-1 text-[10px] font-extrabold text-strong">
+                      Execution timeline - every stage, its reasoning and latency:
+                    </div>
+                    {/* Traversed path at a glance */}
+                    {e.path && e.path.length > 0 && (
+                      <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] font-bold text-soft">
+                        {e.path.map((p, j) => (
+                          <span key={j} className="flex items-center gap-1">
+                            {j > 0 && <span className="text-faint">→</span>}
+                            <span className="rounded-full bg-card2 px-1.5 py-0.5">{p}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      {e.stages.map((s, j) => (
+                        <div key={j} className="rounded-lg bg-card2 px-1.5 py-1 text-[10px] leading-snug">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="font-extrabold text-strong">{s.stage}</span>
+                            <span className="flex shrink-0 items-center gap-1">
+                              {s.verdict === "deterministic" && (
+                                <span className="rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-bold text-[#8a6100] dark:text-brandyellow">
+                                  no-AI fallback
+                                </span>
+                              )}
+                              {typeof s.ms === "number" && (
+                                <span className="tabular-nums text-faint">{s.ms}ms</span>
+                              )}
+                            </span>
+                          </div>
+                          {s.reasoning && <div className="mt-0.5 text-soft">{s.reasoning.slice(0, 200)}</div>}
+                          {s.output && (
+                            <div className="mt-0.5 truncate text-faint">→ {s.output.slice(0, 140)}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {/* Deal memory - everything the thread remembers */}
+                    {e.state && (
+                      <div className="mt-1.5 border-t border-line pt-1.5 text-[10px] text-soft">
+                        <span className="font-extrabold text-strong">Deal memory:</span>{" "}
+                        {[
+                          e.state.lastTarget ? `last ask ${e.state.lastTarget}` : "",
+                          e.state.lastLeverage ? `leverage: ${e.state.lastLeverage}` : "",
+                          e.state.mileageKm ? `mileage ${e.state.mileageKm}km` : "",
+                          e.state.conditionNotes ? `condition: ${e.state.conditionNotes}` : "",
+                          e.state.toneDegraded ? "tone: annoyed" : "",
+                          e.state.phase ? `phase ${e.state.phase}` : "",
+                          e.state.waitingUntil ? `waiting until ${e.state.waitingUntil}` : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "(nothing beyond the chips above)"}
+                        {e.state.nodeRuns && Object.keys(e.state.nodeRuns).length > 0 && (
+                          <span className="mt-0.5 block text-faint">
+                            node budgets used:{" "}
+                            {Object.entries(e.state.nodeRuns)
+                              .map(([k, v]) => `${k}×${v}`)
+                              .join(", ")}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 {whyOpen === i && e.ladder && (
@@ -492,6 +592,31 @@ export function PlaygroundPanel() {
               className="btn btn-sm shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-soft hover:border-brandblue disabled:opacity-50"
             >
               📷 send price sheet
+            </button>
+            {/* Location pins / contact cards: the EXACT synthesized text the
+                production webhook feeds the engine - byte-for-byte parity. */}
+            <button
+              onClick={() =>
+                sendTurn({
+                  shopSays:
+                    "(the shop shared its location: Shop location - https://maps.google.com/?q=18.7883,98.9853)",
+                })
+              }
+              disabled={busy}
+              className="btn btn-sm shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-soft hover:border-brandblue disabled:opacity-50"
+            >
+              📍 send location pin
+            </button>
+            <button
+              onClick={() =>
+                sendTurn({
+                  shopSays: "(the shop shared a contact: Boss +66812345678)",
+                })
+              }
+              disabled={busy}
+              className="btn btn-sm shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-soft hover:border-brandblue disabled:opacity-50"
+            >
+              👤 send contact card
             </button>
           </div>
           <div className="mt-1.5 flex items-center gap-1.5">
