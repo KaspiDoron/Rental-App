@@ -38,6 +38,7 @@ export type NodeKind =
   | "pickup-location" // sends the traveller's location after explicit consent
   | "closing-message" // the traveller locked the deal - tell the shop
   | "silent" // deliberate no-reply (a first-class, visible move)
+  | "momentum" // last-resort continuation after a brief acknowledgement ("Yes.")
   | "custom-llm" // owner-created node with a prompt template
   // tail gates - every outbound passes through, in order
   | "style-validator" // critique/revise + global uniqueness + emoji tone
@@ -103,6 +104,8 @@ export type GraphCondition =
   | { kind: "hasMedia"; media: "image" | "audio" | "any" }
   | { kind: "mediaCoherent"; value: boolean }
   | { kind: "eventIs"; event: GraphEventKind }
+  // quote still far above the real floor (>25%) - leverage to keep pushing
+  | { kind: "priceFarAboveFloor" }
   | { kind: "nodeRanBelow"; nodeId: string; max: number }
   | { kind: "notG"; of: GraphCondition }
   | { kind: "allG"; of: GraphCondition[] }
@@ -210,6 +213,7 @@ export interface GraphFacts {
   hasClarifyMessage: boolean;
   matchesSpecNotFalse: boolean;
   priceAtOrBelowFloor: boolean;
+  priceFarAboveFloor: boolean; // quote >25% above the known floor
   targetIsRealSaving: boolean;
   rivalCheaper: boolean;
   counts: { clarify: number; bargain: number; answer: number; close: number };

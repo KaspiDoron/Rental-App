@@ -15,13 +15,13 @@ export const GRAPH_SPEC_VERSION = 2 as const;
 // Bump when the shipped default node prompts / edges change in a way that
 // should reach already-saved graphs. Currently informational (the sanitizer
 // backfills empty prompts on every load regardless).
-export const DEFAULT_GRAPH_REVISION = 2;
+export const DEFAULT_GRAPH_REVISION = 3;
 
 export function defaultGraphSettings(): GraphSettings {
   return {
     maxStepsPerEvent: 8,
     maxLlmCallsPerEvent: 5,
-    maxRoundsPerShop: 3,
+    maxRoundsPerShop: 4,
     waitWindow: { minS: 120, maxS: 900 },
     strategicWaitMaxMin: 45,
     emojiTone: true,
@@ -67,7 +67,7 @@ export function defaultGraphNodes(): NodeSpec[] {
     // ---- chief ----
     n("director", "director", "Negotiation Director", "🧠", {
       instructions:
-        "You see EVERY shop in the search at once and this shop's full thread. Patience is leverage: you do not owe any shop an instant reply - when a shop says 'no deal', WAIT a few minutes to see if they break before you answer, and let the shop send the last message. Push toward the real ground-floor using the cheapest rival offer as leverage. Before showing the traveller a deal you must know price + deposit + how they get the vehicle. Prefer cash deposit over passport. Stop pushing the instant the shop says last price / cannot lower, or sounds annoyed, then close warmly. Always warm, human, with a friendly 'my friend' tone and one emoji.",
+        "You see EVERY shop in the search at once and this shop's full thread. Patience is leverage: you do not owe any shop an instant reply - when a shop says 'no deal', WAIT a few minutes to see if they break before you answer, and let the shop send the last message. Push RELENTLESSLY but politely toward the real ground-floor, using the cheapest rival offer in this search as honest leverage the moment it exists. Before showing the traveller a deal you must know price + deposit + how they get the vehicle. Prefer cash deposit over passport. One 'last price' with real room left (quote far above floor, or a cheaper rival) earns one more gentle move or a package ask (helmets, delivery, full tank) at their price; a SECOND firm signal or any annoyance ends the push - close warmly. A bare 'Yes.' from the shop is the start of qualification, never the end - keep collecting what's missing. Always warm, human, with a friendly 'my friend' tone and one emoji.",
     }),
     // ---- act ----
     n("answer", "answer", "Answer the shop", "💬", {
@@ -82,7 +82,7 @@ export function defaultGraphNodes(): NodeSpec[] {
     }),
     n("bargain", "bargain", "Bargainer", "🥊", {
       instructions:
-        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors near the floor; round 2 softens and meets closer to their new number; the final round is a tiny nudge. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). Never push after an explicit last price / cannot lower, or when they sound annoyed.",
+        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors at the floor; later rounds keep closing the remaining gap proportionally. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). For 7+ day rentals ask about the weekly/monthly rate. When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). If they resist the number, pivot to package value at THEIR price: free helmet(s), free delivery to the hotel, or a full tank. One 'last price' with real room left (far above floor, or a cheaper rival) earns ONE more gentle move; a second firm signal or any annoyance ends the push immediately.",
     }),
     n("deposit-probe", "deposit-probe", "Deposit Negotiator", "🛂", {
       maxRunsPerThread: 3,
@@ -116,6 +116,11 @@ export function defaultGraphNodes(): NodeSpec[] {
     n("silent", "silent", "Deliberate silence", "🤫", {
       instructions:
         "A first-class move: sometimes the strongest play is to say nothing and let the shop send the next (or last) message. Also used when the search session is closed.",
+    }),
+    n("momentum", "momentum", "Momentum Keeper", "🔁", {
+      maxRunsPerThread: 2,
+      instructions:
+        "The shop said something brief or agreeable ('Yes.', 'ok', a thumbs up) that advances nothing - a confirmation is the BEGINNING of qualification, not the end. Keep the deal moving with ONE short question for the most useful missing thing: the price for our dates, the deposit, or how we get the vehicle. If everything is already known, warmly confirm the total for the dates and ask if they can hold it. Never re-ask something already answered.",
     }),
     // ---- tail gates ----
     n("style-validator", "style-validator", "Style & Uniqueness Validator", "🎨", {
@@ -229,11 +234,25 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "hasUsablePrice", value: true },
         { kind: "matchesSpecNotFalse" },
         { kind: "priceAtOrBelowFloor", value: false },
-        { kind: "targetIsRealSaving", value: true },
+        // A push is justified by a genuine saving OR a cheaper real rival
+        // (the rival caps the ask, so it is always a meaningful number).
+        {
+          kind: "anyG",
+          of: [{ kind: "targetIsRealSaving", value: true }, { kind: "rivalCheaper" }],
+        },
         { kind: "roundsBelow" }, // settings.maxRoundsPerShop
-        // ONE explicit firm signal ("last price", "cannot lower") ends the
-        // price push - in the launch playbook nobody bargains past it.
-        { kind: "notG", of: { kind: "firmCountAtLeast", min: 1 } },
+        // TWO explicit firm signals always end the price push. After ONE,
+        // a single extra gentle move is allowed only with real leverage:
+        // the quote still far above the floor, or a cheaper rival in hand.
+        { kind: "notG", of: { kind: "firmCountAtLeast", min: 2 } },
+        {
+          kind: "anyG",
+          of: [
+            { kind: "notG", of: { kind: "firmCountAtLeast", min: 1 } },
+            { kind: "rivalCheaper" },
+            { kind: "priceFarAboveFloor" },
+          ],
+        },
         { kind: "notG", of: { kind: "toneDegraded" } },
       ]),
       "push toward the floor (round-aware)"
@@ -355,6 +374,21 @@ export function defaultGraphEdges(): EdgeSpec[] {
       ]),
       "thank once after our asks"
     ),
+    e(
+      "d-momentum",
+      "director",
+      "momentum",
+      90,
+      // TRUE last resort: only a real inbound (never a wakeup tick), never a
+      // closed session, never an annoyed shop. A bare "Yes." must start
+      // qualification, not end the conversation.
+      A([
+        { kind: "notG", of: { kind: "eventIs", event: "tick" } },
+        { kind: "notG", of: { kind: "sessionClosed" } },
+        { kind: "notG", of: { kind: "toneDegraded" } },
+      ]),
+      "brief acknowledgement - keep the deal moving"
+    ),
 
     // ---- the tail every composed message flows through ------------------------
     e("t-style", "bargain", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
@@ -363,6 +397,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
     e("t-style-d", "deposit-probe", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
     e("t-style-f", "fulfillment-probe", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
     e("t-style-cl", "close", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
+    e("t-style-m", "momentum", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
     e("t-style-pl", "pickup-location", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
     e("t-style-cm", "closing-message", "style-validator", 10, { kind: "always" }, "style + uniqueness"),
     e("t-localize", "style-validator", "localize", 10, { kind: "always" }, "local language stickiness"),
@@ -468,7 +503,7 @@ export function validateGraphSpec(spec: GraphSpec): GraphValidation {
     seen.add(from);
     return enabledEdges.some((x) => x.from === from && reach(x.to, seen));
   };
-  const composers = ["answer", "clarify", "bargain", "deposit-probe", "fulfillment-probe", "close"];
+  const composers = ["answer", "clarify", "bargain", "deposit-probe", "fulfillment-probe", "close", "momentum"];
   for (const c of composers) {
     const node = spec.nodes.find((x) => x.id === c);
     if (node?.enabled && !reach(c)) {

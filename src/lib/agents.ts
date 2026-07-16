@@ -598,9 +598,12 @@ export async function composeBargain(opts: {
   if (target && quoted) {
     const lowest = opts.floorPricePerDay ?? Math.round(quoted * 0.6);
     if (target < lowest) target = lowest;
-    // Ask for a clean, human number (220, not 213) - odd figures read as robotic
-    // and weaken the ask.
-    target = roundNice(target);
+    // Ask for a clean, human number (220, not 213) - odd figures read as
+    // robotic and weaken the ask. When the ENGINE provided the target it is
+    // already nice-rounded and recorded in thread state (lastTarget) - do not
+    // re-round it here or the message would name a different number than the
+    // ladder tracks.
+    if (!opts.targetPricePerDay) target = roundNice(target);
     if (target >= quoted) target = undefined; // quote already at/below target
   }
   const tactics = getTactics();
@@ -633,9 +636,23 @@ export async function composeBargain(opts: {
           opts.rfq.vehicleClass
         )} for ${opts.rfq.durationDays} day(s)`;
 
+  // Duration-based discount levers: long rentals deserve the weekly/monthly
+  // rate framing - the strongest honest card a traveller holds.
+  const rentalDays = opts.rfq.durationDays;
+  const durationLever =
+    rentalDays >= 25
+      ? `The rental is ${rentalDays} days - essentially a MONTH. Frame the ask around the monthly rate ("for one month, what is your monthly price?") - monthly rates are always far below day-rate x days. `
+      : rentalDays >= 7
+      ? `The rental is ${rentalDays} days - a week or more. Frame the ask around the weekly rate ("for ${rentalDays} days, can you give the weekly price?") - shops always have a lower weekly number. `
+      : "";
+  // When the shop resists the number, value can still be won at THEIR price.
+  const packagePivot =
+    `If they push back on the number, pivot to PACKAGE value at their price instead of arguing: ` +
+    `free helmet(s), free delivery to the hotel, a full tank, or free insurance - pick ONE that fits the chat. `;
+
   // Round-aware playbook directives - the owner's launch scripts, generalized.
   const roundPlay =
-    opts.round <= 0
+    (opts.round <= 0
       ? `FIRST PUSH (the owner's playbook): their opening quote is above the fair local price. ` +
         `Use the rental DAYS as leverage: warmly apologize that the quote is really expensive for you, ` +
         `mention you are renting for ${opts.rfq.durationDays} days (a long time), and ask for the target ` +
@@ -645,9 +662,11 @@ export async function composeBargain(opts: {
       : opts.round === 1
       ? `SECOND PUSH: they refused the first ask ("cannot give that price"). Come back relaxed and friendly ` +
         `with the new, slightly higher round-number target - meet them partway, make it feel easy to say yes, ` +
-        `hint you are ready to book today. Never apologize twice, never sound needy. `
+        `hint you are ready to book today. Never apologize twice, never sound needy. ` +
+        packagePivot
       : `FINAL NUDGE: one last tiny, warm ask at the target - fully relaxed, zero pressure, ` +
-        `and make clear you are happy either way. `;
+        `and make clear you are happy either way. ` +
+        packagePivot) + durationLever;
 
   const system =
     "You write ONE short WhatsApp message from a real human traveller chatting " +

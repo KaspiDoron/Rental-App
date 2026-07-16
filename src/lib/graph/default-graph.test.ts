@@ -27,7 +27,9 @@ function ctx(over: Partial<DecisionContext> = {}): DecisionContext {
 // context - proving the migration is behavior-preserving.
 function legacyOnlySpec(): GraphSpec {
   const spec = defaultGraphSpec();
-  const off = new Set(["deposit-probe", "fulfillment-probe", "present"]);
+  // "momentum" is also new: it deliberately replaces legacy dead-end silence
+  // (a bare "Yes." now continues qualification) - proven separately below.
+  const off = new Set(["deposit-probe", "fulfillment-probe", "present", "momentum"]);
   spec.nodes = spec.nodes.map((n) => (off.has(n.id) ? { ...n, enabled: false } : n));
   // Disable the media-confirm edge too (legacy contexts carry no media).
   spec.edges = spec.edges.map((e) => (e.id === "d-media-confirm" ? { ...e, enabled: false } : e));

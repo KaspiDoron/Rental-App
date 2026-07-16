@@ -242,8 +242,10 @@ describe("engine end-to-end (deterministic)", () => {
   it("plays the whole Shop B script: bargain -> deposit -> cash push -> accept -> present", async () => {
     // The owner's Shop B example, end to end with carried state:
     //   "250/day" -> we bargain (rival 200 as leverage)
-    //   "170, you come pick up" -> price settles + on-shop known -> deposit probe
-    //   "Passport only" -> the cash push
+    //   "170, you come pick up" -> still 20 over the floor -> ONE more
+    //     proportionate micro-ask (the gap-aware ladder: 155)
+    //   "Cannot lower, 170 last price. Passport only" -> firm with no leverage
+    //     left -> the push ends, the cash push follows
     //   "3000 cash is fine" -> deal complete -> present (no more pushing)
     const bag = makeIO(seed());
     const t = async (
@@ -269,17 +271,19 @@ describe("engine end-to-end (deterministic)", () => {
     // The playbook opener asks the FLOOR itself (150), not a compromise.
     expect(bag.getState().fields.lastTarget).toBe(150);
 
-    // The shop concedes to 170 - that already BEATS our round-1 ask of
-    // floor+15% (~173), so pushing again would be irrational: the playbook
-    // moves straight to collecting the missing deal term (the deposit).
+    // The shop concedes to 170 - still 20 above the 150 floor. The gap-aware
+    // ladder keeps chasing realistic room with a proportionate micro-ask
+    // (floor + a quarter of the remaining gap = 155) instead of dead-ending.
     const r2 = await t(
       "Okay, I give you 170 per day. You come pick up at shop.",
       extraction({ pricePerDay: 170, onShopOnly: true }),
       170
     );
-    expect(r2.action).toBe("deposit-probe");
+    expect(r2.action).toBe("bargain");
+    expect(bag.getState().fields.lastTarget).toBe(155);
 
-    // Passport-only comes back - the polite one-time cash push follows.
+    // A firm "last price" with no leverage left (170 is not far above the
+    // floor, no cheaper rival) ends the push - the polite cash push follows.
     const r3 = await t(
       "Cannot lower, 170 last price. Passport deposit only.",
       extraction({ found: false, shopFirm: true, depositType: "passport", deposit: "Passport only" }),
@@ -327,6 +331,120 @@ describe("engine end-to-end (deterministic)", () => {
     expect(r2.action).toBe("bargain");
     // The opener asks the real floor itself.
     expect(bag.getState().fields.lastTarget).toBe(150);
+  });
+
+  it("a bare 'Yes.' never dead-ends: momentum keeps the qualification moving", async () => {
+    // The owner's screenshot bug: the shop answered "Yes." and the agent went
+    // quiet forever. A confirmation is the BEGINNING of qualification - after
+    // the one allowed clarify, the momentum keeper must still ask for the most
+    // useful missing thing instead of falling into terminal silence.
+    const bag = makeIO({
+      ...seed(),
+      nodeRuns: { clarify: 2 }, // clarify budget exhausted (maxRunsPerThread 2)
+    });
+    const res = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "Yes.", images: [], audios: [] },
+        extraction: extraction({ found: false, clarifyMessage: "Is that per day?" }),
+        usablePrice: undefined,
+      }),
+      bag.io,
+      spec
+    );
+    expect(res.action).toBe("momentum");
+    expect(bag.sends.length).toBe(1);
+    // No price yet -> it re-anchors on the missing price.
+    expect(bag.sends[0].text.toLowerCase()).toMatch(/price|day/);
+  });
+
+  it("momentum confirms + asks to hold when the deal is complete but close is spent", async () => {
+    const bag = makeIO({
+      ...seed(),
+      nodeRuns: { close: 2, present: 1 },
+      fields: {
+        firmCount: 0,
+        toneDegraded: false,
+        rounds: 1,
+        pricePerDay: 150,
+        currency: "THB",
+        depositType: "cash",
+        depositAmount: 3000,
+        fulfillment: "on-shop",
+        presented: true,
+      },
+    });
+    const res = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "Yes.", images: [], audios: [] },
+        extraction: extraction({ found: false, clarifyMessage: "Anything else?" }),
+        usablePrice: undefined,
+      }),
+      bag.io,
+      spec
+    );
+    expect(res.action).toBe("momentum");
+    // It must confirm, never accept: "hold" language, no booking commitment.
+    expect(bag.sends[0].text).toMatch(/150/);
+  });
+
+  it("a cheaper rival justifies one more push past a single firm signal", async () => {
+    // Shop is firm ONCE at 200 (not far above the 150 floor x1.25 = 187.5
+    // alone would pass too, so use 190 to isolate the rival branch) - with a
+    // REAL rival at 180 the bargain stays legal and the deterministic path
+    // records the honest leverage note.
+    const bag = makeIO({
+      ...seed(),
+      fields: {
+        firmCount: 1,
+        toneDegraded: false,
+        rounds: 1,
+        pricePerDay: 190,
+        depositType: "cash",
+        depositAmount: 3000,
+        fulfillment: "on-shop",
+      },
+    });
+    bag.io.cheapestRival = async () => 180;
+    const res = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "190 is my price.", images: [], audios: [] },
+        extraction: extraction({ pricePerDay: 190 }),
+        usablePrice: 190,
+      }),
+      bag.io,
+      spec
+    );
+    expect(res.action).toBe("bargain");
+    // The deterministic path preserves the cross-shop leverage honestly.
+    expect(bag.getState().fields.lastLeverage).toMatch(/180/);
+    // The rival caps the ask - never invented, never below the floor.
+    expect(bag.getState().fields.lastTarget).toBeLessThanOrEqual(180);
+  });
+
+  it("two firm signals end the push even with a cheaper rival", async () => {
+    const bag = makeIO({
+      ...seed(),
+      fields: {
+        firmCount: 2,
+        toneDegraded: false,
+        rounds: 1,
+        pricePerDay: 300,
+        depositType: "cash",
+        depositAmount: 3000,
+        fulfillment: "on-shop",
+      },
+    });
+    bag.io.cheapestRival = async () => 180;
+    const res = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "300, final.", images: [], audios: [] },
+        extraction: extraction({ pricePerDay: 300, shopFirm: true }),
+        usablePrice: 300,
+      }),
+      bag.io,
+      spec
+    );
+    expect(res.action).not.toBe("bargain");
   });
 
   it("a closed session stays completely silent", async () => {

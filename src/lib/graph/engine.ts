@@ -197,6 +197,11 @@ function buildFacts(args: {
     hasClarifyMessage: isTick ? false : Boolean(input.extraction?.clarifyMessage),
     matchesSpecNotFalse: input.extraction ? input.extraction.matchesSpec !== false : true,
     priceAtOrBelowFloor: atFloor,
+    // Far above the floor (>25%) = real room remains; one firm "last price"
+    // does not end the push when this (or a cheaper rival) is true.
+    priceFarAboveFloor: Boolean(
+      price && input.floorPrice && price > input.floorPrice * 1.25
+    ),
     targetIsRealSaving: Boolean(price && args.target && args.target < price * 0.95),
     rivalCheaper: Boolean(args.rivalPrice),
     counts,
@@ -433,7 +438,10 @@ export async function runGraphTurn(
     const atFloor = Boolean(
       input.floorPrice && f.pricePerDay! <= input.floorPrice * 1.05
     );
-    if (!atFloor && input.ctx.sender && input.ctx.vendorId) {
+    // Cross-shop intelligence: always look for a cheaper rival in this search
+    // session (even at-floor - the director still reads it as context), so
+    // competitor offers can be used as honest leverage the moment they exist.
+    if (input.ctx.sender && input.ctx.vendorId) {
       const { vehicleKeyFor } = await import("../market");
       rivalPrice = await io
         .cheapestRival({
@@ -603,6 +611,15 @@ export async function runGraphTurn(
     const edge = spec.edges.find((x) => x.id === choice.edgeId)!;
     const node = nodesById.get(edge.to)!;
 
+    // Honest cross-shop leverage must survive the DETERMINISTIC path too: when
+    // the LLM director is off/unreachable it never writes a leverageNote, so a
+    // real cheaper rival would silently vanish from the bargain prompt.
+    const leverageNote =
+      choice.leverageNote ??
+      (rivalPrice && node.id === "bargain"
+        ? `another shop nearby offered ${rivalPrice} ${input.currency}/day for the same vehicle`
+        : undefined);
+
     const result = await composeForNode({
       node,
       edgeLabel: edge.label ?? edge.id,
@@ -612,7 +629,7 @@ export async function runGraphTurn(
       cfg,
       target,
       rivalPrice,
-      leverageNote: choice.leverageNote,
+      leverageNote,
       llmBudget,
     });
     state.nodeRuns[node.id] = (state.nodeRuns[node.id] ?? 0) + 1;

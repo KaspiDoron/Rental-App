@@ -237,6 +237,38 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
       return { message: msg, kind: "auto-clarify", reasoning: args.edgeLabel };
     }
 
+    case "momentum": {
+      // A brief/agreeable reply ("Yes.", "ok") advanced nothing - a
+      // confirmation is the BEGINNING of qualification, not the end. Ask the
+      // single most useful missing thing; with everything known, confirm the
+      // total for the dates and ask them to hold it.
+      const days = input.rfq.durationDays;
+      const priceOk = (f.pricePerDay ?? 0) > 0;
+      let base: string;
+      let what: string;
+      if (!priceOk) {
+        base = `Great! So what is your best price per day for the ${days} day${days === 1 ? "" : "s"}? 🙂`;
+        what = "warmly re-anchors on the missing daily price for our dates";
+      } else if (!f.depositType) {
+        base = f.fulfillment ? pick(DEPOSIT_PROBES) : pick(DEPOSIT_AND_FULFILLMENT_PROBES);
+        what = "asks what deposit the shop needs";
+      } else if (!f.fulfillment) {
+        base = pick(FULFILLMENT_PROBES);
+        what = "asks whether they deliver or we come to the shop";
+      } else {
+        const cur = f.currency ?? input.currency;
+        base = `Perfect - so ${f.pricePerDay} ${cur}/day for ${days} day${days === 1 ? "" : "s"}. Can you hold it for me while I decide? 🙏`;
+        what = "confirms the agreed daily price and asks them to hold it (never accepts)";
+      }
+      const v = await vary(base, args, what);
+      return {
+        message: v.text.slice(0, 300),
+        kind: "auto-momentum",
+        reasoning: "brief acknowledgement from the shop - keeping the qualification moving",
+        verdict: v.fromAi ? undefined : "deterministic",
+      };
+    }
+
     case "close": {
       const saidYes =
         (f.pricePerDay ?? 0) > 0 ||

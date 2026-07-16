@@ -46,7 +46,12 @@ export function directorSystemPrompt(instructions: string): string {
     "Accepting an opening quote near double the floor is the one unforgivable mistake.\n" +
     "- Before the traveller sees an offer we must know price, deposit (prefer cash over " +
     "passport) and fulfillment - prioritize probe moves when those are missing.\n" +
-    "- Stop pushing the INSTANT the shop says last price / cannot lower, or sounds annoyed; close warmly instead.\n" +
+    "- One 'last price' is not the end when real room remains (quote far above the floor, or a " +
+    "cheaper rival in this session): one more gentle move or a package sweetener (helmets, " +
+    "delivery, full tank) at their price is allowed. A SECOND firm signal, or any annoyance, " +
+    "ends the push immediately - close warmly instead.\n" +
+    "- A brief agreeable reply ('Yes.', 'ok') is the START of qualification: keep collecting " +
+    "the missing deal fields, never let the thread die on a confirmation.\n" +
     "- High mileage or visible scratches/damage from photos are honest, polite leverage.\n" +
     (instructions ? `OWNER GUIDANCE: ${instructions}\n` : "") +
     'Reply ONLY as JSON: { "edgeId": string|null, "action": "act"|"wait-hold"|"wait-defer"|"silent", ' +

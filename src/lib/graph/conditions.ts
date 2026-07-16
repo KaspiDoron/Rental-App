@@ -68,6 +68,8 @@ export function evalGraphCondition(cond: GraphCondition, facts: GraphFacts): boo
         return facts.mediaCoherent === cond.value;
       case "eventIs":
         return facts.event === cond.event;
+      case "priceFarAboveFloor":
+        return facts.priceFarAboveFloor;
       case "nodeRanBelow":
         return (facts.nodeRuns[cond.nodeId] ?? 0) < cond.max;
       case "notG":
@@ -120,6 +122,7 @@ export function factsFromLegacy(
     event: "inbound-text",
     phase: "opening",
     priceKnown: ctx.hasUsablePrice,
+    priceFarAboveFloor: false,
     depositKnown: false,
     fulfillmentKnown: false,
     depositPassportOnly: false,
@@ -176,6 +179,8 @@ function leafText(cond: GraphCondition): string {
       return c.value === false ? "a lower ask would not save real money" : "a lower ask saves real money";
     case "rivalCheaper":
       return "another shop in this session offered less";
+    case "priceFarAboveFloor":
+      return "the quote is still far above the market floor";
     case "shopAskedQuestion":
       return "the shop asked us a question";
     case "shopSentVehiclePhoto":
@@ -285,6 +290,7 @@ export const CONDITION_VOCABULARY: {
   { kind: "priceAtOrBelowFloor", label: "the price is at/below the market floor", params: [{ name: "value", type: "boolean" }] },
   { kind: "targetIsRealSaving", label: "our target is a real saving", params: [{ name: "value", type: "boolean" }] },
   { kind: "rivalCheaper", label: "a rival shop offered less" },
+  { kind: "priceFarAboveFloor", label: "quote far above the floor (>25%)" },
   { kind: "counterBelow", label: "legacy counter below", params: [{ name: "counter", type: "enum", options: ["clarify", "bargain", "answer", "close"] }, { name: "max", type: "number" }] },
   { kind: "counterAtLeast", label: "legacy counter at least", params: [{ name: "counter", type: "enum", options: ["clarify", "bargain", "answer", "close"] }, { name: "min", type: "number" }] },
   { kind: "phaseIs", label: "thread phase is", params: [{ name: "phase", type: "enum", options: ["opening", "awaiting_price", "negotiating", "collecting_terms", "complete", "presented", "closing", "closed", "dead"] }] },
