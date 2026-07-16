@@ -12,6 +12,7 @@ import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
+import { SiteFooter } from "@/components/SiteFooter";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -674,16 +675,21 @@ export default function ProfilePage() {
           </div>
         </section>
 
-        {/* Booking history */}
+        {/* Booking history - the full hub lives in /deals now */}
         <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("My bookings")}</div>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[13px] font-extrabold text-strong">{t("My bookings")}</div>
+            <a href="/deals" className="text-[12px] font-bold text-brandblue underline">
+              {t("Open My deals")} →
+            </a>
+          </div>
           {bookings.length === 0 ? (
             <p className="text-[12px] text-faint">
               {t("No bookings yet - lock your first deal and it will show up here.")}
             </p>
           ) : (
             <div className="space-y-2">
-              {bookings.map((b, i) => (
+              {bookings.slice(0, 3).map((b, i) => (
                 <div key={b.id ?? i} className="flex items-center justify-between rounded-2xl bg-card2 p-3">
                   <div>
                     <div className="text-[13px] font-extrabold text-strong">{b.vendor_name}</div>
@@ -717,6 +723,14 @@ export default function ProfilePage() {
                   </div>
                 </div>
               ))}
+              {bookings.length > 3 && (
+                <a
+                  href="/deals"
+                  className="block rounded-2xl bg-card2 p-2.5 text-center text-[12px] font-extrabold text-brandblue"
+                >
+                  {t("See all")} {bookings.length} {t("bookings in My deals")} →
+                </a>
+              )}
             </div>
           )}
         </section>
@@ -738,6 +752,8 @@ export default function ProfilePage() {
         <button onClick={signOut} className="btn btn-danger w-full rounded-2xl py-3 text-sm">
           {t("Sign out")}
         </button>
+
+        <SiteFooter />
       </div>
     </main>
   );

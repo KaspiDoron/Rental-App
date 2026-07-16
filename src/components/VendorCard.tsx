@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
@@ -16,7 +16,7 @@ import { ThreadPeek } from "./ThreadPeek";
 // only its real reply produces a price. Everything happens INSIDE the app:
 // the RFQ is sent from here via the official WhatsApp Cloud API, and the
 // shop's answer flows back into this card automatically through the webhook.
-export function VendorCard({
+function VendorCardInner({
   vendor,
   rfq,
   plan,
@@ -635,3 +635,8 @@ export function VendorCard({
     </div>
   );
 }
+
+// Memoised: with stable handler identities from the page, a card only
+// re-renders when ITS vendor object (or the search context) changes - key for
+// long result lists on low-end phones.
+export const VendorCard = memo(VendorCardInner);

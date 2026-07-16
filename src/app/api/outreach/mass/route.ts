@@ -11,6 +11,7 @@ import {
 import { placeDetails } from "@/lib/google";
 import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
+import { can } from "@/lib/entitlements";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
@@ -20,7 +21,7 @@ const MAX_BATCH = 6;
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
-  if (session.plan === "free") {
+  if (!can(session.plan, "mass-bargain")) {
     return NextResponse.json(
       { error: "Mass bargain is a Pro/Ultra feature.", upgrade: true },
       { status: 403 }

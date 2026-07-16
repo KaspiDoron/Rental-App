@@ -4,10 +4,11 @@ import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 import { startNav } from "./NavVeil";
 
-type Tab = "home" | "profile" | "feedback";
+type Tab = "home" | "deals" | "profile" | "feedback";
+type NavTab = Exclude<Tab, "feedback">;
 
-// Global bottom navigation: 3 perfectly centred slots (the map lives inside
-// the results view, not here). Navigating shows a slick loading veil.
+// Global bottom navigation: 4 centred slots (the map lives inside the results
+// view, not here). Navigating shows a slick loading veil.
 export function TabBar({
   active,
   onSelect,
@@ -15,8 +16,8 @@ export function TabBar({
   onUpgrade,
   showUpgrade,
 }: {
-  active: Exclude<Tab, "feedback">;
-  onSelect: (t: Exclude<Tab, "feedback">) => void;
+  active: NavTab;
+  onSelect: (t: NavTab) => void;
   onFeedback: () => void;
   onUpgrade: () => void;
   showUpgrade: boolean;
@@ -24,6 +25,7 @@ export function TabBar({
   const { t } = useI18n();
   const items: { id: Tab; icon: string; label: string }[] = [
     { id: "home", icon: "bolt", label: t("Find deals") },
+    { id: "deals", icon: "card", label: t("My deals") },
     { id: "profile", icon: "user", label: t("Profile") },
     { id: "feedback", icon: "chat", label: t("Feedback") },
   ];
@@ -34,14 +36,14 @@ export function TabBar({
         <div className="pointer-events-none mb-2 flex justify-center px-4">
           <button
             onClick={onUpgrade}
-            className="btn btn-sm chip pointer-events-auto flex items-center gap-1.5 rounded-full bg-brandyellow px-4 py-2 text-[12px] font-extrabold text-[#4a3300] shadow-lg animate-wiggle"
+            className="btn btn-sm chip cta-sheen pointer-events-auto flex items-center gap-1.5 rounded-full bg-brandblue px-4 py-2 text-[12px] font-extrabold text-white shadow-lg"
           >
-            🎉 {t("80% OFF launch - Upgrade")}
+            <Icon name="sparkles" className="h-3.5 w-3.5" /> {t("See Pro features")}
           </button>
         </div>
       )}
       <nav className="tabbar pb-safe">
-        <div className="mx-auto grid max-w-md grid-cols-3 px-2 pt-1.5">
+        <div className="mx-auto grid max-w-md grid-cols-4 px-2 pt-1.5">
           {items.map((it) => {
             const on = active === it.id;
             const isFeedback = it.id === "feedback";
@@ -56,7 +58,7 @@ export function TabBar({
                   }
                   // Instant feedback on EVERY page change (global veil).
                   if (it.id !== active) startNav();
-                  onSelect(it.id as Exclude<Tab, "feedback">);
+                  onSelect(it.id as NavTab);
                 }}
                 className="btn btn-sm flex flex-col items-center justify-center gap-1 rounded-2xl py-1.5"
               >

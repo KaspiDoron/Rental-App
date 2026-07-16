@@ -16,6 +16,9 @@ import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { FaqSection } from "@/components/FaqSection";
+import { SiteFooter } from "@/components/SiteFooter";
+import { SearchSummaryBar } from "@/components/SearchSummaryBar";
+import { can } from "@/lib/entitlements";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { BargainDraftModal } from "@/components/BargainDraftModal";
@@ -119,11 +122,25 @@ export default function Home() {
   const [localLang, setLocalLang] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [restored, setRestored] = useState(false);
+  // Progressive disclosure: once results are in, the big search card folds
+  // into a one-row summary (the form stays mounted so tour anchors survive).
+  const [formOpen, setFormOpen] = useState(true);
+  // Card windowing: render the first batch and reveal more on demand - keeps
+  // long result lists cheap on low-end phones.
+  const [visibleCount, setVisibleCount] = useState(20);
   // Live status panel (expandable) + user-facing queued-message list (bug #1/#9).
   const [statusOpen, setStatusOpen] = useState(false);
   // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
   const [showGame, setShowGame] = useState(false);
   const [pushState, setPushState] = useState<"idle" | "on" | "denied" | "off">("idle");
+
+  // Fold the search card away when the agents take over the screen; a phase
+  // transition re-collapses it, a tap on the summary row re-opens it.
+  useEffect(() => {
+    if (phase === "running" || phase === "done") setFormOpen(false);
+    if (phase === "profiling") setVisibleCount(20);
+  }, [phase]);
+  const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
 
   // Jump straight to a shop's card from the status panel: switch to the list,
   // highlight it, and smooth-scroll it into view.
@@ -388,6 +405,11 @@ export default function Home() {
   const patchVendor = useCallbackRef((id: string, patch: Partial<Vendor>) => {
     setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   });
+  // Stable identity so the memoised VendorCard doesn't re-render on every
+  // parent state change.
+  const handleStage = useCallbackRef((id: string, stage: Vendor["stage"]) =>
+    patchVendor(id, { stage })
+  );
 
   // The traveller's own held-for-opening-hours queue (bug #9). They can see it
   // and remove any queued message; the matching card clears its queued badge.
@@ -630,7 +652,7 @@ export default function Home() {
   // Pickup consent: the traveller approved sharing their EXACT location with a
   // shop that offered to pick them up. Prefer a fresh precise GPS fix; fall back
   // to the search origin's coordinates. The location is sent ONLY from here.
-  async function pickupConsent(vendor: Vendor): Promise<{ ok: boolean; reason?: string }> {
+  const pickupConsent = useCallbackRef(async (vendor: Vendor): Promise<{ ok: boolean; reason?: string }> => {
     const coords = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
       if (!navigator.geolocation) return resolve(origin ? { lat: origin.lat, lng: origin.lng } : null);
       navigator.geolocation.getCurrentPosition(
@@ -657,9 +679,9 @@ export default function Home() {
     } catch {
       return { ok: false, reason: "network" };
     }
-  }
+  });
 
-  async function customMessage(vendorId: string, message: string) {
+  const customMessage = useCallbackRef(async (vendorId: string, message: string) => {
     const vendor = vendors.find((v) => v.id === vendorId);
     const res = await fetch("/api/outreach", {
       method: "POST",
@@ -677,7 +699,91 @@ export default function Home() {
       }),
     });
     return res.json();
-  }
+  });
+
+  // Mass bargain: named + stable so the button AND (later) Will's command
+  // bridge share the exact same path. Entitlement-gated through can().
+  const runMassBargain = useCallbackRef(async () => {
+    if (!rfq) return;
+    if (!can(session?.plan, "mass-bargain")) {
+      setUpgradeOpen(true);
+      return;
+    }
+    setMassState("running");
+    setMassNote(null);
+    try {
+      const targets = filtered
+        .filter((v) => !v.offer && v.stage !== "rfq-sent" && v.stage !== "awaiting-response")
+        .slice(0, 6)
+        .map((v) => ({
+          id: v.id,
+          name: v.name,
+          whatsapp: v.whatsapp,
+          placeId: v.placeId,
+          // Google "open now" - so an open shop is never queued as closed.
+          openNow: v.openNow,
+        }));
+      const res = await fetch("/api/outreach/mass", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendors: targets,
+          message: rfq.vendorMessage,
+          rfq,
+          region: origin?.label ?? "",
+          localLang: localLangActive,
+        }),
+      });
+      const d = await res.json();
+      if (d.results) {
+        let alreadyAsked = 0;
+        for (const r of d.results) {
+          if (r.sent) {
+            patchVendor(r.id, {
+              stage: "awaiting-response",
+              sentText: r.text,
+              sentGloss: r.gloss,
+              lastEventAt: Date.now(),
+              queuedUntil: undefined,
+            });
+          } else if (r.queued) {
+            // Held for the shop's opening hours - show it on the card
+            // and in the user-facing queue (they can wait or remove).
+            patchVendor(r.id, {
+              queuedUntil: r.queuedUntil ?? new Date().toISOString(),
+              lastEventAt: Date.now(),
+            });
+          } else if (String(r.reason ?? "").startsWith("rfq-dedup")) {
+            // This shop already has an open conversation from the last
+            // 24h - the agent continues THAT thread instead of
+            // re-sending the same question (never look like a bot).
+            alreadyAsked += 1;
+            patchVendor(r.id, {
+              stage: "awaiting-response",
+              lastEventAt: Date.now(),
+            });
+          }
+        }
+        refreshQueue();
+        setMassNote(
+          d.sent > 0 || d.queued > 0 || alreadyAsked > 0
+            ? `${t("Agents are on it - shops asked:")} ${d.sent}${
+                d.queued > 0 ? ` · ${d.queued} ${t("queued for opening hours")}` : ""
+              }${
+                alreadyAsked > 0 ? ` · ${alreadyAsked} ${t("already in conversation")}` : ""
+              }`
+            : d.connect
+            ? t("Connect your WhatsApp in Profile first.")
+            : t("No shops could be messaged right now.")
+        );
+      } else {
+        setMassNote(d.error ?? t("Could not start the mass bargain."));
+        if (d.upgrade) setUpgradeOpen(true);
+      }
+    } finally {
+      setMassState("done");
+    }
+  });
 
   const availableClasses = useMemo(() => {
     const set = new Set<Vendor["vehicleClasses"][number]>();
@@ -771,7 +877,15 @@ export default function Home() {
       </div>
 
       <div className="px-4">
-        <section className="surface mt-4 rounded-blob p-4">
+        {formCollapsed && (
+          <SearchSummaryBar
+            requestText={rawText}
+            originLabel={origin?.label}
+            radiusKm={radiusKm}
+            onExpand={() => setFormOpen(true)}
+          />
+        )}
+        <section className={`surface mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
           <label className="text-[12px] font-extrabold text-soft">
             {t("What do you want to rent?")}
           </label>
@@ -1175,99 +1289,19 @@ export default function Home() {
         {vendors.length > 1 && rfq && (
           <div className="mt-3">
             <button
-              onClick={async () => {
-                if (session?.plan === "free") {
-                  setUpgradeOpen(true);
-                  return;
-                }
-                setMassState("running");
-                setMassNote(null);
-                try {
-                  const targets = filtered
-                    .filter((v) => !v.offer && v.stage !== "rfq-sent" && v.stage !== "awaiting-response")
-                    .slice(0, 6)
-                    .map((v) => ({
-                      id: v.id,
-                      name: v.name,
-                      whatsapp: v.whatsapp,
-                      placeId: v.placeId,
-                      // Google "open now" - so an open shop is never queued as closed.
-                      openNow: v.openNow,
-                    }));
-                  const res = await fetch("/api/outreach/mass", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      vendors: targets,
-                      message: rfq.vendorMessage,
-                      rfq,
-                      region: origin?.label ?? "",
-                      localLang: localLangActive,
-                    }),
-                  });
-                  const d = await res.json();
-                  if (d.results) {
-                    let alreadyAsked = 0;
-                    for (const r of d.results) {
-                      if (r.sent) {
-                        patchVendor(r.id, {
-                          stage: "awaiting-response",
-                          sentText: r.text,
-                          sentGloss: r.gloss,
-                          lastEventAt: Date.now(),
-                          queuedUntil: undefined,
-                        });
-                      } else if (r.queued) {
-                        // Held for the shop's opening hours - show it on the card
-                        // and in the user-facing queue (they can wait or remove).
-                        patchVendor(r.id, {
-                          queuedUntil: r.queuedUntil ?? new Date().toISOString(),
-                          lastEventAt: Date.now(),
-                        });
-                      } else if (String(r.reason ?? "").startsWith("rfq-dedup")) {
-                        // This shop already has an open conversation from the last
-                        // 24h - the agent continues THAT thread instead of
-                        // re-sending the same question (never look like a bot).
-                        alreadyAsked += 1;
-                        patchVendor(r.id, {
-                          stage: "awaiting-response",
-                          lastEventAt: Date.now(),
-                        });
-                      }
-                    }
-                    refreshQueue();
-                    setMassNote(
-                      d.sent > 0 || d.queued > 0 || alreadyAsked > 0
-                        ? `${t("Agents are on it - shops asked:")} ${d.sent}${
-                            d.queued > 0
-                              ? ` · ${d.queued} ${t("queued for opening hours")}`
-                              : ""
-                          }${
-                            alreadyAsked > 0
-                              ? ` · ${alreadyAsked} ${t("already in conversation")}`
-                              : ""
-                          }`
-                        : d.connect
-                        ? t("Connect your WhatsApp in Profile first.")
-                        : t("No shops could be messaged right now.")
-                    );
-                  } else {
-                    setMassNote(d.error ?? t("Could not start the mass bargain."));
-                    if (d.upgrade) setUpgradeOpen(true);
-                  }
-                } finally {
-                  setMassState("done");
-                }
-              }}
+              onClick={runMassBargain}
               disabled={massState === "running"}
               className={`btn w-full rounded-2xl py-3 text-[14px] font-extrabold text-white disabled:opacity-70 ${
-                session?.plan === "free" ? "bg-faint" : "badge-flash"
+                !can(session?.plan, "mass-bargain") ? "bg-faint" : "badge-flash"
               }`}
             >
               {massState === "running" ? (
                 <LoadingDots light label={t("Agents contacting every shop")} />
               ) : (
-                <>⚡ {t("Mass bargain - ask all shops at once")}{session?.plan === "free" ? " 🔒" : ""}</>
+                <span className="flex items-center justify-center gap-1.5">
+                  <Icon name={can(session?.plan, "mass-bargain") ? "bolt" : "lock"} className="h-4 w-4" />
+                  {t("Mass bargain - ask all shops at once")}
+                </span>
               )}
             </button>
             {massNote && (
@@ -1314,7 +1348,7 @@ export default function Home() {
           </div>
         ) : (
           <div data-tour="vendors" className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-            {filtered.map((v, i) => (
+            {filtered.slice(0, visibleCount).map((v, i) => (
               <div
                 key={v.id}
                 id={`vendor-${v.id}`}
@@ -1334,12 +1368,20 @@ export default function Home() {
                   onBook={setBookingVendor}
                   onReviews={setReviewsVendor}
                   onBargain={setBargainVendor}
-                  onStage={(id, stage) => patchVendor(id, { stage })}
+                  onStage={handleStage}
                   onCustomMessage={customMessage}
                   onPickupConsent={pickupConsent}
                 />
               </div>
             ))}
+            {filtered.length > visibleCount && (
+              <button
+                onClick={() => setVisibleCount((n) => n + 20)}
+                className="btn btn-ghost w-full rounded-2xl py-3 text-[13px] font-extrabold text-brandblue md:col-span-2"
+              >
+                {t("Show")} {Math.min(20, filtered.length - visibleCount)} {t("more shops")}
+              </button>
+            )}
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
                 <LoadingDots label={t("More agents reporting in")} />
@@ -1401,6 +1443,7 @@ export default function Home() {
 
         {/* Popular questions - owner-managed, expandable (#18) */}
         {phase === "idle" && <FaqSection />}
+        {phase === "idle" && <SiteFooter />}
       </div>
 
       {bookingVendor && (
@@ -1464,6 +1507,7 @@ export default function Home() {
         active="home"
         onSelect={(t) => {
           if (t === "profile") window.location.href = "/profile";
+          else if (t === "deals") window.location.href = "/deals";
           else {
             setView("list");
             window.scrollTo({ top: 0, behavior: "smooth" });
