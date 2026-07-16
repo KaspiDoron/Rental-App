@@ -79,7 +79,7 @@ const STEPS: Step[] = [
   {
     emoji: "🤝",
     title: "10 · Meet Will",
-    text: '"Expand the radius to 10 km", "only scooters under 150", "what are you doing right now?", "pause everything" - type or speak it to Will and it happens. He confirms every action and never guesses on anything destructive.',
+    text: 'That\'s Will on the edge of your screen - he blinks, waves and follows the whole hunt. Tap him and tell him anything: "expand the radius to 10 km", "only scooters under 150", "pause everything". He confirms every action and never guesses on anything destructive.',
     anchor: "will",
   },
   {

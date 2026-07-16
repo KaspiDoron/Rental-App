@@ -318,9 +318,10 @@ input, textarea, select, button {
   .cta-sheen::after { animation: none; background-image: none; }
 }
 
-/* Will companion micro-life: an occasional blink, a gentle wave and a softly
-   glowing antenna. transform-box: fill-box makes transform-origin local to
-   each SVG group, so the animations pivot correctly at any rendered size. */
+/* Will companion micro-life: blink + look-around, a gentle wave every ~35s,
+   softly glowing antenna, plus mood variants (thinking / sleeping /
+   celebrating). transform-box: fill-box makes transform-origin local to each
+   SVG group, so the animations pivot correctly at any rendered size. */
 @keyframes will-blink {
   0%, 90%, 96%, 100% { transform: scaleY(1); }
   93% { transform: scaleY(0.08); }
@@ -330,24 +331,78 @@ input, textarea, select, button {
   transform-origin: center;
   animation: will-blink 4.8s ease-in-out infinite;
 }
+/* Look around occasionally - a slow glance left, then right, mostly centered */
+@keyframes will-look {
+  0%, 54%, 100% { transform: translateX(0); }
+  60%, 66% { transform: translateX(-2.2px); }
+  78%, 86% { transform: translateX(2.2px); }
+}
+.will-eyes-move {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: will-look 11s ease-in-out infinite;
+}
+/* One friendly wave roughly every 35 seconds - playful, never spammy */
 @keyframes will-wave {
-  0%, 62%, 92%, 100% { transform: rotate(0deg); }
-  70% { transform: rotate(-26deg); }
-  77% { transform: rotate(12deg); }
-  84% { transform: rotate(-20deg); }
+  0%, 91%, 99.5%, 100% { transform: rotate(0deg); }
+  93% { transform: rotate(-26deg); }
+  95% { transform: rotate(12deg); }
+  97% { transform: rotate(-20deg); }
 }
 .will-arm {
   transform-box: fill-box;
   transform-origin: 50% 92%;
-  animation: will-wave 7.5s ease-in-out infinite;
+  animation: will-wave 35s ease-in-out infinite;
 }
 @keyframes will-glow {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 .will-antenna { animation: will-glow 2.6s ease-in-out infinite; }
+
+/* Mood: thinking - darting eyes, busy antenna (the agents are working) */
+@keyframes will-think-look {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-2px, -1.2px); }
+  55% { transform: translate(2px, -0.8px); }
+  80% { transform: translate(0.5px, 0.5px); }
+}
+.will-mood-thinking .will-eyes-move { animation: will-think-look 1.7s ease-in-out infinite; }
+.will-mood-thinking .will-antenna { animation-duration: 0.8s; }
+.will-mood-thinking .will-arm { animation: none; }
+
+/* Mood: sleeping - eyes closed, everything slows down */
+.will-mood-sleeping .will-eyes { transform: scaleY(0.1); animation: none; }
+.will-mood-sleeping .will-eyes-move { animation: none; }
+.will-mood-sleeping .will-antenna { animation-duration: 7s; }
+
+/* Mood: celebrating - fast happy wave + a joyful bounce */
+@keyframes will-wave-fast {
+  0%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(-28deg); }
+  60% { transform: rotate(14deg); }
+}
+@keyframes will-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-4px) scale(1.06); }
+  65% { transform: translateY(0) scale(0.99); }
+}
+.will-mood-celebrating { animation: will-bounce 0.9s ease-in-out infinite; }
+.will-mood-celebrating .will-arm { animation: will-wave-fast 0.8s ease-in-out infinite; }
+.will-mood-celebrating .will-antenna { animation-duration: 0.7s; }
+
+/* Tap reaction - a quick delighted boop */
+@keyframes will-boop {
+  0% { transform: scale(1) rotate(0deg); }
+  35% { transform: scale(1.14) rotate(-7deg); }
+  70% { transform: scale(0.96) rotate(4deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.will-boop { animation: will-boop 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+
 @media (prefers-reduced-motion: reduce) {
-  .will-eyes, .will-arm, .will-antenna { animation: none; }
+  .will-eyes, .will-eyes-move, .will-arm, .will-antenna,
+  .will-mood-celebrating, .will-boop { animation: none !important; }
 }
 
 /* Map pin drop + selected pulse.

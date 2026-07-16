@@ -26,7 +26,7 @@ import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
 import type { WillContext } from "@/lib/will-commands";
-import { WillDock } from "@/components/will/WillDock";
+import { WillCompanion } from "@/components/will/WillCompanion";
 import { WillSheet } from "@/components/will/WillSheet";
 import { CompareSheet } from "@/components/will/CompareSheet";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
@@ -953,6 +953,26 @@ export default function Home() {
     return cur ? moneyLocal(0, cur).replace(/[\d.,\s]/g, "") || "$" : "$";
   }, [vendors]);
 
+  // Will's proactive companion context: what he says, when he celebrates
+  // (offerCount rises -> a new offer landed) and when he shows the attention
+  // dot - all derived from live state, never invented.
+  const offerCount = useMemo(
+    () => activityItems.filter((it) => it.kind === "offer").length,
+    [activityItems]
+  );
+  const riskCount = Object.keys(riskByVendor).length;
+  const willNote = useMemo(() => {
+    if (paused) return t("Paused - I'm holding every message. Tap me to resume.");
+    if (riskCount > 0) return t("I flagged a reply for you - worth a look.");
+    if (lastWillSay) return lastWillSay;
+    if (phase === "running") return t("On it - working the shops now. Tap me to steer.");
+    if (phase === "done" && cheapest?.offer)
+      return `${t("Best so far")}: ${moneyLocal(cheapest.offer.pricePerDay, cheapest.offer.currency)}/${t("day")} · ${t("want me to push harder?")}`;
+    if (phase === "done") return t("Openers are out - I'll ping you when replies land.");
+    return t("Tell me what you want to ride - I'll do the haggling.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused, riskCount, lastWillSay, phase, cheapest]);
+
   // Live status for the session strip (bug #1). Three HONEST buckets that never
   // contradict each other:
   //   messaged = the shop was actually contacted (delivered, now awaiting reply)
@@ -978,7 +998,7 @@ export default function Home() {
   const paidPlan = session ? session.plan !== "free" : false;
 
   return (
-    <main className="mx-auto min-h-[100dvh] max-w-md pb-52 sm:max-w-lg md:max-w-3xl">
+    <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-3xl">
       <div className="topbar">
         <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
           <div className="flex items-center gap-2">
@@ -1676,35 +1696,14 @@ export default function Home() {
         </Modal>
       )}
 
-      {/* Will - the conversational steering wheel, always one thumb away */}
+      {/* Will - the living companion on the edge of the screen. The TabBar is
+          the primary bottom element; Will's full chat opens from him. */}
       {session && !willOpen && (
-        <WillDock
-          busy={will.busy}
-          paused={paused}
-          lastSay={lastWillSay}
-          hints={
-            phase === "idle"
-              ? [
-                  t("Need the cheapest scooter?"),
-                  t("Where are you staying?"),
-                  t("Ask Will anything..."),
-                ]
-              : phase === "running" || phase === "profiling"
-                ? [
-                    t("What's happening right now?"),
-                    t("Ask Will anything..."),
-                    t("Try: pause the search"),
-                  ]
-                : [
-                    t("Compare the top 3 for me"),
-                    t("What should I negotiate?"),
-                    t("Why was this shop picked?"),
-                  ]
-          }
-          onSend={(text) => {
-            setWillOpen(true);
-            will.send(text);
-          }}
+        <WillCompanion
+          busy={will.busy || phase === "profiling" || phase === "running"}
+          alert={riskCount > 0}
+          celebrateKey={offerCount}
+          note={willNote}
           onOpen={() => setWillOpen(true)}
         />
       )}

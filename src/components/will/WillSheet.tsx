@@ -1,7 +1,8 @@
 "use client";
 
-// Will's full conversation sheet: transcript, quick-command chips, composer.
-// The dock opens this; both share the same useWill state via props.
+// Will's full conversation sheet: transcript, quick-command chips, composer
+// (with voice input where the browser supports it). Opened from the Will
+// companion on the screen edge - this is THE conversational surface.
 
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Modal";
@@ -9,6 +10,7 @@ import { Icon } from "../icons";
 import { LoadingDots } from "../LoadingDots";
 import { WillMessage } from "./WillMessage";
 import { WillAvatar } from "./WillAvatar";
+import { getRecognizer, type SpeechRecognitionLike } from "@/lib/speech";
 import type { WillMsg } from "@/lib/useWill";
 import { useI18n } from "@/lib/i18n";
 
@@ -35,7 +37,36 @@ export function WillSheet({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState("");
+  const [listening, setListening] = useState(false);
+  const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const recRef = useRef<SpeechRecognitionLike | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setVoiceAvailable(Boolean(getRecognizer()));
+  }, []);
+
+  const toggleVoice = () => {
+    if (listening) {
+      recRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const rec = getRecognizer();
+    if (!rec) return;
+    recRef.current = rec;
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (e) => {
+      const said = e.results[0]?.[0]?.transcript ?? "";
+      if (said.trim()) onSend(said);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    setListening(true);
+    rec.start();
+  };
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -119,13 +150,25 @@ export function WillSheet({
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          placeholder={t("Ask Will anything...")}
-          className="h-11 flex-1 rounded-2xl border-2 border-line bg-card px-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+          placeholder={listening ? t("Listening...") : t("Ask Will anything...")}
+          className="h-11 min-w-0 flex-1 rounded-2xl border-2 border-line bg-card px-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+          style={{ fontSize: "16px" }}
         />
+        {voiceAvailable && !draft.trim() && (
+          <button
+            onClick={toggleVoice}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
+              listening ? "bg-brandred text-white soft-pulse" : "bg-card2 text-soft"
+            }`}
+            aria-label={t("Voice input")}
+          >
+            <Icon name="mic" className="h-4 w-4" />
+          </button>
+        )}
         <button
           onClick={submit}
           disabled={busy || !draft.trim()}
-          className="btn btn-primary h-11 rounded-2xl px-4 disabled:opacity-50"
+          className="btn btn-primary h-11 shrink-0 rounded-2xl px-4 disabled:opacity-50"
           aria-label={t("Send")}
         >
           <Icon name="send" className="h-4.5 w-4.5" />
