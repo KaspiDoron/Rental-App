@@ -7,14 +7,25 @@ export const dynamic = "force-dynamic";
 // Browser-safe configuration only. The Google OAuth client ID is public by
 // design; secret keys are never exposed here.
 export async function GET() {
-  const [clientId, mapsKey, adsense] = await Promise.all([
+  const [clientId, mapsKey, adsense, testMode, scaleMode] = await Promise.all([
     getConfig("GOOGLE_OAUTH_CLIENT_ID"),
     getConfig("GOOGLE_MAPS_API_KEY"),
     getConfig("ADSENSE_CLIENT"),
+    getConfig("TEST_MODE"),
+    getConfig("SCALE_MODE"),
   ]);
+  const on = (v: string | undefined | null) =>
+    ["on", "1", "true"].includes((v ?? "").trim().toLowerCase());
+  const scaled = on(scaleMode);
   return NextResponse.json({
     googleClientId: clientId ?? null,
     mapsEnabled: Boolean(mapsKey),
     adsenseClient: adsense ?? null,
+    testMode: on(testMode),
+    // Client polling cadence: SCALE_MODE stretches intervals to cut function
+    // invocations under load (Vercel Hobby has no workers to add).
+    poll: scaled
+      ? { activityMs: 25000, repliesMs: 30000, tagsMs: 300000 }
+      : { activityMs: 12000, repliesMs: 15000, tagsMs: 120000 },
   });
 }

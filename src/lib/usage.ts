@@ -60,7 +60,17 @@ const LIMIT_DEFAULTS: Record<string, number> = {
 
 export async function limitFor(name: keyof typeof LIMIT_DEFAULTS): Promise<number> {
   const v = Number(await getConfig(name));
-  return Number.isFinite(v) && v > 0 ? v : LIMIT_DEFAULTS[name];
+  const base = Number.isFinite(v) && v > 0 ? v : LIMIT_DEFAULTS[name];
+  // SCALE_MODE: one owner switch that triples every per-user budget when the
+  // backend plans have been upgraded to carry the load. Explicit per-limit
+  // overrides above still win (they are read first).
+  try {
+    const scale = ((await getConfig("SCALE_MODE")) ?? "").trim().toLowerCase();
+    if (scale === "on" || scale === "1" || scale === "true") return base * 3;
+  } catch {
+    /* scale lookup is best-effort */
+  }
+  return base;
 }
 
 export function limitDefaults() {

@@ -2282,25 +2282,43 @@ function BetaManager() {
   const [lock, setLock] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [testMode, setTestMode] = useState(false);
+  const [testBusy, setTestBusy] = useState(false);
 
   async function load() {
     const d = await (await fetch("/api/admin/beta")).json();
     setLock(Boolean(d.lockEnabled));
     setCounts(d.counts ?? null);
-    // Owner is auto-included and not editable here - show only the testers.
-    const testers = (d.entries ?? []).filter(
-      (e: { plan: string; email: string }) => e.plan !== "ultra" || !e.email.includes("kaspidoron")
-    );
     setText(
       (d.entries ?? [])
-        .map((e: { email: string; plan: string }) => `${e.email}, ${e.plan}`)
+        .map(
+          (e: { email: string; plan: string; test?: boolean }) =>
+            `${e.email}, ${e.plan}${e.test ? ", test" : ""}`
+        )
         .join("\n")
     );
-    void testers;
+    fetch("/api/config/public")
+      .then((r) => r.json())
+      .then((p) => setTestMode(Boolean(p.testMode)))
+      .catch(() => {});
   }
   useEffect(() => {
     load();
   }, []);
+
+  async function toggleTestMode() {
+    setTestBusy(true);
+    try {
+      await fetch("/api/admin/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "TEST_MODE", value: testMode ? "off" : "on" }),
+      });
+      setTestMode((v) => !v);
+    } finally {
+      setTestBusy(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -2310,8 +2328,12 @@ function BetaManager() {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => {
-        const [email, plan] = line.split(/[,:|]/).map((x) => x.trim());
-        return { email: (email ?? "").toLowerCase(), plan: (plan ?? "free").toLowerCase() };
+        const [email, plan, flag] = line.split(/[,:|]/).map((x) => x.trim());
+        return {
+          email: (email ?? "").toLowerCase(),
+          plan: (plan ?? "free").toLowerCase(),
+          test: (flag ?? "").toLowerCase() === "test",
+        };
       })
       .filter((e) => e.email.includes("@"));
     try {
@@ -2346,8 +2368,28 @@ function BetaManager() {
       <p className="mb-2 text-[11px] text-faint">
         Only these accounts (plus you) can log in - everyone else is blocked at the
         door. One per line: <span className="font-mono">email, plan</span> where plan
-        is free / pro / ultra. Up to 25 testers. Applies instantly, no redeploy.
+        is free / pro / ultra - append <span className="font-mono">, test</span> to
+        make someone a TEST USER. Up to 25 testers. Applies instantly, no redeploy.
       </p>
+      {/* Global Test Mode switch: test users ride Ultra free + sandbox billing */}
+      <div className="mb-2 flex items-center justify-between rounded-xl bg-card2 p-2.5">
+        <div>
+          <div className="text-[12px] font-extrabold text-strong">🧪 Test Mode</div>
+          <div className="text-[10px] text-faint">
+            ON: testers marked &quot;test&quot; get Ultra free, checkout applies plans
+            instantly (no charge), a banner shows app-wide. OFF: fully live.
+          </div>
+        </div>
+        <button
+          onClick={toggleTestMode}
+          disabled={testBusy}
+          className={`btn btn-sm rounded-full px-4 py-1.5 text-[11px] font-extrabold disabled:opacity-50 ${
+            testMode ? "bg-brandyellow text-[#4a3300]" : "btn-ghost border border-line"
+          }`}
+        >
+          {testBusy ? "..." : testMode ? "ON - go live" : "OFF - enable"}
+        </button>
+      </div>
       {counts && (
         <div className="mb-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
           <span className="rounded-full bg-card2 px-2 py-0.5 text-faint">{counts.total} total</span>

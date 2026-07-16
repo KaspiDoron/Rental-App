@@ -142,8 +142,19 @@ export async function getSession(): Promise<Session | null> {
   const role = await roleFor(raw.email);
   // Management holds the Ultra plan automatically, free of charge.
   const { getUser, normalizePlan } = await import("./access");
-  const plan =
+  let plan =
     role !== "user" ? "ultra" : normalizePlan((await getUser(raw.email))?.plan);
+  // TEST MODE: flagged testers ride Ultra for free while the switch is on -
+  // flipping it off instantly returns them to their real (paid) plan, since
+  // the plan is re-derived on every request.
+  if (plan !== "ultra" && role === "user") {
+    try {
+      const { isTestUser } = await import("./allowlist");
+      if (await isTestUser(raw.email)) plan = "ultra";
+    } catch {
+      /* never block a session on the test-mode lookup */
+    }
+  }
   return { email: raw.email, issuedAt: raw.issuedAt, role, plan };
 }
 

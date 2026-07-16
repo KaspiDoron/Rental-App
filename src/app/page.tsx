@@ -153,6 +153,16 @@ export default function Home() {
   const [willOpen, setWillOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
+  // Poll cadence from the server (SCALE_MODE stretches these under load).
+  const [pollCfg, setPollCfg] = useState({ activityMs: 12000, repliesMs: 15000, tagsMs: 120000 });
+  useEffect(() => {
+    fetch("/api/config/public")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.poll?.activityMs) setPollCfg(d.poll);
+      })
+      .catch(() => {});
+  }, []);
 
   // Fold the search card away when the agents take over the screen; a phase
   // transition re-collapses it, a tap on the summary row re-opens it.
@@ -554,9 +564,9 @@ export default function Home() {
       refreshQueue();
     };
     tick();
-    const id = setInterval(tick, 12000);
+    const id = setInterval(tick, pollCfg.activityMs);
     return () => clearInterval(id);
-  }, [session, vendors.length, refreshQueue]);
+  }, [session, vendors.length, refreshQueue, pollCfg.activityMs]);
 
   // Reply-VERIFIED shop tags (item #13): one batched fetch per result set,
   // plus a slow refresh while the search is on screen - a shop's second
@@ -585,12 +595,12 @@ export default function Home() {
       } catch {}
     };
     load();
-    const id = setInterval(load, 120000);
+    const id = setInterval(load, pollCfg.tagsMs);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [session, vendorIdsKey]);
+  }, [session, vendorIdsKey, pollCfg.tagsMs]);
 
   // Live loop: while agents are in ANY active conversation, poll the reply
   // feed so shop answers pop into the cards automatically. This must include
@@ -655,9 +665,9 @@ export default function Home() {
       } catch {}
     };
     tick();
-    const id = setInterval(tick, 15000);
+    const id = setInterval(tick, pollCfg.repliesMs);
     return () => clearInterval(id);
-  }, [session, waiting, rfq, searchEpoch]);
+  }, [session, waiting, rfq, searchEpoch, pollCfg.repliesMs]);
 
   function runFunnel(list: Vendor[], _activeRfq: StructuredRFQ) {
     timers.current.forEach(clearTimeout);

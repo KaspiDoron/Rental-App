@@ -22,6 +22,26 @@ export async function POST(req: Request) {
   const { planId } = await req.json().catch(() => ({}));
   const origin = new URL(req.url).origin;
 
+  // TEST MODE sandbox: flagged testers get the plan applied instantly - no
+  // real charge, no payment provider round-trip. Only while the owner's
+  // TEST_MODE switch is on.
+  try {
+    const { isTestUser } = await import("@/lib/allowlist");
+    if (await isTestUser(session.email)) {
+      const plan = PLANS.find((p) => p.id === planId && p.amount > 0);
+      if (!plan) return NextResponse.json({ error: "Choose a paid plan." }, { status: 400 });
+      const { setPlan } = await import("@/lib/access");
+      await setPlan(session.email, plan.id);
+      return NextResponse.json({
+        sandbox: true,
+        provider: "test-mode",
+        applied: plan.id,
+      });
+    }
+  } catch {
+    /* sandbox path is best-effort; real checkout below */
+  }
+
   if (await lemonConfigured()) {
     const result = await createLemonCheckout(String(planId), origin, session.email);
     if (result.url) return NextResponse.json({ url: result.url, provider: "lemonsqueezy" });

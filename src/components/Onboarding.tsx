@@ -77,8 +77,19 @@ const STEPS: Step[] = [
     text: "When a price lands, your agent compares it to the real local floor and makes ONE friendly ask - it never pushes twice and never accepts for you. Happy? Tap Book and choose delivery or pickup.",
   },
   {
+    emoji: "🤝",
+    title: "10 · Meet Will",
+    text: '"Expand the radius to 10 km", "only scooters under 150", "what are you doing right now?", "pause everything" - type or speak it to Will and it happens. He confirms every action and never guesses on anything destructive.',
+    anchor: "will",
+  },
+  {
+    emoji: "🛰️",
+    title: "11 · Watch every move",
+    text: "The Activity view is your mission control: every message, reply, decision and deliberate wait, in order, with the reasoning. Tap 'Why this move?' on anything to see exactly how Will chose it.",
+  },
+  {
     emoji: "💬",
-    title: "10 · Connect your WhatsApp",
+    title: "12 · Connect your WhatsApp",
     text: "Everything is sent from YOUR number so shops talk to a real traveller. Open Profile -> Your WhatsApp and link it with the pairing code - it takes 30 seconds.",
     anchor: "tab-profile",
   },

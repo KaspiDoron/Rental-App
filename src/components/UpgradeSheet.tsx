@@ -183,7 +183,10 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
-      else setMsg(data.error ?? "Payments are almost ready - check back soon!");
+      else if (data.sandbox) {
+        setMsg(`Test mode - ${String(data.applied ?? planId)} plan applied instantly, no charge.`);
+        setMyPlan(String(data.applied ?? planId));
+      } else setMsg(data.error ?? "Payments are almost ready - check back soon!");
     } finally {
       setBusy(false);
     }

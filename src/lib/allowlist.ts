@@ -21,6 +21,9 @@ import type { PlanId } from "./access";
 export interface BetaEntry {
   email: string;
   plan: PlanId;
+  // Test user: while global TEST_MODE is on, rides Ultra free + sandbox
+  // billing. Backward-compatible - old stored JSON simply lacks the field.
+  test?: boolean;
 }
 
 function ownerEmailLocal(): string {
@@ -56,6 +59,7 @@ function parseEnvList(raw: string | undefined): BetaEntry[] {
 export async function betaAllowlist(): Promise<BetaEntry[]> {
   const out = new Map<string, PlanId>();
   // Config (owner-editable) first, then env fallback.
+  const testFlags = new Map<string, boolean>();
   try {
     const raw = await getConfig("beta_allowlist");
     if (raw) {
@@ -63,7 +67,10 @@ export async function betaAllowlist(): Promise<BetaEntry[]> {
       if (Array.isArray(parsed)) {
         for (const e of parsed) {
           const email = String(e?.email ?? "").trim().toLowerCase();
-          if (email.includes("@")) out.set(email, normalizePlanLoose(e?.plan));
+          if (email.includes("@")) {
+            out.set(email, normalizePlanLoose(e?.plan));
+            if (e?.test) testFlags.set(email, true);
+          }
         }
       }
     }
@@ -74,7 +81,11 @@ export async function betaAllowlist(): Promise<BetaEntry[]> {
     if (!out.has(e.email)) out.set(e.email, e.plan);
   }
   out.set(ownerEmailLocal(), "ultra"); // owner is never lockable
-  return [...out.entries()].map(([email, plan]) => ({ email, plan }));
+  return [...out.entries()].map(([email, plan]) => ({
+    email,
+    plan,
+    ...(testFlags.get(email) ? { test: true } : {}),
+  }));
 }
 
 /** The invited plan for an email, or null when the email is NOT allowed. */
@@ -103,8 +114,28 @@ export async function saveBetaAllowlist(entries: BetaEntry[]): Promise<void> {
     const email = String(e?.email ?? "").trim().toLowerCase();
     if (!email.includes("@") || seen.has(email) || email === ownerEmailLocal()) continue;
     seen.add(email);
-    clean.push({ email, plan: normalizePlanLoose(e?.plan) });
+    clean.push({ email, plan: normalizePlanLoose(e?.plan), ...(e?.test ? { test: true } : {}) });
     if (clean.length >= 25) break;
   }
   await setConfig("beta_allowlist", JSON.stringify(clean));
+}
+
+// ---------------------------------------------------------------------------
+// TEST MODE - one owner switch: while ON, testers flagged `test` in the beta
+// list ride Ultra for free and billing runs in sandbox (plan applied
+// instantly, no Lemon Squeezy round-trip). Flip it OFF and the app is fully
+// live again - plans re-derive on the very next request.
+// ---------------------------------------------------------------------------
+
+export async function testModeOn(): Promise<boolean> {
+  const v = ((await getConfig("TEST_MODE")) ?? "").trim().toLowerCase();
+  return v === "on" || v === "1" || v === "true";
+}
+
+/** Is this email a flagged test user WHILE test mode is on? */
+export async function isTestUser(email: string): Promise<boolean> {
+  if (!(await testModeOn())) return false;
+  const key = email.trim().toLowerCase();
+  const entry = (await betaAllowlist()).find((e) => e.email === key);
+  return Boolean(entry?.test);
 }

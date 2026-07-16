@@ -75,3 +75,34 @@ Bootstrap env vars in Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
 ## Working branch
 
 Develop on `claude/rental-negotiation-app-pc33ux`. Commit + push there.
+
+## MCP servers (tooling for AI-assisted development)
+
+`.mcp.json` wires the official remote MCP servers for the external services
+this app uses, so Claude Code (and other MCP clients) can inspect them
+directly. All are HTTP + OAuth - authorize interactively via `/mcp` in a
+Claude Code session; NO keys are stored in the repo.
+
+| Service | MCP | Notes |
+|---|---|---|
+| Supabase | `https://mcp.supabase.com/mcp?project_ref=...` | DB, app_config vault, tables |
+| Stripe | `https://mcp.stripe.com` | fallback billing (official remote MCP) |
+| Vercel | `https://mcp.vercel.com` | deploys, env, domains (official remote MCP) |
+| GitHub | built into Claude Code remote sessions | PRs, issues, CI |
+
+Services with NO official MCP server as of 2026-07 (use their REST APIs via
+the code in `src/lib/`): Evolution API (WhatsApp), Lemon Squeezy, Groq,
+Gemini, OpenRouter, Cerebras, Mistral, DeepSeek, Together, SambaNova,
+Hugging Face, Brevo, Resend, Gmail SMTP, Google Maps Platform, OSM Nominatim,
+Google AdSense, Web Push/VAPID.
+
+## Owner switches (Admin -> Keys / Users)
+
+- `TEST_MODE` - "on": beta testers flagged `test` ride Ultra free, checkout
+  applies plans instantly with no charge, a global banner shows. Toggle also
+  lives in Admin -> Users. "off" (or unset): fully live.
+- `SCALE_MODE` - "on": 3x per-user rate limits + relaxed client polling for
+  high-concurrency periods (flip AFTER upgrading the backend plans).
+- `APP_DOMAIN` - the public domain; drives SEO/share metadata, geocoder
+  identity and push sender identity with no redeploy.
+- `HUMAN_TAKEOVER` - "off" disables user-typed-message takeover detection.
