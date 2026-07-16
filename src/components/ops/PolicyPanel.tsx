@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LoadingDots } from "../LoadingDots";
 import type { PolicyOverlay } from "@/lib/ops/overlay";
-import type { PolicyVersion, ReplayReport } from "@/lib/ops/types";
+import type { PolicyVersion, ReplayCaseResult, ReplayReport } from "@/lib/ops/types";
 
 interface GoldenRow {
   id: number;
@@ -38,6 +38,7 @@ export function PolicyPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const [report, setReport] = useState<ReplayReport | null>(null);
+  const [stepping, setStepping] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     const [p, g] = await Promise.all([
@@ -246,34 +247,43 @@ export function PolicyPanel() {
         )}
         <div className="mt-2 space-y-1.5">
           {golden.map((g) => (
-            <div key={g.id} className="flex items-center gap-2 rounded-xl bg-card2 px-2.5 py-1.5">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[12px] font-extrabold text-strong">{g.name}</p>
-                <p className="text-[9px] text-faint">
-                  {g.turnCount} turn{g.turnCount === 1 ? "" : "s"}
-                  {g.region ? ` · ${g.region}` : ""} · {new Date(g.createdAt).toLocaleDateString()}
-                </p>
+            <div key={g.id}>
+              <div className="flex items-center gap-2 rounded-xl bg-card2 px-2.5 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[12px] font-extrabold text-strong">{g.name}</p>
+                  <p className="text-[9px] text-faint">
+                    {g.turnCount} turn{g.turnCount === 1 ? "" : "s"}
+                    {g.region ? ` · ${g.region}` : ""} · {new Date(g.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setStepping(stepping === g.id ? null : g.id)}
+                  className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandblue"
+                >
+                  ▶ Step
+                </button>
+                <button
+                  onClick={() => goldenAction("toggle", g.id)}
+                  className={`chip rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${
+                    g.enabled ? "border-savings bg-savings-soft text-savings" : "border-line text-faint"
+                  }`}
+                >
+                  {g.enabled ? "on" : "off"}
+                </button>
+                <button
+                  onClick={() => goldenAction("delete", g.id)}
+                  className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandred"
+                >
+                  ✕
+                </button>
               </div>
-              <button
-                onClick={() => goldenAction("toggle", g.id)}
-                className={`chip rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${
-                  g.enabled ? "border-savings bg-savings-soft text-savings" : "border-line text-faint"
-                }`}
-              >
-                {g.enabled ? "on" : "off"}
-              </button>
-              <button
-                onClick={() => goldenAction("delete", g.id)}
-                className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandred"
-              >
-                ✕
-              </button>
+              {stepping === g.id && <ReplayStepper caseId={g.id} />}
             </div>
           ))}
         </div>
       </div>
 
-      {/* Version history */}
+      {/* Version history - full ReplayStepper component defined below */}
       <div className="surface rounded-blob p-3.5">
         <h4 className="text-[13px] font-extrabold text-strong">🗂️ Version history</h4>
         <p className="mt-0.5 text-[11px] text-soft">
@@ -315,6 +325,91 @@ export function PolicyPanel() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Step through one golden case decision-by-decision: shop message in, engine
+// decision out (action, chosen edge, target, composed message) with the
+// expectation check per turn - a movie of the negotiation under the LIVE spec.
+function ReplayStepper({ caseId }: { caseId: number }) {
+  const [result, setResult] = useState<ReplayCaseResult | null>(null);
+  const [step, setStep] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/admin/ops/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ caseIds: [caseId] }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const c = d?.baseline?.cases?.[0];
+        if (c) setResult(c);
+        else setFailed(true);
+      })
+      .catch(() => setFailed(true));
+  }, [caseId]);
+
+  if (failed) {
+    return <p className="mt-1 px-2 text-[10px] text-brandred">Replay failed to run.</p>;
+  }
+  if (!result) return <div className="mt-1 px-2"><LoadingDots label="Replaying" /></div>;
+  const t = result.turns[step];
+  if (!t) return null;
+
+  return (
+    <div className="ml-2 mt-1 rounded-2xl border border-line bg-card p-2.5">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setStep(Math.max(0, step - 1))}
+          disabled={step === 0}
+          className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-soft disabled:opacity-40"
+        >
+          ‹ Prev
+        </button>
+        <span className="text-[10px] font-extrabold text-strong">
+          Turn {step + 1}/{result.turns.length}
+        </span>
+        <button
+          onClick={() => setStep(Math.min(result.turns.length - 1, step + 1))}
+          disabled={step >= result.turns.length - 1}
+          className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-soft disabled:opacity-40"
+        >
+          Next ›
+        </button>
+        <span
+          className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-extrabold ${
+            t.failures.length === 0 ? "bg-savings-soft text-savings" : "bg-brandred-soft text-brandred"
+          }`}
+        >
+          {t.failures.length === 0 ? "PASS" : "FAIL"}
+        </span>
+      </div>
+      {t.shopSays && (
+        <p className="mt-1.5 rounded-xl bg-card2 px-2 py-1.5 text-[11px] text-strong">
+          🏪 {t.shopSays}
+        </p>
+      )}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+        <span className="rounded-full bg-brandblue-soft px-2 py-0.5 font-extrabold text-brandblue">
+          {t.got.action}
+        </span>
+        {t.got.edgeId && <span className="text-soft">via {t.got.edgeId}</span>}
+        {typeof t.got.target === "number" && <span className="text-soft">target {t.got.target}</span>}
+      </div>
+      {t.got.path.length > 0 && (
+        <p className="mt-1 truncate text-[9px] text-faint">{t.got.path.join(" → ")}</p>
+      )}
+      {t.got.message && (
+        <p className="mt-1.5 rounded-xl bg-brandblue-soft px-2 py-1.5 text-[11px] text-strong">
+          🤖 {t.got.message}
+        </p>
+      )}
+      {t.failures.length > 0 && (
+        <p className="mt-1.5 text-[10px] font-bold text-brandred">{t.failures.join("; ")}</p>
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { LoadingDots } from "../LoadingDots";
 import { ConversationPanel } from "./ConversationPanel";
 import { PolicyPanel } from "./PolicyPanel";
+import { AnalyticsPanel } from "./AnalyticsPanel";
 
 interface ThreadCard {
   threadKey: string;
@@ -45,8 +46,18 @@ interface InboxRow {
 }
 
 export function OpsCenter() {
-  const [tab, setTab] = useState<"inbox" | "threads" | "policy">("inbox");
+  const [tab, setTab] = useState<"inbox" | "threads" | "analytics" | "policy">("inbox");
   const [open, setOpen] = useState<{ threadKey: string; vendorName: string } | null>(null);
+  const [detected, setDetected] = useState<number | null>(null);
+
+  // Opportunistic detection sweep (same piggyback pattern as outbox draining):
+  // the system pre-fills the inbox with its own weakest conversations.
+  useEffect(() => {
+    fetch("/api/admin/ops/detect", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => setDetected(typeof d?.flagged === "number" ? d.flagged : null))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="space-y-3">
@@ -57,6 +68,12 @@ export function OpsCenter() {
           learn: bookmarks become live exemplars, corrections become training, branch verdicts
           become director priors. Owner-only.
         </p>
+        {detected !== null && detected > 0 && (
+          <p className="mt-1.5 text-[11px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+            🤖 The detector just flagged {detected} conversation{detected === 1 ? "" : "s"} for
+            review - they are in the inbox.
+          </p>
+        )}
       </div>
 
       {open ? (
@@ -72,6 +89,7 @@ export function OpsCenter() {
               [
                 ["inbox", "📥 Review inbox"],
                 ["threads", "💬 All conversations"],
+                ["analytics", "📊 Analytics"],
                 ["policy", "🗂️ Policy & versions"],
               ] as const
             ).map(([t, label]) => (
@@ -90,6 +108,7 @@ export function OpsCenter() {
           {tab === "threads" && (
             <ThreadsPanel onOpen={(tk, vn) => setOpen({ threadKey: tk, vendorName: vn })} />
           )}
+          {tab === "analytics" && <AnalyticsPanel />}
           {tab === "policy" && <PolicyPanel />}
         </>
       )}

@@ -106,6 +106,7 @@ export interface ReplayCaseResult {
   pass: boolean;
   turns: {
     turn: number;
+    shopSays?: string;
     expected: GoldenExpect;
     got: { action: string; edgeId?: string; path: string[]; target?: number; message?: string };
     failures: string[];

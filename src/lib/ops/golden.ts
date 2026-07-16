@@ -54,6 +54,7 @@ export function evaluateCase(gc: GoldenCase, playedTurns: PlayedTurn[]): ReplayC
     const failures = evaluateTurn(expected, played);
     return {
       turn: i,
+      shopSays: played.shopSays?.slice(0, 300),
       expected,
       got: {
         action: played.action,

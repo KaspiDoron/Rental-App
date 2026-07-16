@@ -38,6 +38,7 @@ src/
       billing/checkout                             (Stripe, admin only)
       webhooks/whatsapp  webhooks/stripe           (inbound events)
       admin/config  admin/users  admin/analytics   (admin, session-gated)
+      admin/ops/*                                  (OWNER-only AI Operations Center)
       auth/login|logout|me
   lib/
     agents.ts        Profiler, Bargaining, Market-Rate, Sentiment, Safety, Feedback agents
@@ -64,6 +65,17 @@ supabase/schema.sql  Run once; RLS on, service-role only
 - **Negotiation** is simulated server-side (round-based price cuts bounded by the
   Market-Rate Analyst). Swap in real WhatsApp threads later via the webhook +
   `whatsapp_messages` table.
+
+## AI Operations Center (Admin -> Ops, owner only)
+
+Cross-user negotiation review + a REAL learning loop: owner ratings, branch
+verdicts, corrections and bookmarks compile into `app_config.ops_learning`
+(director priors + exemplars + judge calibration, kill switch `OPS_LEARNING`);
+thresholds live in the clamped `policy_overlay`; every behavior change is a
+`policy_versions` row gated by the deterministic golden replay suite
+(`agent_golden_cases`, `replayConversation` in `src/lib/simulate.ts`) with
+one-click rollback. Key libs: `src/lib/ops/*`, `src/lib/policy.ts`. Never
+bypass `saveVersionedSpec` when writing the graph spec or overlay.
 
 ## Operations
 
