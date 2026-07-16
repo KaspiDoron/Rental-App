@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "./LoadingDots";
+import { Icon } from "./icons";
 import { WaTermsModal } from "./WaTermsModal";
 import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
@@ -150,10 +151,10 @@ export function WaConnect({
             <>
               {/* Trust header: pro WhatsApp-AI mark + calming pitch */}
               <div className="mb-2 flex items-center gap-2.5 rounded-2xl bg-card2 p-2.5">
-                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#25D366] text-[22px] shadow-md">
-                  💬
-                  <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-brandblue text-[10px] shadow">
-                    ✨
+                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#25D366] text-white shadow-md">
+                  <Icon name="whatsapp" className="h-6 w-6" />
+                  <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-brandblue text-white shadow">
+                    <Icon name="sparkles" className="h-3 w-3" />
                   </span>
                 </span>
                 <div className="text-[12px] leading-snug text-soft">

@@ -14,6 +14,7 @@ import { TabBar } from "@/components/TabBar";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
+import { WillAvatar } from "@/components/will/WillAvatar";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -1563,24 +1564,34 @@ export default function Home() {
 
         {vendors.length === 0 && phase === "idle" && (
           <div className="mt-10 text-center">
-            <div className="mx-auto mb-3 w-fit opacity-90 float-soft">
-              <BrandMark size={72} />
+            <div className="mx-auto flex w-fit items-end gap-1.5">
+              <div className="float-soft">
+                <WillAvatar size={72} className="drop-shadow-lg" />
+              </div>
+              <div className="relative mb-4 max-w-[220px] rounded-2xl rounded-bl-md bg-card2 px-3 py-2 text-left shadow-md rise-in">
+                <p className="text-[12px] font-extrabold leading-snug text-strong">
+                  {t("Tell me what you want to ride and where you're staying.")}
+                </p>
+                <p className="mt-0.5 text-[11px] leading-snug text-soft">
+                  {t("I'll find every shop around you and haggle the real local price.")}
+                </p>
+                <span aria-hidden className="absolute -left-1 bottom-2.5 h-2 w-2 rotate-45 bg-card2" />
+              </div>
             </div>
-            <p className="mx-auto max-w-[280px] text-sm text-soft">
-              {t("Tell us what you want to rent - car, scooter or motorbike - and where you're staying. The agents find every rental shop around you and bargain authentically for the best price.")}
-            </p>
           </div>
         )}
 
         {/* Zero results after a completed search (was a blank screen) */}
         {vendors.length === 0 && phase === "done" && (
           <div className="mt-8 rounded-blob surface p-5 text-center animate-slide-up">
-            <div className="mb-2 text-3xl">🔍</div>
+            <div className="mx-auto mb-2 w-fit">
+              <WillAvatar size={56} wave={false} />
+            </div>
             <div className="text-[15px] font-extrabold text-strong">
               {t("No rental shops found near your stay")}
             </div>
             <p className="mx-auto mt-1 max-w-[300px] text-[13px] text-soft">
-              {t("Try widening the search radius, checking the location is right, or searching a nearby area.")}
+              {t("Nothing in this radius yet - let me widen the net, or double-check the location is right.")}
             </p>
             <button
               onClick={() => {
