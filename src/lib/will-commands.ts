@@ -18,6 +18,10 @@ export type WillCommand =
   | { action: "compare"; vendorIds: string[] }
   | { action: "open_vendor"; vendorId: string }
   | { action: "remember"; note: string }
+  // Navigation + product guidance - Will is the app's operating system.
+  | { action: "open_deals" }
+  | { action: "open_pricing" }
+  | { action: "help" }
   | { action: "answer"; text: string }
   | { action: "clarify"; text: string };
 
@@ -78,6 +82,17 @@ export function parseWillCommandDeterministic(
 ): WillCommand | null {
   const s = text.trim().toLowerCase();
   if (!s) return null;
+
+  // Product guidance + navigation - Will is the app's control center.
+  if (/^(help|what can you do|what do you do|how do (?:you|i) work|capabilities)\b/.test(s)) {
+    return { action: "help" };
+  }
+  if (/\b(open|show|go to|see)\b.*\b(deals?|bookings?|my hunts?)\b|^my deals?$/.test(s)) {
+    return { action: "open_deals" };
+  }
+  if (/\b(plans?|pricing|upgrade|pro|ultra)\b.*\b(cost|price|difference|include|what|show|compare)\b|\bwhat.*\b(pro|ultra|plans?)\b|^(show )?(plans|pricing)$/.test(s)) {
+    return { action: "open_pricing" };
+  }
 
   // Radius: "expand search radius to 5km", "radius 12", "search wider"
   const radius = s.match(/(?:radius|distance)[^\d]{0,12}(\d{1,2})(?:\s*km)?|(\d{1,2})\s*km\s*(?:radius|around|near)?$/);

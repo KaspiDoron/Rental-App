@@ -141,7 +141,17 @@ export async function POST(req: Request) {
         }
       }
     }
-    if (rows.length) await sbInsert("whatsapp_messages", rows);
+    // DURABILITY: if the store is unreachable, tell Meta so it RETRIES -
+    // returning 200 here would permanently drop every vendor reply that
+    // arrives during a database blip (no other recovery path exists for the
+    // Cloud channel; wa-sync only reconciles the Evolution channel).
+    if (rows.length) {
+      const stored = await sbInsert("whatsapp_messages", rows);
+      const { supabaseConfigured } = await import("@/lib/runtime-config");
+      if (stored === false && supabaseConfigured()) {
+        return NextResponse.json({ error: "store unavailable - retry" }, { status: 503 });
+      }
+    }
 
     // Agentic processing (bounded so Meta always gets a fast 200).
     for (const msg of inbound.slice(0, 3)) {

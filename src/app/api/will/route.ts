@@ -41,6 +41,9 @@ Allowed actions (never invent others):
 - {"action":"answer","text":"__STATUS__"} - they ask what's happening / progress
 - {"action":"answer","text":"__WHY__"} - they ask why an option/move was chosen
 - {"action":"answer","text":"<direct answer>"} - other questions you can answer from the context alone
+- {"action":"open_deals"} - they want their deals/bookings/hunt history page
+- {"action":"open_pricing"} - they ask about plans/pricing/upgrading (recommend honestly, never pushy)
+- {"action":"help"} - they ask what you can do / how this works
 - {"action":"clarify","text":"<one short question>"} - when you genuinely can't tell what they want
 
 Rules: never fabricate shops, prices or ids not present in the context. Prefer acting over clarifying. "say" always confirms concretely what you did or found.`;
@@ -106,7 +109,11 @@ export async function POST(req: Request) {
     };
   }
 
-  // 3) Server-composed answers for status / why / compare.
+  // 3) Server-composed answers for help / status / why / compare.
+  if (command.action === "help") {
+    const answer = helpSay(ctx);
+    return NextResponse.json({ command: { action: "answer", text: answer }, say: answer });
+  }
   if (command.action === "answer" && command.text === "__STATUS__") {
     const answer = await composeStatus(session.email, ctx);
     return NextResponse.json({ command: { action: "answer", text: answer }, say: answer });
@@ -170,10 +177,28 @@ function sanitize(cmd: WillCommand, ctx: WillContext): WillCommand | null {
     case "pause_session":
     case "resume_session":
     case "mass_bargain":
+    case "open_deals":
+    case "open_pricing":
+    case "help":
       return cmd;
     default:
       return null;
   }
+}
+
+/** Plan-aware capability tour - Will explains what HE can do right now. */
+function helpSay(ctx: WillContext): string {
+  const base =
+    "I run the whole hunt: say \"find me a 125cc scooter near my hotel\" and I search, message every shop and haggle. " +
+    "You can steer me any time - \"radius 10km\", \"only automatic scooters\", \"under 200 a day\", \"pause everything\", " +
+    "\"what's happening?\", \"why this shop?\", \"compare the top 3\", \"open my deals\".";
+  if (ctx.plan === "free") {
+    return base + " On Free I work one shop at a time; Pro adds mass bargain (every shop in one tap) - say \"show plans\" if you're curious.";
+  }
+  if (ctx.plan === "pro") {
+    return base + " You're on Pro, so \"negotiate harder\" fires a mass bargain at every open shop. Ultra adds local-language haggling - the strongest lever.";
+  }
+  return base + " You're on Ultra: I bargain in each shop's own language and you can ask \"why\" about any move I make.";
 }
 
 function defaultSay(cmd: WillCommand, ctx: WillContext): string {
@@ -188,6 +213,10 @@ function defaultSay(cmd: WillCommand, ctx: WillContext): string {
       return `Done - ${cmd.label ?? "filter updated"}.`;
     case "start_search":
       return "On it - structuring your request and finding every shop around you.";
+    case "open_deals":
+      return "Opening My deals - every hunt, offer and booking in one place.";
+    case "open_pricing":
+      return "Here are the plans - honestly, one good negotiation usually covers months of Pro.";
     case "clear_search":
       return "Sure - confirm in the dialog and I'll wipe this search.";
     case "pause_session":

@@ -15,10 +15,12 @@ import type { WillMsg } from "@/lib/useWill";
 import { useI18n } from "@/lib/i18n";
 
 const QUICK = [
+  "What can you do?",
   "What's happening right now?",
   "Compare the top 3",
   "Why is this the best option?",
   "Try negotiating harder",
+  "Open my deals",
   "Pause this search",
 ];
 

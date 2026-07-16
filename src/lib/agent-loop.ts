@@ -125,7 +125,14 @@ export async function processVendorReply(opts: {
   // inbound text, marked so the reasoning is transparent in traces.
   if (!text && transcript?.text) text = `(voice note) ${transcript.text}`.trim();
   // A price-list PHOTO or voice note with no caption is still a real reply.
-  if (!text && images.length === 0) return;
+  // When the media download FAILED (images empty, no text, but a real message
+  // id exists), the shop DID answer - going silent here makes the app look
+  // like the shop ghosted the user. Synthesize an honest placeholder so the
+  // reply is visible everywhere and the agent politely asks for text.
+  if (!text && images.length === 0) {
+    if (!opts.waMessageId) return; // synthetic/system event - nothing real
+    text = "(the shop sent a photo/attachment that couldn't be loaded)";
+  }
   const from = opts.fromDigits.replace(/[^\d]/g, "");
   const senderFilter = opts.senderEmail
     ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`

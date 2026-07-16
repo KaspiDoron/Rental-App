@@ -91,6 +91,10 @@ export function useWill(bridge: WillBridge) {
         return "Clear requested";
       case "remember":
         return "Noted";
+      case "open_deals":
+        return "Opening My deals";
+      case "open_pricing":
+        return "Opening plans";
       default:
         return undefined;
     }
@@ -132,6 +136,13 @@ export function useWill(bridge: WillBridge) {
       case "remember":
         setNotes((n) => [...n.slice(-9), cmd.note]);
         break;
+      case "open_deals":
+        window.location.href = "/deals";
+        break;
+      case "open_pricing":
+        window.location.href = "/pricing";
+        break;
+      case "help":
       case "answer":
       case "clarify":
         break; // pure speech

@@ -13,7 +13,12 @@ import { WillAvatar, type WillMood } from "./WillAvatar";
 import { startNav } from "../NavVeil";
 import { useI18n } from "@/lib/i18n";
 
-const HIDE_KEY = "wd_will_companion";
+// Dismissal is a NAP, never a disappearance: Will is a core surface of the
+// product, so ✕ hides him for 20 minutes and he quietly returns (a permanent
+// per-session hide once made him vanish with no way back - a regression a
+// real user hit). New key name deliberately ignores the old "off" flag.
+const NAP_KEY = "wd_will_nap_until";
+const NAP_MS = 20 * 60_000;
 const SLEEP_AFTER_MS = 90_000;
 
 export function WillCompanion({
@@ -44,11 +49,17 @@ export function WillCompanion({
   const sleepTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
+    let wake: ReturnType<typeof setTimeout> | undefined;
     try {
-      setHidden(sessionStorage.getItem(HIDE_KEY) === "off");
+      const until = Number(sessionStorage.getItem(NAP_KEY) ?? 0);
+      const napping = Number.isFinite(until) && until > Date.now();
+      setHidden(napping);
+      // He comes back on his own when the nap ends - never gone for good.
+      if (napping) wake = setTimeout(() => setHidden(false), until - Date.now());
     } catch {
       setHidden(false);
     }
+    return () => clearTimeout(wake);
   }, []);
 
   // The bubble appears after a beat and quietly leaves unless it's an alert.
@@ -146,11 +157,12 @@ export function WillCompanion({
         <button
           onClick={() => {
             try {
-              sessionStorage.setItem(HIDE_KEY, "off");
+              sessionStorage.setItem(NAP_KEY, String(Date.now() + NAP_MS));
             } catch {}
             setHidden(true);
           }}
-          aria-label={t("Hide Will")}
+          aria-label={t("Hide Will for a bit")}
+          title={t("Hide Will for 20 minutes")}
           className="absolute -left-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-card2 text-[10px] font-bold text-faint shadow"
         >
           ✕

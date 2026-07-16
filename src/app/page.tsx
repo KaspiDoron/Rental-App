@@ -176,13 +176,22 @@ export default function Home() {
   const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
 
   // Jump straight to a shop's card from the status panel: switch to the list,
-  // highlight it, and smooth-scroll it into view.
+  // highlight it, and smooth-scroll it into view. The list is WINDOWED
+  // (visibleCount) - a card beyond the window has no DOM node, so the window
+  // must grow past the target first or the tap silently does nothing.
   function scrollToVendor(id: string) {
     setView("list");
     setSelectedId(id);
-    requestAnimationFrame(() => {
-      document.getElementById(`vendor-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setVisibleCount((n) => {
+      const idx = vendors.findIndex((v) => v.id === id);
+      return idx >= 0 ? Math.max(n, idx + 5) : n;
     });
+    // Two frames: let React commit the larger window before scrolling.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        document.getElementById(`vendor-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      })
+    );
   }
 
   // Opt in to browser push so a shop reply reaches the traveller with the app
@@ -294,6 +303,12 @@ export default function Home() {
           if (typeof s.radiusKm === "number") setRadiusKm(s.radiusKm);
           if (s.filters) setFilters(s.filters);
           if (typeof s.searchEpoch === "number") setSearchEpoch(s.searchEpoch);
+          // Re-seed the applied-reply set - without this, every restore
+          // re-applied all replies over the restored offers, inflating the
+          // round count and (with out-of-order rows) reverting the price.
+          if (Array.isArray(s.appliedReplyIds)) {
+            for (const id of s.appliedReplyIds) appliedReplies.current.add(id);
+          }
           setPhase("done");
         }
       }
@@ -308,7 +323,18 @@ export default function Home() {
       if (vendors.length) {
         sessionStorage.setItem(
           "wd_search",
-          JSON.stringify({ vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters, searchEpoch })
+          JSON.stringify({
+            vendors,
+            rfq,
+            source,
+            sourceError,
+            rawText,
+            origin,
+            radiusKm,
+            filters,
+            searchEpoch,
+            appliedReplyIds: [...appliedReplies.current].slice(-200),
+          })
         );
       } else {
         sessionStorage.removeItem("wd_search");
@@ -458,6 +484,11 @@ export default function Home() {
   // ---- Will's bridge: natural language -> the EXISTING setters ------------
   // Will can only ever do what the visible controls can do; every command
   // lands on the same state the buttons use.
+  // Latest-ref wrapper: the bridge memo must NEVER capture a stale
+  // startSearch closure (it reads rawText/origin/radius at call time) -
+  // "search now" through Will always runs the CURRENT request.
+  const startSearchStable = useCallbackRef((text?: string) => startSearch(text));
+
   const willBridge = useMemo(
     () => ({
       getContext: (): WillContext => ({
@@ -484,7 +515,7 @@ export default function Home() {
       patchFilters: (patch: Record<string, unknown>) =>
         setFilters((f) => ({ ...f, ...(patch as Partial<FilterState>) })),
       setBudget: (v: number | null) => setFilters((f) => ({ ...f, maxPricePerDay: v })),
-      startSearch: (text?: string) => void startSearch(text),
+      startSearch: (text?: string) => void startSearchStable(text),
       clearSearch: () => setClearConfirm(true), // always through the confirm dialog
       pause: async () => {
         setPaused(true);
@@ -643,8 +674,13 @@ export default function Home() {
   // feed so shop answers pop into the cards automatically. This must include
   // offer-received/negotiating - after a bargain is sent the shop's counter
   // must still arrive without a manual refresh.
-  const waiting = vendors.some((v) =>
-    ["rfq-sent", "awaiting-response", "negotiating", "offer-received"].includes(v.stage ?? "")
+  // Poll while anything is genuinely in flight. A COMPLETE presented offer is
+  // settled - polling it forever burns battery and quota for nothing (the
+  // activity poll + focus-resync still catch a late surprise reply).
+  const waiting = vendors.some(
+    (v) =>
+      ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "") ||
+      (v.stage === "offer-received" && v.offer && v.offer.presentable !== true)
   );
   useEffect(() => {
     if (!session || !waiting || !rfq) return;
@@ -666,9 +702,21 @@ export default function Home() {
             )
           );
         }
+        // NEWEST ROW PER VENDOR WINS. The feed arrives newest-first; applying
+        // every row would make the OLDEST functional update win (React applies
+        // them in order), silently reverting a fresher negotiated price to an
+        // older, higher one and inflating the round counter.
+        const newestByVendor = new Map<string, (typeof d.replies)[number]>();
         for (const r of d.replies ?? []) {
-          if (!r.found || !r.pricePerDay || appliedReplies.current.has(r.id)) continue;
+          if (!r.found || !r.pricePerDay) continue;
           if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < searchEpoch) continue;
+          const cur = newestByVendor.get(r.vendorId);
+          if (!cur || Date.parse(r.createdAt) > Date.parse(cur.createdAt)) {
+            newestByVendor.set(r.vendorId, r);
+          }
+        }
+        for (const r of newestByVendor.values()) {
+          if (appliedReplies.current.has(r.id)) continue;
           appliedReplies.current.add(r.id);
           setVendors((vs) =>
             vs.map((v) =>
@@ -808,6 +856,16 @@ export default function Home() {
         fulfillment: pData.rfq.fulfillment === "any" ? undefined : pData.rfq.fulfillment,
       }),
     });
+    if (!vRes.ok) {
+      // A failed discovery call must NEVER masquerade as "no shops found
+      // near your stay" - that sends users widening the radius for nothing.
+      const err = await vRes.json().catch(() => ({}));
+      setPhase("idle");
+      setSourceError(
+        err.error ?? t("The shop search hiccuped - tap Find my deal to try again.")
+      );
+      return;
+    }
     const vData = await vRes.json();
     const list: Vendor[] = (vData.vendors ?? []).map((v: Vendor) => ({
       ...v,
@@ -988,15 +1046,25 @@ export default function Home() {
   );
 
   const offersIn = vendors.filter((v) => v.offer).length;
+  // CURRENCY SAFETY: offers can legitimately arrive in different currencies
+  // (one shop quotes USD, another THB). Raw numbers must never be compared or
+  // summed across currencies - all aggregates work within the DOMINANT one.
+  const dominantCurrency = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const v of vendors) {
+      if (v.offer) counts.set(v.offer.currency, (counts.get(v.offer.currency) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  }, [vendors]);
   const totalSavings = useMemo(() => {
     if (!rfq) return 0;
     return vendors.reduce((sum, v) => {
-      if (!v.offer) return sum;
+      if (!v.offer || v.offer.currency !== dominantCurrency) return sum;
       return (
         sum + Math.max(0, (v.offer.listPricePerDay - v.offer.pricePerDay) * rfq.durationDays)
       );
     }, 0);
-  }, [vendors, rfq]);
+  }, [vendors, rfq, dominantCurrency]);
 
   // Inbound-risk alerts per shop (from the activity feed) - the red banner on
   // the card that says "Will flagged this reply".
@@ -1013,17 +1081,18 @@ export default function Home() {
   const cheapest = useMemo(
     () =>
       vendors
-        .filter((v) => v.offer)
+        .filter((v) => v.offer && v.offer.currency === dominantCurrency)
         .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay)[0],
-    [vendors]
+    [vendors, dominantCurrency]
   );
 
-  // The savings ticker's currency symbol comes from the offers themselves
-  // (they all share the search's local currency) - never a hardcoded "$".
+  // The savings ticker's symbol matches the DOMINANT currency the aggregates
+  // above are computed in - never whichever offer happens to be first.
   const savingsSymbol = useMemo(() => {
-    const cur = vendors.find((v) => v.offer)?.offer?.currency;
-    return cur ? moneyLocal(0, cur).replace(/[\d.,\s]/g, "") || "$" : "$";
-  }, [vendors]);
+    return dominantCurrency
+      ? moneyLocal(0, dominantCurrency).replace(/[\d.,\s]/g, "") || "$"
+      : "$";
+  }, [dominantCurrency]);
 
   // Will's proactive companion context: what he says, when he celebrates
   // (offerCount rises -> a new offer landed) and when he shows the attention
@@ -1033,7 +1102,16 @@ export default function Home() {
     [activityItems]
   );
   const riskCount = Object.keys(riskByVendor).length;
+  // First-time visitors get a personal hello from Will before anything else.
+  const [firstVisit, setFirstVisit] = useState(false);
+  useEffect(() => {
+    try {
+      setFirstVisit(!localStorage.getItem("wd_onboarded"));
+    } catch {}
+  }, []);
   const willNote = useMemo(() => {
+    if (firstVisit && phase === "idle")
+      return t("Hi, I'm Will 👋 Tell me what you want to ride - I find the shops and do the haggling. Tap me any time.");
     if (paused) return t("Paused - I'm holding every message. Tap me to resume.");
     if (riskCount > 0) return t("I flagged a reply for you - worth a look.");
     if (lastWillSay) return lastWillSay;
@@ -1043,7 +1121,7 @@ export default function Home() {
     if (phase === "done") return t("Openers are out - I'll ping you when replies land.");
     return t("Tell me what you want to ride - I'll do the haggling.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused, riskCount, lastWillSay, phase, cheapest]);
+  }, [paused, riskCount, lastWillSay, phase, cheapest, firstVisit]);
 
   // Live status for the session strip (bug #1). Three HONEST buckets that never
   // contradict each other:
@@ -1056,8 +1134,14 @@ export default function Home() {
     const deals: Vendor[] = [];
     for (const v of vendors) {
       if (v.offer) deals.push(v);
+      // A shop the agents already REACHED (a reply is pending / negotiation
+      // is live) stays "messaged" even while a follow-up sits in the outbox -
+      // otherwise the counters flicker right after a send. A shop whose FIRST
+      // message is still held (stage rfq-sent + queuedUntil) is honestly
+      // "queued": nothing has been delivered yet.
+      else if (["awaiting-response", "negotiating"].includes(v.stage ?? "")) messaged.push(v);
       else if (v.queuedUntil) queued.push(v);
-      else if (["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")) messaged.push(v);
+      else if (v.stage === "rfq-sent") messaged.push(v);
     }
     return { messaged, queued, deals };
   }, [vendors]);

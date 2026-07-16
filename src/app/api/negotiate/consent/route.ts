@@ -30,6 +30,25 @@ export async function POST(req: Request) {
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
   const digits = to.replace(/[^\d]/g, "");
 
+  // EXACT-LOCATION SAFETY: the destination must be a shop THIS USER's agent
+  // already messaged - a tampered client must never point precise GPS at an
+  // arbitrary number. (placeId-resolved numbers are Google's, already safe.)
+  if (body.to) {
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const known = await sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+        digits
+      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
+    ).catch(() => []);
+    if (known.length === 0) {
+      return NextResponse.json(
+        { sent: false, reason: "unknown-destination", error: "This number is not one of your negotiation threads." },
+        { status: 400 }
+      );
+    }
+  }
+
   const result = await runUserAction({
     userEmail: session.email,
     toDigits: digits,
