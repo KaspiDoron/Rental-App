@@ -1,13 +1,14 @@
 "use client";
 
-// "My deals" hub: everything with money on the table in one place - confirmed
-// bookings, open offers your agents negotiated, and honest staleness flags.
-// Bookings used to hide inside Profile; travellers need to find their active
-// deals in one tap.
+// "My deals" - rebuilt around SEARCH SESSIONS instead of a flat offer list.
+// Each session is a living dashboard: who was contacted, who answered, the
+// best price on the table, honest savings, what Will plans next and what
+// needs the traveller. Think Linear/Stripe dashboard, not an e-commerce list.
 
 import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Icon } from "@/components/icons";
+import { WillAvatar } from "@/components/will/WillAvatar";
 import { LanguageButton } from "@/components/LanguageButton";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SkeletonCard } from "@/components/Skeleton";
@@ -17,6 +18,57 @@ import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { startNav } from "@/components/NavVeil";
 import { moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
+
+interface SessionOffer {
+  vendorId: string;
+  vendorName: string;
+  current: number;
+  ask: number | null;
+  currency: string;
+  round: number;
+  verified: boolean;
+  at: string;
+  stale: boolean;
+}
+
+interface TimelineEvent {
+  at: string;
+  kind: "sent" | "reply" | "offer" | "alert" | "booked" | "you";
+  vendorName?: string;
+  text: string;
+}
+
+interface SessionSummary {
+  id: string;
+  startedAt: string;
+  isLatest: boolean;
+  query: string | null;
+  vehicleClass: string | null;
+  radiusKm: number | null;
+  shopsFound: number;
+  status: "booked" | "live" | "waiting" | "wrapped";
+  paused: boolean;
+  contacted: number;
+  replied: number;
+  waiting: number;
+  offers: SessionOffer[];
+  best: (SessionOffer & { savedPct: number | null }) | null;
+  avgAsk: number | null;
+  booking: {
+    vendorName: string;
+    total: number | null;
+    perDay: number | null;
+    currency: string;
+    scheduledAt: string | null;
+    at: string;
+  } | null;
+  attention: string[];
+  plannedMoves: { at: string; vendorName: string | null; reason: string }[];
+  queuedSends: number;
+  timeline: TimelineEvent[];
+  progress: number;
+  progressLabel: string;
+}
 
 interface Booking {
   id?: number;
@@ -30,24 +82,35 @@ interface Booking {
   created_at: string;
 }
 
-interface OpenOffer {
-  vendorId: string;
-  vendorName: string;
-  pricePerDay: number;
-  currency: string;
-  round: number;
-  verified: boolean;
-  fulfillment: string | null;
-  durationDays: number | null;
-  at: string;
-  stale: boolean;
+function timeAgo(iso: string, t: (s: string) => string): string {
+  const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  if (mins < 1) return t("just now");
+  if (mins < 60) return `${mins}${t("m ago")}`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}${t("h ago")}`;
+  const days = Math.round(hrs / 24);
+  return `${days}${t("d ago")}`;
 }
+
+function timeAt(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+const TIMELINE_ICON: Record<TimelineEvent["kind"], string> = {
+  sent: "send",
+  you: "user",
+  reply: "chat",
+  offer: "money",
+  alert: "alert",
+  booked: "check",
+};
 
 export default function DealsPage() {
   const { t } = useI18n();
   const [loading, setLoading] = useState(true);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [offers, setOffers] = useState<OpenOffer[]>([]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [email, setEmail] = useState<string | undefined>();
   const [plan, setPlan] = useState<string>("free");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -68,21 +131,60 @@ export default function DealsPage() {
     fetch("/api/deals", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
+        const s: SessionSummary[] = d.sessions ?? [];
+        setSessions(s);
         setBookings(d.bookings ?? []);
-        setOffers(d.offers ?? []);
+        // The freshest hunt opens expanded - it's what you came to check.
+        if (s[0]) setExpanded({ [s[0].id]: true });
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const fulfillmentLabel = (f: string | null | undefined) =>
-    f === "delivery" || f === "hotel-delivery"
-      ? t("Delivered to you")
-      : f === "pickup"
-      ? t("Shop picks you up")
-      : f === "on-shop" || f === "in-store"
-      ? t("Pick up at the shop")
-      : null;
+  const vehicleLabel = (v: string | null) =>
+    v === "car"
+      ? t("Car")
+      : v === "motorbike"
+        ? t("Motorbike")
+        : v === "scooter"
+          ? t("Scooter")
+          : t("Vehicle");
+
+  const statusPill = (s: SessionSummary) => {
+    if (s.status === "booked")
+      return (
+        <span className="flex items-center gap-1 rounded-full bg-savings-soft px-2.5 py-1 text-[10px] font-extrabold text-savings">
+          <Icon name="check" className="h-3 w-3" /> {t("Booked")}
+        </span>
+      );
+    if (s.paused)
+      return (
+        <span className="flex items-center gap-1 rounded-full bg-brandyellow-soft px-2.5 py-1 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+          <Icon name="pause" className="h-3 w-3" /> {t("Paused")}
+        </span>
+      );
+    if (s.status === "live")
+      return (
+        <span className="flex items-center gap-1 rounded-full bg-brandblue-soft px-2.5 py-1 text-[10px] font-extrabold text-brandblue">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brandblue opacity-60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-brandblue" />
+          </span>
+          {t("Live")}
+        </span>
+      );
+    if (s.status === "waiting")
+      return (
+        <span className="flex items-center gap-1 rounded-full bg-card2 px-2.5 py-1 text-[10px] font-extrabold text-soft">
+          <Icon name="clock" className="h-3 w-3" /> {t("Waiting on shops")}
+        </span>
+      );
+    return (
+      <span className="rounded-full bg-card2 px-2.5 py-1 text-[10px] font-extrabold text-faint">
+        {t("Wrapped up")}
+      </span>
+    );
+  };
 
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-2xl">
@@ -104,25 +206,334 @@ export default function DealsPage() {
       <div className="space-y-4 px-4 pt-4">
         {loading && (
           <>
-            <SkeletonCard lines={2} />
+            <SkeletonCard lines={4} />
             <SkeletonCard lines={3} />
           </>
         )}
 
-        {!loading && (
-          <>
-            {/* Confirmed bookings */}
-            <section className="rise-in">
-              <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
-                <Icon name="check" className="h-4 w-4 text-savings" /> {t("Booked")}
-              </div>
-              {bookings.length === 0 ? (
-                <div className="surface rounded-blob p-4 text-[12px] text-soft">
-                  {t("Nothing booked yet - lock a deal and it lands here.")}
+        {!loading && sessions.length === 0 && bookings.length === 0 && (
+          <div className="surface rounded-blob p-6 text-center rise-in">
+            <div className="mx-auto mb-3 w-fit float-soft">
+              <WillAvatar size={64} />
+            </div>
+            <div className="text-[15px] font-extrabold text-strong">
+              {t("No hunts yet - and I'm ready")}
+            </div>
+            <p className="mx-auto mt-1 max-w-[300px] text-[12px] text-soft">
+              {t("Tell me what you want to ride and where you're staying. I'll find nearby shops and haggle the price down while you do literally anything else.")}
+            </p>
+            <a
+              href="/"
+              onClick={() => startNav()}
+              className="btn btn-primary cta-sheen mt-4 inline-block rounded-2xl px-6 py-3 text-[14px]"
+            >
+              {t("Start my first hunt")}
+            </a>
+          </div>
+        )}
+
+        {/* One living dashboard per search session */}
+        {!loading &&
+          sessions.map((s) => {
+            const open = Boolean(expanded[s.id]);
+            return (
+              <section key={s.id} className="surface overflow-hidden rounded-blob rise-in">
+                {/* Header - always visible, tap to expand */}
+                <button
+                  onClick={() => setExpanded((e) => ({ ...e, [s.id]: !open }))}
+                  className="block w-full p-3.5 text-left"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brandblue-soft text-brandblue">
+                        <Icon name={s.vehicleClass === "car" ? "car" : "bike"} className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-[14px] font-extrabold text-strong">
+                          {vehicleLabel(s.vehicleClass)} {t("hunt")}
+                          {s.radiusKm ? ` · ${s.radiusKm}km` : ""}
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-faint">
+                          {s.query ? `"${s.query}"` : `${s.shopsFound} ${t("shops found")}`} ·{" "}
+                          {timeAgo(s.startedAt, t)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {statusPill(s)}
+                      <Icon
+                        name="chevron"
+                        className={`h-4 w-4 text-faint transition-transform ${open ? "rotate-90" : ""}`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Progress - the one line users actually care about */}
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-[10px] font-bold">
+                      <span className="text-soft">{t(s.progressLabel)}</span>
+                      <span className="tabular-nums text-faint">{s.progress}%</span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-card2">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ${
+                          s.status === "booked" ? "bg-savings" : "bg-brandblue"
+                        }`}
+                        style={{ width: `${s.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                </button>
+
+                {open && (
+                  <div className="space-y-3 px-3.5 pb-3.5">
+                    {/* Stat trio */}
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { n: s.contacted, label: t("contacted") },
+                        { n: s.replied, label: t("replied") },
+                        { n: s.waiting, label: t("waiting") },
+                      ].map((st) => (
+                        <div key={st.label} className="rounded-2xl bg-card2 p-2.5 text-center">
+                          <div className="text-[18px] font-extrabold tabular-nums text-strong">
+                            {st.n}
+                          </div>
+                          <div className="text-[10px] font-bold text-faint">{st.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Booked - the crown */}
+                    {s.booking && (
+                      <div className="rounded-2xl bg-savings-soft p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-savings">
+                              <Icon name="check" className="h-3.5 w-3.5" /> {t("Locked in")}
+                            </div>
+                            <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
+                              {s.booking.vendorName}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            {s.booking.total != null && (
+                              <div className="text-[16px] font-extrabold text-strong">
+                                {moneyLocal(s.booking.total, s.booking.currency)}
+                              </div>
+                            )}
+                            {s.booking.perDay != null && (
+                              <div className="text-[10px] font-bold text-faint">
+                                {moneyLocal(s.booking.perDay, s.booking.currency)}/{t("day")}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Best offer on the table */}
+                    {!s.booking && s.best && (
+                      <div className="rounded-2xl border border-brandblue/25 bg-brandblue-soft/60 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-extrabold uppercase tracking-wide text-brandblue">
+                              {t("Best on the table")}
+                            </div>
+                            <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
+                              {s.best.vendorName}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              {s.best.verified ? (
+                                <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
+                                  {t("Confirmed by the shop")}
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-faint">
+                                  {t("Unconfirmed")}
+                                </span>
+                              )}
+                              {s.best.round > 0 && (
+                                <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-soft">
+                                  {t("After")} {s.best.round}{" "}
+                                  {s.best.round === 1 ? t("round") : t("rounds")}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="text-[18px] font-extrabold text-strong">
+                              {moneyLocal(s.best.current, s.best.currency)}
+                            </div>
+                            <div className="text-[10px] font-bold text-faint">/{t("day")}</div>
+                            {s.best.savedPct != null && s.best.savedPct > 0 && (
+                              <div className="mt-0.5 rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
+                                −{s.best.savedPct}% {t("off asking")}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {s.avgAsk != null && s.avgAsk > s.best.current && (
+                          <div className="mt-2 text-[11px] font-bold text-soft">
+                            {t("Average asking price nearby")}:{" "}
+                            <span className="line-through opacity-70">
+                              {moneyLocal(s.avgAsk, s.best.currency)}
+                            </span>{" "}
+                            → {t("yours")}: {moneyLocal(s.best.current, s.best.currency)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Needs you */}
+                    {s.attention.length > 0 && (
+                      <div className="rounded-2xl bg-brandred-soft p-3">
+                        <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-brandred">
+                          <Icon name="bell" className="h-3.5 w-3.5" /> {t("Needs you")}
+                        </div>
+                        <ul className="mt-1 space-y-1">
+                          {s.attention.map((a, i) => (
+                            <li key={i} className="text-[11px] font-bold leading-snug text-strong">
+                              · {a}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Will's planned moves */}
+                    {(s.plannedMoves.length > 0 || s.queuedSends > 0) && (
+                      <div className="rounded-2xl bg-card2 p-3">
+                        <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-soft">
+                          <Icon name="sparkles" className="h-3.5 w-3.5" /> {t("Will's next moves")}
+                        </div>
+                        <ul className="mt-1 space-y-1 text-[11px] font-bold leading-snug text-soft">
+                          {s.queuedSends > 0 && (
+                            <li>
+                              · {s.queuedSends}{" "}
+                              {s.queuedSends === 1
+                                ? t("message queued - it sends the moment the shop opens")
+                                : t("messages queued - they send the moment shops open")}
+                            </li>
+                          )}
+                          {s.plannedMoves.map((m, i) => (
+                            <li key={i}>
+                              · {m.vendorName ? `${m.vendorName}: ` : ""}
+                              {m.reason} ({timeAt(m.at)})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* All offers, cheapest first */}
+                    {s.offers.length > 1 && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                          {t("Every offer in this hunt")}
+                        </div>
+                        <div className="space-y-1.5">
+                          {s.offers.map((o) => (
+                            <div
+                              key={o.vendorId + o.at}
+                              className="flex items-center justify-between gap-2 rounded-xl bg-card2 px-3 py-2"
+                            >
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                <span
+                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                    o.verified ? "bg-savings" : "bg-faint"
+                                  }`}
+                                />
+                                <span className="truncate text-[12px] font-bold text-strong">
+                                  {o.vendorName}
+                                </span>
+                                {o.stale && (
+                                  <Icon name="clock" className="h-3 w-3 shrink-0 text-brandyellow" />
+                                )}
+                              </div>
+                              <div className="shrink-0 text-[12px] font-extrabold tabular-nums text-strong">
+                                {moneyLocal(o.current, o.currency)}
+                                <span className="text-[10px] font-bold text-faint">/{t("day")}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Mini timeline */}
+                    {s.timeline.length > 0 && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                          {t("Latest moves")}
+                        </div>
+                        <div className="space-y-1.5">
+                          {s.timeline.map((e, i) => (
+                            <div key={i} className="flex items-start gap-2">
+                              <span
+                                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                                  e.kind === "alert"
+                                    ? "bg-brandred-soft text-brandred"
+                                    : e.kind === "offer" || e.kind === "booked"
+                                      ? "bg-savings-soft text-savings"
+                                      : "bg-card2 text-faint"
+                                }`}
+                              >
+                                <Icon name={TIMELINE_ICON[e.kind]} className="h-3 w-3" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[11px] font-bold leading-tight text-soft">
+                                  {e.vendorName ? `${e.vendorName}: ` : ""}
+                                  {e.text}
+                                </div>
+                                <div className="text-[10px] text-faint">{timeAgo(e.at, t)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex gap-2 pt-0.5">
+                      {s.isLatest ? (
+                        <a
+                          href="/"
+                          onClick={() => startNav()}
+                          className="btn btn-primary flex-1 rounded-2xl py-2.5 text-center text-[13px]"
+                        >
+                          {t("Open live workspace")}
+                        </a>
+                      ) : (
+                        <a
+                          href="/"
+                          onClick={() => startNav()}
+                          className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-center text-[13px]"
+                        >
+                          {t("Search like this again")}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+
+        {/* Older bookings that predate the recent sessions */}
+        {!loading &&
+          (() => {
+            const shown = new Set(
+              sessions.filter((s) => s.booking).map((s) => s.booking!.at)
+            );
+            const rest = bookings.filter((b) => !shown.has(b.created_at));
+            if (rest.length === 0) return null;
+            return (
+              <section className="rise-in">
+                <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+                  <Icon name="check" className="h-4 w-4 text-savings" /> {t("Booked earlier")}
                 </div>
-              ) : (
                 <div className="space-y-2.5">
-                  {bookings.map((b, i) => (
+                  {rest.map((b, i) => (
                     <div key={b.id ?? i} className="surface rounded-blob p-3.5">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -134,11 +545,6 @@ export default function DealsPage() {
                               ? `${t("Pick-up")}: ${b.scheduled_at.replace("T", " · ")}`
                               : t("Pick-up time agreed in chat")}
                           </div>
-                          {fulfillmentLabel(b.fulfillment) && (
-                            <div className="mt-0.5 text-[11px] font-bold text-soft">
-                              {fulfillmentLabel(b.fulfillment)}
-                            </div>
-                          )}
                         </div>
                         <div className="text-right">
                           <div className="text-[15px] font-extrabold text-strong">
@@ -152,87 +558,11 @@ export default function DealsPage() {
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
+              </section>
+            );
+          })()}
 
-            {/* Open negotiated offers */}
-            <section className="rise-in">
-              <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
-                <Icon name="money" className="h-4 w-4 text-brandblue" /> {t("Deals on the table")}
-              </div>
-              {offers.length === 0 ? (
-                <div className="surface rounded-blob p-5 text-center">
-                  <div className="mx-auto mb-2 w-fit float-soft">
-                    <BrandMark size={52} />
-                  </div>
-                  <div className="text-[13px] font-extrabold text-strong">
-                    {t("No open offers right now")}
-                  </div>
-                  <p className="mx-auto mt-1 max-w-[280px] text-[12px] text-soft">
-                    {t("Start a search and your agents will bring negotiated prices straight here.")}
-                  </p>
-                  <a
-                    href="/"
-                    onClick={() => startNav()}
-                    className="btn btn-primary mt-3 inline-block rounded-2xl px-5 py-2.5 text-[13px]"
-                  >
-                    {t("Find my deal")}
-                  </a>
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {offers.map((o) => (
-                    <div key={o.vendorId + o.at} className="surface rounded-blob p-3.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate text-[14px] font-extrabold text-strong">
-                            {o.vendorName}
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                            {o.verified ? (
-                              <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
-                                {t("Confirmed by the shop")}
-                              </span>
-                            ) : (
-                              <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-faint">
-                                {t("Unconfirmed")}
-                              </span>
-                            )}
-                            {o.round > 0 && (
-                              <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
-                                {t("After")} {o.round}{" "}
-                                {o.round === 1 ? t("bargaining round") : t("bargaining rounds")}
-                              </span>
-                            )}
-                            {fulfillmentLabel(o.fulfillment) && (
-                              <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-soft">
-                                {fulfillmentLabel(o.fulfillment)}
-                              </span>
-                            )}
-                          </div>
-                          {o.stale && (
-                            <div className="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-                              <Icon name="clock" className="h-3.5 w-3.5" />
-                              {t("Quoted over a day ago - worth re-confirming before you rely on it.")}
-                            </div>
-                          )}
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-[16px] font-extrabold text-strong">
-                            {moneyLocal(o.pricePerDay, o.currency)}
-                          </div>
-                          <div className="text-[10px] font-bold text-faint">/{t("day")}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <SiteFooter />
-          </>
-        )}
+        {!loading && <SiteFooter />}
       </div>
 
       {feedbackOpen && <FeedbackModal email={email} onClose={() => setFeedbackOpen(false)} />}

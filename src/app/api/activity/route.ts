@@ -113,7 +113,9 @@ export async function GET(req: Request) {
       received_at: string;
     }>(
       "whatsapp_messages",
-      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
+      // Marker rows (session pause/takeover flags) live in the same table -
+      // keep them out of the human-facing feed.
+      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover)&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -204,13 +206,14 @@ export async function GET(req: Request) {
     });
   }
   for (const m of outbound) {
+    const human = m.raw?.kind === "human-manual";
     items.push({
       id: `sent:${m.id}`,
       at: m.received_at,
       kind: "sent",
       vendorId: m.raw?.vendorId,
       vendorName: m.raw?.vendorName,
-      title: "Message sent to the shop",
+      title: human ? "You messaged the shop yourself" : "Message sent to the shop",
       detail: (m.raw?.english || m.body || "").slice(0, 220) || undefined,
     });
   }
