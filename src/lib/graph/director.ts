@@ -137,6 +137,17 @@ export async function runDirector(args: {
 
   const system = directorSystemPrompt(args.instructions);
 
+  // Owner-audited learning (edge priors + approved exemplars), compiled into
+  // config at review time - one cached read, empty string when nothing is
+  // learned or OPS_LEARNING=off, so the base prompt stays byte-identical.
+  let learningBlock = "";
+  try {
+    const { getOpsLearning, formatDirectorLearning } = await import("../ops/learning");
+    learningBlock = formatDirectorLearning(await getOpsLearning());
+  } catch {
+    /* learning is optional context, never a dependency */
+  }
+
   const user =
     `THIS SEARCH SESSION (all shops):\n${sessionLines}\n\n` +
     `THIS SHOP's thread:\n${input.history}\n\n` +
@@ -147,7 +158,8 @@ export async function runDirector(args: {
     legal.map((l) => `- ${l.edgeId}: ${l.label} -> ${l.toKind}`).join("\n") +
     (facts.event === "tick"
       ? "\n\nNOTE: this is a WAKEUP after a deliberate wait - decide now; deferring again is not allowed."
-      : "");
+      : "") +
+    learningBlock;
 
   const out = await chat([
     { role: "system", content: system },

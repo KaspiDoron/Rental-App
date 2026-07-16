@@ -43,6 +43,38 @@ export function ReviewControls({
   const [bookmark, setBookmark] = useState(initial?.bookmark ?? false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  const [coachBusy, setCoachBusy] = useState(false);
+
+  // Route the feedback through the Coach: an agent converts it into concrete
+  // instruction patches on the live pipeline (versioned, rollbackable).
+  const applyAsCoaching = async () => {
+    if (!feedback.trim()) return;
+    setCoachBusy(true);
+    setSaved(null);
+    try {
+      const res = await fetch("/api/admin/graph/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          feedback,
+          score: rating ?? undefined,
+          context: `Ops Center review of thread ${threadKey}${
+            decisionId ? `, decision ${decisionId}` : ""
+          }.${better.trim() ? ` Suggested better reply: "${better.trim()}"` : ""}`,
+        }),
+      });
+      const d = await res.json();
+      setSaved(
+        d?.applied
+          ? `Coaching applied: ${d.summary || d.patches?.map((p: { nodeLabel: string }) => p.nodeLabel).join(", ")}`
+          : d?.error ?? "Coaching failed."
+      );
+    } catch {
+      setSaved("Could not reach the coach.");
+    } finally {
+      setCoachBusy(false);
+    }
+  };
 
   const save = async (extra?: Record<string, unknown>) => {
     setBusy(true);
@@ -192,6 +224,16 @@ export function ReviewControls({
         {(initial?.status === "auto_flagged" || initial?.status === "flagged") && (
           <button onClick={() => save({ status: "resolved" })} disabled={busy} className={chip(false)}>
             Resolve
+          </button>
+        )}
+        {feedback.trim() && (
+          <button
+            onClick={applyAsCoaching}
+            disabled={coachBusy}
+            className="btn btn-ghost btn-sm rounded-xl px-3"
+            title="An agent turns this feedback into instruction patches on the live pipeline"
+          >
+            {coachBusy ? "Coaching..." : "🎓 Apply as coaching"}
           </button>
         )}
         <button

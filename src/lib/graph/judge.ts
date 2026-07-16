@@ -81,6 +81,17 @@ async function scoreMove(args: {
     .catch(() => []);
   const det = deterministicMoveScores(args.text, recent);
 
+  // Owner calibration: the judge re-anchors its rubric to how the OWNER
+  // grades similar messages (compiled from Ops Center reviews; empty when
+  // nothing is learned or the kill switch is off).
+  let calibration = "";
+  try {
+    const { getOpsLearning, formatJudgeCalibration } = await import("../ops/learning");
+    calibration = formatJudgeCalibration(await getOpsLearning());
+  } catch {
+    /* calibration is optional context */
+  }
+
   const detail = await chatDetailed([
     {
       role: "system",
@@ -92,7 +103,8 @@ async function scoreMove(args: {
         "known, not pushing when the shop is firm, never implying acceptance)?\n" +
         "- tone: warm, human, casual, non-pushy, exactly one emoji, not too long?\n" +
         "- uniqueness: does it read as freshly written, not a canned template?\n" +
-        'Reply ONLY as JSON: { "tacticFit": 1-5, "tone": 1-5, "uniqueness": 1-5, "why": string }.',
+        'Reply ONLY as JSON: { "tacticFit": 1-5, "tone": 1-5, "uniqueness": 1-5, "why": string }.' +
+        calibration,
     },
     {
       role: "user",

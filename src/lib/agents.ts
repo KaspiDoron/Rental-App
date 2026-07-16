@@ -640,17 +640,20 @@ export async function composeBargain(opts: {
   fallback?: boolean;
 }> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
-  // Sane target: the market floor when we know it, otherwise a modest 15% cut.
-  // The REAL floor is the honest lower bound - when we know it we may ask it
-  // outright (the playbook's first push IS the floor); only without a floor
-  // does the 60%-of-quote guard protect against absurd lowballs.
+  // Owner-tuned thresholds (defaults = the historical literals below).
+  const { getPolicyOverlay, DEFAULT_OVERLAY } = await import("./ops/overlay");
+  const overlay = await getPolicyOverlay().catch(() => DEFAULT_OVERLAY);
+  // Sane target: the market floor when we know it, otherwise a modest cut
+  // (default 15%). The REAL floor is the honest lower bound - when we know it
+  // we may ask it outright (the playbook's first push IS the floor); only
+  // without a floor does the lowball guard protect against absurd asks.
   const quoted = opts.currentPricePerDay;
   let target = opts.targetPricePerDay;
   if (!target && quoted) {
-    target = Math.round(quoted * 0.85);
+    target = Math.round(quoted * overlay.defaultCut);
   }
   if (target && quoted) {
-    const lowest = opts.floorPricePerDay ?? Math.round(quoted * 0.6);
+    const lowest = opts.floorPricePerDay ?? Math.round(quoted * overlay.lowballGuard);
     if (target < lowest) target = lowest;
     // Ask for a clean, human number (220, not 213) - odd figures read as
     // robotic and weaken the ask. When the ENGINE provided the target it is
@@ -667,14 +670,24 @@ export async function composeBargain(opts: {
   const tactics = getTactics();
   const tactic = tactics[Math.min(opts.round, tactics.length - 1)] ?? tactics[0];
 
-  // Training examples: durable (Supabase) first, then this instance's memory.
+  // Training examples: a balanced 2+2 mix of the owner's hand-taught
+  // transcripts and Ops-Center learning (bookmarked exemplars + corrections),
+  // so review-console feedback reaches every future bargain without ever
+  // crowding out the original teaching. In-memory examples fill any gap.
   const { sbSelect } = await import("./runtime-config");
-  const durable = await sbSelect<{ text: string }>(
-    "agent_training",
-    "select=text&order=created_at.desc&limit=4"
-  );
+  const [classic, opsRows] = await Promise.all([
+    sbSelect<{ text: string }>(
+      "agent_training",
+      "select=text&source=not.in.(ops-exemplar,ops-correction)&order=created_at.desc&limit=2"
+    ).catch(() => []),
+    sbSelect<{ text: string }>(
+      "agent_training",
+      "select=text&source=in.(ops-exemplar,ops-correction)&order=created_at.desc&limit=2"
+    ).catch(() => []),
+  ]);
   const examples = [
-    ...durable.map((d) => d.text),
+    ...classic.map((d) => d.text),
+    ...opsRows.map((d) => d.text),
     ...listTraining().map((t) => t.text),
   ];
   const training = Array.from(new Set(examples)).slice(0, 4).join("\n---\n");
@@ -743,7 +756,7 @@ export async function composeBargain(opts: {
       : "") +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
     (target
-      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(opts.floorPricePerDay ?? Math.round((quoted ?? target) * 0.6), cur)} - unrealistic lowballs insult the shop. `
+      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(opts.floorPricePerDay ?? Math.round((quoted ?? target) * overlay.lowballGuard), cur)} - unrealistic lowballs insult the shop. `
       : "Do NOT propose any specific number - just warmly ask for their best price. ") +
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region

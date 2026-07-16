@@ -47,6 +47,7 @@ import {
 } from "./state";
 import { validateMediaCoherence } from "./coherence";
 import { enforceEmojiTone, ensureGloballyFresh } from "./uniqueness";
+import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
 import type {
   DeliverResult,
   DirectorChoice,
@@ -168,14 +169,15 @@ function buildFacts(args: {
   target?: number;
   rivalPrice?: number;
   mediaCoherent: boolean;
+  overlay: PolicyOverlay;
 }): GraphFacts {
-  const { input, state, spec } = args;
+  const { input, state, spec, overlay } = args;
   const f = state.fields;
   const isTick = input.event.kind === "tick";
   const price = f.pricePerDay;
   const priceOk = priceKnown(f);
   const atFloor = Boolean(
-    price && input.floorPrice && price <= input.floorPrice * 1.05
+    price && input.floorPrice && price <= input.floorPrice * overlay.floorTolerance
   );
   const counts = {
     clarify: Math.max(input.legacyCounts.clarify, state.nodeRuns["clarify"] ?? 0),
@@ -197,10 +199,10 @@ function buildFacts(args: {
     hasClarifyMessage: isTick ? false : Boolean(input.extraction?.clarifyMessage),
     matchesSpecNotFalse: input.extraction ? input.extraction.matchesSpec !== false : true,
     priceAtOrBelowFloor: atFloor,
-    // Far above the floor (>25%) = real room remains; one firm "last price"
-    // does not end the push when this (or a cheaper rival) is true.
+    // Far above the floor (default >25%, owner-tunable) = real room remains;
+    // one firm "last price" does not end the push when this is true.
     priceFarAboveFloor: Boolean(
-      price && input.floorPrice && price > input.floorPrice * 1.25
+      price && input.floorPrice && price > input.floorPrice * overlay.priceFarAboveFloor
     ),
     targetIsRealSaving: Boolean(price && args.target && args.target < price * 0.95),
     rivalCheaper: Boolean(args.rivalPrice),
@@ -324,6 +326,10 @@ export async function runGraphTurn(
     return true;
   };
 
+  // Owner-tuned thresholds (defaults = the historical literals; 30s-cached
+  // config read, so this costs nothing on the hot path).
+  const overlay = await getPolicyOverlay().catch(() => DEFAULT_OVERLAY);
+
   // ---- state ---------------------------------------------------------------
   let state =
     (await io.loadState(input.event.threadKey)) ??
@@ -445,7 +451,7 @@ export async function runGraphTurn(
   const f = state.fields;
   if (nodeOn("comparator") && priceKnown(f)) {
     const atFloor = Boolean(
-      input.floorPrice && f.pricePerDay! <= input.floorPrice * 1.05
+      input.floorPrice && f.pricePerDay! <= input.floorPrice * overlay.floorTolerance
     );
     // Cross-shop intelligence: always look for a cheaper rival in this search
     // session (even at-floor - the director still reads it as context), so
@@ -465,10 +471,10 @@ export async function runGraphTurn(
     if (!atFloor) {
       // PRINTED-LIST ANCHOR: a posted price board is firmer than a spoken
       // quote - deep lowballs against it kill deals ("that's OK, take it
-      // there"). Asks bottom out around 80% of the listed price of the
-      // chosen model (the real floor still applies when it is higher).
+      // there"). Asks bottom out around 80% (owner-tunable) of the listed
+      // price of the chosen model (the real floor applies when higher).
       const sheetAnchor = f.sheetPricePerDay
-        ? Math.round(f.sheetPricePerDay * 0.8)
+        ? Math.round(f.sheetPricePerDay * overlay.sheetAnchor)
         : 0;
       const effFloor =
         Math.max(input.floorPrice ?? 0, sheetAnchor) || undefined;
@@ -494,7 +500,7 @@ export async function runGraphTurn(
   }
 
   // ---- the director loop -------------------------------------------------------
-  let facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent });
+  let facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay });
   let steps = 0;
   let ladder: DecisionLadderRung[] | undefined;
   let lastResult: GraphTurnResult = { decisionId, action: "silent", traces };
@@ -676,7 +682,7 @@ export async function runGraphTurn(
         .catch(() => {});
       state.phase = derivePhase(state);
       // present loops back to the director (t-present-back) for a warm close.
-      facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent });
+      facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay });
       lastResult = { decisionId, action: "present", traces, ladder };
       continue;
     }
@@ -835,6 +841,33 @@ async function runTailGates(args: {
       output: text,
       verdict: validation.verdict === "ok" && !freshNote ? "ok" : "revised",
     });
+  }
+
+  // Owner-banned phrases (policy overlay) - deterministic scrub, so a phrase
+  // the owner outlawed in the Ops Center can never reach a shop again.
+  try {
+    const { getPolicyOverlay } = await import("../ops/overlay");
+    const banned = (await getPolicyOverlay()).bannedPhrases;
+    const hits: string[] = [];
+    for (const phrase of banned) {
+      const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      if (rx.test(text)) {
+        hits.push(phrase);
+        text = text.replace(rx, "").replace(/\s{2,}/g, " ").trim();
+      }
+    }
+    if (hits.length) {
+      push({
+        stage: "style-validator",
+        nodeId: "style-validator",
+        input: hits.join(", "),
+        reasoning: "owner-banned phrase removed (policy overlay)",
+        output: text,
+        verdict: "revised",
+      });
+    }
+  } catch {
+    /* scrub is best-effort */
   }
 
   // ---- localize ----------------------------------------------------------------
