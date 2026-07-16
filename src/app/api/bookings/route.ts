@@ -12,6 +12,34 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "booking payload required" }, { status: 400 });
   }
 
+  // COMMITMENT LOCK: refuse a second confirmed booking with a DIFFERENT shop
+  // inside 10 minutes - the double-booking window where two shops both hear
+  // "yes". Re-booking the same shop (retry, edit) stays allowed.
+  const thisVendorId = String(b.vendorId ?? "");
+  const recent = await sbSelect<{ vendor_id: string | null; vendor_name: string }>(
+    "bookings",
+    `select=vendor_id,vendor_name&user_email=eq.${encodeURIComponent(
+      session.email
+    )}&status=eq.confirmed&created_at=gte.${encodeURIComponent(
+      new Date(Date.now() - 10 * 60_000).toISOString()
+    )}&order=created_at.desc&limit=1`
+  ).catch(() => []);
+  if (
+    recent[0] &&
+    thisVendorId &&
+    recent[0].vendor_id &&
+    recent[0].vendor_id !== thisVendorId
+  ) {
+    return NextResponse.json(
+      {
+        error: `You just locked a deal with ${recent[0].vendor_name}. To book a different shop, remove that booking first (My deals).`,
+        alreadyCommitted: true,
+        vendorName: recent[0].vendor_name,
+      },
+      { status: 409 }
+    );
+  }
+
   // TRUST NOTHING NUMERIC FROM THE CLIENT. The daily price and duration define
   // the total; recompute it server-side so a tampered/garbage client total can
   // never be persisted as the money record.

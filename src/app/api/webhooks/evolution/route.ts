@@ -40,12 +40,18 @@ async function regionForThread(fromDigits: string): Promise<string | undefined> 
   return typeof r === "string" && r ? r : undefined;
 }
 
+function unwrap(data: any): any {
+  return data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
+}
+
 function extractText(data: any): string {
-  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
+  const m = unwrap(data);
   return (
     m?.conversation ??
     m?.extendedTextMessage?.text ??
     m?.imageMessage?.caption ??
+    m?.documentMessage?.caption ??
+    m?.videoMessage?.caption ??
     ""
   );
 }
@@ -53,12 +59,52 @@ function extractText(data: any): string {
 // WhatsApp voice notes arrive as audioMessage (audio/ogg; codecs=opus), also
 // wrapped in ephemeralMessage on disappearing chats.
 function hasAudioMessage(data: any): boolean {
-  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
-  return Boolean(m?.audioMessage);
+  return Boolean(unwrap(data)?.audioMessage);
 }
 function hasImageMessage(data: any): boolean {
-  const m = data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
-  return Boolean(m?.imageMessage);
+  return Boolean(unwrap(data)?.imageMessage);
+}
+// Beyond image/audio: documents (PDF rate cards), location pins and contact
+// cards used to be silently dropped - now every one becomes either engine
+// input or an honest user-facing note.
+function documentMessage(data: any): { mimetype?: string; fileName?: string } | null {
+  const d = unwrap(data)?.documentMessage;
+  return d ? { mimetype: d.mimetype, fileName: d.fileName } : null;
+}
+function locationMessage(data: any): { lat?: number; lng?: number; name?: string } | null {
+  const l = unwrap(data)?.locationMessage;
+  return l
+    ? { lat: Number(l.degreesLatitude), lng: Number(l.degreesLongitude), name: l.name || l.address }
+    : null;
+}
+function contactMessage(data: any): { name?: string; digits?: string } | null {
+  const c = unwrap(data)?.contactMessage ?? unwrap(data)?.contactsArrayMessage?.contacts?.[0];
+  if (!c) return null;
+  const digits = String(c.vcard ?? "").match(/waid=(\d{6,})|TEL[^:]*:\+?([\d\s-]{6,})/i);
+  return {
+    name: c.displayName ?? undefined,
+    digits: (digits?.[1] ?? digits?.[2] ?? "").replace(/[^\d]/g, "") || undefined,
+  };
+}
+
+// Media downloads fail transiently (host mid-restart, expired media). A
+// price-list photo silently lost = a lost offer, so retry with backoff.
+async function fetchMediaWithRetry(
+  email: string,
+  data: any
+): Promise<{ mime: string; base64: string } | null> {
+  const { fetchMediaBase64 } = await import("@/lib/evolution");
+  const delays = [0, 2000, 5000];
+  for (const wait of delays) {
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try {
+      const media = await fetchMediaBase64(email, data);
+      if (media) return media;
+    } catch {
+      /* retry */
+    }
+  }
+  return null;
 }
 
 export async function POST(req: Request) {
@@ -140,26 +186,115 @@ export async function POST(req: Request) {
     const items = Array.isArray(body.data) ? body.data : [body.data];
 
     for (const data of items.slice(0, 3)) {
-      if (!data?.key || data.key.fromMe) continue; // only the vendor's messages
+      if (!data?.key) continue;
       const remoteJid = String(data.key.remoteJid ?? "");
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
       const from = remoteJid.split("@")[0];
 
       // Not a rental-shop thread we opened? Drop it - never stored, never read.
+      // (Applies to fromMe too: the user's OWN chats with friends stay sacred.)
       if (!(await isVendorThread(from))) continue;
+
+      // ---- HUMAN TAKEOVER DETECTION ------------------------------------------
+      // A fromMe message in a shop thread is either (a) our own bot send
+      // echoing back, or (b) THE USER typing in WhatsApp themselves. Case (b)
+      // used to be invisible - the agent kept talking over the user. Now it
+      // stores the message and stands the agents down for this thread.
+      if (data.key.fromMe) {
+        try {
+          const { getConfig } = await import("@/lib/runtime-config");
+          if ((await getConfig("HUMAN_TAKEOVER"))?.toLowerCase() === "off") continue;
+          const email = await emailForInstance(instance);
+          if (!email) continue;
+          const text = extractText(data);
+          if (!text.trim()) continue; // media-only self message - out of scope
+          const msgId = String(data.key.id ?? "");
+          const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+          // Echo check 1: a bot send is already recorded with this provider id.
+          const byId = msgId
+            ? await sbSelect(
+                "whatsapp_messages",
+                `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+                  from
+                )}&wa_message_id=eq.${encodeURIComponent(msgId)}&limit=1`
+              )
+            : [];
+          if (byId.length > 0) continue;
+          // Echo check 2: same body already stored as OUR outbound recently
+          // (every bot/app send is inserted at send time).
+          const recentOut = await sbSelect<{ body: string | null }>(
+            "whatsapp_messages",
+            `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+              from
+            )}&raw->>sender=eq.${encodeURIComponent(email)}&received_at=gte.${encodeURIComponent(
+              new Date(Date.now() - 10 * 60_000).toISOString()
+            )}&order=received_at.desc&limit=10`
+          );
+          const isEcho = recentOut.some(
+            (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
+          );
+          if (isEcho) continue;
+          // A real human message: record it in the thread + stand down.
+          await sbInsert("whatsapp_messages", [
+            {
+              wa_message_id: msgId || null,
+              from_number: instance,
+              to_number: from,
+              body: text,
+              type: "text",
+              direction: "outbound",
+              raw: { sender: email, kind: "human-manual", channel: "evolution" },
+            },
+          ]);
+          const { setThreadTakeover } = await import("@/lib/session-flags");
+          const already = await (await import("@/lib/session-flags")).isThreadTakenOver(email, from);
+          if (!already) {
+            await setThreadTakeover(email, from, true);
+            const { sendPushToUser } = await import("@/lib/push");
+            sendPushToUser(email, {
+              title: "You've got the wheel 🤝",
+              body: "You messaged this shop yourself - Will is standing down on that chat until you hand it back (open the conversation in the app).",
+              url: "/",
+            }).catch(() => {});
+          }
+        } catch {
+          /* takeover detection is best-effort - never break the webhook */
+        }
+        continue;
+      }
 
       const text = extractText(data);
       const msgId = String(data.key.id ?? "");
       const hasImage = hasImageMessage(data);
       const hasAudio = hasAudioMessage(data);
+      const doc = documentMessage(data);
+      const loc = locationMessage(data);
+      const contact = contactMessage(data);
+
+      // Location pins / contact cards become plain text the engine can use.
+      let syntheticText = text;
+      if (!syntheticText && loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+        syntheticText = `(the shop shared its location${loc.name ? `: ${loc.name}` : ""} - https://maps.google.com/?q=${loc.lat},${loc.lng})`;
+      }
+      if (!syntheticText && contact && (contact.name || contact.digits)) {
+        syntheticText = `(the shop shared a contact${contact.name ? `: ${contact.name}` : ""}${contact.digits ? ` +${contact.digits}` : ""})`;
+      }
 
       await sbInsert("whatsapp_messages", [
         {
           wa_message_id: msgId,
           from_number: from,
           to_number: instance,
-          body: text || (hasImage ? "[photo]" : hasAudio ? "[voice note]" : ""),
-          type: hasImage ? "image" : hasAudio ? "audio" : "text",
+          body:
+            syntheticText ||
+            (hasImage
+              ? "[photo]"
+              : hasAudio
+              ? "[voice note]"
+              : doc
+              ? `[document: ${doc.fileName ?? "file"}]`
+              : ""),
+          type: hasImage ? "image" : hasAudio ? "audio" : doc ? "document" : "text",
           direction: "inbound",
           raw: { instance, pushName: data.pushName ?? null, channel: "evolution" },
         },
@@ -168,10 +303,6 @@ export async function POST(req: Request) {
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
-      // A shop that sends ONLY a price-list photo or a voice note (no caption)
-      // is the common case - read the media, don't skip it.
-      if (!text && !hasImage && !hasAudio) continue;
-
       const email = await emailForInstance(instance);
       // A real inbound proves the socket is live: persist "open" durably.
       if (email) {
@@ -179,21 +310,63 @@ export async function POST(req: Request) {
         markOpen(email).catch(() => {});
       }
 
-      // Price-list photo? Download it so the vision agent can read the prices.
+      // A PDF (or any non-image document) can't go through the vision agent -
+      // tell the user honestly instead of dropping it on the floor.
+      const docIsImage = Boolean(doc?.mimetype && /^image\//i.test(doc.mimetype));
+      if (doc && !docIsImage && email) {
+        const { sendPushToUser } = await import("@/lib/push");
+        sendPushToUser(email, {
+          title: "A shop sent a document 📄",
+          body: `${doc.fileName ?? "A file"} arrived on WhatsApp - open the chat there to view it.`,
+          url: "/",
+        }).catch(() => {});
+        await sbInsert("agent_events", [
+          {
+            kind: "media-unreadable",
+            vendor_id: "",
+            vendor_name: from,
+            detail: `Document "${doc.fileName ?? "file"}" (${doc.mimetype ?? "?"}) from +${from} - stored, not machine-readable (email ${email}).`,
+          },
+        ]).catch(() => {});
+      }
+
+      // A shop that sends ONLY a price-list photo or a voice note (no caption)
+      // is the common case - read the media, don't skip it.
+      if (!syntheticText && !hasImage && !hasAudio && !docIsImage) continue;
+
+      // Price-list photo (or image-typed document)? Download WITH RETRY so the
+      // vision agent can read the prices - a transient media failure must not
+      // lose the offer.
       const images: { mime: string; base64: string }[] = [];
-      if (hasImage && email) {
-        const { fetchMediaBase64 } = await import("@/lib/evolution");
-        const media = await fetchMediaBase64(email, data);
+      if ((hasImage || docIsImage) && email) {
+        const media = await fetchMediaWithRetry(email, data);
         if (media) images.push(media);
+        else if (!syntheticText) {
+          // Total failure with no caption: be honest, don't go silent.
+          const { sendPushToUser } = await import("@/lib/push");
+          sendPushToUser(email, {
+            title: "A photo didn't come through 📷",
+            body: "A shop sent a photo we couldn't download - check the chat in WhatsApp.",
+            url: "/",
+          }).catch(() => {});
+          await sbInsert("agent_events", [
+            {
+              kind: "media-fetch-failed",
+              vendor_id: "",
+              vendor_name: from,
+              detail: `Photo from +${from} failed to download after 3 attempts (email ${email}).`,
+            },
+          ]).catch(() => {});
+          continue;
+        }
       }
 
       // Voice note? Download + transcribe (heavy-accent primed) so the whole
       // pipeline treats it exactly like an inbound text.
       let transcript: { text: string; language?: string; source: string } | null = null;
-      if (hasAudio && email && !text) {
+      if (hasAudio && email && !syntheticText) {
         try {
-          const { fetchMediaBase64 } = await import("@/lib/evolution");
-          const media = await fetchMediaBase64(email, data);
+          const media = await fetchMediaWithRetry(email, data);
           if (media) {
             const { transcribeAudio } = await import("@/lib/graph/transcribe");
             const rfqRegion = await regionForThread(from);
@@ -210,7 +383,7 @@ export async function POST(req: Request) {
 
       await processVendorReply({
         fromDigits: from,
-        text,
+        text: syntheticText,
         images,
         transcript,
         waMessageId: msgId,

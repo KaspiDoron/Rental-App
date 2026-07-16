@@ -32,6 +32,7 @@ function VendorCardInner({
   onPickupConsent,
   whyDecisionId,
   onWhy,
+  riskNote,
 }: {
   vendor: Vendor;
   rfq: StructuredRFQ | null;
@@ -54,6 +55,8 @@ function VendorCardInner({
   // "Why this move?" - the latest director decision for this shop (live data).
   whyDecisionId?: string;
   onWhy?: (decisionId: string) => void;
+  // Inbound-risk warning from the safety screen ("asked for your passport...").
+  riskNote?: string;
 }) {
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
@@ -311,6 +314,15 @@ function VendorCardInner({
           {vendor.queuedUntil && !offer && (
             <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
               🕘 {t("Waiting for the shop to open - sends automatically")}
+            </div>
+          )}
+          {riskNote && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-xl border-2 border-brandred/40 bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
+              <Icon name="alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                {t("Will flagged this shop's reply")}: {riskNote}{" "}
+                {t("Nothing was sent - review before you act.")}
+              </span>
             </div>
           )}
           <Pipeline stage={vendor.stage ?? "queued"} />

@@ -30,6 +30,8 @@ export function TranscriptSheet({
 }) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<Msg[] | null>(null);
+  const [takeover, setTakeover] = useState<boolean | null>(null);
+  const [switching, setSwitching] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,7 +41,26 @@ export function TranscriptSheet({
       .then((r) => r.json())
       .then((d) => setMessages(Array.isArray(d.messages) ? d.messages : []))
       .catch(() => setMessages([]));
+    fetch(`/api/thread/takeover?vendorId=${encodeURIComponent(vendorId)}`)
+      .then((r) => r.json())
+      .then((d) => setTakeover(Boolean(d.takeover)))
+      .catch(() => {});
   }, [vendorId, since]);
+
+  async function switchTakeover(mode: "takeover" | "handback") {
+    setSwitching(true);
+    try {
+      const res = await fetch("/api/thread/takeover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorId, mode }),
+      });
+      const d = await res.json();
+      if (d.ok !== undefined) setTakeover(mode === "takeover");
+    } finally {
+      setSwitching(false);
+    }
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
@@ -56,6 +77,29 @@ export function TranscriptSheet({
           ✕
         </button>
       </div>
+
+      {takeover !== null && (
+        <div
+          className={`mb-2 flex items-center justify-between gap-2 rounded-2xl p-2.5 ${
+            takeover ? "bg-savings-soft" : "bg-card2"
+          }`}
+        >
+          <div className="min-w-0 text-[11px] font-bold leading-snug text-soft">
+            {takeover
+              ? t("You have the wheel - Will stays silent on this chat until you hand it back.")
+              : t("Will is handling this chat. Take over any time - he'll stand down instantly.")}
+          </div>
+          <button
+            onClick={() => switchTakeover(takeover ? "handback" : "takeover")}
+            disabled={switching}
+            className={`btn btn-sm shrink-0 rounded-xl px-3 py-1.5 text-[11px] font-extrabold disabled:opacity-50 ${
+              takeover ? "btn-primary" : "btn-ghost border border-line"
+            }`}
+          >
+            {takeover ? t("Hand back to Will") : t("Take over")}
+          </button>
+        </div>
+      )}
 
       <div className="no-scrollbar max-h-[55vh] space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3">
         {messages === null && <LoadingDots label={t("Loading the conversation")} />}

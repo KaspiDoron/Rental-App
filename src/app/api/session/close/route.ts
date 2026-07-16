@@ -16,10 +16,16 @@ export async function POST() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
-  // 1. Drop EVERYTHING this user still has parked in the outbox.
+  // 1. Drop EVERYTHING this user still has parked in the outbox - and the
+  //    strategic-wait wakeups too, so a closed session never even wakes up
+  //    to decide "should I message?" (the answer is always no).
   await sbDelete(
     "wa_outbox",
     `sender_key=eq.${encodeURIComponent(session.email)}`
+  ).catch(() => {});
+  await sbDelete(
+    "graph_wakeups",
+    `kind=eq.tick&thread_key=like.${encodeURIComponent(session.email + ":*")}`
   ).catch(() => {});
 
   // 2. Stamp the close marker (a system row in the message log - no schema

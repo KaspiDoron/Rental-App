@@ -73,6 +73,7 @@ const KEYS: {
   { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
   { name: "GRAPH_ENGINE", label: "Negotiation engine ('off' = legacy pipeline)", scope: "ai", editable: true },
+  { name: "HUMAN_TAKEOVER", label: "Human takeover detection ('off' = ignore user-typed WhatsApp messages)", scope: "messaging", editable: true },
   { name: "EVOLUTION_HOSTS", label: "Evolution host pool (url|key per line)", scope: "messaging", editable: true },
   { name: "EVOLUTION_MAX_PER_HOST", label: "Max WhatsApp users per host", scope: "messaging", editable: true },
   { name: "EVOLUTION_PROXY", label: "Residential proxy URL (anti-ban - socks5://user:pass@host:port)", scope: "messaging", editable: true },

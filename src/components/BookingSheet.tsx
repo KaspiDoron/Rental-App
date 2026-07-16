@@ -40,6 +40,8 @@ export function BookingSheet({
   // traveller's WhatsApp on close (they continue in their own app).
   const [waLink, setWaLink] = useState<string | null>(null);
   const [disconnected, setDisconnected] = useState(false);
+  // Commitment-lock refusal from the server (double-booking guard).
+  const [lockError, setLockError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -75,27 +77,42 @@ export function BookingSheet({
   async function confirm() {
     if (submitting) return; // guard against a double-tap firing two bookings
     setSubmitting(true);
-    setStep("confirmed");
+    setLockError(null);
     const when = `${pickupDate}T${time}:00`;
-    // Persist the booking. total_price is recomputed server-side from the
-    // per-day price and duration - we don't send a trustable total. No trailing
-    // Z: the pickup time is the SHOP's local wall-clock, not UTC.
-    fetch("/api/bookings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        vendorId: vendor.id,
-        vendorName: vendor.name,
-        pricePerDay: vendor.offer?.pricePerDay ?? 0,
-        durationDays,
-        currency: vendor.offer?.currency ?? "USD",
-        fulfillment,
-        deliveryAddress: fulfillment === "hotel-delivery" ? address.trim() : undefined,
-        oneWayDropOff: rfq?.oneWayDropOff,
-        scheduledAt: when,
-        returnDate: returnDateStr,
-      }),
-    }).catch(() => {});
+    // Persist the booking FIRST and respect the server's commitment lock: if
+    // another shop was just booked, we stop HERE - no closing message, no
+    // second "yes" to a second shop. total_price is recomputed server-side.
+    // No trailing Z: the pickup time is the SHOP's local wall-clock, not UTC.
+    try {
+      const bRes = await fetch("/api/bookings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          pricePerDay: vendor.offer?.pricePerDay ?? 0,
+          durationDays,
+          currency: vendor.offer?.currency ?? "USD",
+          fulfillment,
+          deliveryAddress: fulfillment === "hotel-delivery" ? address.trim() : undefined,
+          oneWayDropOff: rfq?.oneWayDropOff,
+          scheduledAt: when,
+          returnDate: returnDateStr,
+        }),
+      });
+      if (bRes.status === 409) {
+        const bd = await bRes.json().catch(() => ({}));
+        setLockError(
+          bd.error ??
+            "You just locked a deal with another shop - remove that booking first if you changed your mind."
+        );
+        setSubmitting(false);
+        return;
+      }
+    } catch {
+      /* booking storage is retried by the user; the flow continues */
+    }
+    setStep("confirmed");
 
     // Close the deal: the engine's closing-message node tells the shop, then we
     // DISCONNECT the traveller's WhatsApp so they continue in their own app.
@@ -107,6 +124,7 @@ export function BookingSheet({
         body: JSON.stringify({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
+          vendorId: vendor.id,
           pricePerDay: vendor.offer?.pricePerDay,
           currency: vendor.offer?.currency,
           fulfillment:
@@ -309,6 +327,11 @@ export function BookingSheet({
               risk.
             </span>
           </label>
+          {lockError && (
+            <div className="mt-2 rounded-2xl bg-brandred-soft p-2.5 text-[12px] font-bold text-brandred">
+              {lockError}
+            </div>
+          )}
           <button
             onClick={confirm}
             disabled={!dealTerms || !deliveryReady || submitting}

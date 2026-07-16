@@ -261,10 +261,12 @@ export async function GET(req: Request) {
   for (const e of events) {
     let excerpt = "";
     let risk = "high";
+    let reasons: string[] = [];
     try {
       const d = JSON.parse(e.detail ?? "{}");
       excerpt = String(d.excerpt ?? "");
       risk = String(d.risk ?? "high");
+      if (Array.isArray(d.reasons)) reasons = d.reasons.map(String);
     } catch {}
     items.push({
       id: `alert:${e.id}`,
@@ -273,8 +275,8 @@ export async function GET(req: Request) {
       vendorId: e.vendor_id ?? undefined,
       vendorName: e.vendor_name ?? undefined,
       title: "Will flagged this reply - please review",
-      detail: excerpt.slice(0, 220) || undefined,
-      meta: { risk },
+      detail: (reasons[0] ?? excerpt).slice(0, 220) || undefined,
+      meta: { risk, excerpt: excerpt.slice(0, 200) },
     });
   }
 

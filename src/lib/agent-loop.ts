@@ -408,6 +408,52 @@ export async function processVendorReply(opts: {
       .catch(() => {});
   }
 
+  // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
+  // photos, off-platform transfers, shady links - for the USER. Never touches
+  // what the engine replies.
+  if (ctx.sender && text) {
+    void (async () => {
+      try {
+        const { screenInbound } = await import("./inbound-risk");
+        const verdict = await screenInbound(text);
+        if (verdict.risk === "none") return;
+        await sbInsert("agent_events", [
+          {
+            kind: "inbound-risk",
+            vendor_id: ctx.vendorId ?? "",
+            vendor_name: ctx.vendorName ?? "",
+            detail: JSON.stringify({
+              email: ctx.sender,
+              risk: verdict.risk,
+              reasons: verdict.reasons,
+              excerpt: text.slice(0, 200),
+            }),
+          },
+        ]);
+        const { sendPushToUser } = await import("./push");
+        await sendPushToUser(ctx.sender!, {
+          title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
+          body: `${ctx.vendorName || "A shop"}: ${verdict.reasons[0] ?? "review this message before acting"}`,
+          url: "/",
+        });
+      } catch {
+        /* screening is best-effort */
+      }
+    })();
+  }
+
+  // HUMAN TAKEOVER GATE (pre-engine): the user typed in this shop's thread
+  // themselves - the agents stand down for THIS thread until handback. The
+  // reply was stored and pushed above; we just don't answer it.
+  if (ctx.sender && !sessionClosed) {
+    try {
+      const { isThreadTakenOver } = await import("./session-flags");
+      if (await isThreadTakenOver(ctx.sender, from)) return;
+    } catch {
+      /* flags unreadable - fail open */
+    }
+  }
+
   // SESSION PAUSE GATE (pre-engine, same philosophy as sessionClosed): the
   // user told Will to hold everything. The reply was stored and the push sent
   // above - the agents just say NOTHING until the user resumes.

@@ -910,6 +910,18 @@ export default function Home() {
     }, 0);
   }, [vendors, rfq]);
 
+  // Inbound-risk alerts per shop (from the activity feed) - the red banner on
+  // the card that says "Will flagged this reply".
+  const riskByVendor = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const it of activityItems) {
+      if (it.kind === "alert" && it.vendorId && !out[it.vendorId]) {
+        out[it.vendorId] = it.detail ?? it.title;
+      }
+    }
+    return out;
+  }, [activityItems]);
+
   const cheapest = useMemo(
     () =>
       vendors
@@ -1496,6 +1508,7 @@ export default function Home() {
                   onPickupConsent={pickupConsent}
                   whyDecisionId={whyByVendor[v.id]}
                   onWhy={openWhy}
+                  riskNote={riskByVendor[v.id]}
                 />
               </div>
             ))}
