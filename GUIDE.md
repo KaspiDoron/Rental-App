@@ -407,3 +407,16 @@ Keep the `GOOGLE_MAPS_API_KEY` in Keys and enable "Places API (New)".
 **Legal:** public `/terms` and `/privacy` pages, three mandatory signup
 consents (enforced server-side), and disclaimers across the funnel. Set the real
 legal entity name in `OPERATOR_NAME` (`src/lib/legal.ts`) when you have one.
+
+## Setting your domain (one key, everywhere)
+
+When you buy a real domain (e.g. `https://wheeldeal.app`):
+
+1. Point the domain at Vercel (Project -> Settings -> Domains).
+2. In the app: **Admin -> Keys -> "Public app domain"** (`APP_DOMAIN`) - paste
+   the full `https://...` URL. Takes effect within ~30 seconds, no redeploy.
+
+That single key now drives the share-preview/SEO URLs (OpenGraph, canonical),
+the geocoding fallback identity and the push-notification sender identity.
+WhatsApp webhooks and billing redirect URLs need NO action - they derive from
+the live request origin automatically.

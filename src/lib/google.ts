@@ -206,11 +206,14 @@ const MAX_SUGGESTIONS = 10;
 
 // A descriptive, contactable User-Agent keeps Nominatim from throttling us as
 // aggressively (their policy requires identifying the app). Include the deploy
-// origin when we know it.
-function nominatimUA(): string {
+// origin when we know it - the admin-set APP_DOMAIN wins over build-time env.
+async function nominatimUA(): Promise<string> {
   const site =
-    process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL || "wheeldeal.app";
-  return `WheelDeal/1.0 (vehicle-rental app; ${site})`;
+    (await getConfig("APP_DOMAIN").catch(() => null)) ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.VERCEL_URL ||
+    "wheeldeal.app";
+  return `WheelDeal/1.0 (vehicle-rental app; ${site.replace(/^https?:\/\//, "")})`;
 }
 
 export async function searchPlaces(
@@ -309,7 +312,7 @@ export async function searchPlaces(
         q
       )}`,
       {
-        headers: { "User-Agent": nominatimUA() },
+        headers: { "User-Agent": await nominatimUA() },
         cache: "no-store",
       }
     );

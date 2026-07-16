@@ -12,6 +12,7 @@ import { LoadingDots } from "@/components/LoadingDots";
 import { CURRENCIES, savedCurrency, setSavedCurrency } from "@/lib/currency";
 import { startNav } from "@/components/NavVeil";
 import { Icon } from "@/components/icons";
+import { TrustPanel } from "@/components/landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 
 declare global {
@@ -378,6 +379,9 @@ export default function LoginPage() {
             🔐 {t("Sign in or create an account to enter")}
           </span>
         </div>
+        <a href="/welcome" className="mt-2 inline-block text-[12px] font-bold text-brandblue underline">
+          {t("New here? See how WheelDeal works")}
+        </a>
       </div>
 
       {/* Mode switch */}
@@ -623,6 +627,11 @@ export default function LoginPage() {
         </p>
       </form>
       )}
+
+      {/* Trust strip: the three promises, compact */}
+      <div className="mt-5 rounded-blob bg-card2 p-3.5">
+        <TrustPanel compact />
+      </div>
 
       {/* Private-beta note: this is an invite-only test. */}
       <p className="mt-4 text-center text-[11px] text-faint">

@@ -6,70 +6,84 @@ import { OfflineBanner } from "@/components/OfflineBanner";
 import "./globals.css";
 
 // Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
-// (og:image) work. Priority: explicit NEXT_PUBLIC_SITE_URL -> Vercel's
-// production domain -> current deployment URL -> fallback.
-const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ||
-  (process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "https://wheeldeal.vercel.app");
+// (og:image) work. Priority: admin-set APP_DOMAIN (Key Vault, no redeploy) ->
+// explicit NEXT_PUBLIC_SITE_URL -> Vercel's production domain -> current
+// deployment URL -> fallback.
+function envSiteUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "https://wheeldeal.vercel.app")
+  );
+}
 const title = "WheelDeal - cheapest local rides, negotiated for you";
 const description =
   "AI agents find and negotiate the cheapest car, manual motorcycle & automatic scooter rentals near your hotel. Live bargaining, map + list, biggest savings first.";
 
-export const metadata: Metadata = {
-  metadataBase: new URL(siteUrl),
-  title: { default: title, template: "%s · WheelDeal" },
-  description,
-  applicationName: "WheelDeal",
-  keywords: [
-    "car rental",
-    "motorcycle rental",
-    "scooter hire",
-    "travel savings",
-    "rental negotiation",
-    "cheap rentals",
-  ],
-  authors: [{ name: "WheelDeal" }],
-  creator: "WheelDeal",
-  manifest: "/manifest.webmanifest",
-  appleWebApp: {
-    capable: true,
-    title: "WheelDeal",
-    statusBarStyle: "default",
-  },
-  formatDetection: { telephone: false },
-  openGraph: {
-    type: "website",
-    siteName: "WheelDeal",
-    title,
+export async function generateMetadata(): Promise<Metadata> {
+  let siteUrl = envSiteUrl();
+  try {
+    const { getConfig } = await import("@/lib/runtime-config");
+    const domain = await getConfig("APP_DOMAIN");
+    if (domain) siteUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  } catch {
+    /* build-time / keyless: env chain above is the answer */
+  }
+  return {
+    metadataBase: new URL(siteUrl),
+    title: { default: title, template: "%s · WheelDeal" },
     description,
-    url: siteUrl,
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title,
-    description,
-    site: process.env.TWITTER_HANDLE || undefined,
-    creator: process.env.TWITTER_HANDLE || undefined,
-  },
-  robots: { index: true, follow: true },
-  alternates: { canonical: "/" },
-  category: "travel",
-  generator: "WheelDeal",
-  referrer: "origin-when-cross-origin",
-  icons: {
-    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/apple-icon", sizes: "180x180", type: "image/png" }],
-  },
-  other: {
-    "msapplication-TileColor": "#2f6fed",
-    "apple-mobile-web-app-title": "WheelDeal",
-  },
-};
+    applicationName: "WheelDeal",
+    keywords: [
+      "car rental",
+      "motorcycle rental",
+      "scooter hire",
+      "travel savings",
+      "rental negotiation",
+      "cheap rentals",
+    ],
+    authors: [{ name: "WheelDeal" }],
+    creator: "WheelDeal",
+    manifest: "/manifest.webmanifest",
+    appleWebApp: {
+      capable: true,
+      title: "WheelDeal",
+      statusBarStyle: "default",
+    },
+    formatDetection: { telephone: false },
+    openGraph: {
+      type: "website",
+      siteName: "WheelDeal",
+      title,
+      description,
+      url: siteUrl,
+      locale: "en_US",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      site: process.env.TWITTER_HANDLE || undefined,
+      creator: process.env.TWITTER_HANDLE || undefined,
+    },
+    robots: { index: true, follow: true },
+    alternates: { canonical: "/" },
+    category: "travel",
+    generator: "WheelDeal",
+    referrer: "origin-when-cross-origin",
+    icons: {
+      icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+      apple: [{ url: "/apple-icon", sizes: "180x180", type: "image/png" }],
+    },
+    other: {
+      "msapplication-TileColor": "#2f6fed",
+      "apple-mobile-web-app-title": "WheelDeal",
+    },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",

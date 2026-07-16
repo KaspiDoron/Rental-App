@@ -27,7 +27,14 @@ async function ensureVapid(): Promise<string | null> {
   if (configured !== pub) {
     const admins = (await getConfig("ADMIN_EMAILS")) || "";
     const subject = admins.split(",")[0]?.trim();
-    webpush.setVapidDetails(subject ? `mailto:${subject}` : "mailto:hello@wheeldeal.app", pub, priv);
+    // Fallback subject derives from the admin-set APP_DOMAIN so push identity
+    // follows the brand domain without a redeploy.
+    let host = "wheeldeal.app";
+    try {
+      const domain = await getConfig("APP_DOMAIN");
+      if (domain) host = new URL(domain.startsWith("http") ? domain : `https://${domain}`).hostname;
+    } catch {}
+    webpush.setVapidDetails(subject ? `mailto:${subject}` : `mailto:hello@${host}`, pub, priv);
     configured = pub;
   }
   return pub;

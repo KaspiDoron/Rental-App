@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "./LoadingDots";
 import { WaTermsModal } from "./WaTermsModal";
+import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 
 // The ONE WhatsApp-connect experience, used identically in signup and in the
@@ -169,6 +170,11 @@ export function WaConnect({
                 <li>🛡 {t("Protected: human-pace sending, daily safety caps and shop business-hours only - built to keep your number safe.")}</li>
                 <li>✌️ {t("Yours: disconnect any time with one tap and every trace of the link is erased.")}</li>
               </ul>
+              {/* The full protection story - same panel as the landing page,
+                  incl. the expandable list of real anti-ban mechanics. */}
+              <div className="mb-2 rounded-2xl bg-card2 p-2.5">
+                <TrustPanel frame={false} />
+              </div>
             </>
           )}
           <label
