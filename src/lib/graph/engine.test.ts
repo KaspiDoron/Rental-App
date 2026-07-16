@@ -447,6 +447,58 @@ describe("engine end-to-end (deterministic)", () => {
     expect(res.action).not.toBe("bargain");
   });
 
+  it("a shop that walks away gets ONE warm goodbye, then silence", async () => {
+    // "That's OK you can take it there" ended a real negotiation - the agent
+    // must never chase, and never keep probing a dead thread.
+    const bag = makeIO({
+      ...seed(),
+      fields: { firmCount: 0, toneDegraded: false, rounds: 1, pricePerDay: 280 },
+    });
+    const r1 = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "That's OK you can take it there. Thx!", images: [], audios: [] },
+        extraction: extraction({ found: false, shopDeclined: true }),
+        usablePrice: undefined,
+      }),
+      bag.io,
+      spec
+    );
+    expect(r1.action).toBe("close"); // one warm goodbye
+    expect(bag.getState().fields.declined).toBe(true);
+
+    const r2 = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "ok bye", images: [], audios: [] },
+        extraction: extraction({ found: false, clarifyMessage: "?" }),
+        usablePrice: undefined,
+      }),
+      bag.io,
+      spec
+    );
+    expect(r2.action).toBe("silent"); // never chases, never momentum-pokes
+    expect(bag.sends.length).toBe(1);
+  });
+
+  it("a printed price list keeps asks credible (no deep lowballs)", async () => {
+    // Sheet shows 280/day for the chosen model, real floor is 150. The old
+    // ladder would ask ~172 against a POSTED board - the shop walks away.
+    // The sheet anchor bottoms asks around 80% of the printed price.
+    const bag = makeIO(seed());
+    const res = await runGraphTurn(
+      input({
+        event: { kind: "inbound-text", threadKey: "u@x:66111", userEmail: "u@x", toDigits: "66111", shopMessage: "(price list photo)", images: [], audios: [] },
+        extraction: extraction({ pricePerDay: 280, imageKind: "price_sheet" }),
+        usablePrice: 280,
+      }),
+      bag.io,
+      spec
+    );
+    expect(res.action).toBe("bargain");
+    expect(bag.getState().fields.sheetPricePerDay).toBe(280);
+    // 0.8 * 280 = 224 - the ask never dives below the credible band.
+    expect(bag.getState().fields.lastTarget).toBeGreaterThanOrEqual(220);
+  });
+
   it("a closed session stays completely silent", async () => {
     const { io, sends } = makeIO(seed());
     const res = await runGraphTurn(

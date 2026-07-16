@@ -185,6 +185,25 @@ export function defaultGraphEdges(): EdgeSpec[] {
       "traveller approved sharing their location"
     ),
     e(
+      "d-declined-close",
+      "director",
+      "close",
+      15,
+      A([
+        { kind: "shopDeclinedDeal" },
+        { kind: "counterBelow", counter: "close", max: 1 },
+      ]),
+      "the shop walked away - one warm goodbye"
+    ),
+    e(
+      "d-declined-silent",
+      "director",
+      "silent",
+      16,
+      { kind: "shopDeclinedDeal" },
+      "declined - the conversation is over"
+    ),
+    e(
       "d-answer",
       "director",
       "answer",

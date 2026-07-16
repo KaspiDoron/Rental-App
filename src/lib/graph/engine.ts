@@ -216,6 +216,7 @@ function buildFacts(args: {
     rounds: f.rounds ?? 0,
     maxRounds: spec.settings.maxRoundsPerShop,
     toneDegraded: Boolean(f.toneDegraded),
+    shopDeclined: Boolean(f.declined),
     dealComplete: dealComplete(f),
     pickupOffered: Boolean(f.pickupOffered),
     pickupConsent: Boolean(f.pickupConsent),
@@ -462,9 +463,18 @@ export async function runGraphTurn(
         .catch(() => undefined);
     }
     if (!atFloor) {
+      // PRINTED-LIST ANCHOR: a posted price board is firmer than a spoken
+      // quote - deep lowballs against it kill deals ("that's OK, take it
+      // there"). Asks bottom out around 80% of the listed price of the
+      // chosen model (the real floor still applies when it is higher).
+      const sheetAnchor = f.sheetPricePerDay
+        ? Math.round(f.sheetPricePerDay * 0.8)
+        : 0;
+      const effFloor =
+        Math.max(input.floorPrice ?? 0, sheetAnchor) || undefined;
       target = computeRoundTarget({
         quoted: f.pricePerDay!,
-        floorPrice: input.floorPrice,
+        floorPrice: effFloor,
         rivalPrice,
         rounds: f.rounds ?? 0,
         lastTarget: f.lastTarget,

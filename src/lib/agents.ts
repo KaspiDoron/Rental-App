@@ -684,6 +684,10 @@ export async function composeBargain(opts: {
     "mention an app or assistant. Never invent prices we were not given. " +
     roundPlay +
     "Never repeat a question the shop already answered. " +
+    "VARY YOUR ARGUMENTS: never reuse a lever already played in this " +
+    "conversation (check the history) - if the many-days card was used, switch " +
+    "to the weekly rate, a package ask (helmet/delivery/full tank), the rival " +
+    "offer, or booking right now. A repeated argument reads as a bot. " +
     (opts.history
       ? "Conversation so far (oldest first) - do NOT re-ask anything answered here:\n" +
         opts.history +
@@ -892,6 +896,9 @@ export interface ExtractedOffer {
   onShopOnly?: boolean | null;
   // The shop is holding firm on price ("last price", "cannot go lower").
   shopFirm?: boolean | null;
+  // The shop WALKED AWAY: told the traveller to take the other offer, said
+  // not interested / no thanks / goodbye. Ends the negotiation gracefully.
+  shopDeclined?: boolean | null;
   // The shop's tone in THIS reply - "annoyed" stops further pushing.
   shopTone?: "warm" | "neutral" | "annoyed" | null;
   // Constrained fact tags (item #13) from the reply, e.g. "helmets-included".
@@ -918,11 +925,16 @@ const ON_SHOP_RX =
   /\b(only (?:at|in) (?:the )?shop|come (?:to|at) (?:the )?shop|no delivery|pick ?up at (?:the )?shop|you come (?:to )?(?:the )?shop|at shop only|in[- ]store only)\b/i;
 const ANNOYED_RX =
   /\b(go (?:to )?(them|others?)( then)?|stop asking|already told you|how many times|waste (?:my|our) time|no more|enough|final answer)\b/i;
+// The shop walks away from the deal ("that's OK you can take it there",
+// "not interested", "no thanks", "good luck") - the negotiation is over.
+const DECLINED_RX =
+  /\b(you can take it there|take (?:it|that) (?:one|offer|deal)( then)?|go with (?:them|the other)|not interested|no,? thank(?:s| you)[.! ]*$|good luck( then)?|we (?:can'?t|cannot) help|sorry,? (?:no|cannot))\b/i;
 
 export function readNegotiationSignals(text: string): {
   pickupOffered: boolean | null;
   onShopOnly: boolean | null;
   shopFirm: boolean | null;
+  shopDeclined: boolean | null;
   shopTone: "warm" | "neutral" | "annoyed" | null;
 } {
   const t = text || "";
@@ -930,6 +942,7 @@ export function readNegotiationSignals(text: string): {
     pickupOffered: PICKUP_RX.test(t) ? true : null,
     onShopOnly: ON_SHOP_RX.test(t) ? true : null,
     shopFirm: FIRM_RX.test(t) ? true : null,
+    shopDeclined: DECLINED_RX.test(t) ? true : null,
     shopTone: ANNOYED_RX.test(t) ? "annoyed" : null,
   };
 }
@@ -1013,7 +1026,8 @@ export async function extractOffer(
     '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
     '"fuelPolicy": string|null, "imageKind": "vehicle"|"price_sheet"|"document"|"other"|null, ' +
     '"pickupOffered": boolean|null, "onShopOnly": boolean|null, ' +
-    '"shopFirm": boolean|null, "shopTone": "warm"|"neutral"|"annoyed"|null, ' +
+    '"shopFirm": boolean|null, "shopDeclined": boolean|null, ' +
+    '"shopTone": "warm"|"neutral"|"annoyed"|null, ' +
     '"mileageKm": number|null, "conditionNotes": string|null, "imageSummary": string|null, ' +
     '"tags": string[] }. ' +
     "pickupOffered: true ONLY if the shop offered to come pick the TRAVELLER up " +
@@ -1029,6 +1043,10 @@ export async function extractOffer(
     "is never firm. " +
     "shopTone: how the shop sounds in THIS reply - 'annoyed' if irritated or " +
     "telling us to stop asking, 'warm' if friendly, else 'neutral'. " +
+    "shopDeclined: true ONLY if THIS reply walks away from the deal - tells the " +
+    "traveller to take the other shop's offer ('that's OK you can take it " +
+    "there'), says not interested / no thanks / can't help / goodbye. A refusal " +
+    "to LOWER a price is shopFirm, NOT shopDeclined. null when neither. " +
     "imageKind: ONLY when a photo is attached, classify it - \"vehicle\" if it is " +
     "a photo of the actual scooter/motorbike/car, \"price_sheet\" if it shows " +
     "prices/rates/a menu, \"document\" for papers/contracts/IDs, else \"other\"; " +
@@ -1046,7 +1064,23 @@ export async function extractOffer(
     "its own per-day price (e.g. Honda Click 125cc 300, Yamaha NMAX 155cc 500). " +
     "Pick the model row that MATCHES the traveller's request above (same class " +
     "and closest cc) and return THAT price with found=true, matchesSpec=true and " +
-    "the model name in vehicleDescription. The sheet may be in ANY language " +
+    "the model name in vehicleDescription. " +
+    "WHEN SEVERAL ROWS MATCH the requested class and cc, ALWAYS return the " +
+    "CHEAPEST matching row - the traveller wants the lowest price that fits, " +
+    "NEVER a premium/new-model/bigger-engine row when a cheaper matching row " +
+    "exists (e.g. asked: automatic 125cc; sheet has Yamaha Fino 125 at 280, " +
+    "Click 125 LED at 300, Click 125 New Model at 350 -> return 280, and name " +
+    "the cheaper alternatives in imageSummary). " +
+    "TRANSMISSION MATTERS: a 'semi automatic'/'semi-auto' model is NOT an " +
+    "automatic scooter - exclude semi-automatic rows when the traveller asked " +
+    "automatic (and vice versa); 'automatic'/CVT scooters (Click, Fino, Scoopy, " +
+    "Filano, PCX, NMAX...) match an automatic request. " +
+    "WEEKLY/MONTHLY COLUMNS: sheets often list both a day rate and a week rate " +
+    "('300 Baht/Day, 1,900 Baht/Week'). pricePerDay is the DAY rate of the " +
+    "chosen row, but ALWAYS spell out the weekly rate and its per-day value in " +
+    "imageSummary (1,900/7 = ~271/day) - for 7+ day rentals it is the honest " +
+    "bargaining anchor. " +
+    "The sheet may be in ANY language " +
     "(Thai, Hungarian, Indonesian...) - deposit lines like 'Letet: Utlevel vagy " +
     "3000 Baht' mean 'Deposit: passport or 3000 baht', so read deposit tiers per " +
     "model size too. Opening hours on the sheet (e.g. OPEN 08.00AM) are context, " +
@@ -1202,6 +1236,7 @@ export async function extractOffer(
       pickupOffered: e.pickupOffered === true || sig.pickupOffered === true ? true : null,
       onShopOnly: e.onShopOnly === true || sig.onShopOnly === true ? true : null,
       shopFirm: e.shopFirm === true || sig.shopFirm === true ? true : null,
+      shopDeclined: e.shopDeclined === true || sig.shopDeclined === true ? true : null,
       shopTone:
         e.shopTone === "annoyed" || sig.shopTone === "annoyed"
           ? "annoyed"

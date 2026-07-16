@@ -106,6 +106,8 @@ export type GraphCondition =
   | { kind: "eventIs"; event: GraphEventKind }
   // quote still far above the real floor (>25%) - leverage to keep pushing
   | { kind: "priceFarAboveFloor" }
+  // the shop walked away from the deal ("take it there") - stop gracefully
+  | { kind: "shopDeclinedDeal" }
   | { kind: "nodeRanBelow"; nodeId: string; max: number }
   | { kind: "notG"; of: GraphCondition }
   | { kind: "allG"; of: GraphCondition[] }
@@ -161,6 +163,10 @@ export interface ThreadFields {
   cashAlternativeAsked?: boolean; // passport -> cash push happens ONCE
   firmCount: number; // times the shop held firm on price
   toneDegraded: boolean; // the shop sounded annoyed - stop pushing
+  declined?: boolean; // the shop walked away - negotiation over
+  // Printed price-list anchor: the listed price of the chosen model. Keeps
+  // bargaining asks credible against a posted board (never deep lowballs).
+  sheetPricePerDay?: number;
   rounds: number; // bargain asks made in this thread
   lastTarget?: number; // our last asked price (concession ladder)
   lastLeverage?: string;
@@ -229,6 +235,7 @@ export interface GraphFacts {
   rounds: number;
   maxRounds: number; // settings.maxRoundsPerShop (roundsBelow default)
   toneDegraded: boolean;
+  shopDeclined: boolean; // the shop walked away - negotiation over
   dealComplete: boolean;
   pickupOffered: boolean;
   pickupConsent: boolean;

@@ -568,6 +568,22 @@ export default function Home() {
     }
   }
 
+  // REALTIME FEEL: the moment the app regains focus/visibility (user flips
+  // back from WhatsApp), bump this nonce - both pollers below depend on it,
+  // so they re-run their tick IMMEDIATELY instead of waiting a full interval.
+  const [syncNonce, setSyncNonce] = useState(0);
+  useEffect(() => {
+    const wake = () => {
+      if (!document.hidden) setSyncNonce((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    return () => {
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }, []);
+
   // Poll the consolidated activity endpoint while there are vendors on
   // screen (cheap, user-scoped). Pauses in hidden tabs - no wasted requests.
   useEffect(() => {
@@ -579,7 +595,7 @@ export default function Home() {
     tick();
     const id = setInterval(tick, pollCfg.activityMs);
     return () => clearInterval(id);
-  }, [session, vendors.length, refreshQueue, pollCfg.activityMs]);
+  }, [session, vendors.length, refreshQueue, pollCfg.activityMs, syncNonce]);
 
   // Reply-VERIFIED shop tags (item #13): one batched fetch per result set,
   // plus a slow refresh while the search is on screen - a shop's second
@@ -680,7 +696,7 @@ export default function Home() {
     tick();
     const id = setInterval(tick, pollCfg.repliesMs);
     return () => clearInterval(id);
-  }, [session, waiting, rfq, searchEpoch, pollCfg.repliesMs]);
+  }, [session, waiting, rfq, searchEpoch, pollCfg.repliesMs, syncNonce]);
 
   function runFunnel(list: Vendor[], _activeRfq: StructuredRFQ) {
     timers.current.forEach(clearTimeout);

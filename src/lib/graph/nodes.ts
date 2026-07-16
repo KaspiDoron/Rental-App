@@ -315,6 +315,11 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
           roundDirective,
           node.instructions ? `Owner guidance: ${node.instructions}` : "",
           args.leverageNote ? `Real leverage you may mention: ${args.leverageNote}.` : "",
+          // A posted price board is firmer than a spoken quote - acknowledge
+          // it and keep the ask credible, or the shop walks away.
+          f.sheetPricePerDay
+            ? `The shop POSTED a price list showing ${f.sheetPricePerDay} ${input.currency}/day for this model. Acknowledge their listed price warmly and keep your ask credible against the printed board - a deep lowball against a posted list insults the shop and kills the deal.`
+            : "",
           "Include exactly one warm emoji.",
         ]
           .filter(Boolean)

@@ -70,6 +70,8 @@ export function evalGraphCondition(cond: GraphCondition, facts: GraphFacts): boo
         return facts.event === cond.event;
       case "priceFarAboveFloor":
         return facts.priceFarAboveFloor;
+      case "shopDeclinedDeal":
+        return facts.shopDeclined;
       case "nodeRanBelow":
         return (facts.nodeRuns[cond.nodeId] ?? 0) < cond.max;
       case "notG":
@@ -123,6 +125,7 @@ export function factsFromLegacy(
     phase: "opening",
     priceKnown: ctx.hasUsablePrice,
     priceFarAboveFloor: false,
+    shopDeclined: false,
     depositKnown: false,
     fulfillmentKnown: false,
     depositPassportOnly: false,
@@ -181,6 +184,8 @@ function leafText(cond: GraphCondition): string {
       return "another shop in this session offered less";
     case "priceFarAboveFloor":
       return "the quote is still far above the market floor";
+    case "shopDeclinedDeal":
+      return "the shop walked away from the deal";
     case "shopAskedQuestion":
       return "the shop asked us a question";
     case "shopSentVehiclePhoto":
@@ -291,6 +296,7 @@ export const CONDITION_VOCABULARY: {
   { kind: "targetIsRealSaving", label: "our target is a real saving", params: [{ name: "value", type: "boolean" }] },
   { kind: "rivalCheaper", label: "a rival shop offered less" },
   { kind: "priceFarAboveFloor", label: "quote far above the floor (>25%)" },
+  { kind: "shopDeclinedDeal", label: "the shop walked away" },
   { kind: "counterBelow", label: "legacy counter below", params: [{ name: "counter", type: "enum", options: ["clarify", "bargain", "answer", "close"] }, { name: "max", type: "number" }] },
   { kind: "counterAtLeast", label: "legacy counter at least", params: [{ name: "counter", type: "enum", options: ["clarify", "bargain", "answer", "close"] }, { name: "min", type: "number" }] },
   { kind: "phaseIs", label: "thread phase is", params: [{ name: "phase", type: "enum", options: ["opening", "awaiting_price", "negotiating", "collecting_terms", "complete", "presented", "closing", "closed", "dead"] }] },

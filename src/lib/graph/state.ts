@@ -100,6 +100,10 @@ export function applyExtractionToState(
     f.priceVerified = Boolean(
       extraction.found && extraction.matchesSpec && extraction.confidence === "high"
     );
+    // A PRINTED price list is a firmer anchor than a spoken quote - remember
+    // the listed price so the bargaining ladder keeps its asks credible
+    // (deep lowballs against a posted board kill deals).
+    if (extraction.imageKind === "price_sheet") f.sheetPricePerDay = usablePrice;
   }
   if (extraction.depositType) {
     f.depositType = extraction.depositType;
@@ -136,6 +140,9 @@ export function applyExtractionToState(
   // before it started - that exact case froze a 300-vs-160-floor negotiation.
   if (extraction.shopFirm === true && f.pricePerDay) f.firmCount = (f.firmCount ?? 0) + 1;
   if (extraction.shopTone === "annoyed") f.toneDegraded = true;
+  // The shop walked away ("take it there") - the negotiation is OVER. One warm
+  // goodbye at most, then silence; the UI shows the thread as declined.
+  if (extraction.shopDeclined === true) f.declined = true;
 
   const next = { ...state, fields: f };
   next.phase = derivePhase(next);

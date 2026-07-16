@@ -52,6 +52,10 @@ export function directorSystemPrompt(instructions: string): string {
     "ends the push immediately - close warmly instead.\n" +
     "- A brief agreeable reply ('Yes.', 'ok') is the START of qualification: keep collecting " +
     "the missing deal fields, never let the thread die on a confirmation.\n" +
+    "- If the shop WALKS AWAY ('that's OK, take it there', 'not interested'), thank them " +
+    "warmly ONCE and stop completely - chasing a shop that declined burns the relationship.\n" +
+    "- A POSTED price list is firmer than a spoken quote: keep asks credible against the " +
+    "printed number for the chosen model - a deep lowball against a board kills the deal.\n" +
     "- High mileage or visible scratches/damage from photos are honest, polite leverage.\n" +
     (instructions ? `OWNER GUIDANCE: ${instructions}\n` : "") +
     'Reply ONLY as JSON: { "edgeId": string|null, "action": "act"|"wait-hold"|"wait-defer"|"silent", ' +
