@@ -173,7 +173,13 @@ per Evolution host) - so 25 testers fit on one host; hundreds of users need
    currently silent rows an admin must go look for.
 3. **Run the updated `supabase/schema.sql`** - this pass added the three
    missing hot-path indexes (`raw->>'sender'`, `from_number`,
-   `wa_outbox.sender_key`).
+   `wa_outbox.sender_key`), plus the **feedback threads** additions
+   (`feedback_replies` table, `feedback.user_seen_at`, `feedback_reporter_idx`).
+   All additive/`if not exists` - safe to re-run. Until it runs, feedback
+   threads degrade gracefully (reads return empty, no crash); replies persist
+   only after the migration. The **messaging capacity redesign needs NO
+   migration** - the rolling window is counted from existing `whatsapp_messages`
+   RFQ rows.
 4. **Raise Evolution capacity intentionally**: one host ≈ 40 users; add hosts
    to the pool before invites outgrow it.
 5. **Lemon Squeezy live-mode checklist**: store, variants, webhook secret set
