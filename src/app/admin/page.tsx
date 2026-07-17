@@ -61,6 +61,95 @@ interface FeedbackRow {
   status?: string;
   owner_note?: string | null;
   created_at: string;
+  replies?: {
+    id: number;
+    author_role: string;
+    author_email: string | null;
+    body: string;
+    created_at: string;
+  }[];
+}
+
+/** User-visible reply thread on a feedback report (owner/admin side). Distinct
+ *  from the internal owner_note - this is what the reporter reads and answers. */
+function AdminReplyThread({
+  report,
+  onReplied,
+}: {
+  report: FeedbackRow;
+  onReplied: (reply: NonNullable<FeedbackRow["replies"]>[number]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const replies = report.replies ?? [];
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/feedback/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedbackId: report.id, body: text }),
+      });
+      if (res.ok) {
+        onReplied({
+          id: Date.now(),
+          author_role: "owner",
+          author_email: null,
+          body: text,
+          created_at: new Date().toISOString(),
+        });
+        setDraft("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-line bg-card2/40 p-1.5">
+      <div className="text-[9px] font-extrabold uppercase tracking-wide text-faint">
+        Reply to the user{report.reporter_email ? "" : " (anonymous - no reply channel)"}
+      </div>
+      {replies.length > 0 && (
+        <div className="mt-1 space-y-1">
+          {replies.map((rp) => (
+            <div
+              key={rp.id}
+              className={`text-[11px] ${
+                rp.author_role === "user" ? "text-strong" : "text-brandblue"
+              }`}
+            >
+              <b>{rp.author_role === "user" ? "User" : "Team"}:</b> {rp.body}
+            </div>
+          ))}
+        </div>
+      )}
+      {report.reporter_email && (
+        <div className="mt-1 flex items-center gap-1.5">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") send();
+            }}
+            disabled={busy}
+            placeholder="Write a reply the user will see..."
+            className="h-8 min-w-0 flex-1 rounded-lg border-2 border-line bg-card px-2 text-[11px] text-strong focus:border-brandblue focus:outline-none disabled:opacity-60"
+          />
+          <button
+            onClick={send}
+            disabled={busy || !draft.trim()}
+            className="btn btn-sm btn-primary h-8 shrink-0 rounded-lg px-2.5 text-[10px] font-extrabold disabled:opacity-50"
+          >
+            Send
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function AdminPage() {
@@ -2066,6 +2155,18 @@ export default function AdminPage() {
                   }
                 }}
                 className="mt-1.5 w-full rounded-lg border-2 border-line bg-card p-1.5 text-[11px] text-strong focus:border-brandblue focus:outline-none"
+              />
+              {/* User-visible reply thread (distinct from the internal note
+                  above): what the reporter reads and can answer in Your reports. */}
+              <AdminReplyThread
+                report={f}
+                onReplied={(reply) =>
+                  setFeedbackRows((rows) =>
+                    rows.map((r) =>
+                      r.id === f.id ? { ...r, replies: [...(r.replies ?? []), reply] } : r
+                    )
+                  )
+                }
               />
               {/* Delete this report for good (spam / resolved noise) */}
               <div className="mt-1.5 flex justify-end">

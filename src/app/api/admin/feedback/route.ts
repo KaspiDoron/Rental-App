@@ -29,8 +29,39 @@ export async function GET() {
     (byId[img.feedback_id] ??= []).push(img.data_url);
   }
 
+  // Attach the reply thread for each report so management sees the full,
+  // two-way conversation (user replies + prior owner/admin answers).
+  let replies: {
+    id: number;
+    feedback_id: number;
+    author_role: string;
+    author_email: string | null;
+    body: string;
+    created_at: string;
+  }[] = [];
+  if (rows.length) {
+    const ids = rows.map((r) => r.id).join(",");
+    replies = await sbSelect<{
+      id: number;
+      feedback_id: number;
+      author_role: string;
+      author_email: string | null;
+      body: string;
+      created_at: string;
+    }>(
+      "feedback_replies",
+      `select=id,feedback_id,author_role,author_email,body,created_at&feedback_id=in.(${ids})&order=created_at.asc&limit=500`
+    ).catch(() => []);
+  }
+  const repliesById: Record<number, typeof replies> = {};
+  for (const r of replies) (repliesById[r.feedback_id] ??= []).push(r);
+
   return NextResponse.json({
-    feedback: rows.map((r) => ({ ...r, images: byId[r.id] ?? [] })),
+    feedback: rows.map((r) => ({
+      ...r,
+      images: byId[r.id] ?? [],
+      replies: repliesById[r.id] ?? [],
+    })),
   });
 }
 

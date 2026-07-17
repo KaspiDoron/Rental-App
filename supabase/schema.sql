@@ -438,6 +438,24 @@ alter table public.feedback add column if not exists status     text default 'op
 alter table public.feedback add column if not exists owner_note text;
 alter table public.feedback add column if not exists resolved_at timestamptz;
 
+-- ---- Feedback threads (user <-> owner/admin conversation per report) ----------
+-- Each report becomes a real, two-way thread the reporter can see and reply to.
+-- `user_seen_at` powers the unread badge (a reply newer than this is unread).
+alter table public.feedback add column if not exists user_seen_at timestamptz;
+create index if not exists feedback_reporter_idx
+  on public.feedback (reporter_email, created_at desc);
+create table if not exists public.feedback_replies (
+  id           bigint generated always as identity primary key,
+  feedback_id  bigint not null,
+  author_email text,
+  author_role  text not null default 'user',  -- 'user' | 'admin' | 'owner'
+  body         text not null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists feedback_replies_fid_idx
+  on public.feedback_replies (feedback_id, created_at);
+alter table public.feedback_replies enable row level security;
+
 -- ---- Shop intelligence (New#18): tag offers with area + vehicle bucket ---------
 -- So we can aggregate real market data by area and vehicle type (lowest /
 -- highest / typical price, rental duration, delivery signal) for the owner.
