@@ -285,20 +285,23 @@ export async function GET(req: Request) {
 
   items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 
-  // Same shape as /api/queue so the existing queue card keeps working.
+  // Same shape as /api/queue so the existing queue card keeps working. The
+  // reason is the guard's REAL stored reason translated honestly - a pacing
+  // hold must never masquerade as "shop closed".
+  const { queueReasonLabel } = await import("@/lib/queue-reason");
   const queue = outbox.map((r) => {
     const at = Date.parse(r.not_before);
+    const meta = r.meta as { vendorId?: string; vendorName?: string; reason?: string; kind?: string } | null;
     return {
       id: r.id,
-      vendorId: r.meta?.vendorId ?? null,
-      vendorName: r.meta?.vendorName ?? null,
+      vendorId: meta?.vendorId ?? null,
+      vendorName: meta?.vendorName ?? null,
       toNumber: r.to_number,
       notBefore: r.not_before,
       due: at <= now,
-      reason:
-        at > now
-          ? "Waiting for the shop to open - it sends automatically then."
-          : "Sending shortly - open shops are messaged first.",
+      kind: meta?.kind ?? null,
+      reason: at <= now ? "Sending shortly" : queueReasonLabel(meta?.reason),
+      rawReason: meta?.reason ?? null,
     };
   });
 

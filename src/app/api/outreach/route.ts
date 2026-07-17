@@ -202,6 +202,9 @@ export async function POST(req: Request) {
       sent: false,
       queued: Boolean(guard.queuedUntil),
       queuedUntil: guard.queuedUntil,
+      // The guard's REAL reason - the card renders it honestly (a pacing hold
+      // must never be shown as "shop closed").
+      queuedReason: guard.queuedUntil ? guard.reason ?? null : null,
       halted,
       error: halted
         ? "This shop was already asked - your agent keeps the existing conversation going instead of re-sending the question."

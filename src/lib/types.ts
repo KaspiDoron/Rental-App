@@ -127,6 +127,9 @@ export interface Vendor {
   sentGloss?: string;
   lastEventAt?: number;
   queuedUntil?: string;
+  // The anti-ban guard's RAW hold reason ("human pacing gap", "shop is closed
+  // now"...) - cards translate it honestly instead of guessing "shop closed".
+  queuedReason?: string;
 }
 
 export interface VendorReview {

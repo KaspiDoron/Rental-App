@@ -137,6 +137,7 @@ export async function POST(req: Request) {
     sent: boolean;
     queued?: boolean;
     queuedUntil?: string;
+    queuedReason?: string;
     reason?: string;
     text?: string;
     gloss?: string;
@@ -184,6 +185,8 @@ export async function POST(req: Request) {
         sent: false,
         queued: Boolean(guard.queuedUntil),
         queuedUntil: guard.queuedUntil ? new Date(guard.queuedUntil).toISOString() : undefined,
+        // Raw guard reason so the card can explain the hold honestly.
+        queuedReason: guard.queuedUntil ? guard.reason ?? undefined : undefined,
         reason: guard.queuedUntil ? "queued" : guard.reason,
       });
       continue;

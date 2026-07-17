@@ -9,6 +9,7 @@ import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency } from "@/lib/currency";
+import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
 import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
 
@@ -46,9 +47,9 @@ function VendorCardInner({
   onReviews: (vendor: Vendor) => void;
   onBargain: (vendor: Vendor) => void;
   onStage: (vendorId: string, stage: Vendor["stage"]) => void;
-  // A send was parked in the outbox - stamp queuedUntil instantly so every
-  // surface (status strip, card button) agrees without waiting for a poll.
-  onQueued?: (vendorId: string, queuedUntil?: string) => void;
+  // A send was parked in the outbox - stamp queuedUntil + the guard's real
+  // reason instantly so every surface agrees without waiting for a poll.
+  onQueued?: (vendorId: string, queuedUntil?: string, queuedReason?: string) => void;
   onCustomMessage: (
     vendorId: string,
     message: string
@@ -80,6 +81,12 @@ function VendorCardInner({
     vendor.stage ?? ""
   );
   const askDone = alreadyAsked || rfqState === "sent" || rfqState === "queued";
+  // The user removed the queued message (server truth cleared queuedUntil):
+  // this card's local "queued" latch must release too, so the button honestly
+  // returns to "Ask for price" instead of staying stuck on a dead queue.
+  useEffect(() => {
+    if (rfqState === "queued" && !vendor.queuedUntil) setRfqState("idle");
+  }, [rfqState, vendor.queuedUntil]);
   // TRUTH RULE: a message held in the outbox is QUEUED, never "Sent".
   // vendor.queuedUntil is the server-reconciled source (survives remounts),
   // rfqState covers the instant before the first poll.
@@ -132,13 +139,12 @@ function VendorCardInner({
         onStage(vendor.id, "rfq-sent");
         setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200);
       } else if (d.queued) {
-        // Shop is closed: the anti-ban engine queued the message for their
-        // opening hours - it WILL go out, so the ask is spent. Stamp the
-        // queued-until immediately so the status strip and this card agree
-        // NOW, not after the next poll.
+        // The anti-ban engine parked the message (shop closed, safe pacing,
+        // daily limit...). NOTHING was delivered, so the stage must NOT claim
+        // "RFQ sent" - the queued badge is the whole truth. Stamp queuedUntil
+        // + the real reason immediately so strip and card agree NOW.
         setRfqState("queued");
-        onStage(vendor.id, "rfq-sent");
-        onQueued?.(vendor.id, d.queuedUntil);
+        onQueued?.(vendor.id, d.queuedUntil, d.queuedReason);
       } else if (d.halted) {
         // Already asked and awaiting the reply (server-side truth).
         setRfqState("sent");
@@ -324,11 +330,13 @@ function VendorCardInner({
         </div>
 
         <div className="mt-3">
-          {/* Held for the shop's opening hours - it sends automatically then.
-              The user can also remove it from the status panel above. */}
+          {/* A held message shows the guard's REAL reason (shop closed / safe
+              pacing / daily limit) + an honest ETA. The user can remove it
+              from the status panel above. */}
           {vendor.queuedUntil && !offer && (
             <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-              🕘 {t("Waiting for the shop to open - sends automatically")}
+              🕘 {t(queueReasonLabel(vendor.queuedReason))}
+              {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
             </div>
           )}
           {riskNote && (
@@ -571,8 +579,9 @@ function VendorCardInner({
                   <LoadingDots light label={t("Sending")} />
                 ) : queuedActive ? (
                   // Queued is queued - it must NEVER read as "Sent", even
-                  // after a remount (queuedActive derives from server state).
-                  `🕘 ${t("Queued - sends when the shop opens")}`
+                  // after a remount (queuedActive derives from server state),
+                  // and the reason is the guard's real one, never a guess.
+                  `🕘 ${t(queueReasonLabel(vendor.queuedReason))}`
                 ) : askDone ? (
                   `✓ ${t("Sent - reply lands here")}`
                 ) : waConnected ? (

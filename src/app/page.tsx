@@ -474,10 +474,15 @@ export default function Home() {
   const handleStage = useCallbackRef((id: string, stage: Vendor["stage"]) =>
     patchVendor(id, { stage })
   );
-  // A send was parked in the outbox: stamp queuedUntil NOW so the status
-  // strip and the card agree instantly (the activity poll keeps it fresh).
-  const handleQueued = useCallbackRef((id: string, queuedUntil?: string) =>
-    patchVendor(id, { queuedUntil: queuedUntil ?? new Date().toISOString() })
+  // A send was parked in the outbox: stamp queuedUntil + the guard's REAL
+  // reason NOW so strip and card agree instantly (the activity poll keeps it
+  // fresh). Nothing was delivered, so the stage is deliberately untouched.
+  const handleQueued = useCallbackRef(
+    (id: string, queuedUntil?: string, queuedReason?: string) =>
+      patchVendor(id, {
+        queuedUntil: queuedUntil ?? new Date().toISOString(),
+        queuedReason: queuedReason || undefined,
+      })
   );
   const openWhy = useCallbackRef((decisionId: string) => setWhyDecision(decisionId));
 
@@ -564,19 +569,46 @@ export default function Home() {
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
-      const items: { vendorId: string | null; notBefore: string }[] = Array.isArray(d.queue) ? d.queue : [];
+      const items: { vendorId: string | null; notBefore: string; rawReason?: string | null }[] =
+        Array.isArray(d.queue) ? d.queue : [];
       setQueueItems(d.queue ?? []);
       // Reconcile the cards with the SERVER (single source of truth for the
-      // queued badge, covering every send path): set the badge for shops with a
-      // held message, clear it once that message leaves the outbox (sent/removed).
-      const byVendor = new Map<string, string>();
-      for (const i of items) if (i.vendorId) byVendor.set(i.vendorId, i.notBefore);
+      // queued badge, covering every send path): set badge + REAL reason for
+      // shops with a held message; when the row leaves the outbox, decide
+      // HONESTLY what happened using delivery evidence from the same payload:
+      //   sent event exists  -> the message left: the shop is now contacted
+      //   no sent evidence   -> it was removed: the shop goes back to "found"
+      //                         (never a phantom "messaged")
+      const byVendor = new Map<string, { until: string; reason?: string | null }>();
+      for (const i of items)
+        if (i.vendorId) byVendor.set(i.vendorId, { until: i.notBefore, reason: i.rawReason });
+      const sentVendors = new Set<string>(
+        (Array.isArray(d.items) ? d.items : [])
+          .filter((it: { kind?: string; vendorId?: string }) => it.kind === "sent" && it.vendorId)
+          .map((it: { vendorId: string }) => it.vendorId)
+      );
       setVendors((vs) =>
         vs.map((v) => {
           if (v.offer || !v.id) return v; // an offer supersedes any queue badge
-          const until = byVendor.get(v.id);
-          if (until && v.queuedUntil !== until) return { ...v, queuedUntil: until };
-          if (!until && v.queuedUntil) return { ...v, queuedUntil: undefined };
+          const held = byVendor.get(v.id);
+          if (held && (v.queuedUntil !== held.until || v.queuedReason !== (held.reason ?? undefined))) {
+            return { ...v, queuedUntil: held.until, queuedReason: held.reason ?? undefined };
+          }
+          if (!held && v.queuedUntil) {
+            const delivered = sentVendors.has(v.id);
+            return {
+              ...v,
+              queuedUntil: undefined,
+              queuedReason: undefined,
+              stage: delivered
+                ? v.stage === "found" || v.stage === "rfq-sent"
+                  ? "awaiting-response"
+                  : v.stage
+                : v.stage === "rfq-sent"
+                  ? "found"
+                  : v.stage,
+            };
+          }
           return v;
         })
       );
@@ -586,21 +618,38 @@ export default function Home() {
   });
 
   async function removeQueued(id: number, vendorId: string | null) {
-    setQueueItems((items) => items.filter((i) => i.id !== id));
-    if (vendorId) patchVendor(vendorId, { queuedUntil: undefined, lastEventAt: Date.now() });
+    // Optimistic clear: remove EVERY item for this shop (the server sweep
+    // below matches), revert a never-delivered ask back to "Ask for price".
+    setQueueItems((items) => items.filter((i) => i.id !== id && (!vendorId || i.vendorId !== vendorId)));
+    if (vendorId) {
+      setVendors((vs) =>
+        vs.map((v) =>
+          v.id === vendorId
+            ? {
+                ...v,
+                queuedUntil: undefined,
+                queuedReason: undefined,
+                lastEventAt: Date.now(),
+                stage: v.stage === "rfq-sent" ? "found" : v.stage,
+              }
+            : v
+        )
+      );
+    }
     try {
-      // SERVER-AUTHORITATIVE: the response says whether WE removed the row.
-      // If a drainer claimed it first, the message already left - tell the
-      // user honestly instead of letting a "removed" item send later.
+      // SERVER-AUTHORITATIVE + ID-CHURN PROOF: the drain loop re-queues held
+      // rows under new ids, so the server sweeps EVERY pending row for this
+      // shop (not just the tapped id). "sent" comes back only with real
+      // delivery evidence - never inferred from a lost id race.
       const res = await fetch("/api/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", id }),
+        body: JSON.stringify({ action: "delete", id, vendorId }),
       });
       const d = await res.json().catch(() => ({ removed: true }));
-      if (d.removed === false) {
+      if (d.sent === true) {
         setMassNote(t("Too late to remove that one - it had already left for the shop."));
-        if (vendorId) patchVendor(vendorId, { stage: "rfq-sent", lastEventAt: Date.now() });
+        if (vendorId) patchVendor(vendorId, { stage: "awaiting-response", lastEventAt: Date.now() });
       }
     } finally {
       refreshQueue();
@@ -992,10 +1041,11 @@ export default function Home() {
               queuedUntil: undefined,
             });
           } else if (r.queued) {
-            // Held for the shop's opening hours - show it on the card
-            // and in the user-facing queue (they can wait or remove).
+            // Held by the guard (shop closed / pacing / limit) - show the
+            // REAL reason on the card and in the user-facing queue.
             patchVendor(r.id, {
               queuedUntil: r.queuedUntil ?? new Date().toISOString(),
+              queuedReason: r.queuedReason || undefined,
               lastEventAt: Date.now(),
             });
           } else if (String(r.reason ?? "").startsWith("rfq-dedup")) {

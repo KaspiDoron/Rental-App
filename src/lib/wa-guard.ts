@@ -798,7 +798,15 @@ export async function guardOutbound(opts: {
   if (opts.auto && opts.shopOpenNow !== true) {
     const { off, known } = resolveOffset(opts.toDigits, region);
     if (opts.shopOpenNow === false) {
-      return await queue(nextBusinessOpen(opts.toDigits, p, region), "shop is closed now");
+      // Google says closed. If it is DAYTIME at the shop (lunch break, late
+      // opening), retry within the hour instead of parking until tomorrow
+      // morning - the old behavior turned a 13:00 opening into a 22h wait.
+      const localH = (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
+      const daytime = known && localH >= p.business_hour_start && localH < p.business_hour_end;
+      const until = daytime
+        ? new Date(Date.now() + (45 + Math.random() * 30) * 60_000).toISOString()
+        : nextBusinessOpen(opts.toDigits, p, region);
+      return await queue(until, "shop is closed now");
     }
     if (known) {
       const localHour =

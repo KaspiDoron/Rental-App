@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect, sbDelete } from "@/lib/runtime-config";
+import { sbSelect } from "@/lib/runtime-config";
+import { queueReasonLabel } from "@/lib/queue-reason";
 
 // USER-facing queued-message viewer (bug #9). Every traveller can see the
-// messages the anti-ban engine is holding for them (shop closed / paced) and
-// decide: WAIT for the shop to open, or REMOVE the queued message. Strictly
-// scoped to the signed-in user's own sender_key - a user never sees or touches
-// another user's queue. (The owner has a separate global view in Admin.)
+// messages the anti-ban engine is holding for them - with the REAL reason
+// (shop closed / safe pacing / daily limit / paused), never a made-up one -
+// and decide: WAIT, or REMOVE them. Strictly scoped to the signed-in user's
+// own sender_key.
 
 interface OutboxRow {
   id: number;
@@ -21,8 +22,8 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ items: [] }, { status: 401 });
 
-  // Opportunistic drain: this endpoint is polled every ~20s while the app is
-  // open, so due messages actually leave even without the external cron.
+  // Opportunistic drain: this endpoint is polled while the app is open, so
+  // due messages actually leave even without the external cron.
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
@@ -50,11 +51,10 @@ export async function GET() {
       toNumber: r.to_number,
       notBefore: r.not_before,
       due: at <= now,
-      // Friendly, user-facing reason (no anti-ban jargon).
-      reason:
-        at > now
-          ? "Waiting for the shop to open - it sends automatically then."
-          : "Sending shortly - open shops are messaged first.",
+      kind: r.meta?.kind ?? null,
+      // The guard's REAL stored reason, translated honestly.
+      reason: at <= now ? "Sending shortly" : queueReasonLabel(r.meta?.reason),
+      rawReason: r.meta?.reason ?? null,
     };
   });
 
@@ -66,18 +66,50 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   const body = await req.json().catch(() => ({}));
 
-  if (body.action === "delete" && body.id) {
-    // Ownership guard: only delete a row that belongs to THIS user.
-    // ATOMIC TRUTH: delete-with-return tells us whether WE actually removed
-    // the row. If a concurrent drainer already claimed it (delete-returning
-    // is the claim), the message is on its way - the client must know the
-    // removal LOST the race instead of silently pretending it worked.
+  if (body.action === "delete" && (body.id || body.vendorId)) {
     const { sbDeleteReturning } = await import("@/lib/runtime-config");
-    const removed = await sbDeleteReturning<{ id: number }>(
-      "wa_outbox",
-      `id=eq.${Number(body.id)}&sender_key=eq.${encodeURIComponent(session.email)}`
-    ).catch(() => []);
-    return NextResponse.json({ ok: true, removed: removed.length > 0 });
+    const vendorId = body.vendorId ? String(body.vendorId).slice(0, 200) : null;
+
+    // 1) The row the user tapped (ownership-scoped).
+    let removed = body.id
+      ? await sbDeleteReturning<{ id: number; to_number: string }>(
+          "wa_outbox",
+          `id=eq.${Number(body.id)}&sender_key=eq.${encodeURIComponent(session.email)}`
+        ).catch(() => [])
+      : [];
+
+    // 2) VENDOR-WIDE sweep: the drain loop re-queues held messages under NEW
+    //    row ids (pacing re-checks), so deleting one stale id used to lose the
+    //    race and the "removed" message popped right back. The user's intent
+    //    is "do not message this shop" - remove EVERY pending row for it.
+    if (vendorId) {
+      const swept = await sbDeleteReturning<{ id: number; to_number: string }>(
+        "wa_outbox",
+        `sender_key=eq.${encodeURIComponent(session.email)}&meta->>vendorId=eq.${encodeURIComponent(
+          vendorId
+        )}`
+      ).catch(() => []);
+      removed = [...removed, ...swept];
+    }
+    if (removed.length > 0) {
+      return NextResponse.json({ ok: true, removed: true, count: removed.length });
+    }
+
+    // 3) Nothing pending. Honest verdict: did it actually LEAVE (a real
+    //    outbound in the last 15 min), or was there simply nothing left?
+    let sent = false;
+    if (vendorId) {
+      const recent = await sbSelect<{ id: number }>(
+        "whatsapp_messages",
+        `select=id&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+          session.email
+        )}&raw->>vendorId=eq.${encodeURIComponent(vendorId)}&received_at=gte.${encodeURIComponent(
+          new Date(Date.now() - 15 * 60_000).toISOString()
+        )}&limit=1`
+      ).catch(() => []);
+      sent = recent.length > 0;
+    }
+    return NextResponse.json({ ok: true, removed: !sent, sent });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
