@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { queueReasonLabel } from "@/lib/queue-reason";
+import { digitsOnly } from "@/lib/phone";
 
 // USER-facing queued-message viewer (bug #9). Every traveller can see the
 // messages the anti-ban engine is holding for them - with the REAL reason
@@ -91,7 +92,7 @@ export async function POST(req: Request) {
     //    re-initiates) and purge that thread's pending wakeups exactly.
     const digitsSet = new Set(removed.map((r) => r.to_number).filter(Boolean));
     if (body.toNumber) {
-      const d = String(body.toNumber).replace(/[^\d]/g, "");
+      const d = digitsOnly(String(body.toNumber));
       if (d) digitsSet.add(d);
     }
     const { cancelSends } = await import("@/lib/wa/cancellations");

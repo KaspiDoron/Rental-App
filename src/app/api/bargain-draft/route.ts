@@ -3,6 +3,7 @@ import { composeBargain, runSafety, currencyForRegion } from "@/lib/agents";
 import { getSession } from "@/lib/session";
 import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
+import { digitsOnly } from "@/lib/phone";
 
 // Adaptive Bargaining Agent: composes the next negotiation message to send.
 // This is the SAME brain the automatic funnel uses - market-floor anchored
@@ -73,7 +74,7 @@ export async function POST(req: Request) {
   // sender, inbound by receiver) - never another user's thread.
   let history: string | undefined;
   try {
-    const digits = String(vendor.whatsapp ?? "").replace(/[^\d]/g, "");
+    const digits = digitsOnly(String(vendor.whatsapp ?? ""));
     const out = await sbSelect<{
       direction: string;
       body: string | null;

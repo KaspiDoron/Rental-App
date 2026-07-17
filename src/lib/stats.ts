@@ -4,8 +4,8 @@
 
 import "server-only";
 import { sbSelect, sbInsert, supabaseConfigured } from "./runtime-config";
+import { digitsOnly } from "./phone";
 
-const digitsOnly = (s: string) => s.replace(/[^\d]/g, "");
 
 /**
  * On a shop's FIRST reply, record how long it took since our first outbound

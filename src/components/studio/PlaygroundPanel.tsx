@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { PlaceAutocomplete } from "../PlaceAutocomplete";
 import { LoadingDots } from "../LoadingDots";
 import { CoachBox } from "./CoachBox";
+import { digitsOnly } from "@/lib/phone";
 
 // The interactive Playground: YOU are the rental shop (or an AI persona is),
 // chatting against the REAL negotiation engine turn by turn - same graph, same
@@ -355,7 +356,7 @@ export function PlaygroundPanel() {
               Rival offer in this session (cross-shop leverage, optional)
               <input
                 value={rival}
-                onChange={(e) => setRival(e.target.value.replace(/[^\d]/g, ""))}
+                onChange={(e) => setRival(digitsOnly(e.target.value))}
                 inputMode="numeric"
                 placeholder="e.g. 200"
                 className="mt-1 w-full rounded-xl border-2 border-line bg-card p-2 text-[16px] text-strong"

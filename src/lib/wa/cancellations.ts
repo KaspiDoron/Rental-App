@@ -1,5 +1,6 @@
 import "server-only";
 import { getConfig, sbDelete, sbInsert, sbSelectStrict } from "../runtime-config";
+import { digitsOnly } from "../phone";
 
 // Cancellation tombstones - the "absolute queue deletion" guarantee.
 //
@@ -27,7 +28,7 @@ export async function cancelSends(
   toDigits: string,
   reason: CancelReason
 ): Promise<boolean> {
-  const digits = toDigits.replace(/[^\d]/g, "");
+  const digits = digitsOnly(toDigits);
   if (!senderKey || !digits) return false;
   // Upsert on (sender_key, to_number): re-cancelling refreshes the reason.
   return sbInsert(
@@ -39,7 +40,7 @@ export async function cancelSends(
 
 /** Remove the tombstone - called by every EXPLICIT user send action. */
 export async function clearCancellation(senderKey: string, toDigits: string): Promise<void> {
-  const digits = toDigits.replace(/[^\d]/g, "");
+  const digits = digitsOnly(toDigits);
   if (!senderKey || !digits) return;
   await sbDelete(
     "wa_cancellations",
@@ -59,7 +60,7 @@ export async function isCancelled(
   senderKey: string,
   toDigits: string
 ): Promise<boolean | null> {
-  const digits = toDigits.replace(/[^\d]/g, "");
+  const digits = digitsOnly(toDigits);
   if (!senderKey || !digits) return false;
   if (!(await cancelGuardEnabled())) return false;
   const res = await sbSelectStrict<{ id: number }>(
@@ -111,7 +112,7 @@ export async function recordSuppressedSend(
   await sbInsert("agent_events", [
     {
       kind,
-      detail: `Automated message to +${toDigits.replace(/[^\d]/g, "")} suppressed (${
+      detail: `Automated message to +${digitsOnly(toDigits)} suppressed (${
         kind === "cancelled-send-blocked" ? "user removed queued messages" : "human takeover"
       }) for ${senderKey}.`,
     },

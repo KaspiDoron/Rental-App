@@ -14,6 +14,7 @@ import { startNav } from "@/components/NavVeil";
 import { Icon } from "@/components/icons";
 import { TrustPanel } from "@/components/landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
+import { digitsOnly } from "@/lib/phone";
 
 declare global {
   interface Window {
@@ -418,7 +419,7 @@ export default function LoginPage() {
             autoComplete="one-time-code"
             maxLength={6}
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/[^\d]/g, ""))}
+            onChange={(e) => setCode(digitsOnly(e.target.value))}
             placeholder="123456"
             className="w-full rounded-2xl border-2 border-line bg-card p-3 text-center font-mono text-2xl font-extrabold tracking-[0.4em] text-strong focus:border-brandblue focus:outline-none"
           />

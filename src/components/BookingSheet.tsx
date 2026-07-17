@@ -8,6 +8,7 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { PlaceAutocomplete } from "./PlaceAutocomplete";
 import { LoadingDots } from "./LoadingDots";
+import { digitsOnly } from "@/lib/phone";
 
 type Step = "verify" | "schedule" | "confirmed";
 
@@ -140,7 +141,7 @@ export function BookingSheet({
       const d = await res.json();
       setNotify(d.sent ? "sent" : "queued");
       setDisconnected(Boolean(d.disconnected));
-      setWaLink(d.waLink ?? (vendor.whatsapp ? `https://wa.me/${vendor.whatsapp.replace(/[^\d]/g, "")}` : null));
+      setWaLink(d.waLink ?? (vendor.whatsapp ? `https://wa.me/${digitsOnly(vendor.whatsapp)}` : null));
     } catch {
       setNotify("failed");
     }

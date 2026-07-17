@@ -4,6 +4,7 @@
 // the migration ran (golden rule: everything degrades gracefully).
 
 import type { ExtractedOffer } from "../agents";
+import { digitsOnly } from "../phone";
 import type {
   FulfillmentKind,
   NegotiationThreadState,
@@ -12,7 +13,7 @@ import type {
 } from "./types";
 
 export function threadKeyFor(userEmail: string | undefined, toDigits: string): string {
-  return `${userEmail ?? "system"}:${toDigits.replace(/[^\d]/g, "")}`;
+  return `${userEmail ?? "system"}:${digitsOnly(toDigits)}`;
 }
 
 export function newThreadState(args: {

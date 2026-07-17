@@ -67,6 +67,11 @@ export function fromIls(ils: number, code: string): string {
  * Format an amount that is ALREADY in the shop's local currency (offers come
  * from vendor replies in their own money - never convert, never force "$").
  */
+/** Just the symbol for a currency code ("THB" -> "฿", unknown -> "$"). */
+export function currencySymbol(code?: string): string {
+  return moneyLocal(0, code).replace(/[\d.,\s]/g, "") || "$";
+}
+
 export function moneyLocal(amount: number, code?: string): string {
   const c = CURRENCIES.find((x) => x.code === (code ?? "").toUpperCase());
   const n =

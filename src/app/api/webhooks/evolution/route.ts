@@ -25,6 +25,7 @@ import {
 // Shared with wa-sync so BOTH ingestion paths enforce the same gate (a
 // second copy is how the drill window got skipped on the recovery path).
 import { isVendorThread } from "@/lib/drill";
+import { digitsOnly } from "@/lib/phone";
 
 // The region of the last outbound to this shop - primes the voice transcriber
 // for the local accent (best-effort; undefined just means no language hint).
@@ -83,7 +84,7 @@ function contactMessage(data: any): { name?: string; digits?: string } | null {
   const digits = String(c.vcard ?? "").match(/waid=(\d{6,})|TEL[^:]*:\+?([\d\s-]{6,})/i);
   return {
     name: c.displayName ?? undefined,
-    digits: (digits?.[1] ?? digits?.[2] ?? "").replace(/[^\d]/g, "") || undefined,
+    digits: digitsOnly(digits?.[1] ?? digits?.[2]) || undefined,
   };
 }
 

@@ -9,6 +9,7 @@ import {
 import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
+import { digitsOnly } from "@/lib/phone";
 
 // In-app outreach: the ONLY way messages leave the app. The user never jumps
 // to WhatsApp - we screen the message through the safety agent, resolve the
@@ -85,8 +86,8 @@ export async function POST(req: Request) {
   let vendorNameOverride: string | null = null;
   if (body.placeId) {
     const details = await placeDetails(String(body.placeId));
-    const resolved = (details?.phone ?? "").replace(/[^\d]/g, "");
-    const supplied = to.replace(/[^\d]/g, "");
+    const resolved = digitsOnly(details?.phone);
+    const supplied = digitsOnly(to);
     if (!supplied) {
       to = details?.phone ?? "";
     } else if (resolved && supplied !== resolved) {
@@ -107,7 +108,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const digits = to.replace(/[^\d]/g, "");
+  const digits = digitsOnly(to);
   // An explicit send from the user RE-OPENS a shop they previously removed
   // from the queue - the tombstone yields only to a fresh human decision.
   {

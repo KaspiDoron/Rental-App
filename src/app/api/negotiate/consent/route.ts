@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { placeDetails } from "@/lib/google";
 import { runUserAction } from "@/lib/graph/engine";
 import { sendFromUser } from "@/lib/evolution";
+import { digitsOnly } from "@/lib/phone";
 
 // Pickup-consent handoff: the traveller tapped "Share my location" on a vendor
 // card because the shop offered to pick them up. ONLY here - after explicit
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     to = details?.phone ?? "";
   }
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
-  const digits = to.replace(/[^\d]/g, "");
+  const digits = digitsOnly(to);
 
   // EXACT-LOCATION SAFETY: the destination must be a shop THIS USER's agent
   // already messaged - a tampered client must never point precise GPS at an

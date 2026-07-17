@@ -12,6 +12,7 @@ import { placeDetails } from "@/lib/google";
 import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can } from "@/lib/entitlements";
+import { digitsOnly } from "@/lib/phone";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
@@ -166,7 +167,7 @@ export async function POST(req: Request) {
       results.push({ id: v.id, sent: false, reason: "no-phone" });
       continue;
     }
-    const digits = to.replace(/[^\d]/g, "");
+    const digits = digitsOnly(to);
     // The user explicitly selected this shop for the mass run - that decision
     // re-opens a previously removed/cancelled recipient.
     {

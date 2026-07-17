@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
+import { digitsOnly } from "@/lib/phone";
 
 // LIVE DRILL (management only): run the REAL pipeline against a real phone
 // number that is NOT a rental shop - a friend plays the shop on WhatsApp.
@@ -15,7 +16,7 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const name = String(body.name ?? "Drill Shop").slice(0, 60);
-  const digits = String(body.phone ?? "").replace(/[^\d]/g, "");
+  const digits = digitsOnly(String(body.phone ?? ""));
   const text = String(body.text ?? "").trim();
   const region = String(body.region ?? "").trim() || undefined;
   const wantsLocal = Boolean(body.localLang);

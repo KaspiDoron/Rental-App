@@ -26,6 +26,7 @@ const STATUS_META: Record<ServiceHealth["status"], { bar: string; width: string;
 
 export function HealthPanel() {
   const [services, setServices] = useState<ServiceHealth[] | null>(null);
+  const [guardCounters, setGuardCounters] = useState<Record<string, number> | null>(null);
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
   const [nextInS, setNextInS] = useState(REFRESH_MS / 1000);
@@ -40,6 +41,7 @@ export function HealthPanel() {
         setCheckedAt(new Date());
         setNextInS(REFRESH_MS / 1000);
       }
+      if (d.guardCounters) setGuardCounters(d.guardCounters);
     } catch {
       /* keep the last snapshot */
     } finally {
@@ -132,6 +134,23 @@ export function HealthPanel() {
         </div>
       )}
 
+      {guardCounters && Object.values(guardCounters).some((n) => n > 0) && (
+        <div className="mt-2 rounded-2xl bg-card2 p-2.5">
+          <div className="text-[11px] font-extrabold text-strong">Send-pipeline guardrails (24h)</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {Object.entries(guardCounters)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => (
+                <span
+                  key={k}
+                  className="rounded-full bg-card px-2 py-0.5 text-[10px] font-bold text-soft"
+                >
+                  {k}: {n}
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
       <CronUrlCard />
     </div>
   );

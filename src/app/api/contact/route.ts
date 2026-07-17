@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
+import { digitsOnly } from "@/lib/phone";
 
 // Resolve a real vendor's phone (Place Details) into a compliant wa.me link.
 export async function GET(req: Request) {
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
       note: "No phone number available for this vendor (or the Google Maps key is not set).",
     });
   }
-  const digits = details.phone.replace(/[^\d]/g, "");
+  const digits = digitsOnly(details.phone);
   return NextResponse.json({
     available: true,
     phone: details.phone,

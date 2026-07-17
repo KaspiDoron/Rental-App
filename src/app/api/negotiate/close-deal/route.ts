@@ -5,6 +5,7 @@ import { runUserAction } from "@/lib/graph/engine";
 import { sendFromUser, disconnectInstance } from "@/lib/evolution";
 import { sbSelect, sbInsert, sbDelete, sbDeleteReturning } from "@/lib/runtime-config";
 import { cancelSends, clearCancellation } from "@/lib/wa/cancellations";
+import { digitsOnly } from "@/lib/phone";
 
 // Close-deal handoff: the traveller confirmed a deal on a card. We (1) send the
 // shop a final closing message via the engine's closing-message node, then (2)
@@ -23,7 +24,7 @@ export async function POST(req: Request) {
     to = details?.phone ?? "";
   }
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
-  const digits = to.replace(/[^\d]/g, "");
+  const digits = digitsOnly(to);
 
   // KNOWN-THREAD GUARD (same pattern as the pickup-consent route): a closing
   // message may only go to a number THIS user's agent actually negotiated

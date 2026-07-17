@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "../LoadingDots";
+import { digitsOnly } from "@/lib/phone";
 
 interface ThreadMsg {
   id: string;
@@ -138,7 +139,7 @@ export function LiveDrillPanel() {
 
       <button
         onClick={start}
-        disabled={busy || phone.replace(/[^\d]/g, "").length < 7}
+        disabled={busy || digitsOnly(phone).length < 7}
         className="btn btn-primary w-full rounded-2xl py-3 text-sm font-bold disabled:opacity-50"
       >
         {busy ? <LoadingDots light label="Starting the drill" /> : "▶️ Start the live drill"}

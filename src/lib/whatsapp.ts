@@ -7,6 +7,7 @@
 
 import "server-only";
 import { getConfig } from "./runtime-config";
+import { digitsOnly } from "./phone";
 
 export interface SendResult {
   channel: "cloud-api" | "click-to-chat";
@@ -25,7 +26,7 @@ export async function whatsappConfigured(): Promise<boolean> {
 }
 
 function clickToChat(to: string, message: string): SendResult {
-  const num = to.replace(/[^\d]/g, "");
+  const num = digitsOnly(to);
   const waLink = `https://wa.me/${num}?text=${encodeURIComponent(message)}`;
   return { channel: "click-to-chat", ok: true, waLink };
 }
@@ -51,7 +52,7 @@ export async function sendWhatsApp(
         },
         body: JSON.stringify({
           messaging_product: "whatsapp",
-          to: to.replace(/[^\d]/g, ""),
+          to: digitsOnly(to),
           type: "text",
           text: { body: message },
         }),

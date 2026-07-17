@@ -22,6 +22,7 @@ import { getConfig } from "./runtime-config";
 import { haversineKm } from "./geo";
 import { cacheGet, cacheSet, recordApi } from "./usage";
 import type { Vendor, VehicleClass, VendorReview } from "./types";
+import { digitsOnly } from "./phone";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -506,7 +507,7 @@ export async function findRealVendors(
     // phone number. (If that would empty the list, keep them so the map/list is
     // not blank, but the card still gates "Ask for price" on a real number.)
     const reachable = mapped.filter(
-      (v) => (v.whatsapp ?? "").replace(/[^\d]/g, "").length >= 7
+      (v) => digitsOnly(v.whatsapp).length >= 7
     );
     const list = reachable.length > 0 ? reachable : mapped;
     // Tag the fastest-replying quartile (Ultra insight).
@@ -514,7 +515,7 @@ export async function findRealVendors(
     const fast = await fastResponderPhones();
     if (fast.size) {
       for (const v of list) {
-        if (fast.has((v.whatsapp ?? "").replace(/[^\d]/g, ""))) v.fastResponder = true;
+        if (fast.has(digitsOnly(v.whatsapp))) v.fastResponder = true;
       }
     }
     // Paid placements: glowing "Recommended" cards pinned to the top.

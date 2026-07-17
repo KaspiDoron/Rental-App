@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { sbDelete, sbInsertClaim, sbSelectStrict } from "../runtime-config";
+import { digitsOnly } from "../phone";
 
 // Pacing primitives for the anti-ban engine.
 //
@@ -47,7 +48,7 @@ export function gapBucket(nowMs: number, gapSeconds: number): number {
 /** Stable short hash of a message body for idempotency slot keys. */
 export function messageSlotKey(toDigits: string, text: string): string {
   const norm = text.replace(/\s+/g, " ").trim().toLowerCase();
-  return `msg:${toDigits.replace(/[^\d]/g, "")}:${createHash("sha256")
+  return `msg:${digitsOnly(toDigits)}:${createHash("sha256")
     .update(norm)
     .digest("hex")
     .slice(0, 16)}`;

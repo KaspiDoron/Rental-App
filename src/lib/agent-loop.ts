@@ -20,6 +20,7 @@ import { floorPriceFor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
 import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
+import { digitsOnly } from "./phone";
 
 export interface ThreadContext {
   sender?: string;
@@ -133,7 +134,7 @@ export async function processVendorReply(opts: {
     if (!opts.waMessageId) return; // synthetic/system event - nothing real
     text = "(the shop sent a photo/attachment that couldn't be loaded)";
   }
-  const from = opts.fromDigits.replace(/[^\d]/g, "");
+  const from = digitsOnly(opts.fromDigits);
   const senderFilter = opts.senderEmail
     ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`
     : "";

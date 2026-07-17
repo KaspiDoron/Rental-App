@@ -10,6 +10,7 @@ import {
 import { chat, extractJson } from "@/lib/ai";
 import { addTraining } from "@/lib/memory";
 import { sbInsert } from "@/lib/runtime-config";
+import { digitsOnly } from "@/lib/phone";
 
 // Teach the bargaining agents from the owner's OWN WhatsApp chats with rental
 // shops. The owner PASTES the shops' WhatsApp numbers (the places they have
@@ -25,7 +26,7 @@ const MAX_CHATS = 25;
 const MAX_MSGS = 60;
 
 function toJid(raw: string): string | null {
-  const digits = raw.replace(/[^\d]/g, "");
+  const digits = digitsOnly(raw);
   if (digits.length < 7) return null; // not a real phone number
   return `${digits}@s.whatsapp.net`;
 }
@@ -112,7 +113,7 @@ export async function POST(req: Request) {
     : [];
   const rawList = rawNumbers
     .map((n) => String(n).trim())
-    .filter((n) => n.replace(/[^\d]/g, "").length >= 7)
+    .filter((n) => digitsOnly(n).length >= 7)
     .slice(0, MAX_NUMBERS);
 
   let imported = 0;

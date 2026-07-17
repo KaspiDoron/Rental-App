@@ -16,6 +16,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
+import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
@@ -666,7 +667,7 @@ export async function connectInstance(
   if (!host) return { ok: false, error: "The WhatsApp connector is not set up yet." };
   const token = await webhookToken();
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
-  const digits = (phone ?? "").replace(/[^\d]/g, "");
+  const digits = digitsOnly(phone);
 
   // NEVER destroy an already-linked session. If the instance is already open,
   // the user has connected - return that instead of wiping it (this was the
@@ -884,7 +885,7 @@ export async function numberOnWhatsApp(
   const instance = instanceNameFor(email);
   const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
     method: "POST",
-    body: JSON.stringify({ numbers: [number.replace(/[^\d]/g, "")] }),
+    body: JSON.stringify({ numbers: [digitsOnly(number)] }),
   });
   if (!res.ok || !Array.isArray(res.data)) return null; // unknown - don't block
   return Boolean(res.data[0]?.exists ?? res.data[0]?.numberExists);
@@ -1001,7 +1002,7 @@ export async function resolveChatJid(
   email: string,
   rawNumber: string
 ): Promise<string | null> {
-  const digits = rawNumber.replace(/[^\d]/g, "");
+  const digits = digitsOnly(rawNumber);
   if (digits.length < 7) return null;
   const instance = instanceNameFor(email);
   // 1) Ask WhatsApp for the canonical JID of this number.
@@ -1019,7 +1020,7 @@ export async function resolveChatJid(
   try {
     const chats = await fetchChats(email);
     const tail = digits.slice(-9);
-    const hit = chats.find((c) => c.jid.replace(/[^\d]/g, "").endsWith(tail));
+    const hit = chats.find((c) => digitsOnly(c.jid).endsWith(tail));
     if (hit) return hit.jid;
   } catch {
     /* fall through */
@@ -1201,7 +1202,7 @@ export async function sendFromUser(
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
 
   const instance = instanceNameFor(email);
-  const number = to.replace(/[^\d]/g, "");
+  const number = digitsOnly(to);
 
   // Resume the session if it dropped, instead of failing outright.
   const conn = await ensureConnected(email, 6000);

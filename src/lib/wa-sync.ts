@@ -12,6 +12,7 @@ import "server-only";
 import { sbSelect, sbInsert } from "./runtime-config";
 import { fetchMessagesRaw, fetchMediaBase64, sendFromUser } from "./evolution";
 import { processVendorReply } from "./agent-loop";
+import { digitsOnly } from "./phone";
 
 const SYNC_MIN_GAP_MS = 25_000; // at most one real sync per user per 25s
 const THREAD_WINDOW_H = 36; // only threads we messaged in the last 36h
@@ -47,7 +48,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
       email
     )}&received_at=gte.${encodeURIComponent(since)}&order=received_at.desc&limit=60`
   ).catch(() => []);
-  const numbers = [...new Set(outbound.map((o) => (o.to_number || "").replace(/[^\d]/g, "")))]
+  const numbers = [...new Set(outbound.map((o) => digitsOnly(o.to_number)))]
     .filter((n) => n.length >= 7)
     .slice(0, MAX_THREADS);
   if (numbers.length === 0) return 0;

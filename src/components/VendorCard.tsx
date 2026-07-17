@@ -8,7 +8,7 @@ import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { useI18n } from "@/lib/i18n";
-import { moneyLocal, convertApprox, savedCurrency } from "@/lib/currency";
+import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/currency";
 import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
 import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
@@ -102,7 +102,7 @@ function VendorCardInner({
 
   const offer = vendor.offer;
   // The offer's own currency symbol - prices display in the shop's money.
-  const curSymbol = offer ? moneyLocal(0, offer.currency).replace(/[\d.,\s]/g, "") || "$" : "$";
+  const curSymbol = offer ? currencySymbol(offer.currency) : "$";
   // Traveller's own currency (item #6) - set after mount so SSR markup stays
   // deterministic. Used only for the "≈ in your money" hint under the total.
   const [myCur, setMyCur] = useState<string | null>(null);
@@ -639,7 +639,7 @@ function VendorCardInner({
             )}
             {rfqState === "rate-limited" && (
               <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-                {rfqError ?? t("Safety pause - try again in a few minutes.")}
+                {rfqError ?? t("Taking a short break - try again in a few minutes.")}
               </div>
             )}
           </div>

@@ -151,7 +151,37 @@ export async function GET() {
   ];
 
   const services = await Promise.all(checks);
-  return NextResponse.json({ services, checkedAt: new Date().toISOString() });
+
+  // Suppression/degradation counters (last 24h): the observability layer for
+  // the send pipeline - a spike here is the first sign something is being
+  // held back (cancellations firing, claims contended, fail-closed holds,
+  // structurally illegal phase jumps).
+  const { sbSelect } = await import("@/lib/runtime-config");
+  const sinceIso = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const guardKinds = [
+    "cancelled-send-blocked",
+    "takeover-send-blocked",
+    "claim-lost",
+    "bargain-blocked",
+    "phase-anomaly",
+    "ambiguous-inbound",
+    "wa-send-dropped",
+  ];
+  const eventRows = await sbSelect<{ kind: string }>(
+    "agent_events",
+    `select=kind&kind=in.(${guardKinds.join(",")})&created_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&limit=500`
+  ).catch(() => []);
+  const guardCounters: Record<string, number> = {};
+  for (const k of guardKinds) guardCounters[k] = 0;
+  for (const r of eventRows) guardCounters[r.kind] = (guardCounters[r.kind] ?? 0) + 1;
+
+  return NextResponse.json({
+    services,
+    guardCounters,
+    checkedAt: new Date().toISOString(),
+  });
 }
 
 // Vercel: allow slow upstreams (Hobby default is ~10s - too short).

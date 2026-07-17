@@ -5,6 +5,7 @@
 import "server-only";
 import { sbSelect, sbInsert, sbDelete, sbUpdate } from "./runtime-config";
 import type { Vendor } from "./types";
+import { digitsOnly } from "./phone";
 
 export interface SponsoredRow {
   id: number;
@@ -40,10 +41,10 @@ export async function tagSponsored(vendors: Vendor[]): Promise<void> {
     const sponsors = await activeSponsors();
     if (!sponsors.length) return;
     for (const v of vendors) {
-      const phone = (v.whatsapp ?? "").replace(/[^\d]/g, "");
+      const phone = digitsOnly(v.whatsapp);
       const name = norm(v.name);
       const hit = sponsors.some((s) => {
-        if (s.phone && phone && phone.endsWith(s.phone.replace(/[^\d]/g, "").slice(-9)))
+        if (s.phone && phone && phone.endsWith(digitsOnly(s.phone).slice(-9)))
           return true;
         const sname = norm(s.name);
         return sname.length >= 4 && (name.includes(sname) || sname.includes(name));
@@ -72,7 +73,7 @@ export async function addSponsor(row: {
     {
       name: row.name.trim(),
       place_query: row.place_query?.trim() || null,
-      phone: row.phone?.replace(/[^\d]/g, "") || null,
+      phone: digitsOnly(row.phone) || null,
       notes: row.notes?.trim() || null,
       active: true,
     },

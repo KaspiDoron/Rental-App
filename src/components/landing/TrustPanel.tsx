@@ -69,7 +69,7 @@ export function TrustPanel({
             onClick={() => setOpen((o) => !o)}
             className="chip flex items-center gap-1 text-[12px] font-extrabold text-brandblue"
           >
-            {t("How we protect your number")}
+            {t("How we look after your number")}
             <Icon name="chevron" className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
           </button>
           {open && (

@@ -21,6 +21,7 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
 import { sendProgress } from "@/lib/batch-progress";
+import { formatClock } from "@/lib/clock";
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
@@ -39,7 +40,8 @@ import { LoadingDots } from "@/components/LoadingDots";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
-import { moneyLocal } from "@/lib/currency";
+import { moneyLocal, currencySymbol } from "@/lib/currency";
+import { digitsOnly } from "@/lib/phone";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -646,7 +648,7 @@ export default function Home() {
           if (!v.id) return v;
           // "Paused by you" flag - independent of the queue badge; shown when
           // the user removed messages for this shop and has not re-engaged.
-          const digits = (v.whatsapp ?? "").replace(/[^\d]/g, "");
+          const digits = digitsOnly(v.whatsapp);
           const isCancelled = Boolean(digits && cancelledDigits.has(digits));
           const base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
           if (base.offer) return base; // an offer supersedes any queue badge
@@ -1235,7 +1237,7 @@ export default function Home() {
   // above are computed in - never whichever offer happens to be first.
   const savingsSymbol = useMemo(() => {
     return dominantCurrency
-      ? moneyLocal(0, dominantCurrency).replace(/[\d.,\s]/g, "") || "$"
+      ? currencySymbol(dominantCurrency)
       : "$";
   }, [dominantCurrency]);
 
@@ -1574,7 +1576,7 @@ export default function Home() {
                         </button>
                         <span className="shrink-0 text-soft">
                           {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
-                          {v.lastEventAt ? ` · ${new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          {v.lastEventAt ? ` · ${formatClock(v.lastEventAt)}` : ""}
                         </span>
                       </div>
                     ))}
@@ -1597,7 +1599,7 @@ export default function Home() {
                             <span className="truncate">{v.name}</span>
                           </button>
                           <span className="shrink-0 text-faint">
-                            {v.lastEventAt ? new Date(v.lastEventAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : t("awaiting reply")}
+                            {v.lastEventAt ? formatClock(v.lastEventAt) : t("awaiting reply")}
                           </span>
                         </div>
                         {v.sentGloss && (
@@ -1675,10 +1677,10 @@ export default function Home() {
                 {queueProgress.dueNow
                   ? t("next one leaves any moment")
                   : queueProgress.nextAt
-                    ? `${t("next at")} ~${new Date(queueProgress.nextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                    ? `${t("next at")} ~${formatClock(queueProgress.nextAt)}`
                     : ""}
                 {queueProgress.doneBy && queueProgress.waiting > 1
-                  ? ` · ${t("all done by")} ~${new Date(queueProgress.doneBy).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                  ? ` · ${t("all done by")} ~${formatClock(queueProgress.doneBy)}`
                   : ""}
                 {" - "}
                 {t("your agent messages shops one at a time, the way a person would")}
@@ -1694,7 +1696,7 @@ export default function Home() {
                     <span className="block text-[10px] text-faint">
                       {t(q.reason)}
                       {q.notBefore
-                        ? ` · ~${new Date(q.notBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                        ? ` · ~${formatClock(q.notBefore)}`
                         : ""}
                     </span>
                   </span>
