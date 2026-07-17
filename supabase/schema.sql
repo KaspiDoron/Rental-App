@@ -758,3 +758,18 @@ create index if not exists agent_events_user_idx
 -- Session attribution on offers (exact rival grouping per search session).
 alter table public.offers add column if not exists search_id bigint;
 create index if not exists offers_search_idx on public.offers (search_id);
+
+-- ---- Scooter Dash leaderboard -----------------------------------------------------
+-- Scores publish ONLY with explicit consent: display_name is set when the
+-- player chose to publish under a name; null = anonymous ("Traveller").
+-- Private scores are never inserted at all (localStorage keeps them).
+create table if not exists public.game_scores (
+  id           bigint generated always as identity primary key,
+  user_email   text not null,
+  display_name text,
+  score        int not null check (score >= 0 and score <= 99999),
+  created_at   timestamptz not null default now()
+);
+create index if not exists game_scores_top_idx
+  on public.game_scores (score desc, created_at asc);
+alter table public.game_scores enable row level security;

@@ -22,6 +22,11 @@ const config: Config = {
         brandred: { DEFAULT: "var(--red)", soft: "var(--red-soft)" },
         brandyellow: { DEFAULT: "var(--yellow)", soft: "var(--yellow-soft)" },
         savings: { DEFAULT: "var(--green)", soft: "var(--green-soft)" },
+        wagreen: {
+          DEFAULT: "var(--wa-green)",
+          deep: "var(--wa-green-deep)",
+          soft: "var(--wa-green-soft)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-body)"],

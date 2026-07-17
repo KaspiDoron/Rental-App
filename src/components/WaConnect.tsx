@@ -215,7 +215,7 @@ export function WaConnect({
           <button
             onClick={connect}
             disabled={busy || !consent}
-            className="btn btn-primary w-full rounded-2xl py-3 text-[14px] disabled:opacity-50"
+            className="btn w-full rounded-2xl bg-wagreen-deep py-3 text-[14px] font-extrabold text-white shadow-md hover:opacity-90 disabled:opacity-50"
           >
             {busy ? <LoadingDots light label={t("Getting your code ready")} /> : `💬 ${t("Connect my WhatsApp")}`}
           </button>

@@ -32,6 +32,11 @@
   --green: #16a34a;
   --green-soft: #ddf5e4;
 
+  /* WhatsApp affinity tokens - conversation-related affordances only. */
+  --wa-green: #25d366;
+  --wa-green-deep: #128c7e;
+  --wa-green-soft: #e7fbe9;
+
   --shadow: 0 6px 24px -12px rgba(33, 40, 55, 0.18);
 
   --safe-top: env(safe-area-inset-top, 0px);
@@ -57,6 +62,9 @@
   --yellow-soft: #453a1c;
   --green: #4ade80;
   --green-soft: #1d3b2a;
+  --wa-green: #25d366;
+  --wa-green-deep: #34c391;
+  --wa-green-soft: #173626;
 
   --shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.55);
 }

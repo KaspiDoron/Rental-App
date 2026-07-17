@@ -21,6 +21,36 @@ const NAP_KEY = "wd_will_nap_until";
 const NAP_MS = 20 * 60_000;
 const SLEEP_AFTER_MS = 90_000;
 
+// Draggable companion: position persists across visits (localStorage), snaps
+// to the nearest screen edge on release, and always stays clear of the TabBar
+// and safe areas. A quick tap still opens Will - drag starts only after the
+// pointer moves past a small threshold, so the two gestures never fight.
+const POS_KEY = "wd_will_pos";
+const DRAG_THRESHOLD_PX = 8;
+const TABBAR_CLEARANCE = 96; // px above the bottom safe area (TabBar height + gap)
+const TOP_CLEARANCE = 72;
+
+interface WillPos {
+  side: "left" | "right";
+  /** Distance from the bottom safe-area edge, px. */
+  bottom: number;
+}
+
+function loadPos(): WillPos {
+  try {
+    const raw = JSON.parse(localStorage.getItem(POS_KEY) ?? "null") as WillPos | null;
+    if (raw && (raw.side === "left" || raw.side === "right") && Number.isFinite(raw.bottom)) {
+      return { side: raw.side, bottom: clampBottom(raw.bottom) };
+    }
+  } catch {}
+  return { side: "right", bottom: TABBAR_CLEARANCE };
+}
+
+function clampBottom(b: number): number {
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  return Math.min(Math.max(b, TABBAR_CLEARANCE), Math.max(TABBAR_CLEARANCE, vh - TOP_CLEARANCE - 80));
+}
+
 export function WillCompanion({
   note,
   alert = false,
@@ -47,6 +77,68 @@ export function WillCompanion({
   const [boop, setBoop] = useState(false);
   const lastCelebrate = useRef<number | undefined>(celebrateKey);
   const sleepTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // ---- drag state ----------------------------------------------------------
+  const [pos, setPos] = useState<WillPos>({ side: "right", bottom: TABBAR_CLEARANCE });
+  const [dragging, setDragging] = useState(false);
+  // Live pixel offset while dragging (transform, GPU-cheap); null when parked.
+  const [dragXY, setDragXY] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    moved: boolean;
+    pointerId: number;
+  } | null>(null);
+  const reduceMotion = useRef(false);
+
+  useEffect(() => {
+    setPos(loadPos());
+    try {
+      reduceMotion.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch {}
+  }, []);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragRef.current = { startX: e.clientX, startY: e.clientY, moved: false, pointerId: e.pointerId };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    if (!d.moved) {
+      d.moved = true;
+      setDragging(true);
+      setBubble(false);
+    }
+    setDragXY({ x: dx, y: dy });
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(d.pointerId);
+    } catch {}
+    if (!d.moved) {
+      // A tap, not a drag - open Will as always.
+      open();
+      return;
+    }
+    // Park: snap to the nearest horizontal edge, clamp vertically, persist.
+    const vw = window.innerWidth;
+    const side: WillPos["side"] = e.clientX < vw / 2 ? "left" : "right";
+    const nextBottom = clampBottom(pos.bottom - (e.clientY - d.startY));
+    const next: WillPos = { side, bottom: nextBottom };
+    setDragXY(null);
+    setDragging(false);
+    setPos(next);
+    try {
+      localStorage.setItem(POS_KEY, JSON.stringify(next));
+    } catch {}
+  };
 
   useEffect(() => {
     let wake: ReturnType<typeof setTimeout> | undefined;
@@ -122,26 +214,49 @@ export function WillCompanion({
     window.location.href = "/?will=1";
   };
 
+  const onLeft = pos.side === "left";
   return (
     <div
       data-tour="will"
-      className="fixed right-0 z-40 flex flex-col items-end"
-      style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 96px)" }}
+      className={`fixed z-[60] flex flex-col ${onLeft ? "left-0 items-start" : "right-0 items-end"} ${
+        dragging || reduceMotion.current ? "" : "transition-all duration-300 ease-out"
+      }`}
+      style={{
+        bottom: `calc(env(safe-area-inset-bottom, 0px) + ${pos.bottom}px)`,
+        transform: dragXY ? `translate(${dragXY.x}px, ${dragXY.y}px)` : undefined,
+        // Only the companion itself refuses touch scrolling - the page keeps
+        // scrolling normally everywhere else.
+        touchAction: "none",
+      }}
     >
-      {bubble && note && (
+      {bubble && note && !dragging && (
         <button
           onClick={open}
-          className="relative mb-1.5 mr-3 max-w-[230px] rounded-2xl rounded-br-md bg-card2/95 px-3 py-2 text-left text-[11px] font-bold leading-snug text-soft shadow-lg backdrop-blur animate-slide-up"
+          className={`relative mb-1.5 max-w-[230px] rounded-2xl bg-card2/95 px-3 py-2 text-left text-[11px] font-bold leading-snug text-soft shadow-lg backdrop-blur animate-slide-up ${
+            onLeft ? "ml-3 rounded-bl-md" : "mr-3 rounded-br-md"
+          }`}
         >
           {note}
-          <span aria-hidden className="absolute -bottom-1 right-4 h-2 w-2 rotate-45 bg-card2/95" />
+          <span
+            aria-hidden
+            className={`absolute -bottom-1 h-2 w-2 rotate-45 bg-card2/95 ${onLeft ? "left-4" : "right-4"}`}
+          />
         </button>
       )}
-      <div className="relative mr-[-10px]">
+      <div className={`relative ${onLeft ? "ml-[-10px]" : "mr-[-10px]"}`}>
         <button
-          onClick={open}
-          aria-label={t("Open Will")}
-          className={`block transition-transform ${boop ? "will-boop" : "active:scale-95"}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            dragRef.current = null;
+            setDragXY(null);
+            setDragging(false);
+          }}
+          aria-label={t("Open Will (drag to move him)")}
+          className={`block ${dragging ? "cursor-grabbing scale-110" : "transition-transform"} ${
+            boop ? "will-boop" : dragging ? "" : "active:scale-95"
+          }`}
         >
           <WillAvatar size={54} mood={mood} className="drop-shadow-xl" />
           {busy && !celebrating && (
@@ -163,7 +278,9 @@ export function WillCompanion({
           }}
           aria-label={t("Hide Will for a bit")}
           title={t("Hide Will for 20 minutes")}
-          className="absolute -left-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-card2 text-[10px] font-bold text-faint shadow"
+          className={`absolute -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-card2 text-[10px] font-bold text-faint shadow ${
+            onLeft ? "-right-2" : "-left-2"
+          }`}
         >
           ✕
         </button>

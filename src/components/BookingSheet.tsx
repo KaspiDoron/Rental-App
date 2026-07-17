@@ -403,7 +403,7 @@ export function BookingSheet({
                 href={waLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="btn btn-primary mt-2 block w-full rounded-xl py-2.5 text-center text-[13px]"
+                className="btn mt-2 block w-full rounded-xl bg-wagreen-deep py-2.5 text-center text-[13px] font-extrabold text-white shadow-md hover:opacity-90"
               >
                 Open WhatsApp chat with {vendor.name}
               </a>
