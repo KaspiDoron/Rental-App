@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
@@ -67,7 +67,7 @@ function VendorCardInner({
   const [chatOpen, setChatOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [chatState, setChatState] = useState<{
-    status: "idle" | "checking" | "sent" | "blocked";
+    status: "idle" | "checking" | "sent" | "queued" | "blocked";
     reason?: string;
     suggestion?: string;
   }>({ status: "idle" });
@@ -75,6 +75,10 @@ function VendorCardInner({
     "idle" | "sending" | "sent" | "queued" | "no-phone" | "not-connected" | "rate-limited"
   >("idle");
   const [rfqError, setRfqError] = useState<string | null>(null);
+  // Every deferred UI step is tracked and cleared on unmount - an untracked
+  // setTimeout kept firing stage changes after the card was gone.
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timersRef.current.forEach(clearTimeout), []);
   // "Already asked" survives navigation: it derives from the vendor's stage
   // (persisted with the search), not from this component's local state.
   const alreadyAsked = ["rfq-sent", "awaiting-response", "negotiating"].includes(
@@ -137,7 +141,7 @@ function VendorCardInner({
       if (d.sent) {
         setRfqState("sent");
         onStage(vendor.id, "rfq-sent");
-        setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200);
+        timersRef.current.push(setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200));
       } else if (d.queued) {
         // The anti-ban engine parked the message (shop closed, safe pacing,
         // daily limit...). NOTHING was delivered, so the stage must NOT claim
@@ -186,13 +190,16 @@ function VendorCardInner({
     };
     if (verdict.allowed && !verdict.sent) {
       if (verdict.queued) {
-        // Anti-ban queue (shop closed / pacing): the message WILL go out.
-        setChatState({ status: "sent" });
+        // Anti-ban queue (shop closed / pacing): NOTHING was delivered yet -
+        // saying "Sent" here was a lie the queue card immediately disproved.
+        setChatState({ status: "queued" });
         setDraft("");
-        setTimeout(() => {
-          setChatOpen(false);
-          setChatState({ status: "idle" });
-        }, 1600);
+        timersRef.current.push(
+          setTimeout(() => {
+            setChatOpen(false);
+            setChatState({ status: "idle" });
+          }, 2600)
+        );
         return;
       }
       // Only claim "connect WhatsApp" when that is actually the problem -
@@ -210,10 +217,12 @@ function VendorCardInner({
     if (verdict.allowed) {
       setChatState({ status: "sent" });
       setDraft("");
-      setTimeout(() => {
-        setChatOpen(false);
-        setChatState({ status: "idle" });
-      }, 1600);
+      timersRef.current.push(
+        setTimeout(() => {
+          setChatOpen(false);
+          setChatState({ status: "idle" });
+        }, 1600)
+      );
     } else {
       setChatState({
         status: "blocked",
@@ -337,6 +346,13 @@ function VendorCardInner({
             <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
               🕘 {t(queueReasonLabel(vendor.queuedReason))}
               {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
+            </div>
+          )}
+          {/* The user removed this shop's queued messages: honest paused
+              state - agents stay silent until a fresh send re-opens it. */}
+          {vendor.cancelled && !vendor.queuedUntil && !offer && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
+              ⏸ {t("Paused by you - sending a new message re-opens this shop")}
             </div>
           )}
           {riskNote && (
@@ -678,6 +694,11 @@ function VendorCardInner({
             )}
             {chatState.status === "sent" && (
               <div className="mt-1 text-[12px] font-bold text-savings">✓ {t("Sent")}</div>
+            )}
+            {chatState.status === "queued" && (
+              <div className="mt-1 text-[12px] font-bold text-brandblue">
+                🕘 {t("Queued - it goes out automatically, you'll see it in the queue below")}
+              </div>
             )}
             <button
               onClick={sendCustom}

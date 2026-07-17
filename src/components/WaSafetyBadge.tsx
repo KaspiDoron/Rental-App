@@ -11,11 +11,13 @@ import { useI18n } from "@/lib/i18n";
 export interface WaSafety {
   state: "healthy" | "pacing" | "paused" | "recovering";
   reason?: string;
+  publicReason?: string;
   pausedUntil?: string;
   trustScore: number;
   riskScore: number;
   queued: number;
   queueReasons: string[];
+  publicQueueReasons?: string[];
 }
 
 export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
@@ -28,18 +30,18 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
       ? {
           cls: "bg-savings-soft text-savings",
           icon: "shieldCheck",
-          label: t("Safe pacing"),
+          label: t("All good"),
         }
       : safety.state === "pacing"
       ? {
           cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
           icon: "clock",
-          label: `${t("Pacing")} · ${safety.queued} ${t("queued")}`,
+          label: `${safety.queued} ${t("in line - sending automatically")}`,
         }
       : {
           cls: "bg-brandred-soft text-brandred",
           icon: "shield",
-          label: safety.state === "recovering" ? t("Cooling down") : t("Safety pause"),
+          label: t("Taking a short break"),
         };
 
   return (
@@ -50,7 +52,7 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
       >
         <Icon name={cfg.icon} className="h-3.5 w-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">
-          {t("WhatsApp protection")}: {cfg.label}
+          {t("Messaging")}: {cfg.label}
         </span>
         <Icon name="chevron" className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
@@ -59,7 +61,7 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
           {safety.state === "healthy" && (
             <p>{t("All clear - your number is healthy and messages send at a natural, human pace.")}</p>
           )}
-          {safety.reason && safety.state !== "healthy" && <p>{t(safety.reason)}</p>}
+          {safety.publicReason && safety.state !== "healthy" && <p>{t(safety.publicReason)}</p>}
           {safety.pausedUntil && (
             <p className="mt-1 font-bold">
               {t("Sending resumes")}:{" "}
@@ -74,11 +76,11 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
           {safety.queued > 0 && (
             <p className="mt-1">
               {safety.queued} {t("message(s) held")}
-              {safety.queueReasons.length > 0 ? ` - ${safety.queueReasons.join(" · ")}` : ""}
+              {(safety.publicQueueReasons ?? []).length > 0 ? ` - ${(safety.publicQueueReasons ?? []).join(" · ")}` : ""}
             </p>
           )}
           <p className="mt-1.5 text-[10px] text-faint">
-            {t("Trust score")} {safety.trustScore}/100 · {t("Pauses are automatic protection for your number - never an error.")}
+            {t("Short waits are deliberate - they keep your messages feeling personal, never spammy.")}
           </p>
         </div>
       )}

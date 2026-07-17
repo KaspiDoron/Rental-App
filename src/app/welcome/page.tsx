@@ -32,7 +32,7 @@ const FEED_PREVIEW: { icon: string; title: string; detail: string; tone?: "wait"
   { icon: "send", title: "Asked Moto Rent Canggu for their best 5-day price", detail: "Worded uniquely, sent from your WhatsApp" },
   { icon: "sparkles", title: "Read the reply: 300/day quoted", detail: "Real local floor for a 125cc here is ~160/day" },
   { icon: "chat", title: "Countered warmly using your 5 days as leverage", detail: "\"Could you do 160 a day my friend? 🫶\"" },
-  { icon: "clock", title: "Will is waiting 25 minutes on purpose", detail: "Answering instantly reads as desperate - patience is leverage", tone: "wait" },
+  { icon: "clock", title: "Will is waiting 25 minutes on purpose", detail: "A short, deliberate pause makes the shop take your offer seriously", tone: "wait" },
   { icon: "money", title: "Deal improved: 180/day, cash deposit, free helmet", detail: "40% below the opening quote", tone: "offer" },
 ];
 

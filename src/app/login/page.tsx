@@ -578,7 +578,7 @@ export default function LoginPage() {
               {showHowItWorks && (
                 <ul className="space-y-1.5 rounded-xl bg-card2 px-3 py-2.5 text-[11px] leading-relaxed text-soft pop-in">
                   <li>
-                    · {t("Messages send from your own WhatsApp, paced carefully like a human. WhatsApp doesn't officially support assistants like Will, so a spare SIM is a smart choice - our pacing engine exists to protect your number.")}
+                    · {t("Messages send from your own WhatsApp at a natural, human pace - many travellers use a spare SIM for peace of mind.")}
                   </li>
                   <li>
                     · {t("Will drafts and sends messages for you. You see every move live, can pause everything or take over any chat - and what's sent from your account is yours.")}

@@ -20,6 +20,7 @@ import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
+import { sendProgress } from "@/lib/batch-progress";
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
@@ -230,6 +231,16 @@ export default function Home() {
   const [queueItems, setQueueItems] = useState<
     { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
   >([]);
+  // CLIENT TOMBSTONES for queue removals: keys ("id:<n>" / "v:<vendorId>")
+  // mapped to the time they were tombstoned. Any poll that raced the server
+  // delete still holds pre-delete rows - without this filter it would
+  // resurrect the removed row + card badge for one poll cycle (the reported
+  // remove-flicker). Entries expire after 30s (by then the server state is
+  // authoritative either way) and are cleared early on fetch failure so the
+  // row honestly reappears instead of silently vanishing.
+  const pendingRemovals = useRef<Map<string, number>>(new Map());
+  // Queue rows currently being removed (disables their Remove button).
+  const [removingIds, setRemovingIds] = useState<Set<number>>(new Set());
   // Local going-rate hint (item #6): what the cheapest scooter / economy car
   // honestly costs per day around the chosen stay, in the LOCAL currency.
   const [priceHint, setPriceHint] = useState<{
@@ -340,7 +351,7 @@ export default function Home() {
         sessionStorage.removeItem("wd_search");
       }
     } catch {}
-  }, [vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters, restored]);
+  }, [vendors, rfq, source, sourceError, rawText, origin, radiusKm, filters, restored, searchEpoch]);
 
   function clearSearch() {
     timers.current.forEach(clearTimeout);
@@ -585,9 +596,36 @@ export default function Home() {
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
-      const items: { vendorId: string | null; notBefore: string; rawReason?: string | null }[] =
-        Array.isArray(d.queue) ? d.queue : [];
-      setQueueItems(d.queue ?? []);
+      // Drop rows the user just removed (tombstoned) - a poll that read the
+      // server BEFORE the delete committed must not resurrect them. Expired
+      // tombstones (>30s) fall away so a genuinely failed delete resurfaces.
+      const nowMs = Date.now();
+      for (const [k, at] of pendingRemovals.current) {
+        if (nowMs - at > 30_000) pendingRemovals.current.delete(k);
+      }
+      const tombstoned = (row: { id?: number; vendorId?: string | null }) =>
+        pendingRemovals.current.has(`id:${row.id}`) ||
+        (row.vendorId ? pendingRemovals.current.has(`v:${row.vendorId}`) : false);
+      const rawItems: {
+        id: number;
+        vendorId: string | null;
+        notBefore: string;
+        rawReason?: string | null;
+      }[] = Array.isArray(d.queue) ? d.queue : [];
+      const items = rawItems.filter((i) => !tombstoned(i));
+      // A poll whose payload no longer contains a tombstoned row confirms the
+      // server delete landed - retire those tombstones.
+      for (const k of [...pendingRemovals.current.keys()]) {
+        if (k.startsWith("v:") && !rawItems.some((i) => `v:${i.vendorId}` === k)) {
+          pendingRemovals.current.delete(k);
+        }
+      }
+      setQueueItems((d.queue ?? []).filter((i: { id: number; vendorId: string | null }) => !tombstoned(i)));
+      // Shops the user explicitly paused (removed queued messages) - the card
+      // says so instead of pretending nothing happened.
+      const cancelledDigits = new Set<string>(
+        Array.isArray(d.cancelledNumbers) ? d.cancelledNumbers : []
+      );
       // Reconcile the cards with the SERVER (single source of truth for the
       // queued badge, covering every send path): set badge + REAL reason for
       // shops with a held message; when the row leaves the outbox, decide
@@ -605,27 +643,36 @@ export default function Home() {
       );
       setVendors((vs) =>
         vs.map((v) => {
-          if (v.offer || !v.id) return v; // an offer supersedes any queue badge
-          const held = byVendor.get(v.id);
-          if (held && (v.queuedUntil !== held.until || v.queuedReason !== (held.reason ?? undefined))) {
-            return { ...v, queuedUntil: held.until, queuedReason: held.reason ?? undefined };
+          if (!v.id) return v;
+          // "Paused by you" flag - independent of the queue badge; shown when
+          // the user removed messages for this shop and has not re-engaged.
+          const digits = (v.whatsapp ?? "").replace(/[^\d]/g, "");
+          const isCancelled = Boolean(digits && cancelledDigits.has(digits));
+          const base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
+          if (base.offer) return base; // an offer supersedes any queue badge
+          const held = byVendor.get(base.id);
+          if (
+            held &&
+            (base.queuedUntil !== held.until || base.queuedReason !== (held.reason ?? undefined))
+          ) {
+            return { ...base, queuedUntil: held.until, queuedReason: held.reason ?? undefined };
           }
-          if (!held && v.queuedUntil) {
-            const delivered = sentVendors.has(v.id);
+          if (!held && base.queuedUntil) {
+            const delivered = sentVendors.has(base.id);
             return {
-              ...v,
+              ...base,
               queuedUntil: undefined,
               queuedReason: undefined,
               stage: delivered
-                ? v.stage === "found" || v.stage === "rfq-sent"
+                ? base.stage === "found" || base.stage === "rfq-sent"
                   ? "awaiting-response"
-                  : v.stage
-                : v.stage === "rfq-sent"
+                  : base.stage
+                : base.stage === "rfq-sent"
                   ? "found"
-                  : v.stage,
+                  : base.stage,
             };
           }
-          return v;
+          return base;
         })
       );
     } catch {
@@ -634,8 +681,13 @@ export default function Home() {
   });
 
   async function removeQueued(id: number, vendorId: string | null, toNumber?: string) {
-    // Optimistic clear: remove EVERY item for this shop (the server sweep
-    // below matches), revert a never-delivered ask back to "Ask for price".
+    // TOMBSTONE FIRST: every poll from now on drops this row/badge, so an
+    // interleaved poll that read pre-delete server state cannot resurrect it
+    // (the remove-flicker). Optimistic clear follows.
+    const nowMs = Date.now();
+    pendingRemovals.current.set(`id:${id}`, nowMs);
+    if (vendorId) pendingRemovals.current.set(`v:${vendorId}`, nowMs);
+    setRemovingIds((s) => new Set(s).add(id));
     setQueueItems((items) => items.filter((i) => i.id !== id && (!vendorId || i.vendorId !== vendorId)));
     if (vendorId) {
       setVendors((vs) =>
@@ -645,6 +697,7 @@ export default function Home() {
                 ...v,
                 queuedUntil: undefined,
                 queuedReason: undefined,
+                cancelled: true,
                 lastEventAt: Date.now(),
                 stage: v.stage === "rfq-sent" ? "found" : v.stage,
               }
@@ -664,12 +717,29 @@ export default function Home() {
         // outbox row already drained - "remove" must survive wakeups too.
         body: JSON.stringify({ action: "delete", id, vendorId, toNumber }),
       });
+      if (!res.ok) throw new Error(`queue delete ${res.status}`);
       const d = await res.json().catch(() => ({ removed: true }));
+      if (d.ok === false && d.error) {
+        // The server removed rows but could NOT confirm permanence - say so
+        // honestly instead of a silent success.
+        setMassNote(t(String(d.error)));
+      }
       if (d.sent === true) {
         setMassNote(t("Too late to remove that one - it had already left for the shop."));
         if (vendorId) patchVendor(vendorId, { stage: "awaiting-response", lastEventAt: Date.now() });
       }
+    } catch {
+      // OFFLINE/FAILURE HONESTY: nothing changed on the server - drop the
+      // tombstones so the row honestly reappears, and tell the user.
+      pendingRemovals.current.delete(`id:${id}`);
+      if (vendorId) pendingRemovals.current.delete(`v:${vendorId}`);
+      setMassNote(t("Couldn't reach the server - nothing was removed. Try again."));
     } finally {
+      setRemovingIds((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
       refreshQueue();
     }
   }
@@ -751,12 +821,16 @@ export default function Home() {
   );
   useEffect(() => {
     if (!session || !waiting || !rfq) return;
+    // Stale-run guard: an unmounted/reconfigured effect must never apply its
+    // in-flight response to fresh state (the epoch may have changed).
+    let cancelled = false;
     const tick = async () => {
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.
         const res = await fetch(`/api/replies?since=${searchEpoch}`, { cache: "no-store" });
         const d = await res.json();
+        if (cancelled) return;
         // Shops that walked away: the card says so honestly - it never keeps
         // pretending the agent is "still confirming" a dead conversation.
         const declinedIds = new Set<string>(
@@ -832,7 +906,10 @@ export default function Home() {
     };
     tick();
     const id = setInterval(tick, pollCfg.repliesMs);
-    return () => clearInterval(id);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [session, waiting, rfq, searchEpoch, pollCfg.repliesMs, syncNonce]);
 
   function runFunnel(list: Vendor[], _activeRfq: StructuredRFQ) {
@@ -1219,6 +1296,18 @@ export default function Home() {
     offers: statusGroups.deals.length,
   };
 
+  // Honest pacing progress ("3 of 8 sent - next at ~14:32 - done by ~14:41")
+  // derived from LIVE queue rows so mid-batch removals shrink the plan.
+  const queueProgress = useMemo(
+    () =>
+      sendProgress(
+        queueItems.map((q) => ({ notBefore: q.notBefore })),
+        stageCounts.messaged + stageCounts.offers,
+        Date.now()
+      ),
+    [queueItems, stageCounts.messaged, stageCounts.offers]
+  );
+
   const paidPlan = session ? session.plan !== "free" : false;
 
   return (
@@ -1577,6 +1666,23 @@ export default function Home() {
               </div>
               <span className="text-[10px] font-bold text-faint">{t("auto-sends")}</span>
             </div>
+            {queueProgress && (
+              <p className="mb-1.5 text-[11px] text-soft">
+                {queueProgress.sent > 0
+                  ? `${queueProgress.sent} ${t("of")} ${queueProgress.total} ${t("sent")} · `
+                  : ""}
+                {queueProgress.dueNow
+                  ? t("next one leaves any moment")
+                  : queueProgress.nextAt
+                    ? `${t("next at")} ~${new Date(queueProgress.nextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                    : ""}
+                {queueProgress.doneBy && queueProgress.waiting > 1
+                  ? ` · ${t("all done by")} ~${new Date(queueProgress.doneBy).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                  : ""}
+                {" - "}
+                {t("your agent messages shops one at a time, the way a person would")}
+              </p>
+            )}
             <div className="space-y-1.5">
               {queueItems.map((q) => (
                 <div key={q.id} className="flex items-center justify-between gap-2 rounded-xl bg-card2 p-2">
@@ -1593,9 +1699,10 @@ export default function Home() {
                   </span>
                   <button
                     onClick={() => removeQueued(q.id, q.vendorId, q.toNumber)}
-                    className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-1 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
+                    disabled={removingIds.has(q.id)}
+                    className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-1 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft disabled:opacity-50"
                   >
-                    {t("Remove")}
+                    {removingIds.has(q.id) ? t("Removing...") : t("Remove")}
                   </button>
                 </div>
               ))}
@@ -1941,7 +2048,7 @@ export default function Home() {
             </div>
             <h2 className="text-lg font-extrabold text-strong">{t("Clear this search?")}</h2>
             <p className="mt-1 text-[13px] text-soft">
-              {t("Your current shops and any offers will be removed. This can't be undone.")}
+              {t("Your current shops and any offers will be removed, and every waiting message is permanently cancelled - nothing will be sent later. This can't be undone.")}
             </p>
             <div className="mt-4 flex gap-2">
               <button

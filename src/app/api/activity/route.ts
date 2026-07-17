@@ -270,7 +270,7 @@ export async function GET(req: Request) {
       title: "Will is waiting on purpose",
       detail:
         (w.payload?.reason ??
-          "replying too fast reads as desperate - the next move is timed for leverage") +
+          "waiting a moment so the shop takes the offer seriously") +
         ` (until ${new Date(w.not_before).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
     });
   }

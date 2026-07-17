@@ -130,6 +130,9 @@ export interface Vendor {
   // The anti-ban guard's RAW hold reason ("human pacing gap", "shop is closed
   // now"...) - cards translate it honestly instead of guessing "shop closed".
   queuedReason?: string;
+  // The user removed queued messages for this shop - agents stay silent until
+  // an explicit new send (the card says "paused by you", never pretends).
+  cancelled?: boolean;
 }
 
 export interface VendorReview {

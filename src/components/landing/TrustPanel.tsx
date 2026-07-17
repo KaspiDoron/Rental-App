@@ -37,8 +37,8 @@ export function TrustPanel({
     },
     {
       icon: "shieldCheck",
-      title: t("A safe-pacing engine guards your number"),
-      body: t("Trust-scored warm-up, human rhythm, hard daily budgets and an automatic safety pause."),
+      title: t("Your number is treated with care"),
+      body: t("Human rhythm, sensible daily amounts, and automatic breaks whenever caution is wise."),
     },
     {
       icon: "eyeOff",

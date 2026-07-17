@@ -1210,12 +1210,17 @@ export async function releaseSendClaim(
 
 export interface SenderSafety {
   state: "healthy" | "pacing" | "paused" | "recovering";
+  /** RAW internal reason - admin surfaces only, never shown to travellers. */
   reason?: string;
+  /** Calm, outcome-language explanation safe for the traveller UI. */
+  publicReason?: string;
   pausedUntil?: string;
   trustScore: number;
   riskScore: number;
   queued: number;
   queueReasons: string[];
+  /** Traveller-safe translations of queueReasons (same order, deduped). */
+  publicQueueReasons: string[];
 }
 
 export async function senderSafety(senderKey: string): Promise<SenderSafety> {
@@ -1239,6 +1244,12 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
       ? rep.paused_until
       : undefined;
 
+  // Traveller-safe translations: outcome language only (what happens and
+  // when), never the mechanism ("ban risk", cap math, trust scores). The raw
+  // reasons stay on the object for admin surfaces.
+  const { queueReasonLabel } = await import("./queue-reason");
+  const publicQueueReasons = [...new Set(queueReasons.map((r) => queueReasonLabel(r)))];
+
   if (pausedUntil) {
     // Ban recovery drops trust to 10 (enterBanRecovery); a plain risk pause
     // keeps whatever trust the number had.
@@ -1248,11 +1259,14 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
       reason: recovering
         ? "recovering after a ban-risk signal - all automated sends are held while your number cools down"
         : "sending paused automatically to protect your number from ban risk",
+      publicReason:
+        "Sending is taking a short break and resumes automatically - your queued messages are safe.",
       pausedUntil,
       trustScore,
       riskScore,
       queued,
       queueReasons,
+      publicQueueReasons,
     };
   }
   if (queued > 0) {
@@ -1261,11 +1275,14 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
       reason:
         queueReasons[0] ??
         "messages are queued and will send at a safe, human pace",
+      publicReason:
+        "Your agent is sending messages at a natural, human pace - each one goes out automatically.",
       trustScore,
       riskScore,
       queued,
       queueReasons,
+      publicQueueReasons,
     };
   }
-  return { state: "healthy", trustScore, riskScore, queued, queueReasons };
+  return { state: "healthy", trustScore, riskScore, queued, queueReasons, publicQueueReasons };
 }

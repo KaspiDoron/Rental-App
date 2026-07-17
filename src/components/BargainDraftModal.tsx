@@ -127,7 +127,7 @@ export function BargainDraftModal({
         setStatusMsg(d.error ?? t("Your WhatsApp is reconnecting - wait a few seconds and tap send again."));
       } else if (d.rateLimited) {
         setSendState("ratelimited");
-        setStatusMsg(d.error ?? t("Daily safe-send limit reached for now - it resumes automatically."));
+        setStatusMsg(d.error ?? t("Done for today - sending resumes automatically a bit later."));
       } else {
         setSendState("manual");
         setStatusMsg(d.error ?? null);

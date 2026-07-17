@@ -338,7 +338,7 @@ export async function GET() {
             vendorName: w.payload?.vendorName ?? null,
             reason:
               w.payload?.reason ??
-              "timed for leverage - replying too fast reads as desperate",
+              "waiting a moment so the shop takes the offer seriously",
           }))
       : [];
     const queuedSends = isLatest ? outbox.length : 0;
