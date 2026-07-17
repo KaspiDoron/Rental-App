@@ -307,15 +307,33 @@ export async function saveThreadState(state: NegotiationThreadState): Promise<vo
     );
     if (after[0] && after[0].version !== next.version) {
       const winner = fromRow(after[0]);
+      const nodeRuns = mergeCounters(winner.nodeRuns, next.nodeRuns);
+      // RE-ENGAGEMENT is STICKY across the race: a thread is only declined if
+      // BOTH writes still consider it declined, so a concurrent re-quote that
+      // reopened a dead thread is never silently reverted to dead. Carry the
+      // re-engagement price/currency when the winner lacks it.
+      const declined = (winner.fields.declined ?? false) && (next.fields.declined ?? false);
+      const mergedFields = {
+        ...winner.fields,
+        firmCount: Math.max(winner.fields.firmCount ?? 0, next.fields.firmCount ?? 0),
+        rounds: Math.max(winner.fields.rounds ?? 0, next.fields.rounds ?? 0),
+        toneDegraded: winner.fields.toneDegraded || next.fields.toneDegraded,
+        declined,
+        pricePerDay: winner.fields.pricePerDay ?? next.fields.pricePerDay,
+        currency: winner.fields.currency ?? next.fields.currency,
+      };
+      // If the reopen cleared the decline out of a terminal dead phase, derive
+      // the phase from the merged facts so the recovery survives the race. A
+      // WON deal (winner.phase "closed") is untouched and never reopens.
+      const mergedPhase =
+        !declined && winner.phase === "dead"
+          ? derivePhase({ ...winner, phase: "negotiating", fields: mergedFields, nodeRuns })
+          : winner.phase;
       const merged: NegotiationThreadState = {
         ...winner,
-        nodeRuns: mergeCounters(winner.nodeRuns, next.nodeRuns),
-        fields: {
-          ...winner.fields,
-          firmCount: Math.max(winner.fields.firmCount ?? 0, next.fields.firmCount ?? 0),
-          rounds: Math.max(winner.fields.rounds ?? 0, next.fields.rounds ?? 0),
-          toneDegraded: winner.fields.toneDegraded || next.fields.toneDegraded,
-        },
+        nodeRuns,
+        fields: mergedFields,
+        phase: mergedPhase,
         version: winner.version + 1,
       };
       await sbUpdate(

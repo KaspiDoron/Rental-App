@@ -198,6 +198,13 @@ export async function POST(req: Request) {
     `select=to_number&sender_key=eq.${encodeURIComponent(session.email)}&limit=100`
   ).catch(() => []);
   const alreadyQueued = new Set(pendingRows.map((r) => r.to_number));
+  // Tighten the click-time budget by intros ALREADY parked to NEW shops (from a
+  // prior tap / another instance): a committed-but-unsent introduction still
+  // consumes a slot, so a double-tap can't each re-grant the full cap. The
+  // per-row guard re-checks at drain regardless, so this only reduces queue
+  // bloat - never over-sends.
+  const parkedNewIntros = pendingRows.filter((r) => !knownNumbers.has(r.to_number)).length;
+  newIntrosLeft = Math.max(0, newIntrosLeft - parkedNewIntros);
   let deferredTomorrow = 0;
 
   for (const v of vendors) {

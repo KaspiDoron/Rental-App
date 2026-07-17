@@ -30,11 +30,12 @@ export async function POST(req: Request) {
   }
   const text = String(body.text).slice(0, 4000);
   const category = String(body.category);
-  // Ownership is tied to the SIGNED-IN session (not the spoofable body.email),
-  // so "your reports" and self-delete are safe. Anonymous submitters still work
-  // via the optional body.email, they just can't list/manage afterwards.
+  // Ownership is the SESSION ONLY - never the spoofable body.email. An
+  // anonymous submission is stored UNOWNED (reporter_email null) so it can
+  // never be planted into another user's "Your reports" feed, nor trigger a
+  // team-reply email to an attacker-chosen address.
   const session = await getSession();
-  const email = session?.email ?? (typeof body.email === "string" ? body.email.slice(0, 200) : "");
+  const email = session?.email ?? "";
   const attachments = parseImages(body.images);
 
   // Feedback Triage Agent: keep genuine issues, filter spam before emailing.

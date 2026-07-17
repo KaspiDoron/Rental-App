@@ -591,27 +591,6 @@ function nextBusinessOpen(toDigits: string, p: SecurityPolicies, region?: string
   return new Date(now.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
 }
 
-/**
- * The HONEST hold for an exhausted daily new-contact budget: the cap counter
- * resets at UTC midnight (new_contacts_date is a UTC date), and the send must
- * also land inside the recipient's business hours. The old hold was
- * "+60-90min from whenever a drain looked" - a lying ETA that crept forward
- * forever ("came back an hour later and everything moved another 30 min").
- * This anchor is STABLE: tomorrow's real window, computed once.
- */
-function nextDailyWindow(toDigits: string, p: SecurityPolicies, region?: string): string {
-  const { off } = resolveOffset(toDigits, region);
-  const reset = new Date();
-  reset.setUTCHours(24, 0, 0, 0); // next UTC midnight = cap reset
-  // Recipient-local hour AT the reset moment; roll forward into their morning.
-  const localAtReset = (reset.getUTCHours() + off + 24) % 24;
-  let waitHours = 0;
-  if (localAtReset < p.business_hour_start) waitHours = p.business_hour_start - localAtReset;
-  else if (localAtReset >= p.business_hour_end)
-    waitHours = 24 - localAtReset + p.business_hour_start;
-  const jitterMs = Math.floor(Math.random() * 45 * 60_000);
-  return new Date(reset.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
-}
 
 /** If `iso` lands outside the recipient's known business window, roll it
  *  forward to the next open; unknown timezone => return unchanged (never
@@ -691,8 +670,16 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
     const today = new Date().toISOString().slice(0, 10);
     count = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
   }
-  const nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
-  return { remaining: Math.max(0, cap - count), cap, windowHours, nextFreeAt };
+  const remaining = Math.max(0, cap - count);
+  let nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
+  // Guard the fallback/edge case: budget spent but no window timestamps to
+  // anchor to (the legacy-counter degrade path, or a count with no oldestAsc).
+  // Without this, nextFreeAt is "now" while remaining is 0, so an over-budget
+  // hold re-attempts every drain (a spin) instead of backing off a real gap.
+  if (remaining <= 0 && Date.parse(nextFreeAt) <= Date.now() + 1000) {
+    nextFreeAt = new Date(Date.now() + Math.min(windowHours, 1) * 3600_000).toISOString();
+  }
+  return { remaining, cap, windowHours, nextFreeAt };
 }
 
 /**
@@ -709,12 +696,6 @@ export async function introHoldIso(
   const p = await getPolicies();
   const { nextFreeAt } = await newContactBudget(senderKey, plan);
   return clampToBusinessHours(nextFreeAt, toDigits, p, region);
-}
-
-/** Kept for backward-compat: the stable tomorrow-morning anchor. */
-export async function dailyWindowIso(toDigits: string, region?: string): Promise<string> {
-  const p = await getPolicies();
-  return nextDailyWindow(toDigits, p, region);
 }
 
 // ---------------------------------------------------------------------------
