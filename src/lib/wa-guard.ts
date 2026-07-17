@@ -568,6 +568,51 @@ function nextBusinessOpen(toDigits: string, p: SecurityPolicies, region?: string
   return new Date(now.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
 }
 
+/**
+ * The HONEST hold for an exhausted daily new-contact budget: the cap counter
+ * resets at UTC midnight (new_contacts_date is a UTC date), and the send must
+ * also land inside the recipient's business hours. The old hold was
+ * "+60-90min from whenever a drain looked" - a lying ETA that crept forward
+ * forever ("came back an hour later and everything moved another 30 min").
+ * This anchor is STABLE: tomorrow's real window, computed once.
+ */
+function nextDailyWindow(toDigits: string, p: SecurityPolicies, region?: string): string {
+  const { off } = resolveOffset(toDigits, region);
+  const reset = new Date();
+  reset.setUTCHours(24, 0, 0, 0); // next UTC midnight = cap reset
+  // Recipient-local hour AT the reset moment; roll forward into their morning.
+  const localAtReset = (reset.getUTCHours() + off + 24) % 24;
+  let waitHours = 0;
+  if (localAtReset < p.business_hour_start) waitHours = p.business_hour_start - localAtReset;
+  else if (localAtReset >= p.business_hour_end)
+    waitHours = 24 - localAtReset + p.business_hour_start;
+  const jitterMs = Math.floor(Math.random() * 45 * 60_000);
+  return new Date(reset.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
+}
+
+/**
+ * How many NEW shops this sender can still introduce themselves to today.
+ * Exported so the mass-bargain route can tell the user the truth AT CLICK
+ * TIME ("today covers N shops; the rest go tomorrow morning") instead of
+ * parking everything behind a fog of fake near-term ETAs.
+ */
+export async function newContactBudget(
+  senderKey: string
+): Promise<{ remaining: number; cap: number }> {
+  const p = await getPolicies();
+  const rep = await getReputation(senderKey);
+  const today = new Date().toISOString().slice(0, 10);
+  const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
+  const cap = newContactCap(rep, p);
+  return { remaining: Math.max(0, cap - newToday), cap };
+}
+
+/** The stable tomorrow-morning anchor, exported for over-budget enqueues. */
+export async function dailyWindowIso(toDigits: string, region?: string): Promise<string> {
+  const p = await getPolicies();
+  return nextDailyWindow(toDigits, p, region);
+}
+
 // ---------------------------------------------------------------------------
 // Content variance - unique payload signature every time
 // ---------------------------------------------------------------------------
@@ -930,9 +975,13 @@ export async function guardOutbound(opts: {
     const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
     const capNew = newContactCap(rep, p);
     if (newToday >= capNew) {
-      // 60-90 min jittered: ten held first-contacts spread out on release
-      // instead of firing as one burst the moment the window re-opens.
-      return await queue(jitteredHold(now, 60, 30), `daily new-contact cap reached (${capNew}/day)`);
+      // STABLE, HONEST anchor: tomorrow's real window (cap reset + recipient
+      // morning), never a creeping "+60-90min from now" that a drain
+      // re-extends forever while telling the user "later today".
+      return await queue(
+        nextDailyWindow(opts.toDigits, p, region),
+        "daily introductions done - resumes next morning"
+      );
     }
     // Reply-rate breaker: if we have enough history and almost nobody replies,
     // freeze cold outreach - this is what actually trips WhatsApp's filters.
@@ -966,7 +1015,7 @@ export async function guardOutbound(opts: {
   // moment the DB blips - the exact outage-mode failure the guard exists for).
   const sentRes = await sbSelectStrict<{ received_at: string }>(
     "whatsapp_messages",
-    `select=received_at&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=received_at&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       opts.senderKey
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()

@@ -1161,16 +1161,23 @@ export default function Home() {
           }
         }
         refreshQueue();
+        const startingNow = (d.sent ?? 0) + Math.max(0, (d.queued ?? 0) - (d.deferredTomorrow ?? 0));
         setMassNote(
-          d.sent > 0 || d.queued > 0 || alreadyAsked > 0
-            ? `${t("Agents are on it - shops asked:")} ${d.sent}${
-                d.queued > 0 ? ` · ${d.queued} ${t("queued for opening hours")}` : ""
-              }${
-                alreadyAsked > 0 ? ` · ${alreadyAsked} ${t("already in conversation")}` : ""
-              }`
-            : d.connect
-            ? t("Connect your WhatsApp in Profile first.")
-            : t("No shops could be messaged right now.")
+          d.deferredTomorrow > 0
+            ? `${t("Today's budget covers")} ${startingNow} ${t(
+                "shops - they start now, one at a time."
+              )} ${d.deferredTomorrow} ${t(
+                "more go out tomorrow morning automatically (your WhatsApp introduces itself to a limited number of new shops per day)."
+              )}`
+            : d.sent > 0 || d.queued > 0 || alreadyAsked > 0
+              ? `${t("Agents are on it - shops asked:")} ${d.sent}${
+                  d.queued > 0 ? ` · ${d.queued} ${t("in line, sending one at a time")}` : ""
+                }${
+                  alreadyAsked > 0 ? ` · ${alreadyAsked} ${t("already in conversation")}` : ""
+                }`
+              : d.connect
+                ? t("Connect your WhatsApp in Profile first.")
+                : t("No shops could be messaged right now.")
         );
       } else {
         setMassNote(d.error ?? t("Could not start the mass bargain."));
@@ -1308,6 +1315,13 @@ export default function Home() {
         Date.now()
       ),
     [queueItems, stageCounts.messaged, stageCounts.offers]
+  );
+
+  // A row overdue by >5 min means sending fell behind (typically: the app was
+  // closed and no background driver ran) - say so instead of a silent stall.
+  const queueStalled = useMemo(
+    () => queueItems.some((q) => Date.parse(q.notBefore) < Date.now() - 5 * 60_000),
+    [queueItems]
   );
 
   const paidPlan = session ? session.plan !== "free" : false;
@@ -1539,7 +1553,11 @@ export default function Home() {
               className="flex w-full items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] font-bold text-soft"
             >
               {stageCounts.messaged > 0 && <span>📤 {stageCounts.messaged} {t("messaged")}</span>}
-              {stageCounts.queued > 0 && <span>🕘 {stageCounts.queued} {t("queued")}</span>}
+              {Math.max(stageCounts.queued, queueItems.length) > 0 && (
+                <span>
+                  🕘 {Math.max(stageCounts.queued, queueItems.length)} {t("queued")}
+                </span>
+              )}
               {stageCounts.offers > 0 && <span className="text-savings">💰 {stageCounts.offers} {t("offers")}</span>}
               {stageCounts.messaged + stageCounts.queued + stageCounts.offers === 0 && (
                 <span>{t("Tap 'Ask for price' on a shop to start")}</span>
@@ -1669,6 +1687,11 @@ export default function Home() {
               </div>
               <span className="text-[10px] font-bold text-faint">{t("auto-sends")}</span>
             </div>
+            {queueStalled && (
+              <p className="mb-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+                ⏱ {t("Sending fell behind while the app was away - catching up now, one message at a time.")}
+              </p>
+            )}
             {queueProgress && (
               <p className="mb-1.5 text-[11px] text-soft">
                 {queueProgress.sent > 0

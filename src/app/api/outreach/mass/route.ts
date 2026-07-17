@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     const [sentRows, queuedRows] = await Promise.all([
       sbSelect<{ to_number: string }>(
         "whatsapp_messages",
-        `select=to_number&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover)&received_at=gte.${sinceIso}&limit=200`
+        `select=to_number&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&limit=200`
       ).catch(() => []),
       sbSelect<{ to_number: string }>(
         "wa_outbox",
@@ -159,6 +159,34 @@ export async function POST(req: Request) {
   const batchStart = Date.now();
   let batchIndex = 0;
 
+  // CLICK-TIME BUDGET TRUTH. The anti-ban engine only allows a limited number
+  // of brand-new shop introductions per day. The old flow silently parked
+  // over-budget messages behind fake near-term ETAs that crept forever
+  // ("came back an hour later - everything moved 30 min further"). Now the
+  // remaining budget is computed UP FRONT: shops inside it start immediately
+  // (first now, the rest 45-75s apart), shops beyond it get an HONEST
+  // tomorrow-morning slot and the user is told so in the response.
+  const { newContactBudget, dailyWindowIso } = await import("@/lib/wa-guard");
+  const budget = await newContactBudget(session.email).catch(() => ({ remaining: 99, cap: 99 }));
+  let newIntrosLeft = budget.remaining;
+  // Which of these shops has this user EVER messaged before? (Known contacts
+  // do not consume the introductions budget.)
+  const { sbSelect } = await import("@/lib/runtime-config");
+  const knownRows = await sbSelect<{ to_number: string }>(
+    "wa_recipient_state",
+    `select=to_number&sender_key=eq.${encodeURIComponent(session.email)}&limit=500`
+  ).catch(() => []);
+  const knownNumbers = new Set(knownRows.map((r) => r.to_number));
+  // DEDUPE: a shop with a message already waiting must not get a second row
+  // (the "same shop listed twice in the queue" report) - covers both re-runs
+  // of mass bargain and duplicate vendors within one batch.
+  const pendingRows = await sbSelect<{ to_number: string }>(
+    "wa_outbox",
+    `select=to_number&sender_key=eq.${encodeURIComponent(session.email)}&limit=100`
+  ).catch(() => []);
+  const alreadyQueued = new Set(pendingRows.map((r) => r.to_number));
+  let deferredTomorrow = 0;
+
   for (const v of vendors) {
     const myIndex = batchIndex++;
     let to = (v.whatsapp ?? "").trim();
@@ -191,6 +219,40 @@ export async function POST(req: Request) {
       // On queued rows the thread peek reads the gloss from outbox meta.
       ...(englishGloss ? { englishGloss } : {}),
     };
+
+    // DEDUPE: this shop already has a message waiting - never add a second.
+    if (alreadyQueued.has(digits)) {
+      results.push({ id: v.id, sent: false, queued: true, reason: "already-queued" });
+      continue;
+    }
+    alreadyQueued.add(digits);
+
+    // BUDGET: a brand-new shop beyond today's introductions budget gets the
+    // honest tomorrow-morning slot - told to the user, never a fake ETA.
+    const isNewIntro = !knownNumbers.has(digits);
+    if (isNewIntro && newIntrosLeft <= 0) {
+      const notBefore = await dailyWindowIso(digits, String(body.region ?? "") || undefined);
+      const parked = await sbInsert("wa_outbox", [
+        {
+          sender_key: session.email,
+          to_number: digits,
+          body: batchMessage,
+          not_before: notBefore,
+          meta: { ...meta, reason: "daily introductions done - resumes next morning" },
+        },
+      ]);
+      deferredTomorrow++;
+      results.push({
+        id: v.id,
+        sent: false,
+        queued: parked,
+        queuedUntil: parked ? notBefore : undefined,
+        queuedReason: parked ? "daily introductions done - resumes next morning" : undefined,
+        reason: parked ? "queued" : "queue-unavailable",
+      });
+      continue;
+    }
+    if (isNewIntro) newIntrosLeft--;
 
     // Shops 2..N: park with the stagger - the guard runs at drain time.
     if (myIndex > 0) {
@@ -309,10 +371,27 @@ export async function POST(req: Request) {
     });
   }
 
+  // LIVENESS: kick the self-chaining drain so the staggered batch keeps
+  // progressing even if the user locks their phone right now (fire-and-
+  // forget; the activity polls and the ping cron remain the backstops).
+  try {
+    const { webhookToken } = await import("@/lib/evolution");
+    const token = await webhookToken();
+    const origin = new URL(req.url).origin;
+    if (token) {
+      fetch(`${origin}/api/wa/tick?token=${encodeURIComponent(token)}&hop=0`).catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
+
   return NextResponse.json({
     results,
     sent: results.filter((r) => r.sent).length,
     queued: results.filter((r) => r.queued).length,
+    // Honest budget summary for the UI: how many shops start now vs tomorrow.
+    deferredTomorrow,
+    introBudget: { remaining: newIntrosLeft, cap: budget.cap },
   });
 }
 

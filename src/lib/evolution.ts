@@ -56,7 +56,7 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
   const hourIso = new Date(now - 3600_000).toISOString();
   const rows = await sbSelect<{ id: number; received_at: string }>(
     "whatsapp_messages",
-    `select=id,received_at&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=id,received_at&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       email
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()

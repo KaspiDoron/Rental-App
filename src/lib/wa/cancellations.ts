@@ -22,7 +22,48 @@ import { digitsOnly } from "../phone";
 
 export type CancelReason = "user-removed" | "session-closed" | "deal-closed";
 
-/** Write a tombstone. Returns false when the write could not be confirmed. */
+// MIGRATION-FREE FALLBACK: the dedicated wa_cancellations table only exists
+// after the owner re-runs schema.sql - but "remove must be permanent" cannot
+// wait for a migration. Marker rows in whatsapp_messages (a table that has
+// existed since day one - the same trick the session-closed flag uses) carry
+// the tombstone until the table is available: to_number="cancel",
+// raw {sender, digits, kind: "cancelled-shop" | "cancel-cleared"}. The
+// NEWEST marker for a (sender, shop) pair wins.
+
+const MARKER_WINDOW_MS = 14 * 24 * 3600_000;
+
+async function writeMarker(
+  senderKey: string,
+  digits: string,
+  kind: "cancelled-shop" | "cancel-cleared",
+  reason?: string
+): Promise<boolean> {
+  return sbInsert("whatsapp_messages", [
+    {
+      to_number: "cancel",
+      body: kind === "cancelled-shop" ? `(stopped messages to +${digits})` : `(re-opened +${digits})`,
+      type: "system",
+      direction: "outbound",
+      raw: { sender: senderKey, digits, kind, ...(reason ? { reason } : {}) },
+    },
+  ]);
+}
+
+/** Newest marker verdict: true=cancelled, false=cleared/none, null=unreadable. */
+async function markerSaysCancelled(senderKey: string, digits: string): Promise<boolean | null> {
+  const res = await sbSelectStrict<{ raw: { kind?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&to_number=eq.cancel&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      senderKey
+    )}&raw->>digits=eq.${encodeURIComponent(digits)}&received_at=gte.${encodeURIComponent(
+      new Date(Date.now() - MARKER_WINDOW_MS).toISOString()
+    )}&order=received_at.desc&limit=1`
+  );
+  if (!("rows" in res)) return res.error === "missing" ? false : null;
+  return res.rows[0]?.raw?.kind === "cancelled-shop";
+}
+
+/** Write a tombstone. Returns false when NO durable store confirmed it. */
 export async function cancelSends(
   senderKey: string,
   toDigits: string,
@@ -31,11 +72,16 @@ export async function cancelSends(
   const digits = digitsOnly(toDigits);
   if (!senderKey || !digits) return false;
   // Upsert on (sender_key, to_number): re-cancelling refreshes the reason.
-  return sbInsert(
+  const table = await sbInsert(
     "wa_cancellations",
     [{ sender_key: senderKey, to_number: digits, reason }],
     "sender_key,to_number"
   );
+  // The marker is ALWAYS written too: it protects the pre-migration present
+  // AND survives the moment the table appears (an empty new table must not
+  // silently reopen shops cancelled via markers).
+  const marker = await writeMarker(senderKey, digits, "cancelled-shop", reason);
+  return table || marker;
 }
 
 /** Remove the tombstone - called by every EXPLICIT user send action. */
@@ -46,15 +92,21 @@ export async function clearCancellation(senderKey: string, toDigits: string): Pr
     "wa_cancellations",
     `sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(digits)}`
   ).catch(() => {});
+  // Only append a cleared-marker when a cancelled-marker is actually in
+  // force - keeps the marker trail short on the common path.
+  const m = await markerSaysCancelled(senderKey, digits).catch(() => false);
+  if (m === true) await writeMarker(senderKey, digits, "cancel-cleared").catch(() => {});
 }
 
 /**
  * Is this recipient tombstoned for this sender?
  *   true  - cancelled: automated sends must be refused outright
- *   false - not cancelled (including "table not migrated yet": no tombstone
- *           can exist in a table that does not exist)
+ *   false - not cancelled
  *   null  - the truth is UNKNOWN (transient read failure): automated senders
  *           must fail CLOSED (hold + retry), never assume "not cancelled"
+ * Checks the dedicated table first, then the marker trail - a cancel
+ * recorded EITHER way is honored, so removal works before, during and after
+ * the schema migration.
  */
 export async function isCancelled(
   senderKey: string,
@@ -69,17 +121,41 @@ export async function isCancelled(
       digits
     )}&limit=1`
   );
-  if ("rows" in res) return res.rows.length > 0;
-  return res.error === "missing" ? false : null;
+  if ("rows" in res && res.rows.length > 0) return true;
+  const tableUnavailable = !("rows" in res) && res.error === "unavailable";
+  const marker = await markerSaysCancelled(senderKey, digits);
+  if (marker === true) return true;
+  if (marker === null || tableUnavailable) return null; // unknown -> fail closed
+  return false;
 }
 
 /** All tombstoned numbers for a user (feeds the "paused" card state). */
 export async function cancelledNumbers(senderKey: string): Promise<string[]> {
+  const out = new Set<string>();
   const res = await sbSelectStrict<{ to_number: string }>(
     "wa_cancellations",
     `select=to_number&sender_key=eq.${encodeURIComponent(senderKey)}&limit=100`
   );
-  return "rows" in res ? res.rows.map((r) => r.to_number) : [];
+  if ("rows" in res) for (const r of res.rows) out.add(r.to_number);
+  // Fold the marker trail (newest marker per shop wins).
+  const markers = await sbSelectStrict<{ raw: { digits?: string; kind?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&to_number=eq.cancel&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      senderKey
+    )}&received_at=gte.${encodeURIComponent(
+      new Date(Date.now() - MARKER_WINDOW_MS).toISOString()
+    )}&order=received_at.desc&limit=200`
+  );
+  if ("rows" in markers) {
+    const seen = new Set<string>();
+    for (const m of markers.rows) {
+      const d = m.raw?.digits;
+      if (!d || seen.has(d)) continue;
+      seen.add(d);
+      if (m.raw?.kind === "cancelled-shop") out.add(d);
+    }
+  }
+  return [...out];
 }
 
 /** Owner kill switch (default ON). */

@@ -39,6 +39,23 @@ paid public signups; the P2 list before hundreds of concurrent users.**
   point of failure: if it lapses, queued messages only move while someone has
   the app open. **Action: keep two independent pinger services pointed at
   `/api/wa/ping` (5-10 min).**
+- **Self-chaining drain** (`/api/wa/tick`, token-gated): kicked by every
+  mass-bargain run and every ping-cron hit. One invocation drains, rides out
+  a stagger step in-process (<=45s), then fire-and-forgets ONE call to
+  itself while near-term work remains (hop-bounded ~40, single-runner via a
+  30s chain claim). Result: a staggered batch keeps progressing for ~30 min
+  after any trigger even with every app closed. Backstops unchanged:
+  activity polls (app open) + the external pinger. Stalls are VISIBLE now:
+  rows overdue >5 min surface an in-app "sending fell behind - catching up"
+  banner instead of silently creeping ETAs.
+- **Daily new-contact budget is HONEST**: when today's introductions are
+  used up, holds anchor to tomorrow's real window (cap reset at UTC midnight
+  + recipient business morning, jittered) - never a "+60-90 min from
+  whenever a drain looked" ETA that re-extends forever. Mass bargain
+  computes the remaining budget AT CLICK TIME: in-budget shops start
+  immediately (first now, 45-75s stagger), over-budget shops are parked on
+  the tomorrow anchor and the user is told exactly that. Duplicate pending
+  rows per shop are refused at enqueue.
 - **Cancellation tombstones** (`wa_cancellations`, unique on sender+number):
   written when a user removes queued messages, clears a search, or closes a
   deal. `guardOutbound` REFUSES automated sends to a tombstoned recipient

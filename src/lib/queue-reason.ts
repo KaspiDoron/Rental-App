@@ -10,6 +10,7 @@ export type QueueReasonKind =
   | "pacing"
   | "batch"
   | "sync"
+  | "tomorrow"
   | "limit"
   | "paused"
   | "hold"
@@ -22,6 +23,7 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   if (/paused by you/.test(r)) return "paused";
   if (/batch-spacing/.test(r)) return "batch";
   if (/sync-retry/.test(r)) return "sync";
+  if (/daily introductions|resumes next morning/.test(r)) return "tomorrow";
   if (/director hold|thinking time|human reply pacing/.test(r)) return "hold";
   if (/pacing|burst|gap/.test(r)) return "pacing";
   if (/cap|limit|paused|recovery|warm/.test(r)) return "limit";
@@ -41,6 +43,8 @@ export function queueReasonLabel(raw?: string | null): string {
       return "In line - your agent messages shops one at a time, like a person";
     case "sync":
       return "Queued - sending resumes automatically in a few minutes";
+    case "tomorrow":
+      return "Today's introductions are done - this goes out tomorrow morning automatically";
     case "pacing":
       return "Queued briefly - sends are paced like a human";
     case "limit":

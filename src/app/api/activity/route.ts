@@ -124,7 +124,7 @@ export async function GET(req: Request) {
       "whatsapp_messages",
       // Marker rows (session pause/takeover flags) live in the same table -
       // keep them out of the human-facing feed.
-      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover)&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
+      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
     ).catch(() => []),
     sbSelect<{
       id: number;

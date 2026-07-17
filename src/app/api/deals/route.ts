@@ -166,7 +166,7 @@ export async function GET() {
         received_at: string;
       }>(
         "whatsapp_messages",
-        `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover)&received_at=gte.${oldestStart}&order=received_at.desc&limit=250`
+        `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${oldestStart}&order=received_at.desc&limit=250`
       ).catch(() => []),
       sbSelect<{
         id: number;

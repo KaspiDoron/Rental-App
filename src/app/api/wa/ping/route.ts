@@ -36,6 +36,15 @@ export async function GET(req: Request) {
     /* best-effort */
   }
 
+  // Extend this ping's reach: kick the self-chaining drain so one cron hit
+  // keeps a staggered batch progressing for the following ~30 minutes even
+  // between cron intervals (fire-and-forget; the chain is single-runner).
+  if (expected) {
+    fetch(
+      `${new URL(req.url).origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=0`
+    ).catch(() => {});
+  }
+
   return NextResponse.json({
     ok: true,
     hosts: hosts.length,
