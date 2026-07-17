@@ -57,6 +57,12 @@ export async function syncInboundReplies(email: string): Promise<number> {
   for (const digits of numbers) {
     if (Date.now() > deadline) break; // stay snappy - next poll continues
     try {
+      // SAME ingestion gate as the webhook: a finished drill (owner testing
+      // against a friend's REAL number) must stop being pulled in here too -
+      // this path used to keep ingesting the friend's private chats for the
+      // whole 36h window after the webhook had already stopped.
+      const { isVendorThread } = await import("./drill");
+      if (!(await isVendorThread(digits, email))) continue;
       const msgs = await fetchMessagesRaw(email, `${digits}@s.whatsapp.net`, 10);
       const inbound = msgs.filter(
         (m) => !m.fromMe && (m.text.trim() || m.hasImage) &&

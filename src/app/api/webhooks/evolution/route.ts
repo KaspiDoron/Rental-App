@@ -22,27 +22,9 @@ import {
 // owner's own) private chats to ingestion. Drill/test threads (the owner
 // rehearsing against a friend's number) count for 12 HOURS only: when the
 // drill is over, the friend's private messages stop being ingested.
-const DRILL_INGEST_WINDOW_MS = 12 * 3600_000;
-
-async function isVendorThread(fromDigits: string, ownerEmail: string): Promise<boolean> {
-  const rows = await sbSelect<{
-    received_at: string;
-    raw: { drill?: boolean; vendorId?: string } | null;
-  }>(
-    "whatsapp_messages",
-    `select=received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      fromDigits
-    )}&raw->>sender=eq.${encodeURIComponent(ownerEmail)}&order=received_at.desc&limit=1`
-  );
-  const row = rows[0];
-  if (!row) return false;
-  const isDrill =
-    row.raw?.drill === true || String(row.raw?.vendorId ?? "").startsWith("drill-");
-  if (isDrill) {
-    return Date.now() - Date.parse(row.received_at) < DRILL_INGEST_WINDOW_MS;
-  }
-  return true;
-}
+// Shared with wa-sync so BOTH ingestion paths enforce the same gate (a
+// second copy is how the drill window got skipped on the recovery path).
+import { isVendorThread } from "@/lib/drill";
 
 // The region of the last outbound to this shop - primes the voice transcriber
 // for the local accent (best-effort; undefined just means no language hint).

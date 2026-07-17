@@ -748,3 +748,9 @@ create table if not exists public.wa_send_claims (
   primary key (sender_key, slot_key)
 );
 alter table public.wa_send_claims enable row level security;
+
+-- Exact ownership scoping for the risk feed (replaces a LIKE substring
+-- filter on detail that could match across users).
+alter table public.agent_events add column if not exists user_email text;
+create index if not exists agent_events_user_idx
+  on public.agent_events (user_email, kind, created_at desc);

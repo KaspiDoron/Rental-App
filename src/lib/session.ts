@@ -139,6 +139,19 @@ export async function getSession(): Promise<Session | null> {
     return null;
   }
   if (!raw?.email) return null;
+  // SERVER-SIDE EXPIRY: maxAge only tells the BROWSER to drop the cookie -
+  // a stolen token replayed directly would otherwise stay valid forever.
+  // Reject anything older than the same 30-day window, and slide-renew
+  // active sessions past the halfway mark so real users never notice.
+  const ageMs = Date.now() - (Number(raw.issuedAt) || 0);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > MAX_AGE * 1000) return null;
+  if (ageMs > (MAX_AGE * 1000) / 2) {
+    try {
+      setSessionCookie(raw.email);
+    } catch {
+      /* renewal is best-effort (read-only contexts cannot set cookies) */
+    }
+  }
   const role = await roleFor(raw.email);
   // Management holds the Ultra plan automatically, free of charge.
   const { getUser, normalizePlan } = await import("./access");

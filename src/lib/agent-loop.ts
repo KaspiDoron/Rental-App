@@ -483,19 +483,24 @@ export async function processVendorReply(opts: {
         const { screenInbound } = await import("./inbound-risk");
         const verdict = await screenInbound(text, { vendorName: ctx.vendorName ?? undefined });
         if (verdict.risk === "none") return;
-        await sbInsert("agent_events", [
-          {
-            kind: "inbound-risk",
-            vendor_id: ctx.vendorId ?? "",
-            vendor_name: ctx.vendorName ?? "",
-            detail: JSON.stringify({
-              email: ctx.sender,
-              risk: verdict.risk,
-              reasons: verdict.reasons,
-              excerpt: text.slice(0, 200),
-            }),
-          },
+        // user_email column = EXACT ownership scoping for the risk feed (the
+        // old detail LIKE *email* filter leaked alerts across users whose
+        // emails were substrings). Retry without the column pre-migration.
+        const riskRow = {
+          kind: "inbound-risk",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: JSON.stringify({
+            email: ctx.sender,
+            risk: verdict.risk,
+            reasons: verdict.reasons,
+            excerpt: text.slice(0, 200),
+          }),
+        };
+        const stamped = await sbInsert("agent_events", [
+          { ...riskRow, user_email: ctx.sender ?? null },
         ]);
+        if (!stamped) await sbInsert("agent_events", [riskRow]);
         const { sendPushToUser } = await import("./push");
         await sendPushToUser(ctx.sender!, {
           title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",

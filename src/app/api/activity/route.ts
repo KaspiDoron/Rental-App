@@ -74,7 +74,10 @@ export async function GET(req: Request) {
       )}&stage=eq.ladder&limit=1`
     ).catch(() => []);
     const row = rows[0];
-    if (!row || (row.user_email && row.user_email !== email)) {
+    // STRICT ownership: a trace with NO owner stamp is nobody's to read -
+    // the old `row.user_email && ...` guard returned it to ANY signed-in
+    // caller who knew the id. Reject unless the stamp matches exactly.
+    if (!row || row.user_email !== email) {
       return NextResponse.json({ ladder: null });
     }
     let ladder: unknown = null;
@@ -178,8 +181,12 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "agent_events",
-      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=eq.inbound-risk&detail=like.${encodeURIComponent(
-        "*" + email + "*"
+      // EXACT ownership match - the old detail LIKE *email* substring filter
+      // showed n@x.com the risk alerts (incl. message excerpts) of john@x.com.
+      // Unstamped legacy rows are hidden by design; the feed is time-windowed
+      // so they age out within a day.
+      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=eq.inbound-risk&user_email=eq.${encodeURIComponent(
+        email
       )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=10`
     ).catch(() => []),
   ]);

@@ -115,8 +115,12 @@ export async function POST(req: Request) {
   try {
     // The Cloud number is SHARED by all users, so the receiving user must be
     // resolved per sender-number: the distinct owners of recent outbound
-    // threads to that number. Exactly one owner = unambiguous; several = the
-    // newest wins and the ambiguity is logged for the owner to see.
+    // threads to that number. Exactly one owner = unambiguous. Several =
+    // PARK, DON'T GUESS: attributing to the newest sender put user A's reply
+    // inside user B's thread (the cross-user leak class). An unattributed
+    // row (no raw.receiver) is invisible to every user surface by
+    // construction - visible to nobody beats visible to the wrong person -
+    // and the ambiguity is logged for the owner's Ops review.
     const resolveReceiver = async (fromDigits: string): Promise<string | null> => {
       const outs = await sbSelect<{ raw: { sender?: string } | null }>(
         "whatsapp_messages",
@@ -136,9 +140,12 @@ export async function POST(req: Request) {
             kind: "ambiguous-inbound",
             vendor_id: "",
             vendor_name: fromDigits,
-            detail: `Cloud inbound from +${fromDigits} matches ${senders.length} users' threads - attributed to the most recent (${senders[0]}).`,
+            detail: `Cloud inbound from +${fromDigits} matches ${senders.length} users' threads (${senders
+              .slice(0, 4)
+              .join(", ")}) - PARKED unattributed, visible to no user. Shared-number limitation.`,
           },
         ]).catch(() => {});
+        return null;
       }
       return senders[0];
     };
@@ -163,11 +170,18 @@ export async function POST(req: Request) {
             type: kind,
             direction: "inbound",
             // receiver = the thread owner - the privacy-scoping keystone.
-            raw: { ...msg, receiver },
+            // A null receiver (unknown or ambiguous sender) is stored but
+            // PARKED: no user surface can see it and no agent processes it.
+            raw: { ...msg, receiver, ...(receiver ? {} : { unattributed: true }) },
           });
           // Text, image/document AND voice notes are processed (a shop that
           // replies with a price-list photo or an audio price must be understood).
-          if (kind === "text" || kind === "image" || kind === "document" || kind === "audio") {
+          // Parked rows are NOT processed - an agent run without a confirmed
+          // owner would write thread state into somebody's negotiation.
+          if (
+            receiver &&
+            (kind === "text" || kind === "image" || kind === "document" || kind === "audio")
+          ) {
             inbound.push({ msg, receiver });
           }
         }

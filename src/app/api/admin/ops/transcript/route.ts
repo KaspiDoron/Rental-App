@@ -145,13 +145,17 @@ export async function GET(req: Request) {
       round: null,
       at: m.received_at,
     })),
-  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  ];
+  // Deterministic causal ordering (same-second rows: inbound first, then id) -
+  // the plain timestamp sort rendered replies above their questions.
+  const { sortTranscript } = await import("@/lib/ops/transcript-sort");
+  const ordered = sortTranscript(messages);
 
   // Every decision referenced by a message (plus the thread's last one) gets
   // its full trace: stages in order, the parsed director ladder, latency.
   const decisionIds = Array.from(
     new Set(
-      [...messages.map((m) => m.decisionId), thread[0]?.last_decision_id].filter(
+      [...ordered.map((m) => m.decisionId), thread[0]?.last_decision_id].filter(
         (x): x is string => Boolean(x)
       )
     )
@@ -225,7 +229,7 @@ export async function GET(req: Request) {
           updatedAt: thread[0].updated_at,
         }
       : null,
-    messages,
+    messages: ordered,
     decisions,
     scores,
     reviews,

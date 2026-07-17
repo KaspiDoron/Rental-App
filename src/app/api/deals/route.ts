@@ -203,8 +203,10 @@ export async function GET() {
         created_at: string;
       }>(
         "agent_events",
-        `select=id,vendor_name,detail,created_at&kind=eq.inbound-risk&detail=like.${encodeURIComponent(
-          "*" + email + "*"
+        // Exact ownership match (the LIKE substring filter leaked alerts
+        // across users whose emails were substrings of each other).
+        `select=id,vendor_name,detail,created_at&kind=eq.inbound-risk&user_email=eq.${encodeURIComponent(
+          email
         )}&created_at=gte.${oldestStart}&order=created_at.desc&limit=20`
       ).catch(() => []),
       sbSelect<{ id: number; not_before: string }>(
