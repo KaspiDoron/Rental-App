@@ -51,6 +51,8 @@ export function TabBar({
               <button
                 key={it.id}
                 data-tour={it.id === "profile" ? "tab-profile" : undefined}
+                aria-current={on ? "page" : undefined}
+                aria-label={it.label}
                 onClick={() => {
                   if (isFeedback) {
                     onFeedback();

@@ -12,6 +12,7 @@ import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
 import { TabBar } from "@/components/TabBar";
 import { FeedbackModal } from "@/components/FeedbackModal";
+import { GoogleWordmark } from "@/components/GoogleWordmark";
 import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
 import { WillAvatar } from "@/components/will/WillAvatar";
@@ -1501,8 +1502,9 @@ export default function Home() {
           </div>
         )}
         {source === "google" && (
-          <div className="mt-3 rounded-2xl bg-savings-soft p-3 text-[12px] font-bold text-savings animate-slide-up">
-            ✓ {t("Real rental shops near your stay, live from Google Maps.")}
+          <div className="mt-3 flex items-center gap-2 rounded-2xl bg-savings-soft p-3 text-[12px] font-bold text-savings animate-slide-up">
+            <GoogleWordmark className="shrink-0 text-[13px]" />
+            <span>✓ {t("Real rental shops near your stay, sourced live from Google.")}</span>
           </div>
         )}
 
@@ -1827,7 +1829,8 @@ export default function Home() {
                 <LoadingDots light label={t("Agents contacting every shop")} />
               ) : (
                 <span className="flex items-center justify-center gap-1.5">
-                  <Icon name={can(session?.plan, "mass-bargain") ? "bolt" : "lock"} className="h-4 w-4" />
+                  {/* WhatsApp glyph brands the channel these messages go out on. */}
+                  <Icon name={can(session?.plan, "mass-bargain") ? "whatsapp" : "lock"} className="h-4 w-4" />
                   {t("Mass bargain - ask all shops at once")}
                 </span>
               )}

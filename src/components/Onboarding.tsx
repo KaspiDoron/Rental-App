@@ -50,7 +50,7 @@ const STEPS: Step[] = [
   {
     emoji: "⚡",
     title: "5 · Find my deal",
-    text: "One tap: the agents structure your request, find every real shop nearby (live from Google Maps) and get ready to message them from YOUR WhatsApp.",
+    text: "One tap: the agents structure your request, find every real shop nearby (shop data sourced live from Google) and get ready to message them from YOUR WhatsApp.",
     anchor: "find",
   },
   {
@@ -178,6 +178,17 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     onClose();
   }
 
+  // Keyboard escape hatch: Esc skips the tour (a11y - the overlay used to trap
+  // keyboard users with no way out but the visible buttons).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") finish();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+
   const s = STEPS[step];
   const spotlight = rect !== null;
   // Tooltip goes under the spotlight when there is room, else above it.
@@ -186,6 +197,9 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
 
   const card = (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Getting started tour"
       className={`surface-strong pointer-events-auto w-full max-w-md p-5 animate-slide-up ${
         spotlight ? "rounded-blob shadow-2xl" : "rounded-t-3xl pb-safe sm:rounded-blob"
       }`}
