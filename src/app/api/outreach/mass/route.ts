@@ -13,16 +13,15 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
+import { planCapacity } from "@/lib/wa/capacity";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
 // stops when the budget runs out (the UI shows how many actually went).
 //
-// BETA LIMIT: each search session contacts at most 10 rental shops in total
-// (sent + queued), enforced HERE - the UI cap is a courtesy, this is the
-// truth. Raised automatically in a future update once scaling lands.
-const MAX_BATCH = 10;
-const SESSION_SHOP_CAP = 10;
+// CAPACITY: each search session contacts at most the plan's rolling-window
+// capacity in total (sent + queued), enforced HERE - the UI cap is a courtesy,
+// this is the truth. free 10 / pro 15 / ultra 40 (see wa/capacity.ts).
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -36,6 +35,11 @@ export async function POST(req: Request) {
   if (await killSwitchOn()) {
     return NextResponse.json({ error: "Temporarily paused by the owner." }, { status: 503 });
   }
+
+  // Plan-tiered batch + session caps. A single mass run (and a whole search
+  // session) can reach up to the plan's rolling-window capacity of shops.
+  const MAX_BATCH = planCapacity(session.plan).newContacts;
+  const SESSION_SHOP_CAP = MAX_BATCH;
 
   const body = await req.json().catch(() => ({}));
   const message = String(body.message ?? "").trim();
@@ -170,8 +174,13 @@ export async function POST(req: Request) {
   // remaining budget is computed UP FRONT: shops inside it start immediately
   // (first now, the rest 45-75s apart), shops beyond it get an HONEST
   // tomorrow-morning slot and the user is told so in the response.
-  const { newContactBudget, dailyWindowIso } = await import("@/lib/wa-guard");
-  const budget = await newContactBudget(session.email).catch(() => ({ remaining: 99, cap: 99 }));
+  const { newContactBudget, introHoldIso } = await import("@/lib/wa-guard");
+  const budget = await newContactBudget(session.email, session.plan).catch(() => ({
+    remaining: 99,
+    cap: 99,
+    windowHours: planCapacity(session.plan).windowHours,
+    nextFreeAt: new Date().toISOString(),
+  }));
   let newIntrosLeft = budget.remaining;
   // Which of these shops has this user EVER messaged before? (Known contacts
   // do not consume the introductions budget.)
@@ -233,14 +242,22 @@ export async function POST(req: Request) {
     // honest tomorrow-morning slot - told to the user, never a fake ETA.
     const isNewIntro = !knownNumbers.has(digits);
     if (isNewIntro && newIntrosLeft <= 0) {
-      const notBefore = await dailyWindowIso(digits, String(body.region ?? "") || undefined);
+      // Beyond this window's introductions budget: park on the ROLLING-window
+      // anchor (when the next slot frees - at most windowHours away), not a
+      // "tomorrow morning" wall. The drain re-runs the full guard at that time.
+      const notBefore = await introHoldIso(
+        session.email,
+        digits,
+        String(body.region ?? "") || undefined,
+        session.plan
+      );
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: session.email,
           to_number: digits,
           body: batchMessage,
           not_before: notBefore,
-          meta: { ...meta, reason: "daily introductions done - resumes next morning" },
+          meta: { ...meta, reason: "introductions full - refreshes soon" },
         },
       ]);
       deferredTomorrow++;
@@ -249,7 +266,7 @@ export async function POST(req: Request) {
         sent: false,
         queued: parked,
         queuedUntil: parked ? notBefore : undefined,
-        queuedReason: parked ? "daily introductions done - resumes next morning" : undefined,
+        queuedReason: parked ? "introductions full - refreshes soon" : undefined,
         reason: parked ? "queued" : "queue-unavailable",
       });
       continue;
@@ -394,9 +411,15 @@ export async function POST(req: Request) {
     results,
     sent: results.filter((r) => r.sent).length,
     queued: results.filter((r) => r.queued).length,
-    // Honest budget summary for the UI: how many shops start now vs tomorrow.
+    // Honest budget summary for the UI: how many shops start now vs deferred,
+    // the rolling-window size, and when the next introduction slot frees.
     deferredTomorrow,
-    introBudget: { remaining: newIntrosLeft, cap: budget.cap },
+    introBudget: {
+      remaining: newIntrosLeft,
+      cap: budget.cap,
+      windowHours: budget.windowHours,
+      nextFreeAt: budget.nextFreeAt,
+    },
   });
 }
 

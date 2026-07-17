@@ -48,14 +48,30 @@ paid public signups; the P2 list before hundreds of concurrent users.**
   activity polls (app open) + the external pinger. Stalls are VISIBLE now:
   rows overdue >5 min surface an in-app "sending fell behind - catching up"
   banner instead of silently creeping ETAs.
-- **Daily new-contact budget is HONEST**: when today's introductions are
-  used up, holds anchor to tomorrow's real window (cap reset at UTC midnight
-  + recipient business morning, jittered) - never a "+60-90 min from
-  whenever a drain looked" ETA that re-extends forever. Mass bargain
+- **New-contact budget is a PLAN-TIERED ROLLING WINDOW** (`src/lib/wa/
+  capacity.ts`): free 10 new shops/6h, pro 15/4h, ultra 40/3h. Capacity
+  refreshes CONTINUOUSLY as the oldest introduction ages out of the window -
+  there is no hard "everything waits until tomorrow (UTC midnight)" wall any
+  more. When the budget is spent, holds anchor to when the next slot frees
+  (`newContactBudget().nextFreeAt` = oldest intro + windowHours, clamped into
+  the shop's business hours) - at most windowHours away, never tomorrow. The
+  window is counted migration-free from timestamped outbound RFQ rows
+  (`whatsapp_messages.raw->>kind=rfq`), so no schema change is needed. Plans
+  are now REAL: `dynamicHourCap` and the new-contact cap both scale with the
+  plan (Ultra gets 18/h headroom vs free's 6/h), so `vip-concurrency` finally
+  does something. Warm-up is humane: the ramp floor is 45% (not the old ~14%
+  day-0 that let a fresh number reach only ~2 shops/day). Mass bargain
   computes the remaining budget AT CLICK TIME: in-budget shops start
-  immediately (first now, 45-75s stagger), over-budget shops are parked on
-  the tomorrow anchor and the user is told exactly that. Duplicate pending
-  rows per shop are refused at enqueue.
+  immediately (first now, 45-75s stagger), over-budget shops park on the
+  rolling anchor and the user sees a "next slot in ~Xh" countdown. Duplicate
+  pending rows per shop are refused at enqueue.
+- **Hourly-cap holds no longer creep**: an over-cap send now anchors to when
+  the rolling hour actually frees (oldest in-window send + 1h + <=3min
+  jitter), a fixed future instant - not a fresh `now+15-35min` re-stamped on
+  every drain (the residual "came back later, everything moved another 30 min"
+  path, which the daily fix in the prior round had left on the hourly cap).
+  Burst tolerance scales with the plan's hourly headroom (the 50-120s min-gap
+  already spaces a paced batch, so it is not a robotic flurry).
 - **Cancellation tombstones** (`wa_cancellations`, unique on sender+number):
   written when a user removes queued messages, clears a search, or closes a
   deal. `guardOutbound` REFUSES automated sends to a tombstoned recipient
@@ -73,9 +89,11 @@ paid public signups; the P2 list before hundreds of concurrent users.**
 ## Rate limiting & anti-ban budgets (as shipped)
 
 Per user daily: 15 searches, 300 geocodes, 120 AI calls, 60 WA sends
-(15/hour). Anti-ban per number: base 4/hour growing to 14/hour with trust,
-40/day cap (±20% jitter), 50-120s gaps, business hours 08-21, 15 new
-contacts/day, auto-pause on risk ≥70 for 4h, 7-day warm-up at half budget.
+(15/hour). Anti-ban per number: base 4/hour growing to 14/hour with trust and
+plan headroom (free 6/h, pro 10/h, ultra 18/h), 40/day cap (±20% jitter),
+50-120s gaps, business hours 08-21, plan-tiered rolling new-contact window
+(free 10/6h, pro 15/4h, ultra 40/3h), auto-pause on risk ≥70 for 4h, 7-day
+warm-up ramping from a 45% floor to full.
 `SCALE_MODE=on` triples the per-user budgets and relaxes client polling
 (12s→25s activity, 15s→30s replies) - it does NOT change anti-ban pacing
 (deliberate: number safety never scales down).

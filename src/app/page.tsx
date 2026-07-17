@@ -1162,13 +1162,18 @@ export default function Home() {
         }
         refreshQueue();
         const startingNow = (d.sent ?? 0) + Math.max(0, (d.queued ?? 0) - (d.deferredTomorrow ?? 0));
+        // Rolling-window capacity: deferred shops begin automatically as slots
+        // free (at most windowHours away), never "tomorrow". Show the honest
+        // next-refresh countdown from nextFreeAt.
+        const nextFreeMs = d.introBudget?.nextFreeAt ? Date.parse(d.introBudget.nextFreeAt) : 0;
+        const refreshMin = nextFreeMs ? Math.max(1, Math.round((nextFreeMs - Date.now()) / 60_000)) : 0;
+        const refreshText =
+          refreshMin >= 90 ? `~${Math.round(refreshMin / 60)} h` : `~${refreshMin} min`;
         setMassNote(
           d.deferredTomorrow > 0
-            ? `${t("Today's budget covers")} ${startingNow} ${t(
-                "shops - they start now, one at a time."
-              )} ${d.deferredTomorrow} ${t(
-                "more go out tomorrow morning automatically (your WhatsApp introduces itself to a limited number of new shops per day)."
-              )}`
+            ? `${t("Starting now:")} ${startingNow} ${t("shops, one at a time.")} ${d.deferredTomorrow} ${t(
+                "more begin automatically as capacity refreshes"
+              )}${refreshMin ? ` (${t("next slot in")} ${refreshText})` : ""}.`
             : d.sent > 0 || d.queued > 0 || alreadyAsked > 0
               ? `${t("Agents are on it - shops asked:")} ${d.sent}${
                   d.queued > 0 ? ` · ${d.queued} ${t("in line, sending one at a time")}` : ""

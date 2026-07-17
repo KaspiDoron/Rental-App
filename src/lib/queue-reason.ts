@@ -10,6 +10,7 @@ export type QueueReasonKind =
   | "pacing"
   | "batch"
   | "sync"
+  | "capacity"
   | "tomorrow"
   | "limit"
   | "paused"
@@ -23,6 +24,8 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   if (/paused by you/.test(r)) return "paused";
   if (/batch-spacing/.test(r)) return "batch";
   if (/sync-retry/.test(r)) return "sync";
+  // Rolling-window introductions budget: capacity refreshes continuously.
+  if (/introductions full|refreshes soon|refreshes in/.test(r)) return "capacity";
   if (/daily introductions|resumes next morning/.test(r)) return "tomorrow";
   if (/director hold|thinking time|human reply pacing/.test(r)) return "hold";
   if (/pacing|burst|gap/.test(r)) return "pacing";
@@ -43,6 +46,8 @@ export function queueReasonLabel(raw?: string | null): string {
       return "In line - your agent messages shops one at a time, like a person";
     case "sync":
       return "Queued - sending resumes automatically in a few minutes";
+    case "capacity":
+      return "You've reached your plan's batch of new shops - more open up shortly, automatically";
     case "tomorrow":
       return "Today's introductions are done - this goes out tomorrow morning automatically";
     case "pacing":

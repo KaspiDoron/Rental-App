@@ -24,6 +24,13 @@
 import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
+import {
+  planCapacity,
+  effectiveNewContactCap,
+  effectiveHourCap,
+  warmupFactor,
+  nextIntroSlotIso,
+} from "./wa/capacity";
 
 // ---------------------------------------------------------------------------
 // Policies - DB-driven control panel with safe defaults
@@ -207,9 +214,21 @@ function ageDaysOf(rep: Reputation): number {
  * full budget. This is the single biggest protection for a NEW linked number.
  */
 function warmupMultiplier(rep: Reputation, p: SecurityPolicies): number {
-  const age = ageDaysOf(rep);
-  if (age >= p.warmup_days) return 1;
-  return Math.min(1, (age + 1) / Math.max(1, p.warmup_days));
+  // Humane ramp: a fresh number still warms up, but from a usable 45% floor
+  // (not the old ~14% day-0 that made a new number nearly mute). The per-send
+  // rate governors keep it safe at the floor. See wa/capacity.ts.
+  return warmupFactor(ageDaysOf(rep), p.warmup_days);
+}
+
+/** Resolve a sender's plan (email = one WA number) for plan-tiered capacity. */
+async function planForSender(senderKey: string): Promise<string> {
+  try {
+    const { getUser } = await import("./access");
+    const u = await getUser(senderKey);
+    return u?.plan ?? "free";
+  } catch {
+    return "free";
+  }
 }
 
 /** Deterministic-per-day ±jitter so a fixed cap is not itself a pattern. */
@@ -223,17 +242,21 @@ function dailyCapJitter(senderKey: string, p: SecurityPolicies): number {
   return 1 - span + frac * span * 2; // 1-span .. 1+span
 }
 
-/** Hourly budget scales with trust AND the warm-up ramp (velocity vector). */
-export function dynamicHourCap(rep: Reputation, p: SecurityPolicies): number {
+/**
+ * Hourly budget scales with trust, the warm-up ramp AND the plan (velocity
+ * vector). A busy plan (Pro/Ultra) gets more headroom so replies + a paced
+ * batch flow; a low-trust number still sits near the conservative base. The
+ * 50-120s min-gap independently caps the true rate well below this.
+ */
+export function dynamicHourCap(rep: Reputation, p: SecurityPolicies, plan?: string): number {
   const t = Math.max(0, Math.min(100, rep.trust_score));
   const base = p.base_hour_cap + ((p.max_hour_cap - p.base_hour_cap) * t) / 100;
-  const cap = base * warmupMultiplier(rep, p);
-  return Math.max(1, Math.round(cap));
+  return effectiveHourCap(plan ?? "free", base, ageDaysOf(rep), p.warmup_days);
 }
 
-/** Cold first-contacts allowed today (warm-up ramped). */
-function newContactCap(rep: Reputation, p: SecurityPolicies): number {
-  return Math.max(1, Math.round(p.max_new_contacts_per_day * warmupMultiplier(rep, p)));
+/** New-shop introductions allowed per rolling window (plan x warm-up). */
+function newContactCap(rep: Reputation, p: SecurityPolicies, plan?: string): number {
+  return effectiveNewContactCap(plan ?? "free", ageDaysOf(rep), p.warmup_days);
 }
 
 /** Lifetime reply rate (0..1) - the strongest health signal. */
@@ -590,24 +613,105 @@ function nextDailyWindow(toDigits: string, p: SecurityPolicies, region?: string)
   return new Date(reset.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
 }
 
-/**
- * How many NEW shops this sender can still introduce themselves to today.
- * Exported so the mass-bargain route can tell the user the truth AT CLICK
- * TIME ("today covers N shops; the rest go tomorrow morning") instead of
- * parking everything behind a fog of fake near-term ETAs.
- */
-export async function newContactBudget(
-  senderKey: string
-): Promise<{ remaining: number; cap: number }> {
-  const p = await getPolicies();
-  const rep = await getReputation(senderKey);
-  const today = new Date().toISOString().slice(0, 10);
-  const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
-  const cap = newContactCap(rep, p);
-  return { remaining: Math.max(0, cap - newToday), cap };
+/** If `iso` lands outside the recipient's known business window, roll it
+ *  forward to the next open; unknown timezone => return unchanged (never
+ *  false-delay an open shop). */
+function clampToBusinessHours(
+  iso: string,
+  toDigits: string,
+  p: SecurityPolicies,
+  region?: string
+): string {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return iso;
+  const { off, known } = resolveOffset(toDigits, region);
+  if (!known) return iso;
+  const localH = (new Date(at).getUTCHours() + new Date(at).getUTCMinutes() / 60 + off + 24) % 24;
+  if (localH >= p.business_hour_start && localH < p.business_hour_end) return iso;
+  const waitHours =
+    localH < p.business_hour_start
+      ? p.business_hour_start - localH
+      : 24 - localH + p.business_hour_start;
+  const jitterMs = Math.floor(Math.random() * 30 * 60_000);
+  return new Date(at + waitHours * 3600_000 + jitterMs).toISOString();
 }
 
-/** The stable tomorrow-morning anchor, exported for over-budget enqueues. */
+/**
+ * Count the DISTINCT new-shop introductions (outbound RFQ opening messages)
+ * this sender made inside the trailing rolling window, oldest-first. Migration
+ * free: an RFQ IS a first-contact and whatsapp_messages.received_at is durable,
+ * so no schema change is needed to make the budget rolling.
+ */
+async function introductionsInWindow(
+  senderKey: string,
+  windowHours: number
+): Promise<{ count: number; oldestAsc: string[] }> {
+  const sinceIso = new Date(Date.now() - windowHours * 3600_000).toISOString();
+  const rows = await sbSelect<{ to_number: string; received_at: string }>(
+    "whatsapp_messages",
+    `select=to_number,received_at&direction=eq.outbound&raw->>kind=eq.rfq&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
+      senderKey
+    )}&received_at=gte.${encodeURIComponent(sinceIso)}&order=received_at.asc&limit=200`
+  );
+  const firstSeen = new Map<string, string>();
+  for (const r of rows) if (!firstSeen.has(r.to_number)) firstSeen.set(r.to_number, r.received_at);
+  const oldestAsc = [...firstSeen.values()].sort();
+  return { count: firstSeen.size, oldestAsc };
+}
+
+export interface IntroBudget {
+  remaining: number;
+  cap: number;
+  windowHours: number;
+  /** ISO instant the next introduction slot frees (now, if already free). */
+  nextFreeAt: string;
+}
+
+/**
+ * How many NEW shops this sender can still introduce in the current ROLLING
+ * window, and when the next slot frees. Plan-tiered and continuously
+ * refreshing (free 10/6h, pro 15/4h, ultra 40/3h) - never a hard "everything
+ * waits until tomorrow" wall. Exported so the mass-bargain route can tell the
+ * user the truth AT CLICK TIME.
+ */
+export async function newContactBudget(senderKey: string, plan?: string): Promise<IntroBudget> {
+  const p = await getPolicies();
+  const rep = await getReputation(senderKey);
+  const resolvedPlan = plan ?? (await planForSender(senderKey));
+  const windowHours = planCapacity(resolvedPlan).windowHours;
+  const cap = newContactCap(rep, p, resolvedPlan);
+  let count = 0;
+  let oldestAsc: string[] = [];
+  try {
+    const win = await introductionsInWindow(senderKey, windowHours);
+    count = win.count;
+    oldestAsc = win.oldestAsc;
+  } catch {
+    // Degrade to the legacy UTC-day counter if the window read fails.
+    const today = new Date().toISOString().slice(0, 10);
+    count = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
+  }
+  const nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
+  return { remaining: Math.max(0, cap - count), cap, windowHours, nextFreeAt };
+}
+
+/**
+ * The instant the next introduction slot frees, clamped into the recipient's
+ * business hours when the timezone is known. Exported for over-budget enqueues
+ * - a rolling-window anchor at most windowHours away, never "tomorrow".
+ */
+export async function introHoldIso(
+  senderKey: string,
+  toDigits: string,
+  region?: string,
+  plan?: string
+): Promise<string> {
+  const p = await getPolicies();
+  const { nextFreeAt } = await newContactBudget(senderKey, plan);
+  return clampToBusinessHours(nextFreeAt, toDigits, p, region);
+}
+
+/** Kept for backward-compat: the stable tomorrow-morning anchor. */
 export async function dailyWindowIso(toDigits: string, region?: string): Promise<string> {
   const p = await getPolicies();
   return nextDailyWindow(toDigits, p, region);
@@ -711,8 +815,10 @@ export async function guardOutbound(opts: {
   region?: string;          // geocoded shop region - best timezone source
   shopOpenNow?: boolean;    // Google "open now" truth - overrides the clock
   meta?: Record<string, unknown>; // thread context for queued sends
+  plan?: string;            // plan-tiered capacity (falls back to meta.plan)
 }): Promise<GuardVerdict> {
   const region = opts.region ?? (typeof opts.meta?.region === "string" ? (opts.meta.region as string) : undefined);
+  const plan = opts.plan ?? (typeof opts.meta?.plan === "string" ? (opts.meta.plan as string) : undefined);
   const p = await getPolicies();
   const text = opts.auto ? humanizeVariant(opts.text) : opts.text;
   const now = Date.now();
@@ -971,17 +1077,15 @@ export async function guardOutbound(opts: {
   //    ban-risk action). Combines: daily new-contact cap, reply-rate circuit
   //    breaker, and delivery-rate circuit breaker (double-tick < threshold).
   if (opts.auto && isNewContact) {
-    const today = new Date().toISOString().slice(0, 10);
-    const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
-    const capNew = newContactCap(rep, p);
-    if (newToday >= capNew) {
-      // STABLE, HONEST anchor: tomorrow's real window (cap reset + recipient
-      // morning), never a creeping "+60-90min from now" that a drain
-      // re-extends forever while telling the user "later today".
-      return await queue(
-        nextDailyWindow(opts.toDigits, p, region),
-        "daily introductions done - resumes next morning"
-      );
+    // ROLLING-WINDOW introductions budget (plan-tiered, continuously
+    // refreshing: free 10/6h, pro 15/4h, ultra 40/3h). When it is spent, hold
+    // to when the next slot frees - at most windowHours away, clamped into the
+    // shop's business hours - NEVER a hard "tomorrow morning" wall. Capacity
+    // comes back gradually as the oldest introduction ages out of the window.
+    const budget = await newContactBudget(opts.senderKey, plan).catch(() => null);
+    if (budget && budget.remaining <= 0) {
+      const until = clampToBusinessHours(budget.nextFreeAt, opts.toDigits, p, region);
+      return await queue(until, "introductions full - refreshes soon");
     }
     // Reply-rate breaker: if we have enough history and almost nobody replies,
     // freeze cold outreach - this is what actually trips WhatsApp's filters.
@@ -1008,7 +1112,7 @@ export async function guardOutbound(opts: {
   // 4. DYNAMIC VOLUME CAPS (velocity vector) - trust-scaled, warm-up ramped,
   //    with a per-day random wobble so a fixed cap is not itself a pattern.
   const jitter = dailyCapJitter(opts.senderKey, p);
-  const hourCap = Math.max(1, Math.round(dynamicHourCap(rep, p) * jitter));
+  const hourCap = Math.max(1, Math.round(dynamicHourCap(rep, p, plan) * jitter));
   const dayCap = Math.max(1, Math.round(p.day_cap * jitter));
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
@@ -1042,9 +1146,17 @@ export async function guardOutbound(opts: {
   const hourAgo = new Date(now - 3600_000).toISOString();
   const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingDueSoon;
   if (lastHour >= hourCap) {
-    // 15-35 min jittered - held batch members regain individual timings.
+    // STABLE hold: anchor to when the rolling hour actually frees (the oldest
+    // send in the window ages out at oldest+1h), NOT a fresh now+15-35min that
+    // every drain re-stamps forward ("came back an hour later, everything
+    // moved another 30 min"). sentRows is DESC, so the last in-window row is
+    // the oldest.
+    const inHour = sentRows.filter((r) => r.received_at >= hourAgo);
+    const oldestInHour = inHour.length ? Date.parse(inHour[inHour.length - 1].received_at) : now;
+    const freeAt = Math.max(now + 90_000, oldestInHour + 3600_000);
+    const jitterMs = Math.floor(Math.random() * 3 * 60_000);
     return await queue(
-      jitteredHold(now, 15, 20),
+      new Date(freeAt + jitterMs).toISOString(),
       `hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`
     );
   }
@@ -1056,7 +1168,11 @@ export async function guardOutbound(opts: {
   //    burst. After a burst, enforce a longer rest before the next send.
   const burstWindowAgo = new Date(now - p.burst_window_seconds * 1000).toISOString();
   const inBurst = sentRows.filter((r) => r.received_at >= burstWindowAgo).length;
-  if (opts.auto && inBurst >= p.burst_max_in_window) {
+  // Burst tolerance scales with the plan's hourly headroom: the 50-120s
+  // min-gap already spaces sends, so a paced batch inside the hourly cap is not
+  // a robotic flurry. Fresh/low-trust numbers keep the conservative floor.
+  const burstMax = Math.max(p.burst_max_in_window, Math.ceil(hourCap * 0.7));
+  if (opts.auto && inBurst >= burstMax) {
     const newest = sentRows[0] ? Date.parse(sentRows[0].received_at) : now;
     const until = new Date(newest + p.burst_cooldown_minutes * 60_000).toISOString();
     return await queue(until, `burst cooldown (${inBurst} in ${p.burst_window_seconds}s)`);

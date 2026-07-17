@@ -9,6 +9,7 @@ import { PlanCard } from "@/components/UpgradeSheet";
 import { SiteFooter } from "@/components/SiteFooter";
 import { PLANS } from "@/lib/stripe";
 import { ENTITLEMENTS, FEATURE_META, type Feature } from "@/lib/entitlements";
+import { PLAN_CAPACITY } from "@/lib/wa/capacity";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -48,6 +49,46 @@ export default function PricingPage() {
         {PLANS.map((p) => (
           <PlanCard key={p.id} plan={p} />
         ))}
+      </section>
+
+      {/* New-shop reach - the real, enforced rolling-window capacity. */}
+      <section className="mt-6">
+        <div className="surface rounded-blob p-4">
+          <h2 className="text-center font-display text-[16px] font-extrabold text-strong">
+            How many shops your agent contacts
+          </h2>
+          <p className="mx-auto mt-1 max-w-[380px] text-center text-[11px] text-soft">
+            The first shop is messaged right away; the rest follow at a safe, human pace.
+            Capacity refreshes on a rolling window - it never waits until the next day.
+          </p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {(["free", "pro", "ultra"] as const).map((plan) => {
+              const c = PLAN_CAPACITY[plan];
+              return (
+                <div
+                  key={plan}
+                  className={`rounded-2xl border p-3 text-center ${
+                    plan === "ultra" ? "border-brandblue bg-brandblue-soft" : "border-line bg-card"
+                  }`}
+                >
+                  <div className="text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                    {plan}
+                  </div>
+                  <div className="mt-1 text-[22px] font-extrabold leading-none text-strong">
+                    {c.newContacts}
+                  </div>
+                  <div className="text-[11px] font-bold text-soft">
+                    new shops / {c.windowHours}h
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-center text-[10px] text-faint">
+            Every send is protected by the same anti-ban pacing on all plans - your WhatsApp
+            number is never put at risk.
+          </p>
+        </div>
       </section>
 
       {/* Feature comparison - generated from the live entitlements map */}

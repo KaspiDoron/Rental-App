@@ -101,7 +101,7 @@ export const FEATURE_META: Record<
   },
   "vip-concurrency": {
     label: "VIP capacity",
-    blurb: "A bigger slice of the safe hourly send budget - more shops, sooner.",
+    blurb: "Up to 40 new shops every 3 hours - the widest safe reach, refreshing fastest.",
     icon: "shieldCheck",
     plan: "ultra",
   },

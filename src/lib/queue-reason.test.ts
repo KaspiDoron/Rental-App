@@ -16,6 +16,7 @@ describe("classifyQueueReason", () => {
     expect(classifyQueueReason("daily new-contact cap reached (8/day)")).toBe("limit");
     expect(classifyQueueReason("number paused (ban-risk recovery)")).toBe("limit");
     expect(classifyQueueReason("paused by you")).toBe("paused");
+    expect(classifyQueueReason("introductions full - refreshes soon")).toBe("capacity");
     expect(classifyQueueReason("director hold - choosing the best reply order")).toBe("hold");
     expect(classifyQueueReason("human reply pacing (thinking time)")).toBe("hold");
     expect(classifyQueueReason(undefined)).toBe("unknown");
@@ -37,6 +38,12 @@ describe("classifyQueueReason", () => {
   it("labels closed-shop holds as waiting for opening", () => {
     expect(queueReasonLabel("shop is closed now")).toMatch(/shop to open/);
     expect(queueReasonLabel("outside recipient business hours")).toMatch(/shop to open/);
+  });
+
+  it("explains the rolling-window capacity hold without a 'tomorrow' wall", () => {
+    const label = queueReasonLabel("introductions full - refreshes soon");
+    expect(label).toMatch(/open up shortly|shortly/i);
+    expect(label).not.toMatch(/tomorrow/i);
   });
 });
 
