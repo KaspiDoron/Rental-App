@@ -3,7 +3,8 @@ import { getSession } from "@/lib/session";
 import { placeDetails } from "@/lib/google";
 import { runUserAction } from "@/lib/graph/engine";
 import { sendFromUser, disconnectInstance } from "@/lib/evolution";
-import { sbSelect, sbInsert, sbDelete } from "@/lib/runtime-config";
+import { sbSelect, sbInsert, sbDelete, sbDeleteReturning } from "@/lib/runtime-config";
+import { cancelSends, clearCancellation } from "@/lib/wa/cancellations";
 
 // Close-deal handoff: the traveller confirmed a deal on a card. We (1) send the
 // shop a final closing message via the engine's closing-message node, then (2)
@@ -72,7 +73,11 @@ export async function POST(req: Request) {
   }
 
   // 1) Tell the shop, via the closing-message node (varied, warm, no auto-delay
-  //    - the traveller is watching).
+  //    - the traveller is watching). ORDER MATTERS: clear any tombstone on
+  //    THIS shop first (confirming the deal is an explicit user action - the
+  //    closing message must be allowed to leave), send, and only THEN
+  //    tombstone the whole session below.
+  await clearCancellation(session.email, digits).catch(() => {});
   let sent = false;
   try {
     const result = await runUserAction({
@@ -97,14 +102,26 @@ export async function POST(req: Request) {
   }
 
   // 1.5) Wind the REST of the session down through the existing, engine-
-  //      respected mechanism: stamp session-closed and purge queued sends +
-  //      strategic wakeups. Other shops' threads go politely silent - no
-  //      "sorry, found another bike" blast, and definitely no second yes.
-  await sbDelete("wa_outbox", `sender_key=eq.${encodeURIComponent(session.email)}`).catch(() => {});
+  //      respected mechanism: stamp session-closed, purge queued sends +
+  //      strategic wakeups (AWAITED - a race here could fire a tick against
+  //      the closing session), and tombstone every recipient including this
+  //      shop (the deal is done - nothing automated chases it afterwards).
+  const purged = await sbDeleteReturning<{ to_number: string }>(
+    "wa_outbox",
+    `sender_key=eq.${encodeURIComponent(session.email)}`
+  ).catch(() => [] as { to_number: string }[]);
+  await sbDelete(
+    "graph_wakeups",
+    `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
+  ).catch(() => {});
   await sbDelete(
     "graph_wakeups",
     `kind=eq.tick&thread_key=like.${encodeURIComponent(session.email + ":*")}`
   ).catch(() => {});
+  const closeDigits = [...new Set([digits, ...purged.map((r) => r.to_number)].filter(Boolean))];
+  for (const d of closeDigits) {
+    await cancelSends(session.email, d, "deal-closed").catch(() => {});
+  }
   await sbInsert("whatsapp_messages", [
     {
       to_number: "session",

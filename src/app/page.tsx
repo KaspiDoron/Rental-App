@@ -354,9 +354,25 @@ export default function Home() {
     setQueueItems([]);
     // Future replies belong to a NEW session - anything before now is dead.
     setSearchEpoch(Date.now());
-    // HARD close on the server too: purge every queued message and stamp the
-    // session-closed marker so the agents stop talking to the old shops.
-    fetch("/api/session/close", { method: "POST" }).catch(() => {});
+    // HARD close on the server too: purge every queued message, tombstone the
+    // recipients and stamp the session-closed marker so the agents stop
+    // talking to the old shops. AWAITED with one retry - a silently failed
+    // close would leave server-side sends alive, which is exactly the lie
+    // the user asked us to kill. On double failure, say so honestly.
+    void (async () => {
+      const close = () =>
+        fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
+      let ok = await close().catch(() => false);
+      if (!ok) {
+        await new Promise((r) => setTimeout(r, 1500));
+        ok = await close().catch(() => false);
+      }
+      if (!ok) {
+        setMassNote(
+          t("The search was cleared here, but the server could not confirm stopping pending messages - check the queue in a moment.")
+        );
+      }
+    })();
     try {
       sessionStorage.removeItem("wd_search");
     } catch {}
@@ -617,7 +633,7 @@ export default function Home() {
     }
   });
 
-  async function removeQueued(id: number, vendorId: string | null) {
+  async function removeQueued(id: number, vendorId: string | null, toNumber?: string) {
     // Optimistic clear: remove EVERY item for this shop (the server sweep
     // below matches), revert a never-delivered ask back to "Ask for price".
     setQueueItems((items) => items.filter((i) => i.id !== id && (!vendorId || i.vendorId !== vendorId)));
@@ -644,7 +660,9 @@ export default function Home() {
       const res = await fetch("/api/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", id, vendorId }),
+        // toNumber lets the server tombstone the recipient even when every
+        // outbox row already drained - "remove" must survive wakeups too.
+        body: JSON.stringify({ action: "delete", id, vendorId, toNumber }),
       });
       const d = await res.json().catch(() => ({ removed: true }));
       if (d.sent === true) {
@@ -1574,7 +1592,7 @@ export default function Home() {
                     </span>
                   </span>
                   <button
-                    onClick={() => removeQueued(q.id, q.vendorId)}
+                    onClick={() => removeQueued(q.id, q.vendorId, q.toNumber)}
                     className="btn btn-sm shrink-0 rounded-lg border-2 border-line px-2 py-1 text-[10px] font-extrabold text-brandred hover:bg-brandred-soft"
                   >
                     {t("Remove")}

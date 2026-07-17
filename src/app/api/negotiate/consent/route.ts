@@ -49,6 +49,13 @@ export async function POST(req: Request) {
     }
   }
 
+  // Sharing pickup location is an explicit user action toward this shop -
+  // it re-opens a previously cancelled recipient.
+  {
+    const { clearCancellation } = await import("@/lib/wa/cancellations");
+    await clearCancellation(session.email, digits).catch(() => {});
+  }
+
   const result = await runUserAction({
     userEmail: session.email,
     toDigits: digits,

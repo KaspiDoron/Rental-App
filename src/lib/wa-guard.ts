@@ -669,6 +669,48 @@ export async function guardOutbound(opts: {
     return { allow: false, reason, text };
   };
 
+  // -2. CANCELLATION TOMBSTONE + HUMAN TAKEOVER - the two absolute vetoes.
+  //     Every automated path (outbox drain, wakeup re-composition, retries)
+  //     converges here, so enforcing the user's "remove"/"I've got this chat"
+  //     at this choke point is what makes them PERMANENT. Distinctions:
+  //       cancelled === true  -> refuse outright (never queued, never retried;
+  //                              the drain drops non-queued rejections)
+  //       cancelled === null  -> the tombstone table is unreadable RIGHT NOW:
+  //                              the truth is unknown, so fail CLOSED - hold
+  //                              briefly and let a later drain re-check. A
+  //                              missing (un-migrated) table reads as false.
+  if (opts.auto) {
+    const { isCancelled, recordSuppressedSend } = await import("./wa/cancellations");
+    const cancelled = await isCancelled(opts.senderKey, opts.toDigits);
+    if (cancelled === true) {
+      void recordSuppressedSend(opts.senderKey, opts.toDigits, "cancelled-send-blocked");
+      return {
+        allow: false,
+        reason: "cancelled-by-user - you removed the messages to this shop",
+        text,
+      };
+    }
+    if (cancelled === null) {
+      return await queue(
+        new Date(now + (5 + Math.random() * 5) * 60_000).toISOString(),
+        "sync-retry"
+      );
+    }
+    try {
+      const { isThreadTakenOver } = await import("./session-flags");
+      if (await isThreadTakenOver(opts.senderKey, opts.toDigits)) {
+        void recordSuppressedSend(opts.senderKey, opts.toDigits, "takeover-send-blocked");
+        return {
+          allow: false,
+          reason: "human takeover - you are chatting with this shop yourself",
+          text,
+        };
+      }
+    } catch {
+      /* flag unreadable - the agent-loop gate still covers the reply path */
+    }
+  }
+
   // -1. IDEMPOTENCY / DEDUP PRE-FLIGHT. Never send the EXACT same text to the
   //     same shop twice in a short window - this is the hard stop against a
   //     message loop (the "agent sent the same message again" bug). Compares
@@ -987,6 +1029,14 @@ export async function drainOutbox(
       meta: row.meta ?? undefined,
     });
     if (!verdict.allow) continue; // re-queued or dropped by the gate
+    // Last-instant cancellation re-check (the user may have tapped Remove
+    // between the guard verdict and this send).
+    try {
+      const { isCancelled } = await import("./wa/cancellations");
+      if ((await isCancelled(row.sender_key, row.to_number)) === true) continue;
+    } catch {
+      /* the guard already enforced the readable cases */
+    }
     const r = await send(row.sender_key, row.to_number, verdict.text);
     if (r.ok) {
       sent++;

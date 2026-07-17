@@ -8,6 +8,10 @@ import { queueReasonLabel } from "@/lib/queue-reason";
 // (shop closed / safe pacing / daily limit / paused), never a made-up one -
 // and decide: WAIT, or REMOVE them. Strictly scoped to the signed-in user's
 // own sender_key.
+//
+// NOTE: this endpoint deliberately does NOT drain the outbox. Opening the
+// queue to REVIEW messages must never be the event that SENDS them - the
+// webhook, the activity/replies polls and the ping cron all drain already.
 
 interface OutboxRow {
   id: number;
@@ -21,18 +25,6 @@ interface OutboxRow {
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ items: [] }, { status: 401 });
-
-  // Opportunistic drain: this endpoint is polled while the app is open, so
-  // due messages actually leave even without the external cron.
-  try {
-    const { drainOutbox } = await import("@/lib/wa-guard");
-    const { sendFromUser } = await import("@/lib/evolution");
-    void drainOutbox((email, to, text) => sendFromUser(email, to, text)).catch(() => {});
-    const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    void drainGraphWakeups((email, to, text) => sendFromUser(email, to, text)).catch(() => {});
-  } catch {
-    /* draining is best-effort */
-  }
 
   const rows = await sbSelect<OutboxRow>(
     "wa_outbox",
@@ -66,8 +58,8 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   const body = await req.json().catch(() => ({}));
 
-  if (body.action === "delete" && (body.id || body.vendorId)) {
-    const { sbDeleteReturning } = await import("@/lib/runtime-config");
+  if (body.action === "delete" && (body.id || body.vendorId || body.toNumber)) {
+    const { sbDeleteReturning, sbDelete } = await import("@/lib/runtime-config");
     const vendorId = body.vendorId ? String(body.vendorId).slice(0, 200) : null;
 
     // 1) The row the user tapped (ownership-scoped).
@@ -91,12 +83,49 @@ export async function POST(req: Request) {
       ).catch(() => []);
       removed = [...removed, ...swept];
     }
+
+    // 3) MAKE IT PERMANENT. Deleting outbox rows alone is not enough: a
+    //    strategic-wait wakeup would re-compose a brand-new message to the
+    //    same shop. Tombstone every affected number (guardOutbound refuses
+    //    automated sends to tombstoned recipients until the user explicitly
+    //    re-initiates) and purge that thread's pending wakeups exactly.
+    const digitsSet = new Set(removed.map((r) => r.to_number).filter(Boolean));
+    if (body.toNumber) {
+      const d = String(body.toNumber).replace(/[^\d]/g, "");
+      if (d) digitsSet.add(d);
+    }
+    const { cancelSends } = await import("@/lib/wa/cancellations");
+    let tombstoneFailed = false;
+    for (const digits of digitsSet) {
+      const ok = await cancelSends(session.email, digits, "user-removed");
+      if (!ok) tombstoneFailed = true;
+      await sbDelete(
+        "graph_wakeups",
+        `kind=eq.tick&thread_key=eq.${encodeURIComponent(`${session.email}:${digits}`)}`
+      ).catch(() => {});
+    }
+
+    // HONESTY over optimism: if the tombstone write could not be confirmed,
+    // say so - rows may re-appear via a wakeup, and pretending otherwise is
+    // the exact lie class this feature exists to kill. (Most common cause:
+    // supabase/schema.sql has not been re-run to create wa_cancellations.)
+    if (tombstoneFailed) {
+      return NextResponse.json({
+        ok: false,
+        removed: removed.length > 0,
+        count: removed.length,
+        error:
+          "The messages were removed from the queue, but the permanent stop could not be saved - it may retry later. (Database update pending.)",
+      });
+    }
+
     if (removed.length > 0) {
       return NextResponse.json({ ok: true, removed: true, count: removed.length });
     }
 
-    // 3) Nothing pending. Honest verdict: did it actually LEAVE (a real
+    // 4) Nothing pending. Honest verdict: did it actually LEAVE (a real
     //    outbound in the last 15 min), or was there simply nothing left?
+    //    Either way the tombstone above now prevents any future auto-send.
     let sent = false;
     if (vendorId) {
       const recent = await sbSelect<{ id: number }>(

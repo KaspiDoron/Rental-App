@@ -310,11 +310,21 @@ export async function GET(req: Request) {
     waHealth = await senderSafety(email);
   } catch {}
 
+  // Numbers the user explicitly cancelled (removed queued messages) - the UI
+  // shows those shops as "paused by you" instead of pretending nothing
+  // happened, and the resume CTA is the explicit action that clears it.
+  let cancelled: string[] = [];
+  try {
+    const { cancelledNumbers } = await import("@/lib/wa/cancellations");
+    cancelled = await cancelledNumbers(email);
+  } catch {}
+
   return NextResponse.json({
     items: items.slice(0, limit),
     queue,
     waHealth,
     whyByVendor,
+    cancelledNumbers: cancelled,
     now: new Date().toISOString(),
   });
 }

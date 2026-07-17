@@ -708,3 +708,27 @@ alter table public.agent_golden_cases enable row level security;
 alter table public.agent_traces add column if not exists ms int;
 alter table public.agent_traces add column if not exists spec_rev int;
 alter table public.agent_scores add column if not exists spec_rev int;
+
+-- ---- Cancellation tombstones (absolute queue deletion) ----------------------------
+-- When a user removes queued messages for a shop (or clears/closes a search
+-- session), a tombstone is written here. guardOutbound refuses AUTOMATED sends
+-- to a tombstoned recipient - across the outbox drain, wakeup re-compositions
+-- and retries - until the user explicitly re-initiates contact (which deletes
+-- the tombstone). This is what makes "remove" permanent on serverless.
+create table if not exists public.wa_cancellations (
+  id         bigint generated always as identity primary key,
+  sender_key text not null,
+  to_number  text not null,
+  reason     text,                     -- 'user-removed' | 'session-closed' | 'deal-closed'
+  created_at timestamptz not null default now(),
+  unique (sender_key, to_number)
+);
+create index if not exists wa_cancellations_sender_idx
+  on public.wa_cancellations (sender_key);
+alter table public.wa_cancellations enable row level security;
+
+-- Exact-match owner scoping for wakeup purges (replaces fragile LIKE patterns
+-- where '_' in an email is itself a wildcard).
+alter table public.graph_wakeups add column if not exists user_email text;
+create index if not exists graph_wakeups_user_idx
+  on public.graph_wakeups (user_email);

@@ -108,6 +108,12 @@ export async function POST(req: Request) {
   }
 
   const digits = to.replace(/[^\d]/g, "");
+  // An explicit send from the user RE-OPENS a shop they previously removed
+  // from the queue - the tombstone yields only to a fresh human decision.
+  {
+    const { clearCancellation } = await import("@/lib/wa/cancellations");
+    await clearCancellation(session.email, digits).catch(() => {});
+  }
   // The identity every stored row uses - a spoofed number can only ever be a
   // clearly-labelled test vendor, never the real shop.
   const vendorId = vendorIdOverride ?? String(body.vendorId ?? "");

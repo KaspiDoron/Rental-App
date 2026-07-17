@@ -27,13 +27,31 @@ paid public signups; the P2 list before hundreds of concurrent users.**
   can never double-send. Failed sends re-queue with backoff (10min ×
   attempts, max 5, then a durable `wa-send-dropped` event). Batch size: 5 per
   drain call.
-- **Strategic waits** (`graph_wakeups`): identical atomic-claim pattern.
-- **Who drains**: every activity/queue poll from any open app, every webhook
-  tail, and `/api/wa/ping` hit by an EXTERNAL cron (cron-job.org). Vercel
-  Hobby crons run at most once per day, so the external pinger is the correct
-  choice on this tier - but it is a single point of failure: if it lapses,
-  queued messages only move while someone has the app open. **Action: keep
-  two independent pinger services pointed at `/api/wa/ping` (5-10 min).**
+- **Strategic waits** (`graph_wakeups`): identical atomic-claim pattern. Rows
+  are stamped with `user_email` so owner-scoped purges are exact matches (the
+  old `thread_key LIKE email:%` pattern treated `_` in emails as a wildcard).
+- **Who drains**: every activity poll from any open app, every webhook tail,
+  the replies/status polls, and `/api/wa/ping` hit by an EXTERNAL cron
+  (cron-job.org). `/api/queue` (the queued-messages VIEWER) deliberately does
+  NOT drain - opening the list to review or remove messages must never be the
+  event that sends them. Vercel Hobby crons run at most once per day, so the
+  external pinger is the correct choice on this tier - but it is a single
+  point of failure: if it lapses, queued messages only move while someone has
+  the app open. **Action: keep two independent pinger services pointed at
+  `/api/wa/ping` (5-10 min).**
+- **Cancellation tombstones** (`wa_cancellations`, unique on sender+number):
+  written when a user removes queued messages, clears a search, or closes a
+  deal. `guardOutbound` REFUSES automated sends to a tombstoned recipient
+  (rule -2, plus a last-instant re-check right before the network send in
+  both drain paths), so outbox re-queues, wakeup re-compositions and retries
+  are all covered - removal is permanent until the user explicitly sends to
+  that shop again (outreach / mass / consent / close-deal clear the
+  tombstone). Human takeover is enforced at the same choke point AND the
+  takeover event purges that thread's outbox rows + tick wakeups. Read
+  semantics are strict: a missing table is vacuously "not cancelled", but a
+  transient read failure is UNKNOWN and automated sends fail CLOSED (queued
+  `sync-retry`, +5-10 min). Kill switch: `CANCEL_GUARD=off` (Admin - Keys)
+  disables enforcement while writes continue.
 
 ## Rate limiting & anti-ban budgets (as shipped)
 

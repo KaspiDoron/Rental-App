@@ -181,6 +181,43 @@ export async function sbSelect<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * STRICT variant of sbSelect for guard-critical reads where "empty" and
+ * "unreadable" mean opposite things. sbSelect collapses every failure to []
+ * which makes safety gates FAIL OPEN (a Supabase blip reads as "nothing sent
+ * today / no tombstones"). This returns:
+ *   { rows }                     - the read genuinely succeeded ([] = empty)
+ *   { error: "missing" }         - the table/column does not exist yet (schema
+ *                                  not migrated): vacuously empty, safe to
+ *                                  treat as "no rows can exist"
+ *   { error: "unavailable" }     - transient failure: the truth is UNKNOWN and
+ *                                  callers must fail CLOSED for automated sends
+ */
+export async function sbSelectStrict<T = Record<string, unknown>>(
+  table: string,
+  query = "select=*&limit=50"
+): Promise<{ rows: T[] } | { error: "missing" | "unavailable" }> {
+  const conn = supabase();
+  // Unconfigured (demo mode) behaves like "missing": no table, no rows.
+  if (!conn) return { error: "missing" };
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}?${query}`, {
+      headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+      cache: "no-store",
+    });
+    if (res.ok) return { rows: (await res.json()) as T[] };
+    // PostgREST: 404 = unknown relation; 400 + 42703/42P01 = missing column/table.
+    if (res.status === 404) return { error: "missing" };
+    if (res.status === 400) {
+      const body = await res.text().catch(() => "");
+      if (body.includes("42P01") || body.includes("42703")) return { error: "missing" };
+    }
+    return { error: "unavailable" };
+  } catch {
+    return { error: "unavailable" };
+  }
+}
+
 /** Insert rows into a Supabase table via the service role. No-op if unset. */
 export async function sbInsert(
   table: string,

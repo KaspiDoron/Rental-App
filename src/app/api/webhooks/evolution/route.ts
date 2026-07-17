@@ -283,6 +283,19 @@ export async function POST(req: Request) {
           const already = await (await import("@/lib/session-flags")).isThreadTakenOver(email, from);
           if (!already) {
             await setThreadTakeover(email, from, true);
+            // The human is at the wheel NOW - kill anything already scheduled
+            // for this thread so the agent cannot talk over them: pending
+            // outbox rows AND strategic-wait wakeups. (The guard also refuses
+            // takeover sends as a belt; this removes the queue itself.)
+            const { sbDelete } = await import("@/lib/runtime-config");
+            await sbDelete(
+              "wa_outbox",
+              `sender_key=eq.${encodeURIComponent(email)}&to_number=eq.${encodeURIComponent(from)}`
+            ).catch(() => {});
+            await sbDelete(
+              "graph_wakeups",
+              `kind=eq.tick&thread_key=eq.${encodeURIComponent(`${email}:${from}`)}`
+            ).catch(() => {});
             const { sendPushToUser } = await import("@/lib/push");
             sendPushToUser(email, {
               title: "You've got the wheel 🤝",

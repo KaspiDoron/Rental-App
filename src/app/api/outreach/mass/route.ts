@@ -150,6 +150,12 @@ export async function POST(req: Request) {
       continue;
     }
     const digits = to.replace(/[^\d]/g, "");
+    // The user explicitly selected this shop for the mass run - that decision
+    // re-opens a previously removed/cancelled recipient.
+    {
+      const { clearCancellation } = await import("@/lib/wa/cancellations");
+      await clearCancellation(session.email, digits).catch(() => {});
+    }
 
     // EVERY mass send passes the anti-ban gate: identical text blasted to 6
     // shops in a burst is a textbook spam signature. The gate varies the

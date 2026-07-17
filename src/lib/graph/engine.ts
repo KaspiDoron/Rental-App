@@ -1182,14 +1182,20 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       return [...rows.values()].slice(0, 10);
     },
     async insertWakeup(row: WakeupRow) {
-      await sbInsert("graph_wakeups", [
-        {
-          kind: row.kind,
-          thread_key: row.threadKey,
-          not_before: row.notBefore,
-          payload: row.payload ?? null,
-        },
+      // Stamp the owning user so purges match EXACTLY (user_email=eq.) instead
+      // of LIKE patterns where '_' in an email is itself a wildcard. Retry
+      // without the column until the owner has re-run schema.sql.
+      const sep = row.threadKey.lastIndexOf(":");
+      const base = {
+        kind: row.kind,
+        thread_key: row.threadKey,
+        not_before: row.notBefore,
+        payload: row.payload ?? null,
+      };
+      const ok = await sbInsert("graph_wakeups", [
+        { ...base, user_email: sep > 0 ? row.threadKey.slice(0, sep) : null },
       ]);
+      if (!ok) await sbInsert("graph_wakeups", [base]);
     },
     async clearWakeups(threadKey, kind) {
       const { sbDeleteReturning } = await import("../runtime-config");
@@ -1227,6 +1233,21 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           queuedUntil: verdict.queuedUntil,
           finalText: verdict.text,
         };
+      }
+      // LAST-INSTANT cancellation re-check: narrows the window between the
+      // guard's verdict and the actual network send, so a user tapping Remove
+      // right now still wins. (The sub-second residue is a documented limit.)
+      try {
+        const { isCancelled } = await import("../wa/cancellations");
+        if ((await isCancelled(senderKey, toNumber)) === true) {
+          return {
+            delivered: "blocked",
+            detail: "cancelled-by-user - removed moments before sending",
+            finalText: verdict.text,
+          };
+        }
+      } catch {
+        /* guard already enforced the readable cases */
       }
       const result = await send(senderKey, toNumber, verdict.text);
       if (result.ok) {
@@ -1365,6 +1386,24 @@ export async function buildTurnFromThread(
   if (idx <= 0) return null;
   const userEmail = threadKey.slice(0, idx);
   const toDigits = threadKey.slice(idx + 1);
+
+  // A claimed TICK for a thread the user cancelled or took over dies here -
+  // without rescheduling. (On an unreadable tombstone we proceed: the guard
+  // itself fails closed at send time, which preserves the message in the
+  // outbox instead of silently losing the wakeup.)
+  if (kind === "tick") {
+    try {
+      const { isCancelled, recordSuppressedSend } = await import("../wa/cancellations");
+      if ((await isCancelled(userEmail, toDigits)) === true) {
+        void recordSuppressedSend(userEmail, toDigits, "cancelled-send-blocked");
+        return null;
+      }
+      const { isThreadTakenOver } = await import("../session-flags");
+      if (await isThreadTakenOver(userEmail, toDigits)) return null;
+    } catch {
+      /* checks are best-effort here - the guard is the hard gate */
+    }
+  }
 
   const prior = await sbSelect<StoredMsg>(
     "whatsapp_messages",
