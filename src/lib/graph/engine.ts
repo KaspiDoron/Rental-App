@@ -948,6 +948,11 @@ async function runTailGates(args: {
         freshNote = ` re-varied (overlap ${(fresh.maxOverlap * 100).toFixed(0)}%)`;
       }
       text = enforceEmojiTone(fresh.text, spec.settings.emojiTone);
+    } else {
+      // Local-language output skips the English trigram store, but the warm
+      // emoji tone policy STILL applies (emojis are language-neutral) - the
+      // audit found Ultra local-language bargains slipped past it entirely.
+      text = enforceEmojiTone(text, spec.settings.emojiTone);
     }
     push({
       stage: "style-validator",

@@ -163,7 +163,21 @@ export function applyExtractionToState(
   // goodbye at most, then silence; the UI shows the thread as declined.
   if (extraction.shopDeclined === true) f.declined = true;
 
+  // RE-ENGAGEMENT (winnable-deal recovery): a thread we treated as dead /
+  // declined is NOT permanently over if the shop later comes back with a
+  // concrete new price ("ok ok, 250 is fine, come"). A fresh usable NUMBER on
+  // a dead/declined thread is a strong re-engagement signal (never a bare tick
+  // or greeting), so clear the decline and let the phase re-derive from the
+  // fresh facts. A WON deal (phase "closed") is never reopened this way.
+  // Guard on the PRIOR state (state.fields.declined / state.phase), never the
+  // f.declined we may have just set above - otherwise a fresh decline that
+  // arrives WITH a number would instantly un-decline itself.
+  const wasDead = state.phase === "dead" || state.fields.declined === true;
+  const reengaged = typeof usablePrice === "number" && usablePrice > 0 && wasDead && state.phase !== "closed";
+  if (reengaged) f.declined = false;
+
   const next = { ...state, fields: f };
+  if (reengaged && next.phase === "dead") next.phase = "negotiating";
   next.phase = derivePhase(next);
   return next;
 }

@@ -736,7 +736,11 @@ export async function composeBargain(opts: {
         packagePivot
       : `FINAL NUDGE: one last tiny, warm ask at the target - fully relaxed, zero pressure, ` +
         `and make clear you are happy either way. ` +
-        packagePivot) + durationLever;
+        packagePivot) +
+    // Round 0 ALREADY leads with the days-leverage play, so appending the
+    // weekly/monthly duration lever there double-states it (reads robotic).
+    // Add the duration lever only from round 1 on, as a fresh angle.
+    (opts.round <= 0 ? "" : durationLever);
 
   const system =
     "You write ONE short WhatsApp message from a real human traveller chatting " +
@@ -761,7 +765,7 @@ export async function composeBargain(opts: {
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
       ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
-      : `Write in SIMPLE, warm, everyday English - the way a friendly traveller actually types on WhatsApp. Use short sentences and common words a non-native speaker easily understands. Contractions are good. NO fancy or formal vocabulary, NO clever idioms or wordplay, NO business/salesy tone. Most rental shops here speak English as a second language, so keep it plain, kind and easy to read. ` +
+      : `The shop speaks a different language than you, so write in SIMPLE, slightly BROKEN non-native English - the way a friendly foreign traveller who learned English as a second language actually types on WhatsApp. Short, telegraphic sentences. Basic common words only. It is FINE (and better) to drop small words or articles occasionally ("is too much for me", "I rent 5 days") - do NOT write polished, fluent, or business English. Stay polite, warm and 100% clear - never rude, never confusing. End with ONE warm emoji. NO idioms, NO wordplay, NO salesy tone. ` +
         (opts.region
           ? `The shop is in ${opts.region}; keep every sentence short and very simple. `
           : "")) +
@@ -868,10 +872,18 @@ export async function composeBargain(opts: {
   const vt = vehicleTerm(opts.rfq.vehicleClass);
   const q = quoted ? money(quoted, cur) : undefined;
   const fallbackPool = rival
-    ? [
-        `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${days} days?`,
-        `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${days} days?`,
-      ]
+    ? opts.round <= 0
+      ? [
+          `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${days} days? 🙂`,
+          `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${days} days? 🙏`,
+        ]
+      : [
+          // Later rounds: don't re-wave the rival card the same way - soften to
+          // a meet-in-the-middle nudge that still holds the leverage.
+          `Ok! Honestly I really want to rent from you - if you can get close to ${t ?? rival}/day for the ${days} days, I book right now. 🤝`,
+          `I hear you! Just a little closer to ${t ?? rival}/day and it's done - I'd rather give you the ${days} days than the other shop. 🙂`,
+          `No pressure - even ${t ?? rival}/day for ${days} days and I confirm today. I'd love it to be your place. 🙏`,
+        ]
     : t && opts.round <= 0
     ? [
         // The owner's opener: days as leverage, ask the floor, warm as a friend.

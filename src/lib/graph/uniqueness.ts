@@ -96,7 +96,8 @@ const EMOJI_ANY = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/u;
 
 /**
  * Emoji tone: outbound messages carry EXACTLY one warm emoji (kindness is
- * policy). Adds one when missing; trims extras beyond the first two.
+ * policy; the composer prompts say "max one"). Adds one when missing; trims
+ * every extra beyond the first so the message never reads as emoji spam.
  */
 export function enforceEmojiTone(text: string, enabled: boolean): string {
   if (!enabled) return text;
@@ -104,13 +105,14 @@ export function enforceEmojiTone(text: string, enabled: boolean): string {
     const fresh = EMOJI_POOL[Math.floor(Math.random() * EMOJI_POOL.length)];
     return `${text.replace(/\s+$/, "")} ${fresh}`;
   }
-  // Cap runaway emoji chains (models sometimes stack 3+).
+  // Keep only the FIRST emoji - models sometimes stack two or three.
   const all = [...text.matchAll(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/gu)];
-  if (all.length > 2) {
+  if (all.length > 1) {
     let seen = 0;
-    return text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/gu, (m) =>
-      ++seen <= 2 ? m : ""
-    ).replace(/\s{2,}/g, " ");
+    return text
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/gu, (m) => (++seen <= 1 ? m : ""))
+      .replace(/\s{2,}/g, " ")
+      .trim();
   }
   return text;
 }

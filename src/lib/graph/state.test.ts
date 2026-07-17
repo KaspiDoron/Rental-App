@@ -133,3 +133,41 @@ describe("global uniqueness", () => {
     expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(out)).toBe(true);
   });
 });
+
+describe("re-engagement - a declined thread is not a permanent dead end", () => {
+  it("reopens when the shop returns with a concrete new price", () => {
+    let s = applyExtractionToState(
+      fresh(),
+      extraction({ pricePerDay: 300, shopDeclined: true }),
+      300,
+      "THB"
+    );
+    s = { ...s, phase: "dead" }; // the pipeline marks a declined thread dead
+    expect(s.fields.declined).toBe(true);
+    // "ok ok, 250 is fine, come" - a concrete number is a re-engagement signal.
+    s = applyExtractionToState(s, extraction({ pricePerDay: 250 }), 250, "THB");
+    expect(s.fields.declined).toBe(false);
+    expect(s.phase).not.toBe("dead");
+    expect(["negotiating", "collecting_terms", "complete"]).toContain(s.phase);
+  });
+
+  it("does NOT reopen on a bare no-price reply", () => {
+    let s = applyExtractionToState(
+      fresh(),
+      extraction({ pricePerDay: 300, shopDeclined: true }),
+      300,
+      "THB"
+    );
+    s = { ...s, phase: "dead" };
+    s = applyExtractionToState(s, extraction({ shopTone: "annoyed" }), undefined, "THB");
+    expect(s.phase).toBe("dead");
+    expect(s.fields.declined).toBe(true);
+  });
+
+  it("never reopens a closed (won) deal", () => {
+    let s = applyExtractionToState(fresh(), extraction({ pricePerDay: 250 }), 250, "THB");
+    s = { ...s, phase: "closed" };
+    s = applyExtractionToState(s, extraction({ pricePerDay: 240 }), 240, "THB");
+    expect(s.phase).toBe("closed");
+  });
+});
