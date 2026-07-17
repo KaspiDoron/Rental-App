@@ -47,15 +47,30 @@ export async function GET(req: Request) {
     });
   }
   if (claim === "lost") return NextResponse.json({ ok: true, ran: false, why: "another runner" });
+  if (claim === "won" && hop === 0) {
+    // A FRESH kick must not stack a second chain onto one that is already
+    // mid-flight (a runner can span 2+ 30s windows): if the PREVIOUS window
+    // slot is taken, a runner was active seconds ago - stand down.
+    const prev = await sbInsertClaim("wa_send_claims", {
+      sender_key: "__chain__",
+      slot_key: `chain:${Math.floor(Date.now() / 30_000) - 1}`,
+    });
+    if (prev === "lost") {
+      return NextResponse.json({ ok: true, ran: false, why: "chain already live" });
+    }
+  }
 
   const started = Date.now();
   let drained = 0;
   const drainOnce = async () => {
     try {
       const { drainOutbox } = await import("@/lib/wa-guard");
-      drained += await drainOutbox((k, to, text) => sendFromUser(k, to, text));
+      // fast=true: skip the long typing simulation - these rows already served
+      // their stagger, and the guard (not presence cosmetics) enforces gaps.
+      // Keeps a 5-row drain safely inside the 60s invocation ceiling.
+      drained += await drainOutbox((k, to, text) => sendFromUser(k, to, text, true));
       const { drainGraphWakeups } = await import("@/lib/graph/engine");
-      drained += await drainGraphWakeups((k, to, text) => sendFromUser(k, to, text));
+      drained += await drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true));
     } catch (e) {
       console.error("[wa:tick]", e instanceof Error ? e.message : e);
     }

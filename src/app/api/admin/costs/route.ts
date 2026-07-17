@@ -25,7 +25,7 @@ export async function GET() {
     sbSelect<{ id: number }>("offers", `select=id&${since}&limit=10000`),
     sbSelect<{ id: number }>(
       "whatsapp_messages",
-      `select=id&direction=eq.outbound&received_at=gte.${encodeURIComponent(start.toISOString())}&limit=10000`
+      `select=id&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(start.toISOString())}&limit=10000`
     ),
     sbSelect<{ email: string }>("app_users", "select=email&limit=10000"),
     killSwitchOn(),

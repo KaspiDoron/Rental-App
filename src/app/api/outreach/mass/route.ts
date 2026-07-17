@@ -157,7 +157,11 @@ export async function POST(req: Request) {
   const batchId = randomBytes(6).toString("hex");
   const offsets = staggerOffsets(vendors.length);
   const batchStart = Date.now();
-  let batchIndex = 0;
+  // The stagger index counts only shops that ACTUALLY enter the send stream -
+  // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the
+  // first sendable shop is always the immediate send (offset 0), and gaps
+  // stay a tight 45-75s regardless of how many earlier shops were skipped.
+  let sendIndex = 0;
 
   // CLICK-TIME BUDGET TRUTH. The anti-ban engine only allows a limited number
   // of brand-new shop introductions per day. The old flow silently parked
@@ -188,7 +192,6 @@ export async function POST(req: Request) {
   let deferredTomorrow = 0;
 
   for (const v of vendors) {
-    const myIndex = batchIndex++;
     let to = (v.whatsapp ?? "").trim();
     if (!to && v.placeId) to = (await placeDetails(v.placeId))?.phone ?? "";
     if (!to) {
@@ -214,7 +217,6 @@ export async function POST(req: Request) {
       plan: session.plan,
       localLang: Boolean(body.localLang) && session.plan === "ultra",
       batchId,
-      batchIndex: myIndex,
       batchSize: vendors.length,
       // On queued rows the thread peek reads the gloss from outbox meta.
       ...(englishGloss ? { englishGloss } : {}),
@@ -254,9 +256,12 @@ export async function POST(req: Request) {
     }
     if (isNewIntro) newIntrosLeft--;
 
-    // Shops 2..N: park with the stagger - the guard runs at drain time.
-    if (myIndex > 0) {
-      const notBefore = new Date(batchStart + offsets[myIndex]).toISOString();
+    // This shop is entering the send stream - claim its stagger slot. The
+    // first eligible shop (slot 0) sends immediately; the rest are parked.
+    const slot = sendIndex++;
+    // Shops after the first: park with the stagger - the guard runs at drain.
+    if (slot > 0) {
+      const notBefore = new Date(batchStart + offsets[slot]).toISOString();
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: session.email,

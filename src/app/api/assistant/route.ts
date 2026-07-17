@@ -92,7 +92,11 @@ export async function POST(req: Request) {
     sbSelect("feedback", "select=category,summary,severity,is_real_issue,created_at&order=created_at.desc&limit=15"),
     sbSelect("searches", "select=vehicle_class,source,results,created_at&order=created_at.desc&limit=20"),
     sbSelect("offers", "select=vendor_name,price_per_day,simulated,verified,created_at&order=created_at.desc&limit=20"),
-    sbSelect("whatsapp_messages", "select=direction,body,received_at&order=received_at.desc&limit=15"),
+    // Marker rows (session/takeover/cancel flags) are plumbing, not chat.
+    sbSelect(
+      "whatsapp_messages",
+      "select=direction,body,received_at&to_number=not.in.(session,takeover,cancel)&order=received_at.desc&limit=15"
+    ),
     sbSelect("bookings", "select=vendor_id,total_price,status,created_at&order=created_at.desc&limit=15"),
   ]);
 
