@@ -89,11 +89,17 @@ export async function GET(req: Request) {
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
-    void drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch(() => {});
+    // Tagged failures: a broken drain must show up in the Vercel logs, not
+    // vanish into a blanket catch (it silently stops all queued sends).
+    void drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+      console.error("[drain:outbox]", e instanceof Error ? e.message : e)
+    );
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    void drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch(() => {});
-  } catch {
-    /* best-effort */
+    void drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+      console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
+    );
+  } catch (e) {
+    console.error("[drain:init]", e instanceof Error ? e.message : e);
   }
 
   const sinceMs = Number(url.searchParams.get("since")) || Date.now() - 24 * 60 * 60 * 1000;

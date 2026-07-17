@@ -63,6 +63,35 @@ contacts/day, auto-pause on risk ≥70 for 4h, 7-day warm-up at half budget.
 (12s→25s activity, 15s→30s replies) - it does NOT change anti-ban pacing
 (deliberate: number safety never scales down).
 
+**Concurrency + herd hardening (wa_send_claims + jittered holds):**
+- Every send claims two atomic slots in `wa_send_claims` (PK conflict = the
+  lock): a per-sender min-gap bucket (serializes the 5+ concurrent drain
+  callers - two invocations can no longer both pass the same stale gap
+  check) and a per-message idempotency hash claimed BEFORE the network send
+  (concurrent duplicates can no longer both deliver). Straddle-proof at
+  bucket boundaries via a previous-bucket age check. Failed sends release
+  their message claim so retries are not self-deduped. GC after 24h.
+- Cap holds are JITTERED (hourly +15-35m, daily new-contact +60-90m, pause
+  +60-75m): a held batch regains individual release times - never ten
+  messages sharing one "~15:27" ETA again. Parked rows count toward the
+  hourly cap only when due within the next hour (no cascade wedging).
+- Mass bargain is a durable TRICKLE: shop 1 sends immediately, shops 2..N
+  are parked with cumulative 45-75s jittered `not_before` stamps
+  (`batch-spacing` + batchId/batchIndex/batchSize meta for the progress UI).
+  The drain re-runs the full guard per row at its own time.
+- Drain is capped at 2 sends per sender per invocation; excess DUE rows are
+  re-spaced forward with jitter (a stale backlog trickles out, never bursts).
+- FAIL-CLOSED reads: the guard's reputation + 24h-history reads are strict -
+  a transient Supabase failure holds automated sends (`sync-retry`, 5-10
+  min) instead of reading as "fresh number, nothing sent today" (the old
+  behavior disabled the entire anti-ban engine exactly during outages).
+  Manual sends stay permissive. Missing tables (pre-migration) degrade to
+  today's behavior.
+- Observability: `claim-lost` / `sync-retry` / `cancelled-send-blocked` /
+  `takeover-send-blocked` agent_events; drain failures log tagged errors.
+- Dev harness: `node scripts/hammer-queue.mjs` fires parallel drain storms +
+  a racing delete at a local server to observe serialization.
+
 ## Test mode - the honest truth table
 
 | Area | TEST_MODE on (flagged tester) | Production |

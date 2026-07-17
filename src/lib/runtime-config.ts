@@ -248,6 +248,40 @@ export async function sbInsert(
   }
 }
 
+/**
+ * Atomic slot claim: plain INSERT with NO conflict resolution, so a duplicate
+ * primary key is a hard 409 - the one signal PostgREST gives us that another
+ * concurrent invocation already owns the slot. This is the lock-free
+ * serialization primitive for sends (see wa_send_claims).
+ *   "won"   - this invocation owns the slot
+ *   "lost"  - another invocation owns it (409 conflict)
+ *   "error" - unknown (network/5xx/missing table): callers must fail CLOSED
+ */
+export async function sbInsertClaim(
+  table: string,
+  row: Record<string, unknown>
+): Promise<"won" | "lost" | "error"> {
+  const conn = supabase();
+  if (!conn) return "error";
+  try {
+    const res = await fetch(`${conn.url}/rest/v1/${table}`, {
+      method: "POST",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify([row]),
+    });
+    if (res.ok) return "won";
+    if (res.status === 409) return "lost";
+    return "error";
+  } catch {
+    return "error";
+  }
+}
+
 /** Insert and return the created rows (needs the id back, e.g. feedback). */
 export async function sbInsertReturning<T = Record<string, unknown>>(
   table: string,

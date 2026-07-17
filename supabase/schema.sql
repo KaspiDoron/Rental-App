@@ -732,3 +732,19 @@ alter table public.wa_cancellations enable row level security;
 alter table public.graph_wakeups add column if not exists user_email text;
 create index if not exists graph_wakeups_user_idx
   on public.graph_wakeups (user_email);
+
+-- ---- Send-slot claims (lock-free concurrency control for sends) -------------------
+-- Vercel serverless has no locks: 5+ concurrent drain callers each read the
+-- same pacing state and could all pass the min-gap/caps together. A claim row
+-- with a PRIMARY KEY makes the decision atomic: the invocation whose INSERT
+-- succeeds owns the slot; a 409 conflict means another invocation won.
+-- Slot kinds: "gap:<bucket>" (one send per min-gap window per sender) and
+-- "msg:<digits>:<hash>" (idempotency - one delivery per unique message).
+-- Rows are garbage-collected after 24h by the outbox drain.
+create table if not exists public.wa_send_claims (
+  sender_key text not null,
+  slot_key   text not null,
+  created_at timestamptz not null default now(),
+  primary key (sender_key, slot_key)
+);
+alter table public.wa_send_claims enable row level security;

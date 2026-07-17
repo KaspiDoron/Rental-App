@@ -1249,7 +1249,39 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       } catch {
         /* guard already enforced the readable cases */
       }
+      // ATOMIC SEND SLOTS: serialize concurrent invocations (min-gap window)
+      // and make delivery idempotent per unique message - the guard's own
+      // checks are read-then-act and cannot do this alone.
+      const { claimForSend, releaseSendClaim } = await import("../wa-guard");
+      const claim = await claimForSend(senderKey, toNumber, verdict.text, true);
+      if (!claim.ok) {
+        if (claim.kind === "duplicate") {
+          return {
+            delivered: "blocked",
+            detail: "duplicate in flight - another invocation is delivering this message",
+            finalText: verdict.text,
+          };
+        }
+        const { jitteredHold } = await import("../wa/pacing");
+        const notBefore = jitteredHold(Date.now(), 1, 2);
+        await sbInsert("wa_outbox", [
+          {
+            sender_key: senderKey,
+            to_number: toNumber,
+            body: verdict.text,
+            not_before: notBefore,
+            meta: { ...meta, reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry" },
+          },
+        ]).catch(() => {});
+        return {
+          delivered: "queued",
+          detail: claim.kind === "pacing" ? "held for human pacing" : "held - retrying sync",
+          queuedUntil: notBefore,
+          finalText: verdict.text,
+        };
+      }
       const result = await send(senderKey, toNumber, verdict.text);
+      if (!result.ok) await releaseSendClaim(senderKey, toNumber, verdict.text).catch(() => {});
       if (result.ok) {
         await afterSend(senderKey, toNumber);
         await sbInsert("whatsapp_messages", [

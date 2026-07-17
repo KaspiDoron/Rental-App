@@ -257,6 +257,50 @@ export async function POST(req: Request) {
   };
   let configured = false;
 
+  // ATOMIC SEND SLOTS, claimed BEFORE the network send: two concurrent
+  // identical requests (double-tap, retried fetch) can never both deliver -
+  // the old dedup row was only written AFTER a successful send, so both
+  // passed the pre-flight together. Auto sends also take the pacing slot.
+  {
+    const { claimForSend } = await import("@/lib/wa-guard");
+    const claim = await claimForSend(session.email, digits, guardedMessage, isAuto);
+    if (!claim.ok && claim.kind === "duplicate") {
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        duplicate: true,
+        reason: "This exact message is already on its way to the shop.",
+      });
+    }
+    if (!claim.ok) {
+      // pacing loss / unknown claim state: park honestly instead of racing.
+      const { jitteredHold } = await import("@/lib/wa/pacing");
+      const notBefore = jitteredHold(Date.now(), 1, 2);
+      await sbInsert("wa_outbox", [
+        {
+          sender_key: session.email,
+          to_number: digits,
+          body: guardedMessage,
+          not_before: notBefore,
+          meta: {
+            sender: session.email,
+            vendorId,
+            vendorName,
+            kind,
+            reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
+          },
+        },
+      ]).catch(() => {});
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        queued: true,
+        queuedUntil: notBefore,
+        queuedReason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
+      });
+    }
+  }
+
   // Try the user's personal WhatsApp whenever the connector is set up.
   // sendFromUser itself verifies the live session (auto-resuming a dropped
   // one), so we never wrongly tell a connected user to "connect first" just
@@ -267,6 +311,8 @@ export async function POST(req: Request) {
     if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
     result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
     if (r.rateLimited) {
+      const { releaseSendClaim } = await import("@/lib/wa-guard");
+      await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
       return NextResponse.json({
         allowed: true,
         sent: false,
@@ -277,6 +323,8 @@ export async function POST(req: Request) {
       });
     }
     if (r.error === "reconnecting") {
+      const { releaseSendClaim } = await import("@/lib/wa-guard");
+      await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
       return NextResponse.json({
         allowed: true,
         sent: false,
@@ -293,7 +341,14 @@ export async function POST(req: Request) {
     const r = await sendWhatsApp(to, guardedMessage);
     result = { channel: r.channel, ok: r.ok, error: r.error };
   }
-  if (result.ok) await afterSend(session.email, digits);
+  if (result.ok) {
+    await afterSend(session.email, digits);
+  } else {
+    // Failed send: release the idempotency claim so the user's retry tap is
+    // not swallowed as a "duplicate" of the failure.
+    const { releaseSendClaim } = await import("@/lib/wa-guard");
+    await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
+  }
 
   // TRUTH RULE: the outbound whatsapp_messages row is the record every
   // surface (thread peek, activity feed, deals dashboard, contacted counts)

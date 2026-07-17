@@ -5,13 +5,23 @@
 // disprove by looking at the shop's door (which is exactly how this bug was
 // caught). Isomorphic + pure so cards, queue lists and APIs share one truth.
 
-export type QueueReasonKind = "closed" | "pacing" | "limit" | "paused" | "hold" | "unknown";
+export type QueueReasonKind =
+  | "closed"
+  | "pacing"
+  | "batch"
+  | "sync"
+  | "limit"
+  | "paused"
+  | "hold"
+  | "unknown";
 
 export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   const r = (raw ?? "").toLowerCase();
   if (!r) return "unknown";
   if (/closed|business hours/.test(r)) return "closed";
   if (/paused by you/.test(r)) return "paused";
+  if (/batch-spacing/.test(r)) return "batch";
+  if (/sync-retry/.test(r)) return "sync";
   if (/director hold|thinking time|human reply pacing/.test(r)) return "hold";
   if (/pacing|burst|gap/.test(r)) return "pacing";
   if (/cap|limit|paused|recovery|warm/.test(r)) return "limit";
@@ -27,10 +37,14 @@ export function queueReasonLabel(raw?: string | null): string {
       return "Paused by you - resumes when you say so";
     case "hold":
       return "Your agent is timing this reply like a human";
+    case "batch":
+      return "In line - your agent messages shops one at a time, like a person";
+    case "sync":
+      return "Queued - sending resumes automatically in a few minutes";
     case "pacing":
       return "Queued briefly - sends are paced like a human";
     case "limit":
-      return "Held by today's safe-sending limit - sends automatically";
+      return "Done for now - sending resumes automatically later today";
     default:
       return "Queued - sends automatically";
   }

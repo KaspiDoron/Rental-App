@@ -131,7 +131,11 @@ export async function POST(req: Request) {
     }
   }
 
-  const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
+  const { guardOutbound, afterSend, claimForSend, releaseSendClaim } = await import(
+    "@/lib/wa-guard"
+  );
+  const { staggerOffsets } = await import("@/lib/wa/pacing");
+  const { randomBytes } = await import("crypto");
   const results: {
     id: string;
     sent: boolean;
@@ -142,7 +146,20 @@ export async function POST(req: Request) {
     text?: string;
     gloss?: string;
   }[] = [];
+
+  // HUMAN-PACED BATCH: only the FIRST shop is contacted right now; every
+  // later shop is parked with a durable, jittered 45-75s stagger
+  // (wa_outbox.not_before survives restarts/redeploys). Ten messages leaving
+  // at the same timestamp is a robotic signature no real traveller produces -
+  // and the drain re-runs the full guard per row at its own time, so hours/
+  // caps/tombstones still apply at the actual send moment.
+  const batchId = randomBytes(6).toString("hex");
+  const offsets = staggerOffsets(vendors.length);
+  const batchStart = Date.now();
+  let batchIndex = 0;
+
   for (const v of vendors) {
+    const myIndex = batchIndex++;
     let to = (v.whatsapp ?? "").trim();
     if (!to && v.placeId) to = (await placeDetails(v.placeId))?.phone ?? "";
     if (!to) {
@@ -157,9 +174,6 @@ export async function POST(req: Request) {
       await clearCancellation(session.email, digits).catch(() => {});
     }
 
-    // EVERY mass send passes the anti-ban gate: identical text blasted to 6
-    // shops in a burst is a textbook spam signature. The gate varies the
-    // payload PER SHOP, respects hours/caps, and queues instead of dropping.
     const meta = {
       sender: session.email,
       vendorId: v.id,
@@ -170,9 +184,37 @@ export async function POST(req: Request) {
       region: String(body.region ?? ""),
       plan: session.plan,
       localLang: Boolean(body.localLang) && session.plan === "ultra",
+      batchId,
+      batchIndex: myIndex,
+      batchSize: vendors.length,
       // On queued rows the thread peek reads the gloss from outbox meta.
       ...(englishGloss ? { englishGloss } : {}),
     };
+
+    // Shops 2..N: park with the stagger - the guard runs at drain time.
+    if (myIndex > 0) {
+      const notBefore = new Date(batchStart + offsets[myIndex]).toISOString();
+      const parked = await sbInsert("wa_outbox", [
+        {
+          sender_key: session.email,
+          to_number: digits,
+          body: batchMessage,
+          not_before: notBefore,
+          meta: { ...meta, reason: "batch-spacing" },
+        },
+      ]);
+      results.push({
+        id: v.id,
+        sent: false,
+        queued: parked,
+        queuedUntil: parked ? notBefore : undefined,
+        queuedReason: parked ? "batch-spacing" : undefined,
+        reason: parked ? "queued" : "queue-unavailable",
+      });
+      continue;
+    }
+
+    // Shop 1: the immediate, fully-guarded send.
     const guard = await guardOutbound({
       senderKey: session.email,
       toDigits: digits,
@@ -197,6 +239,29 @@ export async function POST(req: Request) {
       });
       continue;
     }
+    // Atomic slots: no concurrent duplicate, no gap-window race.
+    const claim = await claimForSend(session.email, digits, guard.text, true);
+    if (!claim.ok) {
+      const notBefore = new Date(batchStart + 60_000).toISOString();
+      await sbInsert("wa_outbox", [
+        {
+          sender_key: session.email,
+          to_number: digits,
+          body: guard.text,
+          not_before: notBefore,
+          meta: { ...meta, reason: claim.kind === "duplicate" ? "batch-spacing" : "human pacing gap" },
+        },
+      ]).catch(() => {});
+      results.push({
+        id: v.id,
+        sent: false,
+        queued: true,
+        queuedUntil: notBefore,
+        queuedReason: "human pacing gap",
+        reason: "queued",
+      });
+      continue;
+    }
 
     let ok = false;
     let reason: string | undefined;
@@ -205,6 +270,7 @@ export async function POST(req: Request) {
       ok = r.ok;
       reason = r.error;
       if (r.rateLimited) {
+        await releaseSendClaim(session.email, digits, guard.text).catch(() => {});
         results.push({ id: v.id, sent: false, reason: "rate-limit" });
         break; // budget exhausted - stop the batch quietly
       }
@@ -228,6 +294,8 @@ export async function POST(req: Request) {
           },
         },
       ]);
+    } else {
+      await releaseSendClaim(session.email, digits, guard.text).catch(() => {});
     }
     results.push({
       id: v.id,

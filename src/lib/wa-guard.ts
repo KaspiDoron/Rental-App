@@ -22,7 +22,8 @@
 //     caps, scoring weights and hours from the DB without a redeploy.
 
 import "server-only";
-import { sbSelect, sbInsert, sbUpdate } from "./runtime-config";
+import { sbSelect, sbSelectStrict, sbInsert, sbUpdate } from "./runtime-config";
+import { jitteredHold } from "./wa/pacing";
 
 // ---------------------------------------------------------------------------
 // Policies - DB-driven control panel with safe defaults
@@ -155,6 +156,26 @@ const REP_COLS =
   "id,sender_key,trust_score,sent_total,replies_total,last_send_at,created_at," +
   "blocks_total,fails_total,reads_total,delivered_total,new_contacts_today," +
   "new_contacts_date,last_reply_at,paused_until,risk_score";
+
+/**
+ * STRICT reputation read for the guard: null means the truth is UNKNOWN
+ * (transient DB failure) - the caller must fail CLOSED for automated sends.
+ * The permissive getReputation() below silently returns a FRESH default on
+ * failure, which would read a paused/burned number as brand-new and healthy.
+ */
+async function getReputationStrict(senderKey: string): Promise<Reputation | null> {
+  const res = await sbSelectStrict<Reputation>(
+    "whatsapp_number_reputation",
+    `select=${REP_COLS}&sender_key=eq.${encodeURIComponent(senderKey)}&limit=1`
+  );
+  if ("error" in res) {
+    // Missing table = un-migrated/demo: today's permissive path is correct.
+    return res.error === "missing" ? getReputation(senderKey) : null;
+  }
+  if (res.rows[0]) return res.rows[0];
+  // Genuinely empty: a brand-new sender - create the warm-up row.
+  return getReputation(senderKey);
+}
 
 async function getReputation(senderKey: string): Promise<Reputation> {
   const rows = await sbSelect<Reputation>(
@@ -650,7 +671,14 @@ export async function guardOutbound(opts: {
   const p = await getPolicies();
   const text = opts.auto ? humanizeVariant(opts.text) : opts.text;
   const now = Date.now();
-  const rep = await getReputation(opts.senderKey);
+  // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must
+  // never treat that as "fresh healthy number" - see the sync-retry hold
+  // below the queue helper. Manual sends keep the permissive default (a human
+  // pressing Send must not be blocked by our own outage).
+  const repStrict = await getReputationStrict(opts.senderKey);
+  const rep =
+    repStrict ??
+    ({ sender_key: opts.senderKey, trust_score: 20, sent_total: 0, replies_total: 0, last_send_at: null } as Reputation);
 
   const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
     if (opts.queueIfBlocked !== false) {
@@ -668,6 +696,14 @@ export async function guardOutbound(opts: {
     }
     return { allow: false, reason, text };
   };
+
+  // -3. FAIL CLOSED ON UNKNOWN SAFETY STATE. If the reputation row (pause
+  //     state, trust, caps history) is unreadable, an automated send holds
+  //     briefly instead of assuming "brand-new healthy number" - a Supabase
+  //     blip must never disable the anti-ban engine.
+  if (opts.auto && repStrict === null) {
+    return await queue(jitteredHold(now, 5, 5), "sync-retry");
+  }
 
   // -2. CANCELLATION TOMBSTONE + HUMAN TAKEOVER - the two absolute vetoes.
   //     Every automated path (outbox drain, wakeup re-composition, retries)
@@ -784,7 +820,8 @@ export async function guardOutbound(opts: {
     try {
       const { isSessionPaused } = await import("./session-flags");
       if (await isSessionPaused(opts.senderKey)) {
-        return await queue(new Date(now + 60 * 60_000).toISOString(), "paused by you");
+        // Jittered hold: a batch paused together must not RELEASE together.
+        return await queue(jitteredHold(now, 60, 15), "paused by you");
       }
     } catch {
       /* flags unreadable - fail open */
@@ -893,10 +930,9 @@ export async function guardOutbound(opts: {
     const newToday = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
     const capNew = newContactCap(rep, p);
     if (newToday >= capNew) {
-      return await queue(
-        new Date(now + 60 * 60_000).toISOString(),
-        `daily new-contact cap reached (${capNew}/day)`
-      );
+      // 60-90 min jittered: ten held first-contacts spread out on release
+      // instead of firing as one burst the moment the window re-opens.
+      return await queue(jitteredHold(now, 60, 30), `daily new-contact cap reached (${capNew}/day)`);
     }
     // Reply-rate breaker: if we have enough history and almost nobody replies,
     // freeze cold outreach - this is what actually trips WhatsApp's filters.
@@ -925,7 +961,10 @@ export async function guardOutbound(opts: {
   const jitter = dailyCapJitter(opts.senderKey, p);
   const hourCap = Math.max(1, Math.round(dynamicHourCap(rep, p) * jitter));
   const dayCap = Math.max(1, Math.round(p.day_cap * jitter));
-  const sentRows = await sbSelect<{ received_at: string }>(
+  // STRICT read: an unreadable send history must hold automated sends (fail
+  // closed), never count as "0 sent today" (fail open = unlimited sends the
+  // moment the DB blips - the exact outage-mode failure the guard exists for).
+  const sentRes = await sbSelectStrict<{ received_at: string }>(
     "whatsapp_messages",
     `select=received_at&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       opts.senderKey
@@ -933,21 +972,30 @@ export async function guardOutbound(opts: {
       new Date(now - 24 * 3600_000).toISOString()
     )}&order=received_at.desc&limit=300`
   );
+  if ("error" in sentRes && sentRes.error === "unavailable" && opts.auto) {
+    return await queue(jitteredHold(now, 5, 5), "sync-retry");
+  }
+  const sentRows = "rows" in sentRes ? sentRes.rows : [];
   // Count messages ALREADY PARKED in the outbox for this sender toward the
   // caps too - they are committed sends that just haven't left yet. Without
   // this, concurrent auto-replies all read the same pre-send count and blow
-  // past the cap (the core ban protection). Pending rows have no send time, so
-  // count them against both the hour and day windows conservatively.
-  const pendingForSender = await sbSelect<{ id: number }>(
+  // past the cap (the core ban protection). Rows count toward the HOURLY
+  // window only when they are actually due within the next hour - a batch
+  // parked for tomorrow must not wedge today's replies into the same hold
+  // (the cascade that stamped ten messages with one identical ETA).
+  const pendingForSender = await sbSelect<{ id: number; not_before: string }>(
     "wa_outbox",
-    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}&limit=300`
+    `select=id,not_before&sender_key=eq.${encodeURIComponent(opts.senderKey)}&limit=300`
   ).catch(() => []);
   const pendingCount = pendingForSender.length;
+  const hourAhead = new Date(now + 3600_000).toISOString();
+  const pendingDueSoon = pendingForSender.filter((r) => r.not_before <= hourAhead).length;
   const hourAgo = new Date(now - 3600_000).toISOString();
-  const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingCount;
+  const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingDueSoon;
   if (lastHour >= hourCap) {
+    // 15-35 min jittered - held batch members regain individual timings.
     return await queue(
-      new Date(now + 15 * 60_000).toISOString(),
+      jitteredHold(now, 15, 20),
       `hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`
     );
   }
@@ -1010,8 +1058,21 @@ export async function drainOutbox(
     )}&order=not_before.asc&limit=5`
   );
   const { sbDeleteReturning } = await import("./runtime-config");
+  const { claimSendSlots, releaseMessageClaim, gcSendClaims } = await import("./wa/pacing");
+  const p = await getPolicies();
   let sent = 0;
+  // Per-invocation, per-sender cap: a backlog (e.g. ten rows stamped with the
+  // same old ETA) drains as a PACED trickle, not a burst.
+  const sentBySender = new Map<string, number>();
   for (const cand of candidates) {
+    if ((sentBySender.get(cand.sender_key) ?? 0) >= 2) {
+      // SMOOTH the remainder: push still-due rows forward with jitter so the
+      // NEXT drain doesn't instantly fire them either (a slow-motion burst).
+      await sbUpdate("wa_outbox", `id=eq.${cand.id}`, {
+        not_before: jitteredHold(Date.now(), 2, 2),
+      }).catch(() => {});
+      continue;
+    }
     // ATOMIC CLAIM: delete-with-return. Only the caller that actually deletes
     // this row gets it back; a concurrent drainer (webhook + poll + cron all
     // fire this) gets [] and skips - so a queued message is sent exactly once,
@@ -1037,9 +1098,41 @@ export async function drainOutbox(
     } catch {
       /* the guard already enforced the readable cases */
     }
+    // ATOMIC SEND SLOTS: the guard's time-based checks are read-then-act and
+    // N concurrent drainers all pass them together. The claim row is the
+    // lock: exactly ONE invocation per min-gap window per sender sends, and
+    // exactly one delivery per unique message ever happens.
+    const claim = await claimSendSlots({
+      senderKey: row.sender_key,
+      toDigits: row.to_number,
+      text: verdict.text,
+      auto: true,
+      gapSeconds: p.min_gap_seconds,
+    });
+    if (!claim.ok) {
+      if (claim.kind === "duplicate") continue; // another invocation is delivering it
+      // pacing loss / unknown -> back into the queue beyond the gap window.
+      await sbInsert("wa_outbox", [
+        {
+          sender_key: row.sender_key,
+          to_number: row.to_number,
+          body: row.body,
+          not_before: jitteredHold(Date.now(), 1, 2),
+          meta: {
+            ...(row.meta ?? {}),
+            reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
+          },
+        },
+      ]).catch(() => {});
+      await sbInsert("agent_events", [
+        { kind: "claim-lost", detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}` },
+      ]).catch(() => {});
+      continue;
+    }
     const r = await send(row.sender_key, row.to_number, verdict.text);
     if (r.ok) {
       sent++;
+      sentBySender.set(row.sender_key, (sentBySender.get(row.sender_key) ?? 0) + 1);
       await afterSend(row.sender_key, row.to_number);
       await sbInsert("whatsapp_messages", [
         {
@@ -1051,6 +1144,9 @@ export async function drainOutbox(
         },
       ]);
     } else {
+      // Release the idempotency claim - the retry below must not be treated
+      // as a duplicate of the failed attempt.
+      await releaseMessageClaim(row.sender_key, row.to_number, verdict.text).catch(() => {});
       // SEND FAILED after the row was deleted - without this, the message is
       // silently LOST (e.g. the WhatsApp host was mid-restart). Re-queue with
       // a backoff and a hard attempts cap; alert the owner when we give up.
@@ -1075,7 +1171,35 @@ export async function drainOutbox(
       }
     }
   }
+  // Housekeeping: stale claim rows expire after 24h (cheap ranged delete).
+  if (candidates.length > 0) await gcSendClaims();
   return sent;
+}
+
+/**
+ * Claim the atomic send slots for a DIRECT send (routes that bypass
+ * drainOutbox). Policies stay internal to this module - callers only learn
+ * the outcome. See src/lib/wa/pacing.ts for semantics.
+ */
+export async function claimForSend(
+  senderKey: string,
+  toDigits: string,
+  text: string,
+  auto: boolean
+): Promise<import("./wa/pacing").ClaimOutcome> {
+  const p = await getPolicies();
+  const { claimSendSlots } = await import("./wa/pacing");
+  return claimSendSlots({ senderKey, toDigits, text, auto, gapSeconds: p.min_gap_seconds });
+}
+
+/** Release a message claim after a failed direct send (retry-friendly). */
+export async function releaseSendClaim(
+  senderKey: string,
+  toDigits: string,
+  text: string
+): Promise<void> {
+  const { releaseMessageClaim } = await import("./wa/pacing");
+  await releaseMessageClaim(senderKey, toDigits, text);
 }
 
 // ---------------------------------------------------------------------------
