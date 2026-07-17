@@ -92,6 +92,21 @@ contacts/day, auto-pause on risk ≥70 for 4h, 7-day warm-up at half budget.
 - Dev harness: `node scripts/hammer-queue.mjs` fires parallel drain storms +
   a racing delete at a local server to observe serialization.
 
+## Connection lifecycle (Evolution)
+
+- **Closing a deal keeps the WhatsApp link.** The old flow logged out AND
+  deleted the instance after every closed deal (full QR re-link each time -
+  the "my WhatsApp disconnected by itself" report). The session-closed
+  marker + cancellation tombstones already silence the agents; teardown adds
+  nothing. Rollback switch: `KEEP_WA_ON_CLOSE=off` restores the old
+  behavior for one release. Explicit disconnect stays in Profile.
+- **Connect re-entry is non-destructive for 90s.** A second Connect tap
+  while a pairing is mid-handshake ("connecting", started <90s ago)
+  re-polls the SAME instance for its current QR/pairing code instead of
+  logout+delete (which destroyed the exact pairing the phone was completing).
+  Stale or wedged pairings still get the clean recreate.
+- Keep-alive remains the external pinger on `/api/wa/ping` (see above).
+
 ## Test mode - the honest truth table
 
 | Area | TEST_MODE on (flagged tester) | Production |

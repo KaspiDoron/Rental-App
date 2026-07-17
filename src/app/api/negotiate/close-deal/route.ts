@@ -132,11 +132,21 @@ export async function POST(req: Request) {
     },
   ]).catch(() => {});
 
-  // 2) Disconnect the traveller's WhatsApp - WheelDeal steps out of the chat.
+  // 2) The traveller's WhatsApp STAYS LINKED. Closing a deal used to
+  //    logout + DELETE the instance (a full QR re-link every single time) -
+  //    that hard teardown was the "my WhatsApp disconnected by itself" bug,
+  //    and nothing needs it: the session-closed marker + tombstones above
+  //    already silence the agents, and the wa.me link works regardless.
+  //    Explicit disconnect remains available in Profile. Rollback switch:
+  //    KEEP_WA_ON_CLOSE=off restores the old teardown for one release.
   let disconnected = false;
   try {
-    await disconnectInstance(session.email);
-    disconnected = true;
+    const { getConfig } = await import("@/lib/runtime-config");
+    const keep = ((await getConfig("KEEP_WA_ON_CLOSE")) ?? "").toLowerCase() !== "off";
+    if (!keep) {
+      await disconnectInstance(session.email);
+      disconnected = true;
+    }
   } catch {
     /* best-effort - the traveller can also disconnect from Profile */
   }
@@ -145,6 +155,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     sent,
     disconnected,
+    stillLinked: !disconnected,
     waLink: `https://wa.me/${digits}`,
   });
 }

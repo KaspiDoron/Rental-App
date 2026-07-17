@@ -678,6 +678,51 @@ export async function connectInstance(
     return { ok: true, state: "open" };
   }
 
+  // A pairing that started SECONDS ago is mid-handshake, not stale. A second
+  // Connect tap (very common in the signup funnel: impatient double-tap, a
+  // re-render, a refocused tab) used to logout+delete the in-progress
+  // instance - destroying the exact pairing the phone was about to complete
+  // ("my WhatsApp disconnected by itself"). Within a 90s grace window we
+  // RE-POLL the same instance for its current code instead of wiping it.
+  if (existing === "connecting") {
+    const row = await sbSelect<{ updated_at: string | null }>(
+      "wa_sessions",
+      `select=updated_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+    ).catch(() => []);
+    const startedMs = row[0]?.updated_at ? Date.parse(row[0].updated_at) : NaN;
+    if (Number.isFinite(startedMs) && Date.now() - startedMs < 90_000) {
+      const conn = await evoFetch(
+        host,
+        `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
+      );
+      const rawPairing =
+        conn.data?.pairingCode ?? conn.data?.qrcode?.pairingCode ?? conn.data?.instance?.pairingCode;
+      const pairing =
+        typeof rawPairing === "string" &&
+        /^[A-Za-z0-9]{3,}-?[A-Za-z0-9]{0,}$/.test(rawPairing) &&
+        rawPairing.length <= 12
+          ? rawPairing
+          : undefined;
+      const qrNow =
+        conn.data?.base64 ??
+        conn.data?.qrcode?.base64 ??
+        (typeof conn.data?.code === "string" && conn.data.code.startsWith("data:")
+          ? conn.data.code
+          : undefined);
+      // The state may have flipped to open while we polled - honor it.
+      const nowState = await connectionState(email);
+      if (nowState === "open") {
+        await markOpen(email);
+        return { ok: true, state: "open" };
+      }
+      if (pairing || qrNow) {
+        return { ok: true, state: "connecting", qr: qrNow, pairingCode: pairing };
+      }
+      // No code from the live handshake - fall through to the clean recreate
+      // (the pairing is likely genuinely wedged).
+    }
+  }
+
   // Otherwise start from a CLEAN slate. A leftover half-linked instance (from a
   // previous attempt, common in the signup funnel) hands WhatsApp a stale
   // pairing code, which WhatsApp rejects as "Incorrect code". Deleting first

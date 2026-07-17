@@ -391,9 +391,8 @@ export function BookingSheet({
             <div className="font-extrabold text-strong">Finish in your WhatsApp 💬</div>
             <p className="mt-1">
               {disconnected
-                ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. "
-                : "Continue the conversation directly with the shop. "}
-              You can reconnect the agents anytime from{" "}
+                ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. You can reconnect the agents anytime from "
+                : "Your WhatsApp stays linked and the agents have stepped back from this chat - the rest of the conversation is just you and the shop. Manage the connection anytime from "}
               <a href="/profile" className="font-bold text-brandblue underline">
                 Profile
               </a>
