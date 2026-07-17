@@ -53,21 +53,14 @@ export async function POST(req: Request) {
   try {
     if (quoted) {
       const { vehicleKeyFor } = await import("@/lib/market");
-      const vkey = vehicleKeyFor(rfq);
-      const since = new Date(Date.now() - 18 * 3600_000).toISOString();
-      const rows = await sbSelect<{ price_per_day: number }>(
-        "offers",
-        `select=price_per_day&user_email=eq.${encodeURIComponent(
-          session.email
-        )}&simulated=eq.false&currency=eq.${encodeURIComponent(
-          cur
-        )}&vehicle_key=eq.${encodeURIComponent(vkey)}&vendor_id=neq.${encodeURIComponent(
-          String(vendor.id ?? "")
-        )}&price_per_day=lt.${quoted}&created_at=gte.${encodeURIComponent(
-          since
-        )}&order=price_per_day.asc&limit=1`
-      );
-      if (rows[0]?.price_per_day) rival = Math.min(rival ?? Infinity, rows[0].price_per_day);
+      const { cheapestRivalFor } = await import("@/lib/search-session");
+      const server = await cheapestRivalFor(session.email, {
+        vendorId: String(vendor.id ?? ""),
+        currency: cur,
+        vehicleKey: vehicleKeyFor(rfq),
+        belowPrice: quoted,
+      });
+      if (server) rival = Math.min(rival ?? Infinity, server);
       if (!Number.isFinite(rival ?? Infinity)) rival = undefined;
     }
   } catch {

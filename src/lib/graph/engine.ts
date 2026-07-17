@@ -749,6 +749,25 @@ export async function runGraphTurn(
       decisionId,
     });
 
+    // A BLOCKED delivery (validator veto, safety veto, post-scrub leverage
+    // loss) must NOT consume the node's run budget: nothing reached the shop,
+    // so counterBelow/maxRuns gates would otherwise read "already bargained
+    // 1x" and silently abandon the push forever - the shop just hears
+    // silence. Roll the increment back so the next event retries cleanly.
+    if (delivered.delivered === "blocked") {
+      state.nodeRuns[node.id] = Math.max(0, (state.nodeRuns[node.id] ?? 0) - 1);
+      if (node.kind === "bargain" && io.recordEvent) {
+        await io
+          .recordEvent({
+            kind: "bargain-blocked",
+            vendorId: input.ctx.vendorId ?? "",
+            vendorName: input.ctx.vendorName ?? "",
+            detail: `Bargain to +${input.event.toDigits} blocked (${delivered.detail}) - run budget rolled back, next event retries.`,
+          })
+          .catch(() => {});
+      }
+    }
+
     if (node.kind === "bargain" && result.tacticId && delivered.delivered !== "blocked") {
       await io
         .insertBargainDraft({
@@ -944,6 +963,7 @@ async function runTailGates(args: {
   // the owner outlawed in the Ops Center can never reach a shop again.
   try {
     const banned = (input.overlay ?? (await getPolicyOverlay())).bannedPhrases;
+    const preScrub = text;
     const hits: string[] = [];
     for (const phrase of banned) {
       const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
@@ -961,6 +981,29 @@ async function runTailGates(args: {
         output: text,
         verdict: "revised",
       });
+      // The scrub runs AFTER the leverage guard - if a banned phrase
+      // overlapped a price/duration token, the message just lost its levers
+      // ("Can you do /day?"). The owner's ban is absolute (never restore the
+      // phrase), so BLOCK delivery instead of sending a toothless ask: the
+      // run-budget rollback lets the next event re-compose cleanly.
+      if (args.nodeId === "bargain") {
+        const lost = leverageLost(preScrub, text, {
+          rivalPrice: args.rivalPrice,
+          target: args.target,
+          durationDays: input.rfq?.durationDays,
+        });
+        if (lost.length) {
+          push({
+            stage: "style-validator",
+            nodeId: "style-validator",
+            input: text,
+            reasoning: `banned-phrase scrub destroyed ${lost.join(" + ")} - blocking this send; the next turn recomposes without the banned phrase`,
+            output: "(blocked)",
+            verdict: "blocked",
+          });
+          return { delivered: "blocked", detail: "banned-phrase scrub removed a negotiation lever" };
+        }
+      }
     }
   } catch {
     /* scrub is best-effort */
@@ -1106,23 +1149,15 @@ export function liveGraphIO(send: LiveSend): GraphIO {
     loadState: loadThreadState,
     saveState: saveThreadState,
     async cheapestRival({ userEmail, vendorId, currency, vehicleKey, belowPrice }) {
-      const since = new Date(Date.now() - 18 * 3600_000).toISOString();
-      const rivals = await sbSelect<{ price_per_day: number }>(
-        "offers",
-        `select=price_per_day&user_email=eq.${encodeURIComponent(
-          userEmail
-        )}&simulated=eq.false&currency=eq.${encodeURIComponent(
-          currency
-        )}&vehicle_key=eq.${encodeURIComponent(vehicleKey)}&vendor_id=neq.${encodeURIComponent(
-          vendorId
-        )}&price_per_day=lt.${belowPrice}&created_at=gte.${encodeURIComponent(
-          since
-        )}&order=price_per_day.asc&limit=1`
-      );
-      return rivals[0]?.price_per_day;
+      // REAL session boundary (latest search, 18h-clamped) + the shared pure
+      // predicate - the same function the playground filters through, so
+      // owner tests exercise production selection logic byte-for-byte.
+      const { cheapestRivalFor } = await import("../search-session");
+      return cheapestRivalFor(userEmail, { vendorId, currency, vehicleKey, belowPrice });
     },
     async sessionTable(userEmail, thisVendorId) {
-      const since = new Date(Date.now() - 18 * 3600_000).toISOString();
+      const { sessionSinceIso } = await import("../search-session");
+      const since = await sessionSinceIso(userEmail);
       const offers = await sbSelect<{
         vendor_id: string;
         vendor_name: string;
@@ -1332,6 +1367,11 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       return rows.map((r) => r.body ?? "").filter(Boolean);
     },
     writeTrace,
+    async recordEvent({ kind, vendorId, vendorName, detail }) {
+      await sbInsert("agent_events", [
+        { kind, vendor_id: vendorId ?? "", vendor_name: vendorName ?? "", detail },
+      ]);
+    },
     llmAllowed: true,
     now: () => Date.now(),
   };

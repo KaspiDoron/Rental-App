@@ -754,3 +754,7 @@ alter table public.wa_send_claims enable row level security;
 alter table public.agent_events add column if not exists user_email text;
 create index if not exists agent_events_user_idx
   on public.agent_events (user_email, kind, created_at desc);
+
+-- Session attribution on offers (exact rival grouping per search session).
+alter table public.offers add column if not exists search_id bigint;
+create index if not exists offers_search_idx on public.offers (search_id);

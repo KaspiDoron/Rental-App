@@ -20,6 +20,73 @@ import type {
 } from "./graph/types";
 import type { StructuredRFQ } from "./types";
 
+// ---------------------------------------------------------------------------
+// Sim rival selection - the PRODUCTION predicate, not a shortcut.
+//
+// The playground used to hand the typed rival price straight to the engine,
+// bypassing the real selection rules (same currency, same vehicle class,
+// different shop, strictly cheaper). That made live no-push bugs impossible
+// to reproduce here. Every simulated rival - typed or listed - now flows
+// through the same pickCheapestRival() the live engine uses.
+// ---------------------------------------------------------------------------
+import { pickCheapestRival, type RivalOffer } from "./search-session";
+
+const SIM_EPOCH = "1970-01-01T00:00:00.000Z";
+
+function simRivalIO(
+  rivalOffers: RivalOffer[] | undefined,
+  rivalPricePerDay: number | undefined,
+  cur: string,
+  usablePrice: number | undefined,
+  thisVendorId: string
+): {
+  cheapestRival: GraphIO["cheapestRival"];
+  sessionRows: (thisPrice?: number) => SessionShopRow[];
+} {
+  const offers: RivalOffer[] = [
+    ...(rivalOffers ?? []),
+    ...(typeof rivalPricePerDay === "number"
+      ? [
+          {
+            vendorId: "rival",
+            pricePerDay: rivalPricePerDay,
+            currency: cur,
+            createdAt: SIM_EPOCH,
+          },
+        ]
+      : []),
+  ];
+  return {
+    cheapestRival: async (args) =>
+      pickCheapestRival(offers, {
+        vendorId: args.vendorId || thisVendorId,
+        currency: args.currency,
+        vehicleKey: args.vehicleKey,
+        belowPrice: args.belowPrice,
+        sinceIso: SIM_EPOCH,
+      }),
+    sessionRows: (thisPrice) => [
+      ...(thisPrice
+        ? [
+            {
+              vendorId: thisVendorId,
+              vendorName: "Test Shop",
+              pricePerDay: thisPrice,
+              currency: cur,
+              isThisShop: true,
+            },
+          ]
+        : []),
+      ...offers.map((o, i) => ({
+        vendorId: o.vendorId || `rival-${i}`,
+        vendorName: "Another shop",
+        pricePerDay: o.pricePerDay,
+        currency: o.currency,
+      })),
+    ],
+  };
+}
+
 export interface SimTurn {
   role: "shop" | "us";
   text: string;
@@ -35,6 +102,9 @@ export interface SimInput {
   stateOverrides?: Partial<NegotiationThreadState["fields"]>;
   // A cheaper rival offer from a sibling shop (cross-shop leverage test).
   rivalPricePerDay?: number;
+  // Full sibling-shop offers (currency/vehicle-aware) - preferred over the
+  // bare number; both flow through the production rival predicate.
+  rivalOffers?: RivalOffer[];
   transcript?: string; // simulate a voice-note transcript
 }
 export interface SimStage {
@@ -124,14 +194,13 @@ export async function simulatePipeline(input: SimInput): Promise<SimResult> {
     saveState: async (s) => {
       captured.push(s);
     },
-    cheapestRival: async () => input.rivalPricePerDay,
-    sessionTable: async (): Promise<SessionShopRow[]> =>
-      input.rivalPricePerDay
-        ? [
-            { vendorId: "sim-shop", vendorName: "Test Shop", pricePerDay: usablePrice, currency: cur, isThisShop: true },
-            { vendorId: "rival", vendorName: "Another shop", pricePerDay: input.rivalPricePerDay, currency: cur },
-          ]
-        : [],
+    ...(() => {
+      const sim = simRivalIO(input.rivalOffers, input.rivalPricePerDay, cur, usablePrice, "sim-shop");
+      return {
+        cheapestRival: sim.cheapestRival,
+        sessionTable: async (): Promise<SessionShopRow[]> => sim.sessionRows(usablePrice),
+      };
+    })(),
     insertWakeup: async () => {},
     clearWakeups: async () => {},
     queueOutbox: async () => {},
@@ -223,6 +292,7 @@ export interface ConversationTurn {
   imageKind?: "vehicle" | "price_sheet";
   // A rival offer that exists in the session BY this turn (cross-shop leverage).
   rivalPricePerDay?: number;
+  rivalOffers?: RivalOffer[];
 }
 
 export interface PlayedTurn {
@@ -305,13 +375,13 @@ async function playSingleTurn(args: {
     saveState: async (s) => {
       carried = s;
     },
-    cheapestRival: async () => turn.rivalPricePerDay,
-    sessionTable: async (): Promise<SessionShopRow[]> =>
-      turn.rivalPricePerDay
-        ? [
-            { vendorId: "rival", vendorName: "Another shop", pricePerDay: turn.rivalPricePerDay, currency: cur },
-          ]
-        : [],
+    ...(() => {
+      const sim = simRivalIO(turn.rivalOffers, turn.rivalPricePerDay, cur, usablePrice, "sim-shop");
+      return {
+        cheapestRival: sim.cheapestRival,
+        sessionTable: async (): Promise<SessionShopRow[]> => sim.sessionRows(),
+      };
+    })(),
     insertWakeup: async () => {},
     clearWakeups: async () => {},
     queueOutbox: async () => {},
@@ -480,11 +550,13 @@ export async function replayConversation(args: {
       saveState: async (s) => {
         carried = s;
       },
-      cheapestRival: async () => turn.rivalPricePerDay,
-      sessionTable: async (): Promise<SessionShopRow[]> =>
-        turn.rivalPricePerDay
-          ? [{ vendorId: "rival", vendorName: "Another shop", pricePerDay: turn.rivalPricePerDay, currency: cur }]
-          : [],
+      ...(() => {
+        const sim = simRivalIO(turn.rivalOffers, turn.rivalPricePerDay, cur, usablePrice, "sim-shop");
+        return {
+          cheapestRival: sim.cheapestRival,
+          sessionTable: async (): Promise<SessionShopRow[]> => sim.sessionRows(),
+        };
+      })(),
       insertWakeup: async () => {},
       clearWakeups: async () => {},
       queueOutbox: async () => {},
@@ -621,6 +693,7 @@ export interface PlaygroundTurnInput {
   voice?: boolean;
   imageKind?: "vehicle" | "price_sheet";
   rivalPricePerDay?: number;
+  rivalOffers?: RivalOffer[];
   rfq?: Partial<StructuredRFQ>;
   region?: string;
   carried?: unknown; // opaque round-tripped NegotiationThreadState
@@ -740,6 +813,7 @@ export async function playgroundTurn(input: PlaygroundTurnInput): Promise<Playgr
       voice: input.voice,
       imageKind: input.imageKind,
       rivalPricePerDay: input.rivalPricePerDay,
+      rivalOffers: input.rivalOffers,
     },
     rfq,
     region,

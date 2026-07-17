@@ -71,19 +71,25 @@ export async function POST(req: Request) {
     ).catch(() => {});
   }
   if (result.found && result.pricePerDay) {
-    await sbInsert("offers", [
-      {
-        user_email: session.email,
-        vendor_id: String(body.vendorId ?? ""),
-        vendor_name: String(body.vendorName ?? ""),
-        price_per_day: result.pricePerDay,
-        list_price_per_day: body.firstQuote ?? result.pricePerDay,
-        currency: cur,
-        round: Number(body.round ?? 0),
-        simulated: false,
-        verified: result.matchesSpec && result.confidence === "high",
-      },
-    ]);
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const latest = await sbSelect<{ id: number }>(
+      "searches",
+      `select=id&user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=1`
+    ).catch(() => []);
+    const row = {
+      user_email: session.email,
+      vendor_id: String(body.vendorId ?? ""),
+      vendor_name: String(body.vendorName ?? ""),
+      price_per_day: result.pricePerDay,
+      list_price_per_day: body.firstQuote ?? result.pricePerDay,
+      currency: cur,
+      round: Number(body.round ?? 0),
+      simulated: false,
+      verified: result.matchesSpec && result.confidence === "high",
+    };
+    // Session attribution; retry without the column pre-migration.
+    const ok = await sbInsert("offers", [{ ...row, search_id: latest[0]?.id ?? null }]);
+    if (!ok) await sbInsert("offers", [row]);
   }
   return NextResponse.json({ ...result, currency: cur });
 }

@@ -387,10 +387,20 @@ export async function processVendorReply(opts: {
       duration_days: rfq.durationDays ?? null,
       delivers,
     };
+    // Session attribution for exact rival grouping (analytics + deals).
+    let searchId: number | null = null;
+    if (ctx.sender) {
+      const s = await sbSelect<{ id: number }>(
+        "searches",
+        `select=id&user_email=eq.${encodeURIComponent(ctx.sender)}&order=created_at.desc&limit=1`
+      ).catch(() => []);
+      searchId = s[0]?.id ?? null;
+    }
     // Retry without the newest columns if the migration has not run yet.
     const offerOk = await sbInsert("offers", [
       {
         ...offerBase,
+        search_id: searchId,
         deposit_note: extraction.deposit ?? null,
         deposit_type: extraction.depositType ?? null,
         deposit_amount: extraction.depositAmount ?? null,
@@ -634,21 +644,13 @@ export async function processVendorReply(opts: {
     // another shop is honest negotiating power.
     if (ctx.sender) {
       const { vehicleKeyFor } = await import("./market");
-      const vkey = vehicleKeyFor(rfq);
-      const since = new Date(Date.now() - 18 * 3600_000).toISOString();
-      const rivals = await sbSelect<{ price_per_day: number }>(
-        "offers",
-        `select=price_per_day&user_email=eq.${encodeURIComponent(
-          ctx.sender
-        )}&simulated=eq.false&currency=eq.${encodeURIComponent(
-          cur
-        )}&vehicle_key=eq.${encodeURIComponent(vkey)}&vendor_id=neq.${encodeURIComponent(
-          ctx.vendorId ?? ""
-        )}&price_per_day=lt.${usablePrice}&created_at=gte.${encodeURIComponent(
-          since
-        )}&order=price_per_day.asc&limit=1`
-      );
-      rivalPrice = rivals[0]?.price_per_day;
+      const { cheapestRivalFor } = await import("./search-session");
+      rivalPrice = await cheapestRivalFor(ctx.sender, {
+        vendorId: ctx.vendorId ?? "",
+        currency: cur,
+        vehicleKey: vehicleKeyFor(rfq),
+        belowPrice: usablePrice,
+      }).catch(() => undefined);
     }
     const baseTarget = floorPrice
       ? Math.max(floorPrice, Math.round(usablePrice * 0.6))

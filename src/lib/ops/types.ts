@@ -73,6 +73,8 @@ export interface GoldenTurn {
   /** Frozen extraction result (what extractOffer returned at capture time). */
   stubExtraction: Record<string, unknown>;
   rivalPricePerDay?: number;
+  /** Frozen sibling-shop offers - flow through the production rival predicate. */
+  rivalOffers?: import("../search-session").RivalOffer[];
   imageKind?: string;
   voice?: boolean;
 }

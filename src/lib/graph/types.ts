@@ -434,6 +434,13 @@ export interface GraphIO {
   }): Promise<void>;
   recentOutboundGlobal(hours: number, limit: number): Promise<string[]>;
   writeTrace(rows: import("../orchestrator").TraceRow[]): Promise<void>;
+  /** Optional observability sink (live IO only - simulators omit it). */
+  recordEvent?(args: {
+    kind: string;
+    vendorId?: string;
+    vendorName?: string;
+    detail: string;
+  }): Promise<void>;
   llmAllowed: boolean; // simulator can force deterministic-only runs
   now(): number;
 }

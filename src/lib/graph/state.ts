@@ -81,6 +81,24 @@ export function derivePhase(state: NegotiationThreadState): ThreadPhase {
   return state.nodeRuns["clarify"] || state.nodeRuns["answer"] ? "awaiting_price" : "opening";
 }
 
+/**
+ * Lightweight state-machine sanity: is this phase move structurally legal?
+ * NEVER blocks (behavior unchanged) - illegal jumps are recorded as
+ * `phase-anomaly` events so the "deal settled but still bargaining/queued"
+ * class of bug is caught structurally instead of per-symptom.
+ */
+export function validatePhaseTransition(from: string, to: string): boolean {
+  if (from === to) return true;
+  // Terminal phases never reopen implicitly (a NEW session starts a new
+  // thread lifecycle; that path resets state explicitly).
+  if (from === "closed" || from === "dead") return false;
+  // Closing may only settle, complete or present - never resume bargaining.
+  if (from === "closing") {
+    return to === "closed" || to === "complete" || to === "presented";
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Applying an extraction to the state (the ONLY place inbound facts land)
 // ---------------------------------------------------------------------------
@@ -239,13 +257,25 @@ export async function saveThreadState(state: NegotiationThreadState): Promise<vo
       last_decision_id: next.lastDecisionId ?? null,
       updated_at: next.updatedAt,
     };
-    const existing = await sbSelect<{ version: number }>(
+    const existing = await sbSelect<{ version: number; phase: string }>(
       "negotiation_threads",
-      `select=version&thread_key=eq.${encodeURIComponent(next.threadKey)}&limit=1`
+      `select=version,phase&thread_key=eq.${encodeURIComponent(next.threadKey)}&limit=1`
     );
     if (existing.length === 0) {
       await sbInsert("negotiation_threads", [row]);
       return;
+    }
+    // Structural sanity (free - piggybacks on the version read): an illegal
+    // phase jump is logged, never blocked.
+    if (existing[0].phase && !validatePhaseTransition(existing[0].phase, next.phase)) {
+      await sbInsert("agent_events", [
+        {
+          kind: "phase-anomaly",
+          vendor_id: next.vendorId,
+          vendor_name: next.vendorName,
+          detail: `Thread ${next.threadKey} jumped ${existing[0].phase} -> ${next.phase} (structurally illegal - investigate).`,
+        },
+      ]).catch(() => {});
     }
     // Optimistic write - only wins if nobody else bumped the version.
     await sbUpdate(
