@@ -42,9 +42,12 @@ export async function GET(req: Request) {
       ).catch(() => []),
       sbSelect<{ id: number; body: string; received_at: string; raw: { english?: string } | null }>(
         "whatsapp_messages",
+        // PRIVACY: inbound is scoped to the messages THIS user's WhatsApp
+        // received (raw.receiver) - digits alone would leak another user's
+        // thread with the same number.
         `select=id,body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           digits
-        )}${since}&order=received_at.asc&limit=60`
+        )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
       ).catch(() => []),
     ]);
     const messages = [
@@ -80,9 +83,10 @@ export async function GET(req: Request) {
       raw: { english?: string } | null;
     }>(
       "whatsapp_messages",
+      // PRIVACY: receiver-scoped - see the full-transcript query above.
       `select=body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
         sent.to_number
-      )}${since}&order=received_at.desc&limit=1`
+      )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.desc&limit=1`
     );
     received = inbound[0] ?? null;
   }

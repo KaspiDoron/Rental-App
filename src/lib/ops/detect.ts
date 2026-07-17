@@ -57,9 +57,10 @@ export async function detectWeakConversations(): Promise<{ scanned: number; flag
       body: string | null;
       direction: string;
       received_at: string;
+      raw: { sender?: string; receiver?: string } | null;
     }>(
       "whatsapp_messages",
-      "select=to_number,from_number,body,direction,received_at&order=received_at.desc&limit=400"
+      "select=to_number,from_number,body,direction,received_at,raw&order=received_at.desc&limit=400"
     ).catch(() => []),
     sbSelect<{ user_email: string; vendor_id: string; confidence: string | null }>(
       "vendor_replies",
@@ -72,10 +73,15 @@ export async function detectWeakConversations(): Promise<{ scanned: number; flag
   ]);
 
   const chiefBy = new Map(chiefs.map((c) => [c.thread_key, c] as const));
+  // Keyed by thread (owner:digits) - a bare-digits key would cross-match two
+  // users' threads with the same shop number. Legacy unstamped rows dropped.
   const lastMsgBy = new Map<string, (typeof msgs)[number]>();
   for (const m of msgs) {
     const digits = m.direction === "inbound" ? m.from_number ?? "" : m.to_number;
-    if (digits && !lastMsgBy.has(digits)) lastMsgBy.set(digits, m);
+    const owner = m.direction === "inbound" ? m.raw?.receiver : m.raw?.sender;
+    if (!digits || !owner) continue;
+    const key = `${owner}:${digits}`;
+    if (!lastMsgBy.has(key)) lastMsgBy.set(key, m);
   }
   const lowConf = new Set(replies.map((r) => `${r.user_email}:${r.vendor_id}`));
   const now = Date.now();
@@ -124,7 +130,7 @@ export async function detectWeakConversations(): Promise<{ scanned: number; flag
     }
 
     // R4 dead thread: the shop asked something and got silence for >6h.
-    const last = lastMsgBy.get(t.to_number);
+    const last = lastMsgBy.get(`${t.user_email}:${t.to_number}`);
     if (
       last &&
       last.direction === "inbound" &&

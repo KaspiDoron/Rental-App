@@ -125,6 +125,8 @@ export function BookingSheet({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
           vendorId: vendor.id,
+          // Google "open now" - a deal-close on an open shop is never queued.
+          openNow: vendor.openNow,
           pricePerDay: vendor.offer?.pricePerDay,
           currency: vendor.offer?.currency,
           fulfillment:

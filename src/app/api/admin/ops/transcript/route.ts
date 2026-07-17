@@ -65,9 +65,11 @@ export async function GET(req: Request) {
     ).catch(() => []),
     sbSelect<WaRow>(
       "whatsapp_messages",
+      // PRIVACY: only the inbound THIS thread's user received - a drill or a
+      // second user on the same shop number must never bleed in.
       `select=id,body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
         digits
-      )}&order=received_at.asc&limit=80`
+      )}&raw->>receiver=eq.${encodeURIComponent(userEmail)}&order=received_at.asc&limit=80`
     ).catch(() => []),
     sbSelect<{
       phase: string;

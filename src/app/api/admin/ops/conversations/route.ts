@@ -42,6 +42,7 @@ interface MsgRow {
   body: string | null;
   direction: string;
   received_at: string;
+  raw: { sender?: string; receiver?: string } | null;
 }
 
 export async function GET(req: Request) {
@@ -69,7 +70,7 @@ export async function GET(req: Request) {
     ).catch(() => []),
     sbSelect<MsgRow>(
       "whatsapp_messages",
-      "select=to_number,from_number,body,direction,received_at&order=received_at.desc&limit=400"
+      "select=to_number,from_number,body,direction,received_at,raw&order=received_at.desc&limit=400"
     ).catch(() => []),
   ]);
 
@@ -101,11 +102,16 @@ export async function GET(req: Request) {
     revBy.set(r.thread_key, agg);
   }
 
-  // Latest message per shop number (thread digits).
+  // Latest message per THREAD (owner + digits) - never keyed by bare digits:
+  // two users on the same shop number (or a drill number) must never see each
+  // other's snippets. Legacy rows without an owner stamp are dropped.
   const lastMsg = new Map<string, MsgRow>();
   for (const m of msgs) {
     const digits = m.direction === "inbound" ? m.from_number ?? "" : m.to_number;
-    if (digits && !lastMsg.has(digits)) lastMsg.set(digits, m);
+    const owner = m.direction === "inbound" ? m.raw?.receiver : m.raw?.sender;
+    if (!digits || !owner) continue;
+    const key = `${owner}:${digits}`;
+    if (!lastMsg.has(key)) lastMsg.set(key, m);
   }
 
   const out = threads
@@ -121,7 +127,7 @@ export async function GET(req: Request) {
       };
       const agg = revBy.get(t.thread_key);
       const chief = chiefBy.get(t.thread_key);
-      const last = lastMsg.get(t.to_number);
+      const last = lastMsg.get(`${t.user_email}:${t.to_number}`);
       return {
         threadKey: t.thread_key,
         userEmail: t.user_email,

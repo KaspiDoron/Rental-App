@@ -111,7 +111,9 @@ export async function syncInboundReplies(email: string): Promise<number> {
             body: m.text || (m.hasImage ? "[photo]" : ""),
             type: m.hasImage ? "image" : "text",
             direction: "inbound",
-            raw: { channel: "evolution", recovered: true },
+            // receiver = the user whose WhatsApp this sync ran for - without
+            // it a recovered row would be invisible to every scoped read.
+            raw: { channel: "evolution", recovered: true, receiver: email },
           },
         ]).catch(() => {});
 

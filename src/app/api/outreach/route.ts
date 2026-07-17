@@ -73,11 +73,30 @@ export async function POST(req: Request) {
     }
   }
 
-  // Resolve the destination number server-side.
+  // Resolve the destination number server-side. ANTI-SPOOF: when the vendor
+  // has a real Google identity (placeId), the client-supplied number must
+  // match the resolved one - a mismatched number must NEVER wear a real
+  // vendor's name (this is exactly how a test number once impersonated a real
+  // Bali shop and leaked a private chat onto its card). The owner may still
+  // test against an arbitrary number, but the thread is then re-keyed as an
+  // explicit test vendor.
   let to = String(body.to ?? "").trim();
-  if (!to && body.placeId) {
+  let vendorIdOverride: string | null = null;
+  let vendorNameOverride: string | null = null;
+  if (body.placeId) {
     const details = await placeDetails(String(body.placeId));
-    to = details?.phone ?? "";
+    const resolved = (details?.phone ?? "").replace(/[^\d]/g, "");
+    const supplied = to.replace(/[^\d]/g, "");
+    if (!supplied) {
+      to = details?.phone ?? "";
+    } else if (resolved && supplied !== resolved) {
+      if (session.role === "owner") {
+        vendorIdOverride = `test-${supplied}`;
+        vendorNameOverride = `${String(body.vendorName ?? "Shop").slice(0, 60)} (drill)`;
+      } else {
+        to = details?.phone ?? ""; // the real shop wins; the spoof is ignored
+      }
+    }
   }
   if (!to) {
     return NextResponse.json({
@@ -89,6 +108,10 @@ export async function POST(req: Request) {
   }
 
   const digits = to.replace(/[^\d]/g, "");
+  // The identity every stored row uses - a spoofed number can only ever be a
+  // clearly-labelled test vendor, never the real shop.
+  const vendorId = vendorIdOverride ?? String(body.vendorId ?? "");
+  const vendorName = vendorNameOverride ?? String(body.vendorName ?? "");
 
   // Anti-Ban gate for agent-composed sends (RFQs, bargains). Custom messages
   // the user typed are auto:false - they skip the engagement halt but still
@@ -132,8 +155,8 @@ export async function POST(req: Request) {
       await sbInsert("agent_events", [
         {
           kind: "localize-fallback",
-          vendor_id: String(body.vendorId ?? ""),
-          vendor_name: String(body.vendorName ?? ""),
+          vendor_id: vendorId,
+          vendor_name: vendorName,
           detail: JSON.stringify({
             email: session.email,
             region: String(body.region ?? ""),
@@ -180,8 +203,8 @@ export async function POST(req: Request) {
     shopOpenNow: typeof body.openNow === "boolean" ? body.openNow : undefined,
     meta: {
       sender: session.email,
-      vendorId: String(body.vendorId ?? ""),
-      vendorName: String(body.vendorName ?? ""),
+      vendorId,
+      vendorName,
       kind,
       round: Number(body.round ?? 0),
       rfq: body.rfq ?? null,
@@ -284,8 +307,8 @@ export async function POST(req: Request) {
           channel: result.channel,
           sender: session.email,
           ok: true,
-          vendorId: String(body.vendorId ?? ""),
-          vendorName: String(body.vendorName ?? ""),
+          vendorId,
+          vendorName,
           kind: String(body.kind ?? "custom"),
           round: Number(body.round ?? 0),
           rfq: body.rfq ?? null,
@@ -303,8 +326,8 @@ export async function POST(req: Request) {
     await sbInsert("agent_events", [
       {
         kind: "send-failed",
-        vendor_id: String(body.vendorId ?? ""),
-        vendor_name: String(body.vendorName ?? ""),
+        vendor_id: vendorId,
+        vendor_name: vendorName,
         detail: JSON.stringify({
           email: session.email,
           channel: result.channel,

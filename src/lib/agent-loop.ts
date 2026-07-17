@@ -207,12 +207,16 @@ export async function processVendorReply(opts: {
       from
     )},from_number.eq.${encodeURIComponent(from)})&order=received_at.desc&limit=20`
   );
+  // PRIVACY: BOTH directions are scoped to this user - outbound by sender,
+  // inbound by receiver (the user whose WhatsApp actually got the message).
+  // Another user's chat with the same number must never enter this context.
   const mine = opts.senderEmail
-    ? threadRows.filter(
-        (m) =>
-          m.direction === "inbound" ||
-          (m.raw as { sender?: string } | null)?.sender === opts.senderEmail
-      )
+    ? threadRows.filter((m) => {
+        const raw = m.raw as { sender?: string; receiver?: string } | null;
+        return m.direction === "inbound"
+          ? raw?.receiver === opts.senderEmail
+          : raw?.sender === opts.senderEmail;
+      })
     : threadRows;
   const thread = mine.slice(0, 12).reverse();
   const history = thread
@@ -426,6 +430,11 @@ export async function processVendorReply(opts: {
         const { translateToEnglish } = await import("./agents");
         const english = await translateToEnglish(text);
         if (!english) return;
+        // PRIVACY: the no-id fallback is receiver-scoped, so the gloss can
+        // never be stamped onto ANOTHER user's inbound row with these digits.
+        const receiverScope = ctx.sender
+          ? `&raw->>receiver=eq.${encodeURIComponent(ctx.sender)}`
+          : "";
         const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
           "whatsapp_messages",
           opts.waMessageId
@@ -434,10 +443,11 @@ export async function processVendorReply(opts: {
               )}&limit=1`
             : `select=id,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
                 from
-              )}&order=received_at.desc&limit=1`
+              )}${receiverScope}&order=received_at.desc&limit=1`
         );
         const row = rows[0];
         if (row) {
+          // Merge preserves receiver/instance - the scoping keys must survive.
           await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
             raw: { ...(row.raw ?? {}), english },
           });

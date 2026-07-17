@@ -76,7 +76,7 @@ export async function POST(req: Request) {
       "whatsapp_messages",
       `select=body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
         digits
-      )}&order=received_at.asc&limit=60`
+      )}&raw->>receiver=eq.${encodeURIComponent(userEmail)}&order=received_at.asc&limit=60`
     ).catch(() => []),
     sbSelect<{
       reply_text: string | null;

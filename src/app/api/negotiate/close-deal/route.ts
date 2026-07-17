@@ -24,6 +24,25 @@ export async function POST(req: Request) {
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
   const digits = to.replace(/[^\d]/g, "");
 
+  // KNOWN-THREAD GUARD (same pattern as the pickup-consent route): a closing
+  // message may only go to a number THIS user's agent actually negotiated
+  // with. Without this, a spoofed `to` would message a stranger AND the
+  // session-close side effects below would nuke the user's real negotiations.
+  {
+    const known = await sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+        digits
+      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
+    ).catch(() => []);
+    if (known.length === 0) {
+      return NextResponse.json(
+        { sent: false, reason: "unknown-destination" },
+        { status: 400 }
+      );
+    }
+  }
+
   // COMMITMENT LOCK: one confirmed deal at a time. If a DIFFERENT shop was
   // booked in the last 10 minutes, refuse - this is the guard against two
   // shops both being told "yes" in the same excited minute (double booking).
@@ -60,6 +79,9 @@ export async function POST(req: Request) {
       userEmail: session.email,
       toDigits: digits,
       kind: "user-close-deal",
+      // Google "open now" from the card - the SAME truth the user sees, so a
+      // deal-close on a live conversation is never queued as "shop closed".
+      shopOpenNow: typeof body.openNow === "boolean" ? body.openNow : undefined,
       payload: {
         pricePerDay: Number(body.pricePerDay) || undefined,
         currency: body.currency ? String(body.currency) : undefined,

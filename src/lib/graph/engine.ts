@@ -954,6 +954,7 @@ async function runTailGates(args: {
       toNumber: input.event.toDigits,
       text,
       meta,
+      shopOpenNow: input.shopOpenNow,
     });
   }
   push({
@@ -1112,7 +1113,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         },
       ]);
     },
-    async guardAndSend({ senderKey, toNumber, text, meta }) {
+    async guardAndSend({ senderKey, toNumber, text, meta, shopOpenNow }) {
       const { guardOutbound, afterSend } = await import("../wa-guard");
       const verdict = await guardOutbound({
         senderKey,
@@ -1121,6 +1122,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         auto: true,
         queueIfBlocked: true,
         meta,
+        shopOpenNow,
       });
       if (!verdict.allow) {
         return {
@@ -1297,11 +1299,15 @@ export async function buildTurnFromThread(
       toDigits
     )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=20`
   );
-  const mine = threadRows.filter(
-    (m) =>
-      m.direction === "inbound" ||
-      (m.raw as { sender?: string } | null)?.sender === userEmail
-  );
+  // PRIVACY: both directions scoped to this user - inbound by receiver (the
+  // WhatsApp that got it), outbound by sender. Another user's chat with the
+  // same digits must never enter this user's negotiation context.
+  const mine = threadRows.filter((m) => {
+    const raw = m.raw as { sender?: string; receiver?: string } | null;
+    return m.direction === "inbound"
+      ? raw?.receiver === userEmail
+      : raw?.sender === userEmail;
+  });
   const thread = mine.slice(0, 12).reverse();
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
@@ -1362,6 +1368,7 @@ export async function runUserAction(args: {
   toDigits: string;
   kind: "user-consent-pickup" | "user-close-deal";
   payload: Record<string, unknown>;
+  shopOpenNow?: boolean;
   send: LiveSend;
 }): Promise<GraphTurnResult | null> {
   const threadKey = threadKeyFor(args.userEmail, args.toDigits);
@@ -1369,5 +1376,6 @@ export async function runUserAction(args: {
   if (!input) return null;
   // User actions send promptly - the traveller is watching the screen.
   input.humanDelay = false;
+  input.shopOpenNow = args.shopOpenNow;
   return runGraphTurn(input, liveGraphIO(args.send));
 }

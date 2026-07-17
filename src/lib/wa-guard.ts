@@ -765,8 +765,14 @@ export async function guardOutbound(opts: {
     if (lastOut[0]) {
       const inboundSince = await sbSelect<{ id: number }>(
         "whatsapp_messages",
+        // PRIVACY + correctness: only replies THIS user's WhatsApp received
+        // count as engagement (another user's thread with the same shop must
+        // never clear this user's halt). Legacy unstamped rows fall back to
+        // the durable wa_recipient_state check below.
         `select=id&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           opts.toDigits
+        )}&raw->>receiver=eq.${encodeURIComponent(
+          opts.senderKey
         )}&received_at=gte.${encodeURIComponent(lastOut[0].received_at)}&limit=1`
       );
       const state = await sbSelect<{ read: boolean; last_reply_at: string | null }>(
@@ -796,8 +802,23 @@ export async function guardOutbound(opts: {
   //      c) If the timezone is genuinely unknown, DO NOT queue - a false
   //         "closed" on an open shop is the worse bug (issue #21).
   if (opts.auto && opts.shopOpenNow !== true) {
+    // ACTIVE-CONVERSATION OVERRIDE: if this shop wrote to THIS user within the
+    // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
+    // a reply "until the shop opens" would be absurd (and was: a deal-close on
+    // a live chat once queued for "opening hours" on a wrong-timezone number).
+    const recentInbound = await sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+        opts.toDigits
+      )}&raw->>receiver=eq.${encodeURIComponent(
+        opts.senderKey
+      )}&received_at=gte.${encodeURIComponent(
+        new Date(now - 30 * 60_000).toISOString()
+      )}&limit=1`
+    ).catch(() => []);
+    const activelyChatting = recentInbound.length > 0;
     const { off, known } = resolveOffset(opts.toDigits, region);
-    if (opts.shopOpenNow === false) {
+    if (!activelyChatting && opts.shopOpenNow === false) {
       // Google says closed. If it is DAYTIME at the shop (lunch break, late
       // opening), retry within the hour instead of parking until tomorrow
       // morning - the old behavior turned a 13:00 opening into a 22h wait.
@@ -808,7 +829,7 @@ export async function guardOutbound(opts: {
         : nextBusinessOpen(opts.toDigits, p, region);
       return await queue(until, "shop is closed now");
     }
-    if (known) {
+    if (known && !activelyChatting) {
       const localHour =
         (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
       const inWindow = localHour >= p.business_hour_start && localHour < p.business_hour_end;

@@ -294,6 +294,9 @@ export interface GraphTurnInput {
   // Pinned policy overlay for DETERMINISTIC replay (golden regression suite);
   // live traffic omits it and the engine reads the active overlay from config.
   overlay?: import("../ops/overlay").PolicyOverlay;
+  // Google "open now" from the card (user actions) - the hours gate must
+  // never queue a deal-close on a shop the app itself shows as open.
+  shopOpenNow?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +409,8 @@ export interface GraphIO {
     toNumber: string;
     text: string;
     meta: Record<string, unknown>;
+    // Google "open now" truth for the hours gate (user actions pass it).
+    shopOpenNow?: boolean;
   }): Promise<DeliverResult>;
   markPresentable(args: {
     userEmail?: string;

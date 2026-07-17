@@ -251,16 +251,26 @@ export async function runJudgeJob(
   if (kind === "judge") {
     const text = String(payload.text ?? "");
     if (!text) return;
-    // Reconstruct a light history for context (best-effort).
+    // Reconstruct a light history for context (best-effort). PRIVACY: both
+    // directions scoped to the thread's user - never another user's chat.
     const idx = threadKey.lastIndexOf(":");
+    const userEmail = idx > 0 ? threadKey.slice(0, idx) : "";
     const toDigits = idx > 0 ? threadKey.slice(idx + 1) : "";
-    const rows = await sbSelect<{ direction: string; body: string | null }>(
+    const rows = await sbSelect<{
+      direction: string;
+      body: string | null;
+      raw: { sender?: string; receiver?: string } | null;
+    }>(
       "whatsapp_messages",
-      `select=direction,body&or=(to_number.eq.${encodeURIComponent(
+      `select=direction,body,raw&or=(to_number.eq.${encodeURIComponent(
         toDigits
-      )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=8`
+      )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=16`
     ).catch(() => []);
     const history = rows
+      .filter((m) =>
+        m.direction === "inbound" ? m.raw?.receiver === userEmail : m.raw?.sender === userEmail
+      )
+      .slice(0, 8)
       .reverse()
       .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 200)}`)
       .join("\n");

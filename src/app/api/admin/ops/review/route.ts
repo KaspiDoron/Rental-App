@@ -134,7 +134,7 @@ export async function POST(req: Request) {
         "whatsapp_messages",
         `select=body,received_at&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           digits
-        )}&order=received_at.desc&limit=4`
+        )}&raw->>receiver=eq.${encodeURIComponent(userEmail)}&order=received_at.desc&limit=4`
       ).catch(() => []),
       sbSelect<{ vendor_name: string | null }>(
         "negotiation_threads",

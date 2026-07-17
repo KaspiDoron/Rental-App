@@ -16,25 +16,43 @@ import {
 } from "@/lib/evolution";
 
 // PRIVACY HARD RULE: WheelDeal must NEVER read a user's personal chats. A
-// message is stored/processed ONLY if it comes from a number WE first messaged
-// as a rental-shop thread (an outbound row exists for it). Anything else -
-// friends, family, groups, statuses - is dropped on the spot, unstored.
-async function isVendorThread(fromDigits: string): Promise<boolean> {
-  const rows = await sbSelect(
+// message is stored/processed ONLY if it comes from a number THIS USER's agent
+// first messaged as a rental-shop thread - scoped to the receiving instance's
+// owner, so one user's test thread can never open another user's (or the
+// owner's own) private chats to ingestion. Drill/test threads (the owner
+// rehearsing against a friend's number) count for 12 HOURS only: when the
+// drill is over, the friend's private messages stop being ingested.
+const DRILL_INGEST_WINDOW_MS = 12 * 3600_000;
+
+async function isVendorThread(fromDigits: string, ownerEmail: string): Promise<boolean> {
+  const rows = await sbSelect<{
+    received_at: string;
+    raw: { drill?: boolean; vendorId?: string } | null;
+  }>(
     "whatsapp_messages",
-    `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(fromDigits)}&limit=1`
+    `select=received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+      fromDigits
+    )}&raw->>sender=eq.${encodeURIComponent(ownerEmail)}&order=received_at.desc&limit=1`
   );
-  return rows.length > 0;
+  const row = rows[0];
+  if (!row) return false;
+  const isDrill =
+    row.raw?.drill === true || String(row.raw?.vendorId ?? "").startsWith("drill-");
+  if (isDrill) {
+    return Date.now() - Date.parse(row.received_at) < DRILL_INGEST_WINDOW_MS;
+  }
+  return true;
 }
 
 // The region of the last outbound to this shop - primes the voice transcriber
 // for the local accent (best-effort; undefined just means no language hint).
-async function regionForThread(fromDigits: string): Promise<string | undefined> {
+// Scoped to the receiving user: another user's region must never prime it.
+async function regionForThread(fromDigits: string, ownerEmail: string): Promise<string | undefined> {
   const rows = await sbSelect<{ raw: { region?: string } | null }>(
     "whatsapp_messages",
     `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
       fromDigits
-    )}&order=received_at.desc&limit=1`
+    )}&raw->>sender=eq.${encodeURIComponent(ownerEmail)}&order=received_at.desc&limit=1`
   ).catch(() => []);
   const r = rows[0]?.raw?.region;
   return typeof r === "string" && r ? r : undefined;
@@ -191,9 +209,26 @@ export async function POST(req: Request) {
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
       const from = remoteJid.split("@")[0];
 
-      // Not a rental-shop thread we opened? Drop it - never stored, never read.
-      // (Applies to fromMe too: the user's OWN chats with friends stay sacred.)
-      if (!(await isVendorThread(from))) continue;
+      // Resolve the RECEIVING user FIRST - every store/read below is scoped to
+      // them. An unresolvable instance is never ingested (a receiver-less row
+      // would be unscopeable forever).
+      const email = await emailForInstance(instance);
+      if (!email) {
+        await sbInsert("agent_events", [
+          {
+            kind: "webhook-orphan",
+            vendor_id: "",
+            vendor_name: from,
+            detail: `Inbound from +${from} on unknown Evolution instance "${instance}" - dropped (privacy: cannot attribute a receiver).`,
+          },
+        ]).catch(() => {});
+        continue;
+      }
+
+      // Not a rental-shop thread THIS user opened? Drop it - never stored,
+      // never read. (Applies to fromMe too: private chats stay sacred, and a
+      // finished drill stops ingesting the friend's messages after 12h.)
+      if (!(await isVendorThread(from, email))) continue;
 
       // ---- HUMAN TAKEOVER DETECTION ------------------------------------------
       // A fromMe message in a shop thread is either (a) our own bot send
@@ -204,8 +239,6 @@ export async function POST(req: Request) {
         try {
           const { getConfig } = await import("@/lib/runtime-config");
           if ((await getConfig("HUMAN_TAKEOVER"))?.toLowerCase() === "off") continue;
-          const email = await emailForInstance(instance);
-          if (!email) continue;
           const text = extractText(data);
           if (!text.trim()) continue; // media-only self message - out of scope
           const msgId = String(data.key.id ?? "");
@@ -296,16 +329,17 @@ export async function POST(req: Request) {
               : ""),
           type: hasImage ? "image" : hasAudio ? "audio" : doc ? "document" : "text",
           direction: "inbound",
-          raw: { instance, pushName: data.pushName ?? null, channel: "evolution" },
+          // receiver = the ONE user whose WhatsApp got this message. Every
+          // read surface filters on it - the privacy isolation keystone.
+          raw: { instance, receiver: email, pushName: data.pushName ?? null, channel: "evolution" },
         },
       ]);
       // Response-time analytics: record how fast this shop replied to our RFQ.
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
-      const email = await emailForInstance(instance);
       // A real inbound proves the socket is live: persist "open" durably.
-      if (email) {
+      {
         const { markOpen } = await import("@/lib/evolution");
         markOpen(email).catch(() => {});
       }
@@ -369,7 +403,7 @@ export async function POST(req: Request) {
           const media = await fetchMediaWithRetry(email, data);
           if (media) {
             const { transcribeAudio } = await import("@/lib/graph/transcribe");
-            const rfqRegion = await regionForThread(from);
+            const rfqRegion = await regionForThread(from, email);
             transcript = await transcribeAudio({
               mime: media.mime || "audio/ogg",
               base64: media.base64,

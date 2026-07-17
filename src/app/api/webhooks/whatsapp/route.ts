@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { getConfig, sbInsert } from "@/lib/runtime-config";
+import { getConfig, sbInsert, sbSelect } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import { sendWhatsApp } from "@/lib/whatsapp";
 
@@ -113,7 +113,37 @@ export async function POST(req: Request) {
   if (!body) return NextResponse.json({ ok: true });
 
   try {
-    const inbound: WaMessage[] = [];
+    // The Cloud number is SHARED by all users, so the receiving user must be
+    // resolved per sender-number: the distinct owners of recent outbound
+    // threads to that number. Exactly one owner = unambiguous; several = the
+    // newest wins and the ambiguity is logged for the owner to see.
+    const resolveReceiver = async (fromDigits: string): Promise<string | null> => {
+      const outs = await sbSelect<{ raw: { sender?: string } | null }>(
+        "whatsapp_messages",
+        `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+          fromDigits
+        )}&received_at=gte.${encodeURIComponent(
+          new Date(Date.now() - 14 * 86_400_000).toISOString()
+        )}&order=received_at.desc&limit=20`
+      ).catch(() => []);
+      const senders = [
+        ...new Set(outs.map((o: { raw: { sender?: string } | null }) => o.raw?.sender).filter(Boolean)),
+      ] as string[];
+      if (senders.length === 0) return null;
+      if (senders.length > 1) {
+        await sbInsert("agent_events", [
+          {
+            kind: "ambiguous-inbound",
+            vendor_id: "",
+            vendor_name: fromDigits,
+            detail: `Cloud inbound from +${fromDigits} matches ${senders.length} users' threads - attributed to the most recent (${senders[0]}).`,
+          },
+        ]).catch(() => {});
+      }
+      return senders[0];
+    };
+
+    const inbound: { msg: WaMessage; receiver: string | null }[] = [];
     const rows: Record<string, unknown>[] = [];
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
@@ -121,6 +151,7 @@ export async function POST(req: Request) {
         for (const msg of value.messages ?? []) {
           const kind = msg.type ?? "text";
           const caption = msg.image?.caption ?? msg.document?.caption;
+          const receiver = await resolveReceiver(msg.from);
           rows.push({
             wa_message_id: msg.id,
             from_number: msg.from,
@@ -131,12 +162,13 @@ export async function POST(req: Request) {
               (kind === "image" ? "[photo]" : kind === "audio" ? "[voice note]" : ""),
             type: kind,
             direction: "inbound",
-            raw: msg,
+            // receiver = the thread owner - the privacy-scoping keystone.
+            raw: { ...msg, receiver },
           });
           // Text, image/document AND voice notes are processed (a shop that
           // replies with a price-list photo or an audio price must be understood).
           if (kind === "text" || kind === "image" || kind === "document" || kind === "audio") {
-            inbound.push(msg);
+            inbound.push({ msg, receiver });
           }
         }
       }
@@ -154,7 +186,7 @@ export async function POST(req: Request) {
     }
 
     // Agentic processing (bounded so Meta always gets a fast 200).
-    for (const msg of inbound.slice(0, 3)) {
+    for (const { msg, receiver } of inbound.slice(0, 3)) {
       const media = msg.image ?? msg.document;
       const images =
         media?.id && (media.mime_type ?? "").startsWith("image/")
@@ -179,6 +211,8 @@ export async function POST(req: Request) {
         waMessageId: msg.id,
         images,
         transcript,
+        // The resolved thread owner - never the globally-latest outbound.
+        senderEmail: receiver ?? undefined,
         send: async (to, message) => {
           const r = await sendWhatsApp(to, message);
           return { ok: r.ok && r.channel === "cloud-api", error: r.error };

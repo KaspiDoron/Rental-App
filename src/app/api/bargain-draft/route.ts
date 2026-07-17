@@ -75,18 +75,30 @@ export async function POST(req: Request) {
   }
 
   // Thread history: what we and the shop already said - the draft must never
-  // repeat an answered question.
+  // repeat an answered question. PRIVACY: vendorId is a Google place id SHARED
+  // across users, so both directions are filtered to THIS user (outbound by
+  // sender, inbound by receiver) - never another user's thread.
   let history: string | undefined;
   try {
     const digits = String(vendor.whatsapp ?? "").replace(/[^\d]/g, "");
-    const out = await sbSelect<{ direction: string; body: string | null }>(
+    const out = await sbSelect<{
+      direction: string;
+      body: string | null;
+      raw: { sender?: string; receiver?: string } | null;
+    }>(
       "whatsapp_messages",
-      `select=direction,body&or=(raw->>vendorId.eq.${encodeURIComponent(
+      `select=direction,body,raw&or=(raw->>vendorId.eq.${encodeURIComponent(
         String(vendor.id ?? "")
-      )},from_number.eq.${encodeURIComponent(digits || "none")})&order=received_at.desc&limit=10`
+      )},from_number.eq.${encodeURIComponent(digits || "none")})&order=received_at.desc&limit=20`
     );
-    if (out.length) {
-      history = out
+    const mine = out.filter((m) =>
+      m.direction === "inbound"
+        ? m.raw?.receiver === session.email
+        : m.raw?.sender === session.email
+    );
+    if (mine.length) {
+      history = mine
+        .slice(0, 10)
         .reverse()
         .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 250)}`)
         .join("\n");
