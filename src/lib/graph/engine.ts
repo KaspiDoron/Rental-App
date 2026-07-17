@@ -226,7 +226,38 @@ function buildFacts(args: {
     hasAudio: input.event.audios.length > 0 || Boolean(input.transcript),
     mediaCoherent: args.mediaCoherent,
     nodeRuns: state.nodeRuns,
+    // Derived AFTER this build by applyStrongBargainFact (needs the spec's
+    // edge legality, which buildFacts cannot see). Placeholder stays false.
+    strongBargainAvailable: false,
   };
+}
+
+/**
+ * The price-first gate's derived fact: strong leverage exists (cheaper rival
+ * or a far-above-floor quote) AND a bargain edge is ACTUALLY legal right now
+ * (edge enabled, node enabled, maxRuns unexhausted, condition true). Computed
+ * as a fixpoint-safe overlay: bargain-edge conditions are evaluated with the
+ * fact still false, so the gated edges' notG(strongBargainAvailable) wrappers
+ * can never influence the bargain edges themselves (no recursion, and the
+ * gate is provably active ONLY when a bargain move is in the legal set -
+ * the director can never be starved by it).
+ */
+export function applyStrongBargainFact(spec: GraphSpec, facts: GraphFacts): GraphFacts {
+  if (!(facts.rivalCheaper || facts.priceFarAboveFloor)) return facts;
+  const nodesById = new Map(spec.nodes.map((x) => [x.id, x]));
+  const bargainLegal = spec.edges.some((edge) => {
+    if (!edge.enabled || edge.from !== "director") return false;
+    const node = nodesById.get(edge.to);
+    if (!node || !node.enabled || node.kind !== "bargain") return false;
+    if (
+      node.maxRunsPerThread != null &&
+      (facts.nodeRuns[node.id] ?? 0) >= node.maxRunsPerThread
+    ) {
+      return false;
+    }
+    return evalGraphCondition(edge.when, facts);
+  });
+  return bargainLegal ? { ...facts, strongBargainAvailable: true } : facts;
 }
 
 function legalEdgesFrom(
@@ -501,7 +532,7 @@ export async function runGraphTurn(
   }
 
   // ---- the director loop -------------------------------------------------------
-  let facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay });
+  let facts = applyStrongBargainFact(spec, buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay }));
   let steps = 0;
   let ladder: DecisionLadderRung[] | undefined;
   let lastResult: GraphTurnResult = { decisionId, action: "silent", traces };
@@ -683,7 +714,7 @@ export async function runGraphTurn(
         .catch(() => {});
       state.phase = derivePhase(state);
       // present loops back to the director (t-present-back) for a warm close.
-      facts = buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay });
+      facts = applyStrongBargainFact(spec, buildFacts({ input, state, spec, target, rivalPrice, mediaCoherent, overlay }));
       lastResult = { decisionId, action: "present", traces, ladder };
       continue;
     }
@@ -704,6 +735,10 @@ export async function runGraphTurn(
       tacticId: result.tacticId,
       nextRound: result.nextRound ?? input.ctx.round ?? 0,
       holdSeconds: choice.action === "wait-hold" ? choice.waitSeconds : undefined,
+      // Negotiation levers the validator must never strip (leverage guard).
+      target,
+      rivalPrice,
+      leverageNote: choice.leverageNote,
       input,
       io,
       spec,
@@ -758,6 +793,39 @@ export async function runGraphTurn(
 // Tail gates: style-validator -> localize -> safety -> deliver
 // ---------------------------------------------------------------------------
 
+/**
+ * Which deliberate negotiation levers did a revision LOSE? A lever counts as
+ * lost only if the original text actually contained it. Number levers match
+ * as digit tokens (with thousands separators tolerated); the duration lever
+ * matches the bare day count. Pure - unit-tested.
+ */
+export function leverageLost(
+  original: string,
+  revised: string,
+  levers: { rivalPrice?: number; target?: number; durationDays?: number }
+): string[] {
+  const lost: string[] = [];
+  const hasNumber = (s: string, n: number) => {
+    const rx = new RegExp(`(?<![\\d])${String(n).split("").join("[,.]?")}(?![\\d])`);
+    return rx.test(s.replace(/\s/g, ""));
+  };
+  if (levers.rivalPrice && hasNumber(original, levers.rivalPrice) && !hasNumber(revised, levers.rivalPrice)) {
+    lost.push(`the rival offer (${levers.rivalPrice})`);
+  }
+  if (levers.target && hasNumber(original, levers.target) && !hasNumber(revised, levers.target)) {
+    lost.push(`the target ask (${levers.target})`);
+  }
+  if (
+    levers.durationDays &&
+    levers.durationDays > 1 &&
+    hasNumber(original, levers.durationDays) &&
+    !hasNumber(revised, levers.durationDays)
+  ) {
+    lost.push(`the ${levers.durationDays}-day rental lever`);
+  }
+  return lost;
+}
+
 async function runTailGates(args: {
   draft: string;
   englishGloss?: string;
@@ -766,6 +834,11 @@ async function runTailGates(args: {
   tacticId?: string;
   nextRound: number;
   holdSeconds?: number;
+  // Deliberate negotiation levers in the draft (bargain nodes) - the style
+  // validator's revision is REJECTED if it drops any of them.
+  target?: number;
+  rivalPrice?: number;
+  leverageNote?: string;
   input: GraphTurnInput;
   io: GraphIO;
   spec: GraphSpec;
@@ -822,6 +895,29 @@ async function runTailGates(args: {
       return { delivered: "blocked", detail: "vetoed by the style validator" };
     }
     text = validation.text;
+    // LEVERAGE GUARD (deterministic): a bargain draft's rival price, target
+    // number and rental-length lever are DELIBERATE negotiation moves. If the
+    // validator's revision dropped any of them, the ORIGINAL draft wins - a
+    // polite-but-toothless "Can you do X?" once cost a live negotiation its
+    // competitive leverage. (Pattern precedent: the pickup-link survival check.)
+    if (args.nodeId === "bargain" && text !== args.draft) {
+      const lost = leverageLost(args.draft, text, {
+        rivalPrice: args.rivalPrice,
+        target: args.target,
+        durationDays: input.rfq?.durationDays,
+      });
+      if (lost.length) {
+        push({
+          stage: "style-validator",
+          nodeId: "style-validator",
+          input: text,
+          reasoning: `leverage preserved - the revision dropped ${lost.join(" + ")}; keeping the original draft`,
+          output: args.draft,
+          verdict: "revised",
+        });
+        text = args.draft;
+      }
+    }
     // Global uniqueness (hundreds of users must never repeat a sentence) +
     // the warm-emoji tone policy. Skipped for local-language output - the
     // trigram store is English and an emoji swap there is safe anyway.

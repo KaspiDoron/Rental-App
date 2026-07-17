@@ -13,9 +13,29 @@ import { evalGraphCondition } from "./conditions";
 export const GRAPH_SPEC_VERSION = 2 as const;
 
 // Bump when the shipped default node prompts / edges change in a way that
-// should reach already-saved graphs. Currently informational (the sanitizer
-// backfills empty prompts on every load regardless).
-export const DEFAULT_GRAPH_REVISION = 3;
+// should reach already-saved graphs. The sanitizer migrates UNTOUCHED
+// built-in edge conditions up to this revision (owner-customized conditions
+// are never overwritten) and stamps it on every sanitized spec.
+export const DEFAULT_GRAPH_REVISION = 4;
+
+// PRICE-FIRST GATE (revision 4): while a strong-leverage bargain (cheaper
+// rival / far-above-floor quote) is actually LEGAL, the competing moves
+// (probes, present, momentum) are illegal - the LLM director can no longer
+// "politely" skip the price push the deterministic ladder would have made.
+// The derived fact is computed in the engine (applyStrongBargainFact) and is
+// true ONLY when a bargain edge is in the legal set, so this gate can never
+// starve the director.
+export const PRICE_FIRST_GATE: GraphCondition = {
+  kind: "notG",
+  of: { kind: "strongBargainAvailable" },
+};
+export const PRICE_FIRST_EDGE_IDS = [
+  "d-deposit-probe",
+  "d-cash-push",
+  "d-fulfillment-probe",
+  "d-present",
+  "d-momentum",
+] as const;
 
 export function defaultGraphSettings(): GraphSettings {
   return {
@@ -286,6 +306,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "matchesSpecNotFalse" },
         { kind: "fieldKnown", field: "deposit", value: false },
         { kind: "nodeRanBelow", nodeId: "deposit-probe", max: 2 },
+        PRICE_FIRST_GATE,
       ]),
       "price is settling - learn the deposit"
     ),
@@ -298,6 +319,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "depositPassportOnly" },
         { kind: "notG", of: { kind: "cashAlternativeAskedAlready" } },
         { kind: "nodeRanBelow", nodeId: "deposit-probe", max: 3 },
+        PRICE_FIRST_GATE,
       ]),
       "passport-only - ask nicely for cash instead"
     ),
@@ -311,6 +333,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "matchesSpecNotFalse" },
         { kind: "fieldKnown", field: "fulfillment", value: false },
         { kind: "nodeRanBelow", nodeId: "fulfillment-probe", max: 2 },
+        PRICE_FIRST_GATE,
       ]),
       "learn delivery / pickup / on-shop"
     ),
@@ -323,6 +346,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "hasUsablePrice", value: true },
         { kind: "dealComplete", value: true },
         { kind: "nodeRanBelow", nodeId: "present", max: 1 },
+        PRICE_FIRST_GATE,
       ]),
       "price + deposit + fulfillment known - show the traveller"
     ),
@@ -405,6 +429,7 @@ export function defaultGraphEdges(): EdgeSpec[] {
         { kind: "notG", of: { kind: "eventIs", event: "tick" } },
         { kind: "notG", of: { kind: "sessionClosed" } },
         { kind: "notG", of: { kind: "toneDegraded" } },
+        PRICE_FIRST_GATE,
       ]),
       "brief acknowledgement - keep the deal moving"
     ),
@@ -592,6 +617,22 @@ export function sanitizeGraphSpec(raw: GraphSpec): GraphSpec {
     })) as EdgeSpec[];
   for (const d of def.edges) if (!edges.some((x) => x.id === d.id)) edges.push(d);
 
+  // REVISION MIGRATION (rev 4: the price-first gate). A saved spec's built-in
+  // edge gets the new shipped condition ONLY when its saved condition still
+  // deep-equals the pre-gate default - an owner-customized condition is never
+  // overwritten. Idempotent: an edge already carrying the gate is skipped.
+  if (((raw as { revision?: number }).revision ?? 0) < DEFAULT_GRAPH_REVISION) {
+    for (const id of PRICE_FIRST_EDGE_IDS) {
+      const saved = edges.find((x) => x.id === id);
+      const shipped = def.edges.find((x) => x.id === id);
+      if (!saved || !shipped) continue;
+      const preGate = stripGate(shipped.when);
+      if (stableStringify(saved.when) === stableStringify(preGate)) {
+        saved.when = shipped.when;
+      }
+    }
+  }
+
   const s = raw.settings ?? def.settings;
   const settings: GraphSettings = {
     maxStepsPerEvent: clampInt(s.maxStepsPerEvent, 2, 20, def.settings.maxStepsPerEvent),
@@ -607,5 +648,32 @@ export function sanitizeGraphSpec(raw: GraphSpec): GraphSpec {
     lowEnglish: Boolean(s.lowEnglish ?? def.settings.lowEnglish),
     streetLocal: Boolean(s.streetLocal ?? def.settings.streetLocal),
   };
-  return { version: GRAPH_SPEC_VERSION, nodes, edges, settings };
+  return { version: GRAPH_SPEC_VERSION, revision: DEFAULT_GRAPH_REVISION, nodes, edges, settings };
+}
+
+// ---- revision-migration helpers -------------------------------------------------
+
+/** JSON with sorted keys - stable structural equality for condition trees. */
+function stableStringify(x: unknown): string {
+  if (Array.isArray(x)) return `[${x.map(stableStringify).join(",")}]`;
+  if (x && typeof x === "object") {
+    const o = x as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(x);
+}
+
+/** The shipped condition WITHOUT the price-first gate = the pre-rev-4 default. */
+function stripGate(when: GraphCondition): GraphCondition {
+  const gate = stableStringify(PRICE_FIRST_GATE);
+  if ((when as { kind?: string }).kind === "allG") {
+    const of = (when as { of: GraphCondition[] }).of.filter(
+      (c) => stableStringify(c) !== gate
+    );
+    return { kind: "allG", of };
+  }
+  return when;
 }

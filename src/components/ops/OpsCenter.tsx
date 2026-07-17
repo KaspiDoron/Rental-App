@@ -16,6 +16,7 @@ interface ThreadCard {
   threadKey: string;
   userEmail: string;
   vendorName: string;
+  drill?: boolean;
   phase: string;
   updatedAt: string;
   rounds: number;
@@ -243,6 +244,11 @@ function ThreadsPanel({ onOpen }: { onOpen: (threadKey: string, vendorName: stri
               {t.bookmark ? "🔖 " : ""}
               {t.vendorName}
             </span>
+            {t.drill && (
+              <span className="shrink-0 rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                🧪 drill
+              </span>
+            )}
             {t.openFlags > 0 && (
               <span className="shrink-0 rounded-full bg-brandred-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandred">
                 {t.openFlags} open

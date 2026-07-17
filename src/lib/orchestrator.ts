@@ -479,6 +479,10 @@ export async function validateDraft(args: {
     "never greet again mid-conversation; NEVER imply a deal is accepted or a " +
     "booking confirmed (only the traveller decides); stay in the same language " +
     "the conversation is already in; sound like a casual human, not a bot. " +
+    "PRESERVE NEGOTIATION LEVERAGE: a cited rival offer ('another shop quoted 220'), " +
+    "the rental length ('for 3 days'), and a commitment-framed ask ('I'd book with " +
+    "you if you can do 200') are DELIBERATE bargaining moves, not clutter and not an " +
+    "accepted deal - keep them word-for-word intact in any revision. " +
     (stage?.instructions ? `Owner guidance: ${stage.instructions} ` : "") +
     (registerRules(args.cfg, args.currency) || "") +
     ' Reply ONLY as JSON: { "verdict": "ok"|"revise"|"veto", "revised": string, ' +

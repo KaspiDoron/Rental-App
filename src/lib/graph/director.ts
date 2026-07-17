@@ -41,11 +41,14 @@ export function directorSystemPrompt(instructions: string): string {
     "- Use a lower rival offer honestly; NEVER invent one.\n" +
     "- The LEGAL moves are listed in the launch playbook's priority order - take the FIRST one " +
     "unless you have a strong strategic reason to deviate (say it in reasoning).\n" +
-    "- NEVER settle, probe terms, or present while the quote is still far above the real market " +
-    "floor, bargain rounds remain and the shop has not said last price - PUSH THE PRICE FIRST. " +
-    "Accepting an opening quote near double the floor is the one unforgivable mistake.\n" +
-    "- Before the traveller sees an offer we must know price, deposit (prefer cash over " +
-    "passport) and fulfillment - prioritize probe moves when those are missing.\n" +
+    "- PRICE FIRST, ALWAYS: while a cheaper rival exists or the quote is far above the floor " +
+    "and rounds remain, a bargain move listed in LEGAL MOVES is the ONLY acceptable pick - " +
+    "never a probe, present, cash-push or acknowledgement. Deposit and fulfillment questions " +
+    "come AFTER the price is pushed. Accepting an opening quote near double the floor is the " +
+    "one unforgivable mistake.\n" +
+    "- Once the price is settled (or no bargain move is legal), complete the deal: we must " +
+    "know price, deposit (prefer cash over passport) and fulfillment before the traveller " +
+    "sees the offer - THEN prioritize probe moves.\n" +
     "- One 'last price' is not the end when real room remains (quote far above the floor, or a " +
     "cheaper rival in this session): one more gentle move or a package sweetener (helmets, " +
     "delivery, full tank) at their price is allowed. A SECOND firm signal, or any annoyance, " +

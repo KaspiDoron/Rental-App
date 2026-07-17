@@ -106,6 +106,9 @@ export type GraphCondition =
   | { kind: "eventIs"; event: GraphEventKind }
   // quote still far above the real floor (>25%) - leverage to keep pushing
   | { kind: "priceFarAboveFloor" }
+  // a strong-leverage bargain (cheaper rival / far-above-floor) is LEGAL right
+  // now - probes/present/momentum are gated off so price is pushed FIRST
+  | { kind: "strongBargainAvailable" }
   // the shop walked away from the deal ("take it there") - stop gracefully
   | { kind: "shopDeclinedDeal" }
   | { kind: "nodeRanBelow"; nodeId: string; max: number }
@@ -137,6 +140,9 @@ export interface GraphSettings {
 
 export interface GraphSpec {
   version: 2;
+  // Default-graph revision this spec was last migrated to (sanitizeGraphSpec
+  // upgrades untouched built-in edges when DEFAULT_GRAPH_REVISION advances).
+  revision?: number;
   nodes: NodeSpec[];
   edges: EdgeSpec[];
   settings: GraphSettings;
@@ -220,6 +226,9 @@ export interface GraphFacts {
   matchesSpecNotFalse: boolean;
   priceAtOrBelowFloor: boolean;
   priceFarAboveFloor: boolean; // quote >25% above the known floor
+  // Derived by the ENGINE (not buildFacts): strong leverage exists AND a
+  // bargain edge is actually legal - the price-first gate for other edges.
+  strongBargainAvailable: boolean;
   targetIsRealSaving: boolean;
   rivalCheaper: boolean;
   counts: { clarify: number; bargain: number; answer: number; close: number };

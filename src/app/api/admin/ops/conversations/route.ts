@@ -133,6 +133,10 @@ export async function GET(req: Request) {
         userEmail: t.user_email,
         vendorId: t.vendor_id,
         vendorName: t.vendor_name || `+${t.to_number}`,
+        // Owner rehearsals - labelled so they never read as real negotiations.
+        drill:
+          String(t.vendor_id ?? "").startsWith("drill-") ||
+          String(t.vendor_id ?? "").startsWith("test-"),
         phase: t.phase,
         updatedAt: t.updated_at,
         rounds: f.rounds ?? 0,
