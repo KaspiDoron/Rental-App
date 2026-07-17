@@ -53,13 +53,26 @@ export function currency(code: string): Currency {
   return CURRENCIES.find((c) => c.code === code) ?? CURRENCIES[0];
 }
 
+// Deterministic thousands grouping, DECOUPLED from the device locale. The old
+// `Math.round(n).toLocaleString()` (no locale arg) followed the phone's
+// settings, so the same shop price rendered "1,234" on a US phone and "1.234"
+// on a German one - a global-consistency bug. A fixed grouping is identical
+// everywhere and universally readable.
+function groupInt(n: number): string {
+  try {
+    return new Intl.NumberFormat("en-US").format(n);
+  } catch {
+    return String(n);
+  }
+}
+
 /** Convert an ILS amount to a display string in the given currency. */
 export function fromIls(ils: number, code: string): string {
   const c = currency(code);
   const adj = code === "ILS" ? 1 : 1.002; // silent 0.2% FX handling fee
   const n = ils * c.perIls * adj;
   const rounded =
-    n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(2).replace(/\.00$/, "");
+    n >= 1000 ? groupInt(Math.round(n)) : n.toFixed(2).replace(/\.00$/, "");
   return c.symbol.length > 1 ? `${c.symbol} ${rounded}` : `${c.symbol}${rounded}`;
 }
 
@@ -76,7 +89,7 @@ export function moneyLocal(amount: number, code?: string): string {
   const c = CURRENCIES.find((x) => x.code === (code ?? "").toUpperCase());
   const n =
     amount >= 1000
-      ? Math.round(amount).toLocaleString()
+      ? groupInt(Math.round(amount))
       : `${Math.round(amount * 100) / 100}`;
   if (!c) return code ? `${n} ${code.toUpperCase()}` : `$${n}`;
   return c.symbol.length > 1 ? `${c.symbol} ${n}` : `${c.symbol}${n}`;

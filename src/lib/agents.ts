@@ -345,11 +345,21 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   return [opener + dropOff, extras, delivery, `${ask} ${thanks}`].filter(Boolean).join(" ");
 }
 
-/** Human-friendly date for messages: "Jan 20" (no year noise for near dates). */
+const SHORT_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * Human-friendly date for shop-facing messages: "20 Jan" - day-first, the
+ * INTERNATIONAL order (US month-first "Jan 20" is ambiguous to most of the
+ * world and this string goes into real messages to foreign shops). Deterministic
+ * English month, so it never follows the server/device locale.
+ */
 function prettyDate(iso: string): string {
   const d = new Date(`${iso}T00:00:00`);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${d.getUTCDate()} ${SHORT_MONTHS[d.getUTCMonth()] ?? ""}`.trim();
 }
 
 // ---------------------------------------------------------------------------

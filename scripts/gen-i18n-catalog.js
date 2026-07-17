@@ -3,8 +3,12 @@
 // anywhere in src/. Run after adding UI copy: node scripts/gen-i18n-catalog.js
 const { execSync } = require("child_process");
 const fs = require("fs");
+// A negative lookbehind excludes the `t` at the TAIL of an identifier
+// (impor`t(`, .ge`t(`, `await impor`t(`...), which the old bare `t\(` regex
+// wrongly captured - polluting the catalog with module paths, HTTP headers and
+// query-param keys and wasting the daily translate budget translating them.
 const out = execSync(
-  `grep -rhoE 't\\("([^"]|\\\\")+"\\)' src --include='*.tsx' --include='*.ts'`,
+  `grep -rhoP '(?<![A-Za-z0-9_$])t\\("(?:[^"\\\\]|\\\\.)*"\\)' src --include='*.tsx' --include='*.ts'`,
   { encoding: "utf8" }
 );
 const strings = [...new Set(
