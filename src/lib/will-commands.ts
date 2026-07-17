@@ -21,6 +21,7 @@ export type WillCommand =
   // Navigation + product guidance - Will is the app's operating system.
   | { action: "open_deals" }
   | { action: "open_pricing" }
+  | { action: "open_feedback"; topic?: string }
   | { action: "help" }
   | { action: "answer"; text: string }
   | { action: "clarify"; text: string };
@@ -92,6 +93,36 @@ export function parseWillCommandDeterministic(
   }
   if (/\b(plans?|pricing|upgrade|pro|ultra)\b.*\b(cost|price|difference|include|what|show|compare)\b|\bwhat.*\b(pro|ultra|plans?)\b|^(show )?(plans|pricing)$/.test(s)) {
     return { action: "open_pricing" };
+  }
+
+  // Feedback / bug reports / complaints / feature requests -> guide the user
+  // to the feedback flow (and open it). Conservative triggers so ordinary chat
+  // about a SHOP being closed/broken never fires this.
+  if (
+    /\b(report (a |an )?(bug|problem|issue|glitch)|(give|send|leave|submit|write) (some )?feedback|feature request|request a feature|i(?:'| a)?m? ?want(?: to)? suggest|suggestion for (the )?app|complain)\b/.test(
+      s
+    ) ||
+    /\b(this|the) (app|page|button|screen|feature)\b.*\b(broke|broken|bug|doesn'?t work|not working|isn'?t working|is wrong)\b/.test(
+      s
+    ) ||
+    /^(feedback|report a bug|bug report|give feedback)$/.test(s)
+  ) {
+    return { action: "open_feedback" };
+  }
+
+  // "Same search session" - a recurring point of confusion Will should own.
+  if (/\bsearch session\b|\bsame search\b|\bwhat (counts as|is) (a|the) (search )?session\b/.test(s)) {
+    return { action: "answer", text: "__SESSION__" };
+  }
+
+  // Capacity / limits / "how many shops" / "why is it queued" explained in
+  // plain language (no ban-jargon) - the route composes it plan-aware.
+  if (
+    /\b(how many (shops|messages|introductions)|new shops per|daily limit|message limit|sending limit|how many.*(introduc|contact)|why (is it |are they )?(queued|waiting|paced|slow|taking))\b/.test(
+      s
+    )
+  ) {
+    return { action: "answer", text: "__CAPACITY__" };
   }
 
   // Radius: "expand search radius to 5km", "radius 12", "search wider"

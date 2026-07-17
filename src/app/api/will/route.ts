@@ -9,6 +9,8 @@ import {
   clampRadius,
 } from "@/lib/will-commands";
 import { composeStatus, composeWhy, composeCompare } from "@/lib/will-answers";
+import { planCapacity } from "@/lib/wa/capacity";
+import { pickVariant, pick } from "@/lib/will-variants";
 
 // Will's brain: natural language in -> ONE typed command + a short spoken
 // confirmation out. The deterministic parser handles the unambiguous cases
@@ -43,8 +45,14 @@ Allowed actions (never invent others):
 - {"action":"answer","text":"<direct answer>"} - other questions you can answer from the context alone
 - {"action":"open_deals"} - they want their deals/bookings/hunt history page
 - {"action":"open_pricing"} - they ask about plans/pricing/upgrading (recommend honestly, never pushy)
+- {"action":"open_feedback","topic":"<bug|idea|question|other>"} - they report a bug, complain about the APP, request a feature, or are frustrated with the product. Warmly guide them to the feedback box and open it.
 - {"action":"help"} - they ask what you can do / how this works
+- {"action":"answer","text":"<direct answer>"} - for product questions you can answer from context (features, how the search session works, why messages are paced, navigation). Explain in plain, friendly language.
 - {"action":"clarify","text":"<one short question>"} - when you genuinely can't tell what they want
+
+Recognise intent generously: confusion -> explain or guide; a complaint or bug about the APP -> open_feedback; a feature idea -> open_feedback; a question already answered somewhere in the app -> point them there in your "say". Never explain internal ban/anti-spam mechanics, WhatsApp limits, or unofficial APIs - speak only in outcomes ("your agent messages shops at a natural pace so replies keep flowing").
+
+Voice: a warm, sharp, human concierge - never a scripted bot. VARY your wording every time; never open two replies the same way. 1-2 sentences, concrete.
 
 Rules: never fabricate shops, prices or ids not present in the context. Prefer acting over clarifying. "say" always confirms concretely what you did or found.`;
 
@@ -71,8 +79,11 @@ export async function POST(req: Request) {
     const ctxLine = JSON.stringify({
       phase: ctx.phase,
       radiusKm: ctx.radiusKm,
+      vehicleClass: ctx.vehicleClass,
+      maxPricePerDay: ctx.maxPricePerDay,
       paused: ctx.paused,
       plan: ctx.plan,
+      waConnected: ctx.waConnected,
       origin: ctx.originLabel,
       offersIn: ctx.offersIn,
       notes: ctx.notes.slice(0, 5),
@@ -103,10 +114,7 @@ export async function POST(req: Request) {
   }
 
   if (!command) {
-    command = {
-      action: "clarify",
-      text: "I didn't quite catch that - do you want me to change the search (radius, budget, vehicle), compare offers, or tell you what's happening?",
-    };
+    command = { action: "clarify", text: pickVariant("clarify") };
   }
 
   // 3) Server-composed answers for help / status / why / compare.
@@ -120,6 +128,14 @@ export async function POST(req: Request) {
   }
   if (command.action === "answer" && command.text === "__WHY__") {
     const answer = await composeWhy(session.email, ctx);
+    return NextResponse.json({ command: { action: "answer", text: answer }, say: answer });
+  }
+  if (command.action === "answer" && command.text === "__SESSION__") {
+    const answer = sessionExplainer();
+    return NextResponse.json({ command: { action: "answer", text: answer }, say: answer });
+  }
+  if (command.action === "answer" && command.text === "__CAPACITY__") {
+    const answer = capacityExplainer(ctx);
     return NextResponse.json({ command: { action: "answer", text: answer }, say: answer });
   }
   if (command.action === "compare") {
@@ -173,6 +189,11 @@ function sanitize(cmd: WillCommand, ctx: WillContext): WillCommand | null {
     case "answer":
     case "clarify":
       return typeof cmd.text === "string" && cmd.text.trim() ? cmd : null;
+    case "open_feedback":
+      return {
+        action: "open_feedback",
+        topic: typeof cmd.topic === "string" ? cmd.topic.slice(0, 24) : undefined,
+      };
     case "clear_search":
     case "pause_session":
     case "resume_session":
@@ -191,7 +212,8 @@ function helpSay(ctx: WillContext): string {
   const base =
     "I run the whole hunt: say \"find me a 125cc scooter near my hotel\" and I search, message every shop and haggle. " +
     "You can steer me any time - \"radius 10km\", \"only automatic scooters\", \"under 200 a day\", \"pause everything\", " +
-    "\"what's happening?\", \"why this shop?\", \"compare the top 3\", \"open my deals\".";
+    "\"what's happening?\", \"why this shop?\", \"compare the top 3\", \"open my deals\". " +
+    "I can also explain how anything here works, and if something's off or you have an idea, say \"give feedback\" and I'll open the box for you.";
   if (ctx.plan === "free") {
     return base + " On Free I work one shop at a time; Pro adds mass bargain (every shop in one tap) - say \"show plans\" if you're curious.";
   }
@@ -204,36 +226,99 @@ function helpSay(ctx: WillContext): string {
 function defaultSay(cmd: WillCommand, ctx: WillContext): string {
   switch (cmd.action) {
     case "set_radius":
-      return `Done - radius is now ${cmd.km} km. New shops in that ring join the next sweep.`;
+      return pick([
+        `Radius is now ${cmd.km} km - new shops in that ring join the next sweep.`,
+        `Widened your reach to ${cmd.km} km. I'll pull in whatever's there.`,
+        `Set - ${cmd.km} km around your stay. Fresh shops get picked up automatically.`,
+      ]);
     case "set_budget":
       return cmd.maxPricePerDay
-        ? `Got it - I'll only surface options at ${cmd.maxPricePerDay}/day or less.`
-        : "Budget cap removed - showing everything again.";
+        ? pick([
+            `Got it - only options at ${cmd.maxPricePerDay}/day or less from here.`,
+            `Capping it at ${cmd.maxPricePerDay}/day - I'll hide anything pricier.`,
+            `Done. Nothing above ${cmd.maxPricePerDay}/day will clutter your list.`,
+          ])
+        : pick([
+            "Budget cap lifted - showing every option again.",
+            "Cleared the budget - the full range is back in view.",
+          ]);
     case "set_filter":
-      return `Done - ${cmd.label ?? "filter updated"}.`;
+      return pick([
+        `Done - ${cmd.label ?? "filter updated"}.`,
+        `Applied: ${cmd.label ?? "your filter"}. The list just retuned.`,
+        `${cmd.label ?? "Filter set"} - results updated.`,
+      ]);
     case "start_search":
-      return "On it - structuring your request and finding every shop around you.";
+      return pick([
+        "On it - structuring your request and finding every shop around you.",
+        "Starting the hunt - reading your request and sweeping the area now.",
+        "Let's go - I'm mapping shops near your stay this second.",
+      ]);
     case "open_deals":
-      return "Opening My deals - every hunt, offer and booking in one place.";
+      return pick([
+        "Opening My deals - every hunt, offer and booking in one place.",
+        "Here's your deals view - all your hunts and their status together.",
+      ]);
     case "open_pricing":
-      return "Here are the plans - honestly, one good negotiation usually covers months of Pro.";
+      return pick([
+        "Here are the plans - honestly, one good negotiation usually pays for months.",
+        "Pulling up pricing - I'll only ever suggest an upgrade if it truly earns its keep.",
+      ]);
+    case "open_feedback":
+      return pickVariant("open_feedback");
     case "clear_search":
-      return "Sure - confirm in the dialog and I'll wipe this search.";
+      return pick([
+        "Sure - confirm in the dialog and I'll wipe this search clean.",
+        "One confirmation and I'll clear it - every queued message stops too.",
+      ]);
     case "pause_session":
-      return "Paused. I'll store every reply but send nothing until you say resume.";
+      return pick([
+        "Paused. I'll keep every reply but send nothing until you say resume.",
+        "Holding everything - replies still land, but I won't message out till you're ready.",
+      ]);
     case "resume_session":
-      return "Back on it - resuming the negotiations where we left off.";
+      return pick([
+        "Back on it - picking the negotiations up where we left off.",
+        "Resumed. The agents are moving again.",
+      ]);
     case "mass_bargain":
       return ctx.waConnected
-        ? "Going wide - asking every remaining shop at once, each with its own wording."
-        : "I'd love to - connect your WhatsApp in Profile first and I'll blast it.";
+        ? pick([
+            "Going wide - asking every remaining shop, each with its own wording. The first goes now, the rest follow at a natural pace.",
+            "Firing at all the open shops - one message leaves immediately, the others space out so replies keep flowing.",
+          ])
+        : pick([
+            "I'd love to - connect your WhatsApp in Profile first and I'll reach them all.",
+            "Almost - link WhatsApp in Profile and this becomes one tap.",
+          ]);
     case "open_vendor":
-      return "Taking you to that shop's card.";
+      return pick(["Taking you to that shop's card.", "Here's that shop - opening it now."]);
     case "remember":
-      return `Noted - I'll keep that in mind for this session: "${cmd.note}".`;
+      return pick([
+        `Noted - I'll keep that in mind this session: "${cmd.note}".`,
+        `Locked in: "${cmd.note}". I'll honour it while we hunt.`,
+      ]);
     default:
-      return "Done.";
+      return pick(["All set.", "Done.", "Handled.", "Taken care of."]);
   }
+}
+
+/** Plain-language explainer for "what is a search session?" - no jargon. */
+function sessionExplainer(): string {
+  return pick([
+    "A search session is one hunt from a single search. Every shop I contact, every reply and offer, and your queued messages all belong to that one session - start a new search and a fresh session begins. Your deals page groups everything by session.",
+    "Think of a search session as one trip's hunt: it starts when you search, and holds all the shops I message, their replies and your queue. A new search opens a new session, so nothing gets tangled between trips.",
+  ]);
+}
+
+/** Plain-language explainer for capacity/pacing - outcomes only, no ban talk. */
+function capacityExplainer(ctx: WillContext): string {
+  const c = planCapacity(ctx.plan);
+  const planName = ctx.plan === "ultra" ? "Ultra" : ctx.plan === "pro" ? "Pro" : "Free";
+  return pick([
+    `On ${planName} I introduce your WhatsApp to up to ${c.newContacts} new shops every ${c.windowHours} hours. The very first shop is messaged right away and the rest follow at a natural, human pace so shops actually reply. That capacity refreshes continuously - you're never stuck waiting for the next day.`,
+    `Your ${planName} plan reaches up to ${c.newContacts} new shops per ${c.windowHours}-hour window. I message the first one immediately, then space the others out like a real person would - it keeps replies coming and your number healthy. As time passes, room for more shops opens up automatically.`,
+  ]);
 }
 
 export const maxDuration = 60;

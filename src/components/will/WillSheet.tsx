@@ -152,8 +152,15 @@ export function WillSheet({
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          placeholder={listening ? t("Listening...") : t("Ask Will anything...")}
-          className="h-11 min-w-0 flex-1 rounded-2xl border-2 border-line bg-card px-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
+          disabled={busy}
+          placeholder={
+            busy ? t("Sending...") : listening ? t("Listening...") : t("Ask Will anything...")
+          }
+          // transition-colors: the focus border eases in instead of snapping
+          // (the "flashes blue for no reason" report was a hard border swap on
+          // every focus/blur/re-render). disabled:opacity while a reply is in
+          // flight so the composer reads as busy, matching the send spinner.
+          className="h-11 min-w-0 flex-1 rounded-2xl border-2 border-line bg-card px-3 text-sm text-strong placeholder:text-faint transition-colors duration-200 focus:border-brandblue focus:outline-none disabled:opacity-60"
           style={{ fontSize: "16px" }}
         />
         {voiceAvailable && !draft.trim() && (
@@ -171,9 +178,17 @@ export function WillSheet({
           onClick={submit}
           disabled={busy || !draft.trim()}
           className="btn btn-primary h-11 shrink-0 rounded-2xl px-4 disabled:opacity-50"
-          aria-label={t("Send")}
+          aria-label={busy ? t("Sending...") : t("Send")}
+          aria-busy={busy}
         >
-          <Icon name="send" className="h-4.5 w-4.5" />
+          {busy ? (
+            <span
+              className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+              aria-hidden="true"
+            />
+          ) : (
+            <Icon name="send" className="h-4.5 w-4.5" />
+          )}
         </button>
       </div>
     </Modal>

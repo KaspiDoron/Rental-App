@@ -570,6 +570,7 @@ export default function Home() {
       massBargain: () => runMassBargain(),
       openVendor: (id: string) => scrollToVendor(id),
       compare: (ids: string[]) => setCompareIds(ids),
+      openFeedback: () => setFeedbackOpen(true),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [phase, radiusKm, filters, vendors, waConnected, session, origin, paused]

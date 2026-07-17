@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WillCommand, WillContext } from "./will-commands";
+import { pickVariant } from "./will-variants";
 
 export interface WillMsg {
   role: "user" | "will";
@@ -27,6 +28,7 @@ export interface WillBridge {
   massBargain(): void;
   openVendor(id: string): void;
   compare(ids: string[]): void;
+  openFeedback(): void; // opens the feedback modal on the hosting page
 }
 
 const STORE_KEY = "wd_will";
@@ -95,6 +97,8 @@ export function useWill(bridge: WillBridge) {
         return "Opening My deals";
       case "open_pricing":
         return "Opening plans";
+      case "open_feedback":
+        return "Opening feedback";
       default:
         return undefined;
     }
@@ -142,6 +146,9 @@ export function useWill(bridge: WillBridge) {
       case "open_pricing":
         window.location.href = "/pricing";
         break;
+      case "open_feedback":
+        b.openFeedback();
+        break;
       case "help":
       case "answer":
       case "clarify":
@@ -181,17 +188,13 @@ export function useWill(bridge: WillBridge) {
         } else {
           setMessages((m) => [
             ...m,
-            {
-              role: "will",
-              text: d?.error ?? "Something hiccuped - try that again in a moment.",
-              at: Date.now(),
-            },
+            { role: "will", text: d?.error ?? pickVariant("hiccup"), at: Date.now() },
           ]);
         }
       } catch {
         setMessages((m) => [
           ...m,
-          { role: "will", text: "I couldn't reach the server - check your connection and try again.", at: Date.now() },
+          { role: "will", text: pickVariant("reconnect"), at: Date.now() },
         ]);
       } finally {
         setBusy(false);

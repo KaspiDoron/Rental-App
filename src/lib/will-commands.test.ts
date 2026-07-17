@@ -97,6 +97,44 @@ describe("will deterministic parser", () => {
     expect(c).toMatchObject({ action: "remember" });
   });
 
+  it("routes bug reports, complaints and feature ideas to feedback", () => {
+    expect(parseWillCommandDeterministic("report a bug", ctx())).toEqual({
+      action: "open_feedback",
+    });
+    expect(parseWillCommandDeterministic("I want to give feedback", ctx())).toEqual({
+      action: "open_feedback",
+    });
+    expect(
+      parseWillCommandDeterministic("this button doesn't work", ctx())
+    ).toEqual({ action: "open_feedback" });
+    expect(
+      parseWillCommandDeterministic("I have a feature request", ctx())
+    ).toEqual({ action: "open_feedback" });
+  });
+
+  it("does NOT fire feedback on ordinary shop/negotiation chat", () => {
+    // A shop being closed/unresponsive must never open the app feedback box.
+    expect(parseWillCommandDeterministic("this shop is closed", ctx())).toBeNull();
+    expect(parseWillCommandDeterministic("compare the top 3 options", ctx())).toMatchObject({
+      action: "compare",
+    });
+  });
+
+  it("answers 'search session' and capacity questions in-app", () => {
+    expect(parseWillCommandDeterministic("what is a search session?", ctx())).toEqual({
+      action: "answer",
+      text: "__SESSION__",
+    });
+    expect(parseWillCommandDeterministic("how many shops can I message?", ctx())).toEqual({
+      action: "answer",
+      text: "__CAPACITY__",
+    });
+    expect(parseWillCommandDeterministic("why is it queued?", ctx())).toEqual({
+      action: "answer",
+      text: "__CAPACITY__",
+    });
+  });
+
   it("gibberish returns null (LLM or clarify territory)", () => {
     expect(parseWillCommandDeterministic("banana wharf indigo", ctx())).toBeNull();
   });
