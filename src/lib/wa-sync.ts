@@ -10,7 +10,7 @@
 
 import "server-only";
 import { sbSelect, sbInsert } from "./runtime-config";
-import { fetchMessagesRaw, fetchMediaBase64, sendFromUser } from "./evolution";
+import { fetchMessagesRaw, fetchMediaBase64, sendFromUser, resolveChatJid } from "./evolution";
 import { processVendorReply } from "./agent-loop";
 import { digitsOnly } from "./phone";
 
@@ -64,9 +64,22 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // whole 36h window after the webhook had already stopped.
       const { isVendorThread } = await import("./drill");
       if (!(await isVendorThread(digits, email))) continue;
-      const msgs = await fetchMessagesRaw(email, `${digits}@s.whatsapp.net`, 10);
+      // Resolve the EXACT chat JID (handles @lid privacy JIDs and format
+      // variants). A hardcoded "<digits>@s.whatsapp.net" misses those, which is
+      // what made the server-side filter fall through to an UNSCOPED whole-inbox
+      // read - the root of personal chats being stapled onto shop threads.
+      const jid = (await resolveChatJid(email, digits)) ?? `${digits}@s.whatsapp.net`;
+      const msgs = await fetchMessagesRaw(email, jid, 10);
       const inbound = msgs.filter(
-        (m) => !m.fromMe && (m.text.trim() || m.hasImage) &&
+        (m) =>
+          !m.fromMe &&
+          (m.text.trim() || m.hasImage) &&
+          // PRIVACY (per-message origin assertion): the message MUST belong to
+          // THIS exact chat. Even if any upstream read ever returned wider data,
+          // a personal chat's message is dropped here - never stapled onto the
+          // shop thread. @lid JIDs match only by exact equality (their numeric
+          // part is not the phone number).
+          (m.remoteJid === jid || digitsOnly(m.remoteJid) === digits) &&
           // ignore ancient history - only the active window matters
           m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
           // RACE GUARD: give the webhook a 20s head start on brand-new
@@ -131,6 +144,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
         }
         await processVendorReply({
           fromDigits: digits,
+          remoteJid: m.remoteJid, // verified above to belong to this chat
           text: m.text,
           images,
           waMessageId: m.id,

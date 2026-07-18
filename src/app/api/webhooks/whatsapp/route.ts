@@ -14,6 +14,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { getConfig, sbInsert, sbSelect } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import { sendWhatsApp } from "@/lib/whatsapp";
+import { digitsOnly } from "@/lib/phone";
 
 // Verify Meta's X-Hub-Signature-256 over the RAW request body. Returns true
 // when no app secret is configured (demo/dev) so the endpoint still works,
@@ -158,7 +159,16 @@ export async function POST(req: Request) {
         for (const msg of value.messages ?? []) {
           const kind = msg.type ?? "text";
           const caption = msg.image?.caption ?? msg.document?.caption;
-          const receiver = await resolveReceiver(msg.from);
+          const resolved = await resolveReceiver(msg.from);
+          // SAME ingestion gate as the Evolution path: only attribute/process a
+          // message from a number that is an ACTIVE rental-shop thread for the
+          // resolved user (rfq-bearing, recency- and drill-windowed). Without
+          // this, the shared Cloud number ingested a user's non-shop contacts
+          // for up to 14 days as "shop replies". A non-vendor-thread inbound is
+          // stored UNATTRIBUTED (receiver=null) so it is invisible to everyone.
+          const { isVendorThread } = await import("@/lib/drill");
+          const receiver =
+            resolved && (await isVendorThread(digitsOnly(msg.from), resolved)) ? resolved : null;
           rows.push({
             wa_message_id: msg.id,
             from_number: msg.from,
@@ -170,8 +180,8 @@ export async function POST(req: Request) {
             type: kind,
             direction: "inbound",
             // receiver = the thread owner - the privacy-scoping keystone.
-            // A null receiver (unknown or ambiguous sender) is stored but
-            // PARKED: no user surface can see it and no agent processes it.
+            // A null receiver (unknown, ambiguous, or not-a-vendor-thread) is
+            // stored but PARKED: no user surface sees it, no agent processes it.
             raw: { ...msg, receiver, ...(receiver ? {} : { unattributed: true }) },
           });
           // Text, image/document AND voice notes are processed (a shop that

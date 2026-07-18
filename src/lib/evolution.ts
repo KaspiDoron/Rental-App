@@ -747,10 +747,13 @@ export async function connectInstance(
     alwaysOnline: false,
     readMessages: false,
     readStatus: false,
-    // History sync ON so the owner can teach the agents from past bargains
-    // (the import reads only the numbers you name). It is a one-time read, not
-    // a ban vector; always_online/proxy are the protections that matter.
-    syncFullHistory: true,
+    // PRIVACY / DATA MINIMISATION: do NOT backfill the user's entire WhatsApp
+    // history into the Evolution store. We only ever need the LIVE messages of
+    // the rental-shop threads the agent opened; keeping the full personal
+    // history out of the store shrinks the blast radius of any future scoping
+    // bug to near zero (the per-message JID filter is the primary guard). The
+    // teaching import still reads recent messages of numbers the owner names.
+    syncFullHistory: false,
   };
   const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
 
@@ -962,8 +965,32 @@ function waMessageText(message: any): string {
   return "";
 }
 
+/**
+ * Does an Evolution message record belong to the requested chat JID?
+ * PRIVACY-CRITICAL: this is the filter that stops the whole-inbox leak. Some
+ * Evolution/Baileys versions ignore the `where.remoteJid` filter and return the
+ * ENTIRE instance inbox; without re-filtering here, a personal chat's messages
+ * would be pulled into a shop thread. Phone JIDs match on their numeric user
+ * part; privacy @lid JIDs match ONLY by exact equality (their numeric part is
+ * NOT the phone number, so never compare them by digits).
+ */
+function jidMatches(recordJid: string, requestedJid: string): boolean {
+  if (!recordJid || !requestedJid) return false;
+  if (recordJid === requestedJid) return true;
+  const isPhone = (j: string) => j.endsWith("@s.whatsapp.net") || j.endsWith("@c.us");
+  if (isPhone(recordJid) && isPhone(requestedJid)) {
+    return digitsOnly(recordJid.split("@")[0]) === digitsOnly(requestedJid.split("@")[0]);
+  }
+  return false;
+}
+
 // Evolution's findMessages body shape varies across versions; try each so a
-// real chat is never wrongly reported empty.
+// real chat is never wrongly reported empty. EVERY returned record is then
+// hard-filtered to the requested JID, so a version that ignores the server-side
+// remoteJid filter (and returns the whole inbox) can NEVER leak another chat's
+// messages into this thread. If a shape returns records but none match the
+// requested chat, that response was unscoped - we discard it and try the next
+// shape, never returning cross-chat rows.
 async function findMessagesRecords(
   email: string,
   jid: string,
@@ -984,7 +1011,12 @@ async function findMessagesRecords(
       const arr: any[] = Array.isArray(res.data)
         ? res.data
         : res.data?.messages?.records ?? res.data?.messages ?? res.data?.records ?? [];
-      if (arr.length) return arr;
+      if (!arr.length) continue;
+      // Keep ONLY records that belong to the requested chat.
+      const scoped = arr.filter((m) => jidMatches(String(m?.key?.remoteJid ?? ""), jid));
+      if (scoped.length) return scoped;
+      // Records came back but none were this chat's - an unscoped response.
+      // Do not return it; try the next shape (also filtered).
     } catch {
       /* try the next body shape */
     }
@@ -1057,6 +1089,7 @@ export interface WaMessageRaw {
   text: string;
   ts: number; // seconds since epoch
   hasImage: boolean;
+  remoteJid: string; // the message's TRUE origin chat - the per-message privacy anchor
   record: unknown; // full Evolution record (needed for media download)
 }
 
@@ -1082,6 +1115,7 @@ export async function fetchMessagesRaw(
         text: waMessageText(msg),
         ts: Number(m.messageTimestamp ?? 0),
         hasImage: Boolean(msg.imageMessage ?? msg.ephemeralMessage?.message?.imageMessage),
+        remoteJid: String(m.key?.remoteJid ?? ""),
         record: m,
       };
     })

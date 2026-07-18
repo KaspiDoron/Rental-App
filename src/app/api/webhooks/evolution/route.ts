@@ -413,6 +413,7 @@ export async function POST(req: Request) {
 
       await processVendorReply({
         fromDigits: from,
+        remoteJid, // true origin chat - asserted against `from` before attributing
         text: syntheticText,
         images,
         transcript,

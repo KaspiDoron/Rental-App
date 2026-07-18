@@ -112,6 +112,11 @@ export async function processVendorReply(opts: {
   // correctness: two users can bargain with the SAME shop, and the reply must
   // attach to THIS user's thread, never someone else's.
   senderEmail?: string;
+  // The inbound message's TRUE origin chat JID (data.key.remoteJid). When
+  // provided, we assert digitsOnly(remoteJid) === fromDigits before attributing
+  // the reply, so a mis-scoped caller can never staple a personal chat onto a
+  // shop thread. Defense-in-depth behind the per-message JID filter upstream.
+  remoteJid?: string;
   // Queue the agent's reply with a natural "thinking" delay instead of
   // answering within seconds (instant replies are the biggest bot tell).
   // Only for senders whose own session can deliver from the queue.
@@ -135,6 +140,17 @@ export async function processVendorReply(opts: {
     text = "(the shop sent a photo/attachment that couldn't be loaded)";
   }
   const from = digitsOnly(opts.fromDigits);
+  // ORIGIN ASSERTION (privacy): if the caller gave us the message's true chat
+  // JID, it MUST match the number we are about to attribute this reply to. A
+  // mismatch means the message came from a different chat (a personal contact
+  // swept in by a mis-scoped read) - refuse to attribute it as a shop reply.
+  if (opts.remoteJid) {
+    const originDigits = digitsOnly(opts.remoteJid);
+    const isPhoneJid = /@s\.whatsapp\.net$|@c\.us$/.test(opts.remoteJid);
+    // Phone JIDs must match by digits; a privacy @lid JID cannot be verified
+    // against a phone number, so we fail closed (do not attribute).
+    if (!isPhoneJid || originDigits !== from) return;
+  }
   const senderFilter = opts.senderEmail
     ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`
     : "";
@@ -199,26 +215,31 @@ export async function processVendorReply(opts: {
   // A reply arrived: build the sender's trust score (anti-ban engagement).
   if (ctx.sender) await recordInboundEngagement(ctx.sender, from);
 
-  // Read the WHOLE recent thread so the agent has real memory. Outbound rows
-  // from OTHER users to the same shop are dropped - each user has their own
-  // private thread with a shop (ask-once counters must never cross users).
-  const threadRows = await sbSelect<ThreadMsg>(
-    "whatsapp_messages",
-    `select=direction,body,raw,received_at&or=(to_number.eq.${encodeURIComponent(
-      from
-    )},from_number.eq.${encodeURIComponent(from)})&order=received_at.desc&limit=20`
-  );
-  // PRIVACY: BOTH directions are scoped to this user - outbound by sender,
-  // inbound by receiver (the user whose WhatsApp actually got the message).
-  // Another user's chat with the same number must never enter this context.
-  const mine = opts.senderEmail
-    ? threadRows.filter((m) => {
-        const raw = m.raw as { sender?: string; receiver?: string } | null;
-        return m.direction === "inbound"
-          ? raw?.receiver === opts.senderEmail
-          : raw?.sender === opts.senderEmail;
-      })
-    : threadRows;
+  // Read the recent thread so the agent has real memory - SCOPED AT THE DB so a
+  // co-user's chat with the SAME shop number can never (a) leak into this
+  // context or (b) evict this user's rows out of a shared limit window (the
+  // old fetch-ALL-then-filter with limit=20 let a busy co-user starve this
+  // user's memory and re-trigger ask-once). Two receiver/sender-scoped reads,
+  // merged. Fail CLOSED: with no receiver scope we cannot build a cross-user-
+  // safe history, so we use none rather than the unfiltered set.
+  let mine: ThreadMsg[] = [];
+  if (opts.senderEmail) {
+    const enc = encodeURIComponent(from);
+    const encMe = encodeURIComponent(opts.senderEmail);
+    const [outRows, inRows] = await Promise.all([
+      sbSelect<ThreadMsg>(
+        "whatsapp_messages",
+        `select=direction,body,raw,received_at&direction=eq.outbound&to_number=eq.${enc}&raw->>sender=eq.${encMe}&order=received_at.desc&limit=12`
+      ),
+      sbSelect<ThreadMsg>(
+        "whatsapp_messages",
+        `select=direction,body,raw,received_at&direction=eq.inbound&from_number=eq.${enc}&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=12`
+      ),
+    ]);
+    mine = [...outRows, ...inRows].sort(
+      (a, b) => Date.parse(b.received_at) - Date.parse(a.received_at)
+    );
+  }
   const thread = mine.slice(0, 12).reverse();
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)

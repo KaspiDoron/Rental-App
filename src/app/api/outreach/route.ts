@@ -84,18 +84,43 @@ export async function POST(req: Request) {
   let to = String(body.to ?? "").trim();
   let vendorIdOverride: string | null = null;
   let vendorNameOverride: string | null = null;
-  if (body.placeId) {
-    const details = await placeDetails(String(body.placeId));
-    const resolved = digitsOnly(details?.phone);
+  // IDENTITY VERIFICATION (privacy keystone). A stored outbound row is what
+  // later makes an inbound reply attribute to a shop, so a number may ONLY wear
+  // a real shop's name+rfq if it is POSITIVELY the shop's own Google-listed
+  // phone. This runs for ANY send that claims a real shop - not just when a
+  // placeId happens to be present (the old `if (body.placeId)` guard left two
+  // holes: no placeId at all, and a placeId whose Google record has no phone -
+  // both let an unverifiable personal number keep the real shop's identity and
+  // ingest that contact's private chats as "shop replies").
+  {
+    const claimedId = String(body.vendorId ?? "");
+    const claimsRealShop =
+      Boolean(body.vendorName || body.vendorId || body.placeId) &&
+      !claimedId.startsWith("test-") &&
+      !claimedId.startsWith("drill-");
+    let resolvedPhone = "";
+    if (body.placeId) {
+      const details = await placeDetails(String(body.placeId));
+      resolvedPhone = digitsOnly(details?.phone);
+      if (!digitsOnly(to) && details?.phone) to = details.phone; // fill from Google
+    }
     const supplied = digitsOnly(to);
-    if (!supplied) {
-      to = details?.phone ?? "";
-    } else if (resolved && supplied !== resolved) {
-      if (session.role === "owner") {
-        vendorIdOverride = `test-${supplied}`;
-        vendorNameOverride = `${String(body.vendorName ?? "Shop").slice(0, 60)} (drill)`;
+    // Positively verified only when the number we will actually send to matches
+    // the shop's own Google phone.
+    const verified = Boolean(resolvedPhone && supplied && supplied === resolvedPhone);
+    if (claimsRealShop && supplied && !verified) {
+      if (resolvedPhone && session.role !== "owner") {
+        // A real shop with a known Google phone: for a normal user the real
+        // shop always wins - ignore the unverifiable supplied number.
+        to = resolvedPhone ? `+${resolvedPhone}` : to;
       } else {
-        to = details?.phone ?? ""; // the real shop wins; the spoof is ignored
+        // Cannot confirm this is the shop's own number (owner testing, no
+        // placeId, or Google has no phone): send still goes out, but the thread
+        // is re-keyed to an explicit, WINDOWED test identity (drill:true) so it
+        // can never wear the real shop's name/rfq or become a permanent
+        // ingestion target for that contact's private messages.
+        vendorIdOverride = `test-${supplied}`;
+        vendorNameOverride = `${String(body.vendorName ?? "Shop").slice(0, 56)} (unverified)`;
       }
     }
   }
