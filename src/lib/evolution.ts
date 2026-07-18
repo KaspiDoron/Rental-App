@@ -650,6 +650,11 @@ export async function ensureConnected(
   // correctly stays "open" = still-linked (genuine unlink goes through the
   // explicit logout/ban paths, never this transient one).
   const prior = await storedStatus(email);
+  // A null stored status means the user is NOT linked (never paired, or just
+  // disconnected). A background drain must NEVER mint a "connecting" session for
+  // them - that resurrected a torn-down link. Only ever record "connecting" for
+  // a session that genuinely exists and is not already durably open/unknown.
+  if (prior === null) return { ok: false, state };
   if (prior !== "open" && prior !== "unknown") {
     await saveSession(email, instance, "connecting", host.url);
   }
@@ -787,7 +792,11 @@ export async function connectInstance(
     groupsIgnore: true,
     readMessages: false,
     readStatus: false,
-    syncFullHistory: true,
+    // Privacy: do NOT backfill the user's entire personal WhatsApp history into
+    // the store at link time. Same rationale as the hardening object below -
+    // keep only the rental-shop threads the agent opens; the per-message JID
+    // filter is the primary guard, this shrinks the blast radius to near zero.
+    syncFullHistory: false,
     ...(proxy ? { proxyHost: proxy.host, proxyPort: proxy.port, proxyProtocol: proxy.protocol, proxyUsername: proxy.username, proxyPassword: proxy.password } : {}),
     webhook: { url: webhookUrl, byEvents: false, events },
   };
@@ -1219,7 +1228,15 @@ export async function disconnectInstance(email: string): Promise<boolean> {
     const res = await evoFetch(h, `/instance/delete/${instance}`, { method: "DELETE" });
     ok = ok || res.ok;
   }
-  await sbDelete("wa_sessions", `email=eq.${encodeURIComponent(email.toLowerCase())}`);
+  const enc = encodeURIComponent(email.toLowerCase());
+  await sbDelete("wa_sessions", `email=eq.${enc}`);
+  // Purge the user's PARKED work too. Without this, an orphaned wa_outbox row
+  // would (a) be drained by a background poll, whose ensureConnected re-created
+  // the wa_sessions row we just deleted (silently undoing the disconnect), and
+  // (b) fire stale sends the moment the user ever re-links. A torn-down link
+  // must leave nothing behind that can message a shop.
+  await sbDelete("wa_outbox", `sender_key=eq.${enc}`).catch(() => {});
+  await sbDelete("graph_wakeups", `user_email=eq.${enc}`).catch(() => {});
   return ok;
 }
 

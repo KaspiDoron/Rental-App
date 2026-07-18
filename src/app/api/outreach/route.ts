@@ -10,6 +10,7 @@ import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
+import { resolveOutreachIdentity } from "@/lib/wa/identity";
 
 // In-app outreach: the ONLY way messages leave the app. The user never jumps
 // to WhatsApp - we screen the message through the safety agent, resolve the
@@ -105,23 +106,21 @@ export async function POST(req: Request) {
       if (!digitsOnly(to) && details?.phone) to = details.phone; // fill from Google
     }
     const supplied = digitsOnly(to);
-    // Positively verified only when the number we will actually send to matches
-    // the shop's own Google phone.
-    const verified = Boolean(resolvedPhone && supplied && supplied === resolvedPhone);
-    if (claimsRealShop && supplied && !verified) {
-      if (resolvedPhone && session.role !== "owner") {
-        // A real shop with a known Google phone: for a normal user the real
-        // shop always wins - ignore the unverifiable supplied number.
-        to = resolvedPhone ? `+${resolvedPhone}` : to;
-      } else {
-        // Cannot confirm this is the shop's own number (owner testing, no
-        // placeId, or Google has no phone): send still goes out, but the thread
-        // is re-keyed to an explicit, WINDOWED test identity (drill:true) so it
-        // can never wear the real shop's name/rfq or become a permanent
-        // ingestion target for that contact's private messages.
-        vendorIdOverride = `test-${supplied}`;
-        vendorNameOverride = `${String(body.vendorName ?? "Shop").slice(0, 56)} (unverified)`;
-      }
+    // The decision is a pure, unit-pinned helper (see wa/identity.ts) - only a
+    // POSITIVE phone contradiction or an explicit owner test re-keys to a test
+    // identity; the mere absence of a reference phone keeps the real identity.
+    const identity = resolveOutreachIdentity({
+      claimsRealShop,
+      resolvedPhone,
+      supplied,
+      isOwner: session.role === "owner",
+      vendorName: body.vendorName ? String(body.vendorName) : undefined,
+    });
+    if (identity.action === "send-to-shop") {
+      to = `+${identity.toPhone}`;
+    } else if (identity.action === "rekey-test") {
+      vendorIdOverride = identity.vendorId;
+      vendorNameOverride = identity.vendorName;
     }
   }
   if (!to) {

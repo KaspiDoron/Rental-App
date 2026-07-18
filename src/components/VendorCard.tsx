@@ -94,9 +94,15 @@ function VendorCardInner({
   // TRUTH RULE: a message held in the outbox is QUEUED, never "Sent".
   // vendor.queuedUntil is the server-reconciled source (survives remounts),
   // rfqState covers the instant before the first poll.
-  const queuedActive =
-    rfqState === "queued" ||
-    Boolean(vendor.queuedUntil && Date.parse(vendor.queuedUntil) > Date.now() && !vendor.offer);
+  // PRESENCE, not a future timestamp: a committed outbox row means "do not
+  // re-fire" whether its ETA is still in the future or already elapsed (a slow
+  // drain / host blip leaves not_before in the past while the row is still
+  // parked). Gating on `> now` re-enabled the button + relabelled it "Ask for
+  // price" while the queued badge still showed - a self-contradiction that let
+  // a tap enqueue a DUPLICATE. This matches the badge (vendor.queuedUntil &&
+  // !offer) and the queue panel; the local latch releases via the effect above
+  // once the server clears queuedUntil (delivered or removed).
+  const queuedActive = rfqState === "queued" || Boolean(vendor.queuedUntil && !vendor.offer);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [pickupState, setPickupState] = useState<"idle" | "sending" | "shared" | "failed">("idle");
 

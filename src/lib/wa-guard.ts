@@ -1304,27 +1304,60 @@ export async function drainOutbox(
       // made a whole batch stall after one send and then silently vanish).
       // Only RECIPIENT-level failures (not on WhatsApp, invalid, blocked) count
       // toward the give-up cap.
-      const { isRecipientSendFailure } = await import("./wa/send-classify");
+      const { isRecipientSendFailure, transientRetryDecision, recipientRetryDecision } =
+        await import("./wa/send-classify");
       const recipientFail = isRecipientSendFailure(r.error);
       const transient = !recipientFail; // reconnecting / timeout / 5xx / empty / unknown host error
-      if (transient) {
-        // Retry SOON with no attempt burn - the batch resumes within ~a minute
-        // of the host recovering, and the queue stays honestly visible.
-        await sbInsert("wa_outbox", [
+      const dropEvent = (detail: string) =>
+        sbInsert("agent_events", [
           {
-            sender_key: row.sender_key,
-            to_number: row.to_number,
-            body: row.body,
-            not_before: new Date(Date.now() + (45 + Math.random() * 75) * 1000).toISOString(),
-            meta: {
-              ...(row.meta ?? {}),
-              reason: "reconnecting - resumes automatically",
-            },
+            kind: "wa-send-dropped",
+            vendor_id: String((row.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+            vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
+            detail,
           },
         ]).catch(() => {});
+      if (transient) {
+        // Retry SOON with no per-failure attempt burn - the batch resumes within
+        // ~a minute of the host recovering. Bounded lifetime lives in the pure
+        // decision helper so a PERMANENTLY dead host cannot loop forever.
+        const meta = (row.meta ?? {}) as { firstQueuedAt?: number; transientAttempts?: number };
+        const firstQueuedAt = Number(meta.firstQueuedAt) || Date.now();
+        const decision = transientRetryDecision(
+          firstQueuedAt,
+          Number(meta.transientAttempts ?? 0),
+          Date.now(),
+          Math.random(),
+        );
+        if (decision.drop) {
+          await dropEvent(
+            `Gave up reaching +${row.to_number} - the WhatsApp host was unreachable for over 24h (sender ${row.sender_key}).`,
+          );
+        } else {
+          await sbInsert("wa_outbox", [
+            {
+              sender_key: row.sender_key,
+              to_number: row.to_number,
+              body: row.body,
+              not_before: new Date(Date.now() + decision.delayMs).toISOString(),
+              meta: {
+                ...(row.meta ?? {}),
+                firstQueuedAt,
+                transientAttempts: decision.attempts,
+                reason: "reconnecting - resumes automatically",
+              },
+            },
+          ]).catch(() => {});
+        }
       } else {
-        const attempts = Number((row.meta as { attempts?: number } | null)?.attempts ?? 0) + 1;
-        if (attempts <= 5) {
+        const decision = recipientRetryDecision(
+          Number((row.meta as { attempts?: number } | null)?.attempts ?? 0),
+        );
+        if (decision.drop) {
+          await dropEvent(
+            `Could not reach +${row.to_number} after 5 attempts (sender ${row.sender_key}) - the shop's number may be unreachable on WhatsApp.`,
+          );
+        } else {
           await sbInsert("wa_outbox", [
             {
               sender_key: row.sender_key,
@@ -1332,17 +1365,12 @@ export async function drainOutbox(
               body: row.body,
               // Recipient-level retry backoff, capped so it never creeps past
               // ~20 min even at the last attempt.
-              not_before: new Date(Date.now() + Math.min(attempts * 4, 20) * 60_000).toISOString(),
-              meta: { ...(row.meta ?? {}), attempts, reason: `couldn't reach this shop - retry ${attempts}/5` },
-            },
-          ]).catch(() => {});
-        } else {
-          await sbInsert("agent_events", [
-            {
-              kind: "wa-send-dropped",
-              vendor_id: String((row.meta as { vendorId?: string } | null)?.vendorId ?? ""),
-              vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
-              detail: `Could not reach +${row.to_number} after 5 attempts (sender ${row.sender_key}) - the shop's number may be unreachable on WhatsApp.`,
+              not_before: new Date(Date.now() + decision.delayMs).toISOString(),
+              meta: {
+                ...(row.meta ?? {}),
+                attempts: decision.attempts,
+                reason: `couldn't reach this shop - retry ${decision.attempts}/5`,
+              },
             },
           ]).catch(() => {});
         }
