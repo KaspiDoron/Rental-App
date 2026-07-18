@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getConfig, sbInsert } from "@/lib/runtime-config";
+import { setPlan } from "@/lib/access";
 
 // Stripe webhook. Billing runs through Lemon Squeezy today, so this endpoint
 // only RECORDS events - but when STRIPE_WEBHOOK_SECRET is set the
@@ -46,6 +47,29 @@ export async function POST(req: Request) {
   await sbInsert("billing_events", [
     { stripe_event_id: event.id ?? null, type: event.type ?? "unknown", verified: Boolean(secret) },
   ]);
+
+  // Grant the plan ONLY from a cryptographically VERIFIED completed checkout -
+  // this is the sole trusted grant path for Stripe (the success-redirect confirm
+  // must never grant, since any signed-in user could POST it). Requires
+  // STRIPE_WEBHOOK_SECRET to be set; an unsigned/dev call never grants.
+  if (secret && event.type === "checkout.session.completed") {
+    const obj =
+      (event as { data?: { object?: Record<string, unknown> } }).data?.object ?? {};
+    const paid =
+      obj.payment_status === "paid" ||
+      obj.payment_status === "no_payment_required" ||
+      obj.status === "complete";
+    const meta = (obj.metadata as { plan?: string; email?: string } | undefined) ?? {};
+    const email =
+      (typeof obj.customer_email === "string" && obj.customer_email) ||
+      (typeof obj.client_reference_id === "string" && obj.client_reference_id) ||
+      meta.email ||
+      "";
+    const plan = meta.plan === "pro" ? "pro" : meta.plan === "ultra" || meta.plan === "business" ? "ultra" : null;
+    if (paid && email && plan) {
+      await setPlan(email, plan).catch(() => {});
+    }
+  }
 
   return NextResponse.json({ received: true });
 }

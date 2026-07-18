@@ -106,6 +106,12 @@ export async function createCheckoutSession(
     "line_items[0][price_data][product_data][name]": `WheelDeal ${p.name} (launch offer, billed every 3 months)`,
     success_url: `${origin}/?billing=success&plan=${p.id}`,
     cancel_url: `${origin}/?billing=cancelled`,
+    // Carry the buyer + plan on the session so the SIGNED webhook can grant the
+    // plan server-side after real payment - the success-redirect confirm must
+    // never be trusted to grant (anyone could POST it).
+    "metadata[plan]": p.id,
+    "metadata[email]": email ?? "",
+    client_reference_id: email ?? "",
     ...(email ? { customer_email: email } : {}),
   });
 
