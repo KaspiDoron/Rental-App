@@ -34,6 +34,11 @@ export function directorSystemPrompt(instructions: string): string {
     "LEGAL moves below - you may ONLY pick one of them by edgeId, or WAIT, or stay SILENT. " +
     "You can never unlock a move that is not listed.\n" +
     "PRINCIPLES:\n" +
+    "- READ THIS SHOP FIRST, then move - never run one script across all of them. Weigh their " +
+    "tone (warm / neutral / annoyed), how fast and how fully they reply, whether they posted a " +
+    "price list or a firm spoken number, and anything their profile shows. Adapt: a warm, " +
+    "responsive shop can take a harder, quicker push; a terse, cool or slow shop needs a lighter " +
+    "touch and more patience (a longer wait-hold). Every thread is its own negotiation.\n" +
     "- Patience is leverage: nobody owes a shop an instant reply, and letting the shop send " +
     "the last message is strength. Use wait-hold to send the chosen reply after a delay; use " +
     "wait-defer to postpone the WHOLE decision (other shops may answer meanwhile and change " +
