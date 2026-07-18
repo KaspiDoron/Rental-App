@@ -7,6 +7,7 @@
 
 import "server-only";
 import { getConfig, sbInsert, sbSelect } from "./runtime-config";
+import { boundedSet } from "./bounded-map";
 
 // Free monthly quotas we track against (shown in the cost tracker).
 export const QUOTAS: Record<string, { free: number; label: string; unitCost: number }> = {
@@ -110,7 +111,9 @@ export async function checkDailyLimit(
     )}&created_at=gte.${encodeURIComponent(today)}&limit=1000`
   );
   const used = rows.reduce((s, r) => s + (r.count ?? 1), 0);
-  counters().set(key, { day: today, n: Math.max(used, mem?.day === today ? mem.n : 0) });
+  // Bounded (like the sibling apiCache) so the map can't grow one entry per
+  // distinct user*kind forever on a long-lived process.
+  boundedSet(counters(), key, { day: today, n: Math.max(used, mem?.day === today ? mem.n : 0) }, 5000);
   if (used >= limit) return { allowed: false, used, limit };
   const cur = counters().get(key)!;
   cur.n += 1;

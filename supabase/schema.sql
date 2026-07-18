@@ -791,3 +791,19 @@ create table if not exists public.game_scores (
 create index if not exists game_scores_top_idx
   on public.game_scores (score desc, created_at asc);
 alter table public.game_scores enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Hot-path indexes (launch scale). The two most-polled endpoints - /api/deals
+-- and /api/activity - filter offers/traces/bookings by (user_email, created_at)
+-- on every poll while a user has the app open. Without these, each poll forces
+-- a sequential scan + sort of tables that grow with every quote from every
+-- user. Additive + idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+create index if not exists offers_user_created_idx
+  on public.offers (user_email, created_at desc);
+create index if not exists agent_traces_user_created_idx
+  on public.agent_traces (user_email, created_at desc);
+create index if not exists bookings_user_created_idx
+  on public.bookings (user_email, created_at desc);
+create index if not exists vendor_replies_user_created_idx
+  on public.vendor_replies (user_email, created_at desc);

@@ -5,6 +5,7 @@
 
 import type { ExtractedOffer } from "../agents";
 import { digitsOnly } from "../phone";
+import { boundedSet } from "../bounded-map";
 import type {
   FulfillmentKind,
   NegotiationThreadState,
@@ -255,7 +256,10 @@ export async function saveThreadState(state: NegotiationThreadState): Promise<vo
     version: state.version + 1,
     updatedAt: new Date().toISOString(),
   };
-  mem().set(state.threadKey, next); // memory copy always fresh
+  // Bounded fallback cache: cap at 2000 threads so a long-lived process cannot
+  // grow one state object per distinct conversation forever (Supabase is the
+  // authoritative store; an evicted cold thread is re-read on next access).
+  boundedSet(mem(), state.threadKey, next, 2000);
   try {
     const { sbSelect, sbInsert, sbUpdate } = await import("../runtime-config");
     const row = {

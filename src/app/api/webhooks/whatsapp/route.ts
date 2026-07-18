@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { getConfig, sbInsert, sbSelect } from "@/lib/runtime-config";
+import { getConfig, sbInsert, sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { digitsOnly } from "@/lib/phone";
@@ -138,15 +138,23 @@ export async function POST(req: Request) {
     // row (no raw.receiver) is invisible to every user surface by
     // construction - visible to nobody beats visible to the wrong person -
     // and the ambiguity is logged for the owner's Ops review.
-    const resolveReceiver = async (fromDigits: string): Promise<string | null> => {
-      const outs = await sbSelect<{ raw: { sender?: string } | null }>(
+    // "db-unavailable" is DISTINCT from "no matching thread": a transient read
+    // failure must make Meta RETRY (503), never be collapsed into a null-receiver
+    // unattributed row that returns 200 and drops the vendor reply forever.
+    const DB_ERR = Symbol("db-unavailable");
+    const resolveReceiver = async (fromDigits: string): Promise<string | null | typeof DB_ERR> => {
+      const res = await sbSelectStrict<{ raw: { sender?: string } | null }>(
         "whatsapp_messages",
         `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
           fromDigits
         )}&received_at=gte.${encodeURIComponent(
           new Date(Date.now() - 14 * 86_400_000).toISOString()
         )}&order=received_at.desc&limit=20`
-      ).catch(() => []);
+      );
+      // Genuine DB outage -> retry. A missing table (pre-migration) behaves as
+      // before (no attribution possible -> null), never a false retry storm.
+      if ("error" in res) return res.error === "unavailable" ? DB_ERR : null;
+      const outs = res.rows;
       const senders = [
         ...new Set(outs.map((o: { raw: { sender?: string } | null }) => o.raw?.sender).filter(Boolean)),
       ] as string[];
@@ -176,6 +184,12 @@ export async function POST(req: Request) {
           const kind = msg.type ?? "text";
           const caption = msg.image?.caption ?? msg.document?.caption;
           const resolved = await resolveReceiver(msg.from);
+          // Attribution read failed (DB outage): store NOTHING and make Meta
+          // retry the whole batch when the DB recovers, instead of parking this
+          // reply unattributed (invisible to its rightful user, never retried).
+          if (resolved === DB_ERR) {
+            return NextResponse.json({ error: "attribution unavailable - retry" }, { status: 503 });
+          }
           // SAME ingestion gate as the Evolution path: only attribute/process a
           // message from a number that is an ACTIVE rental-shop thread for the
           // resolved user (rfq-bearing, recency- and drill-windowed). Without

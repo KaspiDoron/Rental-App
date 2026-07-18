@@ -63,6 +63,22 @@ export async function POST(req: Request) {
     const { sbDeleteReturning, sbDelete } = await import("@/lib/runtime-config");
     const vendorId = body.vendorId ? String(body.vendorId).slice(0, 200) : null;
 
+    // Capture the tapped row's shop number BEFORE deleting, so the permanent
+    // tombstone (which is what actually guarantees "never sends again") is
+    // written even if the DELETE silently fails/times out or the row already
+    // drained. Without this, an id-only remove whose delete failed returned
+    // removed:true while the message still went out (the false-success bug).
+    let tappedNumber: string | null = null;
+    if (body.id) {
+      const r = await sbSelect<{ to_number: string }>(
+        "wa_outbox",
+        `select=to_number&id=eq.${Number(body.id)}&sender_key=eq.${encodeURIComponent(
+          session.email
+        )}&limit=1`
+      ).catch(() => []);
+      tappedNumber = r[0]?.to_number ?? null;
+    }
+
     // 1) The row the user tapped (ownership-scoped).
     let removed = body.id
       ? await sbDeleteReturning<{ id: number; to_number: string }>(
@@ -91,6 +107,7 @@ export async function POST(req: Request) {
     //    automated sends to tombstoned recipients until the user explicitly
     //    re-initiates) and purge that thread's pending wakeups exactly.
     const digitsSet = new Set(removed.map((r) => r.to_number).filter(Boolean));
+    if (tappedNumber) digitsSet.add(tappedNumber);
     if (body.toNumber) {
       const d = digitsOnly(String(body.toNumber));
       if (d) digitsSet.add(d);
@@ -139,7 +156,11 @@ export async function POST(req: Request) {
       ).catch(() => []);
       sent = recent.length > 0;
     }
-    return NextResponse.json({ ok: true, removed: !sent, sent });
+    // Honest: "removed" (won't send) is true only if it already left, or we
+    // actually wrote a tombstone / deleted a row. If we did NEITHER (every read
+    // failed), do not claim success - the message may still be pending.
+    const guaranteed = sent || digitsSet.size > 0;
+    return NextResponse.json({ ok: guaranteed, removed: sent ? false : digitsSet.size > 0, sent });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
