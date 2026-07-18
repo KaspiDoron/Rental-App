@@ -22,10 +22,11 @@
 //     caps, scoring weights and hours from the DB without a redeploy.
 
 import "server-only";
-import { sbSelect, sbSelectStrict, sbInsert, sbUpdate } from "./runtime-config";
+import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
+import { PACING_PRESETS, normalizePacingMode } from "./wa/pacing-mode";
 import {
   planCapacity,
   effectiveNewContactCap,
@@ -124,11 +125,18 @@ declare global {
 export async function getPolicies(): Promise<SecurityPolicies> {
   const cached = globalThis.__wd_wa_policies__;
   if (cached && Date.now() - cached.at < 60_000) return cached.value;
-  const rows = await sbSelect<{ key: string; value: string }>(
-    "whatsapp_security_policies",
-    "select=key,value&limit=50"
-  );
-  const merged: SecurityPolicies = { ...DEFAULTS };
+  const [rows, modeRaw] = await Promise.all([
+    sbSelect<{ key: string; value: string }>(
+      "whatsapp_security_policies",
+      "select=key,value&limit=50"
+    ),
+    getConfig("PACING_MODE").catch(() => undefined),
+  ]);
+  // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
+  const merged: SecurityPolicies = {
+    ...DEFAULTS,
+    ...(PACING_PRESETS[normalizePacingMode(modeRaw)] as Partial<SecurityPolicies>),
+  };
   for (const r of rows) {
     const k = r.key as keyof SecurityPolicies;
     if (!(k in DEFAULTS)) continue;

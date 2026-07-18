@@ -104,6 +104,7 @@ const KEYS: {
   { name: "APP_DOMAIN", label: "Public app domain (https://... - drives share links, SEO & sender identity)", scope: "auth", editable: true },
   { name: "TEST_MODE", label: "Test Mode ('on' = flagged testers ride Ultra free + sandbox billing + banner)", scope: "auth", editable: true },
   { name: "SCALE_MODE", label: "Scale Mode ('on' = 3x per-user limits + relaxed polling for high load)", scope: "data", editable: true },
+  { name: "PACING_MODE", label: "Pacing Mode (WhatsApp speed vs ban-safety dial: 'fast' | 'balanced' | 'cautious'; blank = balanced)", scope: "data", editable: true },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
   { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },
