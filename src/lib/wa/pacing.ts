@@ -59,8 +59,13 @@ export function cappedStaggerOffsets(
   for (let i = 0; i < count; i++) {
     const hour = Math.floor(i / cap);
     const within = i % cap;
+    // Push each new hour-group a min-gap PAST the 3600s boundary so the previous
+    // group's oldest send has aged out of the drain's inclusive rolling-hour
+    // window (>= now-3600000) before this item is due - otherwise the boundary
+    // item still trips the cap and gets re-stamped (the jump returns).
+    const hourBase = hour === 0 ? 0 : hour * 3600_000 + Math.round((minGapSec + 30) * 1000);
     const inWindow = within === 0 ? 0 : within * (minGapSec + rand() * 30) * 1000;
-    out.push(Math.round(hour * 3600_000 + inWindow));
+    out.push(Math.round(hourBase + inWindow));
   }
   return out;
 }

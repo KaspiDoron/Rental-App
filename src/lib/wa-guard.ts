@@ -693,7 +693,13 @@ export async function effectiveHourlyCap(senderKey: string, plan?: string): Prom
   const p = await getPolicies();
   const rep = await getReputation(senderKey);
   const base = dynamicHourCap(rep, p, plan ?? (await planForSender(senderKey)));
-  return Math.max(1, Math.floor(base * 0.8));
+  const cap = Math.floor(base * 0.8);
+  // Large caps (aged, high-trust numbers) lose ~1 to trust decay across a full
+  // hour-group of sends, which would trip the drain's recomputed cap on the
+  // tail item. Give them 1 extra slot of headroom. Small caps (new/low-trust
+  // numbers - the warm-up floor) decay negligibly, so leave them unreduced so a
+  // fresh user's batch is not slowed.
+  return Math.max(1, cap >= 6 ? cap - 1 : cap);
 }
 
 /**
@@ -1320,12 +1326,17 @@ export async function drainOutbox(
     const claimed = await sbDeleteReturning<OutboxRow>("wa_outbox", `id=eq.${cand.id}`);
     if (claimed.length === 0) continue; // another drainer won this row
     const row = claimed[0];
-    // Re-check the gate (caps/hours may have changed while queued).
+    // Re-check the gate (caps/hours may have changed while queued). Preserve the
+    // row's ORIGINAL auto-ness: a user-typed `custom` message that the caps
+    // parked is NOT an agent send, so it must not be re-evaluated as auto and
+    // dropped by an auto-only veto (the engagement halt is terminal now - a
+    // hardcoded auto:true here silently deleted the user's own queued message).
+    const rowKind = (row.meta as { kind?: string } | null)?.kind;
     const verdict = await guardOutbound({
       senderKey: row.sender_key,
       toDigits: row.to_number,
       text: row.body,
-      auto: true,
+      auto: rowKind !== "custom",
       queueIfBlocked: true,
       meta: row.meta ?? undefined,
     });

@@ -123,11 +123,15 @@ describe("cappedStaggerOffsets - honest cap-aware schedule (no optimistic-then-j
     expect(offs[2]).toBeGreaterThan(offs[1]);
   });
 
-  it("hourCap of 1 (a heavily warmed-down number) spaces one per hour", () => {
+  it("hourCap of 1 (a heavily warmed-down number) spaces ~one per hour, past each boundary", () => {
     const offs = cappedStaggerOffsets(3, 1);
     expect(offs[0]).toBe(0);
-    expect(offs[1]).toBe(3600_000);
-    expect(offs[2]).toBe(2 * 3600_000);
+    // Each new hour-group lands just PAST the 1-hour boundary (a min-gap buffer)
+    // so the prior send has aged out of the drain's rolling window.
+    expect(offs[1]).toBeGreaterThan(3600_000);
+    expect(offs[1]).toBeLessThan(3600_000 + 5 * 60_000);
+    expect(offs[2]).toBeGreaterThan(2 * 3600_000);
+    expect(offs[2]).toBeLessThan(2 * 3600_000 + 5 * 60_000);
   });
 });
 
