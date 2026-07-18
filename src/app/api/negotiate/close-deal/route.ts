@@ -124,17 +124,20 @@ export async function POST(req: Request) {
   // deal-closed session must silence it too. The tombstone is the hard,
   // guard-enforced veto (session-closed alone is only a soft, LLM-overridable
   // director fact).
-  const recentOut = await sbSelect<{ to_number: string }>(
-    "whatsapp_messages",
-    `select=to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+  // DISTINCT shops via wa_recipient_state (one row per contacted shop), recency-
+  // bounded - a row-limited whatsapp_messages scan could miss an early quiet
+  // sibling in a heavy session.
+  const activeShops = await sbSelect<{ to_number: string }>(
+    "wa_recipient_state",
+    `select=to_number&sender_key=eq.${encodeURIComponent(
       session.email
-    )}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(
+    )}&last_sent_at=gte.${encodeURIComponent(
       new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
-    )}&order=received_at.desc&limit=200`
+    )}&limit=500`
   ).catch(() => [] as { to_number: string }[]);
   const closeDigits = [
     ...new Set(
-      [digits, ...purged.map((r) => r.to_number), ...recentOut.map((r) => r.to_number)].filter(
+      [digits, ...purged.map((r) => r.to_number), ...activeShops.map((r) => r.to_number)].filter(
         Boolean
       )
     ),

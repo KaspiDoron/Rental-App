@@ -49,17 +49,23 @@ export async function POST() {
   //    override. The tombstone is the HARD, guard-enforced (fail-closed) veto,
   //    so we enumerate every recently-messaged shop and tombstone it. Bounded to
   //    recent outbound (negotiations are short-lived) and capped.
-  const recentOut = await sbSelect<{ to_number: string }>(
-    "whatsapp_messages",
-    `select=to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+  // Source: wa_recipient_state has exactly ONE row per contacted shop (unique
+  // sender_key,to_number), so this enumerates DISTINCT shops - a row-limited
+  // whatsapp_messages scan could miss an early quiet shop when a heavy session
+  // pushes its rows past the limit. Recency-bounded to the shops with a send in
+  // the last 7 days (mid-negotiation threads always qualify); 500 covers any
+  // realistic user.
+  const activeShops = await sbSelect<{ to_number: string }>(
+    "wa_recipient_state",
+    `select=to_number&sender_key=eq.${encodeURIComponent(
       session.email
-    )}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(
+    )}&last_sent_at=gte.${encodeURIComponent(
       new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
-    )}&order=received_at.desc&limit=200`
+    )}&limit=500`
   ).catch(() => [] as { to_number: string }[]);
   const digits = [
     ...new Set(
-      [...purged.map((r) => r.to_number), ...recentOut.map((r) => r.to_number)].filter(Boolean)
+      [...purged.map((r) => r.to_number), ...activeShops.map((r) => r.to_number)].filter(Boolean)
     ),
   ];
   for (const d of digits) {
