@@ -880,9 +880,15 @@ export async function guardOutbound(opts: {
         "sync-retry"
       );
     }
-    try {
+    {
       const { isThreadTakenOver } = await import("./session-flags");
-      if (await isThreadTakenOver(opts.senderKey, opts.toDigits)) {
+      let takeover: boolean | null;
+      try {
+        takeover = await isThreadTakenOver(opts.senderKey, opts.toDigits);
+      } catch {
+        takeover = null; // unreadable -> fail closed below
+      }
+      if (takeover === true) {
         void recordSuppressedSend(opts.senderKey, opts.toDigits, "takeover-send-blocked");
         return {
           allow: false,
@@ -891,8 +897,13 @@ export async function guardOutbound(opts: {
           text,
         };
       }
-    } catch {
-      /* flag unreadable - the agent-loop gate still covers the reply path */
+      if (takeover === null) {
+        // UNKNOWN takeover state (store unreadable): takeover is an absolute
+        // veto, so an automated send fails CLOSED - hold and re-check later
+        // rather than risk posting into a thread the human took over. Mirrors
+        // the cancellation null-path above. (This block runs only for auto.)
+        return await queue(jitteredHold(now, 5, 5), "sync-retry");
+      }
     }
   }
 
@@ -967,14 +978,21 @@ export async function guardOutbound(opts: {
   //     for an hour with an honest reason; the user's own explicit sends
   //     (custom messages) still go through - the pause binds the AGENTS.
   if (opts.auto) {
+    const { isSessionPaused } = await import("./session-flags");
+    let paused: boolean | null;
     try {
-      const { isSessionPaused } = await import("./session-flags");
-      if (await isSessionPaused(opts.senderKey)) {
-        // Jittered hold: a batch paused together must not RELEASE together.
-        return await queue(jitteredHold(now, 60, 15), "paused by you");
-      }
+      paused = await isSessionPaused(opts.senderKey);
     } catch {
-      /* flags unreadable - fail open */
+      paused = null; // unreadable -> fail closed below
+    }
+    if (paused === true) {
+      // Jittered hold: a batch paused together must not RELEASE together.
+      return await queue(jitteredHold(now, 60, 15), "paused by you");
+    }
+    if (paused === null) {
+      // UNKNOWN pause state (store unreadable): "hold everything" is absolute,
+      // so an automated send fails CLOSED - brief sync-retry hold, not a send.
+      return await queue(jitteredHold(now, 5, 5), "sync-retry");
     }
   }
 

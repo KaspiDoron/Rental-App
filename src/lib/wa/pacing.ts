@@ -169,10 +169,26 @@ export async function releaseMessageClaim(
   ).catch(() => {});
 }
 
-/** Throttled GC: clear claim rows older than 24h (call from the drain tail). */
+/** Throttled GC (call from the drain tail). Two horizons by slot type. */
 export async function gcSendClaims(): Promise<void> {
+  // gap (pacing) claims only serialize concurrent drainers WITHIN a min-gap
+  // window - safe to clear after 2h.
   await sbDelete(
     "wa_send_claims",
-    `created_at=lt.${encodeURIComponent(new Date(Date.now() - 24 * 3600_000).toISOString())}`
+    `slot_key=like.gap:*&created_at=lt.${encodeURIComponent(
+      new Date(Date.now() - 2 * 3600_000).toISOString()
+    )}`
+  ).catch(() => {});
+  // msg (idempotency) claims must OUTLIVE the longest possible outbox hold. The
+  // daily cap parks a row at oldest+24h, business-hours-clamped (up to ~40h
+  // out), and a landed-but-timed-out queue() insert can re-park as a belt
+  // duplicate; keeping the twin's msg claim ~72h means that duplicate is still
+  // refused at send time (claimSendSlots -> 409 -> skipped) instead of
+  // double-sending the same message ~a day apart (a ban signal).
+  await sbDelete(
+    "wa_send_claims",
+    `slot_key=like.msg:*&created_at=lt.${encodeURIComponent(
+      new Date(Date.now() - 72 * 3600_000).toISOString()
+    )}`
   ).catch(() => {});
 }

@@ -25,7 +25,12 @@ export async function GET(req: Request) {
   if (!vendorId) return NextResponse.json({ error: "vendorId required" }, { status: 400 });
   const digits = await digitsForVendor(session.email, vendorId);
   if (!digits) return NextResponse.json({ takeover: false });
-  return NextResponse.json({ takeover: await isThreadTakenOver(session.email, digits) });
+  // Coerce the tri-state to a clean boolean for the UI (null = store unreadable
+  // reads as "not taken over" for display only; server-side send-gating fails
+  // closed on null independently).
+  return NextResponse.json({
+    takeover: (await isThreadTakenOver(session.email, digits)) === true,
+  });
 }
 
 export async function POST(req: Request) {

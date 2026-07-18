@@ -26,7 +26,23 @@ export async function GET(req: Request) {
         ref
       )}&key=${key}`;
 
-  const res = await fetch(target, { cache: "no-store" });
+  // Bound the header wait so a stalled Google media endpoint cannot hang this
+  // proxy invocation until Vercel's maxDuration - browser fan-out (up to 12
+  // photo URLs per result view) would otherwise pile hung invocations against
+  // the Hobby concurrency ceiling and starve real routes. The timer is cleared
+  // once headers arrive; the body then streams straight to the client.
+  let res: Response;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    try {
+      res = await fetch(target, { cache: "no-store", signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return new Response(null, { status: 404 });
+  }
   if (!res.ok || !res.body) return new Response(null, { status: 404 });
   return new Response(res.body, {
     headers: {

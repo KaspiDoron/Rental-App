@@ -74,20 +74,36 @@ async function fetchCloudMedia(
 ): Promise<{ mime: string; base64: string } | null> {
   const token = await getConfig("WHATSAPP_ACCESS_TOKEN");
   if (!token) return null;
-  try {
-    const metaRes = await fetch(`https://graph.facebook.com/v20.0/${mediaId}`, {
+  // Both Graph fetches are awaited INLINE in the webhook before it returns 200
+  // to Meta. A stalled Meta CDN with no timeout would hang the shared handler
+  // until Vercel kills it -> Meta gets no 200, re-delivers, and can disable the
+  // callback, and the end-of-handler drain never runs. Bound both calls, and
+  // cap the download so an oversized media object cannot exhaust memory.
+  const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+  const timed = async (url: string, ms: number): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    (timer as { unref?: () => void }).unref?.();
+    return fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
+      signal: ctrl.signal,
     });
+  };
+  try {
+    const metaRes = await timed(`https://graph.facebook.com/v20.0/${mediaId}`, 10_000);
     if (!metaRes.ok) return null;
     const meta = await metaRes.json();
     if (!meta?.url) return null;
-    const binRes = await fetch(meta.url, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
+    const lenHdr = Number(meta?.file_size ?? 0);
+    if (lenHdr && lenHdr > MAX_MEDIA_BYTES) return null; // oversized - skip
+    const binRes = await timed(meta.url, 12_000);
     if (!binRes.ok) return null;
-    const buf = Buffer.from(await binRes.arrayBuffer());
+    const declared = Number(binRes.headers.get("content-length") ?? 0);
+    if (declared && declared > MAX_MEDIA_BYTES) return null;
+    const ab = await binRes.arrayBuffer();
+    if (ab.byteLength > MAX_MEDIA_BYTES) return null; // cap post-read too
+    const buf = Buffer.from(ab);
     return { mime: meta.mime_type || "image/jpeg", base64: buf.toString("base64") };
   } catch {
     return null;

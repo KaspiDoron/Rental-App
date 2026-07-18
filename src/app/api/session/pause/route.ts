@@ -18,5 +18,5 @@ export async function POST(req: Request) {
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
-  return NextResponse.json({ paused: await isSessionPaused(session.email) });
+  return NextResponse.json({ paused: (await isSessionPaused(session.email)) === true });
 }

@@ -6,7 +6,7 @@
 // send NOTHING until the user resumes. The user asked Will to hold - holding
 // must be absolute.
 
-import { sbInsert, sbSelect } from "./runtime-config";
+import { sbInsert, sbSelectStrict } from "./runtime-config";
 
 interface CacheEntry {
   paused: boolean;
@@ -77,43 +77,58 @@ export async function setThreadTakeover(
   return ok;
 }
 
-/** Did the user take this shop's thread over? Latest marker wins. 30s cache. */
-export async function isThreadTakenOver(email: string, digits: string): Promise<boolean> {
+/**
+ * Did the user take this shop's thread over? Latest marker wins, 30s cache.
+ * TRI-STATE, because takeover is an ABSOLUTE veto (like the cancellation
+ * tombstone): true (taken over), false (definitely not), or null (the store is
+ * UNREADABLE right now - the truth is unknown). The old permissive sbSelect
+ * collapsed a transient DB failure to [] -> false and CACHED that false for
+ * 30s, so a blip let the agent talk over a human for up to half a minute. A
+ * null must make automated sends fail CLOSED, and is never cached.
+ */
+export async function isThreadTakenOver(
+  email: string,
+  digits: string
+): Promise<boolean | null> {
   const key = `${email}:${digits}`;
   const hit = takeoverCache().get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.paused;
-  try {
-    const rows = await sbSelect<{ raw: { kind?: string } | null }>(
-      "whatsapp_messages",
-      `select=raw&to_number=eq.takeover&raw->>sender=eq.${encodeURIComponent(
-        email
-      )}&raw->>digits=eq.${encodeURIComponent(
-        digits
-      )}&raw->>kind=in.(human-takeover,human-handback)&order=received_at.desc&limit=1`
-    );
-    const on = rows[0]?.raw?.kind === "human-takeover";
-    takeoverCache().set(key, { paused: on, at: Date.now() });
-    return on;
-  } catch {
-    return hit?.paused ?? false;
+  const res = await sbSelectStrict<{ raw: { kind?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&to_number=eq.takeover&raw->>sender=eq.${encodeURIComponent(
+      email
+    )}&raw->>digits=eq.${encodeURIComponent(
+      digits
+    )}&raw->>kind=in.(human-takeover,human-handback)&order=received_at.desc&limit=1`
+  );
+  if ("error" in res) {
+    // "missing" (no such table/column, demo mode) -> genuinely no marker.
+    // "unavailable" (transient) -> UNKNOWN: never cache, let callers fail closed.
+    return res.error === "missing" ? false : hit?.paused ?? null;
   }
+  const on = res.rows[0]?.raw?.kind === "human-takeover";
+  takeoverCache().set(key, { paused: on, at: Date.now() });
+  return on;
 }
 
-/** Is this user's session paused? Latest pause/resume marker wins. 30s cache. */
-export async function isSessionPaused(email: string): Promise<boolean> {
+/**
+ * Is this user's session paused? Latest pause/resume marker wins, 30s cache.
+ * TRI-STATE for the same reason as isThreadTakenOver: null = store unreadable,
+ * never cached, automated sends fail closed.
+ */
+export async function isSessionPaused(email: string): Promise<boolean | null> {
   const hit = cache().get(email);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.paused;
-  try {
-    const rows = await sbSelect<{ raw: { kind?: string } | null; received_at: string }>(
-      "whatsapp_messages",
-      `select=raw,received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
-        email
-      )}&raw->>kind=in.(session-paused,session-resumed)&order=received_at.desc&limit=1`
-    );
-    const paused = rows[0]?.raw?.kind === "session-paused";
-    cache().set(email, { paused, at: Date.now() });
-    return paused;
-  } catch {
-    return hit?.paused ?? false;
+  const res = await sbSelectStrict<{ raw: { kind?: string } | null; received_at: string }>(
+    "whatsapp_messages",
+    `select=raw,received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
+      email
+    )}&raw->>kind=in.(session-paused,session-resumed)&order=received_at.desc&limit=1`
+  );
+  if ("error" in res) {
+    return res.error === "missing" ? false : hit?.paused ?? null;
   }
+  const paused = res.rows[0]?.raw?.kind === "session-paused";
+  cache().set(email, { paused, at: Date.now() });
+  return paused;
 }

@@ -551,9 +551,13 @@ export async function processVendorReply(opts: {
   if (ctx.sender && !sessionClosed) {
     try {
       const { isThreadTakenOver } = await import("./session-flags");
-      if (await isThreadTakenOver(ctx.sender, from)) return;
+      // Fail CLOSED: skip the auto-reply on true (taken over) OR null (store
+      // unreadable) - talking over a human is an absolute-veto violation, so an
+      // unknown state must not proceed. The inbound is already stored/pushed;
+      // only the automated answer is withheld, and it resumes once readable.
+      if ((await isThreadTakenOver(ctx.sender, from)) !== false) return;
     } catch {
-      /* flags unreadable - fail open */
+      return; // unreadable -> fail closed (do not auto-reply)
     }
   }
 
@@ -563,9 +567,11 @@ export async function processVendorReply(opts: {
   if (ctx.sender && !sessionClosed) {
     try {
       const { isSessionPaused } = await import("./session-flags");
-      if (await isSessionPaused(ctx.sender)) return;
+      // Fail CLOSED on true (paused) OR null (unreadable): "hold everything" is
+      // absolute, so an unknown pause state withholds the auto-reply.
+      if ((await isSessionPaused(ctx.sender)) !== false) return;
     } catch {
-      /* flags unreadable - fail open, the engine's own guards still apply */
+      return; // unreadable -> fail closed
     }
   }
 
