@@ -9,14 +9,21 @@ describe("stripWaFormatting - the shop never sees markdown/`*` artifacts", () =>
     );
   });
 
-  it("strips paired markdown too (via sanitizeAiText)", () => {
-    expect(stripWaFormatting("**best** price and _today_ only")).toBe("best price and today only");
+  it("strips **bold** and inline code", () => {
+    expect(stripWaFormatting("**best** price here")).toBe("best price here");
     expect(stripWaFormatting("use `code` here")).toBe("use code here");
   });
 
-  it("removes trailing and mid stray asterisks/backticks", () => {
+  it("removes trailing/stray asterisks and backticks", () => {
     expect(stripWaFormatting("price*")).toBe("price");
     expect(stripWaFormatting("a ` b")).toBe("a b");
+  });
+
+  it("PRESERVES underscores in URLs / emails / identifiers (no link corruption)", () => {
+    expect(stripWaFormatting("see https://maps.example.com/rent_a_bike now")).toBe(
+      "see https://maps.example.com/rent_a_bike now"
+    );
+    expect(stripWaFormatting("mail john_q_public@site.com")).toBe("mail john_q_public@site.com");
   });
 
   it("leaves clean human text untouched (incl. emoji)", () => {

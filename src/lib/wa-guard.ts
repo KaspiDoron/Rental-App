@@ -1117,7 +1117,7 @@ export async function guardOutbound(opts: {
   //         string first, then the phone prefix.
   //      c) If the timezone is genuinely unknown, DO NOT queue - a false
   //         "closed" on an open shop is the worse bug (issue #21).
-  if (opts.auto && opts.shopOpenNow !== true && !p.ignore_business_hours) {
+  if (opts.auto && opts.shopOpenNow !== true) {
     // ACTIVE-CONVERSATION OVERRIDE: if this shop wrote to THIS user within the
     // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
     // a reply "until the shop opens" would be absurd (and was: a deal-close on
@@ -1145,7 +1145,12 @@ export async function guardOutbound(opts: {
         : nextBusinessOpen(opts.toDigits, p, region);
       return await queue(until, "shop is closed now");
     }
-    if (known && !activelyChatting) {
+    // The CLOCK-window gate (not the Google "closed now" gate above) is what the
+    // 24/7 dial lifts: ignore_business_hours (PACING_MODE=fast) skips ONLY this,
+    // so a fast-mode burst goes out at any hour, while a shop Google reports
+    // DEFINITELY closed right now still parks above - a definitively-closed shop
+    // won't reply, and blasting it hurts reply-rate (a real ban signal).
+    if (known && !activelyChatting && !p.ignore_business_hours) {
       const localHour =
         (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
       const inWindow = localHour >= p.business_hour_start && localHour < p.business_hour_end;
