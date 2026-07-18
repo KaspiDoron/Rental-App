@@ -29,6 +29,19 @@ declare global {
   var __wd_last_maps_key__: string | undefined;
 }
 
+// fetch with a hard 12s timeout so a stalled Google Places response cannot hang
+// a search request for the full Vercel maxDuration under load. The deadline
+// stays armed across the body read (fetch resolves at headers; callers then
+// await res.json()/res.text()); the timer is unref'd so it never holds the
+// runtime, and an abort after completion is a harmless no-op. On abort fetch
+// throws, which every call site's existing catch maps to the API fallback.
+async function timedFetch(url: string, init: RequestInit = {}, ms = 12_000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  (timer as { unref?: () => void }).unref?.();
+  return fetch(url, { ...init, signal: ctrl.signal });
+}
+
 export async function mapsKey(): Promise<string | undefined> {
   // Trim defensively: a key pasted into Vercel with a trailing newline/space
   // breaks the X-Goog-Api-Key header while LOOKING configured.
@@ -65,7 +78,7 @@ async function newTextSearch(
   fieldMask: string
 ): Promise<{ places: any[] | null; error?: string }> {
   try {
-    const res = await fetch(`${NEW_BASE}/places:searchText`, {
+    const res = await timedFetch(`${NEW_BASE}/places:searchText`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -115,7 +128,7 @@ async function newAutocomplete(
   try {
     const body: Record<string, unknown> = { input };
     if (sessionToken) body.sessionToken = sessionToken;
-    const res = await fetch(`${NEW_BASE}/places:autocomplete`, {
+    const res = await timedFetch(`${NEW_BASE}/places:autocomplete`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key },
       body: JSON.stringify(body),
@@ -168,7 +181,7 @@ export async function resolvePlaceLocation(
   if (key) {
     try {
       const st = sessionToken ? `?sessionToken=${encodeURIComponent(sessionToken)}` : "";
-      const res = await fetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}${st}`, {
+      const res = await timedFetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}${st}`, {
         headers: {
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask": "location,formattedAddress,displayName",
@@ -276,7 +289,7 @@ export async function searchPlaces(
 
     // 3) Legacy Geocoding (works on older keys).
     try {
-      const res = await fetch(
+      const res = await timedFetch(
         `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
           q
         )}&key=${key}`,
@@ -308,7 +321,7 @@ export async function searchPlaces(
   // often throttles/blocks datacenter IPs (Vercel), so its failure must also
   // surface instead of masquerading as "no matches".
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${MAX_SUGGESTIONS}&q=${encodeURIComponent(
         q
       )}`,
@@ -358,7 +371,7 @@ export async function reverseGeocode(
   const key = await mapsKey();
   if (key) {
     try {
-      const res = await fetch(
+      const res = await timedFetch(
         `https://maps.googleapis.com/maps/api/geocode/json?latlng=${rlat},${rlng}&key=${key}`,
         { cache: "no-store" }
       );
@@ -384,7 +397,7 @@ export async function reverseGeocode(
 
   // OpenStreetMap Nominatim reverse - free, real data, no key.
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=12&lat=${rlat}&lon=${rlng}`,
       {
         headers: { "User-Agent": "WheelDeal/1.0 (rental savings app)" },
@@ -528,7 +541,7 @@ export async function findRealVendors(
 
   // 2) Legacy Nearby Search (older keys).
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${origin.lat},${origin.lng}&radius=${Math.min(
         50000,
         radiusKm * 1000
@@ -602,7 +615,7 @@ export async function placeDetails(placeId: string): Promise<PlaceDetailsResult 
 
   // 1) Places API (New) details.
   try {
-    const res = await fetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}`, {
+    const res = await timedFetch(`${NEW_BASE}/places/${encodeURIComponent(placeId)}`, {
       headers: {
         "X-Goog-Api-Key": key,
         "X-Goog-FieldMask":
@@ -635,7 +648,7 @@ export async function placeDetails(placeId: string): Promise<PlaceDetailsResult 
 
   // 2) Legacy Place Details.
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=international_phone_number,formatted_phone_number,reviews,rating,user_ratings_total,formatted_address,website&key=${key}`,
       { cache: "no-store" }
     );
@@ -714,7 +727,7 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
     })(),
     (async () => {
       try {
-        const res = await fetch(
+        const res = await timedFetch(
           `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${probe.lat},${probe.lng}&radius=10000&keyword=scooter%20rental&key=${key}`,
           { cache: "no-store" }
         );
@@ -728,7 +741,7 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
     })(),
     (async () => {
       try {
-        const res = await fetch(
+        const res = await timedFetch(
           `https://maps.googleapis.com/maps/api/geocode/json?address=Canggu%20Bali&key=${key}`,
           { cache: "no-store" }
         );

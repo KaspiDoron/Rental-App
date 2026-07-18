@@ -67,6 +67,19 @@ describe("resilience: external fetches are bounded by a hard timeout", () => {
     expect(count(code, /fetch\(/g)).toBe(1);
   });
 
+  it("google.ts routes every Places call through its timedFetch wrapper", () => {
+    const code = readCode("src/lib/google.ts");
+    expect(code).toMatch(/async function timedFetch/);
+    // Only the wrapper's own internal call is a raw lowercase fetch(.
+    expect(count(code, /fetch\(/g)).toBe(1);
+  });
+
+  it("whatsapp.ts Cloud send is abort-bounded", () => {
+    const code = readCode("src/lib/whatsapp.ts");
+    expect(code).toMatch(/AbortController/);
+    expect(code).toMatch(/signal:\s*ctrl\.signal/);
+  });
+
   it("timedFetch keeps its deadline armed across the body read (no header-boundary clear)", () => {
     // The abort deadline must span headers+body: fetch() resolves at headers but
     // the read helpers then `await res.json()`. Clearing the timer at the header
