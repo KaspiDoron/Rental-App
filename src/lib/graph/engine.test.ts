@@ -282,23 +282,34 @@ describe("engine end-to-end (deterministic)", () => {
     expect(r2.action).toBe("bargain");
     expect(bag.getState().fields.lastTarget).toBe(155);
 
-    // A firm "last price" with no leverage left (170 is not far above the
-    // floor, no cheaper rival) ends the push - the polite cash push follows.
+    // AGGRESSIVE market-floor stance: 170 is still ~13% above the 150 floor, so
+    // ONE firm "last price" is treated as a bluff worth a final nudge - the agent
+    // does NOT roll over to logistics while real room remains. firmCount = 1.
     const r3 = await t(
       "Cannot lower, 170 last price. Passport deposit only.",
       extraction({ found: false, shopFirm: true, depositType: "passport", deposit: "Passport only" }),
       undefined
     );
-    expect(r3.action).toBe("deposit-probe"); // the cash push
+    expect(r3.action).toBe("bargain"); // one more push - 13% of room is real
+    expect(bag.getState().fields.firmCount).toBe(1);
+
+    // The shop holds firm a SECOND time - now the push ends cleanly (two firm
+    // signals) and the polite cash push follows.
+    const r4 = await t(
+      "No. 170 is final, really last price. Passport only.",
+      extraction({ found: false, shopFirm: true, depositType: "passport", deposit: "Passport only" }),
+      undefined
+    );
+    expect(r4.action).toBe("deposit-probe"); // the cash push
     expect(bag.getState().fields.cashAlternativeAsked).toBe(true);
 
-    const r4 = await t(
+    const r5 = await t(
       "Okay, 3000 cash is fine.",
       extraction({ found: false, depositType: "cash", depositAmount: 3000, deposit: "3000 cash" }),
       undefined
     );
     // Deal complete (170 + cash 3000 + on-shop) -> present, then a warm close.
-    expect(["present", "close"]).toContain(r4.action);
+    expect(["present", "close"]).toContain(r5.action);
     expect(bag.getState().fields.presented).toBe(true);
     expect(bag.getState().fields.fulfillment).toBe("on-shop");
   });

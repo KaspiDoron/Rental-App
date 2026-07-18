@@ -25,7 +25,12 @@ export interface PolicyOverlay {
 
 export const DEFAULT_OVERLAY: PolicyOverlay = {
   floorTolerance: 1.05,
-  priceFarAboveFloor: 1.25,
+  // AGGRESSIVE market-floor stance: any quote more than ~8% above the absolute
+  // known market floor still has room, so the agent keeps pushing across rounds
+  // instead of drifting to logistics. (Was 1.25 = only pushed past 25% above
+  // floor - far too soft.) The firm-count + tone-degraded + max-rounds guards
+  // still stop it nagging a shop that has genuinely bottomed out.
+  priceFarAboveFloor: 1.08,
   sheetAnchor: 0.8,
   lowballGuard: 0.6,
   defaultCut: 0.85,
@@ -34,7 +39,7 @@ export const DEFAULT_OVERLAY: PolicyOverlay = {
 
 const CLAMPS: Record<keyof Omit<PolicyOverlay, "bannedPhrases">, [number, number]> = {
   floorTolerance: [1.0, 1.15],
-  priceFarAboveFloor: [1.1, 1.6],
+  priceFarAboveFloor: [1.03, 1.6],
   sheetAnchor: [0.7, 0.95],
   lowballGuard: [0.5, 0.8],
   defaultCut: [0.7, 0.95],

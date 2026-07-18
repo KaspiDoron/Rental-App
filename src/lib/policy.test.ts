@@ -29,7 +29,7 @@ describe("policy overlay clamps", () => {
     // These MUST stay in lockstep with the hardcoded math they replace -
     // "no overlay saved" must mean byte-identical negotiation behavior.
     expect(DEFAULT_OVERLAY.floorTolerance).toBe(1.05);
-    expect(DEFAULT_OVERLAY.priceFarAboveFloor).toBe(1.25);
+    expect(DEFAULT_OVERLAY.priceFarAboveFloor).toBe(1.08);
     expect(DEFAULT_OVERLAY.sheetAnchor).toBe(0.8);
     expect(DEFAULT_OVERLAY.lowballGuard).toBe(0.6);
     expect(DEFAULT_OVERLAY.defaultCut).toBe(0.85);
@@ -44,7 +44,7 @@ describe("policy overlay clamps", () => {
       defaultCut: 0.1,
     });
     expect(wild.floorTolerance).toBe(1.15);
-    expect(wild.priceFarAboveFloor).toBe(1.1);
+    expect(wild.priceFarAboveFloor).toBe(1.03);
     expect(wild.sheetAnchor).toBe(0.95);
     expect(wild.lowballGuard).toBe(0.5);
     expect(wild.defaultCut).toBe(0.7);
