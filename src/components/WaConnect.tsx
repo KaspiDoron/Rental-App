@@ -110,6 +110,20 @@ export function WaConnect({
     }
   }
 
+  const [resetDone, setResetDone] = useState(false);
+  async function resetConversations() {
+    if (!window.confirm(t("Clear all imported shop conversations from the app? Your WhatsApp stays connected; new replies re-appear as shops answer."))) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await fetch("/api/wa/reset-conversations", { method: "POST" });
+      setResetDone(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (wa && !wa.available) {
     return (
       <p className="rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
@@ -138,6 +152,23 @@ export function WaConnect({
           >
             {busy ? <LoadingDots /> : t("Disconnect")}
           </button>
+        </div>
+        {/* Privacy tool: wipe any imported shop conversations (e.g. to clear
+            historically mis-filed messages). Scoped strictly to this account. */}
+        <div className="mt-2 border-t border-line/40 pt-2 text-center">
+          {resetDone ? (
+            <span className="text-[11px] font-bold text-savings">
+              ✓ {t("Cleared - conversations re-appear as shops reply.")}
+            </span>
+          ) : (
+            <button
+              onClick={resetConversations}
+              disabled={busy}
+              className="text-[11px] font-bold text-faint underline hover:text-brandred disabled:opacity-60"
+            >
+              {t("Clear imported conversations")}
+            </button>
+          )}
         </div>
       </div>
     );

@@ -164,10 +164,40 @@ is bounded separately by `EVOLUTION_MAX_PER_HOST` (default 40 linked numbers
 per Evolution host) - so 25 testers fit on one host; hundreds of users need
 `EVOLUTION_HOSTS` pool entries (~1 host per 40 users).
 
+## Execution resilience (the "batch stopped after one send" fix)
+
+The Evolution host is the single hard dependency for sending. When it blips
+(the observed Render free-tier "wd-evolution HTTP health check failed" - free
+instances sleep and can be replaced), sends fail transiently. The code now
+survives that gracefully instead of stalling/losing the batch:
+
+- **`drainOutbox` classifies failures** (`src/lib/wa/send-classify.ts`): a
+  transient/infra failure (reconnecting, 5xx, timeout, unknown) retries in
+  ~45-120s with NO attempt-cap burn, so a batch resumes within a minute of the
+  host recovering. Only RECIPIENT failures (not-on-WhatsApp / invalid / blocked)
+  count toward the 5-attempt give-up, whose event now names the shop. The prior
+  behaviour deferred every failure 10/20/30/40/50 min then dropped it silently -
+  that is what made "only one message sent, then it stalled".
+- **Connection state is honest** (`hasSessionRow` fail-safe, no open->connecting
+  clobber): a host outage reports *reconnecting*, never *not linked*, so the app
+  never tells a connected user to re-link.
+
+**Owner infra action (the ~$10/mo ask):** the durable fix for the host itself is
+to move the Evolution instance off Render's **free** tier to **Render Starter
+(~$7/mo, no sleep, faster restart)** - this removes the recurring cold-start /
+health-check-timeout that triggers the transient path in the first place. Pair
+it with the two independent `/api/wa/ping` crons (below) at a 1-2 min cadence so
+the outbox drains without depending on an open app. That combination (paid
+always-on host + external cron + the health-aware retry above) reliably
+progresses hundreds of concurrent users' queues; a dedicated worker/queue
+(Upstash QStash free tier, or a Render background worker) is the P2 upgrade if
+volume outgrows it, not a launch blocker.
+
 ## Before a paid public launch (P1)
 
-1. **Second + monitored pinger** for `/api/wa/ping` (uptime alert on it) -
-   today the whole background pipeline leans on one unmonitored external cron.
+1. **Move Evolution off Render free tier** (Starter, ~$7/mo) + **second +
+   monitored pinger** for `/api/wa/ping` (uptime alert on it) - today the whole
+   background pipeline leans on one free host and one unmonitored external cron.
 2. **Error tracking** (Sentry or similar) + alerts on `agent_events` kinds
    `wa-send-dropped`, `wa-ban-risk`, `media-fetch-failed` - failures are
    currently silent rows an admin must go look for.
