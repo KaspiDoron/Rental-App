@@ -25,6 +25,7 @@ import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
 import { personaHumanize } from "./wa/persona";
+import { stealthFactor } from "./wa/stealth";
 import {
   planCapacity,
   effectiveNewContactCap,
@@ -1268,26 +1269,36 @@ export async function guardOutbound(opts: {
     return await queue(until, `daily cap reached (${dayCap}/day) - resumes as capacity frees`);
   }
 
+  // PREDICTIVE STEALTH: how risky does this number look RIGHT NOW? Below the
+  // hard pause, a rising score stretches the min-gap and tightens burst - a
+  // graduated, self-clearing slowdown that reacts to real feedback before a ban.
+  const stealth = stealthFactor(computeRisk(rep, p).score, p.risk_pause_threshold);
+
   // 5. BURST COOLDOWN - even within caps, N sends in a short window is a robotic
   //    burst. After a burst, enforce a longer rest before the next send.
   const burstWindowAgo = new Date(now - p.burst_window_seconds * 1000).toISOString();
   const inBurst = sentRows.filter((r) => r.received_at >= burstWindowAgo).length;
-  // Burst tolerance scales with the plan's hourly headroom: the 50-120s
-  // min-gap already spaces sends, so a paced batch inside the hourly cap is not
-  // a robotic flurry. Fresh/low-trust numbers keep the conservative floor.
-  const burstMax = Math.max(p.burst_max_in_window, Math.ceil(hourCap * 0.7));
+  // Burst tolerance scales with the plan's hourly headroom; stealth tightens it
+  // when the number is in the danger zone. Fresh/low-trust numbers keep the floor.
+  const burstMax = Math.max(
+    3,
+    Math.round(Math.max(p.burst_max_in_window, Math.ceil(hourCap * 0.7)) / stealth)
+  );
   if (opts.auto && inBurst >= burstMax) {
     const newest = sentRows[0] ? Date.parse(sentRows[0].received_at) : now;
     const until = new Date(newest + p.burst_cooldown_minutes * 60_000).toISOString();
     return await queue(until, `burst cooldown (${inBurst} in ${p.burst_window_seconds}s)`);
   }
 
-  // 6. ANTI-ROBOTIC MINIMUM GAP with jitter (never two sends back-to-back).
+  // 6. ANTI-ROBOTIC MINIMUM GAP with jitter (never two sends back-to-back). The
+  //    gap is stretched by the stealth factor when the number looks risky, so a
+  //    wobbling number instantly paces slower without a hard freeze.
   if (rep.last_send_at) {
-    const gapNeeded = (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000;
+    const gapNeeded = (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000 * stealth;
     const since = now - Date.parse(rep.last_send_at);
     if (opts.auto && since < gapNeeded) {
-      return await queue(new Date(now + (gapNeeded - since)).toISOString(), "human pacing gap");
+      const reason = stealth > 1.3 ? "easing off to keep your number safe" : "human pacing gap";
+      return await queue(new Date(now + (gapNeeded - since)).toISOString(), reason);
     }
   }
 
