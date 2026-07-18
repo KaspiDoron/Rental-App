@@ -819,7 +819,7 @@ export async function guardOutbound(opts: {
 
   const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
     if (opts.queueIfBlocked !== false) {
-      await sbInsert("wa_outbox", [
+      const parked = await sbInsert("wa_outbox", [
         {
           sender_key: opts.senderKey,
           to_number: opts.toDigits,
@@ -829,7 +829,17 @@ export async function guardOutbound(opts: {
           meta: { ...(opts.meta ?? {}), reason },
         },
       ]);
-      return { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text };
+      // Only claim queuedUntil when the row ACTUALLY persisted. If the insert
+      // failed (DB blip / the 8s fetch timeout), returning queuedUntil would
+      // make the drain's needsRepark believe the row is safely parked and DROP
+      // the claimed (already-deleted) row - silent data loss. Omitting it makes
+      // needsRepark re-park via the drain's own belt (a second insert attempt);
+      // the idempotency preflight + msg claim slot prevent a double-send if the
+      // first insert actually landed but its response timed out.
+      if (parked) {
+        return { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text };
+      }
+      return { allow: false, reason, text };
     }
     return { allow: false, reason, text };
   };

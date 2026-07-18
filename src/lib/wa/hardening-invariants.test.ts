@@ -10,6 +10,12 @@ import { join } from "path";
 
 const root = process.cwd();
 const read = (p: string) => readFileSync(join(root, p), "utf8");
+// Strip line + block comments so structural assertions match CODE, not the
+// explanatory prose (which deliberately names the patterns being guarded).
+const readCode = (p: string) =>
+  read(p)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
 const count = (hay: string, needle: RegExp) => (hay.match(needle) ?? []).length;
 
 describe("privacy: no unescaped SQL LIKE wildcard on user identity (cross-user leak)", () => {
@@ -54,9 +60,20 @@ describe("resilience: external fetches are bounded by a hard timeout", () => {
   });
 
   it("every Supabase helper goes through timedFetch (only timedFetch's own call is a raw fetch)", () => {
-    const rc = read("src/lib/runtime-config.ts");
-    expect(rc).toMatch(/async function timedFetch/);
-    // Exactly one raw `await fetch(` survives: the one inside timedFetch itself.
-    expect(count(rc, /await fetch\(/g)).toBe(1);
+    const code = readCode("src/lib/runtime-config.ts");
+    expect(code).toMatch(/async function timedFetch/);
+    // Exactly one raw lowercase `fetch(` survives in code: the one inside
+    // timedFetch itself (all helpers call via `timedFetch(` - capital F).
+    expect(count(code, /fetch\(/g)).toBe(1);
+  });
+
+  it("timedFetch keeps its deadline armed across the body read (no header-boundary clear)", () => {
+    // The abort deadline must span headers+body: fetch() resolves at headers but
+    // the read helpers then `await res.json()`. Clearing the timer at the header
+    // boundary left the body read unbounded (a mid-body DB stall hung the handler
+    // and, on the drain path, lost an already-claimed row).
+    const code = readCode("src/lib/runtime-config.ts");
+    expect(code).not.toMatch(/clearTimeout/);
+    expect(code).toMatch(/\.unref\?\.\(\)/);
   });
 });

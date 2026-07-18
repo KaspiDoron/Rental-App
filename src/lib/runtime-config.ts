@@ -174,11 +174,18 @@ export function supabaseConfigured(): boolean {
 async function timedFetch(url: string, init: RequestInit, ms = 8000): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  // Deliberately do NOT clearTimeout at the header boundary. fetch() resolves as
+  // soon as response HEADERS arrive, but the read helpers then `await
+  // res.json()`/`res.text()`, and that body read shares this AbortController.
+  // Clearing the timer here would leave the body read unbounded (undici's
+  // default bodyTimeout is ~300s, far past Vercel's function limit), so a DB
+  // that streams headers then stalls mid-body would still hang the handler - and
+  // on the drain path a hung handler that Vercel kills LOSES an already-claimed
+  // row. Keeping the deadline armed bounds headers+body together; once the body
+  // is fully read the pending abort is a harmless no-op on a settled request.
+  // unref() so a still-pending timer never keeps the runtime alive.
+  (timer as { unref?: () => void }).unref?.();
+  return fetch(url, { ...init, signal: ctrl.signal });
 }
 
 /** Read rows from a Supabase table via the service role. [] if unset. */
