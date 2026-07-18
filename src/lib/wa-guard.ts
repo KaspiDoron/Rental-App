@@ -1304,8 +1304,8 @@ export async function drainOutbox(
       // made a whole batch stall after one send and then silently vanish).
       // Only RECIPIENT-level failures (not on WhatsApp, invalid, blocked) count
       // toward the give-up cap.
-      const errText = String(r.error ?? "");
-      const recipientFail = /not.*whatsapp|invalid|exist|blocked|forbidden|no-?phone/i.test(errText);
+      const { isRecipientSendFailure } = await import("./wa/send-classify");
+      const recipientFail = isRecipientSendFailure(r.error);
       const transient = !recipientFail; // reconnecting / timeout / 5xx / empty / unknown host error
       if (transient) {
         // Retry SOON with no attempt burn - the batch resumes within ~a minute

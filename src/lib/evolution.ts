@@ -16,6 +16,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runtime-config";
+import { jidMatches } from "./wa/jid";
 import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
@@ -982,25 +983,6 @@ function waMessageText(message: any): string {
   if (message.stickerMessage) return "[sticker]";
   if (message.locationMessage) return "[location]";
   return "";
-}
-
-/**
- * Does an Evolution message record belong to the requested chat JID?
- * PRIVACY-CRITICAL: this is the filter that stops the whole-inbox leak. Some
- * Evolution/Baileys versions ignore the `where.remoteJid` filter and return the
- * ENTIRE instance inbox; without re-filtering here, a personal chat's messages
- * would be pulled into a shop thread. Phone JIDs match on their numeric user
- * part; privacy @lid JIDs match ONLY by exact equality (their numeric part is
- * NOT the phone number, so never compare them by digits).
- */
-function jidMatches(recordJid: string, requestedJid: string): boolean {
-  if (!recordJid || !requestedJid) return false;
-  if (recordJid === requestedJid) return true;
-  const isPhone = (j: string) => j.endsWith("@s.whatsapp.net") || j.endsWith("@c.us");
-  if (isPhone(recordJid) && isPhone(requestedJid)) {
-    return digitsOnly(recordJid.split("@")[0]) === digitsOnly(requestedJid.split("@")[0]);
-  }
-  return false;
 }
 
 // Evolution's findMessages body shape varies across versions; try each so a
