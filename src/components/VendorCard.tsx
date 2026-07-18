@@ -417,7 +417,11 @@ function VendorCardInner({
               <div>
                 <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-faint">
                   {t("Shop's offer")}
-                  {offer.verified ? (
+                  {offer.matchesSpec === false ? (
+                    <span className="rounded bg-brandred-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandred">
+                      {t("DIFFERENT VEHICLE")}
+                    </span>
+                  ) : offer.verified ? (
                     <span className="rounded bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
                       {t("VERIFIED")}
                     </span>
@@ -521,6 +525,10 @@ function VendorCardInner({
               <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
                 🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
+            ) : offer.matchesSpec === false ? (
+              <div className="mt-2 rounded-xl bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
+                ⚠️ {t("This price is for a different vehicle than you asked for - your agent is checking whether they have the one you want.")}
+              </div>
             ) : (
               offer.presentable === false && (
                 <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
@@ -574,19 +582,33 @@ function VendorCardInner({
             )}
 
             <div className="mt-3 flex items-center gap-2">
-              <button
-                onClick={() => onBook(vendor)}
-                className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
-              >
-                {t("Lock this deal")}
-              </button>
-              {vendor.stage !== "declined" && (
+              {/* You can never LOCK a price that is for the wrong vehicle. Until
+                  the shop confirms the vehicle you asked for, the only action is
+                  to keep pressing them (the agent is already clarifying). */}
+              {offer.matchesSpec === false ? (
                 <button
                   onClick={() => onBargain(vendor)}
-                  className="btn btn-sm chip rounded-2xl border-2 border-brandred/30 bg-brandred-soft px-3 py-2.5 text-[12px] font-extrabold text-brandred"
+                  className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
                 >
-                  🥊 {t("Bargain")}
+                  🔎 {t("Ask for the right vehicle")}
                 </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onBook(vendor)}
+                    className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
+                  >
+                    {t("Lock this deal")}
+                  </button>
+                  {vendor.stage !== "declined" && (
+                    <button
+                      onClick={() => onBargain(vendor)}
+                      className="btn btn-sm chip rounded-2xl border-2 border-brandred/30 bg-brandred-soft px-3 py-2.5 text-[12px] font-extrabold text-brandred"
+                    >
+                      🥊 {t("Bargain")}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>

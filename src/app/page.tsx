@@ -42,6 +42,7 @@ import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
+import { cheapestPresentable } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -897,6 +898,10 @@ export default function Home() {
                       message: r.replyText?.slice(0, 200) ?? "",
                       round: v.offer ? v.offer.round + 1 : 0,
                       verified: Boolean(r.verified),
+                      // false = the shop quoted a DIFFERENT vehicle; the card
+                      // flags it and it is excluded from the best-price picker.
+                      // undefined (legacy) is treated as matching.
+                      matchesSpec: r.matchesSpec ?? true,
                       simulated: false,
                       deposit: r.deposit ?? v.offer?.deposit,
                       depositType: r.depositType ?? v.offer?.depositType,
@@ -1249,11 +1254,12 @@ export default function Home() {
     return out;
   }, [activityItems]);
 
+  // A price the shop quoted for a DIFFERENT vehicle (matchesSpec === false) is
+  // never the traveller's "cheapest" - it would surface an e-bike as the best
+  // 125cc-scooter deal. The card still shows it, flagged as off-spec. The rule
+  // lives in one place so it can never drift from the compare sheet.
   const cheapest = useMemo(
-    () =>
-      vendors
-        .filter((v) => v.offer && v.offer.currency === dominantCurrency)
-        .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay)[0],
+    () => cheapestPresentable(vendors, dominantCurrency),
     [vendors, dominantCurrency]
   );
 

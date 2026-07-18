@@ -8,6 +8,7 @@ import { Modal } from "../Modal";
 import { Icon } from "../icons";
 import type { Vendor } from "@/lib/types";
 import { moneyLocal } from "@/lib/currency";
+import { isPresentableOffer } from "@/lib/offer-presentation";
 import { useI18n } from "@/lib/i18n";
 
 export function CompareSheet({
@@ -22,7 +23,9 @@ export function CompareSheet({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const cols = vendors.filter((v) => v.offer).slice(0, 3);
+  // Never compare a price the shop quoted for a DIFFERENT vehicle - it would
+  // rank an off-spec quote (e.g. an e-bike) against the real matches.
+  const cols = vendors.filter((v) => isPresentableOffer(v.offer)).slice(0, 3);
   const cheapest = cols.reduce<Vendor | null>(
     (best, v) => (!best || v.offer!.pricePerDay < best.offer!.pricePerDay ? v : best),
     null

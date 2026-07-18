@@ -384,7 +384,14 @@ export async function processVendorReply(opts: {
       tagsFromExtraction(extraction, text)
     ).catch(() => {});
   }
-  if (usablePrice) {
+  // Only a price for the EXACT requested vehicle becomes an OFFER (best-price
+  // card, deals dashboard, market-rate warehouse). A price the shop quoted for a
+  // DIFFERENT vehicle (matchesSpec === false - e.g. an e-bike when a 125cc
+  // scooter was asked) is NOT the traveller's offer: presenting it as the
+  // cheapest/lockable price misleads the user, and filing it under the requested
+  // vehicle_key would poison the market rate. It stays in vendor_replies (so the
+  // reply is still visible and the agent can clarify), but never an offers row.
+  if (usablePrice && extraction.matchesSpec !== false) {
     // Tag the offer with area + vehicle bucket + a delivery signal, so the
     // owner's shop-intelligence warehouse can aggregate real market data.
     const { vehicleKeyFor, regionKeysFor } = await import("./market");

@@ -130,6 +130,9 @@ export async function GET(req: Request) {
       found: r.found,
       pricePerDay: r.price_per_day,
       verified: r.matches_spec && r.confidence === "high",
+      // Raw spec match: false = the shop quoted a DIFFERENT vehicle. The client
+      // must never present such a price as the best/lockable offer.
+      matchesSpec: r.matches_spec,
       auto: r.auto,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,

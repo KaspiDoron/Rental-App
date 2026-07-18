@@ -61,6 +61,12 @@ export interface Offer {
   // True only after the agent has confirmed the exact vehicle + price with the
   // vendor. Simulated (demo) offers are marked so the UI can label them.
   verified: boolean;
+  // Whether the price the shop quoted is for the EXACT vehicle the traveller
+  // asked for. false = the shop answered about a DIFFERENT vehicle (e.g. an
+  // e-bike when a 125cc scooter was requested) - such a price must never be
+  // shown as the best/lockable offer; it is only a signal for the agent to
+  // clarify. undefined = legacy/unknown (pre this field) -> treated as matching.
+  matchesSpec?: boolean;
   simulated: boolean;
   // Shop-confirmed conditions (shown as tags ONLY when explicitly stated).
   deposit?: string; // human label, e.g. "Passport only", "3,000 THB cash"
