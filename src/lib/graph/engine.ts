@@ -1426,13 +1426,38 @@ export async function drainGraphWakeups(send: LiveSend): Promise<number> {
             await runGraphTurn(input, liveGraphIO(send));
             ran++;
           }
+          // input === null -> the thread was cancelled / taken over / closed:
+          // the wakeup dies here WITHOUT reschedule (correct - see
+          // buildTurnFromThread). Only a THROW below re-parks.
         } else if (row.kind === "judge" || row.kind === "session-judge") {
           const { runJudgeJob } = await import("./judge");
           await runJudgeJob(row.kind, row.thread_key, row.payload ?? {});
           ran++;
         }
       } catch {
-        /* one bad wakeup never blocks the rest */
+        // A TRANSIENT failure mid-run (LLM 5xx, Supabase blip) must NOT silently
+        // drop this claimed (deleted) wakeup - the negotiation would stall
+        // forever with no future turn to reschedule it. Re-park with a bounded
+        // backoff. On the retry, buildTurnFromThread re-checks
+        // cancel/takeover/session-closed and the send guard dedups, so a retry
+        // can neither resurrect a dead thread nor double-send. Stamp user_email
+        // (with the schema-graceful fallback) so session-close still purges it.
+        const { wakeupRetryDecision } = await import("./wakeup-retry");
+        const prior = Number((row.payload as { retryAttempts?: number } | null)?.retryAttempts ?? 0);
+        const decision = wakeupRetryDecision(prior);
+        if (decision.reschedule) {
+          const sep = row.thread_key.lastIndexOf(":");
+          const base = {
+            kind: row.kind,
+            thread_key: row.thread_key,
+            not_before: new Date(Date.now() + decision.delayMs).toISOString(),
+            payload: { ...(row.payload ?? {}), retryAttempts: decision.attempts },
+          };
+          const ok = await sbInsert("graph_wakeups", [
+            { ...base, user_email: sep > 0 ? row.thread_key.slice(0, sep) : null },
+          ]).catch(() => false);
+          if (!ok) await sbInsert("graph_wakeups", [base]).catch(() => {});
+        }
       }
     }
   } catch {
