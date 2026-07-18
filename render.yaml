@@ -51,10 +51,16 @@ services:
     name: wd-queue-drain
     runtime: image
     image:
-      url: docker.io/curlimages/curl:8.11.1
+      url: docker.io/library/node:22-alpine
     schedule: "*/1 * * * *"
     region: oregon
-    dockerCommand: sh -c 'curl -fsS --max-time 55 "$WD_APP_URL/api/wa/ping?token=$WD_PING_TOKEN" || true'
+    # Node's built-in fetch (no curl dependency - the node image always has node
+    # + /bin/sh). sh expands the two env vars, node fires the ping; the floating
+    # promise keeps the process alive until it resolves, then node exits 0, and
+    # .catch swallows any transient network blip so the run never reports failure.
+    # Written as a YAML literal block so the quotes/backslashes reach Render verbatim.
+    dockerCommand: |-
+      sh -c 'node -e "fetch(\"$WD_APP_URL/api/wa/ping?token=$WD_PING_TOKEN\").catch(() => {})"'
     envVars:
       - key: WD_APP_URL
         sync: false

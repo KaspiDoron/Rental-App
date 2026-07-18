@@ -1198,7 +1198,14 @@ export async function guardOutbound(opts: {
   // 4. DYNAMIC VOLUME CAPS (velocity vector) - trust-scaled, warm-up ramped,
   //    with a per-day random wobble so a fixed cap is not itself a pattern.
   const jitter = dailyCapJitter(opts.senderKey, p);
-  const hourCap = Math.max(1, Math.round(dynamicHourCap(rep, p, plan) * jitter));
+  // The hourly cap must NEVER fall below the plan's conversation budget - the
+  // downward daily-wobble (0.8x) would otherwise drop a new ultra number's cap
+  // to ~32 and split its own 40-intro burst an hour out. Floor it at the budget
+  // so the full first-session batch always fits inside one hour.
+  const hourCap = Math.max(
+    planCapacity(plan).newContacts,
+    Math.round(dynamicHourCap(rep, p, plan) * jitter)
+  );
   const dayCap = Math.max(1, Math.round(p.day_cap * jitter));
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
@@ -1240,7 +1247,13 @@ export async function guardOutbound(opts: {
   const pendingDueSoon = pendingForSender.filter((r) => r.not_before <= dueWindow).length;
   const hourAgo = new Date(now - 3600_000).toISOString();
   const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingDueSoon;
-  if (lastHour >= hourCap) {
+  // The hourly cap governs COLD OUTREACH velocity (new first-contacts) - that is
+  // the ban vector. A REPLY to an already-engaged shop (one that messaged us) is
+  // the safest send there is, and must NOT be throttled just because the user's
+  // 40-intro burst already filled this hour - otherwise an engaged shop waits
+  // ~an hour for its counter-reply, killing negotiation momentum. Replies stay
+  // bounded by the burst window, the min-gap, stealth pacing and the daily cap.
+  if (isNewContact && lastHour >= hourCap) {
     // STABLE hold: anchor to when the rolling hour actually frees (the oldest
     // send in the window ages out at oldest+1h), NOT a fresh now+15-35min that
     // every drain re-stamps forward ("came back an hour later, everything
