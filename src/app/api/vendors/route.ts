@@ -39,8 +39,17 @@ export async function POST(req: Request) {
   }
 
   const body = (await req.json().catch(() => null)) as Body | null;
-  if (!body?.origin || typeof body.origin.lat !== "number") {
-    return NextResponse.json({ error: "origin required" }, { status: 400 });
+  // Validate BOTH coordinates and their ranges - a valid lat with a string/NaN
+  // lng silently produced NaN haversine distances (every vendor filtered out) and
+  // a corrupt searches row.
+  const lat = body?.origin?.lat;
+  const lng = body?.origin?.lng;
+  if (
+    !body?.origin ||
+    typeof lat !== "number" || !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+    typeof lng !== "number" || !Number.isFinite(lng) || lng < -180 || lng > 180
+  ) {
+    return NextResponse.json({ error: "valid origin (lat/lng) required" }, { status: 400 });
   }
   const radius = Math.min(50, Math.max(1, body.radiusKm || 8));
   const vClass: VehicleClass =

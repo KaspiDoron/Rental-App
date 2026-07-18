@@ -5,15 +5,19 @@ import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 
 export async function POST(req: Request) {
-  const { text, durationDays } = await req
+  const { text: rawText, durationDays } = await req
     .json()
     .catch(() => ({ text: "" }));
-  if (!text || typeof text !== "string" || text.trim().length < 3) {
+  if (!rawText || typeof rawText !== "string" || rawText.trim().length < 3) {
     return NextResponse.json(
       { error: "Describe the vehicle you want (at least a few words)." },
       { status: 400 }
     );
   }
+  // This route is intentionally open (search before signup), so CAP the input
+  // that reaches the LLM - an uncapped body is a cost/DoS vector (a 1 MB prompt
+  // per call). A real request is a sentence; 600 chars is generous headroom.
+  const text = rawText.slice(0, 600);
   // The session identity powers the stable per-user voice persona, so this
   // user's first message always sounds like the same distinct human.
   const session = await getSession();
