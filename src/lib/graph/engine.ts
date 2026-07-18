@@ -1079,13 +1079,15 @@ async function runTailGates(args: {
     // director hold still extends it deliberately.
     const jitter =
       args.kind === "auto-close" || args.kind === "auto-answer"
-        ? 15 + Math.floor(Math.random() * 30) // 15-45s
+        ? 10 + Math.floor(Math.random() * 15) // 10-25s
         : args.kind === "auto-deposit-probe" || args.kind === "auto-fulfillment-probe"
-        ? 25 + Math.floor(Math.random() * 55) // 25-80s
+        ? 15 + Math.floor(Math.random() * 25) // 15-40s
         : args.kind === "deal-close" || args.kind === "auto-pickup-location"
-        ? 8 + Math.floor(Math.random() * 22) // the traveller just acted - quick is natural
-        : 25 + Math.floor(Math.random() * 65); // bargains "think" 25-90s
-    const delayS = args.holdSeconds ?? jitter;
+        ? 8 + Math.floor(Math.random() * 17) // the traveller just acted - quick is natural
+        : 15 + Math.floor(Math.random() * 25); // bargains "think" 15-40s
+    // A director/strategic WAIT is a deliberate tactic, but never let it blow the
+    // ~2 min counter-reply ceiling for an engaged shop - clamp it to 90s.
+    const delayS = args.holdSeconds != null ? Math.min(args.holdSeconds, 90) : jitter;
     await io.queueOutbox({
       senderKey: input.ctx.sender,
       toNumber: input.event.toDigits,

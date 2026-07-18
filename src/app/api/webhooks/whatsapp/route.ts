@@ -283,6 +283,17 @@ export async function POST(req: Request) {
     } catch {
       /* best-effort */
     }
+    // FAST COUNTER-REPLY: our just-composed reply is parked ~10-40s out, so kick
+    // the self-chaining tick to wait it out in-process and deliver within the
+    // ~2 min ceiling (same mechanism as the Evolution webhook).
+    try {
+      const { webhookToken } = await import("@/lib/evolution");
+      const tok = await webhookToken();
+      const origin = new URL(req.url).origin;
+      if (tok) fetch(`${origin}/api/wa/tick?token=${encodeURIComponent(tok)}&hop=0`).catch(() => {});
+    } catch {
+      /* best-effort */
+    }
   } catch {
     // Never fail the webhook - Meta retries and will disable a flaky endpoint.
   }

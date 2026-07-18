@@ -26,6 +26,7 @@ import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runti
 import { jitteredHold } from "./wa/pacing";
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
+import { stripWaFormatting } from "./text";
 import { PACING_PRESETS, normalizePacingMode } from "./wa/pacing-mode";
 import {
   planCapacity,
@@ -67,6 +68,7 @@ export interface SecurityPolicies {
   burst_cooldown_minutes: number;   // enforced rest after a burst
   require_number_on_whatsapp: boolean; // validate the number exists on WA first
   daily_cap_jitter_pct: number;     // ± random daily-cap wobble (anti-pattern)
+  ignore_business_hours: boolean;   // 24/7 dial: lift the recipient business-hours CLOCK gate for COLD intros (active replies already skip it). PACING_MODE=fast turns this on.
 }
 
 const DEFAULTS: SecurityPolicies = {
@@ -115,6 +117,10 @@ const DEFAULTS: SecurityPolicies = {
   burst_cooldown_minutes: 30,
   require_number_on_whatsapp: true,
   daily_cap_jitter_pct: 20,
+  // Default OFF: cold intros still respect the recipient's business hours at
+  // night. PACING_MODE=fast (or a DB override) flips this to send the whole
+  // 40-intro burst NOW regardless of hour - the owner's explicit 24/7 dial.
+  ignore_business_hours: false,
 };
 
 declare global {
@@ -133,9 +139,13 @@ export async function getPolicies(): Promise<SecurityPolicies> {
     getConfig("PACING_MODE").catch(() => undefined),
   ]);
   // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
+  const mode = normalizePacingMode(modeRaw);
   const merged: SecurityPolicies = {
     ...DEFAULTS,
-    ...(PACING_PRESETS[normalizePacingMode(modeRaw)] as Partial<SecurityPolicies>),
+    ...(PACING_PRESETS[mode] as Partial<SecurityPolicies>),
+    // FAST is the owner's "send the whole burst NOW, any hour" dial - lift the
+    // recipient business-hours clamp for cold intros (replies already skip it).
+    ignore_business_hours: mode === "fast",
   };
   for (const r of rows) {
     const k = r.key as keyof SecurityPolicies;
@@ -780,19 +790,11 @@ export function humanizeVariant(text: string): string {
   // Punctuation/spacing jitter - invisible to a human, new hash every time.
   if (Math.random() < 0.35) out = out.replace(/\. /g, ".  ");
   if (Math.random() < 0.3 && !/[?!]$/.test(out)) out = out.replace(/\.$/, "");
-  // Rare, self-corrected typo (research: a ~2.5% typo rate reads as a real
-  // human and breaks hash-matching). We append a natural correction rather
-  // than send a misspelled word, so the shop still reads clean intent.
-  if (Math.random() < 0.025) {
-    const words = out.split(" ");
-    const i = words.findIndex((w) => w.length >= 4 && /^[a-z]+$/i.test(w));
-    if (i >= 0) {
-      const w = words[i];
-      const typo = w.slice(0, 1) + w.slice(2, 3) + w.slice(1, 2) + w.slice(3); // swap 2 chars
-      // "*word" is how real humans correct a typo in chat.
-      out = out.replace(w, `${typo} *${w}`);
-    }
-  }
+  // (Removed) the "typo *word" self-correction: it literally emitted a leading
+  // asterisk into the sent message ("good *good day", "qiuck *quick question") -
+  // it read as corrupted markdown, not a human touch. The contraction/spacing/
+  // punctuation jitter above plus personaHumanize already guarantee a unique
+  // payload hash per send, so nothing of value is lost.
   return out;
 }
 
@@ -861,8 +863,12 @@ export async function guardOutbound(opts: {
   // AUTO messages get the full anti-fingerprinting pass: strip corporate
   // sign-offs, casualise toward a fast-typing traveller's register + a sparing
   // warm emoji (personaHumanize), THEN the hash-uniqueness variance
-  // (humanizeVariant). A human's own typed message is never touched.
-  const text = opts.auto ? humanizeVariant(personaHumanize(opts.text)) : opts.text;
+  // (humanizeVariant). stripWaFormatting is the LAST step, so no markdown/`*`
+  // artifact from ANY upstream stage (composer or variance) can reach the shop.
+  // A human's own typed message is only formatting-scrubbed, never reworded.
+  const text = opts.auto
+    ? stripWaFormatting(humanizeVariant(personaHumanize(opts.text)))
+    : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must
   // never treat that as "fresh healthy number" - see the sync-retry hold
@@ -1111,7 +1117,7 @@ export async function guardOutbound(opts: {
   //         string first, then the phone prefix.
   //      c) If the timezone is genuinely unknown, DO NOT queue - a false
   //         "closed" on an open shop is the worse bug (issue #21).
-  if (opts.auto && opts.shopOpenNow !== true) {
+  if (opts.auto && opts.shopOpenNow !== true && !p.ignore_business_hours) {
     // ACTIVE-CONVERSATION OVERRIDE: if this shop wrote to THIS user within the
     // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
     // a reply "until the shop opens" would be absurd (and was: a deal-close on

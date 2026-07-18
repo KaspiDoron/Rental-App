@@ -445,6 +445,15 @@ export async function POST(req: Request) {
   } catch {
     /* best-effort */
   }
+
+  // FAST COUNTER-REPLY: the agent's reply we just composed is parked ~10-40s in
+  // the future, so the drain above (rows due NOW) cannot send it, and waiting for
+  // the next 60s cron would blow the ~2 min ceiling. Kick the self-chaining tick:
+  // it claims a single-runner slot and, because the reply is due within its 45s
+  // in-call budget, WAITS in-process until due and drains it - delivering the
+  // counter-message within ~its human-delay, app open or closed. The 30s chain
+  // claim collapses many concurrent inbound webhooks to one runner (no herd).
+  fetch(`${url.origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=0`).catch(() => {});
   // Quiet sessions whose users have not used the app for a while - the link
   // survives, but the device stops looking permanently active on WhatsApp.
   try {

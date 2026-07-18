@@ -942,16 +942,16 @@ export async function processVendorReply(opts: {
     // faster (a quick "thanks!" is natural), bargains "think" longer. A
     // strategist WAIT extends the hold - patience is a deliberate tactic.
     if (opts.humanDelay && ctx.sender) {
-      // Snappy but human: an engaged shop is waiting, so replies land within
-      // ~1-2 min (owner: "respond within a minute or two"), not up to 4. Still
-      // jittered - a sub-second reply is the robotic tell. A strategist WAIT
-      // still extends the hold deliberately.
+      // Snappy but human: an engaged shop is waiting, so replies land within a
+      // strict ~1-2 min ceiling (owner). Still jittered - a sub-second reply is
+      // the robotic tell. A strategist WAIT is deliberate but clamped to 90s so
+      // it never blows the ceiling for an engaged shop.
       const delayS =
         strat.action === "wait" && strat.waitSeconds
-          ? strat.waitSeconds
+          ? Math.min(strat.waitSeconds, 90)
           : followKind === "close" || followKind === "answer"
-          ? 15 + Math.floor(Math.random() * 30) // 15-45s
-          : 25 + Math.floor(Math.random() * 65); // 25-90s (a bargain "thinks")
+          ? 10 + Math.floor(Math.random() * 15) // 10-25s
+          : 15 + Math.floor(Math.random() * 25); // 15-40s (a bargain "thinks")
       // Dedup: one pending row per shop (parkOutboxOnce replaces any older
       // pending row) so an awaiting-reply shop never accumulates duplicates.
       const { parkOutboxOnce } = await import("./wa/park");
