@@ -69,9 +69,21 @@ export interface SecurityPolicies {
 const DEFAULTS: SecurityPolicies = {
   base_hour_cap: 4,
   max_hour_cap: 14,
-  day_cap: 40,
-  min_gap_seconds: 50,
-  gap_jitter_seconds: 70,
+  // Daily ceiling: a hard backstop against a runaway loop, NOT the per-session
+  // limit. Cold introductions are separately bounded by the plan's newContacts
+  // budget (40/window on ultra); the bulk of a busy day is REPLIES to shops that
+  // messaged first (safe). 220 comfortably covers a full session of intros +
+  // multi-round negotiation + a follow-up session, while still capping the
+  // absolute worst case. The reply-rate breaker + risk pause are the real
+  // behavioural guards.
+  day_cap: 220,
+  // Fast, human-jittered spacing: 12-28s between sends. A full ultra budget of
+  // 40 conversations clears in ~10-15 min; free (10) in ~3 min; pro (30) in
+  // ~8 min. Perfectly-regular intervals are a bot signature, so the jitter is
+  // as important as the floor. This is the single strongest ban lever - raise
+  // both numbers (DB override) if a number ever shows soft-restriction signs.
+  min_gap_seconds: 12,
+  gap_jitter_seconds: 16,
   warmup_days: 7,
   // Wide default window (8-21): real rental shops open early and close late.
   // Google "open now" (shopOpenNow) is the primary truth when the client has
@@ -89,8 +101,14 @@ const DEFAULTS: SecurityPolicies = {
   min_reply_samples: 8,
   risk_pause_threshold: 70,
   risk_pause_minutes: 240,
+  // Burst guard aligned to the first-session blast: a new user firing their full
+  // ultra budget of 40 in ~10 min must NOT trip a freeze after the 5th send (the
+  // old 5/600s -> 30-min cooldown was the single hardest blocker of the owner's
+  // "let them use their whole limit fast" goal). The min-gap already prevents
+  // robotic rapid-fire; this only catches a pathological flood well above any
+  // plan budget.
   burst_window_seconds: 600,
-  burst_max_in_window: 5,
+  burst_max_in_window: 45,
   burst_cooldown_minutes: 30,
   require_number_on_whatsapp: true,
   daily_cap_jitter_pct: 20,
@@ -692,14 +710,18 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
 export async function effectiveHourlyCap(senderKey: string, plan?: string): Promise<number> {
   const p = await getPolicies();
   const rep = await getReputation(senderKey);
-  const base = dynamicHourCap(rep, p, plan ?? (await planForSender(senderKey)));
+  const resolvedPlan = plan ?? (await planForSender(senderKey));
+  const base = dynamicHourCap(rep, p, resolvedPlan);
   const cap = Math.floor(base * 0.8);
   // Large caps (aged, high-trust numbers) lose ~1 to trust decay across a full
   // hour-group of sends, which would trip the drain's recomputed cap on the
-  // tail item. Give them 1 extra slot of headroom. Small caps (new/low-trust
-  // numbers - the warm-up floor) decay negligibly, so leave them unreduced so a
-  // fresh user's batch is not slowed.
-  return Math.max(1, cap >= 6 ? cap - 1 : cap);
+  // tail item. Give them 1 extra slot of headroom. Small caps decay negligibly.
+  const trimmed = Math.max(1, cap >= 6 ? cap - 1 : cap);
+  // NEVER stamp the stagger below the plan's conversation budget: a within-budget
+  // batch must fit inside ONE window, never split an hour out (the "18:24 then
+  // jumped to 19:20" bug). The budget is the intended first-session burst; the
+  // min-gap + reply-rate breaker are what actually keep the send rate safe.
+  return Math.max(trimmed, planCapacity(resolvedPlan).newContacts);
 }
 
 /**

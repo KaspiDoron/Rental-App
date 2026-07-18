@@ -169,9 +169,15 @@ export async function POST(req: Request) {
   // and silently re-stamped the overflow an hour out (the "it said 17:34 then
   // 18:34" bug). Using the sender's conservative effective cap keeps the stamps
   // honest and stable.
-  const { effectiveHourlyCap } = await import("@/lib/wa-guard");
+  const { effectiveHourlyCap, getPolicies } = await import("@/lib/wa-guard");
   const hourCap = await effectiveHourlyCap(session.email, session.plan).catch(() => 3);
-  const offsets = cappedStaggerOffsets(vendors.length, hourCap);
+  // Space the stagger by the REAL min-gap (not a hardcoded 90s) so the parked
+  // not_before stamps match the fast rate the drain will actually honor - the
+  // full budget clears in ~10-15 min instead of being stamped an hour apart.
+  const gapSec = await getPolicies()
+    .then((p) => Math.max(8, p.min_gap_seconds))
+    .catch(() => 12);
+  const offsets = cappedStaggerOffsets(vendors.length, hourCap, gapSec);
   const batchStart = Date.now();
   // The stagger index counts only shops that ACTUALLY enter the send stream -
   // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the

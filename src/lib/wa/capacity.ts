@@ -31,16 +31,21 @@ export interface PlanCapacity {
   hourCap: number;
 }
 
-// Tuned to the owner's targets, validated against the rate governors:
-//   free:  10 new shops / 6h   (~1.7/h sustained)
-//   pro:   15 new shops / 4h   (~3.8/h sustained)
-//   ultra: 40 new shops / 3h   (~13/h sustained)
-// hourCap is the per-plan velocity ceiling; the 50-120s min-gap independently
-// caps the true rate well below it, so these are safe headroom, not a blast.
+// The owner's targets - a user must be able to START their FULL plan budget of
+// conversations in the FIRST session, within minutes, on day 0:
+//   free:  10 new shops / 6h
+//   pro:   30 new shops / 4h
+//   ultra: 40 new shops / 3h
+// hourCap == newContacts: the hourly velocity ceiling never sits BELOW the
+// conversation budget, so a within-budget batch is never split across hour
+// windows (the "it said 18:24 then jumped to 19:20" bug). The real send RATE is
+// governed by the jittered min-gap (fast enough to clear the full budget in
+// ~10-15 min) plus the reply-rate circuit breaker + daily ceiling, which halt a
+// number that is actually behaving like a spammer.
 export const PLAN_CAPACITY: Record<CapacityPlan, PlanCapacity> = {
-  free: { newContacts: 10, windowHours: 6, hourCap: 6 },
-  pro: { newContacts: 15, windowHours: 4, hourCap: 10 },
-  ultra: { newContacts: 40, windowHours: 3, hourCap: 18 },
+  free: { newContacts: 10, windowHours: 6, hourCap: 10 },
+  pro: { newContacts: 30, windowHours: 4, hourCap: 30 },
+  ultra: { newContacts: 40, windowHours: 3, hourCap: 40 },
 };
 
 export function normalizeCapacityPlan(plan?: string | null): CapacityPlan {
@@ -55,39 +60,45 @@ export function planCapacity(plan?: string | null): PlanCapacity {
 }
 
 /**
- * Humane warm-up: a brand-new number still ramps, but from a usable FLOOR
- * (45% of capacity on day 0) up to 100% over `warmupDays`, instead of the old
- * ~14% day-0 multiplier that made a fresh number nearly mute. The per-send
- * rate governors keep a new number safe even at the 45% floor.
+ * Gentle warm-up: a brand-new number ramps from a HIGH floor (85% on day 0) to
+ * 100% over `warmupDays`. It only ever nudges the RATE headroom above the plan
+ * budget - it can never crush the number of conversations a user may start
+ * (that is the owner's explicit requirement: full budget usable day 0). The real
+ * safety net for a fresh number is the reply-rate circuit breaker + risk
+ * auto-pause + daily ceiling, which halt a number that is actually spamming.
  */
 export function warmupFactor(ageDays: number, warmupDays: number): number {
   if (!(ageDays < warmupDays)) return 1;
   const linear = (ageDays + 1) / Math.max(1, warmupDays);
-  return Math.max(0.45, Math.min(1, linear));
+  return Math.max(0.85, Math.min(1, linear));
 }
 
-/** Effective new-shop introductions for this window (plan x warm-up). */
+/**
+ * Effective new-shop introductions for this window. The FULL plan budget is
+ * available immediately, on day 0 - warm-up never reduces how many distinct
+ * conversations a user may start (only the send rate ramps, and even that stays
+ * at/above the budget). A brand-new ultra user gets all 40 conversations at once.
+ */
 export function effectiveNewContactCap(
   plan: string | null | undefined,
-  ageDays: number,
-  warmupDays: number
+  _ageDays: number,
+  _warmupDays: number
 ): number {
-  const cap = planCapacity(plan).newContacts;
-  return Math.max(1, Math.round(cap * warmupFactor(ageDays, warmupDays)));
+  return planCapacity(plan).newContacts;
 }
 
 /** Effective sends/hour ceiling: the higher of the trust-scaled base and the
- *  plan's headroom, then warm-up ramped. Keeps replies flowing on busy plans
- *  while a low-trust number stays near the conservative base. */
+ *  plan headroom, warm-up ramped, but NEVER below the plan's conversation
+ *  budget - so a within-budget batch is never split across hour windows. */
 export function effectiveHourCap(
   plan: string | null | undefined,
   trustBaseHourCap: number,
   ageDays: number,
   warmupDays: number
 ): number {
-  const planHour = planCapacity(plan).hourCap;
-  const raw = Math.max(trustBaseHourCap, planHour) * warmupFactor(ageDays, warmupDays);
-  return Math.max(1, Math.round(raw));
+  const cap = planCapacity(plan);
+  const raw = Math.max(trustBaseHourCap, cap.hourCap) * warmupFactor(ageDays, warmupDays);
+  return Math.max(cap.newContacts, Math.round(raw));
 }
 
 /**
