@@ -123,6 +123,22 @@ describe("cappedStaggerOffsets - honest cap-aware schedule (no optimistic-then-j
     expect(offs[2]).toBeGreaterThan(offs[1]);
   });
 
+  it("a full 40-intro ultra batch at a 12s min-gap clears well inside 15 min, strictly in order", () => {
+    const offs = cappedStaggerOffsets(40, 40, 12);
+    // Every intro fits in the first hour group (hourCap 40 == batch size).
+    expect(offs.every((o) => o < 3600_000)).toBe(true);
+    // Strictly increasing (the old per-item formula could stamp #39 before #38).
+    for (let i = 1; i < offs.length; i++) expect(offs[i]).toBeGreaterThan(offs[i - 1]);
+    // The LAST intro is due comfortably under 15 min even at max jitter.
+    expect(offs[39]).toBeLessThan(15 * 60_000);
+    // ...and steps stay in the 12-24s band (min-gap + <= min-gap jitter).
+    for (let i = 1; i < offs.length; i++) {
+      const step = offs[i] - offs[i - 1];
+      expect(step).toBeGreaterThanOrEqual(12_000);
+      expect(step).toBeLessThanOrEqual(24_000);
+    }
+  });
+
   it("hourCap of 1 (a heavily warmed-down number) spaces ~one per hour, past each boundary", () => {
     const offs = cappedStaggerOffsets(3, 1);
     expect(offs[0]).toBe(0);

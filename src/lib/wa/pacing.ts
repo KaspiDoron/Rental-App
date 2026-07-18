@@ -56,16 +56,25 @@ export function cappedStaggerOffsets(
 ): number[] {
   const cap = Math.max(1, Math.floor(hourCap));
   const out: number[] = [];
+  let acc = 0;
   for (let i = 0; i < count; i++) {
     const hour = Math.floor(i / cap);
     const within = i % cap;
-    // Push each new hour-group a min-gap PAST the 3600s boundary so the previous
-    // group's oldest send has aged out of the drain's inclusive rolling-hour
-    // window (>= now-3600000) before this item is due - otherwise the boundary
-    // item still trips the cap and gets re-stamped (the jump returns).
-    const hourBase = hour === 0 ? 0 : hour * 3600_000 + Math.round((minGapSec + 30) * 1000);
-    const inWindow = within === 0 ? 0 : within * (minGapSec + rand() * 30) * 1000;
-    out.push(Math.round(hourBase + inWindow));
+    if (within === 0) {
+      // Start of an hour-group. Push each new group a min-gap PAST the 3600s
+      // boundary so the previous group's oldest send has aged out of the drain's
+      // inclusive rolling-hour window (>= now-3600000) before this item is due -
+      // otherwise the boundary item still trips the cap and gets re-stamped.
+      acc = hour === 0 ? 0 : hour * 3600_000 + Math.round((minGapSec + 30) * 1000);
+    } else {
+      // CUMULATIVE spacing (was a per-item `within * step`, which for a large
+      // group with a small min-gap gave a wildly wide, sometimes NON-monotonic
+      // spread - the 40th intro landing anywhere from ~8 to ~27 min out). Jitter
+      // scales to the gap (never more than the gap itself), so a full 40-intro
+      // ultra batch at a 12s min-gap clears in ~12 min, strictly in order.
+      acc += (minGapSec + rand() * Math.min(30, minGapSec)) * 1000;
+    }
+    out.push(Math.round(acc));
   }
   return out;
 }
