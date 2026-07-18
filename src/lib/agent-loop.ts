@@ -941,25 +941,26 @@ export async function processVendorReply(opts: {
           : followKind === "close" || followKind === "answer"
           ? 20 + Math.floor(Math.random() * 70) // 20-90s
           : 45 + Math.floor(Math.random() * 195); // 45-240s
-      await sbInsert("wa_outbox", [
-        {
-          sender_key: ctx.sender,
-          to_number: from,
-          body: followUp,
-          not_before: new Date(Date.now() + delayS * 1000).toISOString(),
-          meta: {
-            ...ctx,
-            kind: `auto-${followKind}`,
-            round: nextRound,
-            auto: true,
-            ...(englishGloss ? { englishGloss } : {}),
-            reason:
-              strat.action === "wait"
-                ? "strategist hold - choosing the best reply order"
-                : "human reply pacing (thinking time)",
-          },
+      // Dedup: one pending row per shop (parkOutboxOnce replaces any older
+      // pending row) so an awaiting-reply shop never accumulates duplicates.
+      const { parkOutboxOnce } = await import("./wa/park");
+      await parkOutboxOnce({
+        senderKey: ctx.sender,
+        toNumber: from,
+        body: followUp,
+        notBeforeMs: Date.now() + delayS * 1000,
+        meta: {
+          ...ctx,
+          kind: `auto-${followKind}`,
+          round: nextRound,
+          auto: true,
+          ...(englishGloss ? { englishGloss } : {}),
+          reason:
+            strat.action === "wait"
+              ? "strategist hold - choosing the best reply order"
+              : "human reply pacing (thinking time)",
         },
-      ]);
+      });
       traces.push({
         ...traceBase,
         stage: "deliver",

@@ -683,6 +683,20 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
 }
 
 /**
+ * The CONSERVATIVE effective hourly send cap for this sender right now (trust +
+ * warm-up adjusted), used by the batch stagger so it stamps not_before values
+ * the drain will actually honor - no optimistic time that jumps an hour later.
+ * We take 80% of the base (the drain applies a +/-20% daily jitter) and floor at
+ * 1, so a staggered batch stays UNDER the drain's real cap in every window.
+ */
+export async function effectiveHourlyCap(senderKey: string, plan?: string): Promise<number> {
+  const p = await getPolicies();
+  const rep = await getReputation(senderKey);
+  const base = dynamicHourCap(rep, p, plan ?? (await planForSender(senderKey)));
+  return Math.max(1, Math.floor(base * 0.8));
+}
+
+/**
  * The instant the next introduction slot frees, clamped into the recipient's
  * business hours when the timezone is known. Exported for over-budget enqueues
  * - a rolling-window anchor at most windowHours away, never "tomorrow".
@@ -1031,8 +1045,15 @@ export async function guardOutbound(opts: {
       const engaged =
         inboundSince.length > 0 || state[0]?.read || Boolean(state[0]?.last_reply_at);
       if (!engaged) {
+        // TERMINAL drop, not a re-park. A 2nd automated message to a shop that
+        // has not replied/read is the #1 spam signal, so we do not send it - and
+        // we must not leave it perpetually re-parking in the queue either (that
+        // is what kept a duplicate follow-up visible forever and burned drain
+        // cycles). If the shop later engages, a fresh turn composes a new
+        // message that passes this halt.
         return {
           allow: false,
+          terminal: true,
           reason: "engagement-halt: no reply or read receipt yet",
           text,
         };
@@ -1174,8 +1195,15 @@ export async function guardOutbound(opts: {
     "wa_outbox",
     `select=id,not_before&sender_key=eq.${encodeURIComponent(opts.senderKey)}&limit=300`
   ).catch(() => []);
-  const hourAhead = new Date(now + 3600_000).toISOString();
-  const pendingDueSoon = pendingForSender.filter((r) => r.not_before <= hourAhead).length;
+  // Count ONLY genuinely-imminent parked rows (due within one min-gap) toward
+  // the hourly cap - that is the concurrency case this guard is for (N replies
+  // all due NOW each reading the same pre-send count). Counting the whole next
+  // HOUR made a deliberately-staggered batch trip its OWN cap: every future
+  // sibling was counted, so `sent + pendingDueSoon` hit the cap on the first
+  // drain and the drain re-stamped the rest an hour out - the "it said 17:34
+  // then jumped to 18:34" bug. A future-scheduled row is not concurrent.
+  const dueWindow = new Date(now + Math.max(1, p.min_gap_seconds) * 1000).toISOString();
+  const pendingDueSoon = pendingForSender.filter((r) => r.not_before <= dueWindow).length;
   const hourAgo = new Date(now - 3600_000).toISOString();
   const lastHour = sentRows.filter((r) => r.received_at >= hourAgo).length + pendingDueSoon;
   if (lastHour >= hourCap) {

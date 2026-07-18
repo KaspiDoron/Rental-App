@@ -142,7 +142,7 @@ export async function POST(req: Request) {
   const { guardOutbound, afterSend, claimForSend, releaseSendClaim } = await import(
     "@/lib/wa-guard"
   );
-  const { staggerOffsets } = await import("@/lib/wa/pacing");
+  const { cappedStaggerOffsets } = await import("@/lib/wa/pacing");
   const { randomBytes } = await import("crypto");
   const results: {
     id: string;
@@ -162,7 +162,16 @@ export async function POST(req: Request) {
   // and the drain re-runs the full guard per row at its own time, so hours/
   // caps/tombstones still apply at the actual send moment.
   const batchId = randomBytes(6).toString("hex");
-  const offsets = staggerOffsets(vendors.length);
+  // CAP-AWARE stagger: space the first hourly-cap shops ~90s apart (they send
+  // promptly), then jump the overflow to the next hour window - so each parked
+  // row's not_before is the REAL time the drain will honor. The old flat 45-75s
+  // stagger stamped every shop "any minute", then the drain hit the hourly cap
+  // and silently re-stamped the overflow an hour out (the "it said 17:34 then
+  // 18:34" bug). Using the sender's conservative effective cap keeps the stamps
+  // honest and stable.
+  const { effectiveHourlyCap } = await import("@/lib/wa-guard");
+  const hourCap = await effectiveHourlyCap(session.email, session.plan).catch(() => 3);
+  const offsets = cappedStaggerOffsets(vendors.length, hourCap);
   const batchStart = Date.now();
   // The stagger index counts only shops that ACTUALLY enter the send stream -
   // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the

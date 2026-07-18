@@ -1245,15 +1245,10 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       ).catch(() => {});
     },
     async queueOutbox({ senderKey, toNumber, body, notBeforeMs, meta }) {
-      await sbInsert("wa_outbox", [
-        {
-          sender_key: senderKey,
-          to_number: toNumber,
-          body,
-          not_before: new Date(notBeforeMs).toISOString(),
-          meta,
-        },
-      ]);
+      // Dedup: one pending row per shop. A re-run wakeup / repeated tick / new
+      // compose REPLACES any older pending row instead of piling up duplicates.
+      const { parkOutboxOnce } = await import("../wa/park");
+      await parkOutboxOnce({ senderKey, toNumber, body, notBeforeMs, meta: meta ?? undefined });
     },
     async guardAndSend({ senderKey, toNumber, text, meta, shopOpenNow }) {
       const { guardOutbound, afterSend } = await import("../wa-guard");

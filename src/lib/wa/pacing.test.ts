@@ -45,6 +45,7 @@ vi.mock("../runtime-config", () => ({
 import {
   jitteredHold,
   staggerOffsets,
+  cappedStaggerOffsets,
   gapBucket,
   claimSendSlots,
   messageSlotKey,
@@ -87,6 +88,46 @@ describe("staggerOffsets - the batch trickle", () => {
   it("ten shops never share a timestamp (the '~15:27 x10' regression)", () => {
     const offs = staggerOffsets(10);
     expect(new Set(offs).size).toBe(10);
+  });
+});
+
+describe("cappedStaggerOffsets - honest cap-aware schedule (no optimistic-then-jump)", () => {
+  it("first item is immediate", () => {
+    expect(cappedStaggerOffsets(6, 3)[0]).toBe(0);
+  });
+
+  it("puts at most hourCap items inside each 1-hour window", () => {
+    const cap = 3;
+    const offs = cappedStaggerOffsets(8, cap);
+    for (let hour = 0; hour < 3; hour++) {
+      const lo = hour * 3600_000;
+      const hi = (hour + 1) * 3600_000;
+      const inWindow = offs.filter((o) => o >= lo && o < hi).length;
+      expect(inWindow).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it("stamps the overflow at the NEXT hour boundary, not 'any minute'", () => {
+    const offs = cappedStaggerOffsets(6, 3); // items 3,4,5 spill to hour 2
+    // items 0-2 in the first hour (< 1h), items 3-5 at/after +1h
+    expect(offs[2]).toBeLessThan(3600_000);
+    expect(offs[3]).toBeGreaterThanOrEqual(3600_000);
+    expect(offs[5]).toBeGreaterThanOrEqual(3600_000);
+    expect(offs[5]).toBeLessThan(2 * 3600_000);
+  });
+
+  it("within an hour the sends are spaced (never a shared timestamp)", () => {
+    const offs = cappedStaggerOffsets(3, 3);
+    expect(new Set(offs).size).toBe(3);
+    expect(offs[1]).toBeGreaterThan(offs[0]);
+    expect(offs[2]).toBeGreaterThan(offs[1]);
+  });
+
+  it("hourCap of 1 (a heavily warmed-down number) spaces one per hour", () => {
+    const offs = cappedStaggerOffsets(3, 1);
+    expect(offs[0]).toBe(0);
+    expect(offs[1]).toBe(3600_000);
+    expect(offs[2]).toBe(2 * 3600_000);
   });
 });
 

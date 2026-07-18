@@ -234,6 +234,15 @@ export default function Home() {
   const [queueItems, setQueueItems] = useState<
     { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
   >([]);
+  // The plan's rolling introductions budget (Free ~10/6h, Pro ~15/4h, Ultra
+  // ~40/3h), shown as a standing meter in the queued panel so the pacing limit
+  // is always visible - not just a one-time toast.
+  const [introBudget, setIntroBudget] = useState<{
+    remaining: number;
+    cap: number;
+    windowHours: number;
+    nextFreeAt: string;
+  } | null>(null);
   // CLIENT TOMBSTONES for queue removals: keys ("id:<n>" / "v:<vendorId>")
   // mapped to the time they were tombstoned. Any poll that raced the server
   // delete still holds pre-delete rows - without this filter it would
@@ -625,6 +634,7 @@ export default function Home() {
         }
       }
       setQueueItems((d.queue ?? []).filter((i: { id: number; vendorId: string | null }) => !tombstoned(i)));
+      setIntroBudget(d.introBudget ?? null);
       // Shops the user explicitly paused (removed queued messages) - the card
       // says so instead of pretending nothing happened.
       const cancelledDigits = new Set<string>(
@@ -1716,6 +1726,32 @@ export default function Home() {
                 {" - "}
                 {t("your agent messages shops one at a time, the way a person would")}
               </p>
+            )}
+            {introBudget && (
+              <div className="mb-1.5 flex items-center gap-2 rounded-xl bg-card2 px-2.5 py-1.5">
+                <span className="text-[11px]">🎯</span>
+                <div className="min-w-0 flex-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-line">
+                    <div
+                      className="h-full rounded-full bg-brandblue transition-all"
+                      style={{
+                        width: `${Math.round(
+                          (Math.max(0, introBudget.cap - introBudget.remaining) /
+                            Math.max(1, introBudget.cap)) *
+                            100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <span className="whitespace-nowrap text-[10px] font-bold text-soft">
+                  {introBudget.remaining} {t("of")} {introBudget.cap}{" "}
+                  {t("new shops left")} · {introBudget.windowHours}h
+                  {introBudget.remaining <= 0 && introBudget.nextFreeAt
+                    ? ` · ${t("next at")} ~${formatClock(introBudget.nextFreeAt)}`
+                    : ""}
+                </span>
+              </div>
             )}
             <div className="space-y-1.5">
               {queueItems.map((q) => (

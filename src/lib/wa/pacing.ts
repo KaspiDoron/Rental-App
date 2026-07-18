@@ -39,6 +39,32 @@ export function staggerOffsets(count: number, rand: () => number = Math.random):
   return out;
 }
 
+/**
+ * Cap-AWARE stagger offsets. The first `hourCap` items are spaced ~minGap apart
+ * (they fit inside the sender's hourly send budget and go out promptly); every
+ * subsequent group of `hourCap` items jumps to the NEXT 1-hour window. So the
+ * not_before stamps are the REAL times the anti-ban drain will honor - the
+ * queued panel shows the honest schedule from the start, instead of an
+ * optimistic "any minute" that silently jumps an hour when the drain hits the
+ * cap and re-stamps the overflow. Item 0 is always immediate.
+ */
+export function cappedStaggerOffsets(
+  count: number,
+  hourCap: number,
+  minGapSec = 90,
+  rand: () => number = Math.random
+): number[] {
+  const cap = Math.max(1, Math.floor(hourCap));
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const hour = Math.floor(i / cap);
+    const within = i % cap;
+    const inWindow = within === 0 ? 0 : within * (minGapSec + rand() * 30) * 1000;
+    out.push(Math.round(hour * 3600_000 + inWindow));
+  }
+  return out;
+}
+
 /** The min-gap bucket a timestamp falls into (bucket size = the HARD floor). */
 export function gapBucket(nowMs: number, gapSeconds: number): number {
   const size = Math.max(1, gapSeconds) * 1000;

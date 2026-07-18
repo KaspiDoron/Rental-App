@@ -327,6 +327,20 @@ export async function GET(req: Request) {
     waHealth = await senderSafety(email);
   } catch {}
 
+  // The plan's rolling introductions budget, so the queued panel can show a
+  // STANDING "X of N new shops this window - next opens ~HH:MM" indicator
+  // instead of the limit only flashing once as a mass-bargain toast.
+  let introBudget: {
+    remaining: number;
+    cap: number;
+    windowHours: number;
+    nextFreeAt: string;
+  } | null = null;
+  try {
+    const { newContactBudget } = await import("@/lib/wa-guard");
+    introBudget = await newContactBudget(email, session.plan);
+  } catch {}
+
   // Numbers the user explicitly cancelled (removed queued messages) - the UI
   // shows those shops as "paused by you" instead of pretending nothing
   // happened, and the resume CTA is the explicit action that clears it.
@@ -340,6 +354,7 @@ export async function GET(req: Request) {
     items: items.slice(0, limit),
     queue,
     waHealth,
+    introBudget,
     whyByVendor,
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),
