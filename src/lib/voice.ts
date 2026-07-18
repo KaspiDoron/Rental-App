@@ -23,7 +23,7 @@ const GREETINGS = [
   "Hi", "Hello", "Hey", "Hey there", "Hi there", "Good day", "Heya",
 ];
 const SIGNOFFS = [
-  "Thanks!", "Thank you!", "Cheers!", "Thanks a lot!", "Many thanks!", "Thx!",
+  "Thanks!", "Thank you!", "Thanks a lot!", "Thx!", "Ta!", "Cool thanks!",
 ];
 const ENERGY: VoiceProfile["energy"][] = ["calm", "warm", "upbeat"];
 const EMOJI: VoiceProfile["emoji"][] = ["never", "rare", "sometimes"];

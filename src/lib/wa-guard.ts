@@ -24,6 +24,7 @@
 import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
+import { personaHumanize } from "./wa/persona";
 import {
   planCapacity,
   effectiveNewContactCap,
@@ -746,7 +747,7 @@ export async function introHoldIso(
 
 const GREET_SWAPS: [RegExp, string[]][] = [
   [/^hi!?\s/i, ["Hi! ", "Hey! ", "Hello! ", "Hi there! ", "Hey there! "]],
-  [/\bthanks!?$/i, ["Thanks!", "Thank you!", "Cheers!", "Thanks a lot!"]],
+  [/\bthanks!?$/i, ["Thanks!", "Thank you!", "Thanks a lot!", "Thanks 🙏", "Ta!"]],
 ];
 
 /**
@@ -848,7 +849,11 @@ export async function guardOutbound(opts: {
   const region = opts.region ?? (typeof opts.meta?.region === "string" ? (opts.meta.region as string) : undefined);
   const plan = opts.plan ?? (typeof opts.meta?.plan === "string" ? (opts.meta.plan as string) : undefined);
   const p = await getPolicies();
-  const text = opts.auto ? humanizeVariant(opts.text) : opts.text;
+  // AUTO messages get the full anti-fingerprinting pass: strip corporate
+  // sign-offs, casualise toward a fast-typing traveller's register + a sparing
+  // warm emoji (personaHumanize), THEN the hash-uniqueness variance
+  // (humanizeVariant). A human's own typed message is never touched.
+  const text = opts.auto ? humanizeVariant(personaHumanize(opts.text)) : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must
   // never treat that as "fresh healthy number" - see the sync-retry hold

@@ -340,7 +340,7 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
     "How much per day, best price?",
     "What's the best you could do per day?",
   ]);
-  const thanks = pick(["Thanks!", "Thank you!", "Cheers!", "Thanks a lot!"]);
+  const thanks = pick(["Thanks!", "Thank you!", "Thanks 🙏", "Thanks a lot!", "Ta!"]);
 
   return [opener + dropOff, extras, delivery, `${ask} ${thanks}`].filter(Boolean).join(" ");
 }

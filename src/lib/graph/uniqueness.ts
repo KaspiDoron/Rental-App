@@ -35,7 +35,7 @@ const OPENER_SWAPS: [RegExp, string[]][] = [
   [/^okay\b/i, ["Ok", "Alright", "Sounds good", "Got it"]],
   [/^ok\b/i, ["Okay", "Alright", "Cool", "Got it"]],
   [/^great\b/i, ["Nice", "Perfect", "Awesome", "Sounds good"]],
-  [/^thanks\b/i, ["Thank you", "Appreciate it", "Cheers"]],
+  [/^thanks\b/i, ["Thank you", "Appreciate it", "Thanks a lot", "Ta"]],
 ];
 
 /** Deterministic mutation used when a draft collides globally. */
