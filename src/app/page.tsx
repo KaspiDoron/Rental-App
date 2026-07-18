@@ -161,8 +161,11 @@ export default function Home() {
   const [willOpen, setWillOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
-  // Poll cadence from the server (SCALE_MODE stretches these under load).
-  const [pollCfg, setPollCfg] = useState({ activityMs: 12000, repliesMs: 15000, tagsMs: 120000 });
+  // Poll cadence from the server (SCALE_MODE stretches these under load). Fast
+  // by default so a shop's WhatsApp reply surfaces in the app within seconds
+  // (owner: "it should be instant") - the focus/visibility wake forces an
+  // immediate refresh on top of this.
+  const [pollCfg, setPollCfg] = useState({ activityMs: 6000, repliesMs: 6000, tagsMs: 120000 });
   useEffect(() => {
     fetch("/api/config/public")
       .then((r) => r.json())
@@ -829,11 +832,18 @@ export default function Home() {
   // Poll while anything is genuinely in flight. A COMPLETE presented offer is
   // settled - polling it forever burns battery and quota for nothing (the
   // activity poll + focus-resync still catch a late surprise reply).
-  const waiting = vendors.some(
-    (v) =>
-      ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "") ||
-      (v.stage === "offer-received" && v.offer && v.offer.presentable !== true)
-  );
+  const waiting =
+    vendors.some(
+      (v) =>
+        ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "") ||
+        (v.stage === "offer-received" && v.offer && v.offer.presentable !== true)
+    ) ||
+    // Keep the reply loop (which also drives inbound recovery + the outbox drain)
+    // alive while ANY message is still queued. Otherwise, once every card settled
+    // to a presentable offer the poll stopped - and the agent's parked
+    // counter-reply never drained and late shop replies never surfaced (the
+    // "agents never message back / app never updates" reports).
+    queueItems.length > 0;
   useEffect(() => {
     if (!session || !waiting || !rfq) return;
     // Stale-run guard: an unmounted/reconfigured effect must never apply its

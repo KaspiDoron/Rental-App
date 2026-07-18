@@ -1065,14 +1065,17 @@ async function runTailGates(args: {
   if (input.humanDelay && input.ctx.sender) {
     // Human thinking time (instant replies are THE robotic tell). The director
     // hold extends it - patience is a deliberate tactic.
+    // Snappy but human: an engaged shop is waiting, so replies land within
+    // ~1-2 min (owner: "respond within a minute or two"), not up to 4. The
+    // director hold still extends it deliberately.
     const jitter =
       args.kind === "auto-close" || args.kind === "auto-answer"
-        ? 20 + Math.floor(Math.random() * 70) // 20-90s
+        ? 15 + Math.floor(Math.random() * 30) // 15-45s
         : args.kind === "auto-deposit-probe" || args.kind === "auto-fulfillment-probe"
-        ? 30 + Math.floor(Math.random() * 120) // 30-150s
+        ? 25 + Math.floor(Math.random() * 55) // 25-80s
         : args.kind === "deal-close" || args.kind === "auto-pickup-location"
-        ? 8 + Math.floor(Math.random() * 30) // the traveller just acted - quick is natural
-        : 45 + Math.floor(Math.random() * 195); // bargains "think" 45-240s
+        ? 8 + Math.floor(Math.random() * 22) // the traveller just acted - quick is natural
+        : 25 + Math.floor(Math.random() * 65); // bargains "think" 25-90s
     const delayS = args.holdSeconds ?? jitter;
     await io.queueOutbox({
       senderKey: input.ctx.sender,

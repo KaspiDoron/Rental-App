@@ -14,7 +14,7 @@ import { fetchMessagesRaw, fetchMediaBase64, sendFromUser, resolveChatJid } from
 import { processVendorReply } from "./agent-loop";
 import { digitsOnly } from "./phone";
 
-const SYNC_MIN_GAP_MS = 25_000; // at most one real sync per user per 25s
+const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
 const THREAD_WINDOW_H = 36; // only threads we messaged in the last 36h
 const MAX_THREADS = 5;
 // Hard latency budget: the sync runs INSIDE the user's poll request, so it
@@ -82,11 +82,12 @@ export async function syncInboundReplies(email: string): Promise<number> {
           (m.remoteJid === jid || digitsOnly(m.remoteJid) === digits) &&
           // ignore ancient history - only the active window matters
           m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
-          // RACE GUARD: give the webhook a 20s head start on brand-new
+          // RACE GUARD: give the webhook a 10s head start on brand-new
           // messages. If both paths ingest the same message simultaneously,
           // the dedupe makes NEITHER process it - so the sync only touches
-          // messages the webhook has clearly missed.
-          m.ts * 1000 < Date.now() - 20_000
+          // messages the webhook has clearly missed. 10s keeps recovery snappy
+          // while still letting a working webhook win the race.
+          m.ts * 1000 < Date.now() - 10_000
       );
       if (inbound.length === 0) continue;
 

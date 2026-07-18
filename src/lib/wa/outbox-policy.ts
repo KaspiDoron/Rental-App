@@ -23,3 +23,18 @@ export function needsRepark(verdict: OutboxVerdict): boolean {
   if (verdict.terminal) return false; // deliberately dropped (must NOT resurrect)
   return true; // non-terminal reject that did not re-queue -> re-park or lose it
 }
+
+/**
+ * Drain send priority for a due row (LOWER = sent first). An engaged shop that
+ * is WAITING on our reply must never sit behind a cold-introductions batch that
+ * happens to be due at the same instant - the drain budget per invocation is
+ * small, so if the rfq rows go first the reply keeps getting deferred ("our
+ * agents never message back"). A user-typed message beats everything; the
+ * agent's reply/bargain/answer beats a fresh rfq. Same-priority rows keep
+ * oldest-due-first order.
+ */
+export function outboxSendPriority(kind: string | null | undefined): number {
+  if (kind === "human-manual" || kind === "custom") return 0; // the user's own words
+  if (kind === "rfq") return 2; // cold outreach - lowest urgency
+  return 1; // agent reply / answer / bargain to an engaged shop
+}

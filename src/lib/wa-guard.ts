@@ -1319,12 +1319,20 @@ export async function drainOutbox(
     text: string
   ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean }>
 ): Promise<number> {
-  const candidates = await sbSelect<OutboxRow>(
+  const dueRows = await sbSelect<OutboxRow>(
     "wa_outbox",
     `select=id,sender_key,to_number,body,not_before,meta&not_before=lte.${encodeURIComponent(
       new Date().toISOString()
-    )}&order=not_before.asc&limit=5`
+    )}&order=not_before.asc&limit=14`
   );
+  // PRIORITY: an engaged shop waiting on our reply must never sit behind a cold
+  // introductions batch due at the same moment (the "our agents never message
+  // back" report). The rule lives in outbox-policy so it is unit-pinned.
+  const { outboxSendPriority } = await import("./wa/outbox-policy");
+  const priOf = (row: OutboxRow) => outboxSendPriority((row.meta as { kind?: string } | null)?.kind);
+  const candidates = [...dueRows]
+    .sort((a, b) => priOf(a) - priOf(b) || a.not_before.localeCompare(b.not_before))
+    .slice(0, 8);
   const { sbDeleteReturning } = await import("./runtime-config");
   const { claimSendSlots, releaseMessageClaim, gcSendClaims } = await import("./wa/pacing");
   const p = await getPolicies();

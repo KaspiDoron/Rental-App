@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { needsRepark } from "./outbox-policy";
+import { needsRepark, outboxSendPriority } from "./outbox-policy";
 
 describe("needsRepark (drain must never silently lose a claimed row)", () => {
   it("does NOT re-park when the message is being sent", () => {
@@ -23,5 +23,36 @@ describe("needsRepark (drain must never silently lose a claimed row)", () => {
 
   it("prefers terminal over an absent queue (a terminal drop is never resurrected)", () => {
     expect(needsRepark({ allow: false, terminal: true, queuedUntil: undefined })).toBe(false);
+  });
+});
+
+describe("outboxSendPriority (engaged shops beat the cold-intro batch)", () => {
+  it("a user-typed message is sent before anything", () => {
+    expect(outboxSendPriority("human-manual")).toBe(0);
+    expect(outboxSendPriority("custom")).toBe(0);
+  });
+
+  it("an agent reply/bargain/answer beats a fresh rfq", () => {
+    expect(outboxSendPriority("auto-answer")).toBe(1);
+    expect(outboxSendPriority("auto-bargain")).toBe(1);
+    expect(outboxSendPriority("rfq")).toBe(2);
+    expect(outboxSendPriority("auto-answer")).toBeLessThan(outboxSendPriority("rfq"));
+  });
+
+  it("sorting a mixed due batch puts the reply ahead of two due intros", () => {
+    const rows = [
+      { kind: "rfq", at: "2026-01-01T00:00:00Z" },
+      { kind: "rfq", at: "2026-01-01T00:00:01Z" },
+      { kind: "auto-bargain", at: "2026-01-01T00:00:05Z" }, // due LATER but urgent
+    ];
+    const order = [...rows]
+      .sort((a, b) => outboxSendPriority(a.kind) - outboxSendPriority(b.kind) || a.at.localeCompare(b.at))
+      .map((r) => r.kind);
+    expect(order[0]).toBe("auto-bargain");
+  });
+
+  it("unknown/undefined kinds default to reply priority (never treated as cold outreach)", () => {
+    expect(outboxSendPriority(undefined)).toBe(1);
+    expect(outboxSendPriority(null)).toBe(1);
   });
 });
