@@ -34,6 +34,33 @@ services:
     region: oregon
     ipAllowList: [] # internal connections only
 
+  # UNATTENDED QUEUE DRAIN. On Vercel Hobby nothing drains the outbox when no
+  # browser tab is open - queued introductions and the agents' timed replies
+  # would just sit until someone opened the app. This tiny cron hits the Vercel
+  # app's /api/wa/ping every minute, which drains the outbox + graph wakeups AND
+  # kicks the self-chaining tick (one ping keeps the drain progressing for the
+  # following ~30 min). So messages flow on time with the app fully closed.
+  #
+  # OWNER: set two env vars on this cron in the Render dashboard after the first
+  # sync (both are marked sync:false so they are never committed):
+  #   WD_APP_URL    = https://<your-app>.vercel.app   (no trailing slash)
+  #   WD_PING_TOKEN = the webhook token shown in the app at Owner -> Keys
+  # Every-minute cadence keeps agent replies landing within ~1-2 min; relax the
+  # schedule to "*/2 * * * *" or "*/5 * * * *" if you want to trim cron cost.
+  - type: cron
+    name: wd-queue-drain
+    runtime: image
+    image:
+      url: docker.io/curlimages/curl:8.11.1
+    schedule: "*/1 * * * *"
+    region: oregon
+    dockerCommand: sh -c 'curl -fsS --max-time 55 "$WD_APP_URL/api/wa/ping?token=$WD_PING_TOKEN" || true'
+    envVars:
+      - key: WD_APP_URL
+        sync: false
+      - key: WD_PING_TOKEN
+        sync: false
+
   - type: web
     name: wd-evolution
     runtime: docker
@@ -108,10 +135,9 @@ services:
         value: "500"
 
 # ---------------------------------------------------------------------------
-# KEEP-ALIVE: with `plan: starter` the service never sleeps, so the cron ping
-# is only a health watchdog now. Keep pointing cron-job.org at the Vercel app's
-# /api/wa/ping - it pings every Evolution host server-side (the direct Render
-# URL is hit for you; no WhatsApp events are triggered by a GET /).
+# KEEP-ALIVE: with `plan: starter` the service never sleeps. The `wd-queue-drain`
+# cron above now hits /api/wa/ping every minute (unattended outbox drain + host
+# health ping), so an external cron-job.org schedule is optional backup only.
 #
 # SCALING TO HUNDREDS OF CONCURRENT SESSIONS
 # ---------------------------------------------------------------------------
