@@ -1102,7 +1102,26 @@ export async function extractOffer(
     "You extract rental price offers from a vendor's reply (text and/or a photo " +
     "of a price list). The traveller asked for: " +
     spec +
-    ". Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
+    ". " +
+    // Explicit vehicle-CLASS guard - the single most important correctness rule.
+    // The reported failure: an ELECTRIC BICYCLE was passed to the traveller as if
+    // it matched a 125cc scooter request. These classes are NEVER interchangeable.
+    "VEHICLE CLASS IS ABSOLUTE. matchesSpec is TRUE only when the offered vehicle " +
+    "is the SAME CLASS the traveller asked for. Treat these as distinct, " +
+    "non-matching classes: (a) petrol motorbike / scooter / moped (has an engine, " +
+    "cc rating - e.g. 110cc, 125cc, 150cc); (b) electric scooter / e-moped " +
+    "(battery, stated in Watts/kW, NO cc); (c) electric bicycle / e-bike / pedal " +
+    "bicycle (has PEDALS); (d) electric kick-scooter (stand-on, tiny wheels); " +
+    "(e) car / van; (f) other. A request for a petrol scooter/motorbike with a cc " +
+    "figure is NOT matched by an electric bicycle, an e-bike, a kick-scooter, a " +
+    "pedal bike or a car - for ANY of those set matchesSpec=false, imageKind " +
+    "'other' (or 'vehicle' if it is clearly a vehicle photo), and write a short " +
+    "clarifyMessage asking whether they have the actual vehicle class requested " +
+    "(mention the specific class, e.g. 'a 125cc automatic scooter'). If the class " +
+    "is genuinely unclear from the reply/photo, set matchesSpec=false with " +
+    "confidence 'low' and clarify - NEVER guess a match. When the requested and " +
+    "offered class DO match, judge cc/transmission as described below. " +
+    "Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
     '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
     '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
