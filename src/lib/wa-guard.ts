@@ -1195,7 +1195,11 @@ interface OutboxRow {
  * without a dedicated worker.
  */
 export async function drainOutbox(
-  send: (senderKey: string, to: string, text: string) => Promise<{ ok: boolean }>
+  send: (
+    senderKey: string,
+    to: string,
+    text: string
+  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean }>
 ): Promise<number> {
   const candidates = await sbSelect<OutboxRow>(
     "wa_outbox",
@@ -1293,27 +1297,55 @@ export async function drainOutbox(
       // Release the idempotency claim - the retry below must not be treated
       // as a duplicate of the failed attempt.
       await releaseMessageClaim(row.sender_key, row.to_number, verdict.text).catch(() => {});
-      // SEND FAILED after the row was deleted - without this, the message is
-      // silently LOST (e.g. the WhatsApp host was mid-restart). Re-queue with
-      // a backoff and a hard attempts cap; alert the owner when we give up.
-      const attempts = Number((row.meta as { attempts?: number } | null)?.attempts ?? 0) + 1;
-      if (attempts <= 5) {
+      // CLASSIFY the failure. A TRANSIENT infra failure (the Evolution host is
+      // waking/restarting/timed-out - the "wd-evolution health check failed"
+      // case) is NOT the recipient's fault and must NOT burn the retry cap or
+      // creep the ETA 10/20/30/40/50 min into the future (that is exactly what
+      // made a whole batch stall after one send and then silently vanish).
+      // Only RECIPIENT-level failures (not on WhatsApp, invalid, blocked) count
+      // toward the give-up cap.
+      const errText = String(r.error ?? "");
+      const recipientFail = /not.*whatsapp|invalid|exist|blocked|forbidden|no-?phone/i.test(errText);
+      const transient = !recipientFail; // reconnecting / timeout / 5xx / empty / unknown host error
+      if (transient) {
+        // Retry SOON with no attempt burn - the batch resumes within ~a minute
+        // of the host recovering, and the queue stays honestly visible.
         await sbInsert("wa_outbox", [
           {
             sender_key: row.sender_key,
             to_number: row.to_number,
             body: row.body,
-            not_before: new Date(Date.now() + attempts * 10 * 60_000).toISOString(),
-            meta: { ...(row.meta ?? {}), attempts, reason: `send failed - retry ${attempts}/5` },
+            not_before: new Date(Date.now() + (45 + Math.random() * 75) * 1000).toISOString(),
+            meta: {
+              ...(row.meta ?? {}),
+              reason: "reconnecting - resumes automatically",
+            },
           },
         ]).catch(() => {});
       } else {
-        await sbInsert("agent_events", [
-          {
-            kind: "wa-send-dropped",
-            detail: `Gave up on a queued message to +${row.to_number} after 5 failed sends (sender ${row.sender_key}).`,
-          },
-        ]).catch(() => {});
+        const attempts = Number((row.meta as { attempts?: number } | null)?.attempts ?? 0) + 1;
+        if (attempts <= 5) {
+          await sbInsert("wa_outbox", [
+            {
+              sender_key: row.sender_key,
+              to_number: row.to_number,
+              body: row.body,
+              // Recipient-level retry backoff, capped so it never creeps past
+              // ~20 min even at the last attempt.
+              not_before: new Date(Date.now() + Math.min(attempts * 4, 20) * 60_000).toISOString(),
+              meta: { ...(row.meta ?? {}), attempts, reason: `couldn't reach this shop - retry ${attempts}/5` },
+            },
+          ]).catch(() => {});
+        } else {
+          await sbInsert("agent_events", [
+            {
+              kind: "wa-send-dropped",
+              vendor_id: String((row.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+              vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
+              detail: `Could not reach +${row.to_number} after 5 attempts (sender ${row.sender_key}) - the shop's number may be unreachable on WhatsApp.`,
+            },
+          ]).catch(() => {});
+        }
       }
     }
   }

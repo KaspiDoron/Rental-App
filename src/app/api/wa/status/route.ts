@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import {
   connectionState,
   evolutionConfigured,
-  wasEverConnected,
+  hasSessionRow,
   touchActivity,
   markOpen,
 } from "@/lib/evolution";
@@ -21,7 +21,10 @@ export async function GET() {
   if (!available) return NextResponse.json({ available: false, connected: false });
 
   const state = await connectionState(session.email);
-  const paired = state === "open" ? true : await wasEverConnected(session.email);
+  // "paired" = the user has EVER linked (durable session row), not the live
+  // socket - so a transient host outage reports connected+reconnecting, never a
+  // hard "disconnected" that pushes a linked user to re-link.
+  const paired = state === "open" ? true : await hasSessionRow(session.email);
 
   // Persist "open" durably whenever we observe a live socket, so the send path
   // never later mistakes a transient drop for "never connected".

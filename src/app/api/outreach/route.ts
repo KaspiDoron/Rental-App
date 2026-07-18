@@ -204,10 +204,15 @@ export async function POST(req: Request) {
   // channel at all, say exactly that - never queue the message and tell them
   // "the shop is closed" when the real problem is on our side.
   {
-    const { evolutionConfigured, wasEverConnected } = await import("@/lib/evolution");
+    // Gate on EVER-PAIRED (hasSessionRow), NOT the live socket state
+    // (wasEverConnected). A transient Evolution-host outage must never tell a
+    // linked user to "connect first" - the send path (sendFromUser) already
+    // returns an honest "reconnecting" state when the socket is momentarily
+    // down. connect:true is reserved for a user who has genuinely never linked.
+    const { evolutionConfigured, hasSessionRow } = await import("@/lib/evolution");
     const { whatsappConfigured } = await import("@/lib/whatsapp");
     const personal =
-      (await evolutionConfigured()) && (await wasEverConnected(session.email));
+      (await evolutionConfigured()) && (await hasSessionRow(session.email));
     const cloud = await whatsappConfigured();
     if (!personal && !cloud) {
       return NextResponse.json(

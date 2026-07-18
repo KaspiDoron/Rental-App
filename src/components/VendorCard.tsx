@@ -164,13 +164,25 @@ function VendorCardInner({
         // Transient drop (server waking) - no re-link needed, just retry.
         setRfqState("rate-limited");
         setRfqError(d.error ?? null);
-      } else {
-        // We NEVER pretend a message was sent: without a connected WhatsApp
-        // nothing goes out, and the user is told exactly that.
+      } else if (d.configured === false || d.connect) {
+        // The server SAYS WhatsApp is not linked - only then do we ask the user
+        // to connect. Never inferred from a generic failure.
         setRfqState("not-connected");
+      } else {
+        // Anything else (an individual send that failed while WhatsApp IS
+        // linked - a host 5xx, a number hiccup) is a TRANSIENT problem, not a
+        // disconnect. Say so honestly and keep WhatsApp shown as connected.
+        setRfqState("rate-limited");
+        setRfqError(
+          d.error ??
+            t("Not sent - a brief hiccup reaching WhatsApp. It retries on its own; try again in a few seconds.")
+        );
       }
     } catch {
-      setRfqState("not-connected");
+      // A thrown/timed-out request means WE couldn't reach OUR server - that is
+      // never proof the user's WhatsApp is unlinked. Transient hiccup.
+      setRfqState("rate-limited");
+      setRfqError(t("Couldn't reach the server just now - it retries automatically. Try again in a moment."));
     }
   }
 
@@ -586,9 +598,19 @@ function VendorCardInner({
             <div className="mt-2">
               <button
                 onClick={sendRfq}
-                disabled={!waConnected || rfqState === "sending" || askDone}
-                className={`btn w-full rounded-2xl py-2.5 text-[13px] font-extrabold text-white disabled:opacity-60 ${
-                  waConnected ? "bg-savings hover:brightness-95" : "bg-faint"
+                // A message that is sending OR already queued/sent can NEVER be
+                // re-fired: queuedActive must gate the button (a queued row is
+                // committed - tapping again would enqueue a duplicate).
+                disabled={!waConnected || rfqState === "sending" || askDone || queuedActive}
+                aria-disabled={!waConnected || rfqState === "sending" || askDone || queuedActive}
+                className={`btn w-full rounded-2xl py-2.5 text-[13px] font-extrabold ${
+                  queuedActive
+                    ? // Queued is a STATUS, not a call to action: a muted,
+                      // clearly non-interactive chip, never the green primary.
+                      "cursor-default bg-card2 text-soft disabled:opacity-100"
+                    : `text-white disabled:opacity-60 ${
+                        waConnected ? "bg-savings hover:brightness-95" : "bg-faint"
+                      }`
                 }`}
               >
                 {rfqState === "sending" ? (

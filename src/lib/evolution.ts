@@ -15,7 +15,7 @@
 
 import "server-only";
 import { createHash } from "crypto";
-import { getConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
+import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runtime-config";
 import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
@@ -565,15 +565,21 @@ export async function pauseIdleSessions(): Promise<number> {
   }
 }
 
-/** Last durable status we recorded for this user's session. */
+/**
+ * Last durable status we recorded for this user's session. Returns the sentinel
+ * "unknown" when the store is UNREACHABLE (transient Supabase blip) so callers
+ * can fail SAFE and never mistake a DB hiccup for "never linked" - the old
+ * sbSelect collapsed every error to [] -> null -> "not connected".
+ */
 async function storedStatus(email: string): Promise<string | null> {
   // ilike = case-insensitive equality, so rows written before emails were
   // normalised to lowercase still count as linked.
-  const rows = await sbSelect<{ status: string }>(
+  const res = await sbSelectStrict<{ status: string }>(
     "wa_sessions",
     `select=status&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
-  return rows[0]?.status ?? null;
+  if ("error" in res) return res.error === "unavailable" ? "unknown" : null;
+  return res.rows[0]?.status ?? null;
 }
 
 /** True once the user has successfully paired (and hasn't explicitly logged out). */
@@ -583,15 +589,18 @@ export async function wasEverConnected(email: string): Promise<boolean> {
 
 /**
  * True if the user has a session row at all (i.e. they went through linking on
- * this or any host). Used by the send path so a transient reconnect is NEVER
- * mistaken for "not connected" - the user is told to wait, never to re-link.
+ * this or any host). Used by the send/status paths so a transient reconnect is
+ * NEVER mistaken for "not connected" - the user is told to wait, never to
+ * re-link. FAILS SAFE: on an unreachable store it returns true (assume still
+ * linked), so a Supabase blip can never tell a paired user to re-link.
  */
 export async function hasSessionRow(email: string): Promise<boolean> {
-  const rows = await sbSelect<{ email: string }>(
+  const res = await sbSelectStrict<{ email: string }>(
     "wa_sessions",
     `select=email&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
-  return rows.length > 0;
+  if ("error" in res) return res.error === "unavailable"; // unavailable -> assume linked
+  return res.rows.length > 0;
 }
 
 /** Record that the session is live and paired (never downgraded automatically). */
@@ -632,7 +641,17 @@ export async function ensureConnected(
   });
   // Kick a reconnect on the resolved host.
   await evoFetch(host, `/instance/connect/${instance}`);
-  await saveSession(email, instance, "connecting", host.url);
+  // NEVER regress a durable "open" to "connecting" on a failed/unknown probe:
+  // a transient host outage must not make a linked user read as "never
+  // connected" (wasEverConnected == status "open"). Only record "connecting"
+  // when we are not already durably open. The success branch below still
+  // writes "open" when the socket returns; if it never returns, the row
+  // correctly stays "open" = still-linked (genuine unlink goes through the
+  // explicit logout/ban paths, never this transient one).
+  const prior = await storedStatus(email);
+  if (prior !== "open" && prior !== "unknown") {
+    await saveSession(email, instance, "connecting", host.url);
+  }
 
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {

@@ -4,7 +4,7 @@ import { runSafety } from "@/lib/agents";
 import { sendWhatsApp, whatsappConfigured } from "@/lib/whatsapp";
 import {
   evolutionConfigured,
-  wasEverConnected,
+  hasSessionRow,
   ensureConnected,
   sendFromUser,
 } from "@/lib/evolution";
@@ -101,8 +101,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: verdict.reason ?? "Blocked." }, { status: 400 });
   }
 
+  // Gate on EVER-PAIRED, not the live socket - a transient host outage must not
+  // kill the whole batch with "Connect your WhatsApp first". A parked batch
+  // drains when the host recovers; connect:true is only for a never-linked user.
   const personal =
-    (await evolutionConfigured()) && (await wasEverConnected(session.email));
+    (await evolutionConfigured()) && (await hasSessionRow(session.email));
   const cloud = await whatsappConfigured();
   if (!personal && !cloud) {
     return NextResponse.json({ error: "Connect your WhatsApp first.", connect: true }, { status: 400 });
