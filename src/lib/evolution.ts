@@ -1348,12 +1348,18 @@ export async function sendFromUser(
   }
 
   const trySend = async () => {
-    // v2 shape first, then the legacy v1 body.
+    // v2 shape first, then the legacy v1 body. IMPORTANT: only fall back to the
+    // v1 shape on a DEFINITIVE status error (4xx/5xx = the server rejected the
+    // shape, so nothing was delivered). A status 0 is an ABORT/TIMEOUT (our 12s
+    // evoFetch deadline) - the request was in flight and MAY have delivered, so
+    // re-POSTing it would risk a duplicate message (a velocity/uniformity ban
+    // signal). Ambiguous timeouts propagate as {ok:false} and the drain's
+    // transient re-queue handles recovery.
     let r = await evo(email, `/message/sendText/${instance}`, {
       method: "POST",
       body: JSON.stringify({ number, text: message, delay: TYPING_DELAY_MS() }),
     });
-    if (!r.ok) {
+    if (!r.ok && r.status !== 0) {
       r = await evo(email, `/message/sendText/${instance}`, {
         method: "POST",
         body: JSON.stringify({
@@ -1366,9 +1372,11 @@ export async function sendFromUser(
     return r;
   };
 
-  // Send with one reconnect-and-retry on failure.
+  // One reconnect-and-retry, but ONLY on a definitive status error (e.g.
+  // "instance not connected" 4xx) where the send provably did not deliver. A
+  // status 0 (abort/timeout) is ambiguous - never blindly re-POST it.
   let res = await trySend();
-  if (!res.ok) {
+  if (!res.ok && res.status !== 0) {
     await evo(email, `/instance/connect/${instance}`);
     await new Promise((r) => setTimeout(r, 1200));
     res = await trySend();

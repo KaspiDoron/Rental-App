@@ -49,4 +49,21 @@ describe("takeover/pause vetoes are TRI-STATE and fail closed on an unreadable s
     mockStrict.mockResolvedValue({ rows: [{ raw: { kind: "human-takeover" } }] });
     expect(await isThreadTakenOver("e@x.com", "111")).toBe(true);
   });
+
+  it("returns null (not a stale false) when the store is unavailable and only a STALE false is cached", async () => {
+    // A definitive false could have flipped to taken-over on another instance
+    // during the blip - returning the stale false would let the agent slip a
+    // send through. Pre-seed an EXPIRED false entry, then go unavailable.
+    (globalThis as { __wd_takeover_flags__?: Map<string, { paused: boolean; at: number }> })
+      .__wd_takeover_flags__ = new Map([["f@x.com:111", { paused: false, at: Date.now() - 40_000 }]]);
+    mockStrict.mockResolvedValue({ error: "unavailable" });
+    expect(await isThreadTakenOver("f@x.com", "111")).toBe(null);
+  });
+
+  it("honors a STALE true under unavailable (keep holding - fail-closed direction)", async () => {
+    (globalThis as { __wd_session_flags__?: Map<string, { paused: boolean; at: number }> })
+      .__wd_session_flags__ = new Map([["g@x.com", { paused: true, at: Date.now() - 40_000 }]]);
+    mockStrict.mockResolvedValue({ error: "unavailable" });
+    expect(await isSessionPaused("g@x.com")).toBe(true);
+  });
 });

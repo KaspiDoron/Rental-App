@@ -119,7 +119,26 @@ export async function POST(req: Request) {
     "graph_wakeups",
     `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
   ).catch(() => {});
-  const closeDigits = [...new Set([digits, ...purged.map((r) => r.to_number)].filter(Boolean))];
+  // Tombstone every recently-messaged shop (not just outbox-pending ones): a
+  // mid-negotiation sibling awaiting a reply has no outbox row, but the
+  // deal-closed session must silence it too. The tombstone is the hard,
+  // guard-enforced veto (session-closed alone is only a soft, LLM-overridable
+  // director fact).
+  const recentOut = await sbSelect<{ to_number: string }>(
+    "whatsapp_messages",
+    `select=to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      session.email
+    )}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(
+      new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
+    )}&order=received_at.desc&limit=200`
+  ).catch(() => [] as { to_number: string }[]);
+  const closeDigits = [
+    ...new Set(
+      [digits, ...purged.map((r) => r.to_number), ...recentOut.map((r) => r.to_number)].filter(
+        Boolean
+      )
+    ),
+  ];
   for (const d of closeDigits) {
     await cancelSends(session.email, d, "deal-closed").catch(() => {});
   }

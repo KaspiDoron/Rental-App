@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbInsert, sbDelete, sbDeleteReturning } from "@/lib/runtime-config";
+import { sbInsert, sbSelect, sbDelete, sbDeleteReturning } from "@/lib/runtime-config";
 import { cancelSends, pruneCancellations } from "@/lib/wa/cancellations";
 
 // Close the user's search session HARD. Called whenever the user starts a NEW
@@ -41,11 +41,27 @@ export async function POST() {
     `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
   ).catch(() => {});
 
-  // 2. Tombstone every shop that still had something pending. Wakeup-only
-  //    threads without outbox rows are covered by the session-closed marker
-  //    (buildTurnFromThread checks it) - tombstones here are the belt for the
-  //    rows we could enumerate.
-  const digits = [...new Set(purged.map((r) => r.to_number).filter(Boolean))];
+  // 2. Tombstone every shop this session was talking to. CRITICAL: not just the
+  //    ones with a pending outbox row - a shop the agent already messaged and is
+  //    now awaiting a reply from has NO outbox row, yet its inbound reply would
+  //    (on the live LLM path) still trigger an auto-answer, because
+  //    session-closed is otherwise only a SOFT director fact the LLM can
+  //    override. The tombstone is the HARD, guard-enforced (fail-closed) veto,
+  //    so we enumerate every recently-messaged shop and tombstone it. Bounded to
+  //    recent outbound (negotiations are short-lived) and capped.
+  const recentOut = await sbSelect<{ to_number: string }>(
+    "whatsapp_messages",
+    `select=to_number&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      session.email
+    )}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(
+      new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
+    )}&order=received_at.desc&limit=200`
+  ).catch(() => [] as { to_number: string }[]);
+  const digits = [
+    ...new Set(
+      [...purged.map((r) => r.to_number), ...recentOut.map((r) => r.to_number)].filter(Boolean)
+    ),
+  ];
   for (const d of digits) {
     await cancelSends(session.email, d, "session-closed").catch(() => {});
   }

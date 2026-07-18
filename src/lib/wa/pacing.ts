@@ -171,11 +171,14 @@ export async function releaseMessageClaim(
 
 /** Throttled GC (call from the drain tail). Two horizons by slot type. */
 export async function gcSendClaims(): Promise<void> {
-  // gap (pacing) claims only serialize concurrent drainers WITHIN a min-gap
-  // window - safe to clear after 2h.
+  // Every NON-idempotency claim (gap: pacing, chain: tick self-chain lock,
+  // game: score rate-limit, and any future prefix) only guards a short window -
+  // clear after 2h. `not.like.msg:*` restores the pre-split guarantee that the
+  // table cannot grow unbounded (the earlier gap:*-only delete leaked chain:
+  // and game: rows forever - ~720-2880 chain rows/day on an active cron).
   await sbDelete(
     "wa_send_claims",
-    `slot_key=like.gap:*&created_at=lt.${encodeURIComponent(
+    `slot_key=not.like.msg:*&created_at=lt.${encodeURIComponent(
       new Date(Date.now() - 2 * 3600_000).toISOString()
     )}`
   ).catch(() => {});

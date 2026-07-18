@@ -103,8 +103,12 @@ export async function isThreadTakenOver(
   );
   if ("error" in res) {
     // "missing" (no such table/column, demo mode) -> genuinely no marker.
-    // "unavailable" (transient) -> UNKNOWN: never cache, let callers fail closed.
-    return res.error === "missing" ? false : hit?.paused ?? null;
+    // "unavailable" (transient) -> UNKNOWN. Never cache, and only honor a stale
+    // cache entry in the FAIL-CLOSED direction: a stale `true` keeps holding,
+    // but a stale `false` must NOT be returned (the real state may have flipped
+    // to taken-over on another instance during the blip) - fall through to null
+    // so the guard fails closed.
+    return res.error === "missing" ? false : hit?.paused === true ? true : null;
   }
   const on = res.rows[0]?.raw?.kind === "human-takeover";
   takeoverCache().set(key, { paused: on, at: Date.now() });
@@ -126,7 +130,10 @@ export async function isSessionPaused(email: string): Promise<boolean | null> {
     )}&raw->>kind=in.(session-paused,session-resumed)&order=received_at.desc&limit=1`
   );
   if ("error" in res) {
-    return res.error === "missing" ? false : hit?.paused ?? null;
+    // Same fail-closed-direction rule as isThreadTakenOver: a stale `true`
+    // (still paused) is honored, a stale `false` is never returned - null so
+    // automated sends hold rather than slip through during a store blip.
+    return res.error === "missing" ? false : hit?.paused === true ? true : null;
   }
   const paused = res.rows[0]?.raw?.kind === "session-paused";
   cache().set(email, { paused, at: Date.now() });
