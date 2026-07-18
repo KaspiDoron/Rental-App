@@ -41,6 +41,7 @@ import type { GraphFacts, GraphSpec } from "./types";
 
 /** The defect-B fact pattern: quote 250, rival 220, floor 150, all fields known. */
 function leverageFacts(over: Partial<GraphFacts> = {}): GraphFacts {
+  const { counts, ...graphOver } = over;
   return factsFromLegacy(
     {
       sessionClosed: false,
@@ -53,7 +54,7 @@ function leverageFacts(over: Partial<GraphFacts> = {}): GraphFacts {
       priceAtOrBelowFloor: false,
       targetIsRealSaving: true,
       rivalCheaper: true,
-      counts: { clarify: 0, bargain: 0, answer: 0, close: 0 },
+      counts: counts ?? { clarify: 0, bargain: 0, answer: 0, close: 0 },
     },
     {
       priceFarAboveFloor: true,
@@ -64,7 +65,7 @@ function leverageFacts(over: Partial<GraphFacts> = {}): GraphFacts {
       rounds: 0,
       maxRounds: 4,
       firmCount: 0,
-      ...over,
+      ...graphOver,
     }
   );
 }
@@ -86,12 +87,30 @@ describe("strongBargainAvailable derived fact", () => {
     expect(facts.strongBargainAvailable).toBe(false);
   });
 
-  it("is FALSE without leverage, after two firms, and when rounds are exhausted", () => {
+  it("is TRUE on the FIRST quote with room, even without a rival or a far-above-floor quote", () => {
+    // The owner's fix: the agent must take one real bargaining swing before it
+    // drifts to deposit/delivery. A moderate first quote (room to push, no rival,
+    // not 25% above floor) now enforces price-first instead of letting the LLM
+    // jump straight to logistics.
+    const facts = applyStrongBargainFact(
+      defaultGraphSpec(),
+      leverageFacts({ rivalCheaper: false, priceFarAboveFloor: false })
+    );
+    expect(facts.strongBargainAvailable).toBe(true);
+  });
+
+  it("is FALSE once the first push is spent and no sustained leverage remains", () => {
+    // After a bargain has run, only a cheaper rival or a still-far-above-floor
+    // quote keeps the gate closed - a shop holding firm is not nagged forever.
+    const facts = applyStrongBargainFact(
+      defaultGraphSpec(),
+      leverageFacts({ rivalCheaper: false, priceFarAboveFloor: false, counts: { clarify: 0, bargain: 1, answer: 0, close: 0 } })
+    );
+    expect(facts.strongBargainAvailable).toBe(false);
+  });
+
+  it("is FALSE after two firms and when rounds are exhausted (bargain edge itself illegal)", () => {
     const spec = defaultGraphSpec();
-    expect(
-      applyStrongBargainFact(spec, leverageFacts({ rivalCheaper: false, priceFarAboveFloor: false }))
-        .strongBargainAvailable
-    ).toBe(false);
     expect(
       applyStrongBargainFact(spec, leverageFacts({ firmCount: 2 })).strongBargainAvailable
     ).toBe(false);

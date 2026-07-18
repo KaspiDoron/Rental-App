@@ -243,7 +243,16 @@ function buildFacts(args: {
  * the director can never be starved by it).
  */
 export function applyStrongBargainFact(spec: GraphSpec, facts: GraphFacts): GraphFacts {
-  if (!(facts.rivalCheaper || facts.priceFarAboveFloor)) return facts;
+  // The agent must take at least ONE real bargaining swing before it drifts to
+  // logistics (deposit / delivery / pickup) - the owner's report was agents
+  // "going straight for deposit and delivery" on a moderate first quote. So
+  // enforce price-first not only under strong leverage (cheaper rival, or a
+  // quote far above the floor) but ALSO on the FIRST quote whenever there is
+  // genuine room to push (targetIsRealSaving) and no bargain has run yet. Once
+  // that first push is spent, only sustained leverage (rival / far-above-floor)
+  // keeps the gate closed, so a shop holding firm is not nagged forever.
+  const firstBargainWithRoom = facts.targetIsRealSaving && facts.counts.bargain === 0;
+  if (!(facts.rivalCheaper || facts.priceFarAboveFloor || firstBargainWithRoom)) return facts;
   const nodesById = new Map(spec.nodes.map((x) => [x.id, x]));
   const bargainLegal = spec.edges.some((edge) => {
     if (!edge.enabled || edge.from !== "director") return false;
