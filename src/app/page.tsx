@@ -1744,29 +1744,35 @@ export default function Home() {
               </p>
             )}
             {introBudget && (
-              <div className="mb-1.5 flex items-center gap-2 rounded-xl bg-card2 px-2.5 py-1.5">
-                <span className="text-[11px]">🎯</span>
-                <div className="min-w-0 flex-1">
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-line">
-                    <div
-                      className="h-full rounded-full bg-brandblue transition-all"
-                      style={{
-                        width: `${Math.round(
-                          (Math.max(0, introBudget.cap - introBudget.remaining) /
-                            Math.max(1, introBudget.cap)) *
-                            100
-                        )}%`,
-                      }}
-                    />
-                  </div>
+              <div className="mb-1.5 rounded-xl bg-card2 px-2.5 py-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold text-strong">
+                    💬 {t("Shop conversations")}
+                  </span>
+                  <span className="whitespace-nowrap text-[10px] font-bold text-soft">
+                    {introBudget.cap - introBudget.remaining} {t("of")} {introBudget.cap}{" "}
+                    {t("started")} · {introBudget.windowHours}h
+                  </span>
                 </div>
-                <span className="whitespace-nowrap text-[10px] font-bold text-soft">
-                  {introBudget.remaining} {t("of")} {introBudget.cap}{" "}
-                  {t("new shops left")} · {introBudget.windowHours}h
-                  {introBudget.remaining <= 0 && introBudget.nextFreeAt
-                    ? ` · ${t("next at")} ~${formatClock(introBudget.nextFreeAt)}`
-                    : ""}
-                </span>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-line">
+                  <div
+                    className="h-full rounded-full bg-brandblue transition-all"
+                    style={{
+                      width: `${Math.round(
+                        (Math.max(0, introBudget.cap - introBudget.remaining) /
+                          Math.max(1, introBudget.cap)) *
+                          100
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-[10px] text-faint">
+                  {introBudget.remaining > 0
+                    ? `${introBudget.remaining} ${t("more shops you can start chatting - a chat is one shop, any length or number of messages")}`
+                    : introBudget.nextFreeAt
+                      ? `${t("All started - your next conversation opens at")} ~${formatClock(introBudget.nextFreeAt)}`
+                      : t("All started")}
+                </p>
               </div>
             )}
             <div className="space-y-1.5">
