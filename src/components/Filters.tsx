@@ -5,11 +5,11 @@ import { vehicleLabelPlural } from "@/lib/labels";
 import { Icon } from "./icons";
 
 export interface FilterState {
-  sort: "distance" | "rating" | "savings" | "status";
+  sort: "distance" | "rating" | "reviews" | "savings" | "status";
   vehicleClass: VehicleClass | "any";
   fulfillment: Fulfillment;
   minRating: number;
-  agentStatus: "all" | "negotiating" | "dropped" | "offer";
+  agentStatus: "all" | "active" | "negotiating" | "dropped" | "offer";
   maxPricePerDay: number | null;
   deliveryOnly: boolean;
   openNowOnly: boolean;
@@ -85,12 +85,14 @@ export function Filters({
         <span className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide text-faint">
           <Icon name="filter" className="h-3.5 w-3.5" /> Sort
         </span>
-        {(["distance", "rating", "savings", "status"] as const).map((s) => (
+        {(["distance", "rating", "reviews", "savings", "status"] as const).map((s) => (
           <Chip key={s} active={filters.sort === s} onClick={() => set({ sort: s })}>
             {s === "distance"
               ? "Closest"
               : s === "rating"
               ? "Top rated"
+              : s === "reviews"
+              ? "Most reviews"
               : s === "savings"
               ? "Biggest savings"
               : "Active first"}
@@ -115,6 +117,14 @@ export function Filters({
 
       {/* Status + extras (only real, Google-confirmed signals) */}
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
+        <Chip
+          active={filters.agentStatus === "active"}
+          onClick={() =>
+            set({ agentStatus: filters.agentStatus === "active" ? "all" : "active" })
+          }
+        >
+          🔵 Active rentals
+        </Chip>
         <Chip
           active={filters.openNowOnly}
           onClick={() => set({ openNowOnly: !filters.openNowOnly })}

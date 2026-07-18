@@ -1603,15 +1603,33 @@ export default function Home() {
 
             {statusOpen && (stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0) && (
               <div className="space-y-2 border-t border-line px-3 py-2.5">
-                <button
-                  onClick={() => {
-                    setView("activity");
-                    window.scrollTo({ top: 0, behavior: "smooth" });
-                  }}
-                  className="chip flex items-center gap-1 text-[11px] font-extrabold text-brandblue"
-                >
-                  <Icon name="sparkles" className="h-3 w-3" /> {t("See the full live activity feed")} →
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setView("activity");
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                    className="chip flex items-center gap-1 text-[11px] font-extrabold text-brandblue"
+                  >
+                    <Icon name="sparkles" className="h-3 w-3" /> {t("See the full live activity feed")} →
+                  </button>
+                  {/* One-tap: isolate the cards the agents are actively working. */}
+                  <button
+                    onClick={() =>
+                      setFilters((f) => ({
+                        ...f,
+                        agentStatus: f.agentStatus === "active" ? "all" : "active",
+                      }))
+                    }
+                    className={`chip flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-extrabold ${
+                      filters.agentStatus === "active"
+                        ? "bg-brandblue text-white"
+                        : "border-2 border-line text-soft"
+                    }`}
+                  >
+                    🔵 {filters.agentStatus === "active" ? t("Showing active rentals") : t("Show only active rentals")}
+                  </button>
+                </div>
                 {/* Deals in - from whom, price, exact time */}
                 {statusGroups.deals.length > 0 && (
                   <div>
@@ -2255,23 +2273,45 @@ function ToggleBtn({
 
 /* ---- filtering / sorting ---- */
 
+// A shop is ACTIVE when the agent is doing real work on it: an offer is in, a
+// message is queued, or it is mid-conversation. Mirrors the Live Status strip's
+// buckets (statusGroups) so the counts and the filtered view can never disagree.
+function isActiveVendor(v: Vendor): boolean {
+  return (
+    !!v.offer ||
+    !!v.queuedUntil ||
+    ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
+  );
+}
+
 function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[] {
   let list = [...vendors];
 
+  // Vehicle class is a HARD scope (a car search must not surface a scooter).
   if (f.vehicleClass !== "any")
     list = list.filter((v) => v.vehicleClasses.includes(f.vehicleClass as any));
-  if (f.deliveryOnly) list = list.filter((v) => v.fulfillment.includes("hotel-delivery"));
-  if (f.fulfillment === "in-store")
-    list = list.filter((v) => v.fulfillment.includes("in-store"));
-  if (f.openNowOnly) list = list.filter((v) => v.openNow !== false);
-  if (f.fastOnly) list = list.filter((v) => v.fastResponder);
-  if (f.tag && f.tag !== "any")
-    list = list.filter((v) => (v.verifiedTags ?? []).includes(f.tag));
-  if (f.minRating > 0) list = list.filter((v) => v.rating >= f.minRating);
-  if (f.maxPricePerDay)
-    list = list.filter((v) => v.offer && v.offer.pricePerDay <= (f.maxPricePerDay as number));
 
-  if (f.agentStatus === "negotiating")
+  // SOFT attribute filters NEVER evaporate a live negotiation - the user's core
+  // expectation is "the view filters," not "my active rentals vanish." Each
+  // predicate is OR'd with isActiveVendor so a messaged/queued/offer shop always
+  // renders regardless of budget, delivery, rating, tag, open-now or fast toggles.
+  const soft = (pred: (v: Vendor) => boolean) =>
+    (list = list.filter((v) => isActiveVendor(v) || pred(v)));
+
+  if (f.deliveryOnly) soft((v) => v.fulfillment.includes("hotel-delivery"));
+  if (f.fulfillment === "in-store") soft((v) => v.fulfillment.includes("in-store"));
+  if (f.openNowOnly) soft((v) => v.openNow !== false);
+  if (f.fastOnly) soft((v) => v.fastResponder === true);
+  if (f.tag && f.tag !== "any") soft((v) => (v.verifiedTags ?? []).includes(f.tag));
+  if (f.minRating > 0) soft((v) => v.rating >= f.minRating);
+  // Budget: only drop a shop whose QUOTE exceeds the budget. A shop not yet
+  // priced (no offer) is kept - the old `v.offer && ...` dropped every active
+  // un-quoted shop the moment a budget was set (the "cards vanish" bug).
+  if (f.maxPricePerDay)
+    soft((v) => !v.offer || v.offer.pricePerDay <= (f.maxPricePerDay as number));
+
+  if (f.agentStatus === "active") list = list.filter(isActiveVendor);
+  else if (f.agentStatus === "negotiating")
     // "Negotiating now" = every shop the agent is actively working: message
     // sent, awaiting the reply, or mid-bargain.
     list = list.filter((v) =>
@@ -2291,6 +2331,8 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
     switch (f.sort) {
       case "rating":
         return b.rating - a.rating;
+      case "reviews":
+        return (b.reviews ?? 0) - (a.reviews ?? 0);
       case "savings":
         return savingsOf(b) - savingsOf(a);
       case "status":

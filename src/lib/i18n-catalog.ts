@@ -313,6 +313,8 @@ export const I18N_CATALOG: string[] = [
   "Shops see you, not a bot - conversations stay in your own WhatsApp, end to end.",
   "Short waits are deliberate - they keep your messages feeling personal, never spammy.",
   "Show",
+  "Show only active rentals",
+  "Showing active rentals",
   "Side by side",
   "Sign in or create an account to enter",
   "Sign out",
