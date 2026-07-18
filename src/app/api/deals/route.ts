@@ -219,8 +219,13 @@ export async function GET() {
         payload: { reason?: string; vendorName?: string } | null;
       }>(
         "graph_wakeups",
-        `select=id,not_before,payload&thread_key=like.${encodeURIComponent(
-          email + ":*"
+        // EXACT ownership match on the stamped column - the old
+        // `thread_key=like.<email>:*` read could surface a DIFFERENT user's
+        // wakeup (shop name + reason) when one email was a `_`-wildcard match
+        // of another. Unstamped legacy rows are hidden by design (same
+        // precedent as the agent_events feed filter).
+        `select=id,not_before,payload&user_email=eq.${encodeURIComponent(
+          email
         )}&kind=eq.tick&order=not_before.asc&limit=10`
       ).catch(() => []),
       sbSelect<{ raw: { kind?: string } | null }>(

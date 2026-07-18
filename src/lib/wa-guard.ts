@@ -778,7 +778,12 @@ export async function enterBanRecovery(
 export interface GuardVerdict {
   allow: boolean;
   reason?: string;
-  queuedUntil?: string; // set when the message was parked in wa_outbox
+  queuedUntil?: string; // set when the message was parked in wa_outbox (re-queued)
+  terminal?: boolean;   // set when the message must be DROPPED for good (cancelled,
+                        // duplicate, rfq-dedup, takeover). The drain uses this to
+                        // tell "safely re-queued" and "deliberately dropped" apart
+                        // from "rejected but NOT re-parked" - the last of which
+                        // must never silently lose an already-claimed outbox row.
   text: string;         // the (possibly varied) payload to actually send
 }
 
@@ -854,6 +859,7 @@ export async function guardOutbound(opts: {
       void recordSuppressedSend(opts.senderKey, opts.toDigits, "cancelled-send-blocked");
       return {
         allow: false,
+        terminal: true,
         reason: "cancelled-by-user - you removed the messages to this shop",
         text,
       };
@@ -870,6 +876,7 @@ export async function guardOutbound(opts: {
         void recordSuppressedSend(opts.senderKey, opts.toDigits, "takeover-send-blocked");
         return {
           allow: false,
+          terminal: true,
           reason: "human takeover - you are chatting with this shop yourself",
           text,
         };
@@ -898,7 +905,7 @@ export async function guardOutbound(opts: {
       (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
     );
     if (isDup) {
-      return { allow: false, reason: "duplicate message suppressed (idempotency)", text };
+      return { allow: false, terminal: true, reason: "duplicate message suppressed (idempotency)", text };
     }
   }
 
@@ -922,6 +929,7 @@ export async function guardOutbound(opts: {
     if (priorRfq.length > 0) {
       return {
         allow: false,
+        terminal: true,
         reason: "rfq-dedup - this shop was already asked in the last 24h",
         text,
       };
@@ -1070,22 +1078,36 @@ export async function guardOutbound(opts: {
     }
     // Reply-rate breaker: if we have enough history and almost nobody replies,
     // freeze cold outreach - this is what actually trips WhatsApp's filters.
+    // HOLD (queue), never DROP: on the drain path the row was already claimed
+    // (deleted), so returning a bare !allow would silently LOSE the message.
+    // Park it a few hours out (clamped to the shop's business hours) so it
+    // resumes once the number recovers instead of vanishing.
     if ((rep.sent_total || 0) >= p.min_reply_samples && replyRate(rep) < p.min_reply_rate) {
-      return {
-        allow: false,
-        reason: `reply-rate circuit breaker (${(replyRate(rep) * 100).toFixed(0)}% < ${(p.min_reply_rate * 100).toFixed(0)}%) - cold outreach frozen to protect the number`,
-        text,
-      };
+      const until = clampToBusinessHours(
+        new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
+        opts.toDigits,
+        p,
+        region
+      );
+      return await queue(
+        until,
+        `reply-rate circuit breaker (${(replyRate(rep) * 100).toFixed(0)}% < ${(p.min_reply_rate * 100).toFixed(0)}%) - cold outreach frozen to protect the number`
+      );
     }
     // Delivery-rate breaker (research: double-tick threshold ~60%).
     if ((rep.delivered_total || 0) >= 8) {
       const delivRate = (rep.delivered_total || 0) / Math.max(1, rep.sent_total || 0);
       if (delivRate < 0.6) {
-        return {
-          allow: false,
-          reason: `delivery-rate breaker (${(delivRate * 100).toFixed(0)}% delivered) - number may be soft-restricted`,
-          text,
-        };
+        const until = clampToBusinessHours(
+          new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
+          opts.toDigits,
+          p,
+          region
+        );
+        return await queue(
+          until,
+          `delivery-rate breaker (${(delivRate * 100).toFixed(0)}% delivered) - number may be soft-restricted`
+        );
       }
     }
   }
@@ -1111,17 +1133,19 @@ export async function guardOutbound(opts: {
   }
   const sentRows = "rows" in sentRes ? sentRes.rows : [];
   // Count messages ALREADY PARKED in the outbox for this sender toward the
-  // caps too - they are committed sends that just haven't left yet. Without
-  // this, concurrent auto-replies all read the same pre-send count and blow
-  // past the cap (the core ban protection). Rows count toward the HOURLY
-  // window only when they are actually due within the next hour - a batch
-  // parked for tomorrow must not wedge today's replies into the same hold
-  // (the cascade that stamped ten messages with one identical ETA).
+  // HOURLY window (only) when they are actually due within the next hour, so
+  // concurrent auto-replies do not all read the same pre-send count and blow
+  // past the hourly cap. A batch parked for later must NOT wedge today's
+  // replies into the same hold (the cascade that stamped ten messages with one
+  // identical ETA). NOTE: parked rows are deliberately NOT counted toward the
+  // DAILY cap below - a large legitimately-staggered batch would otherwise trip
+  // its OWN daily ceiling (1 sent + 38 parked >= 39) and get almost entirely
+  // deferred; concurrency for the daily total is already serialized by the send
+  // claims, so the daily cap is a pure ceiling on ACTUAL sends.
   const pendingForSender = await sbSelect<{ id: number; not_before: string }>(
     "wa_outbox",
     `select=id,not_before&sender_key=eq.${encodeURIComponent(opts.senderKey)}&limit=300`
   ).catch(() => []);
-  const pendingCount = pendingForSender.length;
   const hourAhead = new Date(now + 3600_000).toISOString();
   const pendingDueSoon = pendingForSender.filter((r) => r.not_before <= hourAhead).length;
   const hourAgo = new Date(now - 3600_000).toISOString();
@@ -1141,8 +1165,18 @@ export async function guardOutbound(opts: {
       `hourly cap reached (${hourCap}/h at trust ${rep.trust_score})`
     );
   }
-  if (sentRows.length + pendingCount >= dayCap) {
-    return { allow: false, reason: `daily cap reached (${dayCap}/day)`, text };
+  if (sentRows.length >= dayCap) {
+    // QUEUE, never DROP: on the drain path the row was already claimed
+    // (deleted), so a bare !allow would silently lose it (the "sent a few then
+    // the rest vanished" bug). Anchor the hold to when the rolling 24h window
+    // actually frees - the oldest send ages out at oldest+24h - clamped into
+    // the shop's business hours, so a capped batch resumes instead of dying.
+    const oldest = sentRows.length
+      ? Date.parse(sentRows[sentRows.length - 1].received_at)
+      : now;
+    const freeAt = Math.max(now + 5 * 60_000, oldest + 24 * 3600_000);
+    const until = clampToBusinessHours(new Date(freeAt).toISOString(), opts.toDigits, p, region);
+    return await queue(until, `daily cap reached (${dayCap}/day) - resumes as capacity frees`);
   }
 
   // 5. BURST COOLDOWN - even within caps, N sends in a short window is a robotic
@@ -1239,7 +1273,28 @@ export async function drainOutbox(
       queueIfBlocked: true,
       meta: row.meta ?? undefined,
     });
-    if (!verdict.allow) continue; // re-queued or dropped by the gate
+    if (!verdict.allow) {
+      // The gate either RE-QUEUED the row (verdict.queuedUntil set) or
+      // DELIBERATELY dropped it (verdict.terminal - cancelled / duplicate /
+      // rfq-dedup / takeover, where re-sending would be wrong). If it did
+      // NEITHER, the row was already CLAIMED (deleted) above but never re-parked
+      // - re-insert it so a non-terminal reject can NEVER silently lose a queued
+      // message. This is the belt behind the branch-level queue() fixes: any
+      // future guard branch that forgets to queue still cannot drop a real send.
+      const { needsRepark } = await import("./wa/outbox-policy");
+      if (needsRepark(verdict)) {
+        await sbInsert("wa_outbox", [
+          {
+            sender_key: row.sender_key,
+            to_number: row.to_number,
+            body: row.body,
+            not_before: jitteredHold(Date.now(), 5, 5),
+            meta: { ...(row.meta ?? {}), reason: "sync-retry" },
+          },
+        ]).catch(() => {});
+      }
+      continue;
+    }
     // Last-instant cancellation re-check (the user may have tapped Remove
     // between the guard verdict and this send).
     try {
@@ -1279,7 +1334,17 @@ export async function drainOutbox(
       ]).catch(() => {});
       continue;
     }
-    const r = await send(row.sender_key, row.to_number, verdict.text);
+    // A THROW from send() (e.g. the transport rejected) must not abandon the
+    // rest of the batch or lose this already-claimed row - treat it as a
+    // transient failure so the branch below re-queues it. With the evoFetch
+    // hard timeout in place, a slow host now returns {ok:false} rather than
+    // hanging, but this keeps any other throw safe too.
+    let r: { ok: boolean; error?: string; rateLimited?: boolean };
+    try {
+      r = await send(row.sender_key, row.to_number, verdict.text);
+    } catch (e) {
+      r = { ok: false, error: e instanceof Error ? e.message : "send threw" };
+    }
     if (r.ok) {
       sent++;
       sentBySender.set(row.sender_key, (sentBySender.get(row.sender_key) ?? 0) + 1);

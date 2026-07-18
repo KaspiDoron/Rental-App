@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { evolutionConfigured, connectionState, hasSessionRow } from "@/lib/evolution";
+import { evolutionConfigured, connectionState, isLinkedForUi } from "@/lib/evolution";
 import { senderSafety } from "@/lib/wa-guard";
 
 // Superset of /api/wa/status: socket state PLUS what the anti-ban guard is
@@ -20,9 +20,11 @@ export async function GET() {
     connectionState(session.email),
     senderSafety(session.email),
   ]);
-  // Ever-linked (durable row), not the live socket - a transient outage reports
-  // connected+reconnecting, never a hard disconnect that says "re-link".
-  const paired = state === "open" ? true : await hasSessionRow(session.email);
+  // GENUINELY linked before (durable status "open"), not merely "a row exists":
+  // a not-yet-linked "connecting" row must never read as connected. Still fails
+  // SAFE on a DB blip, so a transient outage reports connected+reconnecting,
+  // never a hard disconnect that says "re-link".
+  const paired = state === "open" ? true : await isLinkedForUi(session.email);
 
   return NextResponse.json({
     available: true,

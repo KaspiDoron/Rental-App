@@ -21,8 +21,11 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
     ).catch(() => []),
     sbSelect<{ not_before: string; payload: { vendorName?: string; reason?: string } | null }>(
       "graph_wakeups",
-      `select=not_before,payload&thread_key=like.${encodeURIComponent(
-        email + ":*"
+      // EXACT ownership match on the stamped column, not a `thread_key=like.`
+      // wildcard that could read another user's wakeup (a `_` in the email is a
+      // single-char SQL wildcard). Unstamped legacy rows are hidden by design.
+      `select=not_before,payload&user_email=eq.${encodeURIComponent(
+        email
       )}&kind=eq.tick&order=not_before.asc&limit=3`
     ).catch(() => []),
     senderSafety(email).catch(() => null),

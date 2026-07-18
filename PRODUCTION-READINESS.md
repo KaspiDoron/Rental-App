@@ -182,6 +182,43 @@ survives that gracefully instead of stalling/losing the batch:
   clobber): a host outage reports *reconnecting*, never *not linked*, so the app
   never tells a connected user to re-link.
 
+**Adversarial-sweep hardening (this pass) - drain can no longer lose a queued
+message, and no external call can hang a handler:**
+
+- **A claimed row is never silently dropped** (`src/lib/wa/outbox-policy.ts`
+  `needsRepark`, pinned by `outbox-policy.test.ts`). `drainOutbox` claims a due
+  row by DELETING it, then re-runs the guard. Previously the daily-cap and the
+  reply/delivery-rate circuit breakers returned a bare `{allow:false}` WITHOUT
+  re-queuing, so the already-deleted row vanished ("sent a few, the rest
+  disappeared"). Now: those branches `queue()` with a real rolling-window hold;
+  every deliberate drop (cancelled / duplicate / rfq-dedup / takeover) is marked
+  `terminal:true`; and the drain re-parks any reject that is neither queued nor
+  terminal. A `send()` that throws is caught and re-queued too, so one bad send
+  never abandons the rest of the batch.
+- **The daily cap counts ACTUAL sends, not the sender's own parked backlog.**
+  Counting parked rows toward the 24h volume cap made a legitimately-staggered
+  40-shop batch trip its own ceiling (1 sent + 38 parked >= cap) and defer
+  almost everything. Concurrency is already serialized by the send-claim rows;
+  the hourly cap still counts due-soon pending for near-term pacing.
+- **Every external fetch is time-bounded.** `evoFetch` (Evolution) now aborts at
+  12s and Supabase's REST helpers (`runtime-config.ts` `timedFetch`) at 8s - a
+  cold/asleep host or a stalled DB connection returns a transient failure the
+  drain retries, instead of hanging a request until Vercel kills the function
+  (which, mid-drain, previously LOST an already-claimed row). Pinned by
+  `hardening-invariants.test.ts`.
+- **Pairing state is honest** (`isLinkedForUi` / `isLinkedFromStatus`, pinned by
+  `linked-status.test.ts`): a not-yet-opened `connecting` session no longer
+  reports `connected:true`. Previously `/api/wa/status`'s first 3s poll during a
+  first-time link saw the `connecting` row via `hasSessionRow`, reported linked,
+  and cleared the pairing code before the user could enter it. `/api/wa/status`
+  and `/api/wa/health` now require a durable `open` (still fail-safe on a DB
+  blip); the send path keeps `hasSessionRow`'s permissive semantics.
+- **Cross-user isolation on wakeup purges/reads.** `graph_wakeups` filters moved
+  off `thread_key=like.<email>:*` to the exact stamped `user_email=eq.` column,
+  and `wa_sessions` reads off `email=ilike.` to `email=eq.` - an underscore in
+  one user's email is a single-char SQL wildcard that could match (delete/read)
+  a different registered user's rows. Pinned by `hardening-invariants.test.ts`.
+
 **Owner infra action (the ~$10/mo ask):** the durable fix for the host itself is
 to move the Evolution instance off Render's **free** tier to **Render Starter
 (~$7/mo, no sleep, faster restart)** - this removes the recurring cold-start /

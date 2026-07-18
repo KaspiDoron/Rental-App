@@ -111,13 +111,13 @@ export async function POST(req: Request) {
     "wa_outbox",
     `sender_key=eq.${encodeURIComponent(session.email)}`
   ).catch(() => [] as { to_number: string }[]);
+  // EXACT owner match on the stamped column only. The old
+  // `thread_key=like.<email>:*` sweep was a cross-user hazard (an underscore in
+  // the email is a single-char SQL wildcard that could delete another user's
+  // wakeups); the deal-closed marker below is the backstop for any pre-column row.
   await sbDelete(
     "graph_wakeups",
     `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
-  ).catch(() => {});
-  await sbDelete(
-    "graph_wakeups",
-    `kind=eq.tick&thread_key=like.${encodeURIComponent(session.email + ":*")}`
   ).catch(() => {});
   const closeDigits = [...new Set([digits, ...purged.map((r) => r.to_number)].filter(Boolean))];
   for (const d of closeDigits) {

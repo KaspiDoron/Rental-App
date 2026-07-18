@@ -17,6 +17,7 @@ import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runtime-config";
 import { jidMatches } from "./wa/jid";
+import { isLinkedFromStatus } from "./wa/linked-status";
 import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
@@ -415,9 +416,19 @@ async function evoFetch(
   path: string,
   init?: RequestInit
 ): Promise<{ ok: boolean; status: number; data: any }> {
+  // HARD TIMEOUT. undici's fetch has no short overall request timeout, so a
+  // cold/asleep Evolution host (Render free tier) could hang the caller until
+  // Vercel kills the whole function - which, on the drain path, permanently
+  // LOSES an already-claimed outbox row. Bounding every call well under the 60s
+  // function limit turns a fatal hang into a transient failure the drain
+  // re-queues. The sibling probes (hostHealthDetail 4.5s, pingAllHosts 7s)
+  // already do this; the actual send/connect path must too.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
     const res = await fetch(`${host.url}${path}`, {
       ...init,
+      signal: ctrl.signal,
       headers: {
         "Content-Type": "application/json",
         apikey: host.key,
@@ -428,11 +439,14 @@ async function evoFetch(
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
   } catch (e) {
+    const aborted = e instanceof Error && e.name === "AbortError";
     return {
       ok: false,
       status: 0,
-      data: { error: e instanceof Error ? e.message : "network error" },
+      data: { error: aborted ? "evolution host timed out (12s)" : e instanceof Error ? e.message : "network error" },
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -573,11 +587,15 @@ export async function pauseIdleSessions(): Promise<number> {
  * sbSelect collapsed every error to [] -> null -> "not connected".
  */
 async function storedStatus(email: string): Promise<string | null> {
-  // ilike = case-insensitive equality, so rows written before emails were
-  // normalised to lowercase still count as linked.
+  // EXACT match on the lowercased email. saveSession ALWAYS writes
+  // email.trim().toLowerCase() (see its comment), so rows are guaranteed
+  // lowercase and eq. is correct. The old `ilike.` was a cross-user hazard: an
+  // underscore in one user's email is a single-char SQL wildcard, so
+  // `a_b@x.com` could match a DIFFERENT registered user `axb@x.com` and return
+  // their linked state.
   const res = await sbSelectStrict<{ status: string }>(
     "wa_sessions",
-    `select=status&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
+    `select=status&email=eq.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
   if ("error" in res) return res.error === "unavailable" ? "unknown" : null;
   return res.rows[0]?.status ?? null;
@@ -586,6 +604,21 @@ async function storedStatus(email: string): Promise<string | null> {
 /** True once the user has successfully paired (and hasn't explicitly logged out). */
 export async function wasEverConnected(email: string): Promise<boolean> {
   return (await storedStatus(email)) === "open";
+}
+
+/**
+ * Linked FOR THE UI: the user completed pairing at least once (durable status
+ * "open"), OR the store is momentarily unreachable (fail SAFE - a DB blip must
+ * never push a genuinely-paired user to re-link). A mere "connecting" row
+ * (connectInstance handed out a pairing code but the socket never opened) is
+ * explicitly NOT linked. hasSessionRow returns true for ANY row including that
+ * "connecting" one, which made /api/wa/status report connected=true on the
+ * first 3s poll of a first-time pairing - clearing the code before the user
+ * could enter it and stranding them "linked but never open". The status/health
+ * UI must use THIS, not raw row existence.
+ */
+export async function isLinkedForUi(email: string): Promise<boolean> {
+  return isLinkedFromStatus(await storedStatus(email));
 }
 
 /**
@@ -598,7 +631,7 @@ export async function wasEverConnected(email: string): Promise<boolean> {
 export async function hasSessionRow(email: string): Promise<boolean> {
   const res = await sbSelectStrict<{ email: string }>(
     "wa_sessions",
-    `select=email&email=ilike.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
+    `select=email&email=eq.${encodeURIComponent(email.trim().toLowerCase())}&limit=1`
   );
   if ("error" in res) return res.error === "unavailable"; // unavailable -> assume linked
   return res.rows.length > 0;
@@ -638,6 +671,10 @@ export async function ensureConnected(
       instanceName: instance,
       qrcode: false,
       integration: "WHATSAPP-BAILEYS",
+      // Privacy: never backfill the user's full personal history on a failover
+      // recreate either (data minimization must be set at create time on EVERY
+      // instance/create path, not applied post-hoc via a best-effort settings call).
+      syncFullHistory: false,
     }),
   });
   // Kick a reconnect on the resolved host.
@@ -816,6 +853,12 @@ export async function connectInstance(
         ...(digits ? { number: digits } : {}),
         webhook: webhookUrl,
         events: ["MESSAGES_UPSERT"],
+        // Privacy: the flat-retry path fires precisely BECAUSE this is an older
+        // Evolution build - the exact build whose comment below admits it
+        // ignores the post-hoc /settings/set hardening. So syncFullHistory
+        // MUST be declared here at create time, or the user's entire personal
+        // WhatsApp history gets backfilled into the shared store on a fresh link.
+        syncFullHistory: false,
       }),
     });
     if (!created.ok && created.status !== 403 && created.status !== 409) {

@@ -29,16 +29,16 @@ export async function POST() {
     `sender_key=eq.${encodeURIComponent(session.email)}`
   ).catch(() => [] as { to_number: string }[]);
 
-  // Wakeups: exact owner match (new stamped column) + the legacy LIKE sweep
-  // for rows written before the column existed. The marker in step 3 is the
-  // real backstop - a surviving tick sees sessionClosed and stays silent.
+  // Wakeups: EXACT owner match on the stamped column only. The old
+  // `thread_key=like.<email>:*` sweep was a cross-user hazard - an underscore
+  // in this user's email is a single-char SQL wildcard, so it could DELETE a
+  // different registered user's scheduled follow-ups. Any pre-column legacy row
+  // it used to catch is already covered by the session-closed marker in step 3
+  // (a surviving tick sees sessionClosed and stays silent), so dropping the
+  // wildcard sweep loses no correctness.
   await sbDelete(
     "graph_wakeups",
     `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
-  ).catch(() => {});
-  await sbDelete(
-    "graph_wakeups",
-    `kind=eq.tick&thread_key=like.${encodeURIComponent(session.email + ":*")}`
   ).catch(() => {});
 
   // 2. Tombstone every shop that still had something pending. Wakeup-only

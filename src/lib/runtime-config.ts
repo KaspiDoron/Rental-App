@@ -101,7 +101,7 @@ export async function supabaseDiagnostics(): Promise<SupabaseDiagnostics> {
     };
   }
   try {
-    const res = await fetch(`${conn.url}/rest/v1/app_config?select=key&limit=1`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/app_config?select=key&limit=1`, {
       headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
       cache: "no-store",
     });
@@ -162,6 +162,25 @@ export function supabaseConfigured(): boolean {
   return supabase() !== null;
 }
 
+/**
+ * fetch with a HARD timeout. undici's fetch has no short overall request
+ * timeout, so a Supabase connection that accepts but stalls would block the
+ * handler until Vercel's maxDuration - and a single guardOutbound/drain pass
+ * makes a dozen serial DB round-trips, so one stall cascades into killed
+ * requests across the fleet instead of degrading gracefully. On abort the call
+ * throws (AbortError), which every helper's existing catch already maps to its
+ * fail-safe/fail-closed value (sbSelect -> [], sbSelectStrict -> "unavailable").
+ */
+async function timedFetch(url: string, init: RequestInit, ms = 8000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Read rows from a Supabase table via the service role. [] if unset. */
 export async function sbSelect<T = Record<string, unknown>>(
   table: string,
@@ -170,7 +189,7 @@ export async function sbSelect<T = Record<string, unknown>>(
   const conn = supabase();
   if (!conn) return [];
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}?${query}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${query}`, {
       headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
       cache: "no-store",
     });
@@ -201,7 +220,7 @@ export async function sbSelectStrict<T = Record<string, unknown>>(
   // Unconfigured (demo mode) behaves like "missing": no table, no rows.
   if (!conn) return { error: "missing" };
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}?${query}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${query}`, {
       headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
       cache: "no-store",
     });
@@ -230,7 +249,7 @@ export async function sbInsert(
     const url = onConflict
       ? `${conn.url}/rest/v1/${table}?on_conflict=${onConflict}`
       : `${conn.url}/rest/v1/${table}`;
-    const res = await fetch(url, {
+    const res = await timedFetch(url, {
       method: "POST",
       headers: {
         apikey: conn.key,
@@ -264,7 +283,7 @@ export async function sbInsertClaim(
   const conn = supabase();
   if (!conn) return "error";
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}`, {
       method: "POST",
       headers: {
         apikey: conn.key,
@@ -290,7 +309,7 @@ export async function sbInsertReturning<T = Record<string, unknown>>(
   const conn = supabase();
   if (!conn || rows.length === 0) return [];
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}`, {
       method: "POST",
       headers: {
         apikey: conn.key,
@@ -312,7 +331,7 @@ export async function sbDelete(table: string, filter: string): Promise<boolean> 
   const conn = supabase();
   if (!conn) return false;
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${filter}`, {
       method: "DELETE",
       headers: {
         apikey: conn.key,
@@ -339,7 +358,7 @@ export async function sbDeleteReturning<T = Record<string, unknown>>(
   const conn = supabase();
   if (!conn) return [];
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${filter}`, {
       method: "DELETE",
       headers: {
         apikey: conn.key,
@@ -363,7 +382,7 @@ export async function sbUpdate(
   const conn = supabase();
   if (!conn) return false;
   try {
-    const res = await fetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${filter}`, {
       method: "PATCH",
       headers: {
         apikey: conn.key,
@@ -433,7 +452,7 @@ async function loadOverrides(): Promise<Record<string, string>> {
 
   if (s.cache && s.cache.exp > Date.now()) return { ...s.cache.data, ...s.mem };
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `${conn.url}/rest/v1/app_config?select=key,value`,
       {
         headers: {
@@ -490,7 +509,7 @@ export async function setConfig(
   try {
     let res: Response;
     if (value) {
-      res = await fetch(`${conn.url}/rest/v1/app_config?on_conflict=key`, {
+      res = await timedFetch(`${conn.url}/rest/v1/app_config?on_conflict=key`, {
         method: "POST",
         headers: {
           apikey: conn.key,
@@ -503,7 +522,7 @@ export async function setConfig(
         ]),
       });
     } else {
-      res = await fetch(
+      res = await timedFetch(
         `${conn.url}/rest/v1/app_config?key=eq.${encodeURIComponent(name)}`,
         {
           method: "DELETE",

@@ -168,8 +168,12 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "graph_wakeups",
-      `select=id,kind,thread_key,not_before,payload,created_at&thread_key=like.${encodeURIComponent(
-        email + ":*"
+      // EXACT ownership match on the stamped column - the old
+      // `thread_key=like.<email>:*` read could surface a DIFFERENT user's
+      // wakeup when one email `_`-wildcard-matched another. Same fix + same
+      // legacy-row tradeoff as the agent_events filter below.
+      `select=id,kind,thread_key,not_before,payload,created_at&user_email=eq.${encodeURIComponent(
+        email
       )}&kind=eq.tick&order=not_before.asc&limit=10`
     ).catch(() => []),
     sbSelect<{

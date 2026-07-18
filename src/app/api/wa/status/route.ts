@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import {
   connectionState,
   evolutionConfigured,
-  hasSessionRow,
+  isLinkedForUi,
   touchActivity,
   markOpen,
 } from "@/lib/evolution";
@@ -21,10 +21,13 @@ export async function GET() {
   if (!available) return NextResponse.json({ available: false, connected: false });
 
   const state = await connectionState(session.email);
-  // "paired" = the user has EVER linked (durable session row), not the live
-  // socket - so a transient host outage reports connected+reconnecting, never a
-  // hard "disconnected" that pushes a linked user to re-link.
-  const paired = state === "open" ? true : await hasSessionRow(session.email);
+  // "paired" = the user GENUINELY linked before (durable status "open"), not
+  // merely "a session row exists" - a not-yet-linked "connecting" row must NOT
+  // read as connected (that made first-time pairing report linked on the first
+  // 3s poll and clear the code before the user entered it). isLinkedForUi still
+  // fails SAFE on a DB blip, so a transient host outage reports
+  // connected+reconnecting, never a hard "disconnected" that re-links a paired user.
+  const paired = state === "open" ? true : await isLinkedForUi(session.email);
 
   // Persist "open" durably whenever we observe a live socket, so the send path
   // never later mistakes a transient drop for "never connected".
