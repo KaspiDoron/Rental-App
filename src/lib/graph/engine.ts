@@ -394,6 +394,13 @@ export async function runGraphTurn(
     await io.clearWakeups(state.threadKey, "tick");
   }
   state = applyExtractionToState(state, input.extraction, input.usablePrice, input.currency);
+  // The traveller has now shared a hotel (consented): clear the awaiting-location
+  // hold so the deposit/delivery probes resume - otherwise a thread that asked
+  // for the hotel would stay frozen forever even after the user added it. The
+  // answer node still sends the address the next time the shop asks.
+  if (state.fields.awaitingUserLocation && input.ctx.stay?.shareConsent && input.ctx.stay.label) {
+    state = { ...state, fields: { ...state.fields, awaitingUserLocation: false } };
+  }
   // User-action events carry their own state facts (the app already gated the
   // consent / close), so stamp them before the director evaluates.
   if (input.event.kind === "user-consent-pickup") {
