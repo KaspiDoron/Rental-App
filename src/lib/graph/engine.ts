@@ -1413,7 +1413,16 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       // and make delivery idempotent per unique message - the guard's own
       // checks are read-then-act and cannot do this alone.
       const { claimForSend, releaseSendClaim } = await import("../wa-guard");
-      const claim = await claimForSend(senderKey, toNumber, verdict.text, true);
+      // A reply/follow-up to an engaged shop paces per-recipient (distinct
+      // shops never serialize on each other); a cold intro keeps per-sender.
+      const sendKind = (meta as { kind?: string } | undefined)?.kind;
+      const claim = await claimForSend(
+        senderKey,
+        toNumber,
+        verdict.text,
+        true,
+        sendKind !== "rfq" && sendKind !== "custom"
+      );
       if (!claim.ok) {
         if (claim.kind === "duplicate") {
           return {
@@ -1528,16 +1537,21 @@ export async function drainGraphWakeups(send: LiveSend): Promise<number> {
       "graph_wakeups",
       `select=id,kind,thread_key,not_before,payload&not_before=lte.${encodeURIComponent(
         new Date().toISOString()
-      )}&order=not_before.asc&limit=5`
+      )}&order=not_before.asc&limit=24`
     );
     if (due.length === 0) return 0;
     const { sbDeleteReturning } = await import("../runtime-config");
-    for (const cand of due) {
+    // CONCURRENT drain: each due wakeup is an INDEPENDENT thread whose turn is a
+    // full multi-agent LLM compose. Running them sequentially made 40 live
+    // threads advance one-at-a-time (the "loses track of conversations it
+    // initiated" bug). A bounded worker pool overlaps the composes for distinct
+    // threads while the per-recipient send pacing keeps each shop paced.
+    const processOne = async (cand: WakeupRowDb): Promise<void> => {
       const claimed = await sbDeleteReturning<WakeupRowDb>(
         "graph_wakeups",
         `id=eq.${cand.id}`
       );
-      if (claimed.length === 0) continue; // another drainer won this row
+      if (claimed.length === 0) return; // another drainer won this row
       const row = claimed[0];
       try {
         if (row.kind === "tick") {
@@ -1579,7 +1593,19 @@ export async function drainGraphWakeups(send: LiveSend): Promise<number> {
           if (!ok) await sbInsert("graph_wakeups", [base]).catch(() => {});
         }
       }
-    }
+    };
+    // Bounded pool: at most CONCURRENCY composes in flight at once.
+    const CONCURRENCY = 6;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < due.length) {
+        const cand = due[next++];
+        await processOne(cand);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, due.length) }, () => worker())
+    );
   } catch {
     /* table missing / Supabase unset - nothing to drain */
   }

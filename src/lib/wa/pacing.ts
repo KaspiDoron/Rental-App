@@ -110,6 +110,12 @@ export type ClaimOutcome =
  *   current bucket also requires the PREVIOUS bucket to be free or older
  *   than the gap, so two sends can never land min-gap-epsilon apart across
  *   a bucket boundary.
+ *   - perRecipient (REPLIES to already-engaged shops): the gap slot is keyed
+ *     by (sender, RECIPIENT, bucket) instead of (sender, bucket). Distinct
+ *     engaged shops no longer serialize through ONE per-sender window - 40
+ *     live threads can each get their counter-reply promptly - while the SAME
+ *     shop is still min-gap paced. Cold first-contact intros keep the strict
+ *     per-sender lane (velocity to NEW numbers is the real ban vector).
  *
  * Fail CLOSED: an unknown claim state ("error") refuses the send - the
  * caller re-queues. A missing wa_send_claims table (schema not migrated)
@@ -121,6 +127,9 @@ export async function claimSendSlots(opts: {
   text: string;
   auto: boolean;
   gapSeconds: number;
+  /** REPLY lane: key the pacing slot per-recipient so distinct engaged shops
+   * do not serialize on one another (idempotency stays per-message). */
+  perRecipient?: boolean;
   nowMs?: number;
 }): Promise<ClaimOutcome> {
   const now = opts.nowMs ?? Date.now();
@@ -142,7 +151,10 @@ export async function claimSendSlots(opts: {
   if (!opts.auto) return { ok: true };
 
   const bucket = gapBucket(now, opts.gapSeconds);
-  const slotFor = (b: number) => `gap:${opts.gapSeconds}:${b}`;
+  // Reply lane -> the gap slot carries the recipient, so two DIFFERENT shops
+  // never contend for the same bucket (only the same shop is serialized).
+  const laneKey = opts.perRecipient ? `:${digitsOnly(opts.toDigits)}` : "";
+  const slotFor = (b: number) => `gap:${opts.gapSeconds}${laneKey}:${b}`;
   const releaseOwn = async (slots: string[]) => {
     for (const s of slots) {
       await sbDelete(

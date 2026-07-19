@@ -218,6 +218,66 @@ describe("claimSendSlots - lock-free serialization", () => {
   });
 });
 
+describe("claimSendSlots - per-recipient REPLY lane (concurrent negotiations)", () => {
+  const common = { senderKey: "u@x.com", auto: true, gapSeconds: 12 };
+  const t0 = 1_700_000_000_000 - (1_700_000_000_000 % 12_000); // bucket-aligned
+
+  it("two DIFFERENT engaged shops both send in the same window", async () => {
+    const a = await claimSendSlots({
+      ...common,
+      toDigits: "111111",
+      text: "reply to shop A",
+      perRecipient: true,
+      nowMs: t0,
+    });
+    const b = await claimSendSlots({
+      ...common,
+      toDigits: "222222",
+      text: "reply to shop B",
+      perRecipient: true,
+      nowMs: t0 + 500,
+    });
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true); // distinct recipients no longer serialize
+  });
+
+  it("the SAME shop is STILL min-gap serialized in the reply lane", async () => {
+    const a = await claimSendSlots({
+      ...common,
+      toDigits: "111111",
+      text: "first to A",
+      perRecipient: true,
+      nowMs: t0,
+    });
+    const b = await claimSendSlots({
+      ...common,
+      toDigits: "111111",
+      text: "second to A too soon",
+      perRecipient: true,
+      nowMs: t0 + 500,
+    });
+    expect(a.ok).toBe(true);
+    expect(b).toEqual({ ok: false, kind: "pacing" });
+  });
+
+  it("cold intros (no perRecipient) still serialize across recipients", async () => {
+    const a = await claimSendSlots({
+      ...common,
+      toDigits: "111111",
+      text: "cold intro A",
+      nowMs: t0,
+    });
+    const b = await claimSendSlots({
+      ...common,
+      toDigits: "222222",
+      text: "cold intro B",
+      nowMs: t0 + 500,
+    });
+    expect(a.ok).toBe(true);
+    expect(b).toEqual({ ok: false, kind: "pacing" }); // per-sender velocity lane
+  });
+});
+
 describe("gapBucket", () => {
   it("is stable within a window and increments across it", () => {
     expect(gapBucket(120_000, 60)).toBe(2);

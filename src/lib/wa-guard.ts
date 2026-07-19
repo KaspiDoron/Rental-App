@@ -24,6 +24,7 @@
 import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
+import { digitsOnly } from "./phone";
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
 import { stripWaFormatting } from "./text";
@@ -1229,9 +1230,9 @@ export async function guardOutbound(opts: {
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
   // moment the DB blips - the exact outage-mode failure the guard exists for).
-  const sentRes = await sbSelectStrict<{ received_at: string }>(
+  const sentRes = await sbSelectStrict<{ received_at: string; to_number: string }>(
     "whatsapp_messages",
-    `select=received_at&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
+    `select=received_at,to_number&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       opts.senderKey
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()
@@ -1325,9 +1326,27 @@ export async function guardOutbound(opts: {
   // 6. ANTI-ROBOTIC MINIMUM GAP with jitter (never two sends back-to-back). The
   //    gap is stretched by the stealth factor when the number looks risky, so a
   //    wobbling number instantly paces slower without a hard freeze.
-  if (rep.last_send_at) {
+  //    REPLY LANE: a counter-reply to an already-engaged shop paces against the
+  //    last send TO THAT SHOP - not the sender-global last send - so 40 live
+  //    threads never queue behind one another (the "one shop at a time" bug).
+  //    A human juggling many chats answers several within a minute; only the
+  //    SAME shop is min-gap paced. Cold intros keep the strict per-sender gap.
+  const isReply = opts.auto && !isNewContact;
+  let lastSendRefMs = 0;
+  if (isReply) {
+    const toDig = digitsOnly(opts.toDigits);
+    for (const r of sentRows) {
+      if (digitsOnly(r.to_number) !== toDig) continue;
+      const t = Date.parse(r.received_at);
+      if (Number.isFinite(t) && t > lastSendRefMs) lastSendRefMs = t;
+    }
+  } else if (rep.last_send_at) {
+    const t = Date.parse(rep.last_send_at);
+    if (Number.isFinite(t)) lastSendRefMs = t;
+  }
+  if (lastSendRefMs > 0) {
     const gapNeeded = (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000 * stealth;
-    const since = now - Date.parse(rep.last_send_at);
+    const since = now - lastSendRefMs;
     if (opts.auto && since < gapNeeded) {
       const reason = stealth > 1.3 ? "easing off to keep your number safe" : "human pacing gap";
       return await queue(new Date(now + (gapNeeded - since)).toISOString(), reason);
@@ -1371,7 +1390,7 @@ export async function drainOutbox(
     "wa_outbox",
     `select=id,sender_key,to_number,body,not_before,meta&not_before=lte.${encodeURIComponent(
       new Date().toISOString()
-    )}&order=not_before.asc&limit=14`
+    )}&order=not_before.asc&limit=48`
   );
   // PRIORITY: an engaged shop waiting on our reply must never sit behind a cold
   // introductions batch due at the same moment (the "our agents never message
@@ -1380,20 +1399,34 @@ export async function drainOutbox(
   const priOf = (row: OutboxRow) => outboxSendPriority((row.meta as { kind?: string } | null)?.kind);
   const candidates = [...dueRows]
     .sort((a, b) => priOf(a) - priOf(b) || a.not_before.localeCompare(b.not_before))
-    .slice(0, 8);
+    .slice(0, 30);
   const { sbDeleteReturning } = await import("./runtime-config");
   const { claimSendSlots, releaseMessageClaim, gcSendClaims } = await import("./wa/pacing");
   const p = await getPolicies();
   let sent = 0;
-  // Per-invocation, per-sender cap: a backlog (e.g. ten rows stamped with the
-  // same old ETA) drains as a PACED trickle, not a burst.
-  const sentBySender = new Map<string, number>();
+  // Per-invocation drain budgets. COLD INTROS (rfq) stay strictly paced per
+  // sender (2/invocation) - new-number velocity is the ban vector. REPLIES to
+  // engaged shops drain CONCURRENTLY: at most one per shop per invocation (never
+  // double-send a shop) up to an overall paced ceiling, so many live threads
+  // advance together instead of one-at-a-time. The tick self-chains, so any
+  // overflow drains within ~a minute rather than in a burst.
+  const isCold = (row: OutboxRow) => (row.meta as { kind?: string } | null)?.kind === "rfq";
+  const rfqBySender = new Map<string, number>();
+  const replySentToRecipient = new Set<string>();
+  let replyBudget = 16;
   for (const cand of candidates) {
-    if ((sentBySender.get(cand.sender_key) ?? 0) >= 2) {
-      // SMOOTH the remainder: push still-due rows forward with jitter so the
-      // NEXT drain doesn't instantly fire them either (a slow-motion burst).
+    const cold = isCold(cand);
+    const rcptKey = `${cand.sender_key}|${digitsOnly(cand.to_number)}`;
+    const overCap = cold
+      ? (rfqBySender.get(cand.sender_key) ?? 0) >= 2
+      : replyBudget <= 0 || replySentToRecipient.has(rcptKey);
+    if (overCap) {
+      // SMOOTH the remainder so the NEXT drain doesn't instantly fire it either
+      // (a slow-motion burst). Replies get a gentler push (~30-90s) so an
+      // engaged shop still hears back within the ~2 min ceiling; cold intros are
+      // held longer (2-4 min) - velocity to new numbers is the ban risk.
       await sbUpdate("wa_outbox", `id=eq.${cand.id}`, {
-        not_before: jitteredHold(Date.now(), 2, 2),
+        not_before: cold ? jitteredHold(Date.now(), 2, 2) : jitteredHold(Date.now(), 0.5, 1),
       }).catch(() => {});
       continue;
     }
@@ -1458,6 +1491,10 @@ export async function drainOutbox(
       text: verdict.text,
       auto: true,
       gapSeconds: p.min_gap_seconds,
+      // A reply/follow-up to an already-engaged shop paces PER-RECIPIENT, so 40
+      // live threads do not serialize through one per-sender window. A cold
+      // intro (rfq) keeps the strict per-sender velocity lane.
+      perRecipient: rowKind !== "rfq" && rowKind !== "custom",
     });
     if (!claim.ok) {
       if (claim.kind === "duplicate") continue; // another invocation is delivering it
@@ -1492,7 +1529,12 @@ export async function drainOutbox(
     }
     if (r.ok) {
       sent++;
-      sentBySender.set(row.sender_key, (sentBySender.get(row.sender_key) ?? 0) + 1);
+      if (cold) {
+        rfqBySender.set(row.sender_key, (rfqBySender.get(row.sender_key) ?? 0) + 1);
+      } else {
+        replySentToRecipient.add(rcptKey);
+        replyBudget--;
+      }
       await afterSend(row.sender_key, row.to_number);
       await sbInsert("whatsapp_messages", [
         {
@@ -1601,11 +1643,12 @@ export async function claimForSend(
   senderKey: string,
   toDigits: string,
   text: string,
-  auto: boolean
+  auto: boolean,
+  perRecipient = false
 ): Promise<import("./wa/pacing").ClaimOutcome> {
   const p = await getPolicies();
   const { claimSendSlots } = await import("./wa/pacing");
-  return claimSendSlots({ senderKey, toDigits, text, auto, gapSeconds: p.min_gap_seconds });
+  return claimSendSlots({ senderKey, toDigits, text, auto, gapSeconds: p.min_gap_seconds, perRecipient });
 }
 
 /** Release a message claim after a failed direct send (retry-friendly). */
