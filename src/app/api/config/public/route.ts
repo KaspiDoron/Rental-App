@@ -25,7 +25,7 @@ export async function GET() {
     // Client polling cadence: SCALE_MODE stretches intervals to cut function
     // invocations under load (Vercel Hobby has no workers to add).
     poll: scaled
-      ? { activityMs: 25000, repliesMs: 30000, tagsMs: 300000 }
-      : { activityMs: 12000, repliesMs: 15000, tagsMs: 120000 },
+      ? { activityMs: 15000, repliesMs: 20000, tagsMs: 300000 }
+      : { activityMs: 6000, repliesMs: 8000, tagsMs: 120000 },
   });
 }

@@ -687,6 +687,37 @@ export default function Home() {
           .filter((it: { kind?: string; vendorId?: string }) => it.kind === "sent" && it.vendorId)
           .map((it: { vendorId: string }) => it.vendorId)
       );
+      // OFFERS from the fast activity feed: /api/activity already returns priced
+      // offers (kind:"offer"), but only the slower 15-30s replies poll was
+      // setting v.offer - so OFFERS IN sat at 0 for minutes even after a shop
+      // quoted a price. Seed a minimal offer here so the counter + deals view
+      // advance on the 6-12s activity cadence; the richer replies poll enriches
+      // it (deposit/delivery/etc.) later. Items are newest-first, so the first
+      // per vendor is the latest.
+      const offerByVendor = new Map<
+        string,
+        { pricePerDay: number; currency: string; round: number; verified: boolean }
+      >();
+      for (const it of (Array.isArray(d.items) ? d.items : []) as {
+        kind?: string;
+        vendorId?: string;
+        meta?: { pricePerDay?: number; currency?: string; round?: number; verified?: boolean };
+      }[]) {
+        if (
+          it.kind === "offer" &&
+          it.vendorId &&
+          it.meta &&
+          typeof it.meta.pricePerDay === "number" &&
+          !offerByVendor.has(it.vendorId)
+        ) {
+          offerByVendor.set(it.vendorId, {
+            pricePerDay: it.meta.pricePerDay,
+            currency: String(it.meta.currency ?? "USD"),
+            round: Number(it.meta.round ?? 0),
+            verified: Boolean(it.meta.verified),
+          });
+        }
+      }
       setVendors((vs) =>
         vs.map((v) => {
           if (!v.id) return v;
@@ -702,6 +733,30 @@ export default function Home() {
           if (dbState) {
             const target = stageForState(dbState);
             if (canAdvance(base.stage, target)) base = { ...base, stage: target };
+          }
+          // Seed the offer from the activity feed so OFFERS IN advances fast
+          // (only when the card has no richer offer yet - never overwrite the
+          // detailed one the replies poll builds).
+          if (!base.offer) {
+            const o = offerByVendor.get(base.id);
+            if (o) {
+              base = {
+                ...base,
+                stage: "offer-received",
+                offer: {
+                  pricePerDay: o.pricePerDay,
+                  listPricePerDay: o.pricePerDay,
+                  currency: o.currency,
+                  totalPrice: o.pricePerDay * (rfq?.durationDays ?? 1),
+                  includesInsurance: false,
+                  includesDelivery: false,
+                  message: "",
+                  round: o.round,
+                  verified: o.verified,
+                  simulated: false,
+                },
+              };
+            }
           }
           if (base.offer) return base; // an offer supersedes any queue badge
           const held = byVendor.get(base.id);
