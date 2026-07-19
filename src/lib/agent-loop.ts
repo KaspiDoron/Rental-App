@@ -33,6 +33,9 @@ export interface ThreadContext {
   plan?: string;
   channel?: string;
   localLang?: boolean;
+  // The traveller's consented accommodation, stamped on the outbound at send
+  // time so a shop asking "where is your hotel?" can be answered - never guessed.
+  stay?: { label: string; lat?: number; lng?: number; shareConsent: boolean };
 }
 
 interface OutboundRow {
@@ -596,6 +599,19 @@ export async function processVendorReply(opts: {
   // chief Negotiation Director (multi-round bargaining, deposit + fulfillment
   // probing, strategic waits, media coherence, judge scoring). The legacy
   // inline pipeline below is kept behind GRAPH_ENGINE=off for one release.
+  // Resolve the traveller's consented stay FRESH from their profile at turn time
+  // (never the frozen outbound meta), so once they add their hotel the very next
+  // shop message is answered with it - the delivery-loop fix.
+  if (ctx.sender) {
+    try {
+      const { getUserStay } = await import("./access");
+      const stay = await getUserStay(ctx.sender);
+      if (stay) (ctx as ThreadContext).stay = stay;
+    } catch {
+      /* no stay resolvable -> the loop-stop branch prompts the user */
+    }
+  }
+
   const { graphEngineEnabled } = await import("./graph/engine");
   if (await graphEngineEnabled()) {
     const { runGraphTurn, liveGraphIO } = await import("./graph/engine");

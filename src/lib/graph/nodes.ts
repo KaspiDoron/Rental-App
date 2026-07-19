@@ -8,6 +8,7 @@ import { composeBargain, currencyForRegion, money } from "../agents";
 import { chat } from "../ai";
 import { computeRoundTarget } from "./math";
 import { ownerDirectives, registerRules, type OrchestratorConfig } from "../orchestrator";
+import { shopAskedLocation } from "../wa/detectors";
 import type { StructuredRFQ, Vendor } from "../types";
 import type {
   FulfillmentKind,
@@ -25,7 +26,8 @@ export function shopAskedQuestion(text: string): boolean {
     /\?/.test(text) ||
     /\b(you mean|do you mean|which (one|type|kind|model)|what (kind|type|size|model|dates?|day|time)|motor ?bike or car|car or (motor ?)?bike|scooter or (motor ?)?bike|how (many|long|much time)|when (do|will|are) you|where (are|do) you|pick ?up or delivery)\b/i.test(
       text
-    )
+    ) ||
+    shopAskedLocation(text)
   );
 }
 
@@ -168,6 +170,39 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
     }
 
     case "answer": {
+      // DELIVERY LOCATION comes first: a shop asking where the traveller stays
+      // must be answered with the consented address, or the agent must STOP and
+      // let the app ask the user - it must NEVER loop the boilerplate probe.
+      if (shopAskedLocation(text)) {
+        const stay = input.ctx.stay;
+        if (stay?.shareConsent && stay.label) {
+          const link =
+            typeof stay.lat === "number" && typeof stay.lng === "number"
+              ? ` My location: https://maps.google.com/?q=${stay.lat.toFixed(6)},${stay.lng.toFixed(6)}`
+              : "";
+          return {
+            message: `I stay at ${stay.label}.${link} Can you deliver there? 🙂`.slice(0, 400),
+            kind: "auto-answer",
+            reasoning: "answered the shop's delivery-location question with the traveller's consented stay",
+            fieldsPatch: { awaitingUserLocation: false },
+          };
+        }
+        // No shareable stay: one holding line, then flag the app to ask the
+        // traveller and go quiet - the loop-stop that fixes the "Where is your
+        // hotel? -> re-asks deposit/delivery" brick.
+        if (f.awaitingUserLocation) {
+          return {
+            reasoning: "already asked the traveller for their hotel - silent until they share it",
+            terminal: true,
+          };
+        }
+        return {
+          message: "Let me get my hotel address and send it to you shortly 🙏",
+          kind: "auto-answer",
+          reasoning: "shop asked for the delivery location but the traveller shared none - flagging the app to ask, one holding line",
+          fieldsPatch: { awaitingUserLocation: true },
+        };
+      }
       const vehiclePhoto =
         extraction?.imageKind === "vehicle" && !shopAskedQuestion(text);
       const spec = fallbackAnswer(input.rfq);
@@ -238,6 +273,9 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
     }
 
     case "momentum": {
+      if (f.awaitingUserLocation) {
+        return { reasoning: "awaiting the traveller's hotel - no momentum probe", terminal: true };
+      }
       // A brief/agreeable reply ("Yes.", "ok") advanced nothing - a
       // confirmation is the BEGINNING of qualification, not the end. Ask the
       // single most useful missing thing; with everything known, confirm the
@@ -337,6 +375,11 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
     }
 
     case "deposit-probe": {
+      // Never re-probe while we are waiting on the traveller's hotel - that is
+      // the exact loop this fix kills.
+      if (f.awaitingUserLocation) {
+        return { reasoning: "awaiting the traveller's hotel - no deposit probe", terminal: true };
+      }
       const passportOnly = f.depositType === "passport" && !f.cashAlternativeAsked;
       const needFulfillment = !f.fulfillment;
       let base: string;
@@ -366,6 +409,9 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
     }
 
     case "fulfillment-probe": {
+      if (f.awaitingUserLocation) {
+        return { reasoning: "awaiting the traveller's hotel - no fulfillment probe", terminal: true };
+      }
       const v = await vary(
         pick(FULFILLMENT_PROBES),
         args,

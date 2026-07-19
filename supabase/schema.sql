@@ -646,6 +646,12 @@ alter table public.app_users add column if not exists terms_version text;
 alter table public.app_users add column if not exists terms_accepted_at timestamptz;
 alter table public.app_users add column if not exists wa_risk_accepted_at timestamptz;
 alter table public.app_users add column if not exists ai_responsibility_accepted_at timestamptz;
+-- Where the traveller is staying (for delivery). Coordinates are shared with
+-- shops ONLY when stay_share_consent_at is set (explicit per-user opt-in).
+alter table public.app_users add column if not exists stay_label text;
+alter table public.app_users add column if not exists stay_lat double precision;
+alter table public.app_users add column if not exists stay_lng double precision;
+alter table public.app_users add column if not exists stay_share_consent_at timestamptz;
 
 -- ================================================================================
 -- AI OPERATIONS CENTER - owner review console + learning loop

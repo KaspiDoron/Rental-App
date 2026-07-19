@@ -708,6 +708,30 @@ export async function runGraphTurn(
     if (result.fieldsPatch) {
       state = { ...state, fields: { ...state.fields, ...result.fieldsPatch } };
     }
+    // A shop asked for the traveller's hotel and we have none: prompt the user
+    // (once - the answer node only flips this on the transition) so they can add
+    // it and the deal keeps moving instead of looping.
+    if (result.fieldsPatch?.awaitingUserLocation === true && input.ctx.sender) {
+      if (io.recordEvent) {
+        await io
+          .recordEvent({
+            kind: "awaiting-location",
+            vendorId: input.ctx.vendorId ?? "",
+            vendorName: input.ctx.vendorName ?? "",
+            detail: JSON.stringify({ email: input.ctx.sender }),
+          })
+          .catch(() => {});
+      }
+      import("../push")
+        .then((m) =>
+          m.sendPushToUser(input.ctx.sender!, {
+            title: "A shop needs your hotel 🏨",
+            body: `${input.ctx.vendorName ?? "A shop"} asked where to deliver - add your hotel in your profile to keep the deal moving.`,
+            url: "/",
+          })
+        )
+        .catch(() => {});
+    }
     push({
       stage: node.kind,
       nodeId: node.id,
@@ -1664,6 +1688,17 @@ export async function buildTurnFromThread(
     rfq?: import("../types").StructuredRFQ | null;
   };
   if (!ctx?.rfq) return null;
+  // Resolve the traveller's consented stay FRESH (never the frozen outbound
+  // meta) so a hotel added after the thread started is used on the next tick.
+  if (ctx.sender) {
+    try {
+      const { getUserStay } = await import("../access");
+      const stay = await getUserStay(ctx.sender);
+      if (stay) ctx.stay = stay;
+    } catch {
+      /* best-effort */
+    }
+  }
 
   // Session lifecycle: the same closed-session guard the live loop uses.
   let sessionClosed = false;

@@ -26,6 +26,8 @@ export async function GET() {
           plan: session?.plan ?? profile.plan,
           mustChangePassword: Boolean(profile.mustChangePassword),
           hasPassword: Boolean(profile.passwordHash),
+          stayLabel: profile.stayLabel ?? null,
+          stayShareConsent: Boolean(profile.stayShareConsentAt),
         }
       : null,
   });

@@ -181,6 +181,10 @@ export interface ThreadFields {
   mileageKm?: number; // odometer seen in a photo - bargaining leverage
   conditionNotes?: string; // visible condition (scratches, worn tires...)
   mediaSummary?: string; // everything informative the last photo showed
+  // The shop asked WHERE the traveller is staying (for delivery) and we had no
+  // shareable address - the agent stops probing and the app prompts the user
+  // for their hotel instead of looping the boilerplate delivery question.
+  awaitingUserLocation?: boolean;
 }
 
 export interface NegotiationThreadState {
@@ -284,6 +288,10 @@ export interface GraphTurnInput {
     plan?: string;
     channel?: string;
     localLang?: boolean;
+    // Where the traveller is staying, resolved server-side from their profile
+    // ONLY when they consented to share it with shops (privacy). Coordinates are
+    // present only with consent; label-only otherwise.
+    stay?: { label: string; lat?: number; lng?: number; shareConsent: boolean };
   };
   rfq: StructuredRFQ;
   extraction: ExtractedOffer | null;

@@ -40,6 +40,12 @@ export interface UserRecord {
   // The two additional mandatory consents (WhatsApp ban risk + AI responsibility).
   waRiskAcceptedAt?: number;
   aiResponsibilityAcceptedAt?: number;
+  // Where the traveller is staying (for delivery). Shared with shops ONLY when
+  // stayShareConsentAt is set - coordinates never leave the app without it.
+  stayLabel?: string;
+  stayLat?: number;
+  stayLng?: number;
+  stayShareConsentAt?: number;
   addedAt: number;
   lastSeen: number;
 }
@@ -100,6 +106,10 @@ interface UserRow {
   terms_accepted_at: string | null;
   wa_risk_accepted_at: string | null;
   ai_responsibility_accepted_at: string | null;
+  stay_label: string | null;
+  stay_lat: number | null;
+  stay_lng: number | null;
+  stay_share_consent_at: string | null;
   added_at: string | null;
   last_seen: string | null;
 }
@@ -121,6 +131,10 @@ function fromRow(r: UserRow): UserRecord {
     aiResponsibilityAcceptedAt: r.ai_responsibility_accepted_at
       ? Date.parse(r.ai_responsibility_accepted_at)
       : undefined,
+    stayLabel: r.stay_label ?? undefined,
+    stayLat: typeof r.stay_lat === "number" ? r.stay_lat : undefined,
+    stayLng: typeof r.stay_lng === "number" ? r.stay_lng : undefined,
+    stayShareConsentAt: r.stay_share_consent_at ? Date.parse(r.stay_share_consent_at) : undefined,
     addedAt: r.added_at ? Date.parse(r.added_at) : Date.now(),
     lastSeen: r.last_seen ? Date.parse(r.last_seen) : Date.now(),
   };
@@ -148,13 +162,54 @@ async function mirror(rec: UserRecord): Promise<boolean> {
       ? new Date(rec.aiResponsibilityAcceptedAt).toISOString()
       : null,
   };
-  // sbInsert fails silently on an unknown column, so before the consent-column
-  // migration runs the whole upsert (and thus signup) would break. Retry
-  // without the new columns so registration never depends on a pending
-  // migration - same graceful-degradation pattern used across the app.
-  const ok = await sbInsert("app_users", [withConsents], "email");
-  if (ok) return true;
+  const withStay = {
+    ...withConsents,
+    stay_label: rec.stayLabel ?? null,
+    stay_lat: rec.stayLat ?? null,
+    stay_lng: rec.stayLng ?? null,
+    stay_share_consent_at: rec.stayShareConsentAt
+      ? new Date(rec.stayShareConsentAt).toISOString()
+      : null,
+  };
+  // sbInsert fails silently on an unknown column, so before a column migration
+  // runs the whole upsert (and thus signup) would break. Three-tier fallback so
+  // registration never depends on a pending migration, and adding the stay
+  // columns never regresses the already-migrated consent columns.
+  if (await sbInsert("app_users", [withStay], "email")) return true;
+  if (await sbInsert("app_users", [withConsents], "email")) return true;
   return sbInsert("app_users", [base], "email");
+}
+
+/** The traveller's consented stay for the agent - null when none/unconsented. */
+export async function getUserStay(
+  email: string
+): Promise<{ label: string; lat?: number; lng?: number; shareConsent: boolean } | null> {
+  const rec = await getUser(email);
+  if (!rec?.stayLabel) return null;
+  const shareConsent = Boolean(rec.stayShareConsentAt);
+  return {
+    label: rec.stayLabel,
+    // Coordinates ONLY travel with explicit consent (privacy).
+    lat: shareConsent ? rec.stayLat : undefined,
+    lng: shareConsent ? rec.stayLng : undefined,
+    shareConsent,
+  };
+}
+
+/** Save the traveller's stay + the explicit share-with-shops consent. */
+export async function setUserStay(
+  email: string,
+  stay: { label?: string; lat?: number; lng?: number; shareConsent: boolean }
+): Promise<boolean> {
+  const rec = await getUser(email, { fresh: true });
+  if (!rec) return false;
+  rec.stayLabel = stay.label?.trim() || undefined;
+  rec.stayLat = typeof stay.lat === "number" ? stay.lat : undefined;
+  rec.stayLng = typeof stay.lng === "number" ? stay.lng : undefined;
+  // Consent is a server-recorded timestamp; clearing it revokes sharing.
+  rec.stayShareConsentAt = stay.shareConsent && rec.stayLabel ? Date.now() : undefined;
+  const persisted = await mirror(rec);
+  return supabaseConfigured() ? persisted : true;
 }
 
 // ---- CRUD ---------------------------------------------------------------------
