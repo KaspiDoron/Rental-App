@@ -34,6 +34,12 @@ import { evalGraphCondition, explainCondition } from "./conditions";
 import { deterministicChoice, runDirector } from "./director";
 import { composeForNode, computeRoundTarget } from "./nodes";
 import {
+  buildSafeBargainAsk,
+  checkOutboundNumbers,
+  hardConstraintBreached,
+  hardConstraintDecline,
+} from "./guardrails";
+import {
   applyExtractionToState,
   dealComplete,
   depositKnown,
@@ -676,14 +682,15 @@ export async function runGraphTurn(
     const edge = spec.edges.find((x) => x.id === choice.edgeId)!;
     const node = nodesById.get(edge.to)!;
 
-    // Honest cross-shop leverage must survive the DETERMINISTIC path too: when
-    // the LLM director is off/unreachable it never writes a leverageNote, so a
-    // real cheaper rival would silently vanish from the bargain prompt.
+    // Honest cross-shop leverage the composer may mention is derived ONLY from
+    // a REAL rival price in this session - NEVER from the LLM director's
+    // free-text leverageNote, which can hallucinate a competitor that does not
+    // exist ("another shop quoted 220"). The director's note stays in the trace
+    // for observability, but only a verified rivalPrice reaches the bargainer.
     const leverageNote =
-      choice.leverageNote ??
-      (rivalPrice && node.id === "bargain"
+      rivalPrice && node.id === "bargain"
         ? `another shop nearby offered ${rivalPrice} ${input.currency}/day for the same vehicle`
-        : undefined);
+        : undefined;
 
     const result = await composeForNode({
       node,
@@ -748,6 +755,14 @@ export async function runGraphTurn(
       target,
       rivalPrice,
       leverageNote: choice.leverageNote,
+      // The shop's live ceiling for the numeric-sanity gate: our ask may never
+      // exceed the highest real price on the table (spoken quote or posted list).
+      shopCeiling:
+        Math.max(
+          state.fields.pricePerDay ?? 0,
+          state.fields.sheetPricePerDay ?? 0,
+          input.usablePrice ?? 0
+        ) || undefined,
       input,
       io,
       spec,
@@ -783,7 +798,7 @@ export async function runGraphTurn(
           userEmail: input.ctx.sender,
           vendorId: input.ctx.vendorId,
           tactic: result.tacticId,
-          message: result.message,
+          message: delivered.finalText ?? result.message,
         })
         .catch(() => {});
     }
@@ -867,6 +882,7 @@ async function runTailGates(args: {
   target?: number;
   rivalPrice?: number;
   leverageNote?: string;
+  shopCeiling?: number;
   input: GraphTurnInput;
   io: GraphIO;
   spec: GraphSpec;
@@ -1057,6 +1073,101 @@ async function runTailGates(args: {
         verdict: "veto",
       });
       return { delivered: "blocked", detail: verdict.reason ?? "safety block" };
+    }
+  }
+
+  // ---- negotiation integrity (deterministic pre-send validation) -------------
+  // The last, un-bypassable arithmetic + constraint check on the FINAL text an
+  // LLM produced. Catches the three failure classes no prompt fully prevents:
+  // a fabricated rival, an inverted / sub-floor ask, and bargaining on a
+  // vehicle that violates a hard user filter. Manual (non-auto) sends are never
+  // touched - a human's own words are their own.
+  {
+    const PRICE_TREATING = new Set([
+      "bargain",
+      "momentum",
+      "deposit-probe",
+      "fulfillment-probe",
+      "closing-message",
+    ]);
+    // (1) HARD-CONSTRAINT BREACH: the shop's price is for a vehicle that
+    // violates the traveller's immutable filter (they asked manual, the shop
+    // pivoted to an automatic). Decline that track - never bargain or accept it.
+    if (
+      hardConstraintBreached(input.rfq, input.extraction) &&
+      PRICE_TREATING.has(args.nodeId)
+    ) {
+      const decline = hardConstraintDecline(input.rfq);
+      push({
+        stage: "safety",
+        nodeId: "safety",
+        input: text,
+        reasoning: `hard-constraint guard: the shop's offer is for a vehicle that violates the pinned ${
+          input.rfq.transmission !== "any" ? input.rfq.transmission : "vehicle"
+        } requirement - declining that track instead of bargaining on a garbage deal`,
+        output: decline,
+        verdict: "revised",
+      });
+      text = decline;
+      englishGloss = undefined;
+    } else if (["bargain", "momentum", "close", "answer"].includes(args.nodeId)) {
+      // (2) NUMERIC SANITY: fabricated rival (any of these nodes) + the
+      // sub-floor / inverted-ask bounds (the price-asking bargain node only).
+      const isBargain = args.nodeId === "bargain";
+      const excludeExact = [
+        input.rfq?.durationDays,
+        input.rfq?.engineSizeCc,
+        input.rfq?.seats,
+        input.rfq?.helmetCount,
+        input.rfq?.driverAge,
+      ].filter((n): n is number => typeof n === "number");
+      const check = checkOutboundNumbers({
+        text,
+        ceiling: isBargain ? args.shopCeiling : undefined,
+        floor: isBargain ? input.floorPrice : undefined,
+        rivalPrice: args.rivalPrice,
+        excludeExact,
+        checkAskBounds: isBargain,
+      });
+      if (!check.ok) {
+        const { money } = await import("../agents");
+        const safe = isBargain
+          ? buildSafeBargainAsk({
+              target: args.target,
+              ceiling: args.shopCeiling,
+              floor: input.floorPrice,
+              durationDays: input.rfq?.durationDays,
+              currency: input.currency,
+              money,
+            })
+          : null;
+        if (safe) {
+          // Graceful fallback: replace the unsafe draft with an arithmetically
+          // sane, rival-free ask at the ladder's already-clamped target.
+          push({
+            stage: "safety",
+            nodeId: "safety",
+            input: text,
+            reasoning: `numeric guard (${check.violation}): ${check.detail} - repaired to a safe ask at the market-anchored target`,
+            output: safe,
+            verdict: "revised",
+          });
+          text = safe;
+          englishGloss = undefined;
+        } else {
+          // No honest repair possible - block. The run-budget rollback in the
+          // caller lets the next event recompose cleanly (never a lie sent).
+          push({
+            stage: "safety",
+            nodeId: "safety",
+            input: text,
+            reasoning: `numeric guard (${check.violation}): ${check.detail} - blocking this send`,
+            output: "(blocked)",
+            verdict: "blocked",
+          });
+          return { delivered: "blocked", detail: `numeric-guard: ${check.violation}` };
+        }
+      }
     }
   }
 

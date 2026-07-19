@@ -770,8 +770,12 @@ export async function composeBargain(opts: {
       : "") +
     `Preferred tactic: "${tactic.label}" (${tactic.script}). ` +
     (target
-      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(opts.floorPricePerDay ?? Math.round((quoted ?? target) * overlay.lowballGuard), cur)} - unrealistic lowballs insult the shop. `
+      ? `THE ASK: ask if ${money(target, cur)}/day is possible for the ${opts.rfq.durationDays}-day rental - this number is anchored to the real local market floor. NEVER propose a number lower than ${money(opts.floorPricePerDay ?? Math.round((quoted ?? target) * overlay.lowballGuard), cur)} - unrealistic lowballs insult the shop. ` +
+        (quoted
+          ? `HARD ARITHMETIC RULE: you are asking the shop to LOWER their price, so the ONLY number you may propose is ${money(target, cur)}/day - never a number equal to or ABOVE their current ${money(quoted, cur)}/day (asking for MORE than they offered is nonsensical). `
+          : "")
       : "Do NOT propose any specific number - just warmly ask for their best price. ") +
+    "ABSOLUTE RULE: never claim another shop gave you a price unless one is stated in LEVERAGE below - do NOT invent a competitor, a rival number, or any price you were not given. " +
     `CRITICAL MONEY RULE: talk about price ONLY in ${cur} - the shop's own local currency. Never write a dollar sign or convert to USD unless ${cur} is USD. Match the numbers the shop uses. ` +
     (opts.localLanguage && opts.region
       ? `CRITICAL: think and write NATIVELY in the main local language of ${opts.region} from the first word - never compose in English and translate. Use the casual street register a savvy local uses at the market: local haggling phrases, local currency habits, natural slang (respectful, never rude). Short and punchy. `
