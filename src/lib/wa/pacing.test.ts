@@ -278,6 +278,32 @@ describe("claimSendSlots - per-recipient REPLY lane (concurrent negotiations)", 
   });
 });
 
+describe("claimSendSlots - reply FLEET ceiling (atomic total-velocity cap)", () => {
+  const common = { senderKey: "u@x.com", auto: true, gapSeconds: 12, perRecipient: true, fleetGapSeconds: 6 };
+  const t0 = 1_700_000_000_000 - (1_700_000_000_000 % 12_000); // aligned to 12s (and 6s)
+
+  it("two DIFFERENT shops do NOT both send in the same fleet window (no burst)", async () => {
+    const a = await claimSendSlots({ ...common, toDigits: "111111", text: "A", nowMs: t0 });
+    const b = await claimSendSlots({ ...common, toDigits: "222222", text: "B", nowMs: t0 + 500 });
+    expect(a.ok).toBe(true);
+    expect(b).toEqual({ ok: false, kind: "pacing" }); // fleet slot atomically serialized them
+  });
+
+  it("once the fleet gap passes, the next shop sends", async () => {
+    const a = await claimSendSlots({ ...common, toDigits: "111111", text: "A", nowMs: t0 });
+    const b = await claimSendSlots({ ...common, toDigits: "222222", text: "B", nowMs: t0 + 7000 });
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true); // next 6s fleet bucket
+  });
+
+  it("a fleet loser frees its message + recipient slots for the retry", async () => {
+    await claimSendSlots({ ...common, toDigits: "111111", text: "A", nowMs: t0 });
+    const lost = await claimSendSlots({ ...common, toDigits: "222222", text: "B", nowMs: t0 + 500 });
+    expect(lost).toEqual({ ok: false, kind: "pacing" });
+    expect(state.claims.has(`u@x.com|${messageSlotKey("222222", "B")}`)).toBe(false);
+  });
+});
+
 describe("gapBucket", () => {
   it("is stable within a window and increments across it", () => {
     expect(gapBucket(120_000, 60)).toBe(2);

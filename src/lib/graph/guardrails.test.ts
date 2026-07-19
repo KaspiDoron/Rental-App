@@ -144,6 +144,70 @@ describe("checkOutboundNumbers - the three catastrophic failure classes", () => 
   });
 });
 
+describe("verification hardening - no false positives on ordinary haggling", () => {
+  const bounds = { floor: 280, ceiling: 500, excludeExact: [4], checkAskBounds: true };
+
+  it("ALLOWS 'another price / any other price / staying nearby' (not a rival claim)", () => {
+    expect(checkOutboundNumbers({ text: "do you have another price for me? maybe 400 🙏", ...bounds }).ok).toBe(true);
+    expect(checkOutboundNumbers({ text: "any other price? 400 ok?", ...bounds }).ok).toBe(true);
+    expect(checkOutboundNumbers({ text: "i am staying nearby, can you do 400?", ...bounds }).ok).toBe(true);
+    expect(checkOutboundNumbers({ text: "let me ask another question - 400 a day ok?", ...bounds }).ok).toBe(true);
+  });
+
+  it("still BLOCKS a real competitor claim ('another shop')", () => {
+    const r = checkOutboundNumbers({ text: "another shop gave me 220, can you match?", ...bounds });
+    expect(r.ok).toBe(false);
+    expect(r.violation).toBe("fabricated-rival");
+  });
+
+  it("ALLOWS a bargain that acknowledges a DEPOSIT figure (not the daily ask)", () => {
+    expect(checkOutboundNumbers({ text: "the 3000 deposit is ok, 500 is high, can you do 400?", ...bounds }).ok).toBe(true);
+    expect(checkOutboundNumbers({ text: "deposit 200 is fine, can you do 400 a day?", ...bounds }).ok).toBe(true);
+  });
+
+  it("ALLOWS a calendar year after a temporal cue (not a price)", () => {
+    expect(checkOutboundNumbers({ text: "i come back in 2025, can you do 400?", ...bounds }).ok).toBe(true);
+  });
+
+  it("catches non-latin numerals (fabricated 220 in Arabic-Indic script)", () => {
+    const r = checkOutboundNumbers({
+      text: "another shop quoted ٢٢٠, do ٢٠٠",
+      floor: 280,
+      ceiling: 1200,
+      excludeExact: [4],
+      checkAskBounds: true,
+    });
+    expect(r.ok).toBe(false); // fabricated-rival or below-floor - either way blocked
+  });
+
+  it("BLOCKS the inverted ask even when a higher LIST price inflates the ceiling", () => {
+    // Shop verbally offered 500, posted board says 1200, agent asks 600.
+    const r = checkOutboundNumbers({
+      text: "your board says 1200 but can you do 600 a day?",
+      floor: 280,
+      ceiling: 500, // the SPOKEN quote, not the 1200 list
+      allowAbove: [1200], // the list price is a legit reference
+      excludeExact: [4],
+      checkAskBounds: true,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.violation).toBe("above-quote");
+    expect(r.offending).toBe(600);
+  });
+
+  it("ALLOWS citing the LIST price while asking below the spoken quote", () => {
+    const r = checkOutboundNumbers({
+      text: "your board says 1200, but can you do 400 a day for me? 🙏",
+      floor: 280,
+      ceiling: 500,
+      allowAbove: [1200],
+      excludeExact: [4],
+      checkAskBounds: true,
+    });
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("hard feature constraints - manual vs automatic is immutable", () => {
   const autoScooter500: ExtractedOffer = {
     found: true,

@@ -636,6 +636,10 @@ export default function Home() {
       const canAdvance = (cur: string | undefined, target: string) =>
         cur !== "declined" &&
         cur !== "no-contact" &&
+        // A "no-response" card (we waited, nothing came) must not be rewound to
+        // "awaiting-response" by the mere existence of its RFQ row - only a real
+        // reply (active/offer) revives it.
+        !(cur === "no-response" && target === "awaiting-response") &&
         (STAGE_ORDER[target] ?? -1) > (STAGE_ORDER[cur ?? "queued"] ?? -1);
       // Drop rows the user just removed (tombstoned) - a poll that read the
       // server BEFORE the delete committed must not resurrect them. Expired

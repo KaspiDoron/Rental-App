@@ -130,6 +130,10 @@ export async function claimSendSlots(opts: {
   /** REPLY lane: key the pacing slot per-recipient so distinct engaged shops
    * do not serialize on one another (idempotency stays per-message). */
   perRecipient?: boolean;
+  /** REPLY lane fleet ceiling: an ATOMIC per-sender cap on the TOTAL reply
+   * velocity across all shops (a smaller gap than the per-recipient one). Keeps
+   * the concurrency win without letting one number blast 40 sends in seconds. */
+  fleetGapSeconds?: number;
   nowMs?: number;
 }): Promise<ClaimOutcome> {
   const now = opts.nowMs ?? Date.now();
@@ -199,6 +203,29 @@ export async function claimSendSlots(opts: {
   // prev === "error" is tolerable: the current-bucket claim already
   // serializes same-window senders; the straddle residue is accepted over
   // failing a legitimate send on a flaky secondary check.
+
+  // REPLY-LANE FLEET CEILING: the per-recipient slot above lets distinct shops
+  // send concurrently, which (without this) removed the ONLY atomic cap on total
+  // reply velocity - one number could then emit dozens of sends in seconds (a
+  // bulk-sender signature). This claims an ATOMIC per-sender slot at a smaller
+  // gap, so the whole fleet still trickles (~1 reply per fleetGap) even as
+  // distinct shops overlap. Lost -> pace this one out; distinct shops just take
+  // turns through the fleet gap instead of all firing at once.
+  if (opts.perRecipient && opts.fleetGapSeconds && opts.fleetGapSeconds > 0) {
+    const fleetSlot = `rfleet:${opts.fleetGapSeconds}:${gapBucket(now, opts.fleetGapSeconds)}`;
+    const fleet = await sbInsertClaim("wa_send_claims", {
+      sender_key: opts.senderKey,
+      slot_key: fleetSlot,
+    });
+    if (fleet === "lost") {
+      await releaseOwn([msgSlot, slotFor(bucket)]);
+      return { ok: false, kind: "pacing" };
+    }
+    if (fleet === "error") {
+      await releaseOwn([msgSlot, slotFor(bucket)]);
+      return { ok: false, kind: "error" };
+    }
+  }
   return { ok: true };
 }
 

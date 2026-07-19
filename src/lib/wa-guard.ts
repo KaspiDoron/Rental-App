@@ -1413,7 +1413,11 @@ export async function drainOutbox(
   const isCold = (row: OutboxRow) => (row.meta as { kind?: string } | null)?.kind === "rfq";
   const rfqBySender = new Map<string, number>();
   const replySentToRecipient = new Set<string>();
-  let replyBudget = 16;
+  // Modest per-invocation reply budget: the ATOMIC fleet gap slot (in
+  // claimSendSlots) is the real velocity ceiling now, so a high budget here just
+  // churns doomed claims. Frequent invocations (polls + the self-chaining tick)
+  // supply the throughput; each drains a few and the fleet gap paces the total.
+  let replyBudget = 6;
   for (const cand of candidates) {
     const cold = isCold(cand);
     const rcptKey = `${cand.sender_key}|${digitsOnly(cand.to_number)}`;
@@ -1485,6 +1489,7 @@ export async function drainOutbox(
     // N concurrent drainers all pass them together. The claim row is the
     // lock: exactly ONE invocation per min-gap window per sender sends, and
     // exactly one delivery per unique message ever happens.
+    const isReplyRow = rowKind !== "rfq" && rowKind !== "custom";
     const claim = await claimSendSlots({
       senderKey: row.sender_key,
       toDigits: row.to_number,
@@ -1493,8 +1498,10 @@ export async function drainOutbox(
       gapSeconds: p.min_gap_seconds,
       // A reply/follow-up to an already-engaged shop paces PER-RECIPIENT, so 40
       // live threads do not serialize through one per-sender window. A cold
-      // intro (rfq) keeps the strict per-sender velocity lane.
-      perRecipient: rowKind !== "rfq" && rowKind !== "custom",
+      // intro (rfq) keeps the strict per-sender velocity lane. The fleet gap is
+      // the atomic ceiling that keeps the fleet a trickle, not a burst.
+      perRecipient: isReplyRow,
+      fleetGapSeconds: isReplyRow ? replyFleetGapSeconds(p) : undefined,
     });
     if (!claim.ok) {
       if (claim.kind === "duplicate") continue; // another invocation is delivering it
@@ -1648,7 +1655,25 @@ export async function claimForSend(
 ): Promise<import("./wa/pacing").ClaimOutcome> {
   const p = await getPolicies();
   const { claimSendSlots } = await import("./wa/pacing");
-  return claimSendSlots({ senderKey, toDigits, text, auto, gapSeconds: p.min_gap_seconds, perRecipient });
+  return claimSendSlots({
+    senderKey,
+    toDigits,
+    text,
+    auto,
+    gapSeconds: p.min_gap_seconds,
+    perRecipient,
+    fleetGapSeconds: perRecipient ? replyFleetGapSeconds(p) : undefined,
+  });
+}
+
+/**
+ * The atomic fleet-wide gap for the REPLY lane: a smaller gap than the cold
+ * per-sender min-gap (so engaged shops trickle out fast), floored so one number
+ * can never emit a machine-gun burst - a person juggling many chats replies
+ * quickly but not dozens-per-second.
+ */
+function replyFleetGapSeconds(p: SecurityPolicies): number {
+  return Math.max(5, Math.round((p.min_gap_seconds || 12) / 2));
 }
 
 /** Release a message claim after a failed direct send (retry-friendly). */

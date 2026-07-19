@@ -80,6 +80,10 @@ export function ThreadPeek({
     // forever and the shop's reply never rendered. Re-fetch on an interval (and
     // no-store) so a reply that lands seconds later appears without a refresh.
     const load = async () => {
+      // Pause in a hidden tab: with a peek mounted per engaged card, N x 10s
+      // would be needless load while the user is away (matches the activity
+      // poll's own visibility gate). It resumes on focus.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const r = await fetch(
           `/api/thread?vendorId=${encodeURIComponent(vendorId)}${since ? `&since=${since}` : ""}`,

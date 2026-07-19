@@ -123,8 +123,10 @@ export async function GET(req: Request) {
     }>(
       "whatsapp_messages",
       // Marker rows (session pause/takeover flags) live in the same table -
-      // keep them out of the human-facing feed.
-      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&order=received_at.desc&limit=40`
+      // keep them out of the human-facing feed. Fetched deep enough (150) that
+      // the per-vendor state rollup below covers a full 40+ shop batch, not just
+      // the newest 40 (the feed itself is still sliced to `limit`).
+      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&order=received_at.desc&limit=150`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -135,7 +137,7 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "vendor_replies",
-      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=40`
+      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=80`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -148,7 +150,7 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "offers",
-      `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${sinceIso}&order=created_at.desc&limit=30`
+      `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${sinceIso}&order=created_at.desc&limit=80`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -210,10 +212,11 @@ export async function GET(req: Request) {
   // The Live Status panel counted delivered RFQs from a 200-row server
   // aggregate while each CARD reconstructed its stage from a truncated feed -
   // split-brain, so a shop the panel counted "started" stayed stuck in the
-  // "queued message" visual. This rollup is the single source of truth: built
-  // from the same rows already fetched, keyed by vendorId, and NEVER truncated
-  // (a small map), so the card's status always mirrors the real DB state
-  // regardless of soft filters. Ranked messaged < active < offer.
+  // "queued message" visual. This rollup is the card's authoritative signal:
+  // built from the source rows above (fetched deep enough - 150 outbound / 80
+  // replies+offers / 120 traces - to cover a full 40+ shop batch), keyed by
+  // vendorId, so the card status mirrors the real DB state regardless of soft
+  // filters. Ranked messaged < active < offer.
   const STATE_RANK = { messaged: 1, active: 2, offer: 3 } as const;
   type VState = keyof typeof STATE_RANK;
   const vendorStates: Record<string, VState> = {};

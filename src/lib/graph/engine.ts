@@ -755,14 +755,13 @@ export async function runGraphTurn(
       target,
       rivalPrice,
       leverageNote: choice.leverageNote,
-      // The shop's live ceiling for the numeric-sanity gate: our ask may never
-      // exceed the highest real price on the table (spoken quote or posted list).
-      shopCeiling:
-        Math.max(
-          state.fields.pricePerDay ?? 0,
-          state.fields.sheetPricePerDay ?? 0,
-          input.usablePrice ?? 0
-        ) || undefined,
+      // The inverted-ask ceiling is the shop's CURRENT SPOKEN quote - NOT the
+      // posted list price, which (when higher than the spoken quote) would mask
+      // an inverted ask (asking 600 after they verbally offered 500).
+      shopCeiling: input.usablePrice ?? state.fields.pricePerDay ?? undefined,
+      // The posted list/sheet price may be legitimately cited above the ask
+      // ("your board says 1200, can you do 900?") - whitelisted, not the ask.
+      sheetRef: state.fields.sheetPricePerDay ?? undefined,
       input,
       io,
       spec,
@@ -883,6 +882,7 @@ async function runTailGates(args: {
   rivalPrice?: number;
   leverageNote?: string;
   shopCeiling?: number;
+  sheetRef?: number;
   input: GraphTurnInput;
   io: GraphIO;
   spec: GraphSpec;
@@ -1126,6 +1126,7 @@ async function runTailGates(args: {
         ceiling: isBargain ? args.shopCeiling : undefined,
         floor: isBargain ? input.floorPrice : undefined,
         rivalPrice: args.rivalPrice,
+        allowAbove: isBargain && args.sheetRef ? [args.sheetRef] : undefined,
         excludeExact,
         checkAskBounds: isBargain,
       });
