@@ -1,0 +1,75 @@
+# WheelDeal on one free-tier GCE VM (1GB RAM budget).
+#   redis   ~150MB (maxmemory 160mb, AOF persisted)  - queues + hot state
+#   gateway ~80MB                                     - webhook ingress (<200ms ack)
+#   workers ~200MB                                    - all five BullMQ consumers
+#   web     ~250MB                                    - Next.js UI (final phase; on
+#                                                       Vercel during the dual-run)
+# DB + storage stay on SUPABASE (external, free) - nothing DB-shaped runs here.
+#
+# Usage (on the VM):  docker compose --env-file .env up -d --build
+# .env carries: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL
+# (Supavisor pooled, port 6543), SESSION_SECRET, ADMIN_EMAILS, provider keys.
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--appendonly", "yes",
+        "--maxmemory", "160mb",
+        "--maxmemory-policy", "noeviction",
+      ]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.gateway
+    env_file: [.env]
+    environment:
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: gateway
+      GATEWAY_PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  workers:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.workers
+    env_file: [.env]
+    environment:
+      REDIS_URL: redis://redis:6379
+      SERVICE_NAME: workers
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Enable when the UI moves off Vercel (final phase):
+  # web:
+  #   build:
+  #     context: ../..
+  #     dockerfile: infra/docker/Dockerfile.web
+  #   env_file: [.env]
+  #   environment:
+  #     REDIS_URL: redis://redis:6379
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on: [redis]
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:

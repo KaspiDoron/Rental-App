@@ -1,0 +1,9 @@
+{
+  "name": "@wheeldeal/gateway",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx --tsconfig tsconfig.json src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

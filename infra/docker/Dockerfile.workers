@@ -1,0 +1,13 @@
+# WheelDeal workers - all five BullMQ consumers in one ~200MB process.
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+COPY packages ./packages
+COPY apps/gateway ./apps/gateway
+COPY services ./services
+RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
+COPY tsconfig.json ./
+COPY shims ./shims
+COPY src ./src
+ENV NODE_ENV=production
+CMD ["npx", "tsx", "--tsconfig", "services/workers/tsconfig.json", "services/workers/src/index.ts"]

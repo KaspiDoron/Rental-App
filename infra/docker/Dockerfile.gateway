@@ -1,0 +1,15 @@
+# WheelDeal gateway - webhook ingress. tsx runs the TS directly (no emit step;
+# tsconfig paths carry the server-only shim + package aliases).
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+COPY packages ./packages
+COPY apps/gateway ./apps/gateway
+COPY services ./services
+RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
+COPY tsconfig.json ./
+COPY shims ./shims
+COPY src ./src
+ENV NODE_ENV=production
+EXPOSE 8080
+CMD ["npx", "tsx", "--tsconfig", "apps/gateway/tsconfig.json", "apps/gateway/src/server.ts"]

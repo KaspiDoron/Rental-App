@@ -1,0 +1,9 @@
+{
+  "name": "@wheeldeal/workers",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx --tsconfig tsconfig.json src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

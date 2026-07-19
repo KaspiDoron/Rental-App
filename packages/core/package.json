@@ -1,0 +1,8 @@
+{
+  "name": "@wheeldeal/core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WheelDeal negotiation brain - runtime-agnostic facade over src/lib (agents, graph engine, guardrails, market, extraction). Physical relocation of src/lib lands with the Vercel decommission phase; until then this package is the ONE import surface services build against, so the move is a path change, not a rewrite.",
+  "main": "index.ts",
+  "types": "index.ts"
+}
