@@ -244,6 +244,15 @@ export async function processVendorReply(opts: {
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
     .join("\n");
+  // MULTI-MESSAGE COALESCING (critical data-loss fix): a shop often sends a
+  // burst of separate messages - "Good day!" / "We have available Fazzio" /
+  // "Regular rate is 550, we can give you 400 per day" - each arriving as its
+  // OWN webhook. Extracting from the single triggering frame binds a bare price
+  // to no vehicle (matchesSpec=false -> the offer is dropped, UI stuck on "No
+  // price yet"). Instead, extract from the WHOLE unread inbound buffer since our
+  // last outbound, chronologically, so one read sees the vehicle AND its price.
+  const { coalesceUnreadInbound } = await import("./wa/coalesce");
+  const extractText = coalesceUnreadInbound(thread, prior[0]?.received_at ?? "", text) || text;
   // PENDING REPLIES COUNT TOO. A reply parked in wa_outbox with a human
   // "thinking" delay is NOT yet in whatsapp_messages. Without counting it, a
   // SECOND shop message arriving inside that 45-240s window reads the counters
@@ -302,7 +311,7 @@ export async function processVendorReply(opts: {
 
   const extraction = await extractOffer(
     rfq,
-    text || "(the shop sent a price-list photo)",
+    extractText || "(the shop sent a price-list photo)",
     images,
     history,
     ctx.region || undefined
@@ -600,7 +609,9 @@ export async function processVendorReply(opts: {
           threadKey: threadKeyFor(ctx.sender ?? undefined, from),
           userEmail: ctx.sender ?? undefined,
           toDigits: from,
-          shopMessage: text,
+          // The coalesced unread buffer, so the director/answer nodes see the
+          // shop's full recent burst (question + vehicle + price together).
+          shopMessage: extractText,
           images,
           audios: [],
         },

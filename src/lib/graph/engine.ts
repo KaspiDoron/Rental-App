@@ -1701,6 +1701,12 @@ export async function buildTurnFromThread(
     .map((m) => m.body ?? "")
     .filter(Boolean);
   const lastInbound = [...thread].reverse().find((m) => m.direction === "inbound");
+  // COALESCE the unread inbound buffer for the tick path too, so a strategic-
+  // wait re-evaluation sees the shop's whole recent burst (vehicle + price),
+  // not just the last frame - mirrors the ingestion-path coalescing.
+  const { coalesceUnreadInbound } = await import("../wa/coalesce");
+  const lastOutboundAt = [...thread].reverse().find((m) => m.direction === "outbound")?.received_at ?? "";
+  const coalescedTick = coalesceUnreadInbound(thread, lastOutboundAt);
   const countKind = (k: string) =>
     thread.filter(
       (m) => m.direction === "outbound" && (m.raw as { kind?: string } | null)?.kind === k
@@ -1719,7 +1725,7 @@ export async function buildTurnFromThread(
       threadKey,
       userEmail,
       toDigits,
-      shopMessage: lastInbound?.body ?? "",
+      shopMessage: coalescedTick || lastInbound?.body || "",
       images: [],
       audios: [],
       payload,
