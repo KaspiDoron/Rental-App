@@ -125,6 +125,25 @@ function fallbackAnswer(rfq: StructuredRFQ): string {
 }
 
 /** Process one inbound vendor message; auto-extract + auto-respond (once). */
+/**
+ * The NEVER-SILENT photo fallback (Module 3): when a shop sent an image but
+ * the media download permanently failed or the OCR produced nothing usable,
+ * the agent must ask warmly for the price in text instead of leaving the shop
+ * on read. Shaped exactly like extractOffer's own degraded result so the
+ * engine routes it through the normal clarify path (guard + human delay +
+ * uniqueness all apply). matchesSpec stays true - "unreadable" must never be
+ * mistaken for "wrong vehicle" (false would freeze the whole negotiation).
+ */
+export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
+  return {
+    found: false,
+    matchesSpec: true,
+    confidence: "low",
+    clarifyMessage:
+      "We couldn't read that photo clearly - could you type the daily price out for us? 🙂",
+  } as import("./agents").ExtractedOffer;
+}
+
 export async function processVendorReply(opts: {
   fromDigits: string;
   text: string;
@@ -148,6 +167,12 @@ export async function processVendorReply(opts: {
   // answering within seconds (instant replies are the biggest bot tell).
   // Only for senders whose own session can deliver from the queue.
   humanDelay?: boolean;
+  // Module 3 (vision offload): a pre-computed extraction from the isolated
+  // vision worker. When set, the in-turn extractOffer call is skipped - the
+  // LLM-heavy OCR already ran at the vision queue's strict concurrency, and
+  // this turn only composes/guards/sends. Also carries the NEVER-SILENT
+  // fallback (photoClarifyExtraction) when the media/OCR pipeline failed.
+  preExtracted?: import("./agents").ExtractedOffer;
   send: SendFn;
 }): Promise<void> {
   let text = opts.text.trim();
@@ -336,13 +361,15 @@ export async function processVendorReply(opts: {
     ]).catch(() => {});
   }
 
-  const extraction = await extractOffer(
-    rfq,
-    extractText || "(the shop sent a price-list photo)",
-    images,
-    history,
-    ctx.region || undefined
-  );
+  const extraction =
+    opts.preExtracted ??
+    (await extractOffer(
+      rfq,
+      extractText || "(the shop sent a price-list photo)",
+      images,
+      history,
+      ctx.region || undefined
+    ));
   const verified =
     extraction.found && extraction.matchesSpec && extraction.confidence === "high";
   // After we've clarified once, a found price counts even if not fully

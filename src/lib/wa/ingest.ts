@@ -108,6 +108,20 @@ async function fetchMediaWithRetry(
   return null;
 }
 
+/** A request to run the image turn through the isolated vision pipeline
+ * (Module 3): the caller-injected enqueue creates a BullMQ Flow whose CHILD
+ * does the heavy download + OCR at strict concurrency and whose PARENT
+ * continuation composes the reply (or the never-silent clarify). */
+export interface VisionFlowRequest {
+  waMessageId: string;
+  fromDigits: string;
+  remoteJid: string;
+  senderEmail: string;
+  caption: string;
+  /** The single provider message frame (carries the media keys). */
+  raw: unknown;
+}
+
 /**
  * Process one Evolution webhook payload end-to-end: receipts, connection
  * lifecycle, privacy-gated message ingestion, takeover detection, media +
@@ -118,10 +132,19 @@ async function fetchMediaWithRetry(
  * opts.origin + opts.token: when set (the Next route), the self-chaining
  * /api/wa/tick kick fires as before. The worker passes neither - it IS the
  * persistent process, so the in-request tick chain is unnecessary there.
+ *
+ * opts.enqueueVisionFlow: injected ONLY by the worker runtime (dependency
+ * inversion - this file must never import BullMQ into the Next bundle). When
+ * present, image turns are OFFLOADED to the vision Flow instead of running
+ * the download + LLM OCR inline in this turn.
  */
 export async function processEvolutionWebhook(
   payload: unknown,
-  opts: { origin?: string; token?: string } = {}
+  opts: {
+    origin?: string;
+    token?: string;
+    enqueueVisionFlow?: (req: VisionFlowRequest) => Promise<void>;
+  } = {}
 ): Promise<void> {
   const body: any = payload ?? null;
   if (!body) return;
@@ -372,15 +395,35 @@ export async function processEvolutionWebhook(
       // is the common case - read the media, don't skip it.
       if (!syntheticText && !hasImage && !hasAudio && !docIsImage) continue;
 
-      // Price-list photo (or image-typed document)? Download WITH RETRY so the
-      // vision agent can read the prices - a transient media failure must not
-      // lose the offer.
+      // Price-list photo (or image-typed document)?
+      //
+      // WORKER RUNTIME (Module 3): offload the whole image turn to the vision
+      // Flow - the CHILD downloads + OCRs at strict concurrency 2 (RAM-spike
+      // isolation on the 1GB VM) and the PARENT continuation composes the
+      // reply, or the NEVER-SILENT clarify if the child failed. Nothing heavy
+      // runs in this turn.
+      if ((hasImage || docIsImage) && email && opts.enqueueVisionFlow) {
+        await opts.enqueueVisionFlow({
+          waMessageId: msgId,
+          fromDigits: from,
+          remoteJid,
+          senderEmail: email,
+          caption: syntheticText,
+          raw: data,
+        });
+        continue; // the flow's continuation owns this turn from here
+      }
+
+      // VERCEL/INLINE PATH: download WITH RETRY so the vision agent can read
+      // the prices - a transient media failure must not lose the offer.
       const images: { mime: string; base64: string }[] = [];
+      let mediaFetchFailed = false;
       if ((hasImage || docIsImage) && email) {
         const media = await fetchMediaWithRetry(email, data);
         if (media) images.push(media);
-        else if (!syntheticText) {
-          // Total failure with no caption: be honest, don't go silent.
+        else {
+          mediaFetchFailed = true;
+          // Be honest with the USER (push + ops event)...
           const { sendPushToUser } = await import("@/lib/push");
           sendPushToUser(email, {
             title: "A photo didn't come through 📷",
@@ -395,7 +438,9 @@ export async function processEvolutionWebhook(
               detail: `Photo from +${from} failed to download after 3 attempts (email ${email}).`,
             },
           ]).catch(() => {});
-          continue;
+          // ...and NEVER-SILENT with the SHOP: the old `continue` here left the
+          // vendor on read forever. Fall through to processVendorReply with the
+          // photo-clarify so the agent warmly asks for the price in text.
         }
       }
 
@@ -428,6 +473,13 @@ export async function processEvolutionWebhook(
         waMessageId: msgId,
         senderEmail: email ?? undefined,
         humanDelay: Boolean(email),
+        // A photo we could not download (and no caption to extract from):
+        // inject the never-silent clarify so the shop still gets a warm ask
+        // for the price in text instead of silence.
+        preExtracted:
+          mediaFetchFailed && !syntheticText
+            ? (await import("@/lib/agent-loop")).photoClarifyExtraction()
+            : undefined,
         send: async (to, message) => {
           if (!email) return { ok: false, error: "unknown instance" };
           return sendFromUser(email, to, message);

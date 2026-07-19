@@ -10,9 +10,11 @@
 
 // The full inbound pipeline (extracted from the evolution webhook route).
 export { processEvolutionWebhook } from "../../src/lib/wa/ingest";
+export type { VisionFlowRequest } from "../../src/lib/wa/ingest";
 
 // Agent loop + composition.
-export { processVendorReply } from "../../src/lib/agent-loop";
+export { processVendorReply, photoClarifyExtraction } from "../../src/lib/agent-loop";
+export type { ExtractedOffer } from "../../src/lib/agents";
 export {
   extractOffer,
   composeBargain,

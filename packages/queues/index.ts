@@ -35,14 +35,7 @@ export interface OutboundJob {
   meta?: Record<string, unknown>;
 }
 
-export interface VisionJob {
-  messageId: string;
-  threadKey: string;
-  senderEmail: string;
-  fromDigits: string;
-  caption?: string;
-  mediaRef?: string;
-}
+// Vision flow job schemas live in ./vision (re-exported at the bottom).
 
 export interface OutreachBatchJob {
   userEmail: string;
@@ -101,10 +94,6 @@ export async function enqueueOutbound(job: OutboundJob, delayMs = 0): Promise<vo
   await queue(OUTBOUND_QUEUE).add("send", job, { ...RETRY_POLICY, delay: delayMs });
 }
 
-export async function enqueueVision(job: VisionJob): Promise<void> {
-  await queue(VISION_QUEUE).add("vision", job, RETRY_POLICY);
-}
-
 export async function enqueueOutreachBatch(job: OutreachBatchJob): Promise<void> {
   await queue(OUTREACH_QUEUE).add("batch", job, RETRY_POLICY);
 }
@@ -121,3 +110,16 @@ export async function sendToDlq(
     { removeOnComplete: false, removeOnFail: false }
   );
 }
+
+// Vision flow (Module 3) - kept at the bottom: vision.ts imports the queue
+// names/helpers above, so re-exporting last keeps the ESM cycle trivially safe.
+export {
+  enqueueVisionFlow,
+  visionChildJobId,
+  visionParentJobId,
+} from "./vision";
+export type {
+  VisionExtractJob,
+  VisionContinuationJob,
+  VisionChildResult,
+} from "./vision";
