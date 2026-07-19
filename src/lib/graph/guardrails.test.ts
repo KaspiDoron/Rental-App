@@ -195,6 +195,32 @@ describe("verification hardening - no false positives on ordinary haggling", () 
     expect(r.offending).toBe(600);
   });
 
+  it("ALLOWS citing a REAL rival BELOW the floor (a genuine competitor, not a lowball)", () => {
+    const r = checkOutboundNumbers({
+      text: "another shop give me 290 per day for 5 days, you can do same or better? then i rent from you 🙏",
+      floor: 350,
+      ceiling: 400,
+      rivalPrice: 290,
+      excludeExact: [5],
+      checkAskBounds: true,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("still BLOCKS OUR OWN sub-floor ask even when a below-floor rival is present", () => {
+    const r = checkOutboundNumbers({
+      text: "another shop gave 290, but can you do 200 a day for me?",
+      floor: 350,
+      ceiling: 400,
+      rivalPrice: 290,
+      excludeExact: [5],
+      checkAskBounds: true,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.violation).toBe("below-floor");
+    expect(r.offending).toBe(200);
+  });
+
   it("ALLOWS citing the LIST price while asking below the spoken quote", () => {
     const r = checkOutboundNumbers({
       text: "your board says 1200, but can you do 400 a day for me? 🙏",

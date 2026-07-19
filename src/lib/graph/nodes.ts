@@ -314,7 +314,7 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
           ownerDirectives(args.cfg, "price"),
           roundDirective,
           node.instructions ? `Owner guidance: ${node.instructions}` : "",
-          args.leverageNote ? `Real leverage you may mention: ${args.leverageNote}.` : "",
+          args.leverageNote ? `REQUIRED leverage you MUST state (name the competitor price AND the rental days): ${args.leverageNote}.` : "",
           // A posted price board is firmer than a spoken quote - acknowledge
           // it and keep the ask credible, or the shop walks away.
           f.sheetPricePerDay

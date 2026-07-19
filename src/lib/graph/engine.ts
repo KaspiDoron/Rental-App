@@ -689,7 +689,7 @@ export async function runGraphTurn(
     // for observability, but only a verified rivalPrice reaches the bargainer.
     const leverageNote =
       rivalPrice && node.id === "bargain"
-        ? `another shop nearby offered ${rivalPrice} ${input.currency}/day for the same vehicle`
+        ? `another shop in this search already gave ${rivalPrice} ${input.currency}/day for the same vehicle for the ${input.rfq.durationDays} days - you MUST cite this ${rivalPrice}/day price and the ${input.rfq.durationDays} days and ask this shop to beat it`
         : undefined;
 
     const result = await composeForNode({

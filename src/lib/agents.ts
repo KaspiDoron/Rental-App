@@ -800,6 +800,22 @@ export async function composeBargain(opts: {
     systemWithDirectives +=
       "\nYou are MID-CONVERSATION: do NOT start with a greeting (no hey/hi/hello) - go straight into the message.";
   }
+  // HARD cross-shop leverage: when a real same-search competitor price exists it
+  // is the strongest card the traveller holds - the model must NOT drop it under
+  // the "vary your arguments" directive. Force the number + the rental days into
+  // the message, in very simple broken English (many shops read basic English).
+  if (opts.rivalPricePerDay) {
+    systemWithDirectives +=
+      `\nHARD LEVERAGE RULE: a real nearby shop in this same search gave ${money(
+        opts.rivalPricePerDay,
+        cur
+      )}/day for the SAME ${vehicleTerm(opts.rfq.vehicleClass)} for these ${
+        opts.rfq.durationDays
+      } days. You MUST name this ${money(
+        opts.rivalPricePerDay,
+        cur
+      )}/day price AND the ${opts.rfq.durationDays} days and ask this shop to match or beat it - never omit or soften it away. Very simple broken English, e.g. "another shop give me ${opts.rivalPricePerDay} per day for ${opts.rfq.durationDays} days, you can do same or better? then i rent from you".`;
+  }
 
   // ZERO-PATTERN AUTHENTICITY: (a) a stable per-user voice persona so every
   // user's agent sounds like ONE consistent, distinct human; (b) the user's
@@ -832,13 +848,18 @@ export async function composeBargain(opts: {
     `Vehicle: ${spec}. Currency: ${cur}. ` +
     (quoted ? `They quoted ${money(quoted, cur)}/day. ` : "No quote yet. ") +
     (opts.rivalPricePerDay
-      ? `LEVERAGE: another shop already offered this traveller ${money(
+      ? `LEVERAGE (you MUST use this): another shop in the traveller's search ALREADY offered ${money(
           opts.rivalPricePerDay,
           cur
-        )}/day for the same vehicle. Naturally mention you already have an offer at ${money(
+        )}/day for the same ${vehicleTerm(opts.rfq.vehicleClass)} for this ${
+          opts.rfq.durationDays
+        }-day rental. Your message MUST state that a nearby shop gave ${money(
           opts.rivalPricePerDay,
           cur
-        )}/day and warmly ask if THIS shop can beat it - make clear that if they go lower you'll rent from them. Friendly, never threatening. `
+        )}/day for the ${opts.rfq.durationDays} days and ask THIS shop to match or beat it to close now - make clear you'll rent from whoever is cheaper. Friendly, never threatening. Do NOT omit the ${money(
+          opts.rivalPricePerDay,
+          cur
+        )} number or the ${opts.rfq.durationDays} days. `
       : "") +
     (target
       ? `Write our single friendly ask for ${money(target, cur)}/day. All amounts in ${cur}.`
