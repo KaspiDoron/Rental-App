@@ -36,6 +36,7 @@ import { composeForNode, computeRoundTarget } from "./nodes";
 import {
   buildSafeBargainAsk,
   checkOutboundNumbers,
+  correctDuration,
   hardConstraintBreached,
   hardConstraintDecline,
 } from "./guardrails";
@@ -780,6 +781,7 @@ export async function runGraphTurn(
       englishGloss: result.englishGloss,
       kind: result.kind ?? `auto-${node.id}`,
       nodeId: node.id,
+      nodeKind: node.kind,
       tacticId: result.tacticId,
       nextRound: result.nextRound ?? input.ctx.round ?? 0,
       holdSeconds: choice.action === "wait-hold" ? choice.waitSeconds : undefined,
@@ -905,6 +907,11 @@ async function runTailGates(args: {
   englishGloss?: string;
   kind: string;
   nodeId: string;
+  // The node's KIND (bargain / answer / momentum / ...). The numeric + duration
+  // guards key on this, NEVER on nodeId: an owner-edited graph spec can rename a
+  // bargain node's id, and keying on id would let the renamed node bypass the
+  // guard entirely (a silent no-op that ships a fabricated rival to a shop).
+  nodeKind: string;
   tacticId?: string;
   nextRound: number;
   holdSeconds?: number;
@@ -936,7 +943,7 @@ async function runTailGates(args: {
     input.event.kind !== "tick" && looksEnglish(input.event.shopMessage);
   const useLocalLang =
     Boolean(input.ctx.localLang) && input.ctx.plan === "ultra" && !shopWroteEnglish;
-  const isLocalizedBargain = args.nodeId === "bargain" && useLocalLang;
+  const isLocalizedBargain = args.nodeKind === "bargain" && useLocalLang;
 
   // ---- style-validator -------------------------------------------------------
   if (nodeOn("style-validator")) {
@@ -976,7 +983,7 @@ async function runTailGates(args: {
     // validator's revision dropped any of them, the ORIGINAL draft wins - a
     // polite-but-toothless "Can you do X?" once cost a live negotiation its
     // competitive leverage. (Pattern precedent: the pickup-link survival check.)
-    if (args.nodeId === "bargain" && text !== args.draft) {
+    if (args.nodeKind === "bargain" && text !== args.draft) {
       const lost = leverageLost(args.draft, text, {
         rivalPrice: args.rivalPrice,
         target: args.target,
@@ -1048,7 +1055,7 @@ async function runTailGates(args: {
       // ("Can you do /day?"). The owner's ban is absolute (never restore the
       // phrase), so BLOCK delivery instead of sending a toothless ask: the
       // run-budget rollback lets the next event re-compose cleanly.
-      if (args.nodeId === "bargain") {
+      if (args.nodeKind === "bargain") {
         const lost = leverageLost(preScrub, text, {
           rivalPrice: args.rivalPrice,
           target: args.target,
@@ -1115,6 +1122,31 @@ async function runTailGates(args: {
   // vehicle that violates a hard user filter. Manual (non-auto) sends are never
   // touched - a human's own words are their own.
   {
+    // (0) DURATION TRUTH: the message must state the traveller's REAL rental
+    // length. An LLM freely writes the day count and, contaminated by few-shot
+    // examples, drifts (5-day search -> "for 3 days") - which also sabotages a
+    // "discount for long term" offer. checkOutboundNumbers can never catch this
+    // (it strips every "N days" as a non-price), so duration gets its own
+    // deterministic correction on EVERY outbound the engine composes. Keyed on
+    // nothing but the presence of a wrong day count - safe for all node kinds.
+    if (input.rfq?.durationDays) {
+      const fixed = correctDuration(text, input.rfq.durationDays);
+      if (fixed.changed) {
+        push({
+          stage: "safety",
+          nodeId: "safety",
+          input: text,
+          reasoning: `duration guard: the draft said ${fixed.from.join("/")} day(s) but the traveller's rental is ${input.rfq.durationDays} days - corrected to the truth`,
+          output: fixed.text,
+          verdict: "revised",
+        });
+        text = fixed.text;
+        englishGloss = undefined; // a corrected duration invalidates the gloss
+      }
+    }
+    // The numeric + hard-constraint guards key on the node's KIND, never its id:
+    // an owner-edited graph spec can rename a bargain node's id, and keying on id
+    // would let the renamed node ship a fabricated rival past the guard.
     const PRICE_TREATING = new Set([
       "bargain",
       "momentum",
@@ -1127,7 +1159,7 @@ async function runTailGates(args: {
     // pivoted to an automatic). Decline that track - never bargain or accept it.
     if (
       hardConstraintBreached(input.rfq, input.extraction) &&
-      PRICE_TREATING.has(args.nodeId)
+      PRICE_TREATING.has(args.nodeKind)
     ) {
       const decline = hardConstraintDecline(input.rfq);
       push({
@@ -1142,10 +1174,10 @@ async function runTailGates(args: {
       });
       text = decline;
       englishGloss = undefined;
-    } else if (["bargain", "momentum", "close", "answer"].includes(args.nodeId)) {
+    } else if (["bargain", "momentum", "close", "answer"].includes(args.nodeKind)) {
       // (2) NUMERIC SANITY: fabricated rival (any of these nodes) + the
       // sub-floor / inverted-ask bounds (the price-asking bargain node only).
-      const isBargain = args.nodeId === "bargain";
+      const isBargain = args.nodeKind === "bargain";
       const excludeExact = [
         input.rfq?.durationDays,
         input.rfq?.engineSizeCc,

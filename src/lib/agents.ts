@@ -13,6 +13,7 @@ import type {
 } from "./types";
 import { getTactics, recordOutcome } from "./memory";
 import { parseDeposit } from "./deposit";
+import { extractRentalDailyPrice } from "./wa/price-extract";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -783,8 +784,15 @@ export async function composeBargain(opts: {
         (opts.region
           ? `The shop is in ${opts.region}; keep every sentence short and very simple. `
           : "")) +
+    // The rental length is FACT, not something to improvise: state it as EXACTLY
+    // this many days whenever you mention days - a wrong number (e.g. 3 when it
+    // is 5) both looks incoherent and throws away a "discount for long term".
+    `HARD FACT - the rental is EXACTLY ${opts.rfq.durationDays} day(s). If you mention the number of days, it MUST be ${opts.rfq.durationDays} - never any other number. ` +
     (training
-      ? "Learn tone and moves from these REAL past bargains by the owner:\n" + training
+      ? "Learn ONLY tone, warmth and sentence rhythm from these past bargains - " +
+        "they are from DIFFERENT negotiations, so NEVER copy any number, price, " +
+        "currency or day-count out of them (those belong to other shops and other " +
+        "trips). Use ONLY this chat's real figures:\n" + training
       : "");
 
   // Owner-editable house rules for the bargaining agent (never removable).
@@ -1111,8 +1119,20 @@ export async function extractOffer(
           .filter(Boolean)
           .join(" ")
       : `${rfq.engineSizeCc ? rfq.engineSizeCc + "cc " : ""}${
-          rfq.vehicleClass === "scooter" ? "automatic scooter" : "manual motorcycle"
-        }${rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""}`;
+          // Respect an EXPLICIT transmission - "manual scooter" and "automatic
+          // motorcycle" exist and matter for matchesSpec. Only when the traveller
+          // left it "any" do we fall back to the class default (scooters are
+          // automatic, motorcycles manual).
+          rfq.transmission === "manual"
+            ? "manual "
+            : rfq.transmission === "automatic"
+            ? "automatic "
+            : rfq.vehicleClass === "scooter"
+            ? "automatic "
+            : "manual "
+        }${rfq.vehicleClass === "scooter" ? "scooter" : "motorcycle"}${
+          rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""
+        }`;
 
   // The local currency of the shop. When a shop replies with a bare number and
   // no symbol ("250 per day"), it means 250 in THEIR money - never dollars.
@@ -1212,8 +1232,25 @@ export async function extractOffer(
     "3000 Baht' mean 'Deposit: passport or 3000 baht', so read deposit tiers per " +
     "model size too. Opening hours on the sheet (e.g. OPEN 08.00AM) are context, " +
     "never a price. An odometer/mileage number (e.g. 45,000 km) is NEVER a price. " +
-    "matchesSpec is true ONLY if the price clearly refers to the exact requested " +
-    "vehicle. Combine the reply with the conversation history for CONTEXT, but " +
+    // MESSY BUSINESS TEMPLATES: shops often reply with a whole price list mixing
+    // NON-rental services (airport/port/pier transfers priced 'per trip', island
+    // tours, shuttle, boat, habal-habal) alongside the actual vehicle RENTAL line
+    // priced 'per day'. IGNORE every transfer/tour/shuttle/trip line - those are
+    // not what the traveller is renting - and pick the vehicle rental '/day' line
+    // that matches the requested class. Example: a reply listing 'Airport 250 " +
+    "PHP/trip, Port 350 PHP/trip, Scooter: 350 PHP/day, Island tour available' " +
+    "for a scooter request -> found=true, pricePerDay=350 (the '/day' scooter " +
+    "line), NEVER the 250 or 350 '/trip' transfer numbers. " +
+    // Relax matchesSpec so a plain class word matches even without cc/transmission
+    // restated: a shop that just writes 'Scooter: 350/day' for a scooter request
+    // DOES match (same class) - matchesSpec=true. Only a DIFFERENT class (a car
+    // line for a scooter request, an e-bike, a pedal bicycle) is matchesSpec=false.
+    "A bare class word that MATCHES the requested class ('Scooter', 'Motorbike', " +
+    "'Car') is a MATCH even if cc/transmission are not restated - do NOT demand " +
+    "the shop repeat the cc to set matchesSpec=true; only a genuinely DIFFERENT " +
+    "class is matchesSpec=false. " +
+    "matchesSpec is true ONLY if the price clearly refers to the requested " +
+    "vehicle CLASS. Combine the reply with the conversation history for CONTEXT, but " +
     "NEVER attribute a number to the shop that appears only in OUR (traveller) " +
     "messages - our own asks and counter-offers are NOT the shop's price. " +
     "pricePerDay must come from the SHOP's own words or photo; the ONE " +
@@ -1257,12 +1294,25 @@ export async function extractOffer(
       : "");
 
   // Vision path (handles price-list photos) when Gemini is available.
+  // NOTHING below may throw: a provider error must NEVER abort processVendorReply
+  // before the reply is stored - it would leave the shop hanging "awaiting reply"
+  // for minutes (the exact Sun House failure). A thrown call degrades to the
+  // deterministic heuristic instead.
   if (images.length > 0) {
-    const out = await chatVision(system, text || "See attached price list.", images);
+    let out: string | null = null;
+    try {
+      out = await chatVision(system, text || "See attached price list.", images);
+    } catch {
+      out = null;
+    }
     if (out) {
       const parsed = extractJson<ExtractedOffer>(out);
       if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
     }
+    // A photo with NO usable model output: still try the caption text with the
+    // deterministic extractor before giving up (many captions carry the price).
+    const capHit = deterministicPriceHit();
+    if (capHit) return capHit;
     return {
       found: false,
       // "unknown" must never read as "wrong vehicle": matchesSpec=false is the
@@ -1276,40 +1326,33 @@ export async function extractOffer(
   }
 
   // Text path via any configured LLM.
-  const llm = await chat([
-    { role: "system", content: system },
-    { role: "user", content: text },
-  ]);
+  let llm: string | null = null;
+  try {
+    llm = await chat([
+      { role: "system", content: system },
+      { role: "user", content: text },
+    ]);
+  } catch {
+    llm = null;
+  }
   if (llm) {
     const parsed = extractJson<ExtractedOffer>(llm);
-    if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
+    if (parsed && typeof parsed.found === "boolean") {
+      const norm = normalizeExtraction(parsed, spec);
+      // BACKSTOP: the model said "no price" but a deterministic line-aware read
+      // finds a genuine per-day rental rate (the messy Sun House template the LLM
+      // choked on). Trust the deterministic price rather than stalling the thread.
+      if (!norm.found) {
+        const rescue = deterministicPriceHit();
+        if (rescue) return rescue;
+      }
+      return norm;
+    }
   }
 
-  // Heuristic fallback: find a price, but never auto-verify it. A bare number
-  // is in the shop's LOCAL currency, never dollars.
-  const m =
-    text.match(/(?:\$|usd|idr|rp|eur|€|thb|฿|rm|php|₱|₹|₫)?\s?(\d{1,3}(?:[.,]\d{3})*(?:\.\d+)?)\s*(?:\/|per\s*)?(?:day|d\b)/i) ??
-    // "170 last price" / "final price 400" - a firm quote is still a quote.
-    text.match(/(\d{2,3}(?:[.,]\d{3})*)\s*(?:is\s*)?(?:my\s*|the\s*)?(?:last|final|best)\s*price/i) ??
-    text.match(/(?:last|final|best)\s*price\s*(?:is\s*)?[,:]?\s*(\d{2,3}(?:[.,]\d{3})*)/i);
-  // Guard: in "3 day 900" the regex catches the DURATION ("3 day"), not the
-  // price - never mistake the day count for a daily rate.
-  const heuristicPrice = m ? parseFloat(m[1].replace(/,/g, "")) : NaN;
-  if (m && heuristicPrice > 0 && heuristicPrice !== rfq.durationDays) {
-    return {
-      found: true,
-      pricePerDay: heuristicPrice,
-      currency: symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD",
-      // The regex cannot judge the vehicle, and "unknown" must not read as
-      // "wrong vehicle" (false blocks bargain/probe/present entirely - the
-      // engine would go 100% mute whenever every LLM provider is down).
-      matchesSpec: true,
-      confidence: "medium",
-      clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
-      ...heuristicDepositFields(text, localCur),
-      ...readNegotiationSignals(text),
-    };
-  }
+  // Heuristic fallback: find a price, but never auto-verify it.
+  const hit = deterministicPriceHit();
+  if (hit) return hit;
   return {
     found: false,
     matchesSpec: true,
@@ -1318,6 +1361,54 @@ export async function extractOffer(
     ...heuristicDepositFields(text, localCur),
     ...readNegotiationSignals(text),
   };
+
+  // Deterministic, LLM-free price read. Runs the human-grade line-aware extractor
+  // first (skips transfer/tour lines, picks the requested vehicle class, handles
+  // "350 PHP/day" with the currency in ANY position) and only then the legacy
+  // "last/final/best price" phrasing. Returns a full ExtractedOffer or null.
+  function deterministicPriceHit(): ExtractedOffer | null {
+    const rentalHit = extractRentalDailyPrice(text, {
+      vehicleClass: rfq.vehicleClass,
+      durationDays: rfq.durationDays,
+      localCurrency: localCur || undefined,
+    });
+    if (rentalHit && rentalHit.pricePerDay > 0) {
+      return {
+        found: true,
+        pricePerDay: rentalHit.pricePerDay,
+        currency: rentalHit.currency || (symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD"),
+        // A wrong-class line (classMatch===false) is NOT a match; a same-class or
+        // class-agnostic line is treated as matching so the funnel keeps moving.
+        // "unknown" must never read as "wrong vehicle" (false mutes the engine).
+        matchesSpec: rentalHit.classMatch === false ? false : true,
+        confidence: "medium",
+        clarifyMessage:
+          rentalHit.classMatch === false
+            ? `Thanks! Do you also have a ${spec}? That's what the traveller needs.`
+            : `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
+        ...heuristicDepositFields(text, localCur),
+        ...readNegotiationSignals(text),
+      };
+    }
+    // "170 last price" / "final price 400" - a firm quote is still a quote.
+    const m =
+      text.match(/(\d{2,3}(?:[.,]\d{3})*)\s*(?:is\s*)?(?:my\s*|the\s*)?(?:last|final|best)\s*price/i) ??
+      text.match(/(?:last|final|best)\s*price\s*(?:is\s*)?[,:]?\s*(\d{2,3}(?:[.,]\d{3})*)/i);
+    const price = m ? parseFloat(m[1].replace(/[,\s]/g, "")) : NaN;
+    if (m && price > 0 && price !== rfq.durationDays) {
+      return {
+        found: true,
+        pricePerDay: price,
+        currency: symbolMatch ? currencyFromToken(symbolMatch[0]) : localCur || "USD",
+        matchesSpec: true,
+        confidence: "medium",
+        clarifyMessage: `Great, thank you! Just to confirm: is that the daily price for the ${spec} exactly? Once you confirm I'll pass it to the traveller.`,
+        ...heuristicDepositFields(text, localCur),
+        ...readNegotiationSignals(text),
+      };
+    }
+    return null;
+  }
 
   function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
     let conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";

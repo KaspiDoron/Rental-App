@@ -81,4 +81,33 @@ describe("pickCheapestRival", () => {
   it("empty session -> no rival, never a guess", () => {
     expect(pickCheapestRival([], args)).toBeUndefined();
   });
+
+  it("fails closed on an unknown vehicle (null vehicle_key never matches)", () => {
+    expect(pickCheapestRival([offer({ vehicleKey: null })], args)).toBeUndefined();
+  });
+});
+
+describe("pickCheapestRival - exact search_id scoping (cross-session leak-proof)", () => {
+  const scoped = { ...args, searchId: 42 };
+
+  it("cites a rival from THIS search even if the time window would also allow it", () => {
+    expect(pickCheapestRival([offer({ searchId: 42 })], scoped)).toBe(220);
+  });
+
+  it("IGNORES a cheaper offer from a DIFFERENT search (the cross-session leak)", () => {
+    // Same currency, same vehicle, in the 18h window, even cheaper - but it
+    // belongs to another search the traveller is NOT comparing right now.
+    expect(
+      pickCheapestRival([offer({ searchId: 7, pricePerDay: 180 })], scoped)
+    ).toBeUndefined();
+  });
+
+  it("an offer with no search_id is not counted once we know our session id", () => {
+    expect(pickCheapestRival([offer({ searchId: null })], scoped)).toBeUndefined();
+  });
+
+  it("falls back to the time window when the session id is unknown", () => {
+    // No searchId in args -> the createdAt boundary governs (legacy behaviour).
+    expect(pickCheapestRival([offer({ searchId: 7 })], args)).toBe(220);
+  });
 });

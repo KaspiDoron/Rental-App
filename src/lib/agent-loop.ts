@@ -15,7 +15,31 @@
 
 import "server-only";
 import { sbInsert, sbSelect, sbUpdate } from "./runtime-config";
-import { extractOffer, composeBargain, runSafety, currencyForRegion } from "./agents";
+import { extractOffer, composeBargain, runSafety, currencyForRegion, money } from "./agents";
+import {
+  checkOutboundNumbers,
+  claimedRivalNumber,
+  correctDuration,
+  buildSafeBargainAsk,
+  stripRivalClaims,
+} from "./graph/guardrails";
+
+/**
+ * The strategist note is LLM free text. Pass it to the bargainer ONLY when it
+ * does not assert a competitor PRICE we cannot vouch for: no rival number is
+ * fine (a strategic hint), a number matching our one server-verified rival is
+ * fine, anything else (an invented "another shop offered 220") is dropped whole.
+ */
+function safeLeverageNote(note: string | undefined, rivalPrice: number | undefined): string {
+  const n = (note ?? "").trim();
+  if (!n) return "";
+  const claimed = claimedRivalNumber(n);
+  if (claimed === undefined) return `Real leverage you may mention: ${n}.`;
+  if (rivalPrice !== undefined && Math.abs(claimed - rivalPrice) <= Math.max(1, rivalPrice * 0.05)) {
+    return `Real leverage you may mention: ${n}.`;
+  }
+  return ""; // asserts a rival price that is not our verified one - drop it
+}
 import { floorPriceFor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
 import type { TraceRow } from "./orchestrator";
@@ -873,14 +897,23 @@ export async function processVendorReply(opts: {
       currentPricePerDay: usablePrice,
       rivalPricePerDay: rivalPrice,
       region: ctx.region || undefined,
-      round: 1,
+      // The REAL round (0-based). A hardcoded 1 framed the first-ever counter as
+      // a "SECOND PUSH" that falsely implies the shop already refused an ask -
+      // so the opener's days-leverage play never fired on first contact.
+      round: autoBargains,
       currency: cur,
       localLanguage: useLocalLang,
       targetPricePerDay: target,
       floorPricePerDay: floorPrice,
       history,
       voiceKey: ctx.sender ?? undefined,
-      extraDirectives: [register, ownerDirectives(cfg, "price"), strat.leverageNote ? `Real leverage you may mention: ${strat.leverageNote}.` : ""]
+      // The strategist's leverageNote is LLM-authored free text. NEVER pass it
+      // as licensed leverage when it asserts a competitor PRICE that is not our
+      // one server-verified rival - that is exactly how an invented "another
+      // shop offered 220" gets laundered into the message. A real rival is
+      // force-injected by composeBargain via rivalPricePerDay; the note may only
+      // carry NON-price strategic hints ("shop sounds flexible", "low season").
+      extraDirectives: [register, ownerDirectives(cfg, "price"), safeLeverageNote(strat.leverageNote, rivalPrice)]
         .filter(Boolean)
         .join("\n"),
     });
@@ -940,6 +973,73 @@ export async function processVendorReply(opts: {
     return;
   }
   followUp = validation.text;
+
+  // ---- NEGOTIATION INTEGRITY (deterministic, the legacy path's missing gate) -
+  // The graph engine (default) runs checkOutboundNumbers + a duration guard on
+  // every outbound; the legacy pipeline (GRAPH_ENGINE=off) shipped whatever the
+  // LLM wrote. That is how a hallucinated "another shop quoted 220" and a wrong
+  // "3 days" (search was 5) reached a real shop. Mirror the engine's gate here.
+  // Only English drafts are validated numerically (a localized bargain is Thai
+  // etc.; its levers were preserved at compose time and a strip would corrupt it).
+  if (followUp && !(useLocalLang && followKind === "bargain")) {
+    // (a) DURATION: rewrite any wrong rental length to the real duration.
+    const dur = correctDuration(followUp, rfq.durationDays);
+    if (dur.changed) {
+      traces.push({
+        ...traceBase,
+        stage: "integrity",
+        input: followUp,
+        reasoning: `duration guard: draft said ${dur.from.join("/")} day(s), traveller's rental is ${rfq.durationDays} - corrected`,
+        output: dur.text,
+        verdict: "revised",
+      });
+      followUp = dur.text;
+      if (englishGloss) englishGloss = undefined;
+    }
+    // (b) NUMERIC SANITY: fabricated rival (all directions) + sub-floor /
+    // inverted-ask bounds (bargain only). rivalPrice is a SERVER-VERIFIED
+    // same-session offer - the only thing that licenses a rival claim.
+    const isBargain = followKind === "bargain";
+    const excludeExact = [rfq.durationDays, rfq.engineSizeCc, rfq.seats].filter(
+      (n): n is number => typeof n === "number"
+    );
+    const numCheck = checkOutboundNumbers({
+      text: followUp,
+      ceiling: isBargain ? usablePrice : undefined,
+      floor: isBargain ? floorPrice : undefined,
+      rivalPrice,
+      excludeExact,
+      checkAskBounds: isBargain,
+    });
+    if (!numCheck.ok) {
+      const safe = isBargain
+        ? buildSafeBargainAsk({
+            target,
+            ceiling: usablePrice,
+            floor: floorPrice,
+            durationDays: rfq.durationDays,
+            currency: cur,
+            money,
+          })
+        : stripRivalClaims(followUp);
+      traces.push({
+        ...traceBase,
+        stage: "integrity",
+        input: followUp,
+        reasoning: `numeric guard (${numCheck.violation}): ${numCheck.detail} - ${
+          safe ? "repaired to a safe, rival-free message" : "no honest repair - suppressing this send"
+        }`,
+        output: safe ?? "(suppressed)",
+        verdict: safe ? "revised" : "veto",
+      });
+      if (!safe) {
+        await writeTrace(traces);
+        return; // never ship a lie; the next inbound recomposes cleanly
+      }
+      followUp = safe;
+      if (englishGloss) englishGloss = undefined;
+    }
+  }
 
   // LANGUAGE STICKINESS: a thread that started in the shop's local language
   // NEVER flips to English mid-conversation (the "agent suddenly switched to
