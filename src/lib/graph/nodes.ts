@@ -85,10 +85,13 @@ const FULFILLMENT_PROBES = [
   "How do I get it - you deliver, or I come to you?",
 ];
 
+// Address-FIRST pickup templates (Module 5): {where} is the verified stay -
+// the typed hotel/street text, with a maps pin appended ONLY when the user's
+// "Share precise location" toggle stored consented coordinates.
 const PICKUP_SHARE_LINES = [
-  "Great, here is my location: {link} - what time can you come? 🙂",
-  "Perfect! I'm here: {link} - let me know when you can pick me up 🙏",
-  "Here is where I am: {link} - message me when you're close! 🙂",
+  "Great, you can pick me up at {where} - what time can you come? 🙂",
+  "Perfect! I'm staying at {where} - let me know when you can pick me up 🙏",
+  "I'm at {where} - message me when you're close! 🙂",
 ];
 
 const CLOSING_LINES = [
@@ -174,27 +177,21 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
       // must be answered with the consented address, or the agent must STOP and
       // let the app ask the user - it must NEVER loop the boilerplate probe.
       if (shopAskedLocation(text)) {
-        const stay = input.ctx.stay;
-        if (stay?.shareConsent && stay.label) {
-          const link =
-            typeof stay.lat === "number" && typeof stay.lng === "number"
-              ? ` My location: https://maps.google.com/?q=${stay.lat.toFixed(6)},${stay.lng.toFixed(6)}`
-              : "";
+        // MODULE 5: one gate for every disclosure. The typed stay label is the
+        // DEFAULT share (typing it into the location config IS the consent to
+        // tell shops in text - the UI says so explicitly); the maps pin exists
+        // ONLY when the "Share precise location" toggle stored consented
+        // coordinates. Raw/client coordinates never reach this code.
+        const { resolveShareableLocation } = await import("../location");
+        const share = resolveShareableLocation(input.ctx.stay ?? null);
+        if (share.addressText) {
+          const link = share.mapsLink ? ` My location: ${share.mapsLink}` : "";
           return {
-            message: `I stay at ${stay.label}.${link} Can you deliver there? 🙂`.slice(0, 400),
+            message: `I stay at ${share.addressText}.${link} Can you deliver there? 🙂`.slice(0, 400),
             kind: "auto-answer",
-            reasoning: "answered the shop's delivery-location question with the traveller's consented stay",
-            fieldsPatch: { awaitingUserLocation: false },
-          };
-        }
-        if (stay?.label) {
-          // We know the hotel NAME but the traveller did not consent to share
-          // their address - never disclose it. Pivot to shop pickup so the deal
-          // still moves, and do not freeze.
-          return {
-            message: "I think is easier i come pick it up at your shop 🙂 what time you open?",
-            kind: "auto-answer",
-            reasoning: "shop asked location but the traveller did not consent to share it - pivot to shop pickup, never disclose the address",
+            reasoning: share.mapsLink
+              ? "answered the shop's delivery-location question with the verified stay + the consented precise pin"
+              : "answered with the verified stay ADDRESS TEXT only (no precise-location consent - no pin)",
             fieldsPatch: { awaitingUserLocation: false },
           };
         }
@@ -213,6 +210,24 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
           reasoning: "shop asked for the delivery location but the traveller shared none - flagging the app to ask, one holding line",
           fieldsPatch: { awaitingUserLocation: true },
         };
+      }
+      // REGION-CONTEXT presence question ("Are you there in moalboal, cebu?"):
+      // Module 5 D3 - confirm from the search-region STRING token only. Never
+      // coordinates, never the stay (the shop asked about the AREA, not for a
+      // delivery address). Previously this fell through to the generic answer
+      // and talked about the bike instead of answering the question.
+      {
+        const { shopAskedPresence } = await import("../wa/detectors");
+        if (shopAskedPresence(text) && input.ctx.region) {
+          const area = input.ctx.region.split(",")[0].trim();
+          if (area) {
+            return {
+              message: `Yes, we're around ${area} 🙂`,
+              kind: "auto-answer",
+              reasoning: `confirmed presence from the region string ("${area}") - coordinates are never used for area questions`,
+            };
+          }
+        }
       }
       const vehiclePhoto =
         extraction?.imageKind === "vehicle" && !shopAskedQuestion(text);
@@ -444,16 +459,30 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
     }
 
     case "pickup-location": {
-      const p = input.event.payload ?? {};
-      const lat = Number(p.lat);
-      const lng = Number(p.lng);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        return { reasoning: "no coordinates in the consent payload - nothing to share", terminal: true };
+      // MODULE 5 HARD GATE: compose ONLY from the server-verified stay through
+      // resolveShareableLocation - client-posted coordinates in the event
+      // payload are ignored by design (the production leak was a stale device
+      // fix relayed verbatim). Address text always; the maps pin exists ONLY
+      // when the "Share precise location" toggle stored consented coords.
+      const { resolveShareableLocation } = await import("../location");
+      const share = resolveShareableLocation(input.ctx.stay ?? null);
+      if (!share.addressText) {
+        return { reasoning: "no verified stay on file - nothing to share (UI prompts the traveller)", terminal: true };
       }
-      const link = `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
-      const base = pick(PICKUP_SHARE_LINES).replace("{link}", link);
-      const v = await vary(base, args, `shares the traveller's location link (${link}) for the shop's pickup service and asks when they can come - KEEP THE LINK EXACTLY AS IS`);
-      const finalText = v.text.includes(link) ? v.text : base; // the link must survive
+      const where = share.mapsLink
+        ? `${share.addressText} (${share.mapsLink})`
+        : share.addressText;
+      const base = pick(PICKUP_SHARE_LINES).replace("{where}", where);
+      const v = await vary(
+        base,
+        args,
+        `tells the shop where to pick the traveller up (${share.addressText}${share.mapsLink ? " + a maps link that must survive EXACTLY as is" : " - address text only, NEVER invent a maps link or coordinates"}) and asks when they can come`
+      );
+      // The verified address (and the consented link, when present) must survive.
+      const finalText =
+        v.text.includes(share.addressText) && (!share.mapsLink || v.text.includes(share.mapsLink))
+          ? v.text
+          : base;
       return {
         message: finalText,
         kind: "auto-pickup-location",

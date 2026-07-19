@@ -6,21 +6,33 @@ import { sendFromUser } from "@/lib/evolution";
 import { digitsOnly } from "@/lib/phone";
 
 // Pickup-consent handoff: the traveller tapped "Share my location" on a vendor
-// card because the shop offered to pick them up. ONLY here - after explicit
-// consent - do we send the shop the exact location, via the engine's
-// pickup-location node (which composes a varied message with a Google Maps
-// link). The exact location is NEVER sent without this.
+// card because the shop offered to pick them up.
 //
-// Body: { to?, placeId?, lat, lng }
+// MODULE 5 HARD GATE: this route NO LONGER reads client-posted lat/lng - the
+// production leak was a stale device fix posted from the browser and relayed
+// verbatim to a shop. The tap now only AUTHORIZES the share; what actually
+// gets shared is the SERVER-VERIFIED stay (getUserStay), resolved through
+// resolveShareableLocation by the engine: address text always, a maps pin
+// ONLY when the "Share precise location" toggle stored consented coordinates.
+// No stay configured -> { ok:false, reason:"no-stay" } so the UI opens the
+// LocationConfig sheet instead of silently sending anything.
+//
+// Body: { to?, placeId? }   (lat/lng in the body are IGNORED by design)
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const lat = Number(body.lat);
-  const lng = Number(body.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return NextResponse.json({ error: "Location required to share for pickup." }, { status: 400 });
+
+  // The share must have something server-verified to say.
+  const { getUserStay } = await import("@/lib/access");
+  const stay = await getUserStay(session.email);
+  if (!stay?.label) {
+    return NextResponse.json({
+      ok: false,
+      reason: "no-stay",
+      error: "Add your hotel or address first - that's what we'll share with the shop.",
+    });
   }
 
   let to = String(body.to ?? "").trim();
@@ -61,7 +73,9 @@ export async function POST(req: Request) {
     userEmail: session.email,
     toDigits: digits,
     kind: "user-consent-pickup",
-    payload: { lat, lng, pickupConsent: true },
+    // Consent flag ONLY - the engine composes from the server-verified stay
+    // (ctx.stay), never from anything the client posted.
+    payload: { pickupConsent: true },
     send: (senderKey, dest, text) => sendFromUser(senderKey, dest, text),
   });
 

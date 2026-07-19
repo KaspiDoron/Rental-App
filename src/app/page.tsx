@@ -1154,16 +1154,13 @@ export default function Home() {
   // Pickup consent: the traveller approved sharing their EXACT location with a
   // shop that offered to pick them up. Prefer a fresh precise GPS fix; fall back
   // to the search origin's coordinates. The location is sent ONLY from here.
+  // MODULE 5: the tap only AUTHORIZES the share - no client coordinates are
+  // ever posted (the old getCurrentPosition/stale-origin fallback leaked a
+  // previous trip's GPS to a shop). The server composes from the VERIFIED stay
+  // (typed address; precise pin only with the default-OFF toggle). reason
+  // "no-stay" means the user must configure their stay first - the caller
+  // opens the location settings.
   const pickupConsent = useCallbackRef(async (vendor: Vendor): Promise<{ ok: boolean; reason?: string }> => {
-    const coords = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
-      if (!navigator.geolocation) return resolve(origin ? { lat: origin.lat, lng: origin.lng } : null);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => resolve(origin ? { lat: origin.lat, lng: origin.lng } : null),
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    });
-    if (!coords) return { ok: false, reason: "no-location" };
     try {
       const res = await fetch("/api/negotiate/consent", {
         method: "POST",
@@ -1171,8 +1168,6 @@ export default function Home() {
         body: JSON.stringify({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
-          lat: coords.lat,
-          lng: coords.lng,
         }),
       });
       const d = await res.json();

@@ -24,3 +24,25 @@ export function shopAskedLocation(text: string): boolean {
     /\b(send|share|drop)\b[^?.!]{0,20}\b(location|hotel|address|pin)\b/.test(t)
   );
 }
+
+/**
+ * Did the shop ask whether the traveller IS IN a place ("Are you there in
+ * moalboal, cebu?", "you here in Boracay?")? A REGION-context question, not a
+ * delivery-address request - answered from the search region STRING only
+ * (Module 5 D3: never coordinates, never the stay). Location asks
+ * (shopAskedLocation) take priority and are deliberately excluded.
+ */
+export function shopAskedPresence(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (!t) return false;
+  if (shopAskedLocation(t)) return false; // delivery-address asks win
+  if (/\bwhere\s+(are|r)\s+you\s+from\b/.test(t)) return false;
+  return (
+    // "are you (there|here|now) in <place>" - typos like "are you there in
+    // moalboal, cebu,v" included; the trailing place is required.
+    /\b(are|r)\s+(you|u)\s+(there|here|now|already|still)?\s*(in|at|near)\s+[a-z]/.test(t) ||
+    // "you in <place>?" / "you here?" style shorthand with a question mark.
+    /\b(you|u)\s+(in|at|near)\s+[a-z][^?]{0,30}\?/.test(t) ||
+    /\b(are|r)\s+(you|u)\s+(here|there|around|nearby)\s*\?/.test(t)
+  );
+}

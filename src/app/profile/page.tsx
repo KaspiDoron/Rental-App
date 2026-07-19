@@ -12,6 +12,7 @@ import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
+import LocationConfig from "@/components/LocationConfig";
 import { SiteFooter } from "@/components/SiteFooter";
 import { WillCompanion } from "@/components/will/WillCompanion";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
@@ -58,10 +59,6 @@ export default function ProfilePage() {
   const [phoneMsg, setPhoneMsg] = useState<string | null>(null);
 
   // Where you're staying (for delivery) + explicit consent to share with shops.
-  const [stayVal, setStayVal] = useState("");
-  const [stayConsent, setStayConsent] = useState(false);
-  const [stayBusy, setStayBusy] = useState(false);
-  const [stayMsg, setStayMsg] = useState<string | null>(null);
 
   // Personal WhatsApp session state (rendered by <WaConnect/>).
   const [wa, setWa] = useState<{
@@ -92,8 +89,6 @@ export default function ProfilePage() {
         setSession(d.session);
         setProfile(d.profile);
         setPhoneVal(d.profile?.phone ?? "");
-        setStayVal(d.profile?.stayLabel ?? "");
-        setStayConsent(Boolean(d.profile?.stayShareConsent));
         const urlPw = new URLSearchParams(window.location.search).get("pw") === "1";
         if (d.profile?.mustChangePassword || urlPw) setMustChangePw(true);
       })
@@ -188,29 +183,6 @@ export default function ProfilePage() {
       }
     } finally {
       setPhoneBusy(false);
-    }
-  }
-
-  async function saveStay() {
-    setStayBusy(true);
-    setStayMsg(null);
-    try {
-      const res = await fetch("/api/profile/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // No coordinates here (a typed hotel name) - the label alone answers
-        // "where is your hotel?"; consent gates whether it is shared at all.
-        body: JSON.stringify({ stayLabel: stayVal, shareStayConsent: stayConsent && stayVal.trim() !== "" }),
-      });
-      const d = await res.json();
-      if (res.ok) {
-        setStayConsent(Boolean(d.profile?.stayShareConsent));
-        setStayMsg(t("Saved") + " ✓");
-      } else {
-        setStayMsg(d.error ?? t("Could not update."));
-      }
-    } finally {
-      setStayBusy(false);
     }
   }
 
@@ -357,37 +329,12 @@ export default function ProfilePage() {
           )}
         </section>
 
-        {/* Where you're staying - so your agent can answer a shop's "where is
-            your hotel?" for delivery, instead of looping. Sharing is OFF until
-            you tick the box (privacy). */}
+        {/* Where you're staying (Module 5): typed address = the default share;
+            the "Share precise location" toggle (default OFF) is the ONLY path
+            that captures/reveals coordinates. */}
         <section className="surface rounded-blob p-4">
           <div className="text-[13px] font-extrabold text-strong">🏨 {t("Where you're staying")}</div>
-          <p className="mt-1 text-[11px] text-soft">
-            {t("If a shop asks where to deliver, your agent can share this so the deal keeps moving.")}
-          </p>
-          <input
-            value={stayVal}
-            onChange={(e) => setStayVal(e.target.value.slice(0, 160))}
-            placeholder={t("Hotel or place name")}
-            className="mt-2 w-full rounded-xl border-2 border-line bg-transparent px-3 py-2 text-[16px] text-strong"
-          />
-          <label className="mt-2 flex items-start gap-2 text-[12px] font-bold text-soft">
-            <input
-              type="checkbox"
-              checked={stayConsent}
-              onChange={(e) => setStayConsent(e.target.checked)}
-              className="mt-0.5 h-4 w-4"
-            />
-            <span>{t("Let my agent share this address with shops when they ask about delivery or pickup.")}</span>
-          </label>
-          <button
-            onClick={saveStay}
-            disabled={stayBusy}
-            className="btn btn-primary btn-sm mt-3 w-full rounded-xl text-[12px] disabled:opacity-60"
-          >
-            {stayBusy ? <LoadingDots light label={t("Saving")} /> : t("Save")}
-          </button>
-          {stayMsg && <p className="mt-2 text-[12px] font-bold text-savings">{stayMsg}</p>}
+          <LocationConfig />
         </section>
 
         {/* Currency - prominent (item #6): detected from the device, one tap to change */}
