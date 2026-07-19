@@ -159,6 +159,32 @@ describe("runGraphTurn integrity - Batch D production failures never ship", () =
     // A real, arithmetically sane ask survived (below the 250 quote, above floor).
   });
 
+  it("BARGAINED-0 KILL: a floor ABOVE the live quote (bad seed 350 vs 300) is clamped and a counter still goes out", async () => {
+    // The production paralysis: PH seed floor 350 > live 300 quote flipped
+    // priceAtOrBelowFloor true -> d-bargain illegal -> engine went silent and
+    // the dashboard honestly reported Bargained 0 forever. The credibility
+    // clamp (min(floor, quote*0.9)) must restore room to counter.
+    POISON = "Thanks! Could you do 270 a day for the 5 days? 🙏";
+    const { io, sends } = makeIO({
+      ...seed(),
+      fields: { firmCount: 0, toneDegraded: false, rounds: 0 },
+    });
+    const result = await runGraphTurn(
+      turnInput({
+        extraction,
+        usablePrice: 300,
+        floorPrice: 350, // the poisoned seed - ABOVE the shop's own quote
+        overlay: { ...DEFAULT_OVERLAY },
+      }),
+      io
+    );
+    expect(result.delivered?.delivered).toBe("sent");
+    expect(sends).toHaveLength(1);
+    // The counter asks for LESS than the live 300 quote - bargaining is alive.
+    const nums = (sends[0].match(/\d{2,4}/g) ?? []).map(Number);
+    expect(nums.some((n) => n < 300 && n >= 200)).toBe(true);
+  });
+
   it("BUG1 alone: a wrong-duration bargain is corrected to the real 5 days and still sends", async () => {
     POISON = "Thanks! For the 3 days, could you do 200 a day my friend? 🙏";
     const { io, sends } = makeIO({

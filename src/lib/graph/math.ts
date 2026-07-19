@@ -1,6 +1,31 @@
 // Pure negotiation math - no IO, no server-only, so tests and the client-side
 // Studio preview can import it freely.
 
+/**
+ * CREDIBILITY CLAMP (the Bargained-0 kill): a market "floor" at or above the
+ * shop's own LIVE quote is not credible - shops quote above their floor, never
+ * below it. A wrong-high seed (PH 350 vs live 300 quotes) used to flip
+ * priceAtOrBelowFloor true and silently paralyze ALL bargaining. Clamp the
+ * effective floor below the quote (10% headroom) so the engine always has room
+ * to counter; callers emit a `suspect-floor` event when the clamp fires so bad
+ * data gets fixed, not hidden. Lives HERE (pure module) so the engine imports
+ * it statically - test mocks of ./market never hide it.
+ */
+export function credibleFloor(
+  floor: number | null | undefined,
+  liveQuote: number | null | undefined
+): { floor: number | undefined; clamped: boolean } {
+  if (typeof floor !== "number" || !(floor > 0)) return { floor: undefined, clamped: false };
+  if (typeof liveQuote !== "number" || !(liveQuote > 0)) return { floor, clamped: false };
+  // CRITICAL discriminator: quote AT the floor (within 2%) is the SETTLED
+  // state - the shop was bargained down to it, and reopening the push forever
+  // would be the aggressive-lowball failure mode. Only a floor STRICTLY above
+  // the quote beyond that tolerance is impossible-bad-data (a shop never
+  // opens below the true market floor).
+  if (floor <= liveQuote * 1.02) return { floor, clamped: false };
+  return { floor: Math.max(1, Math.round(liveQuote * 0.9)), clamped: true };
+}
+
 export function niceRound(x: number): number {
   if (x >= 1000) return Math.round(x / 50) * 50;
   if (x >= 200) return Math.round(x / 10) * 10;

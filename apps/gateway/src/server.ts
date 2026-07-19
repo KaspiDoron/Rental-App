@@ -11,6 +11,7 @@ import { webhookToken } from "@wheeldeal/core";
 import { logger, env } from "@wheeldeal/shared";
 import { claimInboundIds, redis } from "@wheeldeal/redis";
 import { enqueueInbound } from "@wheeldeal/queues";
+import { registerStreamRoute } from "./routes/stream";
 
 const app = express();
 app.use(express.json({ limit: "8mb" })); // Evolution payloads carry base64 previews
@@ -73,6 +74,9 @@ app.post(["/api/webhooks/evolution", "/webhooks/evolution"], async (req, res) =>
     if (ms > 200) logger.warn({ ms }, "webhook ack exceeded 200ms budget");
   }
 });
+
+// Realtime UI sync: SSE stream of session deltas (Module 2).
+registerStreamRoute(app);
 
 const port = Number(env("GATEWAY_PORT", "8080"));
 const server = app.listen(port, () => {

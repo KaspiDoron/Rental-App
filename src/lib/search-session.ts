@@ -59,6 +59,23 @@ export async function cheapestRivalFor(
   args: { vendorId: string; currency: string; vehicleKey: string; belowPrice: number }
 ): Promise<number | undefined> {
   const session = await currentSession(userEmail);
+
+  // HOT PATH (Module 2): O(log n) Redis ZSET read, scoped to this exact
+  // session + vehicle + currency. Only authoritative for sessions the worker
+  // runtime ingested (the `live` flag) - on Vercel or for a Vercel-era
+  // session this returns null and the Postgres path below stays the truth.
+  if (session.id != null) {
+    const { cheapestCachedRival } = await import("./rival-cache");
+    const cached = await cheapestCachedRival({
+      searchId: session.id,
+      vehicleKey: args.vehicleKey,
+      currency: args.currency,
+      excludeVendorId: args.vendorId,
+      belowPrice: args.belowPrice,
+    });
+    if (cached != null) return cached;
+  }
+
   const rows = await sbSelect<{
     vendor_id: string;
     price_per_day: number;

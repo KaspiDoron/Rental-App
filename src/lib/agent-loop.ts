@@ -40,7 +40,7 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
   }
   return ""; // asserts a rival price that is not our verified one - drop it
 }
-import { floorPriceFor } from "./market";
+import { floorPriceFor, credibleFloor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
 import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
@@ -363,12 +363,31 @@ export async function processVendorReply(opts: {
   // total: divide it. (The extraction prompt now rules this too; this is the
   // arithmetic backstop for when the model slips.)
   const floor = await floorPriceFor(ctx.region || undefined, rfq);
-  const floorSameCur = floor && floor.currency === cur ? floor : null;
+  let floorSameCur = floor && floor.currency === cur ? floor : null;
   if (usablePrice && rfq.durationDays > 1 && floorSameCur) {
     const typical = floorSameCur.typical ?? Math.round(floorSameCur.floor * 1.6);
     const perDayIfTotal = Math.round(usablePrice / rfq.durationDays);
     if (usablePrice >= typical * 2 && perDayIfTotal >= floorSameCur.floor * 0.55) {
       usablePrice = perDayIfTotal;
+    }
+  }
+  // CREDIBILITY CLAMP (the Bargained-0 kill): a "floor" at/above the shop's
+  // own live quote is bad data, not a reason to go mute - it used to flip
+  // priceAtOrBelowFloor true and make the bargain edge illegal for EVERY shop
+  // in the region (PH seed 350 vs live 300 quotes). Clamp below the quote so
+  // the engine always has room to counter, and record the suspect data point.
+  if (usablePrice && floorSameCur) {
+    const credible = credibleFloor(floorSameCur.floor, usablePrice);
+    if (credible.clamped && credible.floor) {
+      await sbInsert("agent_events", [
+        {
+          kind: "suspect-floor",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: `Market floor ${floorSameCur.floor} ${cur} >= live quote ${usablePrice} ${cur} (${ctx.region ?? "?"}) - clamped to ${credible.floor} so bargaining stays possible. Fix the floor data.`,
+        },
+      ]).catch(() => {});
+      floorSameCur = { ...floorSameCur, floor: credible.floor };
     }
   }
   const replyBase = {
@@ -479,6 +498,23 @@ export async function processVendorReply(opts: {
     if (!offerOk) {
       const okDep = await sbInsert("offers", [{ ...offerBase, deposit_note: extraction.deposit ?? null }]);
       if (!okDep) await sbInsert("offers", [offerBase]);
+    }
+    // HOT-STATE WRITE-THROUGH (Module 2): mirror the offer into the Redis
+    // session aggregates (lowest-rival ZSET + OFFERS IN / BARGAINED HSET) and
+    // publish the delta for the SSE stream. REDIS_URL-gated no-op on Vercel;
+    // never throws; Postgres above remains the source of truth.
+    if (searchId != null) {
+      const { recordSessionOffer } = await import("./rival-cache");
+      await recordSessionOffer({
+        searchId,
+        vendorId: ctx.vendorId ?? "",
+        vehicleKey,
+        currency: cur,
+        pricePerDay: usablePrice,
+        // First write pins the list anchor; later rounds only lower the score.
+        listPricePerDay: usablePrice,
+        durationDays: rfq.durationDays ?? 1,
+      }).catch(() => {});
     }
   }
 

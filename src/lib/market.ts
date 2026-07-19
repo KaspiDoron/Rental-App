@@ -121,7 +121,11 @@ const COUNTRY_SCOOTER_FLOOR: Record<string, { cur: string; perDay: number }> = {
   thailand: { cur: "THB", perDay: 150 },
   indonesia: { cur: "IDR", perDay: 50000 },
   vietnam: { cur: "VND", perDay: 100000 },
-  philippines: { cur: "PHP", perDay: 350 },
+  // PRODUCTION FIX: 350 sat ABOVE real live quotes (two shops at 300/day in the
+  // Camiguin/Moalboal drills) - a floor above the quote flips priceAtOrBelowFloor
+  // true and makes the d-bargain edge illegal, muting ALL bargaining ("Bargained
+  // ₱0"). 150 is the real low-season walk-in floor for a 125cc in the provinces.
+  philippines: { cur: "PHP", perDay: 150 },
   malaysia: { cur: "MYR", perDay: 25 },
   india: { cur: "INR", perDay: 400 },
   "sri lanka": { cur: "LKR", perDay: 2500 },
@@ -151,6 +155,11 @@ const COUNTRY_SCOOTER_FLOOR: Record<string, { cur: string; perDay: number }> = {
   usa: { cur: "USD", perDay: 35 },
   "united arab emirates": { cur: "AED", perDay: 100 },
 };
+
+// The credibility clamp lives in graph/math.ts (pure - the engine imports it
+// statically so test mocks of THIS module can never hide it); re-exported here
+// for the market-domain callers (agent-loop).
+export { credibleFloor } from "./graph/math";
 
 // How each vehicle bucket prices relative to a 125cc scooter (=1.0). Rough but
 // consistent worldwide - real area rows from the AI refresh override these.

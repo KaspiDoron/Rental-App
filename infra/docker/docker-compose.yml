@@ -2,8 +2,9 @@
 #   redis   ~150MB (maxmemory 160mb, AOF persisted)  - queues + hot state
 #   gateway ~80MB                                     - webhook ingress (<200ms ack)
 #   workers ~200MB                                    - all five BullMQ consumers
-#   web     ~250MB                                    - Next.js UI (final phase; on
-#                                                       Vercel during the dual-run)
+# OWNER RULE R1: the Next.js frontend stays on VERCEL permanently ($0, its own
+# RAM) - no web service ever runs on this VM. The VM is strictly
+# gateway + workers + redis (~450MB, comfortable headroom on 1GB).
 # DB + storage stay on SUPABASE (external, free) - nothing DB-shaped runs here.
 #
 # Usage (on the VM):  docker compose --env-file .env up -d --build
@@ -13,10 +14,16 @@
 services:
   redis:
     image: redis:7-alpine
+    # OWNER RULE R2: no-appendfsync-on-rewrite - during an AOF rewrite, skip
+    # fsync so a background rewrite can never saturate the GCE standard
+    # persistent disk's IOPS and stall the gateway's <200ms webhook ACK path.
+    # (Trade-off: up to ~30s of writes at risk ONLY during a rewrite window -
+    # acceptable; every queue consumer is idempotent by design.)
     command:
       [
         "redis-server",
         "--appendonly", "yes",
+        "--no-appendfsync-on-rewrite", "yes",
         "--maxmemory", "160mb",
         "--maxmemory-policy", "noeviction",
       ]
@@ -57,19 +64,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-
-  # Enable when the UI moves off Vercel (final phase):
-  # web:
-  #   build:
-  #     context: ../..
-  #     dockerfile: infra/docker/Dockerfile.web
-  #   env_file: [.env]
-  #   environment:
-  #     REDIS_URL: redis://redis:6379
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on: [redis]
-  #   restart: unless-stopped
 
 volumes:
   redis-data:

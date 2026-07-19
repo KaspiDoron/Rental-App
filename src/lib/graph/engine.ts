@@ -33,6 +33,7 @@ import {
 import { evalGraphCondition, explainCondition } from "./conditions";
 import { deterministicChoice, runDirector } from "./director";
 import { composeForNode, computeRoundTarget } from "./nodes";
+import { credibleFloor } from "./math";
 import {
   buildSafeBargainAsk,
   checkOutboundNumbers,
@@ -395,6 +396,20 @@ export async function runGraphTurn(
     await io.clearWakeups(state.threadKey, "tick");
   }
   state = applyExtractionToState(state, input.extraction, input.usablePrice, input.currency);
+
+  // CREDIBILITY CLAMP (the Bargained-0 kill, engine choke point): a market
+  // floor at/above the shop's LIVE price is bad data - it flips
+  // priceAtOrBelowFloor true and makes the bargain edge illegal, muting the
+  // whole negotiation. Clamping HERE (after state load) covers every caller in
+  // one place: the inbound path, the tick path (price lives only in state
+  // then) and the Playground - what the owner tests is what production runs.
+  {
+    const livePrice = input.usablePrice ?? state.fields.pricePerDay ?? undefined;
+    const credible = credibleFloor(input.floorPrice, livePrice);
+    if (credible.clamped) {
+      input = { ...input, floorPrice: credible.floor };
+    }
+  }
   // The traveller has now provided a hotel: clear the awaiting-location hold so
   // the deposit/delivery probes resume - otherwise a thread that asked for the
   // hotel would stay frozen forever even after the user added it (even if they

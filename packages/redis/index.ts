@@ -61,65 +61,36 @@ export async function claimInboundIds(ids: string[]): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Session offer aggregates (Module 2) - the instant-rival hot path.
+// Session offer hot state (Module 2) - canonical impl in src/lib/rival-cache,
+// re-exported via ./offers (one schema, both runtimes).
 // ---------------------------------------------------------------------------
 
-const SESSION_TTL_S = 24 * 3600;
-
-/** Record/refresh a shop's current per-day offer for a search session. */
-export async function recordSessionOffer(
-  searchId: string | number,
-  vendorId: string,
-  pricePerDay: number
-): Promise<void> {
-  const key = `session:${searchId}:offers`;
-  const r = redis();
-  await r.zadd(key, String(pricePerDay), vendorId);
-  await r.expire(key, SESSION_TTL_S);
-}
-
-/** The cheapest OTHER shop's offer in this session, or null. */
-export async function cheapestSessionRival(
-  searchId: string | number,
-  excludeVendorId: string
-): Promise<{ vendorId: string; pricePerDay: number } | null> {
-  const rows = await redis().zrange(`session:${searchId}:offers`, 0, 5, "WITHSCORES");
-  for (let i = 0; i < rows.length; i += 2) {
-    if (rows[i] !== excludeVendorId) {
-      return { vendorId: rows[i], pricePerDay: Number(rows[i + 1]) };
-    }
-  }
-  return null;
-}
+export {
+  recordSessionOffer,
+  cheapestCachedRival,
+  publishSessionEvent,
+  sessionAggregates,
+  offersKey,
+  listPriceKey,
+  aggKey,
+  liveFlagKey,
+  eventsChannel,
+} from "./offers";
+export type { SessionOfferWrite, CachedRivalQuery, SessionEventPayload } from "./offers";
 
 // ---------------------------------------------------------------------------
-// Pub/sub - realtime UI sync (SSE fan-out subscribes to these).
+// Pub/sub SUBSCRIBE side - services only (a subscribed conn can't run
+// commands, so this stays on the always-on service client).
 // ---------------------------------------------------------------------------
 
-export type SessionEvent = {
-  type: "offer" | "counter" | "state" | "message";
-  vendorId?: string;
-  pricePerDay?: number;
-  at: string;
-  detail?: string;
-};
-
-export async function publishSessionEvent(
-  searchId: string | number,
-  event: SessionEvent
-): Promise<void> {
-  try {
-    await redis().publish(`session:${searchId}:events`, JSON.stringify(event));
-  } catch {
-    /* realtime is an enhancement - polling remains the fallback */
-  }
-}
+import { eventsChannel as chanFor } from "./offers";
+import type { SessionEventPayload as SessionEvent } from "./offers";
 
 export function subscribeSessionEvents(
   searchId: string | number,
   onEvent: (e: SessionEvent) => void
 ): () => void {
-  const chan = `session:${searchId}:events`;
+  const chan = chanFor(searchId);
   const sub = redisSubscriber();
   const handler = (channel: string, message: string) => {
     if (channel !== chan) return;
