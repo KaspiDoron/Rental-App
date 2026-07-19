@@ -35,3 +35,4 @@ yarn-error.log*
 
 # Claude Code local (per-machine) settings
 .claude/settings.local.json
+dump.rdb
