@@ -160,8 +160,19 @@ export async function POST(req: Request) {
   // source of truth), so no two shops ever receive the same opening text.
   if (isAuto && kind === "rfq" && body.rfq) {
     try {
-      const { variedFirstMessage } = await import("@/lib/agents");
-      outboundText = variedFirstMessage(body.rfq);
+      // Module 4: the deterministic variation-matrix compiler (seed =
+      // user|vendor|hour) + the global-uniqueness guard, replacing the old
+      // Math.random template pools - reproducible diversity, cross-fleet
+      // skeleton dedup (the Redis window no-ops on Vercel).
+      const { compileOpener } = await import("@/lib/copy/promptCompiler");
+      const { openerSeed } = await import("@/lib/copy/matrix");
+      const { ensureGloballyUnique } = await import("@/lib/graph/uniqueness");
+      const compiled = compileOpener(
+        body.rfq,
+        openerSeed(session.email, vendorId || digits, new Date().toISOString().slice(0, 13)),
+        String(body.region ?? "") || undefined
+      );
+      outboundText = (await ensureGloballyUnique(compiled, [])).text;
     } catch {
       /* keep the client message on any failure */
     }

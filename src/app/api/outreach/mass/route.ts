@@ -185,6 +185,41 @@ export async function POST(req: Request) {
   // stay a tight 45-75s regardless of how many earlier shops were skipped.
   let sendIndex = 0;
 
+  // MODULE 4 - PER-SHOP COMPILED OPENERS. The root cause of the "identical
+  // message to every shop" spam fingerprint was this route sending ONE stored
+  // string to the whole batch. Each shop now gets its own deterministic
+  // variation-matrix compile (seed = user|vendor|batchId), checked through the
+  // global-uniqueness guard (in-batch + cross-fleet signature window). Ultra
+  // local-language localizes PER SHOP. Legacy callers without an rfq in the
+  // body keep the old single-message behavior.
+  const rfqForCompile =
+    body.rfq &&
+    typeof body.rfq === "object" &&
+    typeof (body.rfq as { durationDays?: unknown }).durationDays === "number"
+      ? (body.rfq as import("@/lib/types").StructuredRFQ)
+      : null;
+  const compiledRecent: string[] = [];
+  const wantLocalLang = Boolean(body.localLang) && session.plan === "ultra";
+  const openerFor = async (vendorId: string): Promise<{ text: string; gloss?: string }> => {
+    if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
+    const { compileOpener } = await import("@/lib/copy/promptCompiler");
+    const { openerSeed } = await import("@/lib/copy/matrix");
+    const { ensureGloballyUnique } = await import("@/lib/graph/uniqueness");
+    const english = compileOpener(
+      rfqForCompile,
+      openerSeed(session.email, vendorId, batchId),
+      String(body.region ?? "") || undefined
+    );
+    const unique = await ensureGloballyUnique(english, compiledRecent);
+    compiledRecent.push(unique.text);
+    if (!wantLocalLang) return { text: unique.text };
+    const { localizeMessage } = await import("@/lib/agents");
+    const localized = await localizeMessage(unique.text, String(body.region ?? "") || undefined);
+    return localized.localized
+      ? { text: localized.text, gloss: localized.english ?? unique.text }
+      : { text: unique.text };
+  };
+
   // CLICK-TIME BUDGET TRUTH. The anti-ban engine only allows a limited number
   // of brand-new shop introductions per day. The old flow silently parked
   // over-budget messages behind fake near-term ETAs that crept forever
@@ -240,6 +275,9 @@ export async function POST(req: Request) {
       await clearCancellation(session.email, digits).catch(() => {});
     }
 
+    // Per-shop compiled opener (falls back to the legacy single message when
+    // the caller sent no rfq). Computed before meta so the gloss rides along.
+    const opener = await openerFor(v.id);
     const meta = {
       sender: session.email,
       vendorId: v.id,
@@ -253,7 +291,7 @@ export async function POST(req: Request) {
       batchId,
       batchSize: vendors.length,
       // On queued rows the thread peek reads the gloss from outbox meta.
-      ...(englishGloss ? { englishGloss } : {}),
+      ...((opener.gloss ?? englishGloss) ? { englishGloss: opener.gloss ?? englishGloss } : {}),
     };
 
     // DEDUPE: this shop already has a message waiting - never add a second.
@@ -280,7 +318,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          body: batchMessage,
+          body: opener.text,
           not_before: notBefore,
           meta: { ...meta, reason: "introductions full - refreshes soon" },
         },
@@ -308,7 +346,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          body: batchMessage,
+          body: opener.text,
           not_before: notBefore,
           meta: { ...meta, reason: "batch-spacing" },
         },
@@ -328,7 +366,7 @@ export async function POST(req: Request) {
     const guard = await guardOutbound({
       senderKey: session.email,
       toDigits: digits,
-      text: batchMessage,
+      text: opener.text,
       auto: true,
       queueIfBlocked: true,
       region: String(body.region ?? "") || undefined,

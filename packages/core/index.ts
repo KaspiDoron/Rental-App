@@ -40,6 +40,22 @@ export {
   claimedRivalNumber,
 } from "../../src/lib/graph/guardrails";
 
+// Humanized copywriting engine (Module 4) - full modules also available at
+// @wheeldeal/core/copy/{promptCompiler,matrix} for direct imports.
+export {
+  compileOpener,
+  compileStyleDirectives,
+  vehicleWording,
+} from "../../src/lib/copy/promptCompiler";
+export { openerSeed, drawStyle, seedRng } from "../../src/lib/copy/matrix";
+export type { CopySeed } from "../../src/lib/copy/matrix";
+export {
+  ensureGloballyUnique,
+  recordCopySignature,
+  ensureGloballyFresh,
+  trigramOverlap,
+} from "../../src/lib/graph/uniqueness";
+
 // Deterministic extraction + market intelligence.
 export { extractRentalDailyPrice } from "../../src/lib/wa/price-extract";
 export { coalesceUnreadInbound } from "../../src/lib/wa/coalesce";

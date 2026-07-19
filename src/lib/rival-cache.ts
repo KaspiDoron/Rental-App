@@ -19,11 +19,12 @@
 //
 // Never throws: a Redis hiccup degrades to "no cache" (callers fall back).
 
-type RedisLike = {
+export type RedisLike = {
   set(...args: (string | number)[]): Promise<unknown>;
   exists(key: string): Promise<number>;
   zadd(key: string, score: string, member: string): Promise<unknown>;
-  zrange(key: string, start: number, stop: number, withScores: "WITHSCORES"): Promise<string[]>;
+  zrange(key: string, start: number, stop: number, withScores?: "WITHSCORES"): Promise<string[]>;
+  zremrangebyrank(key: string, start: number, stop: number): Promise<unknown>;
   hset(key: string, ...fieldValues: (string | number)[]): Promise<unknown>;
   hgetall(key: string): Promise<Record<string, string>>;
   expire(key: string, seconds: number): Promise<unknown>;
@@ -32,7 +33,13 @@ type RedisLike = {
 
 let client: RedisLike | null | undefined; // undefined = not tried, null = unavailable
 
-/** Lazy, REDIS_URL-gated client. Returns null on Vercel / when Redis is down. */
+/** The shared lazy, REDIS_URL-gated hot-state client - null on Vercel / when
+ * Redis is down. Exported so sibling hot-state modules (the copy-uniqueness
+ * signature window) reuse ONE connection instead of opening their own. */
+export async function hotStateClient(): Promise<RedisLike | null> {
+  return cacheClient();
+}
+
 async function cacheClient(): Promise<RedisLike | null> {
   if (client !== undefined) return client;
   const url = process.env.REDIS_URL;

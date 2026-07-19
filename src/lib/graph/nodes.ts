@@ -369,6 +369,13 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
           f.sheetPricePerDay
             ? `The shop POSTED a price list showing ${f.sheetPricePerDay} ${input.currency}/day for this model. Acknowledge their listed price warmly and keep your ask credible against the printed board - a deep lowball against a posted list insults the shop and kills the deal.`
             : "",
+          // Module 4: deterministic per-turn structural shape (sentence order,
+          // contractions, emoji rule) - no two turns share a skeleton, across
+          // the whole fleet.
+          (await import("../copy/promptCompiler")).compileStyleDirectives(
+            { threadId: input.event.threadKey, vendorId: input.ctx.vendorId ?? "", nonce: rounds },
+            input.ctx.region || undefined
+          ),
           "Include exactly one warm emoji.",
         ]
           .filter(Boolean)

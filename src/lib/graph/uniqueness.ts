@@ -38,6 +38,24 @@ const OPENER_SWAPS: [RegExp, string[]][] = [
   [/^thanks\b/i, ["Thank you", "Appreciate it", "Thanks a lot", "Ta"]],
 ];
 
+/** Seeded variant of revary (Module 4): deterministic given an rng, so the
+ * compiler's collision re-variation is replayable and unit-testable. */
+export function revarySeeded(text: string, rng: () => number): string {
+  let out = text;
+  for (const [rx, pool] of OPENER_SWAPS) {
+    if (rx.test(out)) {
+      out = out.replace(rx, pool[Math.floor(rng() * pool.length)]);
+      break;
+    }
+  }
+  const emojiRx = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+  const fresh = EMOJI_POOL[Math.floor(rng() * EMOJI_POOL.length)];
+  out = emojiRx.test(out) ? out.replace(emojiRx, fresh) : `${out} ${fresh}`;
+  if (rng() < 0.5) out = out.replace(/\bcan you\b/i, (m) => (m[0] === "C" ? "Could you" : "could you"));
+  if (rng() < 0.4) out = out.replace(/!$/, ".");
+  return out;
+}
+
 /** Deterministic mutation used when a draft collides globally. */
 export function revary(text: string): string {
   let out = text;
@@ -90,6 +108,82 @@ export function ensureGloballyFresh(
   let final = 0;
   for (const prior of recentGlobal) final = Math.max(final, trigramOverlap(text, prior));
   return { text, changed, maxOverlap: final };
+}
+
+// ---------------------------------------------------------------------------
+// Redis signature window (Module 4, owner P1) - the memory-optimized global
+// recent-send memory. ONE ZSET `copy:sigs` holding compact 24-char members
+// (simhash64 hex + fnv1a32 hex - see copy/hash.ts), score = timestamp,
+// trimmed to SIG_CAP by rank + 48h EXPIRE: ~200KB worst case, never raw text.
+// REDIS_URL-gated via the shared hot-state client - a strict no-op on Vercel,
+// where the DB-based ensureGloballyFresh above remains the only layer.
+// ---------------------------------------------------------------------------
+
+import { copySignature, parseSignature, hamming64, simhash64, mulberry32, fnv1a32 } from "../copy/hash";
+import { hotStateClient } from "../rival-cache";
+
+const SIG_KEY = "copy:sigs";
+const SIG_CAP = 2000; // ~2000 * ~100B (member+overhead) ≈ 200KB - far under budget
+const SIG_TTL_S = 48 * 3600;
+const SIG_WINDOW = 300; // compare vs the most recent N signatures (one ZRANGE)
+const HAMMING_MAX = 10; // ≤10/64 differing bits = same structural skeleton
+
+/** Record an ACCEPTED outbound's signature in the sliding window. No-op on
+ * Vercel; never throws. */
+export async function recordCopySignature(text: string): Promise<void> {
+  try {
+    const r = await hotStateClient();
+    if (!r) return;
+    await r.zadd(SIG_KEY, String(Date.now()), copySignature(text));
+    await r.zremrangebyrank(SIG_KEY, 0, -(SIG_CAP + 1)); // keep newest SIG_CAP
+    await r.expire(SIG_KEY, SIG_TTL_S);
+  } catch {
+    /* the guard is an enhancement - a Redis blip never blocks a send */
+  }
+}
+
+/** True when the candidate's skeleton collides with a recent global send. */
+async function collidesGlobally(text: string): Promise<boolean> {
+  try {
+    const r = await hotStateClient();
+    if (!r) return false; // Vercel / Redis down -> the DB layer already ran
+    const sim = simhash64(text);
+    const exact = copySignature(text).slice(16);
+    const recent = await r.zrange(SIG_KEY, -SIG_WINDOW, -1);
+    for (const member of recent) {
+      const parsed = parseSignature(member);
+      if (!parsed) continue;
+      if (parsed.exact === exact) return true; // exact duplicate
+      if (hamming64(parsed.sim, sim) <= HAMMING_MAX) return true; // same skeleton
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The full global-uniqueness gate (Module 4): the in-process trigram check vs
+ * the caller's recent list (works everywhere) PLUS the Redis signature window
+ * (worker runtime). Collisions re-vary DETERMINISTICALLY (seeded by the text
+ * itself) up to 3 times; the accepted text's signature is recorded so the next
+ * send anywhere in the fleet sees it.
+ */
+export async function ensureGloballyUnique(
+  draft: string,
+  recentFallback: string[],
+  opts: { threshold?: number; record?: boolean } = {}
+): Promise<FreshnessVerdict> {
+  // Layer 1: the existing in-process compare (raw strings, DB-fed).
+  let verdict = ensureGloballyFresh(draft, recentFallback, opts.threshold ?? 0.75);
+  // Layer 2: the cross-fleet signature window.
+  const rng = mulberry32(fnv1a32(draft));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!(await collidesGlobally(verdict.text))) break;
+    verdict = { text: revarySeeded(verdict.text, rng), changed: true, maxOverlap: verdict.maxOverlap };
+  }
+  if (opts.record !== false) await recordCopySignature(verdict.text);
+  return verdict;
 }
 
 const EMOJI_ANY = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/u;

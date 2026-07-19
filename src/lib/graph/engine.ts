@@ -54,7 +54,7 @@ import {
   threadKeyFor,
 } from "./state";
 import { validateMediaCoherence } from "./coherence";
-import { enforceEmojiTone, ensureGloballyFresh } from "./uniqueness";
+import { enforceEmojiTone, ensureGloballyUnique } from "./uniqueness";
 import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
 import type {
   DeliverResult,
@@ -1022,7 +1022,11 @@ async function runTailGates(args: {
     let freshNote = "";
     if (!isLocalizedBargain) {
       const recent = await io.recentOutboundGlobal(6, 200).catch(() => []);
-      const fresh = ensureGloballyFresh(text, recent);
+      // Module 4: two-layer guard - the in-process trigram compare (DB-fed)
+      // PLUS the cross-fleet Redis signature window (no-op on Vercel). The
+      // accepted text's compact signature is recorded so every other worker
+      // sees this skeleton within one ZRANGE.
+      const fresh = await ensureGloballyUnique(text, recent);
       if (fresh.changed) {
         freshNote = ` re-varied (overlap ${(fresh.maxOverlap * 100).toFixed(0)}%)`;
       }

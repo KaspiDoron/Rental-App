@@ -976,7 +976,17 @@ export async function processVendorReply(opts: {
       // shop offered 220" gets laundered into the message. A real rival is
       // force-injected by composeBargain via rivalPricePerDay; the note may only
       // carry NON-price strategic hints ("shop sounds flexible", "low season").
-      extraDirectives: [register, ownerDirectives(cfg, "price"), safeLeverageNote(strat.leverageNote, rivalPrice)]
+      extraDirectives: [
+        register,
+        ownerDirectives(cfg, "price"),
+        safeLeverageNote(strat.leverageNote, rivalPrice),
+        // Module 4: deterministic per-turn structural shape (sentence order,
+        // contractions, emoji rule) so no two turns share a skeleton.
+        (await import("./copy/promptCompiler")).compileStyleDirectives(
+          { threadId: `${ctx.sender ?? ""}:${from}`, vendorId: ctx.vendorId ?? "", nonce: autoBargains },
+          ctx.region || undefined
+        ),
+      ]
         .filter(Boolean)
         .join("\n"),
     });
