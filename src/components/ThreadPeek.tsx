@@ -75,16 +75,30 @@ export function ThreadPeek({
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/thread?vendorId=${encodeURIComponent(vendorId)}${since ? `&since=${since}` : ""}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+    // POLL, don't fetch-once: the card mounts this peek the instant the RFQ is
+    // sent - BEFORE any reply exists - so a single fetch showed an empty thread
+    // forever and the shop's reply never rendered. Re-fetch on an interval (and
+    // no-store) so a reply that lands seconds later appears without a refresh.
+    const load = async () => {
+      try {
+        const r = await fetch(
+          `/api/thread?vendorId=${encodeURIComponent(vendorId)}${since ? `&since=${since}` : ""}`,
+          { cache: "no-store" }
+        );
+        if (!r.ok) return;
+        const d = await r.json();
         if (!alive || !d) return;
         if (d.sent?.text) setSent(d.sent);
         if (d.received?.text) setReceived(d.received);
-      })
-      .catch(() => {});
+      } catch {
+        /* transient - the next tick retries */
+      }
+    };
+    void load();
+    const iv = setInterval(load, 10_000);
     return () => {
       alive = false;
+      clearInterval(iv);
     };
   }, [vendorId, since]);
 

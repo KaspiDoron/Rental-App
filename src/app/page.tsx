@@ -613,6 +613,30 @@ export default function Home() {
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
+      // AUTHORITATIVE per-vendor conversation state (messaged / active / offer)
+      // straight from the DB rollup - the single source of truth that keeps the
+      // card status in lock-step with the Live Status panel, so a messaged shop
+      // never stays stuck in the "queued message" visual (split-brain fix).
+      const vendorStates: Record<string, "messaged" | "active" | "offer"> =
+        d.vendorStates && typeof d.vendorStates === "object" ? d.vendorStates : {};
+      // Forward-only stage ranking - the DB state can only ADVANCE a card, never
+      // rewind it, and never overrides a terminal decline / no-contact.
+      const STAGE_ORDER: Record<string, number> = {
+        queued: 0,
+        "locating-contact": 1,
+        found: 2,
+        "no-response": 2,
+        "rfq-sent": 3,
+        "awaiting-response": 4,
+        negotiating: 5,
+        "offer-received": 6,
+      };
+      const stageForState = (s: "messaged" | "active" | "offer") =>
+        s === "offer" ? "offer-received" : s === "active" ? "negotiating" : "awaiting-response";
+      const canAdvance = (cur: string | undefined, target: string) =>
+        cur !== "declined" &&
+        cur !== "no-contact" &&
+        (STAGE_ORDER[target] ?? -1) > (STAGE_ORDER[cur ?? "queued"] ?? -1);
       // Drop rows the user just removed (tombstoned) - a poll that read the
       // server BEFORE the delete committed must not resurrect them. Expired
       // tombstones (>30s) fall away so a genuinely failed delete resurfaces.
@@ -666,7 +690,15 @@ export default function Home() {
           // the user removed messages for this shop and has not re-engaged.
           const digits = digitsOnly(v.whatsapp);
           const isCancelled = Boolean(digits && cancelledDigits.has(digits));
-          const base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
+          let base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
+          // Mirror the authoritative DB state onto the card's stage (forward
+          // only) so a messaged / actively-negotiating shop shows the right
+          // status regardless of soft filters or feed truncation.
+          const dbState = vendorStates[base.id];
+          if (dbState) {
+            const target = stageForState(dbState);
+            if (canAdvance(base.stage, target)) base = { ...base, stage: target };
+          }
           if (base.offer) return base; // an offer supersedes any queue badge
           const held = byVendor.get(base.id);
           if (

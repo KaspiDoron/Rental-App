@@ -206,6 +206,31 @@ export async function GET(req: Request) {
     }
   }
 
+  // ---- PER-VENDOR CONVERSATION STATE (the authoritative card signal) --------
+  // The Live Status panel counted delivered RFQs from a 200-row server
+  // aggregate while each CARD reconstructed its stage from a truncated feed -
+  // split-brain, so a shop the panel counted "started" stayed stuck in the
+  // "queued message" visual. This rollup is the single source of truth: built
+  // from the same rows already fetched, keyed by vendorId, and NEVER truncated
+  // (a small map), so the card's status always mirrors the real DB state
+  // regardless of soft filters. Ranked messaged < active < offer.
+  const STATE_RANK = { messaged: 1, active: 2, offer: 3 } as const;
+  type VState = keyof typeof STATE_RANK;
+  const vendorStates: Record<string, VState> = {};
+  const bumpState = (id: string | null | undefined, s: VState) => {
+    if (!id) return;
+    const cur = vendorStates[id];
+    if (!cur || STATE_RANK[s] > STATE_RANK[cur]) vendorStates[id] = s;
+  };
+  // We MESSAGED the shop (RFQ delivered).
+  for (const m of outbound) if (m.raw?.kind === "rfq") bumpState(m.raw?.vendorId, "messaged");
+  // The agent is ACTIVELY working the thread (any engine trace) or the shop
+  // has REPLIED - either way it is a live conversation, not a queued message.
+  for (const t of traces) if (STAGE_TITLES[t.stage]) bumpState(t.vendor_id, "active");
+  for (const r of replies) bumpState(r.vendor_id, "active");
+  // A real priced OFFER is the strongest state.
+  for (const o of offers) if (o.price_per_day) bumpState(o.vendor_id, "offer");
+
   const items: ActivityItem[] = [];
 
   for (const t of traces) {
@@ -356,6 +381,7 @@ export async function GET(req: Request) {
     waHealth,
     introBudget,
     whyByVendor,
+    vendorStates,
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),
   });
