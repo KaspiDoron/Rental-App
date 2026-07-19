@@ -53,7 +53,7 @@ describe("coalesceUnreadInbound - the dropped-price fix (Qui Motorbike 3-frame b
     expect(out).toBe("400 per day");
   });
 
-  it("caps to the last N frames and a char budget", () => {
+  it("caps frames keeping the OLDEST (vehicle) + the newest (price)", () => {
     const thread: CoalesceMsg[] = [
       { direction: "outbound", body: "q", received_at: t(0) },
       ...Array.from({ length: 20 }, (_, i) => ({
@@ -64,8 +64,38 @@ describe("coalesceUnreadInbound - the dropped-price fix (Qui Motorbike 3-frame b
     ];
     const out = coalesceUnreadInbound(thread, t(0), undefined, { maxFrames: 8 });
     expect(out.split("\n")).toHaveLength(8);
-    expect(out).toContain("frame 19"); // the newest survives
-    expect(out).not.toContain("frame 0"); // the oldest is dropped
+    expect(out).toContain("frame 0"); // the oldest (vehicle) is KEPT
+    expect(out).toContain("frame 19"); // the newest (price) is kept
+    expect(out).not.toContain("frame 5"); // a middle frame is dropped
+  });
+
+  it("keeps the vehicle frame when a chatty burst exceeds the cap (the real bug)", () => {
+    const thread: CoalesceMsg[] = [
+      { direction: "outbound", body: "125cc scooter for 5 days?", received_at: t(0) },
+      { direction: "inbound", body: "We have available Fazzio", received_at: t(1) },
+      { direction: "inbound", body: "come by anytime", received_at: t(2) },
+      { direction: "inbound", body: "we open 9am", received_at: t(3) },
+      { direction: "inbound", body: "helmets free", received_at: t(4) },
+      { direction: "inbound", body: "parking ok", received_at: t(5) },
+      { direction: "inbound", body: "wifi in shop", received_at: t(6) },
+      { direction: "inbound", body: "tours too", received_at: t(7) },
+      { direction: "inbound", body: "near the beach", received_at: t(8) },
+      { direction: "inbound", body: "400 per day best price", received_at: t(9) },
+    ];
+    const out = coalesceUnreadInbound(thread, t(0), "400 per day best price", { maxFrames: 8 });
+    expect(out).toContain("Fazzio"); // vehicle survives
+    expect(out).toContain("400 per day"); // price survives
+  });
+
+  it("strips pure media placeholders and the failed-download synthetic", () => {
+    const thread: CoalesceMsg[] = [
+      { direction: "outbound", body: "q", received_at: t(0) },
+      { direction: "inbound", body: "[photo]", received_at: t(1) },
+      { direction: "inbound", body: "[voice note]", received_at: t(2) },
+      { direction: "inbound", body: "It is 400 per day", received_at: t(3) },
+    ];
+    const out = coalesceUnreadInbound(thread, t(0), "(the shop sent a photo/attachment that couldn't be loaded)");
+    expect(out).toBe("It is 400 per day"); // only real content survives
   });
 
   it("returns empty when there is no unread inbound (a bare tick)", () => {

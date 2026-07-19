@@ -394,11 +394,12 @@ export async function runGraphTurn(
     await io.clearWakeups(state.threadKey, "tick");
   }
   state = applyExtractionToState(state, input.extraction, input.usablePrice, input.currency);
-  // The traveller has now shared a hotel (consented): clear the awaiting-location
-  // hold so the deposit/delivery probes resume - otherwise a thread that asked
-  // for the hotel would stay frozen forever even after the user added it. The
-  // answer node still sends the address the next time the shop asks.
-  if (state.fields.awaitingUserLocation && input.ctx.stay?.shareConsent && input.ctx.stay.label) {
+  // The traveller has now provided a hotel: clear the awaiting-location hold so
+  // the deposit/delivery probes resume - otherwise a thread that asked for the
+  // hotel would stay frozen forever even after the user added it (even if they
+  // left the share box UNticked). Clearing on the LABEL (not consent) unfreezes
+  // the funnel; the answer node still gates SHARING the address on consent.
+  if (state.fields.awaitingUserLocation && input.ctx.stay?.label) {
     state = { ...state, fields: { ...state.fields, awaitingUserLocation: false } };
   }
   // User-action events carry their own state facts (the app already gated the
@@ -1767,7 +1768,10 @@ export async function buildTurnFromThread(
       threadKey,
       userEmail,
       toDigits,
-      shopMessage: coalescedTick || lastInbound?.body || "",
+      // Coalesced burst ONLY on a tick (a strategic-wait re-eval); a user action
+      // (close-deal/consent) must read the single latest frame so a stale "?" in
+      // an earlier frame cannot flip shopAskedQuestion during that action.
+      shopMessage: kind === "tick" ? coalescedTick || lastInbound?.body || "" : lastInbound?.body ?? "",
       images: [],
       audios: [],
       payload,

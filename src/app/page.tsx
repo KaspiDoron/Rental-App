@@ -739,7 +739,11 @@ export default function Home() {
           // detailed one the replies poll builds).
           if (!base.offer) {
             const o = offerByVendor.get(base.id);
-            if (o) {
+            // Never rewind a terminal card (declined / no-contact) into a
+            // bookable deal, and mark the seed not-yet-presentable so the card
+            // still shows "confirming deposit + how you get it" until the richer
+            // replies poll fills those in (no premature "Lock this deal").
+            if (o && canAdvance(base.stage, "offer-received")) {
               base = {
                 ...base,
                 stage: "offer-received",
@@ -754,6 +758,7 @@ export default function Home() {
                   round: o.round,
                   verified: o.verified,
                   simulated: false,
+                  presentable: false,
                 },
               };
             }

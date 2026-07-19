@@ -23,4 +23,11 @@ describe("shopAskedLocation - the delivery-loop trigger", () => {
     expect(shopAskedLocation("what dates do you need it")).toBe(false);
     expect(shopAskedLocation("")).toBe(false);
   });
+
+  it("does NOT fire on DECLARATIVE messages that merely mention a hotel/address", () => {
+    expect(shopAskedLocation("Delivery to the hotel is 50k extra")).toBe(false);
+    expect(shopAskedLocation("Yes we deliver to your hotel")).toBe(false);
+    expect(shopAskedLocation("The address is Jl Sunset Road 88")).toBe(false);
+    expect(shopAskedLocation("we can bring it to your hotel no problem")).toBe(false);
+  });
 });

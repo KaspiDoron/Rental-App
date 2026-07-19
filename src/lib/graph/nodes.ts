@@ -187,7 +187,18 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
             fieldsPatch: { awaitingUserLocation: false },
           };
         }
-        // No shareable stay: one holding line, then flag the app to ask the
+        if (stay?.label) {
+          // We know the hotel NAME but the traveller did not consent to share
+          // their address - never disclose it. Pivot to shop pickup so the deal
+          // still moves, and do not freeze.
+          return {
+            message: "I think is easier i come pick it up at your shop 🙂 what time you open?",
+            kind: "auto-answer",
+            reasoning: "shop asked location but the traveller did not consent to share it - pivot to shop pickup, never disclose the address",
+            fieldsPatch: { awaitingUserLocation: false },
+          };
+        }
+        // No stay at all: one holding line, then flag the app to ask the
         // traveller and go quiet - the loop-stop that fixes the "Where is your
         // hotel? -> re-asks deposit/delivery" brick.
         if (f.awaitingUserLocation) {

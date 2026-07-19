@@ -12,10 +12,15 @@ export function shopAskedLocation(text: string): boolean {
   if (!t) return false;
   if (/\bwhere\s+(are|r)\s+you\s+from\b/.test(t)) return false;
   return (
+    // A "where ... stay/hotel/located" question (the "?" often dropped).
     /\bwhere\s+(did|do|are|is|r|u)\b[^?.!]{0,24}\b(stay|staying|located|hotel|now)\b/.test(t) ||
-    /\b(your|the)\s+(hotel|accommodation|location|address)\b/.test(t) ||
-    /\bwhere\s+(is|are)\s+(you|u|your)\b[^?.!]{0,16}\b(hotel|stay|location)\b/.test(t) ||
-    /\b(send|share|drop)\b[^?.!]{0,20}\b(location|hotel|address|pin)\b/.test(t) ||
-    /\bwhere\s+(did|do)\s+(you|u)\s+stay\b/.test(t)
+    // An interrogative "where/what is your hotel/address/location" - requires the
+    // where/what lead so a DECLARATIVE "deliver to the hotel is 50k" / "the
+    // address is ..." / "we deliver to your hotel" never triggers it.
+    /\b(where|what)('?s| is| are)?\s+(your|the)\s+(hotel|accommodation|location|address)\b/.test(t) ||
+    // A bare "your hotel?" style ask (must END on the noun + a question mark).
+    /\b(your|the)\s+(hotel|accommodation|location|address)\s*\?/.test(t) ||
+    // An explicit request to send/share the location.
+    /\b(send|share|drop)\b[^?.!]{0,20}\b(location|hotel|address|pin)\b/.test(t)
   );
 }
