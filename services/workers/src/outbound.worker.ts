@@ -7,7 +7,7 @@
 import { Worker, type Job } from "bullmq";
 import { guardOutbound, sendFromUser, afterSend } from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
-import { bullConnection } from "@wheeldeal/redis";
+import { bullConnection, recordIntro } from "@wheeldeal/redis";
 import { OUTBOUND_QUEUE, type OutboundJob } from "@wheeldeal/queues";
 
 export function startOutboundWorker(): Worker<OutboundJob> {
@@ -38,6 +38,15 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         throw new Error(sent.error || "send failed"); // retry with backoff
       }
       await afterSend(senderKey, toNumber).catch(() => {});
+      // Module 6: an RFQ that actually LANDED is the one truth point for the
+      // intro-window mirror (the guard may park/drop with no budget consumed;
+      // replies/bargains never count). windowHours is stamped by the outreach
+      // vendor job; default to the longest window (harmless - the ZSET trim
+      // enforces the real window).
+      if (kind === "rfq") {
+        const windowHours = Number((meta as { windowHours?: number } | undefined)?.windowHours) || 6;
+        await recordIntro(senderKey, toNumber, windowHours).catch(() => {});
+      }
       logger.info({ toNumber, kind }, "outbound sent");
     },
     { connection: bullConnection(), concurrency: 2 }

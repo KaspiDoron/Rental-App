@@ -74,7 +74,18 @@ export {
   emailForInstance,
   sendFromUser,
 } from "../../src/lib/evolution";
-export { guardOutbound, drainOutbox, afterSend } from "../../src/lib/wa-guard";
+export {
+  guardOutbound,
+  drainOutbox,
+  afterSend,
+  newContactBudget,
+  introductionsInWindow,
+} from "../../src/lib/wa-guard";
+
+// Plan-tier capacity + batch pacing (Module 6 outreach budgets).
+export { planCapacity, normalizeCapacityPlan, PLAN_CAPACITY } from "../../src/lib/wa/capacity";
+export type { PlanCapacity, CapacityPlan } from "../../src/lib/wa/capacity";
+export { cappedStaggerOffsets, staggerOffsets, jitteredHold } from "../../src/lib/wa/pacing";
 
 // Config / persistence primitives (PostgREST adapter - see @wheeldeal/db).
 export {

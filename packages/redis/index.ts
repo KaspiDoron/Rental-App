@@ -79,6 +79,30 @@ export {
 export type { SessionOfferWrite, CachedRivalQuery, SessionEventPayload } from "./offers";
 
 // ---------------------------------------------------------------------------
+// Plan-tier outreach budgets (Module 6) - canonical impl in src/lib/budget-
+// cache, re-exported via ./budgets (one schema, both runtimes).
+// ---------------------------------------------------------------------------
+
+export {
+  introUsage,
+  seedIntroWindow,
+  recordIntro,
+  tryAcquireCampaignSlot,
+  releaseCampaignSlot,
+  initCampaign,
+  bumpCampaign,
+  completeVendorJob,
+  setCampaignState,
+  readCampaign,
+  introsKey,
+  introsLiveKey,
+  campaignSlotKey,
+  campaignHeldKey,
+  campaignKey,
+} from "./budgets";
+export type { CampaignSlot, CampaignState, CampaignInit } from "./budgets";
+
+// ---------------------------------------------------------------------------
 // Pub/sub SUBSCRIBE side - services only (a subscribed conn can't run
 // commands, so this stays on the always-on service client).
 // ---------------------------------------------------------------------------

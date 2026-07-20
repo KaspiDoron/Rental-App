@@ -36,12 +36,7 @@ export interface OutboundJob {
 }
 
 // Vision flow job schemas live in ./vision (re-exported at the bottom).
-
-export interface OutreachBatchJob {
-  userEmail: string;
-  searchId?: number;
-  vendorIds: string[];
-}
+// Outreach batch/vendor/sync schemas live in ./outreach (re-exported below).
 
 export interface SchedulerJob {
   kind: "drain" | "wakeup" | "dlq-sweep" | "gc";
@@ -94,10 +89,6 @@ export async function enqueueOutbound(job: OutboundJob, delayMs = 0): Promise<vo
   await queue(OUTBOUND_QUEUE).add("send", job, { ...RETRY_POLICY, delay: delayMs });
 }
 
-export async function enqueueOutreachBatch(job: OutreachBatchJob): Promise<void> {
-  await queue(OUTREACH_QUEUE).add("batch", job, RETRY_POLICY);
-}
-
 /** Copy an exhausted job into the DLQ (called from workers' failed handler). */
 export async function sendToDlq(
   dlqName: string,
@@ -123,3 +114,27 @@ export type {
   VisionContinuationJob,
   VisionChildResult,
 } from "./vision";
+
+// Outreach batch flow (Module 6) - re-exported last (outreach.ts imports the
+// names/helpers above, so this keeps the ESM cycle trivially safe).
+export {
+  OUTREACH_DLQ,
+  OUTREACH_BATCH,
+  OUTREACH_VENDOR,
+  OUTREACH_SYNC,
+  OUTREACH_BATCH_OPTS,
+  OUTREACH_VENDOR_OPTS,
+  OUTREACH_SYNC_OPTS,
+  outreachBatchJobId,
+  outreachVendorJobId,
+  outreachSyncJobId,
+  enqueueOutreachBatch,
+  enqueueOutreachVendors,
+  enqueueOutreachSync,
+} from "./outreach";
+export type {
+  OutreachVendorTarget,
+  OutreachBatchJobV2,
+  OutreachVendorJob,
+  OutreachSyncJob,
+} from "./outreach";

@@ -660,10 +660,10 @@ function clampToBusinessHours(
  * free: an RFQ IS a first-contact and whatsapp_messages.received_at is durable,
  * so no schema change is needed to make the budget rolling.
  */
-async function introductionsInWindow(
+export async function introductionsInWindow(
   senderKey: string,
   windowHours: number
-): Promise<{ count: number; oldestAsc: string[] }> {
+): Promise<{ count: number; oldestAsc: string[]; entries: { toNumber: string; atMs: number }[] }> {
   const sinceIso = new Date(Date.now() - windowHours * 3600_000).toISOString();
   const rows = await sbSelect<{ to_number: string; received_at: string }>(
     "whatsapp_messages",
@@ -674,7 +674,13 @@ async function introductionsInWindow(
   const firstSeen = new Map<string, string>();
   for (const r of rows) if (!firstSeen.has(r.to_number)) firstSeen.set(r.to_number, r.received_at);
   const oldestAsc = [...firstSeen.values()].sort();
-  return { count: firstSeen.size, oldestAsc };
+  // entries carry the distinct recipients so the Module-6 Redis mirror can seed
+  // REAL members (member = to_number) and dedup future recordIntro calls.
+  const entries = [...firstSeen.entries()].map(([toNumber, iso]) => ({
+    toNumber,
+    atMs: Date.parse(iso) || Date.now(),
+  }));
+  return { count: firstSeen.size, oldestAsc, entries };
 }
 
 export interface IntroBudget {

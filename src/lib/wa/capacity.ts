@@ -29,6 +29,13 @@ export interface PlanCapacity {
   windowHours: number;
   /** Upper bound on sends/hour for this plan (trust can raise the floor). */
   hourCap: number;
+  /**
+   * How many cold-outreach CAMPAIGNS a user may run at once (Module 6). The
+   * per-window `newContacts` budget already bounds total new shops; this is a
+   * separate, sellable concurrency lever - free's whole 10-shop window is
+   * consumed by one campaign anyway, so parallel campaigns are a paid feature.
+   */
+  concurrentCampaigns: number;
 }
 
 // The owner's targets - a user must be able to START their FULL plan budget of
@@ -43,9 +50,9 @@ export interface PlanCapacity {
 // ~10-15 min) plus the reply-rate circuit breaker + daily ceiling, which halt a
 // number that is actually behaving like a spammer.
 export const PLAN_CAPACITY: Record<CapacityPlan, PlanCapacity> = {
-  free: { newContacts: 10, windowHours: 6, hourCap: 10 },
-  pro: { newContacts: 30, windowHours: 4, hourCap: 30 },
-  ultra: { newContacts: 40, windowHours: 3, hourCap: 40 },
+  free: { newContacts: 10, windowHours: 6, hourCap: 10, concurrentCampaigns: 1 },
+  pro: { newContacts: 30, windowHours: 4, hourCap: 30, concurrentCampaigns: 2 },
+  ultra: { newContacts: 40, windowHours: 3, hourCap: 40, concurrentCampaigns: 3 },
 };
 
 export function normalizeCapacityPlan(plan?: string | null): CapacityPlan {

@@ -22,10 +22,16 @@
 export type RedisLike = {
   set(...args: (string | number)[]): Promise<unknown>;
   exists(key: string): Promise<number>;
+  del(...keys: string[]): Promise<number>;
+  incr(key: string): Promise<number>;
+  decr(key: string): Promise<number>;
   zadd(key: string, score: string, member: string): Promise<unknown>;
   zrange(key: string, start: number, stop: number, withScores?: "WITHSCORES"): Promise<string[]>;
   zremrangebyrank(key: string, start: number, stop: number): Promise<unknown>;
+  zremrangebyscore(key: string, min: string | number, max: string | number): Promise<unknown>;
+  zcard(key: string): Promise<number>;
   hset(key: string, ...fieldValues: (string | number)[]): Promise<unknown>;
+  hincrby(key: string, field: string, increment: number): Promise<number>;
   hgetall(key: string): Promise<Record<string, string>>;
   expire(key: string, seconds: number): Promise<unknown>;
   publish(channel: string, message: string): Promise<unknown>;
