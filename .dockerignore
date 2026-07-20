@@ -1,0 +1,21 @@
+# Keep the Docker build context small (the compose header warned about this).
+# The VM images (gateway/workers) only need src, packages, apps, services,
+# shims, tsconfig + the manifests - never these.
+node_modules
+**/node_modules
+.next
+.git
+.github
+dump.rdb
+*.log
+coverage
+.vercel
+.env
+.env.*
+!.env.example
+packages/testing
+test
+e2e
+*.md
+!GUIDE.md
+scratchpad

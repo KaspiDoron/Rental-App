@@ -1,0 +1,8 @@
+{
+  "name": "@wheeldeal/testing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "E2E mock-webhook harness (Module 7) - fires synthetic Evolution webhooks at the real gateway and asserts the whole pipeline without live WhatsApp.",
+  "type": "module",
+  "main": "mockWebhookHarness.ts"
+}
