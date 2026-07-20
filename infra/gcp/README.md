@@ -1,10 +1,16 @@
-# WheelDeal on GCE — deploy runbook
+# WheelDeal on GCE — 5-minute deploy runbook
 
 The VM runs **redis + gateway + workers** only (~450MB on a free-tier
 `e2-micro`). The Next.js frontend stays on **Vercel**; the DB + storage stay on
 **Supabase**. There is no `web` container and nothing DB-shaped on the VM.
 
-Public path: `https://<APP_DOMAIN>/api/webhooks/evolution` → nginx :443 →
+**Zero-DNS routing:** the gateway is served at **`<static-ip>.sslip.io`**.
+sslip.io is a public wildcard resolver (`A.B.C.D.sslip.io → A.B.C.D`), so the
+domain points at the VM the instant it boots — which means **certbot issues TLS
+automatically during startup, with no A-record and no waiting**. One command in,
+a working `https://…` webhook endpoint out.
+
+Public path: `https://<ip>.sslip.io/api/webhooks/evolution` → nginx :443 →
 gateway :8080 → BullMQ/Redis → workers → the negotiation engine.
 
 ## What runs where
@@ -17,78 +23,114 @@ gateway :8080 → BullMQ/Redis → workers → the negotiation engine.
 | Frontend | Vercel | unchanged |
 | Postgres + Storage | Supabase | pooled (Supavisor, port 6543) for the `pg` path |
 
-## One-time owner prerequisites
+## Step 1 — create the secrets (Cloud Shell)
 
-1. **Enable APIs / billing** on the GCP project (`compute`, `secretmanager`).
-2. **Create the env secret** — the payload is the literal `infra/docker/.env`:
-   ```bash
-   cat > /tmp/wd.env <<'ENV'
-   SUPABASE_URL=https://<ref>.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=<service-role>
-   SUPABASE_DB_URL=postgres://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:6543/postgres
-   SESSION_SECRET=<MUST EQUAL the Vercel value>
-   ADMIN_EMAILS=owner@example.com
-   EVOLUTION_API_URL=http://<evolution-host>:8080
-   EVOLUTION_API_KEY=<evolution-key>
-   APP_DOMAIN=https://<vercel-frontend-domain>
-   ENV
-   gcloud secrets create wheeldeal-env --data-file=/tmp/wd.env && rm /tmp/wd.env
-   ```
-   > `SESSION_SECRET` **must** match the Vercel deployment — the webhook token is
-   > `sha256("wd-webhook:"+SESSION_SECRET).slice(0,32)` and it also derives the
-   > `app_config` AES key. A mismatch = every webhook 403s and pasted keys can't
-   > decrypt.
-3. **(Private repo)** create a GitHub token secret for the clone:
-   `gcloud secrets create wheeldeal-gh-token --data-file=<(printf %s "<token>")`.
-
-## Provision
+The env secret's payload **is** the literal `infra/docker/.env`. Copy this block,
+swap the `REPLACE_…` placeholders for your real values, and create the secret:
 
 ```bash
-PROJECT=<proj> REGION=us-central1 ZONE=us-central1-a \
-APP_DOMAIN=api.example.com OWNER_EMAIL=you@example.com \
+cat > wd.env <<'ENV'
+# --- Supabase (external managed DB + storage) --------------------------------
+SUPABASE_URL=https://REPLACE_REF.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=REPLACE_SERVICE_ROLE_KEY
+# Pooled connection (Supavisor, TRANSACTION mode, port 6543) - NOT the direct 5432:
+SUPABASE_DB_URL=postgresql://postgres.REPLACE_REF:REPLACE_DB_PASSWORD@aws-0-REPLACE_REGION.pooler.supabase.com:6543/postgres
+NEXT_PUBLIC_SUPABASE_ANON_KEY=REPLACE_ANON_KEY
+
+# --- Sessions / admin --------------------------------------------------------
+# MUST be byte-identical to the SESSION_SECRET in your Vercel project, or every
+# webhook 403s and admin-pasted keys can't decrypt (openssl rand -hex 32).
+SESSION_SECRET=REPLACE_WITH_EXACT_VERCEL_SESSION_SECRET
+ADMIN_EMAILS=REPLACE_owner@example.com
+
+# --- Evolution (WhatsApp bridge) - single-host form --------------------------
+EVOLUTION_API_URL=http://REPLACE_EVOLUTION_HOST:8080
+EVOLUTION_API_KEY=REPLACE_EVOLUTION_API_KEY
+
+# --- Public identity ---------------------------------------------------------
+# The VERCEL FRONTEND origin (drives the gateway's SSE CORS allow-origin).
+# This is SEPARATE from the gateway's own <ip>.sslip.io domain.
+APP_DOMAIN=https://REPLACE_your-frontend.vercel.app
+
+# --- Optional tuning ---------------------------------------------------------
+LOG_LEVEL=info
+PG_POOL_MAX=5
+ENV
+
+gcloud secrets create wheeldeal-env --data-file=wd.env && rm wd.env
+```
+
+> Provider keys (Groq/Gemini/OpenRouter/Cerebras, Maps, Resend, Stripe/Lemon
+> Squeezy) are **not** required here — their canonical store is the admin Key
+> Vault (Supabase `app_config`). You may mirror them into `wd.env` if you want,
+> but it's optional.
+
+**Private repo** (this one is): also create a GitHub token secret for the clone
+(a fine-grained token with read-only Contents on the repo):
+
+```bash
+printf %s "REPLACE_GITHUB_TOKEN" | gcloud secrets create wheeldeal-gh-token --data-file=-
+```
+
+To rotate any secret later: `gcloud secrets versions add <name> --data-file=<file>`.
+
+## Step 2 — provision (one command)
+
+```bash
+git clone -b claude/rental-negotiation-app-pc33ux https://github.com/KaspiDoron/Rental-App.git
+cd Rental-App
+
+PROJECT=<your-project-id> OWNER_EMAIL=you@example.com \
 ENV_SECRET=wheeldeal-env REPO_SECRET=wheeldeal-gh-token \
 ./infra/gcp/deploy.sh
 ```
 
-This creates a **static IP**, the **VM** (with `startup.sh` as metadata), and the
-**80/443 firewall**. The startup script installs Docker, adds swap, pulls the
-`.env` from Secret Manager, clones the branch, `docker compose up -d --build`,
-and installs nginx (HTTP). Watch it: `sudo tail -f /var/log/wd-startup.log` (via
-the GCP console SSH).
-
-## SSL (after DNS)
-
-certbot's HTTP-01 challenge needs the domain resolving to the VM **first**:
-
-1. Point `APP_DOMAIN`'s **A-record → the static IP** the script printed.
-2. Once it resolves, SSH via the GCP console and:
-   ```bash
-   sudo certbot --nginx -d <APP_DOMAIN> --non-interactive --agree-tos -m <owner-email> --redirect
-   ```
-   certbot rewrites `nginx.conf` to add the :443 server + the :80→:443 redirect.
-
-## Cut over
-
-Set the **Evolution dashboard webhook URL** to
-`https://<APP_DOMAIN>/api/webhooks/evolution?token=<webhook-token>`. The gateway
-accepts `/api/webhooks/evolution` and `/webhooks/evolution` — same shape as the
-legacy Next route, so this is only a URL change.
-
-## Verify
+`deploy.sh` allocates a static IP, computes `API_DOMAIN=<ip>.sslip.io`, grants
+the VM's service account read access to the secrets, opens 80/443, and creates
+the `e2-micro` VM with `startup.sh` as metadata. The VM then self-bootstraps
+(Docker + swap → pull `.env` → clone → `docker compose up --build` → nginx →
+**certbot auto-issues TLS**). Watch it:
 
 ```bash
-curl http://<STATIC_IP>:8080/healthz          # pre-DNS: {"ok":true,"redis":true}
-curl https://<APP_DOMAIN>/healthz             # post-certbot
-# a wrong token must 403:
-curl -s -o /dev/null -w '%{http_code}\n' "https://<APP_DOMAIN>/api/webhooks/evolution?token=nope"
+gcloud compute ssh wheeldeal-vm --zone us-central1-a \
+  --command 'sudo tail -n 40 -f /var/log/wd-startup.log'
+```
+
+## Step 3 — cut over + verify (~after 3-5 min)
+
+Set the **Evolution dashboard webhook URL** to (the script prints the exact
+domain):
+
+```
+https://<ip>.sslip.io/api/webhooks/evolution?token=<webhook-token>
+```
+
+The token is `sha256("wd-webhook:"+SESSION_SECRET)` truncated to the first 32
+hex chars. Verify:
+
+```bash
+curl https://<ip>.sslip.io/healthz                         # {"ok":true,"redis":true}
+curl -s -o /dev/null -w '%{http_code}\n' \
+     "https://<ip>.sslip.io/api/webhooks/evolution?token=nope"   # 403
 # on the VM:
-cd /opt/wheeldeal/infra/docker && sudo docker compose ps   # redis+gateway+workers healthy
+gcloud compute ssh wheeldeal-vm --zone us-central1-a \
+  --command 'cd /opt/wheeldeal/infra/docker && sudo docker compose ps'   # redis+gateway+workers healthy
+```
+
+## Using your own domain instead of sslip.io
+
+Pass `API_DOMAIN=api.yourdomain.com` to `deploy.sh`. Then it is NOT zero-DNS:
+point that host's **A-record → the printed static IP first**; certbot in the
+startup script will fail the first time (logged, non-fatal — HTTP still serves),
+so once DNS resolves, re-issue on the VM:
+
+```bash
+sudo certbot --nginx -d api.yourdomain.com --non-interactive --agree-tos -m you@example.com --redirect
 ```
 
 ## Operate
 
 - Logs: `sudo docker compose logs -f gateway workers` in `/opt/wheeldeal/infra/docker`.
-- Redeploy a new branch commit: re-run the clone + `docker compose up -d --build`
-  (or `sudo bash /opt/wheeldeal/infra/gcp/startup.sh`).
-- Redis is AOF-persisted on the data volume; the DLQ + queue depth are the
-  health signals (the scheduler logs a `dlq-sweep` line every 15m).
+- Redeploy a new commit: re-run `sudo bash /opt/wheeldeal/infra/gcp/startup.sh`.
+- Redis is AOF-persisted on the data volume; the scheduler logs a `dlq-sweep`
+  line every 15m and a `gc` health line every 30m — the queue-depth signals.
