@@ -19,7 +19,7 @@ export interface PlanView {
 
 import { CURRENCIES, currency, fromIls, savedCurrency, setSavedCurrency } from "@/lib/currency";
 
-// Pricing is anchored in ILS (matches the Lemon Squeezy products exactly).
+// Pricing is anchored in ILS (matches the PayPal billing plans exactly).
 const ILS_PRICES: Record<string, number> = { pro: 16.5, ultra: 88 };
 
 function planPrice(planId: string, code: string): { now: string; list: string } | null {

@@ -15,7 +15,7 @@ Vercel free tier. Runs fully in **demo mode** with zero external services.
 - **Never commit secrets.** All keys come from `process.env` or the Supabase-
   backed Key Vault. `.env*` is gitignored. `.env.example` holds placeholders only.
 - **Everything degrades gracefully.** Every integration (LLM, Supabase, WhatsApp,
-  Resend, Stripe) has a no-key fallback so the app always builds and runs.
+  Resend, PayPal) has a no-key fallback so the app always builds and runs.
 - **Use only short hyphens `-`** in code and copy. No `-` or `-`.
 - **Mobile first.** Test at 320-430px. No horizontal overflow. Respect safe-area
   insets (`pt-safe`, `pb-safe`). Keep form controls >= 16px to avoid iOS zoom.
@@ -35,8 +35,8 @@ src/
       profile   negotiate   safety   vendors      (core funnel)
       outreach                                     (WhatsApp send, safety-screened)
       feedback  feedback/assist                    (triaged feedback + AI writer)
-      billing/checkout                             (Stripe, admin only)
-      webhooks/whatsapp  webhooks/stripe           (inbound events)
+      billing/checkout  billing/confirm            (PayPal, admin only)
+      webhooks/whatsapp  webhooks/paypal           (inbound events)
       admin/config  admin/users  admin/analytics   (admin, session-gated)
       admin/ops/*                                  (OWNER-only AI Operations Center)
       auth/login|logout|me
@@ -46,7 +46,8 @@ src/
     runtime-config.ts Key resolution: Supabase override -> process.env (+ AES encryption)
     config.ts        Admin Key Vault (masked, never leaks secrets to client)
     session.ts       HMAC-signed cookie sessions; admin via ADMIN_EMAILS allowlist
-    whatsapp.ts email.ts stripe.ts   integrations (all optional)
+    whatsapp.ts email.ts paypal.ts   integrations (all optional)
+    plans.ts                         plan catalogue (Pro/Ultra, provider-neutral)
     memory.ts access.ts vendors.ts geo.ts brand.ts types.ts
   components/        UI (VendorCard, MapView, Tracker, Filters, BookingSheet,
                     FeedbackModal, TabBar, BrandMark, icons, ...)
@@ -105,12 +106,11 @@ Claude Code session; NO keys are stored in the repo.
 | Service | MCP | Notes |
 |---|---|---|
 | Supabase | `https://mcp.supabase.com/mcp?project_ref=...` | DB, app_config vault, tables |
-| Stripe | `https://mcp.stripe.com` | fallback billing (official remote MCP) |
 | Vercel | `https://mcp.vercel.com` | deploys, env, domains (official remote MCP) |
 | GitHub | built into Claude Code remote sessions | PRs, issues, CI |
 
 Services with NO official MCP server as of 2026-07 (use their REST APIs via
-the code in `src/lib/`): Evolution API (WhatsApp), Lemon Squeezy, Groq,
+the code in `src/lib/`): Evolution API (WhatsApp), PayPal, Groq,
 Gemini, OpenRouter, Cerebras, Mistral, DeepSeek, Together, SambaNova,
 Hugging Face, Brevo, Resend, Gmail SMTP, Google Maps Platform, OSM Nominatim,
 Google AdSense, Web Push/VAPID.

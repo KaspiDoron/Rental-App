@@ -438,7 +438,7 @@ export default function Home() {
       setWillOpen(true);
       window.history.replaceState({}, "", "/");
     }
-    // Returning from Stripe Checkout.
+    // Returning from PayPal Checkout.
     const plan = params.get("plan");
     if (params.get("billing") === "success" && plan) {
       fetch("/api/billing/confirm", {

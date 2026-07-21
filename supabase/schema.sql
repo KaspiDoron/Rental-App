@@ -247,14 +247,29 @@ create table if not exists public.feedback (
 );
 create index if not exists feedback_created_idx on public.feedback (created_at desc);
 
--- ---- Billing events (Stripe webhook) ----------------------------------------
+-- ---- Billing events (PayPal webhook) ----------------------------------------
 create table if not exists public.billing_events (
-  id              bigint generated always as identity primary key,
-  stripe_event_id text,
-  type            text,
-  verified        boolean default false,
-  created_at      timestamptz not null default now()
+  id                bigint generated always as identity primary key,
+  provider_event_id text,
+  type              text,
+  verified          boolean default false,
+  created_at        timestamptz not null default now()
 );
+-- Migration: earlier deployments had the column named stripe_event_id.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'billing_events'
+      and column_name = 'stripe_event_id'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'billing_events'
+      and column_name = 'provider_event_id'
+  ) then
+    alter table public.billing_events rename column stripe_event_id to provider_event_id;
+  end if;
+end $$;
 
 -- ---- Lock everything to the service role ------------------------------------
 alter table public.app_config       enable row level security;

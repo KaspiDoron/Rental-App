@@ -123,29 +123,37 @@ export async function GET() {
       };
     })(),
 
-    // Lemon Squeezy billing.
+    // PayPal billing.
     (async (): Promise<ServiceHealth> => {
       const { getConfig } = await import("@/lib/runtime-config");
-      const [key, store] = await Promise.all([
-        getConfig("LEMONSQUEEZY_API_KEY"),
-        getConfig("LEMONSQUEEZY_STORE_ID"),
+      const [id, secret, env] = await Promise.all([
+        getConfig("PAYPAL_CLIENT_ID"),
+        getConfig("PAYPAL_CLIENT_SECRET"),
+        getConfig("PAYPAL_ENV"),
       ]);
-      if (!key || !store) {
-        return { id: "billing", label: "Lemon Squeezy (billing)", status: "off", latencyMs: null, detail: "Not configured - plans stay free." };
+      if (!id || !secret) {
+        return { id: "billing", label: "PayPal (billing)", status: "off", latencyMs: null, detail: "Not configured - plans stay free." };
       }
+      const base =
+        (env ?? "live").trim().toLowerCase() === "sandbox"
+          ? "https://api-m.sandbox.paypal.com"
+          : "https://api-m.paypal.com";
       const r = await timed(async () => {
-        const res = await fetch("https://api.lemonsqueezy.com/v1/stores/" + encodeURIComponent(store), {
-          headers: { Authorization: `Bearer ${key}`, Accept: "application/vnd.api+json" },
+        const basic = Buffer.from(`${id.trim()}:${secret.trim()}`).toString("base64");
+        const res = await fetch(`${base}/v1/oauth2/token`, {
+          method: "POST",
+          headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
+          body: "grant_type=client_credentials",
           cache: "no-store",
         });
         return res.ok;
       });
       return {
         id: "billing",
-        label: "Lemon Squeezy (billing)",
+        label: "PayPal (billing)",
         status: r.out === true ? "ok" : "down",
         latencyMs: r.ms,
-        detail: r.out === true ? "Store reachable." : "API rejected the key/store - test in Keys.",
+        detail: r.out === true ? "Credentials valid." : "API rejected the credentials - test in Keys.",
       };
     })(),
   ];

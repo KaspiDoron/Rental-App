@@ -146,7 +146,7 @@ warm-up ramping from a 45% floor to full.
 
 | Area | TEST_MODE on (flagged tester) | Production |
 |---|---|---|
-| Plan | Ultra, free, instant | paid via Lemon Squeezy |
+| Plan | Ultra, free, instant | paid via PayPal |
 | Checkout | sandbox - `setPlan()` applied instantly, no charge | real checkout |
 | Banner | global strip visible | none |
 | WhatsApp | **REAL** - messages go to real shops from the tester's number, real ban-risk budget | same |
@@ -249,8 +249,9 @@ volume outgrows it, not a launch blocker.
    RFQ rows.
 4. **Raise Evolution capacity intentionally**: one host ≈ 40 users; add hosts
    to the pool before invites outgrow it.
-5. **Lemon Squeezy live-mode checklist**: store, variants, webhook secret set
-   in the Vault; test a real purchase + webhook round-trip once.
+5. **PayPal live-mode checklist**: client id/secret, both billing plan ids,
+   webhook id set in the Vault (PAYPAL_ENV=live); test a real purchase + webhook
+   round-trip once.
 
 ## For hundreds of concurrent users (P2)
 

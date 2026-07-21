@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { createCheckoutSession, stripeConfigured, PLANS } from "@/lib/stripe";
-import { createLemonCheckout, lemonConfigured } from "@/lib/lemonsqueezy";
+import { PLANS } from "@/lib/plans";
+import { createPaypalCheckout, paypalConfigured } from "@/lib/paypal";
 
-// Start a checkout for a paid plan. Provider priority:
-//   1. Lemon Squeezy (Merchant of Record - works for individuals in Israel,
-//      pays out via PayPal or wire, no business entity needed)
-//   2. Stripe (kept for owners who can use it)
+// Start a checkout for a paid plan via PayPal Subscriptions (no merchant-
+// approval gate, $0/month, supports Israeli residents + Israeli bank payouts).
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) {
@@ -42,23 +40,12 @@ export async function POST(req: Request) {
     /* sandbox path is best-effort; real checkout below */
   }
 
-  if (await lemonConfigured()) {
-    const result = await createLemonCheckout(String(planId), origin, session.email);
-    if (result.url) return NextResponse.json({ url: result.url, provider: "lemonsqueezy" });
-    return NextResponse.json(
-      { error: result.error, configured: result.configured },
-      { status: result.configured ? 400 : 200 }
-    );
-  }
-
-  const result = await createCheckoutSession(String(planId), origin, session.email);
-  if (result.error) {
-    return NextResponse.json(
-      { error: result.error, configured: result.configured },
-      { status: result.configured ? 400 : 200 }
-    );
-  }
-  return NextResponse.json({ url: result.url, provider: "stripe" });
+  const result = await createPaypalCheckout(String(planId), origin, session.email);
+  if (result.url) return NextResponse.json({ url: result.url, provider: "paypal" });
+  return NextResponse.json(
+    { error: result.error, configured: result.configured },
+    { status: result.configured ? 400 : 200 }
+  );
 }
 
 // Plan catalogue (no secrets - safe for any signed-in user).
@@ -67,10 +54,10 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
-  const [lemon, stripe] = await Promise.all([lemonConfigured(), stripeConfigured()]);
+  const configured = await paypalConfigured();
   return NextResponse.json({
     plans: PLANS,
-    configured: lemon || stripe,
-    provider: lemon ? "lemonsqueezy" : stripe ? "stripe" : null,
+    configured,
+    provider: configured ? "paypal" : null,
   });
 }

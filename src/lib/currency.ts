@@ -1,5 +1,5 @@
-// Currency catalogue. Pricing is anchored in ILS (matches the Lemon Squeezy
-// products exactly); everything else is a display conversion. USD is the
+// Currency catalogue. Pricing is anchored in ILS (matches the PayPal billing
+// plans exactly); everything else is a display conversion. USD is the
 // professional default. A hidden 0.2% is applied to non-ILS conversions.
 
 export interface Currency {

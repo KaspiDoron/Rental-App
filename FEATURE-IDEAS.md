@@ -55,7 +55,7 @@ idea requires a rewrite.
   Recurring B2B revenue with data we already collect (`sponsored_shops`,
   response analytics exist).
 - **Ask**: L. Shop auth (WhatsApp-code login), a small dashboard page,
-  Lemon Squeezy product. Highest revenue ceiling on this list.
+  PayPal billing plan. Highest revenue ceiling on this list.
 
 ### 8. Damage-deposit insurance affiliate
 - **Value**: rental insurance (e.g. per-day scooter cover) presented at

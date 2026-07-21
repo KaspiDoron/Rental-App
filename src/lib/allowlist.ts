@@ -123,7 +123,7 @@ export async function saveBetaAllowlist(entries: BetaEntry[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // TEST MODE - one owner switch: while ON, testers flagged `test` in the beta
 // list ride Ultra for free and billing runs in sandbox (plan applied
-// instantly, no Lemon Squeezy round-trip). Flip it OFF and the app is fully
+// instantly, no PayPal round-trip). Flip it OFF and the app is fully
 // live again - plans re-derive on the very next request.
 // ---------------------------------------------------------------------------
 

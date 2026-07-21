@@ -3,7 +3,7 @@
 // "My deals" - rebuilt around SEARCH SESSIONS instead of a flat offer list.
 // Each session is a living dashboard: who was contacted, who answered, the
 // best price on the table, honest savings, what Will plans next and what
-// needs the traveller. Think Linear/Stripe dashboard, not an e-commerce list.
+// needs the traveller. Think Linear dashboard, not an e-commerce list.
 
 import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";

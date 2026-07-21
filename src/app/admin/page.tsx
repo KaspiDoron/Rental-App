@@ -330,7 +330,7 @@ export default function AdminPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(false);
   const [plans, setPlans] = useState<PlanView[]>([]);
-  const [stripeOn, setStripeOn] = useState(false);
+  const [billingOn, setBillingOn] = useState(false);
   const [newAdmin, setNewAdmin] = useState("");
   const [userMsg, setUserMsg] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
@@ -492,7 +492,7 @@ export default function AdminPage() {
       setPersistent(Boolean(cfg.persistent));
       setUsers(u.users ?? []);
       setPlans(bill.plans ?? []);
-      setStripeOn(Boolean(bill.configured));
+      setBillingOn(Boolean(bill.configured));
       setIsOwner(me.session?.role === "owner");
       setAiProviders(ai.providers ?? []);
       setTrainingCount((tr.examples ?? []).length);
@@ -2192,15 +2192,15 @@ export default function AdminPage() {
         <div className="space-y-3">
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
-              stripeOn
+              billingOn
                 ? "border-savings bg-savings-soft text-savings"
                 : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
             }`}
           >
             <Icon name="card" className="mr-1 inline h-4 w-4" />
-            {stripeOn
+            {billingOn
               ? "Payments are connected. Users see the 80% launch offer (billed every 3 months) via the upgrade chip and at signup."
-              : "Billing preview. Recommended for Israel: connect Lemon Squeezy (no business entity needed, pays out via PayPal/wire) - add the LEMONSQUEEZY_* keys in the Keys tab. Stripe stays available as an alternative."}
+              : "Billing preview. Connect PayPal (no merchant-approval gate, $0/month, pays out to Israeli bank accounts) - add the PAYPAL_* keys in the Keys tab."}
           </div>
           {plans.map((p) => (
             <PlanCard key={p.id} plan={p} />

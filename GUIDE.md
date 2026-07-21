@@ -137,14 +137,25 @@ genuine bugs get emailed to `ADMIN_EMAILS`; everything is also logged in Supabas
 
 ---
 
-## 7. Turn on payments (Stripe - preview for now)
+## 7. Turn on payments (PayPal Subscriptions)
 
-Visible only to management (Admin -> Billing).
+Visible only to management (Admin -> Billing). PayPal has no merchant-approval
+gate, is free ($0/month), and pays out to Israeli bank accounts.
 
-1. Go to **stripe.com**, get your **Secret key** (test mode is fine to start).
-2. In **Admin -> Keys**, paste `STRIPE_SECRET_KEY`.
-3. Open **Admin -> Billing** and click **Subscribe with Stripe** on a plan - it
-   opens a real Stripe Checkout page. (Subscription management is a later pass.)
+1. At **developer.paypal.com -> Apps & Credentials** (toggle **Live**), create a
+   REST app and copy its **Client ID** + **Secret**.
+2. At **paypal.com -> Pay & Get Paid -> Subscriptions -> Plans**, create two
+   subscription plans (Pro and Ultra, billed every 3 months, priced in ILS to
+   match the app) and copy each **Plan ID** (starts with `P-`).
+3. Back in the developer app, add a **Webhook** with URL
+   `https://<your-domain>/api/webhooks/paypal`, subscribe to the events
+   `BILLING.SUBSCRIPTION.ACTIVATED / .CANCELLED / .EXPIRED / .SUSPENDED /
+   .RE-ACTIVATED` (+ `PAYMENT.SALE.COMPLETED`), and copy the **Webhook ID**.
+4. In **Admin -> Keys**, paste `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`,
+   `PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_ULTRA`, `PAYPAL_WEBHOOK_ID` (and
+   `PAYPAL_ENV=sandbox` while testing). Use **Admin -> Keys -> Test** to verify.
+5. Open **Admin -> Billing** and click **Subscribe** on a plan - it opens a real
+   PayPal approval page; the plan is granted server-side from the signed webhook.
 
 ---
 
@@ -156,20 +167,20 @@ Visible only to management (Admin -> Billing).
 - **Admin -> Keys (in-app, any time):** `GOOGLE_MAPS_API_KEY`,
   `GOOGLE_OAUTH_CLIENT_ID`, all `GROQ/GEMINI/OPENROUTER/CEREBRAS` tokens,
   `AI_PROVIDER`, all `WHATSAPP_*`, `RESEND_API_KEY`, `FEEDBACK_FROM_EMAIL`,
-  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+  `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_PLAN_PRO`,
+  `PAYPAL_PLAN_ULTRA`, `PAYPAL_WEBHOOK_ID`.
 
 Always use freshly rotated keys - never ones that were shared in plain text.
 
 ## v4 additions (July 2026)
 
-- Payments: Lemon Squeezy is now the primary provider (works for individuals
-  in Israel; pays out via PayPal or bank wire). Create a store at
-  lemonsqueezy.com, add two subscription products (Pro / Ultra, billed every
-  3 months), then paste LEMONSQUEEZY_API_KEY, LEMONSQUEEZY_STORE_ID,
-  LEMONSQUEEZY_VARIANT_PRO, LEMONSQUEEZY_VARIANT_ULTRA and
-  LEMONSQUEEZY_WEBHOOK_SECRET in Admin -> Keys. Webhook URL:
-  https://<your-domain>/api/webhooks/lemonsqueezy (event: order_created +
-  subscription events).
+- Payments: PayPal Subscriptions is the provider (no merchant-approval gate,
+  $0/month, pays out to Israeli bank accounts). Create a REST app +  two
+  Billing Plans (Pro / Ultra, billed every 3 months) + a Webhook, then paste
+  PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_PLAN_PRO, PAYPAL_PLAN_ULTRA and
+  PAYPAL_WEBHOOK_ID in Admin -> Keys. Webhook URL:
+  https://<your-domain>/api/webhooks/paypal (events: BILLING.SUBSCRIPTION.* +
+  PAYMENT.SALE.COMPLETED). See section 7.
 - Personal WhatsApp: deploy Evolution API (self-hosted, free - see the
   step-by-step in the project chat/README), then paste EVOLUTION_API_URL and
   EVOLUTION_API_KEY in Admin -> Keys. Users connect their own number from

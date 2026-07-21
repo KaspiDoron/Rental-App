@@ -151,42 +151,53 @@ export async function GET(req: Request) {
       }
       break;
     }
-    case "LEMONSQUEEZY_API_KEY":
-    case "LEMONSQUEEZY_STORE_ID":
-    case "LEMONSQUEEZY_VARIANT_PRO":
-    case "LEMONSQUEEZY_VARIANT_ULTRA":
-    case "LEMONSQUEEZY_WEBHOOK_SECRET": {
-      const [key, store, vp, vu, secret] = await Promise.all([
-        getConfig("LEMONSQUEEZY_API_KEY"),
-        getConfig("LEMONSQUEEZY_STORE_ID"),
-        getConfig("LEMONSQUEEZY_VARIANT_PRO"),
-        getConfig("LEMONSQUEEZY_VARIANT_ULTRA"),
-        getConfig("LEMONSQUEEZY_WEBHOOK_SECRET"),
+    case "PAYPAL_CLIENT_ID":
+    case "PAYPAL_CLIENT_SECRET":
+    case "PAYPAL_PLAN_PRO":
+    case "PAYPAL_PLAN_ULTRA":
+    case "PAYPAL_WEBHOOK_ID":
+    case "PAYPAL_ENV": {
+      const [id, secret, pp, pu, webhookId, env] = await Promise.all([
+        getConfig("PAYPAL_CLIENT_ID"),
+        getConfig("PAYPAL_CLIENT_SECRET"),
+        getConfig("PAYPAL_PLAN_PRO"),
+        getConfig("PAYPAL_PLAN_ULTRA"),
+        getConfig("PAYPAL_WEBHOOK_ID"),
+        getConfig("PAYPAL_ENV"),
       ]);
-      if (!key || !store) {
-        result = { ok: false, detail: "Set the API key and Store ID first." };
+      if (!id || !secret) {
+        result = { ok: false, detail: "Set the Client ID and Client Secret first." };
         break;
       }
+      const base =
+        (env ?? "live").trim().toLowerCase() === "sandbox"
+          ? "https://api-m.sandbox.paypal.com"
+          : "https://api-m.paypal.com";
       try {
-        const res = await fetch(`https://api.lemonsqueezy.com/v1/stores/${String(store).trim()}`, {
-          headers: { Accept: "application/vnd.api+json", Authorization: `Bearer ${key.trim()}` },
+        const basic = Buffer.from(`${id.trim()}:${secret.trim()}`).toString("base64");
+        const res = await fetch(`${base}/v1/oauth2/token`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${basic}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: "grant_type=client_credentials",
         });
         const d = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          result = { ok: false, detail: d?.errors?.[0]?.detail ?? `Lemon Squeezy ${res.status} - wrong API key or store ID.` };
+        if (!res.ok || !d.access_token) {
+          result = { ok: false, detail: d?.error_description ?? `PayPal ${res.status} - wrong Client ID or Secret (check live vs sandbox).` };
           break;
         }
-        const storeName = d?.data?.attributes?.name ?? "store";
         const missing = [
-          !vp && "VARIANT_PRO",
-          !vu && "VARIANT_ULTRA",
-          !secret && "WEBHOOK_SECRET",
+          !pp && "PLAN_PRO",
+          !pu && "PLAN_ULTRA",
+          !webhookId && "WEBHOOK_ID",
         ].filter(Boolean);
         result = {
           ok: missing.length === 0,
           detail:
-            `Connected to "${storeName}"` +
-            (missing.length ? ` - still missing: ${missing.join(", ")}.` : " - checkout + webhook fully configured. (Test mode until Lemon Squeezy verifies your store.)"),
+            `PayPal credentials valid (${(env ?? "live").trim().toLowerCase() === "sandbox" ? "sandbox" : "live"})` +
+            (missing.length ? ` - still missing: ${missing.join(", ")}.` : " - checkout + webhook fully configured."),
         };
       } catch (e) {
         result = { ok: false, detail: e instanceof Error ? e.message : "network error" };

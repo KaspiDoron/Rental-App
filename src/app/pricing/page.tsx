@@ -7,7 +7,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { Icon } from "@/components/icons";
 import { PlanCard } from "@/components/UpgradeSheet";
 import { SiteFooter } from "@/components/SiteFooter";
-import { PLANS } from "@/lib/stripe";
+import { PLANS } from "@/lib/plans";
 import { ENTITLEMENTS, FEATURE_META, type Feature } from "@/lib/entitlements";
 import { PLAN_CAPACITY } from "@/lib/wa/capacity";
 

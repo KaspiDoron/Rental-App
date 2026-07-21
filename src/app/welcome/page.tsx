@@ -16,7 +16,7 @@ import { TrustPanel } from "@/components/landing/TrustPanel";
 import { LandingFaq } from "@/components/landing/LandingFaq";
 import { SiteFooter } from "@/components/SiteFooter";
 import { PlanCard } from "@/components/UpgradeSheet";
-import { PLANS } from "@/lib/stripe";
+import { PLANS } from "@/lib/plans";
 import { FOUNDER } from "@/lib/founder";
 
 export const metadata: Metadata = {

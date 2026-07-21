@@ -60,10 +60,9 @@ ENV
 gcloud secrets create wheeldeal-env --data-file=wd.env && rm wd.env
 ```
 
-> Provider keys (Groq/Gemini/OpenRouter/Cerebras, Maps, Resend, Stripe/Lemon
-> Squeezy) are **not** required here — their canonical store is the admin Key
-> Vault (Supabase `app_config`). You may mirror them into `wd.env` if you want,
-> but it's optional.
+> Provider keys (Groq/Gemini/OpenRouter/Cerebras, Maps, Resend, PayPal) are
+> **not** required here — their canonical store is the admin Key Vault (Supabase
+> `app_config`). You may mirror them into `wd.env` if you want, but it's optional.
 
 **Private repo** (this one is): also create a GitHub token secret for the clone
 (a fine-grained token with read-only Contents on the repo):
