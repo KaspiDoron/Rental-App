@@ -10,12 +10,20 @@ export { runPostRails } from "./rails";
 export { mergeDigest, emptyDigest } from "./digest";
 export { runTurn, type TurnOutcome } from "./orchestrator";
 
-/** Owner kill switch for the dual-run: SPTE only takes a turn when ON. */
+/**
+ * SPTE is the PRIMARY engine app-wide: ON by default, disabled ONLY by an
+ * explicit ENGINE_V3=off / 0 / false (the owner kill switch for an emergency
+ * rollback to the graph engine). The graph engine still stands behind it as the
+ * runtime fallback safety net, so "off" is a hard rollback, not the default.
+ */
 export async function engineV3Enabled(): Promise<boolean> {
   try {
     const { getConfig } = await import("../runtime-config");
-    return (await getConfig("ENGINE_V3")) === "on";
+    const v = ((await getConfig("ENGINE_V3")) ?? "").trim().toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
   } catch {
-    return false;
+    // Config unreadable -> default ON (the graph-engine fallback still protects
+    // the turn), so a transient config blip never silently reverts the engine.
+    return true;
   }
 }

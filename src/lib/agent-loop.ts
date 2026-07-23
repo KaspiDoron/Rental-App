@@ -699,50 +699,74 @@ export async function processVendorReply(opts: {
     }
   }
 
-  const { graphEngineEnabled } = await import("./graph/engine");
+  const { graphEngineEnabled, runGraphTurn, liveGraphIO } = await import("./graph/engine");
+  const { threadKeyFor } = await import("./graph/state");
+  const eventKind: "inbound-text" | "inbound-image" =
+    images.length > 0 ? "inbound-image" : "inbound-text";
+  // The ONE input both engines share, so the V3 -> graph fallback is behaviour-
+  // identical at the boundary (same context, same IO, same deadline).
+  const turnInput: import("./graph/types").GraphTurnInput = {
+    event: {
+      kind: eventKind,
+      threadKey: threadKeyFor(ctx.sender ?? undefined, from),
+      userEmail: ctx.sender ?? undefined,
+      toDigits: from,
+      // The coalesced unread buffer, so the director/answer nodes see the
+      // shop's full recent burst (question + vehicle + price together).
+      shopMessage: extractText,
+      images,
+      audios: [],
+    },
+    ctx,
+    rfq,
+    extraction,
+    usablePrice,
+    currency: cur,
+    floorPrice: floorSameCur?.floor,
+    floorTypical: floorSameCur?.typical ?? undefined,
+    sessionClosed,
+    history,
+    priorOutbound: thread
+      .filter((m) => m.direction === "outbound")
+      .map((m) => m.body ?? "")
+      .filter(Boolean),
+    legacyCounts: {
+      clarify: autoClarifies,
+      bargain: autoBargains,
+      answer: autoAnswers,
+      close: autoCloses,
+    },
+    humanDelay: Boolean(opts.humanDelay && ctx.sender),
+    transcript: opts.transcript ?? null,
+    deadlineAt: Date.now() + 45_000,
+  };
+  const io = liveGraphIO(opts.send);
+
+  // ENGINE_V3 (SPTE - Shared Session Blackboard + single-pass) is the PRIMARY
+  // negotiation engine. ZERO-DOWNTIME FALLBACK: runSpteLiveTurn only ever throws
+  // from its pre-send context build (never after a message leaves), so on ANY
+  // error we log the telemetry and fail over to the repaired graph engine
+  // WITHOUT dropping or double-sending the reply.
+  const { engineV3Enabled } = await import("./spte");
+  if (await engineV3Enabled()) {
+    try {
+      const { runSpteLiveTurn } = await import("./spte/live");
+      await runSpteLiveTurn(turnInput, io);
+      return;
+    } catch (e) {
+      await sbInsert("agent_events", [
+        {
+          kind: "engine-v3-fallback",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: `SPTE failover -> graph engine: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500),
+        },
+      ]).catch(() => {});
+      // fall through to the repaired graph engine below.
+    }
+  }
   if (await graphEngineEnabled()) {
-    const { runGraphTurn, liveGraphIO } = await import("./graph/engine");
-    const { threadKeyFor } = await import("./graph/state");
-    const eventKind: "inbound-text" | "inbound-image" =
-      images.length > 0 ? "inbound-image" : "inbound-text";
-    await runGraphTurn(
-      {
-        event: {
-          kind: eventKind,
-          threadKey: threadKeyFor(ctx.sender ?? undefined, from),
-          userEmail: ctx.sender ?? undefined,
-          toDigits: from,
-          // The coalesced unread buffer, so the director/answer nodes see the
-          // shop's full recent burst (question + vehicle + price together).
-          shopMessage: extractText,
-          images,
-          audios: [],
-        },
-        ctx,
-        rfq,
-        extraction,
-        usablePrice,
-        currency: cur,
-        floorPrice: floorSameCur?.floor,
-        floorTypical: floorSameCur?.typical ?? undefined,
-        sessionClosed,
-        history,
-        priorOutbound: thread
-          .filter((m) => m.direction === "outbound")
-          .map((m) => m.body ?? "")
-          .filter(Boolean),
-        legacyCounts: {
-          clarify: autoClarifies,
-          bargain: autoBargains,
-          answer: autoAnswers,
-          close: autoCloses,
-        },
-        humanDelay: Boolean(opts.humanDelay && ctx.sender),
-        transcript: opts.transcript ?? null,
-        deadlineAt: Date.now() + 45_000,
-      },
-      liveGraphIO(opts.send)
-    );
+    await runGraphTurn(turnInput, io);
     return;
   }
 
