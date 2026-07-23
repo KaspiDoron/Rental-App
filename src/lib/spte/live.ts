@@ -18,7 +18,7 @@ import { emptyDigest } from "./digest";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
-import { vehicleKeyFor } from "../market";
+import { vehicleKeyFor, groundedBenchmarkFor } from "../market";
 
 export interface SpteLiveResult {
   ran: true;
@@ -94,13 +94,21 @@ async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<Session
     // Keep the cheapest few rivals - the leverage that matters.
     rivals = rivals.sort((a, b) => a.pricePerDay - b.pricePerDay).slice(0, 4);
   }
+  // Grounded market benchmark (F5): the ONLY market rate allowed into the
+  // prompt - web-grounded with a source URL, and ONLY when its currency matches
+  // this session (never cross-currency). Best-effort; null when none exists yet.
+  let benchmark: SessionSnapshot["benchmark"] = null;
+  try {
+    const gb = await groundedBenchmarkFor(input.ctx.region || undefined, input.rfq);
+    if (gb && gb.currency === input.currency) benchmark = gb;
+  } catch {
+    /* no grounded benchmark -> the pass refuses to invent one */
+  }
   return {
     sessionId: input.event.threadKey,
     rfq: input.rfq,
     currency: input.currency,
-    // A grounded benchmark only reaches the prompt with provenance; the live
-    // input does not carry one, so null (the pass refuses to invent one).
-    benchmark: null,
+    benchmark,
     lowest,
     rivals,
     priors: null,

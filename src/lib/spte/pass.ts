@@ -55,10 +55,26 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "\"counterPricePerDay\"?: number, \"leverageUsed\": string[], \"digestPatch\": string[] (<=3 new facts), " +
     "\"waitMinutes\"?: number }.";
 
+  // Duration is real leverage: a multi-day rental earns a longer-stay discount,
+  // and the cheapest session rival is the strongest anchor to cite verbatim.
+  const days = s.rfq.durationDays;
+  const durationLeverage =
+    days >= 5
+      ? `LEVERAGE: ${days} days is a long rental - push for a multi-day / weekly discount off the daily rate.\n`
+      : days >= 3
+        ? `LEVERAGE: ${days} days - mention the multi-day booking when you ask for a better rate.\n`
+        : "";
+  const rivalLeverage =
+    s.rivals.length > 0
+      ? `LEVERAGE: the cheapest other shop this search is ${s.rivals[0].shop} at ${s.rivals[0].pricePerDay} ${s.rivals[0].currency}/day - you MAY cite it verbatim to ask this shop to match or beat it.\n`
+      : "";
+
   const user =
     `VEHICLE WANTED: ${vehicleLine(ctx)} for ${s.rfq.durationDays} days.\n` +
     `${bench}\n${prior}\n` +
     `RIVAL OFFERS (other shops, this search):\n${rivalLines}\n\n` +
+    durationLeverage +
+    rivalLeverage +
     `THIS SHOP so far:\n${digest}\n\n` +
     `RECENT MESSAGES:\n${tail || "(none yet)"}\n\n` +
     `SHOP JUST SAID: ${ctx.inbound.text || "(nothing - a scheduled follow-up)"}\n` +
