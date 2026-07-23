@@ -1365,7 +1365,7 @@ export async function sendFromUser(
   to: string,
   message: string,
   fast = false
-): Promise<{ ok: boolean; error?: string; rateLimited?: boolean; messageId?: string }> {
+): Promise<{ ok: boolean; error?: string; rateLimited?: boolean; messageId?: string; unconfirmed?: boolean }> {
   const rate = await checkRateLimit(email);
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
 
@@ -1445,36 +1445,38 @@ export async function sendFromUser(
     return r;
   };
 
-  // One reconnect-and-retry, but ONLY on a definitive status error (e.g.
+  // One reconnect-and-retry, but ONLY on a definitive HTTP status error (e.g.
   // "instance not connected" 4xx) where the send provably did not deliver. A
-  // status 0 (abort/timeout) is ambiguous - never blindly re-POST it.
+  // status 0 (abort/timeout) is ambiguous - never blindly re-POST it. We do NOT
+  // retry on a 2xx-without-receipt: that response MAY have delivered, so a
+  // re-POST would create a duplicate WhatsApp message (a velocity/uniformity ban
+  // signal) - and the receipt shape varies across Evolution builds.
   let res = await trySend();
-  if ((!res.ok || !hasSendReceipt(res.data)) && res.status !== 0) {
+  if (!res.ok && res.status !== 0) {
     await evo(email, `/instance/connect/${instance}`);
     await new Promise((r) => setTimeout(r, 1200));
     res = await trySend();
   }
-  // GHOST-SEND KILL: HTTP 2xx is NOT proof of delivery. Evolution can return
-  // 200 while Baileys delivered nothing - a stale socket after a Render restart,
-  // an unresolved JID, or a soft-fail on a number that is not on WhatsApp. A
-  // real send ALWAYS carries a message receipt (key.id / messageTimestamp). If
-  // the body has no receipt, treat it as NOT sent so the drain never writes a
-  // phantom "sent" row and the UI never lies. This is the fix for
-  // "UI says messaged 1 shop but WhatsApp shows zero".
-  if (res.ok && hasSendReceipt(res.data)) {
+  // A 2xx from Evolution means the send request was accepted. A real send also
+  // carries a message receipt (key.id / messageTimestamp); an EXPLICIT
+  // status:"error"/"failed" is a hard reject. Everything else 2xx is a delivery.
+  //
+  // CRITICAL: we must NOT treat a 2xx WITHOUT a receipt as a failure. Different
+  // Evolution builds return different success shapes (some omit key.id on the
+  // first ACK, some nest it), so requiring a receipt made EVERY send look like a
+  // ghost -> the drain re-queued the row for 24h -> the queue never cleared
+  // (the "stuck queue" / "app non-functional" regression). Instead: a 2xx with a
+  // receipt is CONFIRMED; a 2xx without one is accepted as SENT-BUT-UNCONFIRMED
+  // (the row clears, the batch proceeds) and flagged so the UI can show it as
+  // unverified rather than lying. Only an explicit error status re-queues.
+  if (res.ok) {
+    const rawStatus = String(res.data?.status ?? "").toLowerCase();
+    if (rawStatus === "error" || rawStatus === "failed") {
+      return { ok: false, error: "WhatsApp rejected the message" };
+    }
     recordSend(email);
     const id = String(res.data?.key?.id ?? res.data?.messageId ?? "");
-    return { ok: true, messageId: id || undefined };
-  }
-  if (res.ok && !hasSendReceipt(res.data)) {
-    // 200 with no receipt = ghost. Surface it as a transient failure so the
-    // drain re-queues (the socket usually recovers on the next tick) instead of
-    // recording a delivery that never happened.
-    const why =
-      String(res.data?.status ?? "").toLowerCase() === "error"
-        ? "WhatsApp rejected the message"
-        : "no delivery confirmation from WhatsApp (ghost send)";
-    return { ok: false, error: why };
+    return { ok: true, messageId: id || undefined, unconfirmed: !hasSendReceipt(res.data) };
   }
   const errText =
     res.data?.response?.message?.toString?.() ??

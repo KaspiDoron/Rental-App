@@ -1467,7 +1467,7 @@ export async function drainOutbox(
     senderKey: string,
     to: string,
     text: string
-  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean }>
+  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean }>
 ): Promise<number> {
   const dueRows = await sbSelect<OutboxRow>(
     "wa_outbox",
@@ -1613,7 +1613,7 @@ export async function drainOutbox(
     // transient failure so the branch below re-queues it. With the evoFetch
     // hard timeout in place, a slow host now returns {ok:false} rather than
     // hanging, but this keeps any other throw safe too.
-    let r: { ok: boolean; error?: string; rateLimited?: boolean };
+    let r: { ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean };
     try {
       r = await send(row.sender_key, row.to_number, verdict.text);
     } catch (e) {
@@ -1634,9 +1634,29 @@ export async function drainOutbox(
           body: verdict.text,
           type: "text",
           direction: "outbound",
-          raw: { ...(row.meta ?? {}), sender: row.sender_key, ok: true, auto: true, queued: true },
+          // confirmed=false means Evolution accepted the request (2xx) but did
+          // not return a delivery receipt - recorded honestly so the UI can show
+          // it as "sent, unverified" rather than a confirmed delivery.
+          raw: {
+            ...(row.meta ?? {}),
+            sender: row.sender_key,
+            ok: true,
+            auto: true,
+            queued: true,
+            confirmed: r.unconfirmed ? false : true,
+          },
         },
       ]);
+      if (r.unconfirmed) {
+        await sbInsert("agent_events", [
+          {
+            kind: "wa-send-unconfirmed",
+            vendor_id: String((row.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+            vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
+            detail: `Sent to +${row.to_number} (sender ${row.sender_key}) but WhatsApp returned no delivery receipt - shown as unverified.`,
+          },
+        ]).catch(() => {});
+      }
     } else {
       // Release the idempotency claim - the retry below must not be treated
       // as a duplicate of the failed attempt.

@@ -1356,7 +1356,7 @@ export type LiveSend = (
   senderKey: string,
   to: string,
   text: string
-) => Promise<{ ok: boolean; error?: string }>;
+) => Promise<{ ok: boolean; error?: string; unconfirmed?: boolean }>;
 
 export function liveGraphIO(send: LiveSend): GraphIO {
   return {
@@ -1461,6 +1461,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
     },
     async guardAndSend({ senderKey, toNumber, text, meta, shopOpenNow }) {
       const { guardOutbound, afterSend } = await import("../wa-guard");
+      const { parkOutboxOnce } = await import("../wa/park");
       const verdict = await guardOutbound({
         senderKey,
         toDigits: toNumber,
@@ -1543,12 +1544,33 @@ export function liveGraphIO(send: LiveSend): GraphIO {
             body: verdict.text,
             type: "text",
             direction: "outbound",
-            raw: { ...meta, sender: senderKey },
+            // confirmed=false: Evolution accepted the request but returned no
+            // delivery receipt (see sendFromUser) - recorded honestly.
+            raw: {
+              ...meta,
+              sender: senderKey,
+              confirmed: (result as { unconfirmed?: boolean }).unconfirmed ? false : true,
+            },
           },
         ]);
         return { delivered: "sent", detail: "sent through the user's WhatsApp", finalText: verdict.text };
       }
-      return { delivered: "failed", detail: `send failed: ${result.error ?? "unknown"}`, finalText: verdict.text };
+      // NEVER LOSE A COMPOSED REPLY. A transient send failure (reconnecting,
+      // timeout, 5xx) must not drop the shop's answer on the floor - park it so
+      // the next drain retries it. Dedup keeps it to one pending row per shop.
+      await parkOutboxOnce({
+        senderKey,
+        toNumber,
+        body: verdict.text,
+        notBeforeMs: Date.now() + 30_000,
+        meta: { ...(meta as Record<string, unknown>), reason: "reconnecting - reply resumes automatically" },
+      }).catch(() => {});
+      return {
+        delivered: "queued",
+        detail: `send failed (${result.error ?? "unknown"}) - reply re-queued`,
+        queuedUntil: new Date(Date.now() + 30_000).toISOString(),
+        finalText: verdict.text,
+      };
     },
     async markPresentable({ userEmail, vendorId, fulfillment }) {
       if (!vendorId) return;
