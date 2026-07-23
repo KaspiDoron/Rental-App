@@ -366,6 +366,7 @@ export const I18N_CATALOG: string[] = [
   "Translating the app...",
   "Travel preferences",
   "Try again / new code",
+  "SHOP QUOTE",
   "Try:",
   "Type the code above - done! This screen turns green by itself.",
   "Type your email above first, then tap Forgot password.",

@@ -433,6 +433,12 @@ function VendorCardInner({
               <div>
                 <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-faint">
                   {t("Shop's offer")}
+                  {/* BUG 1B: an offer row is ALWAYS a real price a real shop
+                      quoted for the requested vehicle - so the fallback is a
+                      calm "Shop quote", never a scary "UNCONFIRMED" that made
+                      genuine offers look fake. VERIFIED is the premium state
+                      (exact vehicle match + high-confidence read); DIFFERENT
+                      VEHICLE flags a mismatched quote. */}
                   {offer.matchesSpec === false ? (
                     <span className="rounded bg-brandred-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandred">
                       {t("DIFFERENT VEHICLE")}
@@ -442,8 +448,8 @@ function VendorCardInner({
                       {t("VERIFIED")}
                     </span>
                   ) : (
-                    <span className="rounded bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-extrabold text-[#8a6100] dark:text-brandyellow">
-                      {t("UNCONFIRMED")}
+                    <span className="rounded bg-card2 px-1.5 py-0.5 text-[9px] font-extrabold text-soft">
+                      {t("SHOP QUOTE")}
                     </span>
                   )}
                 </div>
