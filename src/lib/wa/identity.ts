@@ -23,22 +23,28 @@ export function resolveOutreachIdentity(opts: {
   claimsRealShop: boolean;
   resolvedPhone: string; // digits only, "" when unknown
   supplied: string; // digits only, "" when none
-  isOwner: boolean;
+  // TRUE only when the OWNER is running a TEST/drill (global TEST_MODE on).
+  // BUG 1B: this used to be a plain `isOwner`, so in PRODUCTION every real shop
+  // the owner contacted was blanket-re-keyed to a "(unverified)" test identity -
+  // the "(unverified)" suffix that appeared on every shop name + push. In
+  // production (TEST_MODE off) the owner is a normal user and their real shops
+  // keep their real identity; only an ACTUAL number mismatch re-keys.
+  ownerTestMode: boolean;
   vendorName?: string;
 }): OutreachIdentity {
-  const { claimsRealShop, resolvedPhone, supplied, isOwner } = opts;
+  const { claimsRealShop, resolvedPhone, supplied, ownerTestMode } = opts;
   if (!claimsRealShop || !supplied) return { action: "keep" };
 
   const mismatch = Boolean(resolvedPhone && supplied && supplied !== resolvedPhone);
-  if (mismatch && !isOwner) {
+  if (mismatch && !ownerTestMode) {
     // Real shop, known Google phone, non-matching supplied number: the real
     // shop always wins - send to the shop's own number, keep its identity.
     return { action: "send-to-shop", toPhone: resolvedPhone };
   }
-  if (mismatch || isOwner) {
-    // A contradiction we cannot override, or the owner explicitly testing an
-    // arbitrary number: re-key to an explicit, WINDOWED test identity so a
-    // spoofed / unverifiable number can never wear the real shop's name/rfq.
+  if (mismatch || ownerTestMode) {
+    // A contradiction we cannot override, or the owner explicitly TESTING (drill
+    // mode) an arbitrary number: re-key to an explicit, WINDOWED test identity so
+    // a spoofed / unverifiable number can never wear the real shop's name/rfq.
     return {
       action: "rekey-test",
       vendorId: `test-${supplied}`,

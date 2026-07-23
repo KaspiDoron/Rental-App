@@ -109,11 +109,16 @@ export async function POST(req: Request) {
     // The decision is a pure, unit-pinned helper (see wa/identity.ts) - only a
     // POSITIVE phone contradiction or an explicit owner test re-keys to a test
     // identity; the mere absence of a reference phone keeps the real identity.
+    // BUG 1B: only re-key to a "(unverified)" test identity when the owner is
+    // actually running a DRILL (TEST_MODE on). In production the owner is a real
+    // user - their real shops must keep their real names.
+    const { testModeOn } = await import("@/lib/allowlist");
+    const ownerTestMode = session.role === "owner" && (await testModeOn());
     const identity = resolveOutreachIdentity({
       claimsRealShop,
       resolvedPhone,
       supplied,
-      isOwner: session.role === "owner",
+      ownerTestMode,
       vendorName: body.vendorName ? String(body.vendorName) : undefined,
     });
     if (identity.action === "send-to-shop") {
