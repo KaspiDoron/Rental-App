@@ -1060,7 +1060,12 @@ export default function Home() {
     // to a presentable offer the poll stopped - and the agent's parked
     // counter-reply never drained and late shop replies never surfaced (the
     // "agents never message back / app never updates" reports).
-    queueItems.length > 0;
+    queueItems.length > 0 ||
+    // BUG 2: during the ACTIVE dispatch window (openers going out / just sent),
+    // always poll so a shop's first offer lands in the card within seconds even
+    // if the vendor's client-side stage has not caught up yet. Bounded: `running`
+    // is the dispatch phase and resets on a new search / idle.
+    phase === "running";
   useEffect(() => {
     if (!session || !waiting || !rfq) return;
     // Stale-run guard: an unmounted/reconfigured effect must never apply its
