@@ -23,7 +23,12 @@ export interface FloorRow {
   currency: string;
   floor_per_day: number;
   typical_per_day: number | null;
-  source: string; // "ai" | "owner"
+  source: string; // "web" | "ai" | "owner"
+  // F5: true only when the number came from a Google-Search-grounded lookup with
+  // at least one citation. A benchmark is shown to users / cited to shops ONLY
+  // when grounded - never an ungrounded model guess.
+  grounded?: boolean;
+  source_url?: string | null;
   updated_at?: string;
 }
 
@@ -110,6 +115,48 @@ export async function floorPriceFor(
     return { floor: row.floor_per_day, typical: row.typical_per_day, currency: row.currency };
   }
   return defaultFloor(region, vkey);
+}
+
+export interface GroundedBenchmark {
+  pricePerDay: number;
+  currency: string;
+  sourceUrl: string;
+  grounded: true;
+}
+
+/**
+ * A CITABLE market benchmark for a spec near a region - returned ONLY when the
+ * stored row is web-grounded with a source URL (F5 anti-hallucination). Callers
+ * (the card band, the composer leverage line) must never show an ungrounded
+ * number as if it were a real market rate. Returns null when no grounded row
+ * exists yet (a lazy refresh is still kicked so the NEXT search has one).
+ */
+export async function groundedBenchmarkFor(
+  region: string | undefined,
+  rfq: StructuredRFQ
+): Promise<GroundedBenchmark | null> {
+  const keys = regionKeysFor(region);
+  if (!keys.length) return null;
+  const vkey = vehicleKeyFor(rfq);
+  const rows = await sbSelect<FloorRow>(
+    "market_floor_prices",
+    `select=region_key,currency,floor_per_day,grounded,source_url,updated_at&vehicle_key=eq.${encodeURIComponent(
+      vkey
+    )}&region_key=in.(${keys.map((k) => `"${k}"`).join(",")})&grounded=eq.true&limit=4`
+  ).catch(() => []);
+  const row =
+    rows.find((r) => r.region_key === keys[0]) ?? rows.find((r) => r.region_key === keys[1]);
+  if (row && row.grounded && row.source_url && row.floor_per_day > 0) {
+    return {
+      pricePerDay: row.floor_per_day,
+      currency: row.currency,
+      sourceUrl: row.source_url,
+      grounded: true,
+    };
+  }
+  // No grounded benchmark yet - kick a lazy refresh for next time, return null.
+  refreshRegionFloors(keys[0]).catch(() => {});
+  return null;
 }
 
 // Researched per-country seed: the LOWEST realistic walk-in price for a 125cc
@@ -228,14 +275,23 @@ export async function refreshRegionFloors(regionKey: string): Promise<boolean> {
   // 1) Real web grounding (Gemini + Google Search). 2) Ungrounded estimate.
   let text: string | null = null;
   let source = "web";
+  let isGrounded = false;
+  let sourceUrl: string | null = null;
   const grounded = await chatGrounded(system, userMsg);
-  if (grounded?.text) {
+  // F5: only trust the grounded path when it actually returned CITATIONS. A
+  // grounded call that came back with no sources is not a verified benchmark -
+  // treat it like the ungrounded fallback so it can never be shown/cited.
+  if (grounded?.text && Array.isArray(grounded.sources) && grounded.sources.length > 0) {
     text = grounded.text;
+    isGrounded = true;
+    sourceUrl = grounded.sources[0] ?? null;
   } else {
-    text = await chat([
-      { role: "system", content: system },
-      { role: "user", content: userMsg },
-    ]);
+    text =
+      grounded?.text ??
+      (await chat([
+        { role: "system", content: system },
+        { role: "user", content: userMsg },
+      ]));
     source = "ai";
   }
   if (!text) return false;
@@ -258,6 +314,8 @@ export async function refreshRegionFloors(regionKey: string): Promise<boolean> {
       floor_per_day: Math.round(p.floor),
       typical_per_day: p.typical > 0 ? Math.round(p.typical) : null,
       source,
+      grounded: isGrounded,
+      source_url: sourceUrl,
       updated_at: new Date().toISOString(),
     };
     if (prior?.id) {

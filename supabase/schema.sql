@@ -334,6 +334,12 @@ create table if not exists public.market_floor_prices (
 create index if not exists market_floor_region_idx
   on public.market_floor_prices (region_key, vehicle_key);
 alter table public.market_floor_prices enable row level security;
+-- Grounded-benchmark provenance (F5 anti-hallucination): only a number backed
+-- by a real web source may ever be shown to a user or cited to a shop as
+-- leverage. `grounded` distinguishes a Google-Search-grounded figure from an
+-- ungrounded model estimate; `source_url` is the citation.
+alter table public.market_floor_prices add column if not exists grounded boolean not null default false;
+alter table public.market_floor_prices add column if not exists source_url text;
 
 -- ---- WhatsApp number reputation (Anti-Ban engine) -----------------------------
 -- Dynamic Trust Score per connected sender. Replies build trust and relax the
