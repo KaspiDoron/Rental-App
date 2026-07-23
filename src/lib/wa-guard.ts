@@ -1698,7 +1698,8 @@ export async function drainOutbox(
             `Gave up reaching +${row.to_number} - the WhatsApp host was unreachable for over 24h (sender ${row.sender_key}).`,
           );
         } else {
-          await sbInsert("wa_outbox", [
+          const { robustRequeue } = await import("./wa/park");
+          await robustRequeue(
             {
               sender_key: row.sender_key,
               to_number: row.to_number,
@@ -1711,7 +1712,8 @@ export async function drainOutbox(
                 reason: "reconnecting - resumes automatically",
               },
             },
-          ]).catch(() => {});
+            "transient"
+          );
         }
       } else {
         const decision = recipientRetryDecision(
@@ -1722,7 +1724,8 @@ export async function drainOutbox(
             `Could not reach +${row.to_number} after 5 attempts (sender ${row.sender_key}) - the shop's number may be unreachable on WhatsApp.`,
           );
         } else {
-          await sbInsert("wa_outbox", [
+          const { robustRequeue } = await import("./wa/park");
+          await robustRequeue(
             {
               sender_key: row.sender_key,
               to_number: row.to_number,
@@ -1736,7 +1739,8 @@ export async function drainOutbox(
                 reason: `couldn't reach this shop - retry ${decision.attempts}/5`,
               },
             },
-          ]).catch(() => {});
+            "recipient"
+          );
         }
       }
     }

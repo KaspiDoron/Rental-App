@@ -492,11 +492,13 @@ export default function Home() {
       }).then(() => window.history.replaceState({}, "", "/"));
     }
 
-    const scheduled = timers.current;
     return () => {
       mounted = false;
       if (retry) clearTimeout(retry);
-      scheduled.forEach(clearTimeout);
+      // Clear the CURRENT timers array, not a mount-time snapshot: runFunnel
+      // replaces timers.current with a new array, so a captured `scheduled`
+      // reference would clear nothing on unmount (audit: stale-ref timers).
+      timers.current.forEach(clearTimeout);
     };
   }, []);
 
@@ -1072,6 +1074,9 @@ export default function Home() {
     // in-flight response to fresh state (the epoch may have changed).
     let cancelled = false;
     const tick = async () => {
+      // Pause in a hidden tab (parity with the activity poll) - no wasted
+      // /api/replies requests while backgrounded; resumes on focus.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.

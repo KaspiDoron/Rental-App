@@ -1534,7 +1534,16 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           finalText: verdict.text,
         };
       }
-      const result = await send(senderKey, toNumber, verdict.text);
+      // A THROW from send() (transport reject, dynamic-import hiccup) must be
+      // treated exactly like a failed send: release the idempotency claim and
+      // re-queue. Without this the claim leaked and the identical reply was then
+      // refused as a `duplicate` for the whole claim-GC horizon (audit DEFECT 4).
+      let result: { ok: boolean; error?: string; unconfirmed?: boolean };
+      try {
+        result = await send(senderKey, toNumber, verdict.text);
+      } catch (e) {
+        result = { ok: false, error: e instanceof Error ? e.message : "send threw" };
+      }
       if (!result.ok) await releaseSendClaim(senderKey, toNumber, verdict.text).catch(() => {});
       if (result.ok) {
         await afterSend(senderKey, toNumber);

@@ -218,6 +218,10 @@ export async function processEvolutionWebhook(
     const items = Array.isArray(body.data) ? body.data : [body.data];
 
     for (const data of items.slice(0, 3)) {
+      // Per-item isolation (audit DEFECT 5): a throw handling ONE message in a
+      // multi-message webhook batch must not drop its siblings - the route always
+      // returns 200, so Evolution never redelivers them. Contain each item.
+      try {
       if (!data?.key) continue;
       const remoteJid = String(data.key.remoteJid ?? "");
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
@@ -485,6 +489,10 @@ export async function processEvolutionWebhook(
           return sendFromUser(email, to, message);
         },
       });
+      } catch {
+        // One bad message in the batch must not drop its siblings (DEFECT 5) -
+        // the webhook already 200s so Evolution never redelivers. Skip this item.
+      }
     }
   } catch {
     // Never fail the webhook.
