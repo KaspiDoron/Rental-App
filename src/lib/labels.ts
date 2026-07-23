@@ -3,15 +3,23 @@
 
 import type { VehicleClass } from "./types";
 
-export function vehicleLabel(v: VehicleClass): string {
-  switch (v) {
-    case "scooter":
-      return "Automatic scooter";
-    case "motorbike":
-      return "Manual motorcycle";
-    default:
-      return "Car";
-  }
+// The transmission is read from the RFQ when known, not hardcoded by class
+// (F2 correctness bug): a manual scooter or automatic motorbike request used to
+// render the wrong word. When transmission is absent/"any", fall back to the
+// common default for that class (scooters are usually automatic, motorbikes
+// manual) so existing callers without an RFQ are unchanged.
+export function vehicleLabel(v: VehicleClass, transmission?: string): string {
+  if (v === "car") return "Car";
+  const isScooter = v === "scooter";
+  const trans =
+    transmission === "automatic"
+      ? "Automatic"
+      : transmission === "manual"
+      ? "Manual"
+      : isScooter
+      ? "Automatic"
+      : "Manual";
+  return `${trans} ${isScooter ? "scooter" : "motorcycle"}`;
 }
 
 // Verified reply-based shop tags (item #13): id -> traveller-facing chip.

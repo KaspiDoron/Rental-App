@@ -179,7 +179,7 @@ export function BookingSheet({
           <div className="mt-2 space-y-1 text-[12px] text-soft">
             <div className="flex items-center gap-1.5">
               <Icon name="check" className="h-3.5 w-3.5 text-savings" />
-              {rfq ? vehicleLabel(rfq.vehicleClass) : ""}
+              {rfq ? vehicleLabel(rfq.vehicleClass, rfq.transmission) : ""}
               {rfq?.engineSizeCc ? ` · ${rfq.engineSizeCc}cc` : ""}
             </div>
             {rfq?.maxMileageKm && (

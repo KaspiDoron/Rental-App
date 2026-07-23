@@ -1,13 +1,30 @@
 import { NextResponse } from "next/server";
-import { runProfiler } from "@/lib/agents";
+import { runProfiler, deterministicRFQ } from "@/lib/agents";
 import { aiEnabled } from "@/lib/ai";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 
 export async function POST(req: Request) {
-  const { text: rawText, durationDays } = await req
-    .json()
-    .catch(() => ({ text: "" }));
+  const body = await req.json().catch(() => ({ text: "" }));
+  const { text: rawText, durationDays, structured, fields } = body ?? {};
+
+  // TAP-TO-BUILD path (F2): a fully-structured request skips the LLM profiler
+  // entirely - the panel already knows every field. Zero tokens, instant.
+  if (structured === true && fields && typeof fields === "object") {
+    const session = await getSession();
+    const rfq = deterministicRFQ(fields);
+    await sbInsert("searches", [
+      {
+        user_email: session?.email ?? null,
+        query_text: "(built with the request panel)",
+        vehicle_class: rfq.vehicleClass,
+        source: "panel",
+        results: 0,
+      },
+    ]);
+    return NextResponse.json({ rfq, aiEnabled: await aiEnabled() });
+  }
+
   if (!rawText || typeof rawText !== "string" || rawText.trim().length < 3) {
     return NextResponse.json(
       { error: "Describe the vehicle you want (at least a few words)." },

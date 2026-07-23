@@ -86,6 +86,20 @@ export async function runProfiler(
   return heuristicRFQ(input, durationDaysHint);
 }
 
+/**
+ * Build a valid StructuredRFQ from FULLY-STRUCTURED tap-to-build input (F2),
+ * with ZERO LLM call - the tap panel already knows every field, so there is
+ * nothing to parse. Reuses normalizeRFQ so the cheapest-by-default fills,
+ * duration clamp and message assembly are byte-identical to the text path. A
+ * Tier-R (0-token) request path.
+ */
+export function deterministicRFQ(fields: Partial<StructuredRFQ>): StructuredRFQ {
+  // A tiny synthetic input string so buildMessage's opener/notes logic has
+  // something human to anchor on when no free text was typed.
+  const synthetic = fields.notes?.trim() || "";
+  return normalizeRFQ(fields as StructuredRFQ, synthetic, fields.durationDays);
+}
+
 function normalizeRFQ(
   rfq: StructuredRFQ,
   input: string,

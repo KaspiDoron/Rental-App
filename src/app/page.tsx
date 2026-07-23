@@ -17,6 +17,7 @@ import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
 import { WillAvatar } from "@/components/will/WillAvatar";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
+import { RequestBuilder } from "@/components/RequestBuilder";
 import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
@@ -142,6 +143,7 @@ export default function Home() {
   // Progressive disclosure: once results are in, the big search card folds
   // into a one-row summary (the form stays mounted so tour anchors survive).
   const [formOpen, setFormOpen] = useState(true);
+  const [builderOpen, setBuilderOpen] = useState(false);
   // Card windowing: render the first batch and reveal more on demand - keeps
   // long result lists cheap on low-end phones.
   const [visibleCount, setVisibleCount] = useState(20);
@@ -1188,13 +1190,15 @@ export default function Home() {
     schedule(() => setPhase("done"), list.length * 200 + 1400);
   }
 
-  async function startSearch(overrideText?: string) {
+  async function startSearch(overrideText?: string, structuredFields?: Partial<StructuredRFQ>) {
     // Will can hand in fresh request text ("find me a 125cc scooter...") -
     // it becomes the visible textarea value AND this search's request.
     const ov = typeof overrideText === "string" ? overrideText.trim() : "";
     if (ov) setRawText(ov);
     const requestText = ov || rawText;
-    if (!requestText.trim()) return;
+    // The tap-to-build panel (F2) supplies fully-structured fields instead of
+    // free text - no requestText needed in that path.
+    if (!structuredFields && !requestText.trim()) return;
     // No coordinates, no search - there is no silent default city anymore.
     if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
       setOriginHint("Set your location first - allow GPS or type your hotel / area.");
@@ -1222,7 +1226,11 @@ export default function Home() {
     const pRes = await fetch("/api/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: requestText }),
+      body: JSON.stringify(
+        structuredFields
+          ? { structured: true, fields: structuredFields }
+          : { text: requestText }
+      ),
     });
     const pData = await pRes.json();
     if (!pRes.ok) {
@@ -1608,7 +1616,34 @@ export default function Home() {
             onExpand={() => setFormOpen(true)}
           />
         )}
-        <section className={`surface mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
+        <section className={`surface relative mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
+          {/* Blur-lock (feature 6.1): the search is gated behind WhatsApp
+              pairing. The card stays mounted (so the onboarding tour anchors
+              still exist) but is blurred + non-interactive under a premium veil
+              until the number is linked. The server already refuses unpaired
+              sends - this makes the gate visible and calm. */}
+          {!waConnected && !restored && phase === "idle" && vendors.length === 0 && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/70 p-5 text-center backdrop-blur-md">
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#25D366] text-white shadow-lg">
+                <Icon name="whatsapp" className="h-7 w-7" />
+              </span>
+              <div>
+                <div className="text-[15px] font-extrabold text-strong">
+                  {t("Pair WhatsApp to start finding deals")}
+                </div>
+                <p className="mx-auto mt-1 max-w-[16rem] text-[12px] font-bold text-soft">
+                  {t("Your agents bargain from your own number, so shops talk to a real traveller. One 30-second link.")}
+                </p>
+              </div>
+              <a
+                href="/profile"
+                className="btn rounded-2xl bg-wagreen-deep px-5 py-2.5 text-[13px] font-extrabold text-white shadow-md hover:opacity-90"
+              >
+                💬 {t("Pair my WhatsApp")}
+              </a>
+            </div>
+          )}
+          <div className={!waConnected && !restored && phase === "idle" && vendors.length === 0 ? "pointer-events-none select-none blur-[2px]" : ""}>
           <label className="text-[12px] font-extrabold text-soft">
             {t("What do you want to rent?")}
           </label>
@@ -1630,6 +1665,33 @@ export default function Home() {
                 {ex.length > 36 ? ex.slice(0, 36) + "..." : ex}
               </button>
             ))}
+          </div>
+
+          {/* Tap-to-build panel (F2 / Step 2): a zero-typing alternative to the
+              free text above. Toggle so first-timers see the guided builder and
+              typists keep the box. Locking runs the SAME search, structured. */}
+          <div className="mt-2">
+            <button
+              onClick={() => setBuilderOpen((s) => !s)}
+              className="text-[11px] font-extrabold text-brandblue underline"
+            >
+              {builderOpen ? t("Prefer typing? Hide the tap builder") : t("⚡ Build your request in taps instead")}
+            </button>
+            {builderOpen && (
+              <div className="mt-2">
+                <RequestBuilder
+                  busy={phase === "profiling" || phase === "running"}
+                  onLock={(fields) => {
+                    if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
+                      setOriginHint(t("Set your location first - allow GPS or type your hotel / area."));
+                      document.querySelector("[data-tour='stay']")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      return;
+                    }
+                    void startSearch(undefined, fields);
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           <div data-tour="stay" className="mt-3">
@@ -1712,6 +1774,7 @@ export default function Home() {
               </button>
             </p>
           )}
+          </div>
         </section>
 
         {vendors.length > 0 && (
@@ -1755,7 +1818,7 @@ export default function Home() {
               )}
             </div>
             <div className="flex flex-wrap gap-1.5">
-              <Tag>{vehicleLabel(rfq.vehicleClass)}</Tag>
+              <Tag>{vehicleLabel(rfq.vehicleClass, rfq.transmission)}</Tag>
               {rfq.engineSizeCc && <Tag>{rfq.engineSizeCc}cc</Tag>}
               {rfq.maxMileageKm && <Tag>&lt;{rfq.maxMileageKm.toLocaleString()} km</Tag>}
               <Tag>
@@ -2071,7 +2134,10 @@ export default function Home() {
           </div>
         )}
 
-        <AdBanner plan={session?.plan} />
+        {/* B10: no ad placeholder on the empty first screen - a 'Sponsored' box
+            is the wrong first impression before a single search has run. The ad
+            still shows in results (line ~2320) once there's real content. */}
+        {vendors.length > 0 && <AdBanner plan={session?.plan} />}
 
         {/* Ultra: bargain in the shop's LOCAL language (optional toggle). */}
         {rfq && (
