@@ -1339,12 +1339,33 @@ export async function disconnectInstance(email: string): Promise<boolean> {
  *  `fast` skips the blocking presence-mimicry wait so the API returns quickly
  *  (used for interactive sends where the UI needs to feel instant; a short
  *  typing indicator still fires, and the guard already spaced the message). */
+/**
+ * A real Evolution /message/sendText success ALWAYS returns a message receipt:
+ * `key.id` (the WhatsApp message id) and/or a `messageTimestamp`. HTTP 200 with
+ * neither means the request was accepted by the HTTP layer but Baileys did not
+ * actually create/dispatch a message - the ghost-send case. An explicit
+ * status:"ERROR" is a hard reject. This is the single source of truth for
+ * "did the message really leave".
+ */
+function hasSendReceipt(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as {
+    key?: { id?: unknown };
+    messageTimestamp?: unknown;
+    messageId?: unknown;
+    status?: unknown;
+  };
+  const status = String(d.status ?? "").toLowerCase();
+  if (status === "error" || status === "failed") return false;
+  return Boolean(d.key?.id || d.messageTimestamp || d.messageId);
+}
+
 export async function sendFromUser(
   email: string,
   to: string,
   message: string,
   fast = false
-): Promise<{ ok: boolean; error?: string; rateLimited?: boolean }> {
+): Promise<{ ok: boolean; error?: string; rateLimited?: boolean; messageId?: string }> {
   const rate = await checkRateLimit(email);
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
 
@@ -1428,14 +1449,32 @@ export async function sendFromUser(
   // "instance not connected" 4xx) where the send provably did not deliver. A
   // status 0 (abort/timeout) is ambiguous - never blindly re-POST it.
   let res = await trySend();
-  if (!res.ok && res.status !== 0) {
+  if ((!res.ok || !hasSendReceipt(res.data)) && res.status !== 0) {
     await evo(email, `/instance/connect/${instance}`);
     await new Promise((r) => setTimeout(r, 1200));
     res = await trySend();
   }
-  if (res.ok) {
+  // GHOST-SEND KILL: HTTP 2xx is NOT proof of delivery. Evolution can return
+  // 200 while Baileys delivered nothing - a stale socket after a Render restart,
+  // an unresolved JID, or a soft-fail on a number that is not on WhatsApp. A
+  // real send ALWAYS carries a message receipt (key.id / messageTimestamp). If
+  // the body has no receipt, treat it as NOT sent so the drain never writes a
+  // phantom "sent" row and the UI never lies. This is the fix for
+  // "UI says messaged 1 shop but WhatsApp shows zero".
+  if (res.ok && hasSendReceipt(res.data)) {
     recordSend(email);
-    return { ok: true };
+    const id = String(res.data?.key?.id ?? res.data?.messageId ?? "");
+    return { ok: true, messageId: id || undefined };
+  }
+  if (res.ok && !hasSendReceipt(res.data)) {
+    // 200 with no receipt = ghost. Surface it as a transient failure so the
+    // drain re-queues (the socket usually recovers on the next tick) instead of
+    // recording a delivery that never happened.
+    const why =
+      String(res.data?.status ?? "").toLowerCase() === "error"
+        ? "WhatsApp rejected the message"
+        : "no delivery confirmation from WhatsApp (ghost send)";
+    return { ok: false, error: why };
   }
   const errText =
     res.data?.response?.message?.toString?.() ??

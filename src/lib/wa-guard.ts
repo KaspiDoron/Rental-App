@@ -70,6 +70,7 @@ export interface SecurityPolicies {
   require_number_on_whatsapp: boolean; // validate the number exists on WA first
   daily_cap_jitter_pct: number;     // ± random daily-cap wobble (anti-pattern)
   ignore_business_hours: boolean;   // 24/7 dial: lift the recipient business-hours CLOCK gate for COLD intros (active replies already skip it). PACING_MODE=fast turns this on.
+  fast_dispatch: boolean;           // owner directive: new users must dispatch their whole intro batch within ~10 min. Lifts BOTH the clock gate AND the Google "closed now" park for COLD intros, so a search fires immediately regardless of shop hours (the message waits unread until the shop opens). Config FAST_DISPATCH; DEFAULT ON.
 }
 
 const DEFAULTS: SecurityPolicies = {
@@ -122,6 +123,12 @@ const DEFAULTS: SecurityPolicies = {
   // night. PACING_MODE=fast (or a DB override) flips this to send the whole
   // 40-intro burst NOW regardless of hour - the owner's explicit 24/7 dial.
   ignore_business_hours: false,
+  // DEFAULT ON (owner directive: dispatch the whole intro batch within ~10 min).
+  // Cold intros fire immediately, paced only by the min-gap - they are NOT
+  // deferred to shop-open hours (the message simply waits unread until the shop
+  // opens). Set FAST_DISPATCH=off to restore conservative business-hours
+  // deferral for cold outreach.
+  fast_dispatch: true,
 };
 
 declare global {
@@ -132,21 +139,28 @@ declare global {
 export async function getPolicies(): Promise<SecurityPolicies> {
   const cached = globalThis.__wd_wa_policies__;
   if (cached && Date.now() - cached.at < 60_000) return cached.value;
-  const [rows, modeRaw] = await Promise.all([
+  const [rows, modeRaw, fastRaw] = await Promise.all([
     sbSelect<{ key: string; value: string }>(
       "whatsapp_security_policies",
       "select=key,value&limit=50"
     ),
     getConfig("PACING_MODE").catch(() => undefined),
+    getConfig("FAST_DISPATCH").catch(() => undefined),
   ]);
   // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
   const mode = normalizePacingMode(modeRaw);
+  // FAST_DISPATCH defaults ON (owner directive). Only an explicit "off"/"false"
+  // restores conservative business-hours deferral for cold intros.
+  const fastDispatch = !["off", "false", "0", "no"].includes(String(fastRaw ?? "").toLowerCase());
   const merged: SecurityPolicies = {
     ...DEFAULTS,
     ...(PACING_PRESETS[mode] as Partial<SecurityPolicies>),
     // FAST is the owner's "send the whole burst NOW, any hour" dial - lift the
     // recipient business-hours clamp for cold intros (replies already skip it).
-    ignore_business_hours: mode === "fast",
+    // fast_dispatch (default ON) additionally lifts the Google "closed now" park
+    // so a new user's whole batch fires within ~10 min regardless of shop hours.
+    ignore_business_hours: mode === "fast" || fastDispatch,
+    fast_dispatch: fastDispatch,
   };
   for (const r of rows) {
     const k = r.key as keyof SecurityPolicies;
@@ -1199,7 +1213,12 @@ export async function guardOutbound(opts: {
     ).catch(() => []);
     const activelyChatting = recentInbound.length > 0;
     const { off, known } = resolveOffset(opts.toDigits, region);
-    if (!activelyChatting && opts.shopOpenNow === false) {
+    // FAST DISPATCH (owner directive): a new user's whole batch must go out
+    // within ~10 min, so cold intros are NOT deferred to shop-open - even when
+    // Google reports the shop closed right now. The message simply waits unread
+    // until they open. This lifts the Google-closed park below (the clock gate
+    // is lifted separately via ignore_business_hours).
+    if (!activelyChatting && opts.shopOpenNow === false && !p.fast_dispatch) {
       // Google says closed. If it is DAYTIME at the shop (lunch break, late
       // opening), retry within the hour instead of parking until tomorrow
       // morning - the old behavior turned a 13:00 opening into a 22h wait.
