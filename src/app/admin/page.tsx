@@ -694,8 +694,12 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
-        {(["command", "analytics", "agents", "ops", "keys", "users", "feedback", "billing", "data"] as const)
-          .filter((t) => t !== "ops" || isOwner)
+        {/* Legacy "Agents" (graph Pipeline Studio) and "Ops" (graph-era Ops
+            Center) tabs are RETIRED from the workspace nav - the app runs on the
+            single-pass engine now, so the old graph-pipeline surfaces are no
+            longer shown. Their code remains for data/learning continuity but is
+            not reachable from the UI. */}
+        {(["command", "analytics", "keys", "users", "feedback", "billing", "data"] as const)
           .map((t) => (
           <button
             key={t}
@@ -704,7 +708,7 @@ export default function AdminPage() {
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t === "command" ? "🎯 command" : t === "agents" ? "🤖 agents" : t === "ops" ? "🧠 ops" : t}
+            {t === "command" ? "🎯 command" : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
