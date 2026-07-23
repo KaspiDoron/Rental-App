@@ -488,11 +488,17 @@ export async function emailForInstance(instance: string): Promise<string | null>
   return rows[0]?.email ?? null;
 }
 
+/** Real-world WhatsApp pairing codes die in about a minute. The app treats a
+ *  shown code as live for this long; past it, any retry takes the hard
+ *  logout+delete+recreate path so the user always types a CURRENT code. */
+export const PAIRING_TTL_MS = 55_000;
+
 async function saveSession(
   email: string,
   instance: string,
   status: string,
-  hostUrl?: string
+  hostUrl?: string,
+  pairingIssuedAt?: Date | null
 ) {
   await sbInsert(
     "wa_sessions",
@@ -506,6 +512,9 @@ async function saveSession(
         instance_name: instance,
         status,
         ...(hostUrl ? { host_url: hostUrl } : {}),
+        ...(pairingIssuedAt !== undefined
+          ? { pairing_code_issued_at: pairingIssuedAt ? pairingIssuedAt.toISOString() : null }
+          : {}),
         updated_at: new Date().toISOString(),
       },
     ],
@@ -722,11 +731,32 @@ export async function connectInstance(
   state?: string;
   qr?: string;
   pairingCode?: string;
+  /** Milliseconds the returned pairing code is still expected to be valid. */
+  pairingExpiresInMs?: number;
+  /** True when the Evolution host itself is down/restarting (crash-loop, not a
+   *  user problem) - the client shows an honest "server restarting" state. */
+  hostDown?: boolean;
   error?: string;
 }> {
   const instance = instanceNameFor(email);
   const host = await resolveHost(email);
   if (!host) return { ok: false, error: "The WhatsApp connector is not set up yet." };
+
+  // HONESTY GATE (B1): with a single host there is no failover, and resolveHost
+  // skips probing - so probe HERE. Pairing against a crash-looping server just
+  // mints codes that die mid-handshake with zero signal; tell the user the
+  // truth instead of showing an undifferentiated timeout.
+  {
+    const health = await hostHealthDetail(host);
+    if (!health.ok) {
+      return {
+        ok: false,
+        hostDown: true,
+        error:
+          "Our WhatsApp server is restarting right now - nothing is wrong on your side. Give it a minute, then tap Try again.",
+      };
+    }
+  }
   const token = await webhookToken();
   const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
   const digits = digitsOnly(phone);
@@ -745,15 +775,21 @@ export async function connectInstance(
   // Connect tap (very common in the signup funnel: impatient double-tap, a
   // re-render, a refocused tab) used to logout+delete the in-progress
   // instance - destroying the exact pairing the phone was about to complete
-  // ("my WhatsApp disconnected by itself"). Within a 90s grace window we
-  // RE-POLL the same instance for its current code instead of wiping it.
+  // ("my WhatsApp disconnected by itself"). While the SHOWN CODE is still
+  // inside its real ~55s validity window we RE-POLL the same instance instead
+  // of wiping it. Past the TTL the old 90s grace was actively harmful: it
+  // handed back the SAME dead code ("Invalid code, try again") - so an
+  // expired code now always falls through to the clean hard reset below.
+  let codeAgeMs = NaN;
   if (existing === "connecting") {
-    const row = await sbSelect<{ updated_at: string | null }>(
+    const row = await sbSelect<{ updated_at: string | null; pairing_code_issued_at?: string | null }>(
       "wa_sessions",
-      `select=updated_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+      `select=updated_at,pairing_code_issued_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
     ).catch(() => []);
-    const startedMs = row[0]?.updated_at ? Date.parse(row[0].updated_at) : NaN;
-    if (Number.isFinite(startedMs) && Date.now() - startedMs < 90_000) {
+    const issued = row[0]?.pairing_code_issued_at ?? row[0]?.updated_at;
+    const startedMs = issued ? Date.parse(issued) : NaN;
+    codeAgeMs = Number.isFinite(startedMs) ? Date.now() - startedMs : NaN;
+    if (Number.isFinite(codeAgeMs) && codeAgeMs < PAIRING_TTL_MS) {
       const conn = await evoFetch(
         host,
         `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
@@ -779,7 +815,14 @@ export async function connectInstance(
         return { ok: true, state: "open" };
       }
       if (pairing || qrNow) {
-        return { ok: true, state: "connecting", qr: qrNow, pairingCode: pairing };
+        return {
+          ok: true,
+          state: "connecting",
+          qr: qrNow,
+          pairingCode: pairing,
+          // Remaining life of the ALREADY-issued code, not a fresh window.
+          pairingExpiresInMs: Math.max(1_000, PAIRING_TTL_MS - codeAgeMs),
+        };
       }
       // No code from the live handshake - fall through to the clean recreate
       // (the pairing is likely genuinely wedged).
@@ -928,16 +971,25 @@ export async function connectInstance(
   }
 
   const state = await connectionState(email);
-  await saveSession(email, instance, state ?? "connecting", host.url);
+  // Stamp WHEN this fresh code was minted so retries can tell live from dead
+  // (the whole B1 "Invalid code" class). No code -> clear the stamp.
+  await saveSession(
+    email,
+    instance,
+    state ?? "connecting",
+    host.url,
+    pairingCode ? new Date() : null
+  );
 
   return {
     ok: true,
     state: state ?? "connecting",
     qr,
     pairingCode,
+    ...(pairingCode ? { pairingExpiresInMs: PAIRING_TTL_MS } : {}),
     error:
       !pairingCode && !qr
-        ? "Couldn't get a code yet - your Render (Evolution) server may be waking up. Wait ~30 seconds and tap Try again."
+        ? "The WhatsApp server didn't hand out a code - wait ~30 seconds and tap Try again."
         : !pairingCode && qr
         ? "Code not available right now - use the QR tab from a computer, or tap Try again."
         : undefined,

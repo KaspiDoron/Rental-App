@@ -217,6 +217,9 @@ create index if not exists wa_sessions_instance_idx
   on public.wa_sessions (instance_name);
 -- If you already ran an older schema, run this once:
 alter table public.wa_sessions add column if not exists host_url text;
+-- Pairing-code freshness (B1): when the code shown to the user was minted, so
+-- the app can enforce a real ~55s TTL instead of guessing from updated_at.
+alter table public.wa_sessions add column if not exists pairing_code_issued_at timestamptz;
 
 -- ---- Bookings ---------------------------------------------------------------
 create table if not exists public.bookings (
@@ -372,6 +375,22 @@ create index if not exists wa_outbox_due_idx on public.wa_outbox (not_before asc
 -- The per-sender pending-count check in the outbound guard runs on every send.
 create index if not exists wa_outbox_sender_idx on public.wa_outbox (sender_key);
 alter table public.wa_outbox enable row level security;
+
+-- B4 SEND-INTEGRITY: enforce at most ONE pending automated row per (sender,shop)
+-- at the DATABASE level - the only guarantee that survives the 7 concurrent
+-- drain/enqueue trigger points (app-level SELECT-then-INSERT checks all race).
+-- Scoped to automated kinds; user-typed ('custom','human-manual') may coexist,
+-- mirroring parkOutboxOnce's own exception list. Run the de-dup cleanup FIRST
+-- (a plain CREATE UNIQUE INDEX fails if duplicates already exist).
+delete from public.wa_outbox a using public.wa_outbox b
+  where a.id > b.id
+    and a.sender_key = b.sender_key
+    and a.to_number = b.to_number
+    and coalesce(a.meta->>'kind','') not in ('custom','human-manual')
+    and coalesce(b.meta->>'kind','') not in ('custom','human-manual');
+create unique index if not exists wa_outbox_pending_auto_uidx
+  on public.wa_outbox (sender_key, to_number)
+  where coalesce(meta->>'kind','') not in ('custom','human-manual');
 
 -- ---- WA idle pause (session quiets down while the app is not in use) ----------
 alter table public.wa_sessions add column if not exists last_active timestamptz;

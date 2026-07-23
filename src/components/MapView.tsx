@@ -2,6 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import { lockBodyScroll } from "@/lib/scroll-lock";
 import {
   MapContainer,
   TileLayer,
@@ -241,10 +242,9 @@ export default function MapView({
   // Lock the page behind the fullscreen map so touch-scroll doesn't move it.
   useEffect(() => {
     if (!full) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const unlock = lockBodyScroll();
     return () => {
-      document.body.style.overflow = prev;
+      unlock();
     };
   }, [full]);
 

@@ -194,9 +194,27 @@ export async function runDirector(args: {
 
   // ---- clamps: the model proposes, the code disposes ----
   if (action === "silent") {
+    // B7 CLAMP: 'silent' was the ONE unclamped verdict. The LLM could pick
+    // silence over a mandatory higher-priority legal move - production case:
+    // a first-turn decline ("I am a bicycle rental - try MASCO") owes exactly
+    // one warm goodbye (d-declined-close, priority 15) before the silent edge
+    // (16), but a free 'silent' skipped it and froze the thread forever.
+    // Silence is only honored when a silent edge is itself the TOP legal
+    // move; otherwise the deterministic ladder wins, same as act/wait-hold.
+    const top = legal[0];
+    if (top && top.toKind !== "silent") {
+      return {
+        action: "act",
+        edgeId: top.edgeId,
+        reasoning:
+          (clip(parsed.reasoning) || "director chose silence") +
+          " - clamped to the ladder: a mandatory non-silent move is legal first",
+        fromAi: true,
+      };
+    }
     return {
       action: "silent",
-      edgeId: null,
+      edgeId: top?.edgeId ?? null,
       reasoning: clip(parsed.reasoning) || "director chose silence",
       fromAi: true,
     };

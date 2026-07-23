@@ -863,6 +863,12 @@ export async function guardOutbound(opts: {
   shopOpenNow?: boolean;    // Google "open now" truth - overrides the clock
   meta?: Record<string, unknown>; // thread context for queued sends
   plan?: string;            // plan-tiered capacity (falls back to meta.plan)
+  // B4: text pulled from wa_outbox was ALREADY humanized once at enqueue. The
+  // drain must NOT re-run the unseeded persona/variance pass on it - doing so
+  // mutates the text on every drainer, which changes its idempotency slot hash
+  // and lets two concurrent drainers both send. When true, only the idempotent
+  // stripWaFormatting runs; the stored text is delivered verbatim.
+  alreadyHumanized?: boolean;
 }): Promise<GuardVerdict> {
   const region = opts.region ?? (typeof opts.meta?.region === "string" ? (opts.meta.region as string) : undefined);
   const plan = opts.plan ?? (typeof opts.meta?.plan === "string" ? (opts.meta.plan as string) : undefined);
@@ -873,8 +879,13 @@ export async function guardOutbound(opts: {
   // (humanizeVariant). stripWaFormatting is the LAST step, so no markdown/`*`
   // artifact from ANY upstream stage (composer or variance) can reach the shop.
   // A human's own typed message is only formatting-scrubbed, never reworded.
+  // B4: an already-humanized (parked) row is delivered verbatim - only the
+  // idempotent formatting scrub runs, so its slot hash stays STABLE across the
+  // concurrent drainers and exactly one delivery happens.
   const text = opts.auto
-    ? stripWaFormatting(humanizeVariant(personaHumanize(opts.text)))
+    ? opts.alreadyHumanized
+      ? stripWaFormatting(opts.text)
+      : stripWaFormatting(humanizeVariant(personaHumanize(opts.text)))
     : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must
@@ -898,6 +909,26 @@ export async function guardOutbound(opts: {
           meta: { ...(opts.meta ?? {}), reason },
         },
       ]);
+      // B4: the partial unique index (sender_key,to_number) rejects a SECOND
+      // pending automated row for the same shop. A failed insert is therefore
+      // ambiguous: DB outage, OR a pending row for this shop already exists (a
+      // genuine duplicate we WANT to suppress). Disambiguate: if a pending
+      // automated row is already there, this send is effectively queued - report
+      // success against that row instead of creating a duplicate.
+      if (!parked) {
+        const kind = typeof opts.meta?.kind === "string" ? (opts.meta.kind as string) : "";
+        if (kind !== "custom" && kind !== "human-manual") {
+          const existing = await sbSelect<{ not_before: string }>(
+            "wa_outbox",
+            `select=not_before&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
+              `&to_number=eq.${encodeURIComponent(opts.toDigits)}` +
+              `&order=not_before.asc&limit=1`
+          ).catch(() => []);
+          if (existing[0]) {
+            return { allow: false, reason: `${reason} - already queued`, queuedUntil: existing[0].not_before, text };
+          }
+        }
+      }
       // Only claim queuedUntil when the row ACTUALLY persisted. If the insert
       // failed (DB blip / the 8s fetch timeout), returning queuedUntil would
       // make the drain's needsRepark believe the row is safely parked and DROP
@@ -1460,6 +1491,8 @@ export async function drainOutbox(
       auto: rowKind !== "custom",
       queueIfBlocked: true,
       meta: row.meta ?? undefined,
+      // B4: row.body was humanized once when it was parked - do NOT re-vary it.
+      alreadyHumanized: true,
     });
     if (!verdict.allow) {
       // The gate either RE-QUEUED the row (verdict.queuedUntil set) or

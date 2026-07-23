@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { lockBodyScroll } from "@/lib/scroll-lock";
 
 // Shared popup shell: blurred backdrop, tap-outside-to-close (every popup in
 // the app must close on backdrop tap), Escape support, body scroll lock.
@@ -55,11 +56,10 @@ export function Modal({
       }
     };
     document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const unlock = lockBodyScroll();
     return () => {
       document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
+      unlock();
       prevFocus?.focus?.();
     };
   }, [onClose]);

@@ -665,7 +665,31 @@ export default function Home() {
           pendingRemovals.current.delete(k);
         }
       }
-      setQueueItems((d.queue ?? []).filter((i: { id: number; vendorId: string | null }) => !tombstoned(i)));
+      // B4 client mitigation: collapse any duplicate rows for the same shop to
+      // ONE entry (keep the earliest-due), so a legacy duplicate outbox row can
+      // never render as two identical queue cards. The DB unique index is the
+      // real guard; this keeps older sessions clean too.
+      {
+        const rows = (d.queue ?? []).filter(
+          (i: { id: number; vendorId: string | null }) => !tombstoned(i)
+        );
+        const byVendor = new Map<string, (typeof rows)[number]>();
+        const deduped: typeof rows = [];
+        for (const r of rows) {
+          const key = r.vendorId ? `v:${r.vendorId}` : `n:${r.toNumber}`;
+          const prev = byVendor.get(key);
+          if (!prev) {
+            byVendor.set(key, r);
+            deduped.push(r);
+          } else if (new Date(r.notBefore).getTime() < new Date(prev.notBefore).getTime()) {
+            // Replace the kept row with the earlier-due one, in place.
+            const idx = deduped.indexOf(prev);
+            if (idx >= 0) deduped[idx] = r;
+            byVendor.set(key, r);
+          }
+        }
+        setQueueItems(deduped);
+      }
       setIntroBudget(d.introBudget ?? null);
       // Shops the user explicitly paused (removed queued messages) - the card
       // says so instead of pretending nothing happened.

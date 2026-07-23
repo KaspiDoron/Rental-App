@@ -34,6 +34,12 @@ export function WaConnect({
   const [method, setMethod] = useState<"code" | "qr">("code");
   const [showTerms, setShowTerms] = useState(false);
   const [waitStep, setWaitStep] = useState(0);
+  const [hostDown, setHostDown] = useState(false);
+  // Pairing codes really die in ~1 minute (B1). Track expiry + a live
+  // countdown, and auto-mint a fresh code when the shown one lapses.
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const autoRefreshes = useRef(0);
   const poll = useRef<ReturnType<typeof setInterval>>();
 
   // Plain-language, reassuring status shown while WhatsApp finishes linking, so
@@ -61,21 +67,57 @@ export function WaConnect({
     return () => clearInterval(poll.current);
   }, []);
 
-  async function connect() {
+  // Live countdown on the shown pairing code; when it lapses, auto-mint a
+  // fresh one (bounded - a down server must not cause an infinite loop).
+  useEffect(() => {
+    if (!expiresAt || !pairingCode) {
+      setSecondsLeft(null);
+      return;
+    }
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left <= 0) {
+        clearInterval(id);
+        setExpiresAt(null);
+        if (autoRefreshes.current < 4) {
+          autoRefreshes.current += 1;
+          void connect(true);
+        } else {
+          setPairingCode(null);
+          setErr(t("The code expired - tap Try again for a fresh one."));
+        }
+      }
+    }, 500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expiresAt, pairingCode]);
+
+  async function connect(fresh = false) {
     setBusy(true);
     setErr(null);
     try {
       const res = await fetch("/api/wa/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, ...(fresh ? { fresh: true } : {}) }),
       });
       const d = await res.json();
       if (!d.available) {
         setErr(d.error ?? t("The WhatsApp connector is not set up yet."));
         return;
       }
-      if (d.pairingCode) setPairingCode(d.pairingCode);
+      // Honest infra state: the WhatsApp server itself is down/restarting.
+      setHostDown(Boolean(d.hostDown));
+      if (d.hostDown) {
+        setErr(d.error ?? t("Our WhatsApp server is restarting - give it a minute, then tap Try again."));
+        return;
+      }
+      if (d.pairingCode) {
+        setPairingCode(d.pairingCode);
+        const ttl = Number(d.pairingExpiresInMs);
+        setExpiresAt(Number.isFinite(ttl) && ttl > 0 ? Date.now() + ttl : null);
+      }
       if (d.qr) setQr(d.qr);
       // Soft error (reachable but no code/QR yet) - surface it but keep the UI.
       if (d.error) setErr(d.error);
@@ -90,6 +132,7 @@ export function WaConnect({
           clearInterval(poll.current);
           setQr(null);
           setPairingCode(null);
+          setExpiresAt(null);
           onConnected?.();
         }
       }, 3000);
@@ -244,7 +287,7 @@ export function WaConnect({
             </span>
           </div>
           <button
-            onClick={connect}
+            onClick={() => void connect()}
             disabled={busy || !consent}
             className="btn w-full rounded-2xl bg-wagreen-deep py-3 text-[14px] font-extrabold text-white shadow-md hover:opacity-90 disabled:opacity-50"
           >
@@ -293,8 +336,18 @@ export function WaConnect({
                     {copied ? `✓ ${t("Copied")}` : t("Tap to copy")}
                   </span>
                 </button>
-              ) : (
+              ) : null}
+              {pairingCode && secondsLeft !== null && (
+                <p className="mt-1.5 text-center text-[11px] font-bold text-soft">
+                  {secondsLeft > 10 ? "⏳" : "⚠️"}{" "}
+                  {t("Enter it within")} <span className="font-mono text-brandblue">{secondsLeft}s</span>
+                  {" - "}
+                  {t("a fresh code appears here automatically when this one expires.")}
+                </p>
+              )}
+              {!pairingCode && (
                 <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+                  {hostDown ? "🔧 " : ""}
                   {err ||
                     t("Preparing your code... tap Try again in a few seconds. If it keeps failing, use the QR tab from a computer.")}
                 </p>
@@ -336,11 +389,22 @@ export function WaConnect({
               <span>{WAIT_STEPS[waitStep]}</span>
             </div>
             <p className="mt-1 text-[10px] font-bold text-brandblue/80">
-              {t("Usually about 3 minutes. You can keep the app open - it turns green by itself when done.")}
+              {t("The whole link takes about 2 minutes. Type each code while its timer runs - this screen turns green by itself when done.")}
             </p>
           </div>
           <div className="mt-2 flex items-center justify-end">
-            <button onClick={connect} disabled={busy} className="btn btn-sm chip rounded-xl bg-card px-3 text-[11px] font-bold text-brandblue disabled:opacity-60">
+            <button
+              onClick={() => {
+                autoRefreshes.current = 0;
+                // A still-valid on-screen code must not be destroyed by an
+                // impatient tap (the server soft-repolls it); a dead or missing
+                // code forces a genuinely fresh instance + code.
+                const codeStillLive = Boolean(pairingCode && secondsLeft !== null && secondsLeft > 0);
+                void connect(!codeStillLive);
+              }}
+              disabled={busy}
+              className="btn btn-sm chip rounded-xl bg-card px-3 text-[11px] font-bold text-brandblue disabled:opacity-60"
+            >
               {busy ? <LoadingDots /> : `↻ ${t("Try again / new code")}`}
             </button>
           </div>

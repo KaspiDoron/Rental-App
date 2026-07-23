@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { lockBodyScroll } from "@/lib/scroll-lock";
 
 type Phase = "ready" | "running" | "over";
 
@@ -261,11 +262,10 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
       }
     };
     window.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const unlock = lockBodyScroll();
     return () => {
       window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
+      unlock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

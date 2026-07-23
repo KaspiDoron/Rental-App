@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { connectInstance, evolutionConfigured } from "@/lib/evolution";
+import { connectInstance, evolutionConfigured, resetInstance } from "@/lib/evolution";
 
 // Start (or resume) the signed-in user's personal WhatsApp session: creates
 // the Evolution instance and returns a QR code to scan from the Profile page.
@@ -34,6 +34,12 @@ export async function POST(req: Request) {
       provider: profile?.provider ?? "email",
       acceptedTerms: true,
     }).catch(() => {});
+  }
+  // fresh=true (the client's auto-refresh when a shown code expired, or an
+  // explicit "New code" tap): guarantee a brand-new session/code by hard
+  // resetting first - the previously dead-code path (B1).
+  if (body.fresh === true) {
+    await resetInstance(session.email).catch(() => {});
   }
   const result = await connectInstance(session.email, origin, phone);
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });

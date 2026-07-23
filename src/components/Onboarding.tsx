@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
+import { lockBodyScroll } from "@/lib/scroll-lock";
 
 interface Step {
   emoji: string;
@@ -114,11 +115,10 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const ua = navigator.userAgent;
     setOs(/android/i.test(ua) ? "android" : "ios");
-    // Lock background scroll for the duration of the tour (like Modal).
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    // Lock background scroll for the duration of the tour (shared iOS-safe lock).
+    const unlock = lockBodyScroll();
     return () => {
-      document.body.style.overflow = prev;
+      unlock();
     };
   }, []);
 

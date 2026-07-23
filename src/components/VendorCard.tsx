@@ -79,6 +79,11 @@ function VendorCardInner({
   // setTimeout kept firing stage changes after the card was gone.
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => () => timersRef.current.forEach(clearTimeout), []);
+  // B3: a SYNCHRONOUS in-flight guard. `disabled` derives from React state that
+  // only lands after a render commit, leaving a window where two near-instant
+  // taps both dispatch a fetch (-> two outbox rows / a double send). This ref
+  // flips before the first await, so the second tap is dropped immediately.
+  const rfqInFlight = useRef(false);
   // "Already asked" survives navigation: it derives from the vendor's stage
   // (persisted with the search), not from this component's local state.
   const alreadyAsked = ["rfq-sent", "awaiting-response", "negotiating"].includes(
@@ -124,6 +129,8 @@ function VendorCardInner({
   // official Cloud API, thread logged so the reply lands here automatically.
   async function sendRfq() {
     if (!rfq) return;
+    if (rfqInFlight.current) return; // B3: drop a double-tap before the first await
+    rfqInFlight.current = true;
     setRfqState("sending");
     try {
       const res = await fetch("/api/outreach", {
@@ -144,7 +151,14 @@ function VendorCardInner({
         }),
       });
       const d = await res.json();
-      if (d.sent) {
+      if (d.duplicate) {
+        // B3: the server recognised this exact ask is already on its way. This
+        // is NOT a failure - the old code fell through to the generic "brief
+        // hiccup" toast (the response has no `error` field), scaring the user.
+        // Reflect the real state: the shop was already contacted.
+        setRfqState("sent");
+        onStage(vendor.id, "awaiting-response");
+      } else if (d.sent) {
         setRfqState("sent");
         onStage(vendor.id, "rfq-sent");
         timersRef.current.push(setTimeout(() => onStage(vendor.id, "awaiting-response"), 1200));
@@ -189,6 +203,8 @@ function VendorCardInner({
       // never proof the user's WhatsApp is unlinked. Transient hiccup.
       setRfqState("rate-limited");
       setRfqError(t("Couldn't reach the server just now - it retries automatically. Try again in a moment."));
+    } finally {
+      rfqInFlight.current = false; // B3: release the synchronous lock
     }
   }
 
