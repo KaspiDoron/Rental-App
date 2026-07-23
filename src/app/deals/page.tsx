@@ -9,7 +9,6 @@ import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Icon } from "@/components/icons";
 import { WillAvatar } from "@/components/will/WillAvatar";
-import { WillCompanion } from "@/components/will/WillCompanion";
 import { LanguageButton } from "@/components/LanguageButton";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SkeletonCard } from "@/components/Skeleton";
@@ -566,19 +565,8 @@ export default function DealsPage() {
         {!loading && <SiteFooter />}
       </div>
 
-      {/* Will follows the journey - peeking in from the edge */}
-      {!loading && (
-        <WillCompanion
-          alert={sessions.some((s) => s.attention.length > 0)}
-          note={
-            sessions.some((s) => s.attention.length > 0)
-              ? t("One of your hunts needs your eye - tap me.")
-              : sessions.length === 0
-                ? t("Want me to start your first hunt?")
-                : t("Need another hunt? Just say the word.")
-          }
-        />
-      )}
+      {/* The floating Will widget was removed (R4) - Will is now an integrated
+          inline guide on the Find-deals funnel, not a disruptive edge widget. */}
 
       {feedbackOpen && <FeedbackModal email={email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}

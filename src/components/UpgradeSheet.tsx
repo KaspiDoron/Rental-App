@@ -28,6 +28,42 @@ function planPrice(planId: string, code: string): { now: string; list: string } 
   return { now: fromIls(ils, code), list: fromIls(ils * 5, code) }; // 80% launch off
 }
 
+// The messaging capacity of each plan, in plain language. Mirrors PLAN_CAPACITY
+// in src/lib/wa/capacity.ts (free 10/6h, pro 30/4h, ultra 40/3h). ULTRA is the
+// visual max the meter fills against.
+const CAPACITY: Record<string, { newContacts: number; windowHours: number; extra: string }> = {
+  free: { newContacts: 10, windowHours: 6, extra: "English messaging" },
+  pro: { newContacts: 30, windowHours: 4, extra: "3x the shops, refreshes faster" },
+  ultra: { newContacts: 40, windowHours: 3, extra: "Most shops, fastest refresh, local language" },
+};
+const MAX_CONTACTS = 40;
+
+function PlanCapacityMeter({ planId, highlight }: { planId: string; highlight?: boolean }) {
+  const c = CAPACITY[planId] ?? CAPACITY.free;
+  const pct = Math.round((c.newContacts / MAX_CONTACTS) * 100);
+  return (
+    <div className={`mt-3 rounded-2xl p-3 ${highlight ? "bg-brandblue-soft" : "bg-card2"}`}>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[13px] font-extrabold text-strong">
+          {c.newContacts} <span className="text-[11px] font-bold text-soft">new shops</span>
+        </span>
+        <span className="text-[11px] font-bold text-faint">every {c.windowHours}h, rolling</span>
+      </div>
+      <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-line/60">
+        <div
+          className={`h-full rounded-full ${planId === "ultra" ? "badge-ultra" : "bg-brandblue"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="mt-1.5 text-[11px] font-semibold leading-snug text-soft">
+        You can start conversations with up to <b>{c.newContacts}</b> brand-new shops in any{" "}
+        <b>{c.windowHours}-hour</b> window - and the whole batch goes out in the first ~10 minutes.
+        Replies never count against it. {c.extra}.
+      </p>
+    </div>
+  );
+}
+
 export function PlanCard({
   plan,
   onSubscribe,
@@ -112,6 +148,10 @@ export function PlanCard({
           <Icon name="sparkles" className="h-3 w-3" /> Launch pricing · {plan.discountPct}% off
         </div>
       )}
+      {/* R5: crystal-clear capacity meter - the 10/30/40 limits explained in
+          plain "X new shops every Y hours", with a visual bar so buyers see
+          exactly what more they get. */}
+      <PlanCapacityMeter planId={plan.id} highlight={plan.highlight} />
       <ul className="mt-2 space-y-1">
         {plan.features.map((f) => {
           // Make the marquee Ultra feature - agents talking in the shop's own

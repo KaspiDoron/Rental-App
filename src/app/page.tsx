@@ -30,7 +30,7 @@ import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
 import type { WillContext } from "@/lib/will-commands";
-import { WillCompanion } from "@/components/will/WillCompanion";
+import { WillGuide, willStageFrom } from "@/components/will/WillGuide";
 import { WillSheet } from "@/components/will/WillSheet";
 import { CompareSheet } from "@/components/will/CompareSheet";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
@@ -1616,6 +1616,22 @@ export default function Home() {
             onExpand={() => setFormOpen(true)}
           />
         )}
+        {/* Will as an INTEGRATED, inline guide (R4): a stage-aware banner that
+            walks the user step-by-step through the lifecycle. Replaces the
+            floating side widget. */}
+        {session && !willOpen && (
+          <WillGuide
+            stage={willStageFrom({
+              waConnected,
+              phase,
+              vendorCount: vendors.length,
+              offerCount,
+              closing: Boolean(bookingVendor),
+            })}
+            busy={will.busy || phase === "profiling" || phase === "running"}
+            onOpen={() => setWillOpen(true)}
+          />
+        )}
         <section className={`surface relative mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
           {/* Blur-lock (feature 6.1): the search is gated behind WhatsApp
               pairing. The card stays mounted (so the onboarding tour anchors
@@ -2473,15 +2489,6 @@ export default function Home() {
 
       {/* Will - the living companion on the edge of the screen. The TabBar is
           the primary bottom element; Will's full chat opens from him. */}
-      {session && !willOpen && (
-        <WillCompanion
-          busy={will.busy || phase === "profiling" || phase === "running"}
-          alert={riskCount > 0}
-          celebrateKey={offerCount}
-          note={willNote}
-          onOpen={() => setWillOpen(true)}
-        />
-      )}
       {willOpen && (
         <WillSheet
           messages={will.messages}
