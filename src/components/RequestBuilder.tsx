@@ -76,6 +76,33 @@ function Stepper({ value, min, max, onChange, suffix }: { value: number; min: nu
   );
 }
 
+// BUG 4: the rental duration must be directly EDITABLE - not only nudged one day
+// at a time. This control keeps the -/+ steppers but the number itself is a
+// typeable input (clamped 1-90), so a 30-day rental is one keystroke.
+function DurationField({ value, onChange, t }: { value: number; onChange: (n: number) => void; t: (s: string) => string }) {
+  const clamp = (n: number) => Math.max(1, Math.min(90, n));
+  return (
+    <div className="inline-flex items-center gap-2 rounded-2xl border-2 border-line bg-card px-2 py-1.5">
+      <button type="button" aria-label="decrease" onClick={() => onChange(clamp(value - 1))} className="btn h-8 w-8 rounded-xl bg-card2 text-xl font-extrabold text-strong">−</button>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={90}
+        value={value}
+        aria-label={t("Rental days")}
+        onChange={(e) => {
+          const n = parseInt(e.target.value, 10);
+          if (Number.isFinite(n)) onChange(clamp(n));
+        }}
+        className="w-12 bg-transparent text-center text-[15px] font-extrabold text-strong outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+      />
+      <span className="text-[12px] font-bold text-faint">{t("days")}</span>
+      <button type="button" aria-label="increase" onClick={() => onChange(clamp(value + 1))} className="btn h-8 w-8 rounded-xl bg-card2 text-xl font-extrabold text-strong">+</button>
+    </div>
+  );
+}
+
 export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<StructuredRFQ>) => void; busy?: boolean }) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
@@ -92,16 +119,19 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
 
   const isTwoWheel = vehicle === "scooter" || vehicle === "motorbike";
 
-  // The step list adapts to the vehicle (a car skips the cc/transmission-for-bikes framing).
-  const steps = useMemo(() => {
-    const base = ["vehicle", "transmission", "specs", "extras", "lock"] as const;
-    return base;
-  }, []);
+  // BUG 4: the gearbox is IMPLIED for two-wheelers (scooter = automatic,
+  // motorbike = manual), so the transmission step is redundant for them and is
+  // shown ONLY for cars, where auto vs manual is a real choice. The step list is
+  // keyed by NAME (not a fixed index) so it can shrink/grow with the vehicle.
+  type StepName = "vehicle" | "transmission" | "specs" | "extras" | "lock";
+  const steps = useMemo<StepName[]>(() => {
+    return vehicle === "car"
+      ? ["vehicle", "transmission", "specs", "extras", "lock"]
+      : ["vehicle", "specs", "extras", "lock"];
+  }, [vehicle]);
   const total = steps.length;
-  const canNext = (() => {
-    if (step === 0) return vehicle !== null;
-    return true; // every later step is optional
-  })();
+  const current: StepName = steps[Math.min(step, total - 1)] ?? "vehicle";
+  const canNext = current === "vehicle" ? vehicle !== null : true;
 
   function go(delta: number) {
     setStep((s) => Math.min(total - 1, Math.max(0, s + delta)));
@@ -127,7 +157,14 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
   }
 
   const ccOptions = vehicle === "motorbike" ? MOTORBIKE_CC : SCOOTER_CC;
-  const stepTitle = ["Pick your ride", "Gears", "Size & spec", "Extras", "Lock it in"][step];
+  const TITLES: Record<StepName, string> = {
+    vehicle: "Pick your ride",
+    transmission: "Gears",
+    specs: "Size & spec",
+    extras: "Extras",
+    lock: "Lock it in",
+  };
+  const stepTitle = TITLES[current];
 
   return (
     <div data-tour="builder" className="overflow-hidden rounded-2xl border-2 border-line bg-card2">
@@ -143,8 +180,10 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
       </div>
 
       <div className="min-h-[200px] p-3">
-        {/* STEP 1 - vehicle */}
-        {step === 0 && (
+        {/* STEP - vehicle. Picking a two-wheeler stamps its implied gearbox
+            (scooter = automatic, motorbike = manual) so no gearbox step is
+            needed; a car defaults to "any" and gets the gearbox step. */}
+        {current === "vehicle" && (
           <div className="space-y-2">
             <OptionCard emoji="🛵" title={t("Scooter")} sub={t("Automatic, easy - the traveller favourite")} active={vehicle === "scooter"} onClick={() => { setVehicle("scooter"); setCc(null); setTransmission("automatic"); }} />
             <OptionCard emoji="🏍️" title={t("Motorbike")} sub={t("Manual gears, more power")} active={vehicle === "motorbike"} onClick={() => { setVehicle("motorbike"); setCc(null); setTransmission("manual"); }} />
@@ -152,8 +191,8 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
           </div>
         )}
 
-        {/* STEP 2 - transmission */}
-        {step === 1 && (
+        {/* STEP - transmission (cars only) */}
+        {current === "transmission" && (
           <div className="space-y-2">
             <p className="mb-1 text-[12px] font-bold text-soft">{t("Which gearbox do you want?")}</p>
             <OptionCard title={t("Either is fine")} sub={t("Cheapest wins")} active={transmission === "any"} onClick={() => setTransmission("any")} />
@@ -162,8 +201,8 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
           </div>
         )}
 
-        {/* STEP 3 - specs */}
-        {step === 2 && (
+        {/* STEP - specs */}
+        {current === "specs" && (
           <div className="space-y-3">
             {isTwoWheel ? (
               <>
@@ -191,13 +230,13 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
             )}
             <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
               <span className="text-[13px] font-extrabold text-strong">{t("For how many days?")}</span>
-              <Stepper value={days} min={1} max={90} onChange={setDays} suffix={t("d")} />
+              <DurationField value={days} onChange={setDays} t={t} />
             </div>
           </div>
         )}
 
-        {/* STEP 4 - extras */}
-        {step === 3 && (
+        {/* STEP - extras */}
+        {current === "extras" && (
           <div className="space-y-3">
             {isTwoWheel && (
               <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
@@ -237,8 +276,8 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
           </div>
         )}
 
-        {/* STEP 5 - lock */}
-        {step === 4 && (
+        {/* STEP - lock */}
+        {current === "lock" && (
           <div className="space-y-3">
             <p className="text-[12px] font-bold text-soft">{t("Here's your request - lock it and I'll find the shops.")}</p>
             <div className="flex flex-wrap gap-1.5">

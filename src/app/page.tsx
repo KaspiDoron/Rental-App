@@ -1696,6 +1696,10 @@ export default function Home() {
             {builderOpen && (
               <div className="mt-2">
                 <RequestBuilder
+                  // BUG 4: a new search (fresh searchEpoch) remounts the builder
+                  // so its step/vehicle/duration reset - no stale carousel header
+                  // carried over from the previous request.
+                  key={searchEpoch}
                   busy={phase === "profiling" || phase === "running"}
                   onLock={(fields) => {
                     if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {

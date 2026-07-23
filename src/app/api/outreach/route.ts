@@ -292,7 +292,7 @@ export async function POST(req: Request) {
   //      sender a bargain can have, with strict anti-ban rate limits.
   //   2. The official Meta Cloud API (owner-level business number).
   //   3. Neither connected -> the UI falls back to copy-paste, still in-app.
-  let result: { channel: string; ok: boolean; error?: string; rateLimited?: boolean } = {
+  let result: { channel: string; ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean } = {
     channel: "none",
     ok: false,
   };
@@ -350,7 +350,7 @@ export async function POST(req: Request) {
     configured = (await wasEverConnected(session.email)) || false;
     const r = await sendFromUser(session.email, digits, guardedMessage, true);
     if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
-    result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited };
+    result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited, unconfirmed: r.unconfirmed };
     if (r.rateLimited) {
       const { releaseSendClaim } = await import("@/lib/wa-guard");
       await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
@@ -409,6 +409,9 @@ export async function POST(req: Request) {
           channel: result.channel,
           sender: session.email,
           ok: true,
+          // false when Evolution accepted the request but returned no delivery
+          // receipt - the card shows "sent, unverified" instead of a checkmark.
+          confirmed: result.unconfirmed ? false : true,
           vendorId,
           vendorName,
           kind: String(body.kind ?? "custom"),
