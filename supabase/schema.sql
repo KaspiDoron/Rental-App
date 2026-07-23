@@ -273,6 +273,10 @@ begin
     alter table public.billing_events rename column stripe_event_id to provider_event_id;
   end if;
 end $$;
+-- Wallet adoption tracking (V2-6): funding source of the payment (card /
+-- apple_pay / google_pay / paypal_balance) when the webhook reports it, so
+-- Apple Pay / Google Pay uptake is measurable after they are enabled.
+alter table public.billing_events add column if not exists funding_source text;
 
 -- ---- Lock everything to the service role ------------------------------------
 alter table public.app_config       enable row level security;

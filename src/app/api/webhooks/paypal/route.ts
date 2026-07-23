@@ -36,8 +36,22 @@ export async function POST(req: Request) {
   const email = String(emailRaw ?? "").toLowerCase();
   const plan = String(planRaw ?? "");
 
+  // Capture the funding source when PayPal reports it (V2-6 wallet adoption):
+  // card / apple_pay / google_pay / paypal_balance. Best-effort - the field
+  // location varies by event type, so read the common shapes.
+  const fundingSource =
+    resource?.payment_source && typeof resource.payment_source === "object"
+      ? Object.keys(resource.payment_source)[0]
+      : (resource?.subscriber?.payment_source
+          ? Object.keys(resource.subscriber.payment_source)[0]
+          : undefined);
   await sbInsert("billing_events", [
-    { provider_event_id: String(body?.id ?? ""), type: `pp_${event}`, verified },
+    {
+      provider_event_id: String(body?.id ?? ""),
+      type: `pp_${event}`,
+      verified,
+      ...(fundingSource ? { funding_source: fundingSource } : {}),
+    },
   ]).catch(() => {});
 
   const activates = [

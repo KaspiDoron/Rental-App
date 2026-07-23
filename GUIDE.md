@@ -157,6 +157,40 @@ gate, is free ($0/month), and pays out to Israeli bank accounts.
 5. Open **Admin -> Billing** and click **Subscribe** on a plan - it opens a real
    PayPal approval page; the plan is granted server-side from the signed webhook.
 
+### 7a. Apple Pay / Google Pay (one-tap wallets)
+
+WheelDeal sends buyers to **PayPal's own hosted approval page**, so the wallet
+buttons a buyer sees there are controlled by your **PayPal Business account
+settings, not by app code** - enabling them is a dashboard toggle, not a deploy.
+
+**Track A - enable on the hosted page (no code, do this first):**
+
+1. In your **PayPal Business** dashboard, open **Account Settings -> Payment
+   preferences / Wallet & Alternative payment methods** and enable **Apple Pay**
+   and **Google Pay** as funding sources for your Live app.
+2. Approved wallet-funded subscriptions fire the **same** webhook events
+   (`BILLING.SUBSCRIPTION.ACTIVATED`, `PAYMENT.SALE.COMPLETED`), so the grant
+   path needs **zero changes** - a wallet payment is granted exactly like a card.
+
+**Owner verification required (facts the app cannot check for you):**
+
+- Confirm your PayPal Business account is **Israel-registered** and that PayPal
+  currently offers Apple Pay / Google Pay as funding sources for Israeli
+  merchants on the **Subscriptions** (recurring) approval flow - wallet support
+  for recurring billing varies by region and is a known inconsistency in
+  PayPal's own docs. If Subscriptions don't support wallets in your region,
+  Track A alone won't show them; use Track B or keep card checkout.
+
+**Track B - embedded wallet buttons on the app's own page (optional, later):**
+Only if you want an Apple Pay / Google Pay button rendered **on WheelDeal's own
+Upgrade sheet** (not PayPal's page). This needs real code + owner steps:
+load the PayPal JS SDK with `components=buttons,applepay,googlepay` using a new,
+deliberately-public `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (client IDs are non-secret by
+design), and serve the Apple-issued domain-association file at
+`/.well-known/apple-developer-merchantid-domain-association` from your Live
+domain (obtain it via PayPal's Apple Pay onboarding - do **not** invent one).
+Adoption is measurable via the new `billing_events.funding_source` column.
+
 ---
 
 ## Quick reference: where each key goes
