@@ -692,7 +692,7 @@ export default function ProfilePage() {
           <div className="mb-2 flex items-center justify-between">
             <div className="text-[13px] font-extrabold text-strong">{t("My bookings")}</div>
             <a href="/deals" className="text-[12px] font-bold text-brandblue underline">
-              {t("Open My deals")} →
+              {t("Open Trips")} →
             </a>
           </div>
           {bookings.length === 0 ? (
@@ -740,7 +740,7 @@ export default function ProfilePage() {
                   href="/deals"
                   className="block rounded-2xl bg-card2 p-2.5 text-center text-[12px] font-extrabold text-brandblue"
                 >
-                  {t("See all")} {bookings.length} {t("bookings in My deals")} →
+                  {t("See all")} {bookings.length} {t("bookings in Trips")} →
                 </a>
               )}
             </div>

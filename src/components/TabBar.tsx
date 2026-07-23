@@ -23,9 +23,13 @@ export function TabBar({
   showUpgrade: boolean;
 }) {
   const { t } = useI18n();
+  // "My deals" is retired (V2-5): its slot is now "Trips" - your locked
+  // bookings + hand-offs. The route path stays /deals so middleware, Will
+  // commands and the privacy source-scan test keep working; only the identity
+  // and framing change.
   const items: { id: Tab; icon: string; label: string }[] = [
     { id: "home", icon: "bolt", label: t("Find deals") },
-    { id: "deals", icon: "card", label: t("My deals") },
+    { id: "deals", icon: "card", label: t("Trips") },
     { id: "profile", icon: "user", label: t("Profile") },
     { id: "feedback", icon: "chat", label: t("Feedback") },
   ];

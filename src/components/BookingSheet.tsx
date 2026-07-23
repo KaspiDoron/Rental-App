@@ -36,6 +36,7 @@ export function BookingSheet({
   const [dealTerms, setDealTerms] = useState(false);
   // Honest notify state: we only SAY the shop was told if it really was.
   const [notify, setNotify] = useState<"sending" | "sent" | "queued" | "failed" | null>(null);
+  const [notifyReason, setNotifyReason] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // The wa.me deep link to the shop's chat + whether WheelDeal disconnected the
   // traveller's WhatsApp on close (they continue in their own app).
@@ -139,7 +140,17 @@ export function BookingSheet({
         }),
       });
       const d = await res.json();
-      setNotify(d.sent ? "sent" : "queued");
+      // F8: a non-OK response (400 unknown-destination, 409 already-committed)
+      // is a FAILURE, not a queue - the old code mapped any !sent to "queued",
+      // telling the user "the shop was told" when nothing was sent. Only a real
+      // queued flag from a 200 means queued.
+      if (!res.ok) {
+        setNotify("failed");
+        setNotifyReason(d.reason ?? d.error ?? null);
+      } else {
+        setNotify(d.sent ? "sent" : d.queued ? "queued" : "failed");
+        if (!d.sent && !d.queued) setNotifyReason(d.reason ?? null);
+      }
       setDisconnected(Boolean(d.disconnected));
       setWaLink(d.waLink ?? (vendor.whatsapp ? `https://wa.me/${digitsOnly(vendor.whatsapp)}` : null));
     } catch {
@@ -382,8 +393,9 @@ export function BookingSheet({
           )}
           {notify === "failed" && (
             <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
-              Booking saved, but the message could not be sent - open the chat
-              below and tell the shop yourself.
+              {notifyReason
+                ? `Booking saved, but the confirmation couldn't be sent (${notifyReason}) - open the chat below and tell the shop yourself.`
+                : "Booking saved, but the message could not be sent - open the chat below and tell the shop yourself."}
             </p>
           )}
 

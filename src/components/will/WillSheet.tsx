@@ -20,7 +20,7 @@ const QUICK = [
   "Compare the top 3",
   "Why is this the best option?",
   "Try negotiating harder",
-  "Open my deals",
+  "Open my trips",
   "Pause this search",
 ];
 

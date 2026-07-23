@@ -1,6 +1,6 @@
 "use client";
 
-// "My deals" - rebuilt around SEARCH SESSIONS instead of a flat offer list.
+// "Trips" (formerly "My deals") - your locked bookings + live search sessions.
 // Each session is a living dashboard: who was contacted, who answered, the
 // best price on the table, honest savings, what Will plans next and what
 // needs the traveller. Think Linear dashboard, not an e-commerce list.
@@ -193,7 +193,7 @@ export default function DealsPage() {
         <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-2xl">
           <div className="flex items-center gap-2">
             <BrandMark size={30} />
-            <h1 className="font-display text-lg font-extrabold text-strong">{t("My deals")}</h1>
+            <h1 className="font-display text-lg font-extrabold text-strong">{t("Your trips")}</h1>
           </div>
           <div className="flex items-center gap-1.5">
             <LanguageButton />

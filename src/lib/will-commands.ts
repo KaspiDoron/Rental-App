@@ -88,7 +88,7 @@ export function parseWillCommandDeterministic(
   if (/^(help|what can you do|what do you do|how do (?:you|i) work|capabilities)\b/.test(s)) {
     return { action: "help" };
   }
-  if (/\b(open|show|go to|see)\b.*\b(deals?|bookings?|my hunts?)\b|^my deals?$/.test(s)) {
+  if (/\b(open|show|go to|see)\b.*\b(deals?|trips?|bookings?|my hunts?)\b|^my (deals?|trips?)$/.test(s)) {
     return { action: "open_deals" };
   }
   if (/\b(plans?|pricing|upgrade|pro|ultra)\b.*\b(cost|price|difference|include|what|show|compare)\b|\bwhat.*\b(pro|ultra|plans?)\b|^(show )?(plans|pricing)$/.test(s)) {

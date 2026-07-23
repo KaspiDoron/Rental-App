@@ -155,6 +155,43 @@ export async function POST(req: Request) {
     },
   ]).catch(() => {});
 
+  // SELF-IMPROVEMENT LOOP (V2-4): bank the price actually achieved so future
+  // sessions in this market start from a real prior. Best-effort, never blocks
+  // the close. Resolves the region + vehicle from the user's most recent search.
+  try {
+    const price = Number(body.pricePerDay);
+    if (price > 0) {
+      const [{ rememberDeal }, { sbSelect: sel }] = await Promise.all([
+        import("@/lib/spte/memory"),
+        import("@/lib/runtime-config"),
+      ]);
+      const rows = await sel<{ query_text: string | null; vehicle_class: string | null }>(
+        "searches",
+        `select=query_text,vehicle_class&user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=1`
+      ).catch(() => []);
+      const region = typeof body.region === "string" ? body.region : "";
+      if (region && rows[0]?.vehicle_class) {
+        await rememberDeal({
+          regionKey: region.toLowerCase(),
+          rfq: {
+            vehicleClass: rows[0].vehicle_class as "car" | "motorbike" | "scooter",
+            transmission: "any",
+            durationDays: Number(body.durationDays) || 1,
+            accessories: [],
+            fulfillment: "any",
+            vendorMessage: "",
+          },
+          currency: body.currency ? String(body.currency) : "USD",
+          pricePerDay: price,
+          listPrice: Number(body.listPricePerDay) || undefined,
+          tactic: "closed-deal",
+        });
+      }
+    }
+  } catch {
+    /* learning is best-effort */
+  }
+
   // 2) The traveller's WhatsApp STAYS LINKED. Closing a deal used to
   //    logout + DELETE the instance (a full QR re-link every single time) -
   //    that hard teardown was the "my WhatsApp disconnected by itself" bug,
