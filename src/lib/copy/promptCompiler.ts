@@ -59,7 +59,14 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   } else if (s.order === "greet-ask-intro") {
     body = `${s.greeting}${slangGreet} ${s.ask} ${s.selfIntro ? `(${vehicle} ${duration})` : `${vehicle} ${duration}.`}`;
   } else {
-    body = `${intro} ${s.ask} ${s.greeting.replace(/!$/, "")} btw!`;
+    // "intro-first": a terse, substance-led opener (a busy traveller getting
+    // straight to the point) - the warmth is the appended sign-off + emoji, not
+    // an opening pleasantry. B2 fix: the old form appended the greeting AFTER
+    // the ask with a hard-coded " btw!" literal, producing the exact production
+    // defect "...best price? Hi there btw! Thanks!". This variant now simply
+    // omits the greeting word, keeping it structurally distinct from the two
+    // greet-first orders without ever misplacing a greeting.
+    body = `${intro} ${s.ask}`;
   }
 
   let out = applyContraction(body, s.contraction).replace(/\s{2,}/g, " ").trim();

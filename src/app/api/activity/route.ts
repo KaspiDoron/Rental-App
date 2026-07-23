@@ -234,6 +234,37 @@ export async function GET(req: Request) {
   // A real priced OFFER is the strongest state.
   for (const o of offers) if (o.price_per_day) bumpState(o.vendor_id, "offer");
 
+  // ---- PER-VENDOR LAST MESSAGES (F4 batch status) --------------------------
+  // The status screen wants {shop, last shop message, last agent message} for
+  // EVERY shop in one response. Previously the client N+1-polled /api/thread per
+  // card; here we derive it from the outbound + replies rows already fetched.
+  // Rows are newest-first, so the FIRST per vendor is the latest.
+  type LastMsg = {
+    lastOutboundText?: string;
+    lastOutboundAt?: string;
+    lastInboundText?: string;
+    lastInboundAt?: string;
+  };
+  const lastByVendor: Record<string, LastMsg> = {};
+  const ensureLast = (id: string): LastMsg => (lastByVendor[id] ??= {});
+  for (const m of outbound) {
+    const id = m.raw?.vendorId;
+    if (!id) continue;
+    const slot = ensureLast(id);
+    if (slot.lastOutboundAt) continue; // already have the newest for this vendor
+    // Prefer the English gloss for the panel; fall back to the raw sent body.
+    slot.lastOutboundText = (m.raw?.english || m.body || "").slice(0, 240);
+    slot.lastOutboundAt = m.received_at;
+  }
+  for (const r of replies) {
+    const id = r.vendor_id;
+    if (!id) continue;
+    const slot = ensureLast(id);
+    if (slot.lastInboundAt) continue;
+    slot.lastInboundText = (r.reply_text || (r.image_count ? "[photo]" : "") || "").slice(0, 240);
+    slot.lastInboundAt = r.created_at;
+  }
+
   const items: ActivityItem[] = [];
 
   for (const t of traces) {
@@ -385,6 +416,7 @@ export async function GET(req: Request) {
     introBudget,
     whyByVendor,
     vendorStates,
+    lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),
   });

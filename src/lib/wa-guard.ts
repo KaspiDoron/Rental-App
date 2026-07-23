@@ -772,7 +772,9 @@ export async function introHoldIso(
 // ---------------------------------------------------------------------------
 
 const GREET_SWAPS: [RegExp, string[]][] = [
-  [/^hi!?\s/i, ["Hi! ", "Hey! ", "Hello! ", "Hi there! ", "Hey there! "]],
+  // B2 fix: the old `^hi!?\s` only consumed "Hi " so it swapped INSIDE
+  // "Hi there!" -> "Hey there! there!". Match the whole leading greeting phrase.
+  [/^(?:hi|hey|hello)(?:\s+there)?!?[,\s]+/i, ["Hi! ", "Hey! ", "Hello! ", "Hi there! ", "Hey there! "]],
   [/\bthanks!?$/i, ["Thanks!", "Thank you!", "Thanks a lot!", "Thanks 🙏", "Ta!"]],
 ];
 
@@ -781,22 +783,27 @@ const GREET_SWAPS: [RegExp, string[]][] = [
  * contractions and spacing so the payload hash is unique per send while the
  * meaning stays identical. (LLM-composed messages are already unique - this
  * is the guarantee for deterministic/template fallbacks.)
+ *
+ * `rand` is injectable (B2/B4): guardOutbound seeds it from the message identity
+ * so a parked row that is re-guarded produces the SAME text - the enqueue-time
+ * humanization is never re-rolled, which is what kept two concurrent drainers'
+ * idempotency hashes stable.
  */
-export function humanizeVariant(text: string): string {
+export function humanizeVariant(text: string, rand: () => number = Math.random): string {
   let out = text;
   for (const [rx, pool] of GREET_SWAPS) {
     if (rx.test(out)) {
-      const pick = pool[Math.floor(Math.random() * pool.length)];
-      out = out.replace(rx, /!?$/.test(pick) && rx.source.includes("thanks") ? pick : pick);
+      const pick = pool[Math.floor(rand() * pool.length)];
+      out = out.replace(rx, pick);
     }
   }
   // Contraction jitter (one direction only, keeps grammar safe).
-  if (Math.random() < 0.5) out = out.replace(/\bI am\b/g, "I'm");
-  if (Math.random() < 0.4) out = out.replace(/\bwhat is\b/gi, (m) => (m[0] === "W" ? "What's" : "what's"));
-  if (Math.random() < 0.3) out = out.replace(/\bokay\b/gi, "ok");
+  if (rand() < 0.5) out = out.replace(/\bI am\b/g, "I'm");
+  if (rand() < 0.4) out = out.replace(/\bwhat is\b/gi, (m) => (m[0] === "W" ? "What's" : "what's"));
+  if (rand() < 0.3) out = out.replace(/\bokay\b/gi, "ok");
   // Punctuation/spacing jitter - invisible to a human, new hash every time.
-  if (Math.random() < 0.35) out = out.replace(/\. /g, ".  ");
-  if (Math.random() < 0.3 && !/[?!]$/.test(out)) out = out.replace(/\.$/, "");
+  if (rand() < 0.35) out = out.replace(/\. /g, ".  ");
+  if (rand() < 0.3 && !/[?!]$/.test(out)) out = out.replace(/\.$/, "");
   // (Removed) the "typo *word" self-correction: it literally emitted a leading
   // asterisk into the sent message ("good *good day", "qiuck *quick question") -
   // it read as corrupted markdown, not a human touch. The contraction/spacing/
@@ -882,10 +889,30 @@ export async function guardOutbound(opts: {
   // B4: an already-humanized (parked) row is delivered verbatim - only the
   // idempotent formatting scrub runs, so its slot hash stays STABLE across the
   // concurrent drainers and exactly one delivery happens.
+  // B2/B4: the humanization is SEEDED from the message identity (sender + shop +
+  // the composed text), so the SAME input always yields the SAME output. This
+  // restores the copy engine's determinism contract and, together with
+  // humanize-once, guarantees two drainers hash a parked row identically.
+  const humanRand = (() => {
+    let h = 2166136261 >>> 0;
+    const seed = `${opts.senderKey}|${opts.toDigits}|${opts.text}`;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return () => {
+      // mulberry32 step - deterministic, well-distributed.
+      h = (h + 0x6d2b79f5) >>> 0;
+      let t = h;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
   const text = opts.auto
     ? opts.alreadyHumanized
       ? stripWaFormatting(opts.text)
-      : stripWaFormatting(humanizeVariant(personaHumanize(opts.text)))
+      : stripWaFormatting(humanizeVariant(personaHumanize(opts.text, humanRand), humanRand))
     : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must

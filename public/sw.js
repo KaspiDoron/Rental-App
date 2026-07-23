@@ -18,7 +18,19 @@ self.addEventListener("push", (event) => {
     renotify: true,
     data: { url: data.url || "/" },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  // B8 stage 1: also wake any OPEN app tab so it refetches immediately, instead
+  // of waiting out its own 6-15s poll (the "push says 1125, card says waiting"
+  // desync). The page listens for this message and bumps its sync nonce.
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+        for (const client of list) {
+          client.postMessage({ type: "wd-refresh", reason: "push", payload: data });
+        }
+      }),
+    ])
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -28,7 +40,16 @@ self.addEventListener("notificationclick", (event) => {
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const client of list) {
         if ("focus" in client) {
-          client.navigate(target);
+          // B8: prefer a cheap focus when the tab is already on the app - a full
+          // navigate() remounts the whole app and re-runs every mount effect.
+          // Only navigate when the client is on a different path.
+          try {
+            const sameApp = new URL(client.url).pathname === new URL(target, client.url).pathname;
+            if (!sameApp && "navigate" in client) client.navigate(target);
+          } catch (e) {
+            /* URL parse guard - focus is enough */
+          }
+          client.postMessage({ type: "wd-refresh", reason: "notification-click" });
           return client.focus();
         }
       }

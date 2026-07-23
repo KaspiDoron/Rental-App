@@ -79,6 +79,21 @@ describe("variation matrix + compiler (owner P2: deterministic diversity)", () =
       expect(text).toMatch(/5 days/);
     }
   });
+  it("B2 regression: a greeting NEVER trails the ask, and no ' btw!' tail", () => {
+    // The old "intro-first" branch produced "...best price? Hi there btw!".
+    // Sweep every sentence order across many seeds and assert the defect shape
+    // can never appear.
+    for (let i = 0; i < 120; i++) {
+      const text = compileOpener(RFQ, openerSeed("u@x.com", `v${i}`, `n${i}`), "Philippines");
+      expect(text).not.toMatch(/\bbtw!/i); // the hard-coded literal is gone
+      // A greeting word must not appear AFTER a question mark.
+      const q = text.indexOf("?");
+      if (q >= 0) {
+        const tail = text.slice(q + 1);
+        expect(tail).not.toMatch(/\b(hi|hey|hello)\b/i);
+      }
+    }
+  });
   it("style directives are deterministic and structural", () => {
     const seed = { threadId: "u@x:63111", vendorId: "v1", nonce: 2 };
     const d1 = compileStyleDirectives(seed, "Philippines");

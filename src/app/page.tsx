@@ -149,7 +149,13 @@ export default function Home() {
   const [statusOpen, setStatusOpen] = useState(false);
   // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
   const [showGame, setShowGame] = useState(false);
-  const [pushState, setPushState] = useState<"idle" | "on" | "denied" | "off">("idle");
+  // B6: distinct states so the toggle gives real feedback. 'pending' shows a
+  // spinner mid-flow; failure modes are no longer collapsed into a look-alike
+  // 'off' (which rendered identically to the untouched 'idle').
+  const [pushState, setPushState] = useState<
+    "idle" | "pending" | "on" | "denied" | "unsupported" | "ios-install" | "error"
+  >("idle");
+  const [pushNote, setPushNote] = useState<string | null>(null);
   // Living workspace: the cross-shop activity feed + honest WA safety state,
   // all from ONE /api/activity poll (which also replaced the queue poll).
   const [activityItems, setActivityItems] = useState<FeedItem[]>([]);
@@ -191,7 +197,11 @@ export default function Home() {
     setView("list");
     setSelectedId(id);
     setVisibleCount((n) => {
-      const idx = vendors.findIndex((v) => v.id === id);
+      // Index into the ACTUALLY-RENDERED list (filtered + sorted), not raw
+      // `vendors` (B9): the list renders `filtered.slice(0, visibleCount)`, so a
+      // window grown to the raw-array index can fall short whenever a sort/
+      // filter reorders the target - leaving no DOM node to scroll to.
+      const idx = filtered.findIndex((v) => v.id === id);
       return idx >= 0 ? Math.max(n, idx + 5) : n;
     });
     // Two frames: let React commit the larger window before scrolling.
@@ -205,11 +215,27 @@ export default function Home() {
   // Opt in to browser push so a shop reply reaches the traveller with the app
   // closed. No-op (button hidden) when the server has no VAPID keys configured.
   async function enablePush() {
-    try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        setPushState("off");
-        return;
+    setPushNote(null);
+    // iOS Safari only exposes Web Push when the app is installed to the Home
+    // Screen - detect that explicitly so we give real guidance, not a dead
+    // look-alike 'off' (B6).
+    const standalone =
+      typeof window !== "undefined" &&
+      ((window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+        window.matchMedia?.("(display-mode: standalone)").matches === true);
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      if (iOS && !standalone) {
+        setPushState("ios-install");
+        setPushNote(t("Add WheelDeal to your Home Screen first (Share -> Add to Home Screen), then enable alerts."));
+      } else {
+        setPushState("unsupported");
+        setPushNote(t("This browser can't do push alerts. Try Chrome, or install the app."));
       }
+      return;
+    }
+    setPushState("pending");
+    try {
       const perm = await Notification.requestPermission();
       if (perm !== "granted") {
         setPushState("denied");
@@ -217,7 +243,8 @@ export default function Home() {
       }
       const { key } = await (await fetch("/api/push/vapid")).json();
       if (!key) {
-        setPushState("off");
+        setPushState("error");
+        setPushNote(t("Alerts aren't configured on the server yet. Nothing you did wrong."));
         return;
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
@@ -225,14 +252,29 @@ export default function Home() {
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       });
-      await fetch("/api/push/subscribe", {
+      // B6: actually CHECK the server accepted the subscription - the old code
+      // set 'on' without reading the response, so a 401 or a save failure still
+      // showed "Alerts on".
+      const res = await fetch("/api/push/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscription: sub }),
       });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.ok === false) {
+        setPushState("error");
+        setPushNote(t("Couldn't save your alert subscription - try again in a moment."));
+        return;
+      }
       setPushState("on");
+      try {
+        localStorage.setItem("wd_push_on", "1");
+      } catch {
+        /* private mode - the in-memory state still reflects success this session */
+      }
     } catch {
-      setPushState("off");
+      setPushState("error");
+      setPushNote(t("Something interrupted turning on alerts - try again."));
     }
   }
   const [queueItems, setQueueItems] = useState<
@@ -787,7 +829,31 @@ export default function Home() {
               };
             }
           }
-          if (base.offer) return base; // an offer supersedes any queue badge
+          // B8: a re-quote on an ALREADY-priced shop must also land on the fast
+          // activity cadence, not wait for the slower replies poll. When the
+          // feed carries a newer round (or a changed price) for a card that
+          // already has an offer, update just the price fields - preserving the
+          // richer deposit/delivery/presentable data the replies poll built.
+          if (base.offer) {
+            const o = offerByVendor.get(base.id);
+            if (
+              o &&
+              (o.round > (base.offer.round ?? 0) || o.pricePerDay !== base.offer.pricePerDay)
+            ) {
+              base = {
+                ...base,
+                offer: {
+                  ...base.offer,
+                  pricePerDay: o.pricePerDay,
+                  currency: o.currency,
+                  totalPrice: o.pricePerDay * (rfq?.durationDays ?? 1),
+                  round: Math.max(o.round, base.offer.round ?? 0),
+                  verified: o.verified || base.offer.verified,
+                },
+              };
+            }
+            return base; // an offer supersedes any queue badge
+          }
           const held = byVendor.get(base.id);
           if (
             held &&
@@ -892,10 +958,39 @@ export default function Home() {
     };
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("focus", wake);
+    // B8 stage 1: the service worker postMessages the open tab the instant a
+    // push arrives (or a notification is tapped) - wake the polls immediately
+    // instead of waiting out the 6-15s interval that caused "push says a price,
+    // card still says waiting".
+    const onSwMessage = (e: MessageEvent) => {
+      if (e.data?.type === "wd-refresh") setSyncNonce((n) => n + 1);
+    };
+    navigator.serviceWorker?.addEventListener?.("message", onSwMessage);
     return () => {
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("focus", wake);
+      navigator.serviceWorker?.removeEventListener?.("message", onSwMessage);
     };
+  }, []);
+
+  // B6: seed the alert state on mount so a returning, already-subscribed user
+  // sees "Alerts on" instead of a plain button (component state resets each
+  // reload). Reconcile against the real browser permission - if the user
+  // revoked it, drop the stale local flag.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    const perm = Notification.permission;
+    if (perm === "denied") {
+      setPushState("denied");
+      return;
+    }
+    let flagged = false;
+    try {
+      flagged = localStorage.getItem("wd_push_on") === "1";
+    } catch {
+      /* private mode */
+    }
+    if (perm === "granted" && flagged) setPushState("on");
   }, []);
 
   // Poll the consolidated activity endpoint while there are vendors on
@@ -1815,22 +1910,38 @@ export default function Home() {
                     >
                       🎮 {t("Play while you wait")}
                     </button>
-                    {pushState !== "on" ? (
-                      <button
-                        onClick={enablePush}
-                        className="btn btn-sm rounded-xl border-2 border-brandblue px-2.5 py-1 text-[11px] font-extrabold text-brandblue"
-                      >
-                        🔔 {t("Notify me")}
-                      </button>
-                    ) : (
+                    {pushState === "on" ? (
                       <span className="rounded-xl bg-savings-soft px-2.5 py-1 text-[11px] font-extrabold text-savings">
                         ✅ {t("Alerts on")}
                       </span>
+                    ) : (
+                      <button
+                        onClick={enablePush}
+                        disabled={pushState === "pending"}
+                        className="btn btn-sm rounded-xl border-2 border-brandblue px-2.5 py-1 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
+                      >
+                        {pushState === "pending" ? (
+                          <LoadingDots label={t("Turning on")} />
+                        ) : (
+                          `🔔 ${t("Notify me")}`
+                        )}
+                      </button>
                     )}
                   </div>
+                  {/* B6: every state now says something distinct - no more silent
+                      look-alike 'off'. */}
                   {pushState === "denied" && (
                     <p className="mt-1 text-[10px] font-bold text-brandred">
                       {t("Notifications are blocked - enable them in your browser settings.")}
+                    </p>
+                  )}
+                  {pushNote && pushState !== "denied" && (
+                    <p
+                      className={`mt-1 text-[10px] font-bold ${
+                        pushState === "error" ? "text-brandred" : "text-brandblue/80"
+                      }`}
+                    >
+                      {pushNote}
                     </p>
                   )}
                 </div>
@@ -2419,11 +2530,13 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
   if (f.fastOnly) soft((v) => v.fastResponder === true);
   if (f.tag && f.tag !== "any") soft((v) => (v.verifiedTags ?? []).includes(f.tag));
   if (f.minRating > 0) soft((v) => v.rating >= f.minRating);
-  // Budget: only drop a shop whose QUOTE exceeds the budget. A shop not yet
-  // priced (no offer) is kept - the old `v.offer && ...` dropped every active
-  // un-quoted shop the moment a budget was set (the "cards vanish" bug).
+  // Budget is a HARD filter, not a soft one (B9). Routing it through soft()/
+  // isActiveVendor made it a TAUTOLOGY - a priced offer is always "active", so
+  // the OR was always true and the budget never removed a single shop, for any
+  // input. The user setting a budget explicitly WANTS over-budget quotes gone;
+  // a not-yet-priced shop can't be over budget so it stays.
   if (f.maxPricePerDay)
-    soft((v) => !v.offer || v.offer.pricePerDay <= (f.maxPricePerDay as number));
+    list = list.filter((v) => !v.offer || v.offer.pricePerDay <= (f.maxPricePerDay as number));
 
   if (f.agentStatus === "active") list = list.filter(isActiveVendor);
   else if (f.agentStatus === "negotiating")
@@ -2434,7 +2547,11 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
     );
   else if (f.agentStatus === "offer") list = list.filter((v) => v.offer);
   else if (f.agentStatus === "dropped")
-    list = list.filter((v) => v.offer && v.offer.round > 0);
+    // "Dropped price" means the shop's live quote is BELOW its first/list price
+    // (B9). The old `offer.round > 0` tested "replied more than once" - a reply
+    // COUNTER, not a price movement - so a shop that restated its same price
+    // twice was mislabelled as having dropped it.
+    list = list.filter((v) => v.offer && v.offer.pricePerDay < v.offer.listPricePerDay);
 
   const savingsOf = (v: Vendor) =>
     v.offer ? (v.offer.listPricePerDay - v.offer.pricePerDay) * days : -1;
@@ -2453,7 +2570,9 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
       case "status":
         return (b.offer ? 1 : 0) - (a.offer ? 1 : 0);
       default:
-        return (a.distanceKm ?? 0) - (b.distanceKm ?? 0);
+        // Unknown distance sorts LAST under "Closest", not first (B9): the old
+        // `?? 0` made a shop with no distanceKm rank as 0 km = nearest.
+        return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
     }
   });
   return list;
