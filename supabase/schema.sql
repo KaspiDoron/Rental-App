@@ -632,6 +632,89 @@ create index if not exists negotiation_threads_user_idx
   on public.negotiation_threads (user_email, updated_at desc);
 alter table public.negotiation_threads enable row level security;
 
+-- =============================================================================
+-- SPTE (Single-Pass Turn Engine) - the Blackboard + single-pass agent (V2-4)
+-- =============================================================================
+-- One user search = one session = the durable twin of the Redis "blackboard".
+-- Replaces the marker-row inference of "session" with a real, queryable row.
+create table if not exists public.search_sessions (
+  id           uuid primary key default gen_random_uuid(),
+  user_email   text not null,
+  rfq          jsonb not null,
+  region_key   text,
+  currency     text,
+  status       text not null default 'active',   -- active | closed | completed
+  benchmark    jsonb,      -- {pricePerDay,currency,sourceUrl,grounded,fetchedAt}
+  lowest       jsonb,      -- {vendorId,shop,pricePerDay,at} - denormalized cross-thread best
+  created_at   timestamptz not null default now(),
+  closed_at    timestamptz
+);
+create index if not exists search_sessions_user_idx
+  on public.search_sessions (user_email, status, created_at desc);
+alter table public.search_sessions enable row level security;
+
+-- negotiation_threads joins a session + carries a rolling digest and the
+-- denormalized last-in/out message (the batch status panel + SPTE snapshot).
+alter table public.negotiation_threads add column if not exists session_id uuid;
+alter table public.negotiation_threads add column if not exists digest jsonb;
+alter table public.negotiation_threads add column if not exists last_inbound_text text;
+alter table public.negotiation_threads add column if not exists last_inbound_at timestamptz;
+alter table public.negotiation_threads add column if not exists last_outbound_text text;
+alter table public.negotiation_threads add column if not exists last_outbound_at timestamptz;
+create index if not exists negotiation_threads_session_idx
+  on public.negotiation_threads (session_id);
+
+-- The single-query context fetch: ONE round-trip per turn (kind to the pg pool
+-- max:5). Returns the session, this thread, its last 6 messages, and the top-3
+-- live rival offers from sibling threads - everything the single pass needs.
+create or replace function public.get_turn_context(p_thread text)
+returns jsonb language sql stable as $$
+  with t as (
+    select * from public.negotiation_threads where thread_key = p_thread
+  )
+  select jsonb_build_object(
+    'thread', (select to_jsonb(t) from t),
+    'session', (select to_jsonb(s) from public.search_sessions s, t
+                where s.id = t.session_id),
+    'tail', (select coalesce(jsonb_agg(m order by m.received_at desc), '[]'::jsonb)
+             from (select direction, body, raw, received_at
+                   from public.whatsapp_messages, t
+                   where whatsapp_messages.to_number = t.to_number
+                     and whatsapp_messages.raw->>'sender' = t.user_email
+                   order by received_at desc limit 6) m),
+    'rivals', (select coalesce(jsonb_agg(r), '[]'::jsonb)
+               from (select jsonb_build_object(
+                       'vendorId', t2.vendor_id, 'shop', t2.vendor_name,
+                       'pricePerDay', (t2.fields->>'pricePerDay')::numeric,
+                       'currency', t2.fields->>'currency') r
+                     from public.negotiation_threads t2, t
+                     where t2.session_id = t.session_id
+                       and t2.thread_key <> t.thread_key
+                       and (t2.fields->>'pricePerDay') is not null
+                     order by (t2.fields->>'pricePerDay')::numeric asc
+                     limit 3) x)
+  );
+$$;
+
+-- SELF-IMPROVEMENT LOOP (the owner's "experience & continuous learning"): every
+-- successful deal and every grounded benchmark is banked here, so future
+-- sessions in the same region/vehicle start from a real prior instead of cold.
+create table if not exists public.deal_memory (
+  id            bigint generated always as identity primary key,
+  region_key    text not null,
+  vehicle_key   text not null,
+  currency      text,
+  price_per_day numeric not null,       -- the price actually achieved
+  list_price    numeric,                -- the shop's first quote (discount signal)
+  duration_days int,
+  tactic        text,                   -- the move/leverage that won it
+  source        text not null default 'deal',  -- deal | benchmark
+  created_at    timestamptz not null default now()
+);
+create index if not exists deal_memory_lookup_idx
+  on public.deal_memory (region_key, vehicle_key, created_at desc);
+alter table public.deal_memory enable row level security;
+
 -- ---- Deferred-decision wakeups (strategic waits + judge jobs) ------------------
 -- The engine parks a "decide again later" marker here; every opportunistic
 -- drain site (webhook, wa/status poll, replies poll, queue, ping) claims due
