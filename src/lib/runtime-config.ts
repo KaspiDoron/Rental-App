@@ -407,9 +407,31 @@ export async function sbUpdate(
 
 // ---- encryption (AES-256-GCM, key derived from SESSION_SECRET) --------------
 
+function cryptoKeyFrom(secret: string): Buffer {
+  return scryptSync(secret || "dev-insecure-secret-change-me", "wheeldeal-config-v1", 32);
+}
+
+// The CURRENT secret - new writes (encrypt) always use this one.
 function cryptoKey(): Buffer {
-  const secret = process.env.SESSION_SECRET || "dev-insecure-secret-change-me";
-  return scryptSync(secret, "wheeldeal-config-v1", 32);
+  return cryptoKeyFrom(process.env.SESSION_SECRET || "dev-insecure-secret-change-me");
+}
+
+// Secrets to TRY when DECRYPTING, newest first. This is the graceful-recovery
+// path for a rotated SESSION_SECRET (e.g. a Vercel -> Cloud Run migration): the
+// vault is AES-encrypted with a key derived from SESSION_SECRET, so a changed
+// secret makes every stored key undecryptable and the whole vault reads empty.
+// Set SESSION_SECRET_PREVIOUS to the OLD secret (comma-separated for several) and
+// old rows decrypt again immediately - WITHOUT reverting the new secret. Any key
+// re-saved afterwards is re-encrypted under the current secret, so the vault
+// migrates itself over time. Unset -> only the current secret is tried (no
+// behavior change).
+function decryptSecrets(): string[] {
+  const cur = process.env.SESSION_SECRET || "dev-insecure-secret-change-me";
+  const prev = (process.env.SESSION_SECRET_PREVIOUS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [cur, ...prev];
 }
 
 function encrypt(plain: string): string {
@@ -432,22 +454,28 @@ export function decryptString(blob: string): string | null {
 }
 
 function decrypt(blob: string): string | null {
-  try {
-    const [v, ivB, tagB, dataB] = blob.split(":");
-    if (v !== "v1") return null;
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      cryptoKey(),
-      Buffer.from(ivB, "base64")
-    );
-    decipher.setAuthTag(Buffer.from(tagB, "base64"));
-    return (
-      decipher.update(Buffer.from(dataB, "base64")).toString("utf8") +
-      decipher.final("utf8")
-    );
-  } catch {
-    return null;
+  const [v, ivB, tagB, dataB] = blob.split(":");
+  if (v !== "v1") return null;
+  // Try the current secret first, then any SESSION_SECRET_PREVIOUS (rotation
+  // recovery). Each attempt is isolated: a wrong key throws on final()/auth-tag
+  // check, so we fall through to the next secret rather than failing the row.
+  for (const secret of decryptSecrets()) {
+    try {
+      const decipher = createDecipheriv(
+        "aes-256-gcm",
+        cryptoKeyFrom(secret),
+        Buffer.from(ivB, "base64")
+      );
+      decipher.setAuthTag(Buffer.from(tagB, "base64"));
+      return (
+        decipher.update(Buffer.from(dataB, "base64")).toString("utf8") +
+        decipher.final("utf8")
+      );
+    } catch {
+      /* wrong secret for this blob - try the next one */
+    }
   }
+  return null;
 }
 
 // ---- Supabase REST ----------------------------------------------------------
