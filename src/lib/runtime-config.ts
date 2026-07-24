@@ -491,6 +491,26 @@ export async function getConfig(name: string): Promise<string | undefined> {
 }
 
 /**
+ * Resolve the Google OAuth client ID with a resilient, multi-source fallback so
+ * Google sign-in survives a vault miss (a decryption failure when SESSION_SECRET
+ * differs between hosts, an unreachable Supabase, or the value simply never
+ * pasted into the Key Vault). getConfig already fails over from the vault to
+ * `process.env.GOOGLE_OAUTH_CLIENT_ID`; this adds the alternate PUBLIC env name
+ * that the build inlines (`NEXT_PUBLIC_GOOGLE_CLIENT_ID`), which is the name the
+ * client ID is usually provided under on a fresh Cloud Run / Vercel deploy. The
+ * client ID is public by design, so surfacing it from any of these sources is
+ * safe - it only ever gates which account the button signs in as. `||` (not
+ * `??`) also skips an empty-string stored value, not just a null one.
+ */
+export async function getGoogleClientId(): Promise<string | undefined> {
+  return (
+    (await getConfig("GOOGLE_OAUTH_CLIENT_ID")) ||
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    undefined
+  );
+}
+
+/**
  * Persist (or clear) a runtime override. Returns a clear error message when
  * durable persistence fails, so the admin UI never fails silently.
  */

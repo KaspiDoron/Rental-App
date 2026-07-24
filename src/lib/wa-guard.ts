@@ -854,6 +854,91 @@ export async function enterBanRecovery(
 }
 
 // ---------------------------------------------------------------------------
+// Send-side STOP-LOSS (fast circuit breaker)
+// ---------------------------------------------------------------------------
+// computeRisk() is a SLOW, cumulative gauge (a failed send adds only ~+3, capped
+// at +15), so a number that gets restricted mid-batch - the exact "your account
+// is limited right now" state - would keep getting hammered shop after shop long
+// before the cumulative risk crosses the pause threshold. This is the FAST trip:
+// N consecutive HARD send failures inside a short window immediately enters
+// ban-recovery, which sets paused_until, so guardOutbound then parks EVERY
+// automated send for the whole account until the window clears. It is the honest,
+// genuinely-protective core - not a promise of zero bans, but a guarantee the
+// system stops digging the moment WhatsApp pushes back.
+//
+// In-memory + per-instance is the CORRECT scope: a failure burst happens inside
+// one drain/batch on one instance, and the DURABLE effect it triggers
+// (paused_until in whatsapp_number_reputation) is what every other instance then
+// honors. A "soft" or "ok" outcome resets the streak so isolated blips (one dead
+// number in a good batch) never trip it.
+const STOP_LOSS_MAX_FAILS = 3; // consecutive hard failures that trip the breaker
+const STOP_LOSS_WINDOW_MS = 180_000; // ...within this window (older streak resets)
+const STOP_LOSS_PAUSE_HOURS = 12; // automated queue halted this long once tripped
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_send_streak__: Map<string, { n: number; first: number }> | undefined;
+}
+function sendStreak(): Map<string, { n: number; first: number }> {
+  if (!globalThis.__wd_send_streak__) globalThis.__wd_send_streak__ = new Map();
+  return globalThis.__wd_send_streak__;
+}
+
+/**
+ * Record the outcome of one outbound send for the stop-loss breaker.
+ *   "ok"   - delivered/accepted: clears the streak.
+ *   "soft" - a failure that is NOT an account-restriction signal (e.g. one
+ *            invalid/non-WhatsApp number): clears the streak (an isolated bad
+ *            number in a healthy batch must not trip the breaker).
+ *   "hard" - an account-level restriction signal (blocked/forbidden/401/403/429,
+ *            or a socket drop / send timeout): increments the streak; on reaching
+ *            STOP_LOSS_MAX_FAILS within the window it trips enterBanRecovery.
+ * Returns { tripped } so callers can log/stop the current drain immediately.
+ * Never throws - the send path must not break on the breaker.
+ */
+export async function noteSendOutcome(
+  senderKey: string,
+  outcome: "ok" | "soft" | "hard"
+): Promise<{ tripped: boolean }> {
+  try {
+    if (outcome !== "hard") {
+      sendStreak().delete(senderKey);
+      return { tripped: false };
+    }
+    const now = Date.now();
+    const rec = sendStreak().get(senderKey);
+    if (!rec || now - rec.first > STOP_LOSS_WINDOW_MS) {
+      sendStreak().set(senderKey, { n: 1, first: now });
+      return { tripped: false };
+    }
+    rec.n += 1;
+    if (rec.n >= STOP_LOSS_MAX_FAILS) {
+      sendStreak().delete(senderKey);
+      await enterBanRecovery(senderKey, STOP_LOSS_PAUSE_HOURS);
+      try {
+        await sbInsert("agent_events", [
+          {
+            kind: "wa-stop-loss",
+            vendor_name: senderKey,
+            detail:
+              `STOP-LOSS: ${STOP_LOSS_MAX_FAILS} consecutive hard send failures in ` +
+              `<${Math.round(STOP_LOSS_WINDOW_MS / 1000)}s - automated queue halted ` +
+              `${STOP_LOSS_PAUSE_HOURS}h. The WhatsApp account is likely restricted; ` +
+              `open the WhatsApp app to confirm and do NOT force sends during a restriction.`,
+          },
+        ]);
+      } catch {
+        /* logging is best-effort */
+      }
+      return { tripped: true };
+    }
+    return { tripped: false };
+  } catch {
+    return { tripped: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The gate - every automated outbound passes through here
 // ---------------------------------------------------------------------------
 

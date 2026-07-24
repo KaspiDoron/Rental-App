@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { setSessionCookie, getSession, isOwner, sessionSecretReady } from "@/lib/session";
-import { getConfig } from "@/lib/runtime-config";
+import { getGoogleClientId } from "@/lib/runtime-config";
 import { getUser, registerUser, isBlocked, touchUser } from "@/lib/access";
 
 const PHONE_RX = /^\+?[\d\s\-()]{7,17}$/;
@@ -38,7 +38,9 @@ export async function POST(req: Request) {
     if (!res.ok || !info.email || info.email_verified !== "true") {
       return NextResponse.json({ error: "Google sign-in could not be verified." }, { status: 401 });
     }
-    const expectedAud = await getConfig("GOOGLE_OAUTH_CLIENT_ID");
+    // Same resilient resolve as the client button, so token verification and
+    // button rendering agree on the client ID across every host/vault state.
+    const expectedAud = await getGoogleClientId();
     if (expectedAud && info.aud !== expectedAud) {
       return NextResponse.json({ error: "Google credential audience mismatch." }, { status: 401 });
     }

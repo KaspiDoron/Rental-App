@@ -48,6 +48,29 @@ describe("privacy/data-minimization: syncFullHistory is never requested true", (
   });
 });
 
+describe("anti-ban: pairing-layer client fingerprint (the ban happened AT pairing)", () => {
+  it("presents a standard Chrome-on-macOS fingerprint, never the flagged default", () => {
+    const evo = read("src/lib/evolution.ts");
+    // The standard desktop WhatsApp-Web fingerprint is declared...
+    expect(evo).toMatch(/\[\s*"Mac OS"\s*,\s*"Chrome"\s*,\s*"[\d.]+"\s*\]/);
+    // ...and pinned to the WEB protocol (not the flagged mobile API).
+    expect(evo).toMatch(/mobile:\s*false/);
+    // ...and it is actually SPREAD into the create bodies (not just declared).
+    const code = readCode("src/lib/evolution.ts");
+    expect(count(code, /\.\.\.CONNECT_FINGERPRINT/g)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("anti-ban: send-side STOP-LOSS wired into the one send chokepoint", () => {
+  it("wa-guard exports noteSendOutcome and evolution.ts feeds it on every outcome", () => {
+    expect(read("src/lib/wa-guard.ts")).toMatch(/export async function noteSendOutcome/);
+    const evo = read("src/lib/evolution.ts");
+    // A clean send resets the streak; a hard failure feeds the breaker.
+    expect(evo).toMatch(/noteSendOutcome\(email,\s*"ok"\)/);
+    expect(evo).toMatch(/noteSendOutcome\(email,\s*hard\s*\?\s*"hard"\s*:\s*"soft"\)/);
+  });
+});
+
 describe("resilience: external fetches are bounded by a hard timeout", () => {
   it("evoFetch aborts on a timeout (a cold Evolution host cannot hang the drain)", () => {
     const evo = read("src/lib/evolution.ts");

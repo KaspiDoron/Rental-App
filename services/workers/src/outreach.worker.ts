@@ -32,6 +32,7 @@ import {
   ensureGloballyUnique,
   planCapacity,
   cappedStaggerOffsets,
+  gaussianUnit,
   newContactBudget,
   introductionsInWindow,
   sbInsert,
@@ -152,7 +153,8 @@ async function handleBatch(job: Job<OutreachBatchJobV2 & LegacyBatchJob>): Promi
   }
 
   // 4. Structural 45-75s stagger, hour-window aware (reuses the drain's math).
-  const delays = cappedStaggerOffsets(take.length, cap.hourCap, 45);
+  // Gaussian (bell-curve) cold-lane jitter - same 45-75s band, human-shaped gaps.
+  const delays = cappedStaggerOffsets(take.length, cap.hourCap, 45, gaussianUnit);
 
   // 5. Init the progress hash, then fan out in ONE pipelined addBulk.
   await initCampaign(batchId, { userEmail, plan, total: take.length, skipped });

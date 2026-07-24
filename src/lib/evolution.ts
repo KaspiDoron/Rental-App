@@ -22,7 +22,36 @@ import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
-const TYPING_DELAY_MS = () => 1200 + Math.floor(Math.random() * 2300);
+
+// PAIRING-LAYER anti-ban: the client fingerprint presented at socket connect.
+// Baileys' default fingerprint (a generic "Evolution API" / library string) reads
+// as an automation client and is a top-weighted flag vector AT PAIRING TIME -
+// before a single message is sent (the exact failure the owner hit). Presenting a
+// STANDARD desktop WhatsApp-Web fingerprint (Chrome on macOS) makes the socket
+// indistinguishable from a normal linked-device Web session.
+//   [platform, browser, version] - Baileys' Browsers.macOS('Chrome') shape.
+// Passed on EVERY instance/create below. On stock Evolution API the authoritative
+// equivalent is the SERVER env CONFIG_SESSION_PHONE_CLIENT="Mac OS" +
+// CONFIG_SESSION_PHONE_NAME="Chrome" (see docs/ANTI-BAN.md); setting both the
+// per-instance field AND the server env is belt-and-suspenders - the field is a
+// harmless no-op on builds that read only the env, and authoritative on forks
+// that pass `browser` straight to makeWASocket.
+const CLIENT_BROWSER: readonly [string, string, string] = ["Mac OS", "Chrome", "122.0.0"];
+
+// Connection-safety defaults shared by every instance/create path. mobile:false
+// pins the WhatsApp WEB protocol (not the flagged/deprecated mobile API); the
+// history/read flags below keep the socket from pulling the user's past chats or
+// media on connect (data minimization AND removing the "reads everything on link"
+// bot signature). NOTE: syncFullHistory:false is intentionally ALSO written as a
+// literal in each create body - the hardening-invariants test pins that literal.
+const CONNECT_FINGERPRINT = { browser: CLIENT_BROWSER, mobile: false } as const;
+
+// A per-message "typing" duration proportional to the message length at a
+// human ~50 WPM (~4.2 chars/sec), clamped to a believable 1.2-8s band. A flat
+// delay regardless of length is itself a faint machine tell; a 20-char "yes, ok"
+// and a 180-char paragraph should not take the same time to "type".
+const typingDelayForLength = (len: number): number =>
+  Math.max(1200, Math.min(8000, Math.round((Math.max(0, len) / 4.2) * 1000)));
 
 declare global {
   // eslint-disable-next-line no-var
@@ -680,6 +709,9 @@ export async function ensureConnected(
       instanceName: instance,
       qrcode: false,
       integration: "WHATSAPP-BAILEYS",
+      // Standard Chrome-on-macOS fingerprint + web protocol on the failover
+      // recreate too, so a reconnect never re-links under the flagged default.
+      ...CONNECT_FINGERPRINT,
       // Privacy: never backfill the user's full personal history on a failover
       // recreate either (data minimization must be set at create time on EVERY
       // instance/create path, not applied post-hoc via a best-effort settings call).
@@ -868,6 +900,10 @@ export async function connectInstance(
     instanceName: instance,
     qrcode: true,
     integration: "WHATSAPP-BAILEYS",
+    // PAIRING-LAYER defense: present a standard Chrome-on-macOS Web fingerprint
+    // and pin the web protocol, so the socket does not get flagged at connect
+    // time (the ban happened BEFORE any message - at pairing).
+    ...CONNECT_FINGERPRINT,
     alwaysOnline: false,
     groupsIgnore: true,
     readMessages: false,
@@ -896,6 +932,10 @@ export async function connectInstance(
         ...(digits ? { number: digits } : {}),
         webhook: webhookUrl,
         events: ["MESSAGES_UPSERT"],
+        // Same reasoning as syncFullHistory below: the older build that needs the
+        // flat-webhook retry ignores post-hoc settings, so the pairing-layer
+        // fingerprint MUST be declared at create time here too.
+        ...CONNECT_FINGERPRINT,
         // Privacy: the flat-retry path fires precisely BECAUSE this is an older
         // Evolution build - the exact build whose comment below admits it
         // ignores the post-hoc /settings/set hardening. So syncFullHistory
@@ -1430,14 +1470,14 @@ export async function sendFromUser(
     // transient re-queue handles recovery.
     let r = await evo(email, `/message/sendText/${instance}`, {
       method: "POST",
-      body: JSON.stringify({ number, text: message, delay: TYPING_DELAY_MS() }),
+      body: JSON.stringify({ number, text: message, delay: typingDelayForLength(message.length) }),
     });
     if (!r.ok && r.status !== 0) {
       r = await evo(email, `/message/sendText/${instance}`, {
         method: "POST",
         body: JSON.stringify({
           number,
-          options: { delay: TYPING_DELAY_MS(), presence: "composing" },
+          options: { delay: typingDelayForLength(message.length), presence: "composing" },
           textMessage: { text: message },
         }),
       });
@@ -1472,9 +1512,14 @@ export async function sendFromUser(
   if (res.ok) {
     const rawStatus = String(res.data?.status ?? "").toLowerCase();
     if (rawStatus === "error" || rawStatus === "failed") {
+      // An explicit WhatsApp reject on an otherwise-2xx response is an
+      // account-level signal - feed the stop-loss so a run of them halts sends.
+      import("./wa-guard").then((m) => m.noteSendOutcome(email, "hard")).catch(() => {});
       return { ok: false, error: "WhatsApp rejected the message" };
     }
     recordSend(email);
+    // A clean send clears the stop-loss streak (the account is responding).
+    import("./wa-guard").then((m) => m.noteSendOutcome(email, "ok")).catch(() => {});
     const id = String(res.data?.key?.id ?? res.data?.messageId ?? "");
     return { ok: true, messageId: id || undefined, unconfirmed: !hasSendReceipt(res.data) };
   }
@@ -1487,9 +1532,25 @@ export async function sendFromUser(
   // looks like list-blasting to Meta - feed it to the risk engine so the
   // number's ban-risk score reflects it.
   try {
-    const { recordSendFailure } = await import("./wa-guard");
+    const { recordSendFailure, noteSendOutcome } = await import("./wa-guard");
     const blocked = /not.*whatsapp|invalid|exist|blocked|forbidden/i.test(String(errText));
     await recordSendFailure(email, number, blocked ? "block" : "fail");
+    // STOP-LOSS classification (distinct from the per-recipient risk above):
+    // "hard" = an ACCOUNT-level restriction signal - an auth/rate HTTP status
+    // (401/403/429), a socket drop / send timeout (status 0), or text that reads
+    // as a restriction/ban/rate limit. A scattered dead number
+    // (invalid/not-on-WhatsApp) is a LIST-quality problem, not an account
+    // restriction, so it stays "soft" and resets the streak - only a genuine
+    // run of account-level failures halts the whole queue.
+    const hard =
+      res.status === 401 ||
+      res.status === 403 ||
+      res.status === 429 ||
+      res.status === 0 ||
+      /forbidden|too many|rate.?limit|\bban\b|banned|restrict|not.?authoriz|spam/i.test(
+        String(errText)
+      );
+    await noteSendOutcome(email, hard ? "hard" : "soft");
   } catch {
     /* best-effort */
   }

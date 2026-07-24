@@ -49,6 +49,7 @@ import {
   gapBucket,
   claimSendSlots,
   messageSlotKey,
+  gaussianUnit,
 } from "./pacing";
 
 beforeEach(() => {
@@ -88,6 +89,38 @@ describe("staggerOffsets - the batch trickle", () => {
   it("ten shops never share a timestamp (the '~15:27 x10' regression)", () => {
     const offs = staggerOffsets(10);
     expect(new Set(offs).size).toBe(10);
+  });
+});
+
+describe("gaussianUnit - bell-curve jitter that never breaks the pacing bounds", () => {
+  it("always returns a value inside [0,1] (so 45+rand*30 stays 45-75s)", () => {
+    for (let i = 0; i < 5000; i++) {
+      const v = gaussianUnit();
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("clusters around the mean (a bell, not a flat uniform)", () => {
+    let inMiddle = 0;
+    const N = 20000;
+    for (let i = 0; i < N; i++) {
+      const v = gaussianUnit(0.5, 0.22);
+      if (v > 0.35 && v < 0.65) inMiddle += 1;
+    }
+    // A uniform draw would put ~30% in the middle 30% of the range; the
+    // Gaussian concentrates clearly more mass there.
+    expect(inMiddle / N).toBeGreaterThan(0.45);
+  });
+
+  it("is a drop-in rand for cappedStaggerOffsets - gaps stay within the min-gap band", () => {
+    const offs = cappedStaggerOffsets(40, 40, 12, gaussianUnit);
+    for (let i = 1; i < offs.length; i++) {
+      const step = offs[i] - offs[i - 1];
+      expect(step).toBeGreaterThanOrEqual(12_000); // >= min-gap
+      expect(step).toBeLessThanOrEqual(24_000); // <= min-gap + jitter cap
+    }
+    expect(new Set(offs).size).toBe(40); // still no shared timestamp
   });
 });
 

@@ -13,6 +13,30 @@ import { digitsOnly } from "../phone";
 //     read the same pacing state and pass together. claimSendSlots() makes
 //     the send decision atomic via wa_send_claims primary-key conflicts.
 
+/**
+ * A [0,1] value drawn from a TRUNCATED GAUSSIAN (bell curve) instead of a flat
+ * uniform. Human inter-message timing clusters around a typical gap and tapers
+ * at the extremes; uniform jitter is flat (45s and 75s equally likely), which
+ * is itself a faint machine signature. Feeding this as the `rand` argument to
+ * the stagger functions below reshapes the SAME 45-75s band into a bell centered
+ * near the middle - most gaps land around the mean, a few stretch to the edges -
+ * without changing any bound (the output is always clamped to [0,1], so
+ * `45 + rand()*30` stays exactly within 45-75s). Box-Muller; drop-in for
+ * Math.random.
+ */
+export function gaussianUnit(
+  mean = 0.5,
+  sd = 0.22,
+  rand: () => number = Math.random
+): number {
+  // Box-Muller needs u1 in (0,1]; guard the log against 0.
+  const u1 = 1 - rand();
+  const u2 = rand();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const v = mean + z * sd;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 /** A hold timestamp with a per-row random spread - never a shared instant. */
 export function jitteredHold(
   nowMs: number,

@@ -142,7 +142,7 @@ export async function POST(req: Request) {
   const { guardOutbound, afterSend, claimForSend, releaseSendClaim } = await import(
     "@/lib/wa-guard"
   );
-  const { cappedStaggerOffsets } = await import("@/lib/wa/pacing");
+  const { cappedStaggerOffsets, gaussianUnit } = await import("@/lib/wa/pacing");
   const { randomBytes } = await import("crypto");
   const results: {
     id: string;
@@ -177,7 +177,10 @@ export async function POST(req: Request) {
   const gapSec = await getPolicies()
     .then((p) => Math.max(8, p.min_gap_seconds))
     .catch(() => 12);
-  const offsets = cappedStaggerOffsets(vendors.length, hourCap, gapSec);
+  // Gaussian (bell-curve) jitter for the cold lane: the same 45-75s band, but
+  // gaps cluster around the mean like human timing instead of a flat uniform
+  // spread (a faint machine tell). Bounds are unchanged (gaussianUnit is [0,1]).
+  const offsets = cappedStaggerOffsets(vendors.length, hourCap, gapSec, gaussianUnit);
   const batchStart = Date.now();
   // The stagger index counts only shops that ACTUALLY enter the send stream -
   // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the
