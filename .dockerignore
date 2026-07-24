@@ -1,21 +1,23 @@
-# Keep the Docker build context small (the compose header warned about this).
-# The VM images (gateway/workers) only need src, packages, apps, services,
-# shims, tsconfig + the manifests - never these.
+# Keep the Docker build context small. NOTE: every npm WORKSPACE directory must
+# stay in the context (npm ci needs all workspace manifests) - so packages/*
+# are NOT excluded; only heavy/irrelevant artifacts are.
 node_modules
 **/node_modules
 .next
 .git
 .github
+.vercel
+.vscode
 dump.rdb
 *.log
 coverage
-.vercel
 .env
 .env.*
 !.env.example
-packages/testing
 test
 e2e
+scratchpad
+infra
+Dockerfile
 *.md
 !GUIDE.md
-scratchpad

@@ -1,0 +1,126 @@
+# WheelDeal - build + deploy to GCP Cloud Run.
+#
+# Required repository secrets:
+#   GCP_SA_KEY                     - JSON key of a service account with roles:
+#                                    Artifact Registry Writer, Cloud Run Admin,
+#                                    Service Account User
+#   GCP_PROJECT_ID                 - the GCP project id
+#   SUPABASE_URL                   - bootstrap runtime env (see CLAUDE.md Deploy)
+#   SUPABASE_SERVICE_ROLE_KEY
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY  - also a BUILD arg (inlined client-side)
+#   SESSION_SECRET
+#   ADMIN_EMAILS
+#   Optional: EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_HOSTS, APP_DOMAIN
+#
+# Every other integration key (LLM providers, PayPal, Resend, Maps...) lives in
+# the Supabase-backed admin Key Vault and needs NO redeploy - only the bootstrap
+# set above is passed to the service.
+
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      # The live production branch of this repo (Vercel-era naming, kept).
+      - claude/rental-negotiation-app-pc33ux
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-cloud-run
+  cancel-in-progress: false
+
+env:
+  REGION: asia-southeast1            # Singapore - closest to the SE-Asia market
+  REPOSITORY: wheeldeal              # Artifact Registry docker repo name
+  SERVICE: wheeldeal                 # Cloud Run service name
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          gcloud artifacts repositories describe "$REPOSITORY" \
+            --location="$REGION" --project="${{ secrets.GCP_PROJECT_ID }}" >/dev/null 2>&1 || \
+          gcloud artifacts repositories create "$REPOSITORY" \
+            --repository-format=docker \
+            --location="$REGION" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --description="WheelDeal container images"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: Build image
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
+          docker build \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            -t "$IMAGE:${{ github.sha }}" \
+            -t "$IMAGE:latest" \
+            .
+
+      - name: Push image
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
+          # ^##^ makes gcloud split on ## instead of "," so secret values may
+          # safely contain commas (e.g. ADMIN_EMAILS, EVOLUTION_HOSTS).
+          ENV_VARS="SUPABASE_URL=${{ secrets.SUPABASE_URL }}"
+          ENV_VARS="$ENV_VARS##SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
+          ENV_VARS="$ENV_VARS##NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
+          ENV_VARS="$ENV_VARS##SESSION_SECRET=${{ secrets.SESSION_SECRET }}"
+          ENV_VARS="$ENV_VARS##ADMIN_EMAILS=${{ secrets.ADMIN_EMAILS }}"
+          if [ -n "${{ secrets.EVOLUTION_API_URL }}" ]; then
+            ENV_VARS="$ENV_VARS##EVOLUTION_API_URL=${{ secrets.EVOLUTION_API_URL }}"
+          fi
+          if [ -n "${{ secrets.EVOLUTION_API_KEY }}" ]; then
+            ENV_VARS="$ENV_VARS##EVOLUTION_API_KEY=${{ secrets.EVOLUTION_API_KEY }}"
+          fi
+          if [ -n "${{ secrets.EVOLUTION_HOSTS }}" ]; then
+            ENV_VARS="$ENV_VARS##EVOLUTION_HOSTS=${{ secrets.EVOLUTION_HOSTS }}"
+          fi
+          if [ -n "${{ secrets.APP_DOMAIN }}" ]; then
+            ENV_VARS="$ENV_VARS##APP_DOMAIN=${{ secrets.APP_DOMAIN }}"
+          fi
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE:${{ github.sha }}" \
+            --region "$REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 1Gi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 10 \
+            --timeout 300 \
+            --set-env-vars "^##^$ENV_VARS"
+
+      - name: Show service URL
+        run: |
+          gcloud run services describe "$SERVICE" --region "$REGION" \
+            --format="value(status.url)"
