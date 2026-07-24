@@ -482,9 +482,16 @@ export async function chat(
  */
 export async function chatDetailed(
   messages: ChatMessage[],
-  opts?: { maxTokens?: number; budgetMs?: number }
+  opts?: { maxTokens?: number; budgetMs?: number; preferProvider?: ProviderName }
 ): Promise<{ text: string | null; provider?: ProviderName; error?: string }> {
-  const list = await providers();
+  let list = await providers();
+  // preferProvider hoists one provider to the front WHEN it is configured
+  // (used by the distillation "teacher" to prefer DeepSeek, while still falling
+  // back to the free chain when no DeepSeek key exists). Not a hard pin.
+  if (opts?.preferProvider) {
+    const pref = opts.preferProvider;
+    list = [...list].sort((a, b) => (a.name === pref ? -1 : b.name === pref ? 1 : 0));
+  }
   if (list.length === 0) {
     return { text: null, error: "No AI provider key is configured. Add one in Admin -> Keys." };
   }

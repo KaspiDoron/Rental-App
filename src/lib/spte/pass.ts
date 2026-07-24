@@ -54,6 +54,9 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "photo/copy of the license, politely defer: you will share it once the rate and rental details are agreed - " +
     "never refuse outright, never send documents, and steer back to the price.\n" +
     "- Keep the message to 1-2 short sentences in simple, everyday English.\n" +
+    (ctx.session.coaching && ctx.session.coaching.trim()
+      ? `${ctx.session.coaching.trim()}\n`
+      : "") +
     "OUTPUT JSON shape: { \"read\": {intent, priceMentioned?, declined?, wrongVehicle?, askedLocation?}, " +
     "\"think\": string (<=1 sentence, private), \"move\": string (from LEGAL MOVES), \"message\"?: string, " +
     "\"counterPricePerDay\"?: number, \"leverageUsed\": string[], \"digestPatch\": string[] (<=3 new facts), " +

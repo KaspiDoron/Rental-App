@@ -42,6 +42,9 @@ export interface SessionSnapshot {
   rivals: Array<{ vendorId: string; shop: string; pricePerDay: number; currency: string }>;
   /** Priors banked from past successful deals (self-improvement loop). */
   priors?: { medianAchieved?: number; typicalDiscountPct?: number; sampleSize: number } | null;
+  /** Few-shot TONE/tactic coaching (owner teaching + Ops learning + distilled
+   *  winning traces). Injected into the prompt; numbers are never copied. */
+  coaching?: string;
 }
 
 export interface ThreadDigest {

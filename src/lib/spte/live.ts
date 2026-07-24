@@ -106,6 +106,11 @@ async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<Session
   } catch {
     /* no grounded benchmark -> the pass refuses to invent one */
   }
+  // Few-shot coaching (owner teaching + Ops learning + distilled winning
+  // traces) - the primary engine now learns like the graph engine does.
+  // Best-effort; "" when nothing has been taught/distilled yet.
+  const { loadCoaching } = await import("./coaching");
+  const coaching = await loadCoaching().catch(() => "");
   return {
     sessionId: input.event.threadKey,
     rfq: input.rfq,
@@ -114,6 +119,7 @@ async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<Session
     lowest,
     rivals,
     priors: null,
+    coaching,
   };
 }
 
