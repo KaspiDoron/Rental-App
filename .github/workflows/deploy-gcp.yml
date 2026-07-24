@@ -25,6 +25,9 @@ on:
       - master
       # The live production branch of this repo (Vercel-era naming, kept).
       - claude/rental-negotiation-app-pc33ux
+      # The active development branch - runs `verify` on push, never `deploy`.
+      - claude/rental-agents-legal-setup-o7rgcv
+  pull_request:
   workflow_dispatch: {}
 
 concurrency:
@@ -37,7 +40,40 @@ env:
   SERVICE: wheeldeal                 # Cloud Run service name
 
 jobs:
+  # QUALITY GATE - typecheck (root + services) + the full vitest suite. Nothing
+  # ships to Cloud Run unless this is green (the `deploy` job `needs: verify`),
+  # so a red build can no longer reach production. Runs on every push/PR.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install deps
+        run: npm ci
+      - name: Typecheck (root)
+        run: npm run typecheck
+      - name: Typecheck (gateway + workers)
+        run: npm run typecheck:services
+      - name: Unit + integration tests
+        run: npx vitest run
+
   deploy:
+    needs: verify
+    # Only the production branches actually deploy; the dev branch + PRs stop
+    # after `verify` (they still get the full quality gate above).
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/master' ||
+       github.ref == 'refs/heads/claude/rental-negotiation-app-pc33ux')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
