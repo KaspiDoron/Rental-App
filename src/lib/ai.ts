@@ -38,6 +38,19 @@ interface ProviderConfig {
 // a 2-3 provider failover chain still fits inside the route's 60s maxDuration.
 const CALL_TIMEOUT_MS = 14000;
 
+/** Every AI provider token key, in default failover order. */
+export const PROVIDER_NAMES: ProviderName[] = [
+  "groq",
+  "cerebras",
+  "sambanova",
+  "deepseek",
+  "together",
+  "openrouter",
+  "mistral",
+  "huggingface",
+  "gemini",
+];
+
 async function allProviders(): Promise<ProviderConfig[]> {
   const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova] =
     await Promise.all([
@@ -51,18 +64,36 @@ async function allProviders(): Promise<ProviderConfig[]> {
       getConfig("TOGETHER_TOKEN"),
       getConfig("SAMBANOVA_TOKEN"),
     ]);
+  // Optional per-provider MODEL override (vault/env `<PROVIDER>_MODEL`). Free-tier
+  // model ids drift constantly - a rename 404s the whole provider. This lets the
+  // owner pin or upgrade any provider's model LIVE from Admin -> Keys with no
+  // redeploy (paste e.g. `CEREBRAS_MODEL = qwen-3-235b-a22b-instruct-2507`).
+  // Blank -> the strong default below. The fallbackModel still covers a bad id.
+  const [groqM, orM, cerM, gemM, misM, hfM, dsM, togM, sambaM] = await Promise.all([
+    getConfig("GROQ_MODEL"),
+    getConfig("OPENROUTER_MODEL"),
+    getConfig("CEREBRAS_MODEL"),
+    getConfig("GEMINI_MODEL"),
+    getConfig("MISTRAL_MODEL"),
+    getConfig("HUGGINGFACE_MODEL"),
+    getConfig("DEEPSEEK_MODEL"),
+    getConfig("TOGETHER_MODEL"),
+    getConfig("SAMBANOVA_MODEL"),
+  ]);
+  const pick = (override: string | undefined, def: string) =>
+    (override && override.trim()) || def;
 
-  // Every provider now runs a TOP-TIER model (70B+/frontier), so whichever key
-  // the owner has, the agents get a strong brain. Order = default failover
-  // priority (fastest + steadiest free tiers first). All are OpenAI-compatible
-  // except Gemini, which the chat() path special-cases.
+  // Every provider runs a TOP-TIER model (70B+/frontier), so whichever key the
+  // owner has, the agents get a strong brain. Order = default failover priority
+  // (fastest + steadiest free tiers first). All are OpenAI-compatible except
+  // Gemini, which the chat() path special-cases.
   return [
     {
       name: "groq",
       token: groq,
       endpoint: "https://api.groq.com/openai/v1/chat/completions",
       // Kimi-K2: a frontier-class open model, served fast on Groq's free tier.
-      model: "moonshotai/kimi-k2-instruct",
+      model: pick(groqM, "moonshotai/kimi-k2-instruct"),
       // Llama-3.3-70B is always live on Groq - a rock-solid fallback.
       fallbackModel: "llama-3.3-70b-versatile",
     },
@@ -70,8 +101,10 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      model: "llama-3.3-70b",
-      fallbackModel: "llama3.1-70b",
+      // llama-3.3-70b is Cerebras' flagship; Llama-4 Scout is the current
+      // fallback (the old llama3.1-70b was retired -> 404).
+      model: pick(cerM, "llama-3.3-70b"),
+      fallbackModel: "llama-4-scout-17b-16e-instruct",
     },
     {
       name: "sambanova",
@@ -79,20 +112,23 @@ async function allProviders(): Promise<ProviderConfig[]> {
       endpoint: "https://api.sambanova.ai/v1/chat/completions",
       // Meta-Llama-3.1-* were deprecated on SambaNova Cloud (HTTP 410).
       // 3.3-70B is current; Llama-4 Maverick is the newer fallback.
-      model: "Meta-Llama-3.3-70B-Instruct",
+      model: pick(sambaM, "Meta-Llama-3.3-70B-Instruct"),
       fallbackModel: "Llama-4-Maverick-17B-128E-Instruct",
     },
     {
       name: "deepseek",
       token: deepseek,
       endpoint: "https://api.deepseek.com/chat/completions",
-      model: "deepseek-chat",
+      // deepseek-chat was retired: the API now requires deepseek-v4-pro (top
+      // tier) or deepseek-v4-flash (the fast fallback).
+      model: pick(dsM, "deepseek-v4-pro"),
+      fallbackModel: "deepseek-v4-flash",
     },
     {
       name: "together",
       token: together,
       endpoint: "https://api.together.xyz/v1/chat/completions",
-      model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+      model: pick(togM, "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"),
       fallbackModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
     },
     {
@@ -100,21 +136,21 @@ async function allProviders(): Promise<ProviderConfig[]> {
       token: openrouter,
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       // Frontier open model, free tier on OpenRouter.
-      model: "deepseek/deepseek-chat-v3.1:free",
+      model: pick(orM, "deepseek/deepseek-chat-v3.1:free"),
       fallbackModel: "meta-llama/llama-3.3-70b-instruct:free",
     },
     {
       name: "mistral",
       token: mistral,
       endpoint: "https://api.mistral.ai/v1/chat/completions",
-      model: "mistral-large-latest",
+      model: pick(misM, "mistral-large-latest"),
       fallbackModel: "open-mistral-nemo",
     },
     {
       name: "huggingface",
       token: huggingface,
       endpoint: "https://router.huggingface.co/v1/chat/completions",
-      model: "meta-llama/Llama-3.3-70B-Instruct",
+      model: pick(hfM, "meta-llama/Llama-3.3-70B-Instruct"),
     },
     {
       name: "gemini",
@@ -122,11 +158,66 @@ async function allProviders(): Promise<ProviderConfig[]> {
       endpoint:
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       // gemini-2.0-flash lost its free tier (limit 0). 2.5-flash still has a
-      // free tier; 2.5-flash-lite is the higher-quota fallback.
-      model: "gemini-2.5-flash",
+      // free tier; gemini-flash-latest is the higher-quota rolling fallback.
+      model: pick(gemM, "gemini-2.5-flash"),
       fallbackModel: "gemini-flash-latest",
     },
   ];
+}
+
+// ---- free-tier reset cadence (documented estimates, NOT an API contract) -----
+// Providers change these without notice and rarely expose the live allowance, so
+// this drives the "resets daily/monthly" label + the used-this-cycle window only.
+// Where a provider DOES expose a live figure (OpenRouter $, DeepSeek balance),
+// aiStatus fetches it and that is authoritative.
+type Cadence = "day" | "month" | "none";
+const PROVIDER_META: Record<ProviderName, { cadence: Cadence; note: string }> = {
+  groq: { cadence: "day", note: "Free tier resets DAILY (per-day token + request caps)." },
+  cerebras: { cadence: "day", note: "Free tier resets DAILY (per-day token cap)." },
+  gemini: { cadence: "day", note: "Free tier resets DAILY (requests-per-day), ~midnight PT." },
+  openrouter: { cadence: "day", note: "Free models cap requests-per-DAY; $ credit shown live." },
+  sambanova: { cadence: "day", note: "Free tier resets DAILY (per-day + per-minute caps)." },
+  mistral: { cadence: "month", note: "Free tier is a MONTHLY token allowance." },
+  huggingface: { cadence: "month", note: "Router credits reset MONTHLY." },
+  together: { cadence: "none", note: "One-time free credit; free models are per-minute rate-limited." },
+  deepseek: { cadence: "none", note: "Pay-as-you-go balance (shown live); no free reset." },
+};
+
+/** Start of the current cadence window as an ISO instant (UTC). */
+function cycleStart(cadence: Cadence): Date | null {
+  if (cadence === "none") return null;
+  const n = new Date();
+  return cadence === "day"
+    ? new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()))
+    : new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1));
+}
+
+/** Tokens we have spent per provider within THIS provider's reset window. */
+async function cycleUsage(): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  try {
+    const { sbSelect } = await import("./runtime-config");
+    // One query over the widest window (a month), then bucket per provider by
+    // its own cadence. Cheap enough for an admin-only panel.
+    const monthStart = cycleStart("month")!;
+    const rows = await sbSelect<{ provider: string; tokens: number; created_at: string }>(
+      "ai_usage",
+      `select=provider,tokens,created_at&created_at=gte.${monthStart.toISOString()}&limit=100000`
+    );
+    const dayStartMs = cycleStart("day")!.getTime();
+    const monthStartMs = monthStart.getTime();
+    for (const r of rows) {
+      const meta = PROVIDER_META[r.provider as ProviderName];
+      if (!meta || meta.cadence === "none") continue;
+      const boundary = meta.cadence === "day" ? dayStartMs : monthStartMs;
+      if (Date.parse(r.created_at) >= boundary) {
+        out[r.provider] = (out[r.provider] ?? 0) + (Number(r.tokens) || 0);
+      }
+    }
+  } catch {
+    /* usage is best-effort - the panel still shows in-memory "used here" */
+  }
+  return out;
 }
 
 // Current Gemini model used by every Gemini call (chat + vision).
@@ -177,11 +268,12 @@ export async function aiStatus() {
   const list = await allProviders();
   const preferred = ((await getConfig("AI_PROVIDER")) || "").toLowerCase();
   const s = usageStore();
+  const cyc = await cycleUsage();
 
   return Promise.all(
     list.map(async (p) => {
       let remaining: string | null = null;
-      // OpenRouter is the only free gateway exposing a clean quota endpoint.
+      // OpenRouter exposes a clean $-quota endpoint.
       if (p.name === "openrouter" && p.token) {
         try {
           const res = await fetch("https://openrouter.ai/api/v1/key", {
@@ -201,6 +293,21 @@ export async function aiStatus() {
           /* leave unknown */
         }
       }
+      // DeepSeek exposes a live balance endpoint.
+      if (p.name === "deepseek" && p.token) {
+        try {
+          const res = await fetch("https://api.deepseek.com/user/balance", {
+            headers: { Authorization: `Bearer ${p.token}` },
+            cache: "no-store",
+          });
+          const d = await res.json();
+          const b = d?.balance_infos?.[0];
+          if (res.ok && b) remaining = `${b.total_balance} ${b.currency} balance`;
+        } catch {
+          /* leave unknown */
+        }
+      }
+      const meta = PROVIDER_META[p.name];
       return {
         name: p.name,
         model: p.model,
@@ -210,9 +317,39 @@ export async function aiStatus() {
         tokensUsed: s[p.name]?.tokens ?? 0,
         failures: s[p.name]?.failures ?? 0,
         remaining, // null = the provider does not expose remaining quota
+        // Free-tier cycle: OUR measured spend this window + the documented reset.
+        usedThisCycle: cyc[p.name] ?? 0,
+        cadence: meta.cadence, // "day" | "month" | "none"
+        cadenceNote: meta.note,
       };
     })
   );
+}
+
+/**
+ * The EXACT endpoint + model the app will use for a provider token key, so the
+ * admin "Test API" button probes what production actually runs (respecting any
+ * `<PROVIDER>_MODEL` override) instead of a separately-hardcoded id that drifts.
+ * Returns null for non-AI keys.
+ */
+export async function aiProviderTestTarget(
+  tokenKey: string
+): Promise<{ endpoint: string; model: string; gemini: boolean } | null> {
+  const byKey: Record<string, ProviderName> = {
+    GROQ_TOKEN: "groq",
+    OPENROUTER_TOKEN: "openrouter",
+    CEREBRAS_TOKEN: "cerebras",
+    GEMINI_TOKEN: "gemini",
+    MISTRAL_TOKEN: "mistral",
+    HUGGINGFACE_TOKEN: "huggingface",
+    DEEPSEEK_TOKEN: "deepseek",
+    TOGETHER_TOKEN: "together",
+    SAMBANOVA_TOKEN: "sambanova",
+  };
+  const name = byKey[tokenKey];
+  if (!name) return null;
+  const p = (await allProviders()).find((x) => x.name === name);
+  return p ? { endpoint: p.endpoint, model: p.model, gemini: p.name === "gemini" } : null;
 }
 
 /** fetch with a hard timeout so one slow provider cannot stall the request. */

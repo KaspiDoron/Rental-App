@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { aiStatus } from "@/lib/ai";
+import { aiStatus, PROVIDER_NAMES } from "@/lib/ai";
 import { setConfig } from "@/lib/runtime-config";
 
 // AI provider dashboard: usage, remaining quota (where the provider exposes
@@ -17,7 +17,9 @@ export async function POST(req: Request) {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { provider } = await req.json().catch(() => ({}));
-  if (!["groq", "gemini", "openrouter", "cerebras"].includes(String(provider))) {
+  // Any configured provider can be starred as the preferred one (was limited to
+  // 4 - so deepseek/mistral/together/sambanova/huggingface could never be set).
+  if (!(PROVIDER_NAMES as string[]).includes(String(provider))) {
     return NextResponse.json({ error: "Unknown provider" }, { status: 400 });
   }
   const result = await setConfig("AI_PROVIDER", String(provider));

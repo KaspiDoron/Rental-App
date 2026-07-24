@@ -1607,13 +1607,26 @@ export default function AdminPage() {
                       {p.configured ? "key set" : "no key"}
                     </span>
                   </div>
+                  {p.model && (
+                    <div className="mt-0.5 font-mono text-[10px] text-faint">{p.model}</div>
+                  )}
                   <div className="mt-0.5 text-[11px] text-soft">
                     Used here: {p.tokensUsed.toLocaleString()} tokens · {p.requests} calls
                     {p.failures > 0 ? ` · ${p.failures} failovers` : ""}
                   </div>
+                  {p.cadence && p.cadence !== "none" && (
+                    <div className="text-[11px] text-soft">
+                      This {p.cadence}: {Number(p.usedThisCycle ?? 0).toLocaleString()} tokens used
+                      {" · "}
+                      <span className="text-faint">
+                        free tier resets {p.cadence === "day" ? "daily" : "monthly"}
+                      </span>
+                    </div>
+                  )}
                   <div className="text-[11px] text-faint">
                     Remaining:{" "}
-                    {p.remaining ?? "this provider does not expose remaining quota"}
+                    {p.remaining ??
+                      (p.cadenceNote ?? "this provider does not expose remaining quota")}
                   </div>
                 </button>
               ))}

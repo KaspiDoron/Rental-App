@@ -69,7 +69,7 @@ const KEYS: {
   { name: "CEREBRAS_TOKEN", label: "Cerebras Gateway", scope: "ai", editable: true },
   { name: "MISTRAL_TOKEN", label: "Mistral (mistral-large - top tier)", scope: "ai", editable: true },
   { name: "HUGGINGFACE_TOKEN", label: "Hugging Face (Llama 3.3 70B - free)", scope: "ai", editable: true },
-  { name: "DEEPSEEK_TOKEN", label: "DeepSeek (deepseek-chat - top tier)", scope: "ai", editable: true },
+  { name: "DEEPSEEK_TOKEN", label: "DeepSeek (deepseek-v4-pro - top tier)", scope: "ai", editable: true },
   { name: "TOGETHER_TOKEN", label: "Together AI (Llama 3.3 70B - free)", scope: "ai", editable: true },
   { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },

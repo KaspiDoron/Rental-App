@@ -38,50 +38,41 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, detail: "No value saved for this key yet." });
   }
 
+  // AI providers: test the EXACT endpoint + model the app will run (respecting
+  // any <PROVIDER>_MODEL override), from the single source in lib/ai. This kills
+  // the old bug where the test used a different, drifted model id than production
+  // (e.g. Cerebras tested llama3.1-8b -> 404 while the app used llama-3.3-70b).
+  {
+    const { aiProviderTestTarget } = await import("@/lib/ai");
+    const target = await aiProviderTestTarget(name);
+    if (target) {
+      if (target.gemini) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${target.model}:generateContent?key=${value}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "ping" }] }], generationConfig: { maxOutputTokens: 2 } }),
+            }
+          );
+          const d = await res.json().catch(() => ({}));
+          return NextResponse.json(
+            res.ok
+              ? { ok: true, detail: `OK - Gemini responded (${target.model}).` }
+              : { ok: false, detail: d?.error?.message ?? `HTTP ${res.status} (model: ${target.model})` }
+          );
+        } catch (e) {
+          return NextResponse.json({ ok: false, detail: e instanceof Error ? e.message : "network error" });
+        }
+      }
+      return NextResponse.json(await testOpenAICompatible(target.endpoint, value!, target.model));
+    }
+  }
+
   let result: TestResult = { ok: false, detail: "No test available for this key." };
 
   switch (name) {
-    case "GROQ_TOKEN":
-      result = await testOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", value!, "llama-3.3-70b-versatile");
-      break;
-    case "OPENROUTER_TOKEN":
-      result = await testOpenAICompatible("https://openrouter.ai/api/v1/chat/completions", value!, "meta-llama/llama-3.1-8b-instruct");
-      break;
-    case "CEREBRAS_TOKEN":
-      result = await testOpenAICompatible("https://api.cerebras.ai/v1/chat/completions", value!, "llama3.1-8b");
-      break;
-    case "MISTRAL_TOKEN":
-      result = await testOpenAICompatible("https://api.mistral.ai/v1/chat/completions", value!, "mistral-small-latest");
-      break;
-    case "HUGGINGFACE_TOKEN":
-      result = await testOpenAICompatible("https://router.huggingface.co/v1/chat/completions", value!, "meta-llama/Llama-3.1-8B-Instruct");
-      break;
-    case "DEEPSEEK_TOKEN":
-      result = await testOpenAICompatible("https://api.deepseek.com/chat/completions", value!, "deepseek-chat");
-      break;
-    case "TOGETHER_TOKEN":
-      result = await testOpenAICompatible("https://api.together.xyz/v1/chat/completions", value!, "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free");
-      break;
-    case "SAMBANOVA_TOKEN":
-      result = await testOpenAICompatible("https://api.sambanova.ai/v1/chat/completions", value!, "Meta-Llama-3.3-70B-Instruct");
-      break;
-    case "GEMINI_TOKEN": {
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${value}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "ping" }] }], generationConfig: { maxOutputTokens: 2 } }),
-          }
-        );
-        const d = await res.json().catch(() => ({}));
-        result = res.ok ? { ok: true, detail: "OK - Gemini responded." } : { ok: false, detail: d?.error?.message ?? `HTTP ${res.status}` };
-      } catch (e) {
-        result = { ok: false, detail: e instanceof Error ? e.message : "network error" };
-      }
-      break;
-    }
     case "GOOGLE_MAPS_API_KEY": {
       const { runMapsDiagnostics } = await import("@/lib/google");
       const d = await runMapsDiagnostics();
