@@ -31,9 +31,9 @@ export async function GET(req: Request) {
   // oldest first - powers the TranscriptSheet chat view. The default 2-message
   // shape below stays untouched (ThreadPeek relies on it).
   if (url.searchParams.get("full") === "1") {
-    if (!sent?.to_number) return NextResponse.json({ messages: [] });
+    if (!sent?.to_number) return NextResponse.json({ messages: [], delivery: null });
     const digits = sent.to_number;
-    const [outs, ins] = await Promise.all([
+    const [outs, ins, recip] = await Promise.all([
       sbSelect<{ id: number; body: string; received_at: string; raw: { englishGloss?: string; kind?: string } | null }>(
         "whatsapp_messages",
         `select=id,body,received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
@@ -48,6 +48,21 @@ export async function GET(req: Request) {
         `select=id,body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           digits
         )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
+      ).catch(() => []),
+      // Delivery status for THIS user's number -> this shop (WhatsApp ticks:
+      // sent -> delivered (double grey) -> read (blue) -> replied). Scoped by
+      // sender_key so it is never another user's recipient row.
+      sbSelect<{
+        delivered: boolean;
+        read: boolean;
+        last_read_at: string | null;
+        last_reply_at: string | null;
+        last_sent_at: string | null;
+      }>(
+        "wa_recipient_state",
+        `select=delivered,read,last_read_at,last_reply_at,last_sent_at&sender_key=eq.${encodeURIComponent(
+          session.email
+        )}&to_number=eq.${encodeURIComponent(digits)}&limit=1`
       ).catch(() => []),
     ]);
     const messages = [
@@ -71,7 +86,18 @@ export async function GET(req: Request) {
     ]
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
       .slice(-80);
-    return NextResponse.json({ messages });
+    const rs = recip[0];
+    const replied = ins.length > 0;
+    const delivery = rs
+      ? {
+          sent: Boolean(rs.last_sent_at) || outs.length > 0,
+          delivered: Boolean(rs.delivered),
+          read: Boolean(rs.read),
+          replied,
+          lastReadAt: rs.last_read_at,
+        }
+      : { sent: outs.length > 0, delivered: false, read: false, replied, lastReadAt: null };
+    return NextResponse.json({ messages, delivery });
   }
 
   let received: { body: string; received_at: string; raw?: { english?: string } | null } | null =

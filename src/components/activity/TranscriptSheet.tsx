@@ -30,6 +30,13 @@ export function TranscriptSheet({
 }) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<Msg[] | null>(null);
+  const [delivery, setDelivery] = useState<{
+    sent: boolean;
+    delivered: boolean;
+    read: boolean;
+    replied: boolean;
+    lastReadAt: string | null;
+  } | null>(null);
   const [takeover, setTakeover] = useState<boolean | null>(null);
   const [switching, setSwitching] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -39,7 +46,10 @@ export function TranscriptSheet({
     if (since) q.set("since", String(since));
     fetch(`/api/thread?${q.toString()}`)
       .then((r) => r.json())
-      .then((d) => setMessages(Array.isArray(d.messages) ? d.messages : []))
+      .then((d) => {
+        setMessages(Array.isArray(d.messages) ? d.messages : []);
+        setDelivery(d.delivery ?? null);
+      })
       .catch(() => setMessages([]));
     fetch(`/api/thread/takeover?vendorId=${encodeURIComponent(vendorId)}`)
       .then((r) => r.json())
@@ -69,7 +79,7 @@ export function TranscriptSheet({
   return (
     <Modal onClose={onClose}>
       <div className="mb-2 flex items-center justify-between">
-        <div>
+        <div className="min-w-0">
           <h2 className="text-[16px] font-extrabold text-strong">{vendorName}</h2>
           <p className="text-[11px] text-faint">{t("The full conversation, exactly as sent")}</p>
         </div>
@@ -77,6 +87,24 @@ export function TranscriptSheet({
           ✕
         </button>
       </div>
+
+      {/* Delivery status (WhatsApp ticks): sent -> delivered -> read -> replied. */}
+      {delivery && (delivery.sent || delivery.delivered || delivery.replied) && (
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold">
+          {(() => {
+            const readTime = delivery.lastReadAt
+              ? new Date(delivery.lastReadAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : "";
+            if (delivery.replied)
+              return <span className="text-savings">✓✓ {t("Read - the shop replied")}</span>;
+            if (delivery.read)
+              return <span className="text-brandblue">✓✓ {t("Read")}{readTime ? ` · ${readTime}` : ""}</span>;
+            if (delivery.delivered)
+              return <span className="text-soft">✓✓ {t("Delivered")}</span>;
+            return <span className="text-faint">✓ {t("Sent")}</span>;
+          })()}
+        </div>
+      )}
 
       {takeover !== null && (
         <div
