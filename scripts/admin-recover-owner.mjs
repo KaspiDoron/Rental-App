@@ -54,7 +54,12 @@ const hasFlag = (name) => process.argv.includes(`--${name}`);
 
 const EMAIL = String(arg("email", "kaspidoron@gmail.com")).trim().toLowerCase();
 const PASSWORD = String(arg("password", "KASPI123"));
-const MUST_CHANGE = hasFlag("must-change");
+// Force a password change on next login whenever the weak, well-known default is
+// used (matches the login route's owner-bootstrap hardening: the default must
+// never remain a live credential). An explicit strong --password the operator
+// chose is left as-is unless they add --must-change. --no-must-change overrides.
+const MUST_CHANGE =
+  hasFlag("must-change") || (PASSWORD === "KASPI123" && !hasFlag("no-must-change"));
 
 // ---- connection (mirrors src/lib/runtime-config.ts supabase()) --------------
 const URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "")

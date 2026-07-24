@@ -109,13 +109,21 @@ before cumulative risk trips the pause. The new `noteSendOutcome(senderKey, outc
 in `wa-guard.ts` is the **fast** trip:
 
 - Every send reports its outcome from the one send chokepoint (`sendFromUser`):
-  `"ok"` (clean) resets the streak; `"soft"` (a scattered dead/invalid number)
-  resets it too; `"hard"` (an **account-level** signal — HTTP 401/403/429, a socket
-  drop / timeout, or restriction/ban/rate-limit text) increments it.
+  `"ok"` (clean) resets the streak; `"soft"` resets it too — a scattered dead/invalid
+  number **and** a bare transient timeout (a cold/slow Evolution host returns status 0,
+  which is NOT a restriction and must not trip the breaker); `"hard"` — an
+  **account-level** signal, HTTP 401/403/429 or restriction/ban/rate-limit text —
+  increments it.
 - **3 consecutive hard failures within 180s → `enterBanRecovery` immediately.** That
   sets `paused_until`, and `guardOutbound` then **parks every automated send** for the
   whole account until the window clears. An `wa-stop-loss` `agent_events` row is written
   so the owner sees it in the Ops center.
+- **Scope, honestly:** the fast streak is in-memory per-process, so it reliably protects
+  the long-lived workers deployment (a burst lands in one process). On the serverless
+  path it under-fires (sends are spread ~1/instance across ephemeral lambdas); there the
+  **durable** reputation gauge (`recordSendFailure` → risk auto-pause) is the
+  cross-instance safety net. A real restriction is caught by both over time; the fast
+  breaker is the immediate stop for the workers path.
 
 This is the honest core of "no-ban safeguards": not a promise that a ban can't
 happen, but a guarantee the system **stops the moment WhatsApp resists**, instead of

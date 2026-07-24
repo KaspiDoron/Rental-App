@@ -55,9 +55,12 @@ describe("anti-ban: pairing-layer client fingerprint (the ban happened AT pairin
     expect(evo).toMatch(/\[\s*"Mac OS"\s*,\s*"Chrome"\s*,\s*"[\d.]+"\s*\]/);
     // ...and pinned to the WEB protocol (not the flagged mobile API).
     expect(evo).toMatch(/mobile:\s*false/);
-    // ...and it is actually SPREAD into the create bodies (not just declared).
+    // ...and it is actually SPREAD into the primary create bodies (main create +
+    // failover recreate). The last-resort flat-retry body DELIBERATELY omits it
+    // so a strict validator that 400s on unknown fields can still pair via the
+    // minimal legacy shape - hence >= 2, not every create path.
     const code = readCode("src/lib/evolution.ts");
-    expect(count(code, /\.\.\.CONNECT_FINGERPRINT/g)).toBeGreaterThanOrEqual(3);
+    expect(count(code, /\.\.\.CONNECT_FINGERPRINT/g)).toBeGreaterThanOrEqual(2);
   });
 });
 

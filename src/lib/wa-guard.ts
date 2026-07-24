@@ -866,11 +866,17 @@ export async function enterBanRecovery(
 // genuinely-protective core - not a promise of zero bans, but a guarantee the
 // system stops digging the moment WhatsApp pushes back.
 //
-// In-memory + per-instance is the CORRECT scope: a failure burst happens inside
-// one drain/batch on one instance, and the DURABLE effect it triggers
-// (paused_until in whatsapp_number_reputation) is what every other instance then
-// honors. A "soft" or "ok" outcome resets the streak so isolated blips (one dead
-// number in a good batch) never trip it.
+// SCOPE (be honest about it): the streak is in-memory per-process. That is the
+// RIGHT scope for the long-lived workers process, where a failure burst happens
+// inside one drain and the DURABLE effect it triggers (paused_until in
+// whatsapp_number_reputation) is what every other instance then honors. On the
+// SERVERLESS path it under-fires: the mass route parks all-but-slot-0 and the
+// drain sends <=1 rfq/sender/invocation across ephemeral instances, so a single
+// process rarely sees 3 hard failures in the window. The durable computeRisk
+// gauge (recordSendFailure -> blocks_total/fails_total -> risk auto-pause) is the
+// cross-instance safety net there; this breaker is the FAST trip that reliably
+// protects the workers deployment. A "soft"/"ok" outcome resets the streak so
+// isolated blips (one dead number in a good batch) never trip it.
 const STOP_LOSS_MAX_FAILS = 3; // consecutive hard failures that trip the breaker
 const STOP_LOSS_WINDOW_MS = 180_000; // ...within this window (older streak resets)
 const STOP_LOSS_PAUSE_HOURS = 12; // automated queue halted this long once tripped

@@ -46,12 +46,18 @@ const CLIENT_BROWSER: readonly [string, string, string] = ["Mac OS", "Chrome", "
 // literal in each create body - the hardening-invariants test pins that literal.
 const CONNECT_FINGERPRINT = { browser: CLIENT_BROWSER, mobile: false } as const;
 
-// A per-message "typing" duration proportional to the message length at a
-// human ~50 WPM (~4.2 chars/sec), clamped to a believable 1.2-8s band. A flat
-// delay regardless of length is itself a faint machine tell; a 20-char "yes, ok"
-// and a 180-char paragraph should not take the same time to "type".
-const typingDelayForLength = (len: number): number =>
-  Math.max(1200, Math.min(8000, Math.round((Math.max(0, len) / 4.2) * 1000)));
+// A per-message "typing" duration that scales with message length, jittered so
+// it is never a flat constant (a faint machine tell). ~18ms/char lands a 40-char
+// reply near ~1.9s and a 180-char paragraph near ~4.4s, and it is CAPPED at 4.5s.
+// The cap matters for more than realism: Evolution honours this `delay` by
+// holding the send request server-side, and evoFetch aborts at 12s - so the hold
+// must stay well under that budget or a slow host would time out (status 0) mid
+// send. 4.5s leaves ~7.5s of headroom for the actual network round-trip.
+const typingDelayForLength = (len: number): number => {
+  const base = 1200 + Math.max(0, len) * 18;
+  const jittered = base * (0.9 + Math.random() * 0.2);
+  return Math.round(Math.max(1200, Math.min(4500, jittered)));
+};
 
 declare global {
   // eslint-disable-next-line no-var
@@ -932,10 +938,13 @@ export async function connectInstance(
         ...(digits ? { number: digits } : {}),
         webhook: webhookUrl,
         events: ["MESSAGES_UPSERT"],
-        // Same reasoning as syncFullHistory below: the older build that needs the
-        // flat-webhook retry ignores post-hoc settings, so the pairing-layer
-        // fingerprint MUST be declared at create time here too.
-        ...CONNECT_FINGERPRINT,
+        // NOTE: the fingerprint fields (browser/mobile) are DELIBERATELY omitted
+        // here. This retry is the LAST-RESORT minimal body: it fires when the
+        // main create failed with a non-403/409 status, which on a strict build
+        // could be a 400 rejecting the very browser/mobile fields. Keeping this
+        // path fingerprint-free means such a build can still pair via the legacy
+        // shape (those builds read the fingerprint from server env anyway -
+        // CONFIG_SESSION_PHONE_CLIENT/NAME, per docs/ANTI-BAN.md).
         // Privacy: the flat-retry path fires precisely BECAUSE this is an older
         // Evolution build - the exact build whose comment below admits it
         // ignores the post-hoc /settings/set hardening. So syncFullHistory
@@ -1536,17 +1545,20 @@ export async function sendFromUser(
     const blocked = /not.*whatsapp|invalid|exist|blocked|forbidden/i.test(String(errText));
     await recordSendFailure(email, number, blocked ? "block" : "fail");
     // STOP-LOSS classification (distinct from the per-recipient risk above):
-    // "hard" = an ACCOUNT-level restriction signal - an auth/rate HTTP status
-    // (401/403/429), a socket drop / send timeout (status 0), or text that reads
-    // as a restriction/ban/rate limit. A scattered dead number
-    // (invalid/not-on-WhatsApp) is a LIST-quality problem, not an account
-    // restriction, so it stays "soft" and resets the streak - only a genuine
-    // run of account-level failures halts the whole queue.
+    // "hard" = an ACCOUNT-level restriction signal ONLY - an auth/rate HTTP
+    // status (401/403/429) or text that reads as a restriction/ban/rate limit.
+    // DELIBERATELY NOT status 0: a status-0 result is evoFetch's own 12s
+    // abort/timeout or a network blip (a cold/slow Evolution host - the target
+    // infra), NOT a WhatsApp restriction. The send path treats status 0 as an
+    // ambiguous transient (never re-POSTed), and the drain re-queues it; feeding
+    // it to the breaker would let a slow host self-inflict a 12h halt on a
+    // healthy number. A scattered dead number (invalid/not-on-WhatsApp) is also
+    // a LIST-quality problem, so it stays "soft" and resets the streak - only a
+    // genuine run of account-level failures halts the whole queue.
     const hard =
       res.status === 401 ||
       res.status === 403 ||
       res.status === 429 ||
-      res.status === 0 ||
       /forbidden|too many|rate.?limit|\bban\b|banned|restrict|not.?authoriz|spam/i.test(
         String(errText)
       );
