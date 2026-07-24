@@ -56,6 +56,10 @@ export default function LoginPage() {
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [subBusy, setSubBusy] = useState(false);
   const googleDiv = useRef<HTMLDivElement>(null);
+  // Why the Google button is missing, when it is - shown as a small honest note
+  // instead of silent empty space (the "button not loading" mystery on a fresh
+  // domain was undebuggable without a console).
+  const [googleIssue, setGoogleIssue] = useState<string | null>(null);
 
   // Google OAuth button (renders when a client id is configured).
   useEffect(() => {
@@ -64,7 +68,13 @@ export default function LoginPage() {
       try {
         const res = await fetch("/api/config/public");
         const { googleClientId } = await res.json();
-        if (!googleClientId || cancelled) return;
+        if (cancelled) return;
+        if (!googleClientId) {
+          // Config unreadable on this deployment (vault key not resolving) -
+          // email login still works; say so instead of a blank gap.
+          setGoogleIssue("Google sign-in is not configured on this server yet - use email below.");
+          return;
+        }
         await new Promise<void>((resolve, reject) => {
           if (window.google?.accounts) return resolve();
           const s = document.createElement("script");
@@ -85,8 +95,21 @@ export default function LoginPage() {
           shape: "pill",
           text: "continue_with",
         });
+        // GSI fails SILENTLY when this page's origin is not in the OAuth
+        // client's "Authorized JavaScript origins" (the classic new-domain
+        // miss): initialize/renderButton log to console but paint nothing.
+        // Detect the empty div and say what's wrong in plain words.
+        setTimeout(() => {
+          if (!cancelled && googleDiv.current && googleDiv.current.childElementCount === 0) {
+            setGoogleIssue(
+              "Google sign-in isn't enabled for this domain yet (the site owner must authorize it in Google Cloud Console). Email login below works."
+            );
+          }
+        }, 2500);
       } catch {
-        /* button simply doesn't render */
+        if (!cancelled) {
+          setGoogleIssue("Google sign-in couldn't load - use email below.");
+        }
       }
     })();
     return () => {
@@ -631,6 +654,11 @@ export default function LoginPage() {
               <span className="h-px flex-1 bg-line" />
             </div>
             <div ref={googleDiv} className="flex justify-center" />
+            {googleIssue && (
+              <p className="mt-1 text-center text-[11px] font-bold text-faint">
+                {t(googleIssue)}
+              </p>
+            )}
           </>
         )}
 
