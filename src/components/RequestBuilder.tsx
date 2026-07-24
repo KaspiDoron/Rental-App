@@ -6,7 +6,7 @@
 // turns into a real RFQ with NO LLM call. The free-text box stays available
 // alongside - this is an alternative, not a replacement.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { StructuredRFQ, VehicleClass, Transmission } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
 import { Icon } from "./icons";
@@ -103,7 +103,16 @@ function DurationField({ value, onChange, t }: { value: number; onChange: (n: nu
   );
 }
 
-export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<StructuredRFQ>) => void; busy?: boolean }) {
+export function RequestBuilder({
+  onFieldsChange,
+  busy,
+}: {
+  /** Live report of the current structured selections (null until a vehicle is
+   *  picked). The page's single bottom "Find my deal" button consumes this -
+   *  the builder itself has NO search button (one unified CTA, owner directive). */
+  onFieldsChange: (fields: Partial<StructuredRFQ> | null) => void;
+  busy?: boolean;
+}) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
@@ -137,13 +146,19 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
     setStep((s) => Math.min(total - 1, Math.max(0, s + delta)));
   }
 
-  function lock() {
-    if (!vehicle || busy) return;
+  // LIVE FIELD REPORT: every selection immediately updates the parent, so the
+  // page's ONE bottom "Find my deal" button always searches with the current
+  // structured request (and the header preview reflects it instantly).
+  useEffect(() => {
+    if (!vehicle) {
+      onFieldsChange(null);
+      return;
+    }
     const vehicleClass: VehicleClass = vehicle as VehicleClass;
     const fields: Partial<StructuredRFQ> = {
       vehicleClass,
       durationDays: days,
-      transmission: isTwoWheel ? transmission : transmission,
+      transmission,
       accessories: [],
       fulfillment: delivery,
     };
@@ -153,8 +168,10 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
     if (maxMileage) fields.maxMileageKm = maxMileage;
     const notes = [storageBox ? "storage box / top box" : "", custom.trim()].filter(Boolean).join("; ");
     if (notes) fields.notes = notes.slice(0, 240);
-    onLock(fields);
-  }
+    onFieldsChange(fields);
+    // onFieldsChange is a stable setter from the parent - the selections drive it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicle, transmission, cc, carType, days, helmets, maxMileage, storageBox, delivery, custom]);
 
   const ccOptions = vehicle === "motorbike" ? MOTORBIKE_CC : SCOOTER_CC;
   const TITLES: Record<StepName, string> = {
@@ -276,10 +293,11 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
           </div>
         )}
 
-        {/* STEP - lock */}
+        {/* STEP - review. ONE unified search CTA lives at the bottom of the
+            whole search block (owner directive) - no second button here. */}
         {current === "lock" && (
           <div className="space-y-3">
-            <p className="text-[12px] font-bold text-soft">{t("Here's your request - lock it and I'll find the shops.")}</p>
+            <p className="text-[12px] font-bold text-soft">{t("Your request is ready:")}</p>
             <div className="flex flex-wrap gap-1.5">
               {vehicle && <span className="rounded-full bg-brandblue-soft px-3 py-1 text-[12px] font-extrabold text-brandblue">{t(vehicle[0].toUpperCase() + vehicle.slice(1))}</span>}
               {isTwoWheel && transmission !== "any" && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t(transmission)}</span>}
@@ -290,9 +308,9 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
               {maxMileage && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">&lt;{maxMileage}km</span>}
               {delivery !== "any" && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{delivery === "hotel-delivery" ? t("Delivered") : t("Pickup")}</span>}
             </div>
-            <button type="button" onClick={lock} disabled={busy} className="btn w-full rounded-2xl bg-brandblue py-3 text-[15px] font-extrabold text-white shadow-md hover:opacity-90 disabled:opacity-50">
-              🔒 {t("Lock request & find deals")}
-            </button>
+            <p className="rounded-xl bg-brandblue-soft px-3 py-2 text-[12px] font-bold text-brandblue">
+              👇 {t("Tap the Find my deal button below to start the search.")}
+            </p>
           </div>
         )}
       </div>
@@ -307,7 +325,7 @@ export function RequestBuilder({ onLock, busy }: { onLock: (fields: Partial<Stru
             {t("Next")} →
           </button>
         ) : (
-          <span className="text-[11px] font-bold text-faint">{t("Tap lock above")}</span>
+          <span className="text-[11px] font-bold text-faint">{busy ? t("Searching...") : t("Ready 👇")}</span>
         )}
       </div>
     </div>

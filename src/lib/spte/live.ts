@@ -16,7 +16,7 @@ import type { GraphIO, GraphTurnInput } from "../graph/types";
 import { runTurn } from "./orchestrator";
 import { emptyDigest } from "./digest";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
-import { shopAskedLocation } from "../wa/detectors";
+import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
 import { vehicleKeyFor, groundedBenchmarkFor } from "../market";
 
@@ -46,6 +46,8 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     outOfStock: Boolean((ex as { outOfStock?: boolean } | null)?.outOfStock),
     askedLocation: text ? shopAskedLocation(text) : false,
     askedQuestion: text ? shopAskedQuestion(text) : false,
+    askedLicense: text ? shopAskedLicense(text) : false,
+    askedLicensePhoto: text ? shopAskedLicensePhoto(text) : false,
   };
 }
 
@@ -175,22 +177,21 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
 
   if (send) {
     try {
+      // INLINE DELIVERY (the "agent never replies" structural fix): the reply
+      // leaves in the SAME serverless invocation that received the shop's
+      // message. The old path parked it 18-45s out and depended on a later
+      // drain invocation + a live Evolution host - which in live testing left
+      // replies stuck as "queued". Now: a bounded human thinking pause (never
+      // blowing the serverless budget), then guardAndSend directly - the guard
+      // still paces per-recipient, and on a guard block or transient send
+      // failure guardAndSend itself queues/re-queues, so nothing is lost.
       if (input.humanDelay) {
-        // Human thinking pause before an engaged-shop reply (never instant - the
-        // robotic tell). The hardened drain owns the actual send + retry.
-        const jitterMs = 18_000 + Math.floor((input.deadlineAt % 27_000));
-        await io.queueOutbox({
-          senderKey,
-          toNumber,
-          body: send,
-          notBeforeMs: io.now() + jitterMs,
-          meta: { ...meta, reason: "reply - human thinking pause" },
-        });
-        delivered = "queued";
-      } else {
-        const res = await io.guardAndSend({ senderKey, toNumber, text: send, meta, shopOpenNow: input.shopOpenNow });
-        delivered = res.delivered;
+        const remaining = input.deadlineAt - io.now();
+        const pauseMs = Math.max(0, Math.min(10_000, remaining - 20_000));
+        if (pauseMs > 0) await new Promise((r) => setTimeout(r, pauseMs));
       }
+      const res = await io.guardAndSend({ senderKey, toNumber, text: send, meta, shopOpenNow: input.shopOpenNow });
+      delivered = res.delivered;
     } catch {
       // Post-decision send failure: park it so the drain retries, never re-run
       // the whole turn (that path belongs to the pre-send fallback only).

@@ -242,6 +242,13 @@ export async function processVendorReply(opts: {
   );
   const ctx = prior[0]?.raw;
   if (!ctx?.rfq) return; // reply without a known thread - stored, not processed
+  // "(unverified)" PURGE at the source: a historical thread whose outbound meta
+  // carries the legacy drill suffix must not propagate it into pushes, events,
+  // offers or engine turns.
+  if (ctx.vendorName) {
+    const { cleanShopName } = await import("./text");
+    ctx.vendorName = cleanShopName(ctx.vendorName);
+  }
 
   // SESSION LIFECYCLE GUARD: if the user closed the search session AFTER our
   // last outbound in this thread, the thread is DEAD. We still store the reply
@@ -378,6 +385,29 @@ export async function processVendorReply(opts: {
     extraction.found && extraction.pricePerDay
       ? extraction.pricePerDay
       : undefined;
+
+  // DETERMINISTIC BACKSTOP (the "3 of 4 offers vanished" fix): the LLM
+  // extractor can miss/fail (quota, odd phrasing) - but a price a human can
+  // read in the text must NEVER be dropped. extractRentalDailyPrice reads the
+  // reply line-by-line (monthly/weekly totals, k-notation, bare-number answers)
+  // and rescues the quote; a wrong-vehicle line (classMatch=false) is never
+  // rescued into the requested vehicle's offer.
+  if (!usablePrice && extractText) {
+    const { extractRentalDailyPrice } = await import("./wa/price-extract");
+    const det = extractRentalDailyPrice(extractText, {
+      vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+      durationDays: rfq.durationDays,
+      localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+    });
+    if (det && det.classMatch !== false) {
+      usablePrice = det.pricePerDay;
+      extraction.found = true;
+      extraction.pricePerDay = det.pricePerDay;
+      if (!extraction.currency && det.currency) extraction.currency = det.currency;
+      // A deterministic rescue is honest but not "high" confidence.
+      if (extraction.confidence !== "high") extraction.confidence = "medium";
+    }
+  }
 
   const cur =
     extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
@@ -547,13 +577,22 @@ export async function processVendorReply(opts: {
 
   // Web Push: alert the traveller a shop replied even if the app is CLOSED, so
   // they can leave the app and come back. Fire-and-forget; no-op without VAPID.
+  // COLLAPSED per shop (the duplicate-notification fix): a 3-message burst from
+  // one shop = ONE push. A price landing is important and bypasses the collapse.
   if (ctx.sender) {
     const shop = ctx.vendorName || "A rental shop";
     const body = usablePrice
       ? `${shop} offered ${usablePrice} ${cur}/day - tap to see the deal.`
       : `${shop} just replied - tap to open WheelDeal.`;
     import("./push")
-      .then((m) => m.sendPushToUser(ctx.sender!, { title: "New reply 🛵", body, url: "/" }))
+      .then((m) =>
+        m.sendPushCollapsed(
+          ctx.sender!,
+          `reply:${ctx.vendorId || from}`,
+          { title: "New reply 🛵", body, url: "/" },
+          { windowSec: 180, important: Boolean(usablePrice) }
+        )
+      )
       .catch(() => {});
   }
 

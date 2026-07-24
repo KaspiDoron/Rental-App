@@ -62,6 +62,48 @@ interface SubRow {
 }
 
 /**
+ * BURST-COLLAPSED push (spam-notification fix): a shop that fires 3 WhatsApp
+ * messages in a minute must produce ONE notification, not three. The collapse
+ * window is DURABLE (serverless instances share nothing in memory): a
+ * `push-collapse` marker row per (user, collapseKey) suppresses further
+ * collapsible pushes inside the window. `important` pushes (a price landed, a
+ * risk flag) bypass the suppression but still stamp the marker, so the noise
+ * that follows a high-value push is swallowed too. Fail-open: if the marker
+ * store is unreadable the push still goes out - a lost dedupe beats a lost
+ * notification.
+ */
+export async function sendPushCollapsed(
+  email: string,
+  collapseKey: string,
+  payload: { title: string; body: string; url?: string },
+  opts: { windowSec?: number; important?: boolean } = {}
+): Promise<void> {
+  if (!email) return;
+  const windowSec = opts.windowSec ?? 180;
+  const key = `${email}|${collapseKey}`.slice(0, 120);
+  try {
+    if (!opts.important) {
+      const { sbSelect } = await import("./runtime-config");
+      const since = new Date(Date.now() - windowSec * 1000).toISOString();
+      const recent = await sbSelect<{ id: number }>(
+        "agent_events",
+        `select=id&kind=eq.push-collapse&vendor_name=eq.${encodeURIComponent(
+          key
+        )}&created_at=gte.${encodeURIComponent(since)}&limit=1`
+      );
+      if (recent.length > 0) return; // collapsed - a push for this shop just went out
+    }
+    const { sbInsert } = await import("./runtime-config");
+    await sbInsert("agent_events", [
+      { kind: "push-collapse", vendor_name: key, detail: payload.title.slice(0, 80) },
+    ]).catch(() => {});
+  } catch {
+    /* fail-open: send the push anyway */
+  }
+  await sendPushToUser(email, payload);
+}
+
+/**
  * Send a push to all of a user's subscribed devices. Best-effort: prunes dead
  * subscriptions (410 Gone / 404) and never throws. No-op when VAPID is unset.
  */

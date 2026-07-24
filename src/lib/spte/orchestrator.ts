@@ -43,17 +43,21 @@ export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
   // PRE-RAILS: legal move set (0 tokens).
   ctx.legalMoves = legalMovesFor(ctx);
 
-  // TIER R: reflex resolution with no LLM call.
+  // TIER R: reflex resolution with no LLM call. Protocol reflexes (license
+  // policy) carry their exact wire text - deterministic even with every LLM
+  // provider down. The text still passes the post-rails like any draft.
   const reflex = reflexTurn(ctx);
   if (reflex) {
     const artifact: TurnArtifact = {
       read: { intent: reflex.reason },
       think: reflex.reason,
       move: reflex.move,
+      message: reflex.message,
       leverageUsed: [],
       digestPatch: [],
     };
-    return finalize(ctx, artifact, { tier: "R", reason: "reflex" });
+    const rail = runPostRails(ctx, artifact);
+    return finalize(ctx, artifact, { tier: "R", reason: "reflex" }, rail.ok ? rail.finalText : undefined);
   }
 
   // TIER F / M: the turn's ONE LLM call, schema-validated + move-coerced.

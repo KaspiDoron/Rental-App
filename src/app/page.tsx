@@ -144,6 +144,22 @@ export default function Home() {
   // into a one-row summary (the form stays mounted so tour anchors survive).
   const [formOpen, setFormOpen] = useState(true);
   const [builderOpen, setBuilderOpen] = useState(false);
+  // Live structured selections from the tap builder. Non-null = STRUCTURED MODE:
+  // the free-text box greys out and the ONE bottom "Find my deal" button runs
+  // the structured search (input-mode disambiguation, owner directive).
+  const [builderFields, setBuilderFields] = useState<Partial<StructuredRFQ> | null>(null);
+  // IDP disclaimer (owner directive): search stays disabled until the traveller
+  // declares they hold a valid International Driving Permit for the category.
+  // Persisted so a returning user is not re-asked every visit.
+  const [idpConsent, setIdpConsent] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("wd_idp_consent") === "yes") setIdpConsent(true);
+    } catch {
+      /* private mode - the checkbox simply starts unchecked */
+    }
+  }, []);
+  const structuredMode = builderOpen && Boolean(builderFields?.vehicleClass);
   // Card windowing: render the first batch and reveal more on demand - keeps
   // long result lists cheap on low-end phones.
   const [visibleCount, setVisibleCount] = useState(20);
@@ -1205,6 +1221,10 @@ export default function Home() {
     // it becomes the visible textarea value AND this search's request.
     const ov = typeof overrideText === "string" ? overrideText.trim() : "";
     if (ov) setRawText(ov);
+    // HEADER RESET (structured mode): a tap-built search must never leave the
+    // previous free-text query visible anywhere - the structured chips are the
+    // only description of the active session.
+    if (structuredFields) setRawText("");
     const requestText = ov || rawText;
     // The tap-to-build panel (F2) supplies fully-structured fields instead of
     // free text - no requestText needed in that path.
@@ -1673,13 +1693,23 @@ export default function Home() {
           <label className="text-[12px] font-extrabold text-soft">
             {t("What do you want to rent?")}
           </label>
+          {/* STRUCTURED MODE disambiguation: while the tap builder holds a
+              selection, the free-text box is visibly inactive so there is never
+              a question of which input the search will use. */}
           <textarea
             data-tour="request"
-            value={rawText}
+            value={structuredMode ? "" : rawText}
             onChange={(e) => setRawText(e.target.value)}
             rows={2}
-            className="mt-1 w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
-            placeholder={t("e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount")}
+            disabled={structuredMode}
+            className={`mt-1 w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none ${
+              structuredMode ? "pointer-events-none opacity-50" : ""
+            }`}
+            placeholder={
+              structuredMode
+                ? t("Using your tap-built request below 👇")
+                : t("e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount")
+            }
           />
           <div data-tour="examples" className="no-scrollbar mt-2 flex gap-2 overflow-x-auto">
             {examples.map((ex) => (
@@ -1698,7 +1728,12 @@ export default function Home() {
               typists keep the box. Locking runs the SAME search, structured. */}
           <div className="mt-2">
             <button
-              onClick={() => setBuilderOpen((s) => !s)}
+              onClick={() =>
+                setBuilderOpen((s) => {
+                  if (s) setBuilderFields(null); // closing = back to free-text mode
+                  return !s;
+                })
+              }
               className="text-[11px] font-extrabold text-brandblue underline"
             >
               {builderOpen ? t("Prefer typing? Hide the tap builder") : t("⚡ Build your request in taps instead")}
@@ -1711,14 +1746,7 @@ export default function Home() {
                   // carried over from the previous request.
                   key={searchEpoch}
                   busy={phase === "profiling" || phase === "running"}
-                  onLock={(fields) => {
-                    if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
-                      setOriginHint(t("Set your location first - allow GPS or type your hotel / area."));
-                      document.querySelector("[data-tour='stay']")?.scrollIntoView({ behavior: "smooth", block: "center" });
-                      return;
-                    }
-                    void startSearch(undefined, fields);
-                  }}
+                  onFieldsChange={setBuilderFields}
                 />
               </div>
             )}
@@ -1780,10 +1808,38 @@ export default function Home() {
             <a href="/privacy" className="underline">{t("Privacy")}</a>
           </p>
 
+          {/* MANDATORY IDP declaration (owner directive): the search stays
+              locked until the traveller declares a valid International Driving
+              Permit for the selected vehicle category. */}
+          <label className="mt-2 flex items-start gap-2 rounded-2xl border-2 border-line bg-card p-3">
+            <input
+              type="checkbox"
+              checked={idpConsent}
+              onChange={(e) => {
+                setIdpConsent(e.target.checked);
+                try {
+                  localStorage.setItem("wd_idp_consent", e.target.checked ? "yes" : "no");
+                } catch {
+                  /* private mode - session-only consent */
+                }
+              }}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--blue)]"
+            />
+            <span className="text-[11px] font-bold leading-snug text-soft">
+              {t("I declare that I hold a valid International Driving Permit (IDP) for the selected vehicle category.")}
+            </span>
+          </label>
+
+          {/* THE one unified search CTA - free-text or tap-built, this button
+              runs it (there is deliberately no second button in the builder). */}
           <button
             data-tour="find"
-            onClick={() => startSearch()}
-            disabled={phase === "profiling" || phase === "running"}
+            onClick={() =>
+              structuredMode && builderFields
+                ? startSearch(undefined, builderFields)
+                : startSearch()
+            }
+            disabled={phase === "profiling" || phase === "running" || !idpConsent}
             className="btn btn-primary cta-sheen mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
             {phase === "profiling" ? (
@@ -1796,6 +1852,11 @@ export default function Home() {
               </>
             )}
           </button>
+          {!idpConsent && (
+            <p className="mt-1.5 text-center text-[10px] font-bold text-faint">
+              ☝️ {t("Tick the license declaration above to start searching.")}
+            </p>
+          )}
           {session?.plan === "free" && (
             <p className="mt-2 text-center text-[11px] font-bold text-faint">
               {t("Free plan: pickups can be scheduled for today only.")}{" "}
@@ -1933,33 +1994,56 @@ export default function Home() {
                     🔵 {filters.agentStatus === "active" ? t("Showing active rentals") : t("Show only active rentals")}
                   </button>
                 </div>
-                {/* Deals in - from whom, price, exact time */}
+                {/* SECTION 1 - Active offers & negotiations: the shops that
+                    replied with a price, at full density - quote, deposit when
+                    the shop stated one, rating, the latest message + time. */}
                 {statusGroups.deals.length > 0 && (
                   <div>
-                    <div className="mb-1 text-[10px] font-extrabold uppercase text-savings">💰 {t("Deals in")}</div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-savings">
+                      💰 {t("Offers & negotiations")} ({statusGroups.deals.length})
+                    </div>
                     {statusGroups.deals.map((v) => (
-                      <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
-                        <button
-                          onClick={() => scrollToVendor(v.id)}
-                          className="flex min-w-0 items-center gap-1 text-left font-bold text-strong hover:text-brandblue"
-                          title={t("Jump to this shop")}
-                        >
-                          <span className="shrink-0 text-brandblue">↧</span>
-                          <span className="truncate">{v.name}</span>
-                        </button>
-                        <span className="shrink-0 text-soft">
-                          {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
-                          {v.lastEventAt ? ` · ${formatClock(v.lastEventAt)}` : ""}
-                        </span>
+                      <div key={v.id} className="mb-1.5 rounded-xl bg-card p-2 text-[11px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => scrollToVendor(v.id)}
+                            className="flex min-w-0 items-center gap-1 text-left font-extrabold text-strong hover:text-brandblue"
+                            title={t("Jump to this shop")}
+                          >
+                            <span className="shrink-0 text-brandblue">↧</span>
+                            <span className="truncate">{v.name}</span>
+                          </button>
+                          <span className="shrink-0 font-extrabold text-savings">
+                            {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-bold text-faint">
+                          {typeof v.rating === "number" && v.rating > 0 && <span>⭐ {v.rating.toFixed(1)}</span>}
+                          {(v.offer?.deposit || v.offer?.depositType) && (
+                            <span>
+                              🔐 {v.offer.depositType === "passport" ? t("Passport deposit") : v.offer.deposit || t("Deposit asked")}
+                            </span>
+                          )}
+                          {v.offer?.includesDelivery && <span>🛵 {t("Delivers")}</span>}
+                          {v.offer?.includesInsurance && <span>🛡️ {t("Insurance")}</span>}
+                          {v.lastEventAt && <span>🕐 {formatClock(v.lastEventAt)}</span>}
+                        </div>
+                        {v.offer?.message && (
+                          <div className="mt-1 truncate rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            💬 {v.offer.message}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
 
-                {/* Messaged - and the EXACT text/gloss we sent on their behalf */}
+                {/* SECTION 2 - Awaiting reply: contacted, with time elapsed. */}
                 {statusGroups.messaged.length > 0 && (
                   <div>
-                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">📤 {t("Messaged")}</div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">
+                      📤 {t("Awaiting reply")} ({statusGroups.messaged.length})
+                    </div>
                     {statusGroups.messaged.map((v) => (
                       <div key={v.id} className="py-0.5 text-[11px]">
                         <div className="flex items-center justify-between gap-2">
@@ -1972,7 +2056,7 @@ export default function Home() {
                             <span className="truncate">{v.name}</span>
                           </button>
                           <span className="shrink-0 text-faint">
-                            {v.lastEventAt ? formatClock(v.lastEventAt) : t("awaiting reply")}
+                            {v.lastEventAt ? `${t("sent")} ${formatClock(v.lastEventAt)}` : t("awaiting reply")}
                           </span>
                         </div>
                         {v.sentGloss && (
@@ -1980,6 +2064,25 @@ export default function Home() {
                             🌐 {v.sentGloss}
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* SECTION 3 - Contacting: intros still queued (auto-sends). A
+                    shop here is NEVER simultaneously above - the buckets are
+                    mutually exclusive by construction. */}
+                {statusGroups.queued.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">
+                      🕘 {t("Contacting")} ({statusGroups.queued.length})
+                    </div>
+                    {statusGroups.queued.map((v) => (
+                      <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+                        <span className="truncate font-bold text-soft">{v.name}</span>
+                        <span className="shrink-0 text-faint">
+                          {v.queuedUntil ? `~${formatClock(v.queuedUntil)}` : t("shortly")}
+                        </span>
                       </div>
                     ))}
                   </div>

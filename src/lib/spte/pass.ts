@@ -49,6 +49,10 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "- NEVER invent a competitor price or a market rate. Use ONLY the verified numbers given here. " +
     "If you cite a rival, cite one from the RIVAL OFFERS list verbatim.\n" +
     "- NEVER agree an exact pickup/delivery time - say the traveller will confirm the time directly.\n" +
+    "- LICENSE POLICY: if the shop asks whether you have a (international) driving license, answer firmly: " +
+    "you have a valid international driving license for this vehicle category. If the shop asks to SEE or get a " +
+    "photo/copy of the license, politely defer: you will share it once the rate and rental details are agreed - " +
+    "never refuse outright, never send documents, and steer back to the price.\n" +
     "- Keep the message to 1-2 short sentences in simple, everyday English.\n" +
     "OUTPUT JSON shape: { \"read\": {intent, priceMentioned?, declined?, wrongVehicle?, askedLocation?}, " +
     "\"think\": string (<=1 sentence, private), \"move\": string (from LEGAL MOVES), \"message\"?: string, " +
@@ -96,38 +100,57 @@ function vehicleLine(ctx: TurnContext): string {
   return `${tr}${r.vehicleClass}${cc}`;
 }
 
-/** A deterministic, never-silent fallback when the LLM is unavailable or its
- *  output is unusable. Uses the top legal move with a safe templated message. */
-export function fallbackArtifact(ctx: TurnContext): TurnArtifact {
-  const move: MoveKind = ctx.legalMoves[0] ?? "silent";
+/** The safe templated message for a move, or undefined when a template would
+ *  have to invent facts (present/closing need real data; pickup-location needs
+ *  the consented stay resolver). */
+function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
   const v = ctx.inbound.verified;
-  let message: string | undefined;
+  const days = ctx.session.rfq.durationDays;
   switch (move) {
     case "bargain":
-      message = v.pricePerDay
-        ? `Thanks! Any chance you can do a bit better for ${ctx.session.rfq.durationDays} days?`
-        : `Could you share your best price for ${ctx.session.rfq.durationDays} days?`;
-      break;
+      return v.pricePerDay
+        ? `Thanks! Any chance you can do a bit better for ${days} days?`
+        : `Could you share your best price for ${days} days?`;
     case "clarify":
-      message = `Could you send the price per day as text? 🙂`;
-      break;
+      return `Could you send the price per day as text? 🙂`;
     case "redirect-close":
-      message = `No worries, thanks for letting me know - have a great day!`;
-      break;
+      return `No worries, thanks for letting me know - have a great day!`;
     case "close":
-      message = `All good, thank you so much for your time!`;
-      break;
+      return `All good, thank you so much for your time!`;
     case "answer":
+      // NEVER-SILENT (the live "agent never replied to my question" failure):
+      // license asks get the exact policy lines; any other question gets an
+      // honest, safe redirect to the one thing we always want - the daily rate.
+      if (v.askedLicensePhoto)
+        return `Sure - I'll share a photo of my license once we finalize the rate and rental details 👍 What's your best price per day?`;
+      if (v.askedLicense)
+        return `Yes, I have a valid international driving license for this. What would your best price per day be?`;
+      return `Good question! Let's sort the main thing first - what's your best price per day for the ${days} days? Then we can go over the details.`;
     case "deposit-probe":
+      return `Great - and what deposit do you need? Cash or passport?`;
     case "fulfillment-probe":
-    case "present":
+      return `Could you deliver it, or do I pick it up at your shop?`;
     case "momentum":
-    case "pickup-location":
-    case "closing-message":
-      message = undefined; // these need real content; silence beats a wrong guess
-      break;
+      return `Hi again! Just checking in - any chance on that better rate for ${days} days?`;
     default:
-      message = undefined;
+      return undefined; // present / closing-message / pickup-location / silent
+  }
+}
+
+/** A deterministic, never-silent fallback when the LLM is unavailable or its
+ *  output is unusable. Walks the LEGAL ladder and takes the FIRST move that has
+ *  a safe template - so a turn that owes the shop a reply never goes silent
+ *  just because the top-priority move needed composed content. */
+export function fallbackArtifact(ctx: TurnContext): TurnArtifact {
+  let move: MoveKind = "silent";
+  let message: string | undefined;
+  for (const m of ctx.legalMoves) {
+    const t = templateFor(ctx, m);
+    if (t) {
+      move = m;
+      message = t;
+      break;
+    }
   }
   return {
     read: { intent: "fallback" },

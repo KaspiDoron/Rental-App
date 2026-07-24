@@ -26,6 +26,44 @@ export function shopAskedLocation(text: string): boolean {
 }
 
 /**
+ * Did the shop ask whether the traveller HAS a (international) driving license?
+ * Common phrasings + typos seen live: "do you have an international driving
+ * liscense ?", "u have license?", "IDP?", "got a driver license for big bike?".
+ * A PHOTO/copy request (shopAskedLicensePhoto) is the stricter match and is
+ * checked first by callers - this one covers the yes/no availability question.
+ */
+export function shopAskedLicense(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (!t) return false;
+  // Any license-ish token (license/licence + the live typos liscense/lisence,
+  // driving permit, IDP).
+  const licenseToken =
+    /\b(licen[cs]e|li[cs][cs]?en[cs]e|driving\s+permit|driver'?s?\s+permit|idp)\b/;
+  if (!licenseToken.test(t)) return false;
+  return (
+    // "do you have / got / u have ... license"
+    /\b(do\s+)?(you|u)\s+(have|got|hold|carry)\b[^?.!]{0,40}(licen[cs]e|li[cs][cs]?en[cs]e|permit|idp)/.test(t) ||
+    // "have/got a license?" / "license?" style shorthand
+    /\b(have|got|with)\s+(a\s+|an\s+)?(international\s+)?(driv(er'?s?|ing)\s+)?(licen[cs]e|li[cs][cs]?en[cs]e|idp)\b/.test(t) ||
+    /\b(licen[cs]e|li[cs][cs]?en[cs]e|idp)\s*\?/.test(t)
+  );
+}
+
+/**
+ * Did the shop ask to SEE the license (photo / copy / picture / send it) - as
+ * opposed to just asking whether the traveller has one? Per policy the agent
+ * defers sharing any document until the rate and rental details are agreed.
+ */
+export function shopAskedLicensePhoto(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(send|share|show|see|photo|picture|pic|copy|scan|foto)\b[^?.!]{0,40}\b(licen[cs]e|li[cs][cs]?en[cs]e|idp|driving\s+permit)\b/.test(t) ||
+    /\b(licen[cs]e|li[cs][cs]?en[cs]e|idp)\b[^?.!]{0,30}\b(photo|picture|pic|copy|scan|foto)\b/.test(t)
+  );
+}
+
+/**
  * Did the shop ask whether the traveller IS IN a place ("Are you there in
  * moalboal, cebu?", "you here in Boracay?")? A REGION-context question, not a
  * delivery-address request - answered from the search region STRING only

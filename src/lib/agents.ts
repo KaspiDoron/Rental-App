@@ -315,20 +315,22 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   // whenever the request captured a date, phrased naturally.
   const when = rfq.startDate ? prettyDate(rfq.startDate) : "";
 
+  // DIRECT, NATURAL opener (owner directive): "Hi! Do you have a [spec]
+  // available for [X] days (starting [date])?" - a real person's first message,
+  // never a wordy self-introduction. Variation stays in the greeting + verb so
+  // no two shops get an identical payload, but every variant is this shape.
   const opener = when
     ? pick([
-        `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days} from ${when}.`,
-        `Hello! Do you have a ${vehicle} available for ${days} starting ${when}?`,
-        `Hey there! I need a ${vehicle} for ${days} from ${when} - is one free?`,
-        `Hi, could I rent a ${vehicle} from you for ${days} starting ${when}?`,
+        `Hi! Do you have a ${vehicle} available for ${days} starting ${when}?`,
+        `Hello! Is a ${vehicle} available for ${days} from ${when}?`,
+        `Hi there! Do you have a ${vehicle} free for ${days} starting ${when}?`,
+        `Hey! Could I rent a ${vehicle} for ${days} from ${when}?`,
       ])
     : pick([
-        `Hi! I'm staying in the area and looking to rent a ${vehicle} for ${days}.`,
-        `Hello! Do you have a ${vehicle} available for ${days}?`,
-        `Hey there! I'm nearby and need a ${vehicle} for about ${days}.`,
-        `Hi, quick question - could I rent a ${vehicle} from you for ${days}?`,
-        `Good day! I'm in town for a bit and after a ${vehicle} for ${days}.`,
-        `Hey! Looking to rent a ${vehicle} for ${days} - do you have one free?`,
+        `Hi! Do you have a ${vehicle} available for ${days}?`,
+        `Hello! Is a ${vehicle} available for ${days}?`,
+        `Hi there! Do you have a ${vehicle} free for ${days}?`,
+        `Hey! Could I rent a ${vehicle} for ${days}?`,
       ]);
   const dropOff = rfq.oneWayDropOff
     ? ` I'd need to drop it off in ${rfq.oneWayDropOff} (one-way).`
@@ -350,10 +352,10 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
         ])
       : "";
   const ask = pick([
-    "What's your best daily price?",
-    "What would the daily rate be?",
+    "What is your best price per day?",
+    "What's your best price per day?",
+    "What would your best daily rate be?",
     "How much per day, best price?",
-    "What's the best you could do per day?",
   ]);
   const thanks = pick(["Thanks!", "Thank you!", "Thanks 🙏", "Thanks a lot!", "Ta!"]);
 

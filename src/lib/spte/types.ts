@@ -60,6 +60,10 @@ export interface VerifiedExtraction {
   outOfStock?: boolean;
   askedLocation?: boolean;
   askedQuestion?: boolean;
+  /** The shop asked whether the traveller HAS a (international) license. */
+  askedLicense?: boolean;
+  /** The shop asked to SEE / get a photo/copy of the license. */
+  askedLicensePhoto?: boolean;
 }
 
 export interface TurnContext {

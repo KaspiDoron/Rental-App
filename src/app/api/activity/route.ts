@@ -364,22 +364,35 @@ export async function GET(req: Request) {
   // Same shape as /api/queue so the existing queue card keeps working. The
   // reason is the guard's REAL stored reason translated honestly - a pacing
   // hold must never masquerade as "shop closed".
+  //
+  // STATUS-PANEL DEDUP (live-trial fix): "Your queued messages" is the list of
+  // UN-SENT INTROS. A parked agent REPLY to an already-messaged shop (kind
+  // reply / bargain / auto-*) must NOT appear here - it made the same shop show
+  // in "Messaged"/"Offers" AND "Queued" simultaneously. Replies surface through
+  // the conversation thread, not the intro queue.
   const { queueReasonLabel } = await import("@/lib/queue-reason");
-  const queue = outbox.map((r) => {
-    const at = Date.parse(r.not_before);
-    const meta = r.meta as { vendorId?: string; vendorName?: string; reason?: string; kind?: string } | null;
-    return {
-      id: r.id,
-      vendorId: meta?.vendorId ?? null,
-      vendorName: meta?.vendorName ?? null,
-      toNumber: r.to_number,
-      notBefore: r.not_before,
-      due: at <= now,
-      kind: meta?.kind ?? null,
-      reason: at <= now ? "Sending shortly" : queueReasonLabel(meta?.reason),
-      rawReason: meta?.reason ?? null,
-    };
-  });
+  const { cleanShopName } = await import("@/lib/text");
+  const INTRO_KINDS = new Set(["rfq", "custom", "human-manual"]);
+  const queue = outbox
+    .filter((r) => {
+      const kind = (r.meta as { kind?: string } | null)?.kind;
+      return !kind || INTRO_KINDS.has(kind);
+    })
+    .map((r) => {
+      const at = Date.parse(r.not_before);
+      const meta = r.meta as { vendorId?: string; vendorName?: string; reason?: string; kind?: string } | null;
+      return {
+        id: r.id,
+        vendorId: meta?.vendorId ?? null,
+        vendorName: meta?.vendorName ? cleanShopName(meta.vendorName) : null,
+        toNumber: r.to_number,
+        notBefore: r.not_before,
+        due: at <= now,
+        kind: meta?.kind ?? null,
+        reason: at <= now ? "Sending shortly" : queueReasonLabel(meta?.reason),
+        rawReason: meta?.reason ?? null,
+      };
+    });
 
   let waHealth: SenderSafety | null = null;
   try {
@@ -408,6 +421,12 @@ export async function GET(req: Request) {
     const { cancelledNumbers } = await import("@/lib/wa/cancellations");
     cancelled = await cancelledNumbers(email);
   } catch {}
+
+  // "(unverified)" PURGE: historical rows stamped the legacy drill suffix into
+  // vendor names - strip it from every feed item so it never renders again.
+  for (const it of items) {
+    if (it.vendorName) it.vendorName = cleanShopName(it.vendorName);
+  }
 
   return NextResponse.json({
     items: items.slice(0, limit),

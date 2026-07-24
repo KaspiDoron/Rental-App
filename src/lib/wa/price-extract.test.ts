@@ -120,4 +120,48 @@ describe("extractRentalDailyPrice - totals and edge cases", () => {
     const hit = extractRentalDailyPrice("yes sir 350 php per day ok", { vehicleClass: "scooter" });
     expect(hit!.pricePerDay).toBe(350);
   });
+
+  // ---- live-failure pins (the "3 of 4 offers vanished" formats) --------------
+
+  it("MONTHLY quote on a 30-day search -> per-day over the real duration", () => {
+    const hit = extractRentalDailyPrice("4000 baht per month", {
+      vehicleClass: "scooter",
+      durationDays: 30,
+      localCurrency: "THB",
+    });
+    expect(hit!.pricePerDay).toBe(133); // 4000/30
+    expect(hit!.currency).toBe("THB");
+  });
+
+  it("monthly phrased as 'monthly rate is 4500'", () => {
+    const hit = extractRentalDailyPrice("monthly rate is 4500", { durationDays: 30 });
+    expect(hit!.pricePerDay).toBe(150);
+  });
+
+  it("WEEKLY quote -> /7", () => {
+    const hit = extractRentalDailyPrice("1400 a week sir", { durationDays: 7 });
+    expect(hit!.pricePerDay).toBe(200);
+  });
+
+  it("BARE-NUMBER answer to our price question ('400 baht')", () => {
+    const hit = extractRentalDailyPrice("400 baht", { durationDays: 30, localCurrency: "THB" });
+    expect(hit!.pricePerDay).toBe(400);
+  });
+
+  it("bare plain number ('450')", () => {
+    const hit = extractRentalDailyPrice("450", { durationDays: 4 });
+    expect(hit!.pricePerDay).toBe(450);
+  });
+
+  it("bare number rejects times, tiny numbers and phone numbers", () => {
+    expect(extractRentalDailyPrice("9", {})).toBeNull();
+    expect(extractRentalDailyPrice("9:00", {})).toBeNull();
+    expect(extractRentalDailyPrice("0812345678", {})).toBeNull();
+    expect(extractRentalDailyPrice("we open at 9", {})).toBeNull();
+  });
+
+  it("k-notation ('150k per day' IDR)", () => {
+    const hit = extractRentalDailyPrice("150k per day", { localCurrency: "IDR" });
+    expect(hit!.pricePerDay).toBe(150000);
+  });
 });

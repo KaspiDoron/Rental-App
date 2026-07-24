@@ -33,8 +33,13 @@ export interface RentalPriceHit {
   classMatch?: boolean;
 }
 
+// Currency CODES/symbols AND the spoken WORDS shops actually type ("400 baht
+// per day", "4000 baht per month") - the word forms were missing, which made
+// every "<n> baht ..." quote invisible to the day/month/week patterns (a live
+// dropped-offer class).
 const CUR =
-  "[$€฿₱₹₫]|(?:usd|idr|rp|eur|thb|rm|php|inr|vnd|myr|aud|nzd|sgd|mxn|try|ils|zar|brl|mad|egp|lkr|npr|twd|jpy|krw)";
+  "[$€฿₱₹₫]|(?:usd|idr|rp|eur|thb|rm|php|inr|vnd|myr|aud|nzd|sgd|mxn|try|ils|zar|brl|mad|egp|lkr|npr|twd|jpy|krw)" +
+  "|(?:baht|pesos?|piso|rupiah|rupees?|dong|ringgit|dollars?|euros?|shekels?|dirhams?)";
 
 // A money amount: either grouped thousands ("1,750" / "1.750" / "1 750") OR a
 // plain run of digits ("1750", "350"), optional decimals. The old pattern only
@@ -56,6 +61,30 @@ const PRICE_TOTAL_REV = new RegExp(
   `\\b(\\d{1,2})\\s*days?\\b[^\\d]{0,10}(?:${CUR})?\\s*${NUM}`,
   "i"
 );
+// A MONTHLY quote ("4000 per month", "4000/month", "monthly 4000") - the format
+// long-rental shops actually use, which the day-only patterns silently dropped
+// (the live "3 of 4 offers vanished" failure on a 30-day search).
+const PRICE_MONTH = new RegExp(
+  `(?:${CUR})?\\s*${NUM}\\s*(?:${CUR})?\\s*(?:[-/]|per\\s*|a\\s+)\\s*month|month(?:ly)?\\s*(?:rate|price|rental)?\\s*(?:is|:|=)?\\s*(?:${CUR})?\\s*${NUM}`,
+  "i"
+);
+// A WEEKLY quote ("1500 a week", "weekly 1500").
+const PRICE_WEEK = new RegExp(
+  `(?:${CUR})?\\s*${NUM}\\s*(?:${CUR})?\\s*(?:[-/]|per\\s*|a\\s+)\\s*week|week(?:ly)?\\s*(?:rate|price)?\\s*(?:is|:|=)?\\s*(?:${CUR})?\\s*${NUM}`,
+  "i"
+);
+// A BARE price answer: the whole (short) message is just an amount + optional
+// currency ("400", "400 baht", "PHP 350 only") - the natural reply to "what's
+// your best price per day?". Strict shape so times/phone numbers never match.
+const BARE_PRICE = new RegExp(
+  `^\\s*(?:${CUR})?\\s*${NUM}\\s*(?:${CUR}|baht|pesos?|peso|dollars?|rupiah|dong|ringgit)?\\s*(?:only|net|\\.|!)?\\s*$`,
+  "i"
+);
+
+/** Normalize k-notation ("150k", "1.5k") into full numbers before matching. */
+function expandK(line: string): string {
+  return line.replace(/(\d+(?:\.\d+)?)\s*k\b/gi, (_, n) => String(Math.round(parseFloat(n) * 1000)));
+}
 
 // A line that is a transfer / tour / other service, NOT a vehicle rental.
 const SERVICE_LINE =
@@ -84,14 +113,16 @@ function currencyIn(line: string): string | undefined {
   const m = line.match(new RegExp(CUR, "i"));
   if (!m) return undefined;
   const t = m[0].toLowerCase();
-  if (/\$|usd/.test(t)) return "USD";
+  if (/\$|usd|dollar/.test(t)) return "USD";
   if (/€|eur/.test(t)) return "EUR";
-  if (/฿|thb/.test(t)) return "THB";
-  if (/₱|php/.test(t)) return "PHP";
-  if (/₹|inr/.test(t)) return "INR";
-  if (/₫|vnd/.test(t)) return "VND";
-  if (/\brp\b|idr/.test(t)) return "IDR";
-  if (/\brm\b|myr/.test(t)) return "MYR";
+  if (/฿|thb|baht/.test(t)) return "THB";
+  if (/₱|php|peso|piso/.test(t)) return "PHP";
+  if (/₹|inr|rupee/.test(t)) return "INR";
+  if (/₫|vnd|dong/.test(t)) return "VND";
+  if (/\brp\b|idr|rupiah/.test(t)) return "IDR";
+  if (/\brm\b|myr|ringgit/.test(t)) return "MYR";
+  if (/ils|shekel/.test(t)) return "ILS";
+  if (/dirham/.test(t)) return "AED";
   return t.toUpperCase();
 }
 
@@ -113,8 +144,9 @@ export function extractRentalDailyPrice(
     .filter(Boolean);
 
   const hits: RentalPriceHit[] = [];
-  for (const line of lines) {
-    if (SERVICE_LINE.test(line)) continue; // transfer / tour / shuttle - skip
+  for (const rawLine of lines) {
+    if (SERVICE_LINE.test(rawLine)) continue; // transfer / tour / shuttle - skip
+    const line = expandK(rawLine);
     const cls = lineClass(line);
     // A line naming a DIFFERENT class than requested (e.g. a car line when a
     // scooter was asked) is a candidate only if nothing better is found.
@@ -125,7 +157,7 @@ export function extractRentalDailyPrice(
         hits.push({
           pricePerDay: amt,
           currency: currencyIn(line) ?? opts.localCurrency,
-          line,
+          line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
         });
         continue;
@@ -143,7 +175,38 @@ export function extractRentalDailyPrice(
         hits.push({
           pricePerDay: Math.round(whole / nDays),
           currency: currencyIn(line) ?? opts.localCurrency,
-          line,
+          line: rawLine,
+          classMatch: cls ? cls === wantClass : undefined,
+        });
+        continue;
+      }
+    }
+    // A MONTHLY quote -> per-day over the real rental length when it is a
+    // month-scale request (a 30-day search is exactly where shops answer in
+    // months), else a calendar month.
+    const month = line.match(PRICE_MONTH);
+    if (month) {
+      const whole = parseAmount(month[1] ?? month[2]);
+      const div = days >= 28 && days <= 31 ? days : 30;
+      if (whole > 0 && whole > div) {
+        hits.push({
+          pricePerDay: Math.round(whole / div),
+          currency: currencyIn(line) ?? opts.localCurrency,
+          line: rawLine,
+          classMatch: cls ? cls === wantClass : undefined,
+        });
+        continue;
+      }
+    }
+    // A WEEKLY quote -> /7.
+    const week = line.match(PRICE_WEEK);
+    if (week) {
+      const whole = parseAmount(week[1] ?? week[2]);
+      if (whole > 0 && whole > 7) {
+        hits.push({
+          pricePerDay: Math.round(whole / 7),
+          currency: currencyIn(line) ?? opts.localCurrency,
+          line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
         });
       }
@@ -155,13 +218,29 @@ export function extractRentalDailyPrice(
     // like "350 php per day" with no newlines), still skipping if it is only a
     // transfer template.
     if (!SERVICE_LINE.test(text)) {
-      const m = text.match(PRICE_DAY);
+      const whole = expandK(text);
+      const m = whole.match(PRICE_DAY);
       if (m) {
         const amt = parseAmount(m[1]);
         if (amt > 0 && amt !== days) {
           return {
             pricePerDay: amt,
-            currency: currencyIn(text) ?? opts.localCurrency,
+            currency: currencyIn(whole) ?? opts.localCurrency,
+            line: text.slice(0, 120),
+            classMatch: undefined,
+          };
+        }
+      }
+      // BARE-NUMBER answer to our price question ("400", "400 baht", "PHP 350
+      // only"): the whole short message IS the daily price. Strict shape + a
+      // sanity band so a time ("9"), a year, or a phone number never passes.
+      const bare = whole.length <= 40 ? whole.match(BARE_PRICE) : null;
+      if (bare) {
+        const amt = parseAmount(bare[1]);
+        if (amt >= 20 && amt <= 5_000_000 && amt !== days) {
+          return {
+            pricePerDay: amt,
+            currency: currencyIn(whole) ?? opts.localCurrency,
             line: text.slice(0, 120),
             classMatch: undefined,
           };

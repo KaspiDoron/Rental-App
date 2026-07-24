@@ -2,6 +2,17 @@
 // vendor) passes through here so no markdown artifacts (**, *, `, #, etc.)
 // ever reach a human conversation.
 
+/**
+ * Strip the legacy "(unverified)" suffix from a shop name. The suffix was a
+ * drill-mode identity marker that leaked onto real shops (fixed at the source),
+ * but HISTORICAL rows (outbound meta, agent_events, offers) still carry it -
+ * this is the display-side purge so it never reaches a card, feed row, queue
+ * item, or push notification again.
+ */
+export function cleanShopName(name: string | null | undefined): string {
+  return String(name ?? "").replace(/\s*\(unverified\)\s*$/i, "").trim();
+}
+
 export function sanitizeAiText(s: string): string {
   return s
     .replace(/```[a-z]*\n?/gi, "") // code fences

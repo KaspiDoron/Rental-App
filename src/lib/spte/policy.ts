@@ -42,8 +42,9 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     moves.push("bargain");
   }
 
-  // The shop asked us something -> answer.
-  if (v.askedQuestion) moves.push("answer");
+  // The shop asked us something -> answer. A license ask counts even when the
+  // generic question detector missed it (shops often drop the "?").
+  if (v.askedQuestion || v.askedLicense || v.askedLicensePhoto) moves.push("answer");
 
   // Missing qualification info -> probe (only once bargaining is exhausted or
   // no price move is legal, preserving bargain-first).
@@ -61,13 +62,51 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   return dedupe(moves);
 }
 
+/** Human vehicle word for the license answer ("this vehicle category"). */
+function vehicleWord(ctx: TurnContext): string {
+  const r = ctx.session.rfq;
+  if (r.vehicleClass === "car") return "car";
+  if (r.vehicleClass === "motorbike") return "motorbike";
+  return "scooter";
+}
+
 /**
  * REFLEX TIER (Tier R): resolve the turn with ZERO LLM calls when the facts
- * fully determine it. Returns the move to take, or null to fall through to the
- * single pass. This is what keeps most protocol turns free.
+ * fully determine it. Returns the move to take (optionally with the exact wire
+ * text for protocol answers), or null to fall through to the single pass. This
+ * is what keeps most protocol turns free - and what makes the license protocol
+ * work even when every LLM provider is down.
  */
-export function reflexTurn(ctx: TurnContext): { move: MoveKind; reason: string } | null {
+export function reflexTurn(
+  ctx: TurnContext
+): { move: MoveKind; reason: string; message?: string } | null {
   const legal = ctx.legalMoves;
+  const v = ctx.inbound.verified;
+
+  // LICENSE PROTOCOL (deterministic policy, owner directive):
+  // - asked for a PHOTO/copy -> politely defer until the deal is agreed.
+  // - asked IF we have one -> firm yes, for this vehicle category.
+  // Only reflex when the message carries no price - a "license? 300/day" combo
+  // still gets the full single pass (which answers both under the prompt rules).
+  const priceInMessage = v.found && typeof v.pricePerDay === "number";
+  if (!priceInMessage && legal.includes("answer")) {
+    if (v.askedLicensePhoto) {
+      return {
+        move: "answer",
+        reason: "license-photo ask - defer until rates agreed (policy)",
+        message:
+          "Sure - I'll share a photo of my license once we finalize the rate and rental details 👍 What's your best price per day?",
+      };
+    }
+    if (v.askedLicense) {
+      return {
+        move: "answer",
+        reason: "license ask - firm yes for this vehicle category (policy)",
+        message: `Yes, I have a valid international driving license for a ${vehicleWord(ctx)}. What would your best price per day be?`,
+      };
+    }
+  }
+
   // Only one legal move AND it needs no composition -> take it reflexively.
   if (legal.length === 1 && legal[0] === "silent") {
     return { move: "silent", reason: "nothing owed - silence" };

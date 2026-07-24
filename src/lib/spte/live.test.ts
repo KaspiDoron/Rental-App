@@ -79,12 +79,18 @@ describe("SPTE live glue", () => {
     expect(events.some((e) => e.kind === "engine-v3-turn")).toBe(true);
   });
 
-  it("parks the reply (human pacing) when humanDelay is set -> queueOutbox", async () => {
+  it("sends INLINE even with humanDelay (bounded pause -> guardAndSend, no park)", async () => {
+    // The structural fix for "agent never replies": a reply leaves in the same
+    // invocation. With a tight remaining budget the pause clamps to 0 and the
+    // send still fires through guardAndSend (which owns queue-on-block).
     const { io, sent } = mockIo();
-    const res = await runSpteLiveTurn(input({ humanDelay: true }), io);
+    const res = await runSpteLiveTurn(
+      input({ humanDelay: true, deadlineAt: 1_015_000 }), // remaining 15s -> pause 0
+      io
+    );
     expect(res.move).toBe("bargain");
     expect(sent.length).toBe(1);
-    expect(sent[0].via).toBe("queueOutbox");
+    expect(sent[0].via).toBe("guardAndSend");
     expect((sent[0].meta as { kind?: string }).kind).toBe("reply");
   });
 
