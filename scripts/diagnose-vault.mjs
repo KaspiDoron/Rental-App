@@ -43,6 +43,10 @@ for (let i = 2; i < process.argv.length; i++) {
     i++;
   }
 }
+// Optional tidy-up: delete rows that decrypt under NO known secret (dead junk
+// once the old SESSION_SECRET is abandoned). Dry-run unless --confirm is passed.
+const PURGE = process.argv.includes("--purge-locked");
+const CONFIRM = process.argv.includes("--confirm");
 
 const URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "")
   .trim()
@@ -95,6 +99,11 @@ async function main() {
 
   const secrets = [];
   if (CURRENT) secrets.push({ label: "current SESSION_SECRET", secret: CURRENT });
+  (process.env.SESSION_SECRET_PREVIOUS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .forEach((s, i) => secrets.push({ label: `SESSION_SECRET_PREVIOUS #${i + 1}`, secret: s }));
   candidates.forEach((c, i) => secrets.push({ label: `candidate #${i + 1}`, secret: c }));
   if (secrets.length === 0) {
     console.log(`\n  (No SESSION_SECRET and no --try-secret given - only counting rows.)`);
@@ -132,6 +141,52 @@ async function main() {
     console.log(`    If the original secret is truly lost, the values cannot be decrypted by`);
     console.log(`    anyone and must be re-pasted in Admin -> Keys.`);
   }
+  // Which rows are LOCKED (decrypt under no known secret)? Those are the ones
+  // that vanished from the app. Listing their NAMES is your re-entry checklist -
+  // note it is NOT only API keys: the same vault holds the tester allowlist,
+  // extra admins, owner switches and the Ops learning/graph blobs.
+  const locked = encrypted.filter((r) => !secrets.some((s) => tryDecrypt(r.value, s.secret)));
+  if (locked.length) {
+    console.log(`\n  LOCKED rows (decrypt under no known secret) - your re-entry checklist:`);
+    for (const r of locked) console.log(`   - ${r.key}`);
+    console.log(
+      `\n  Reminder: beta_allowlist (your testers), ADMIN_EMAILS_EXTRA (extra admins),`
+    );
+    console.log(
+      `  owner switches (TEST_MODE/SCALE_MODE/APP_DOMAIN/...), and the graph/policy/`
+    );
+    console.log(
+      `  ops_learning blobs live here too - re-set the ones you customised (Admin ->`
+    );
+    console.log(`  Users / Keys / Ops), not just the API keys.`);
+  }
+
+  // Optional tidy-up: remove the dead locked rows.
+  if (PURGE && locked.length) {
+    if (!CONFIRM) {
+      console.log(
+        `\n  --purge-locked DRY RUN: would DELETE the ${locked.length} locked row(s) above.`
+      );
+      console.log(`  Re-run with --purge-locked --confirm to actually delete them.`);
+      console.log(
+        `  (Safe: only rows that decrypt under NO known secret are touched; readable`
+      );
+      console.log(`  config is never deleted. They are unrecoverable junk anyway.)`);
+    } else {
+      let ok = 0;
+      for (const r of locked) {
+        const del = await fetch(`${URL}/rest/v1/app_config?key=eq.${encodeURIComponent(r.key)}`, {
+          method: "DELETE",
+          headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, Prefer: "return=minimal" },
+        });
+        if (del.ok) ok++;
+        else console.log(`   ! failed to delete ${r.key} (${del.status})`);
+      }
+      console.log(`\n  Purged ${ok}/${locked.length} locked row(s). The vault now holds only`);
+      console.log(`  readable config; re-enter your keys in Admin -> Keys.`);
+    }
+  }
+
   console.log(`\n  Key names in the vault (${rows.length}):\n   - ${rows.map((r) => r.key).join("\n   - ")}\n`);
 }
 
