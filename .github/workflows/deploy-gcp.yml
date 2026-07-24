@@ -73,8 +73,12 @@ jobs:
       - name: Build image
         run: |
           IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
+          # NEXT_PUBLIC_* are inlined client-side at BUILD time - pass them all.
+          # NEXT_PUBLIC_SUPABASE_URL falls back to SUPABASE_URL (same project).
           docker build \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}" \
             --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            --build-arg NEXT_PUBLIC_SITE_URL="${{ secrets.NEXT_PUBLIC_SITE_URL }}" \
             -t "$IMAGE:${{ github.sha }}" \
             -t "$IMAGE:latest" \
             .

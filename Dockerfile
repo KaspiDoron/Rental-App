@@ -1,15 +1,22 @@
-# syntax=docker/dockerfile:1
 # WheelDeal - Next.js 14 standalone image for GCP Cloud Run.
 #
 # Multi-stage: deps (npm ci, cached by manifests) -> builder (next build with
-# output:standalone) -> runner (Alpine + only the traced server, ~150MB). The
+# output:standalone) -> runner (node:20-slim + only the traced server). slim
+# (glibc) over alpine: no libc6-compat/musl edge cases with SWC, and no apk
+# step that can fail on a filtered network. The
 # container listens on 8080 (Cloud Run's default $PORT) and runs as non-root.
+#
+# Base images come from mirror.gcr.io (Google's Docker Hub mirror): CI runners
+# share egress IPs and Docker Hub's unauthenticated rate limits 403 them - the
+# exact "Build image" failure this replaces. The mirror serves the same
+# official library images without auth or rate pain.
 
 # ---- deps: install the full workspace node_modules (cache-friendly) ---------
-FROM node:20-alpine AS deps
-RUN apk add --no-cache libc6-compat
+FROM mirror.gcr.io/library/node:20-slim AS deps
 WORKDIR /app
-# npm workspaces: every workspace manifest must be present for `npm ci`.
+# npm workspaces: EVERY workspace manifest must be present or `npm ci` fails
+# with a lockfile-sync error. Keep this list in sync with "workspaces" in
+# package.json.
 COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
@@ -23,27 +30,29 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci
 
 # ---- builder: compile the standalone server ---------------------------------
-FROM node:20-alpine AS builder
-RUN apk add --no-cache libc6-compat
+FROM mirror.gcr.io/library/node:20-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# NEXT_PUBLIC_* values are INLINED into the client bundle at build time, so the
-# anon key must be provided as a build arg (never the service-role key - that
-# one is runtime-only).
+# NEXT_PUBLIC_* values are INLINED into the client bundle at build time, so
+# they must arrive as build args (never the service-role key - runtime-only).
+ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV NEXT_TELEMETRY_DISABLED=1
+ARG NEXT_PUBLIC_SITE_URL
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
+    NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ---- runner: minimal production image ---------------------------------------
-FROM node:20-alpine AS runner
+FROM mirror.gcr.io/library/node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=8080 \
     HOSTNAME=0.0.0.0
-RUN addgroup -S nodejs -g 1001 && adduser -S nextjs -u 1001
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m nextjs
 # Standalone output = server.js + the traced node_modules subset only.
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
