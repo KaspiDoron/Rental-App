@@ -26,6 +26,7 @@ import {
 // second copy is how the drill window got skipped on the recovery path).
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
+import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
 // The region of the last outbound to this shop - primes the voice transcriber
 // for the local accent (best-effort; undefined just means no language hint).
@@ -335,10 +336,28 @@ export async function processEvolutionWebhook(
       const loc = locationMessage(data);
       const contact = contactMessage(data);
 
-      // Location pins / contact cards become plain text the engine can use.
+      // Location pins / contact cards become plain text the engine can use. A
+      // pin (or a Maps link/coords pasted as chat text) is enriched with the
+      // distance to the traveller's stay - so the agent can reason about
+      // delivery feasibility - WHEN the traveller consented to share their
+      // location (getUserStay masks coords without consent; we only ever surface
+      // a rough distance, never their pin).
       let syntheticText = text;
-      if (!syntheticText && loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
-        syntheticText = `(the shop shared its location${loc.name ? `: ${loc.name}` : ""} - https://maps.google.com/?q=${loc.lat},${loc.lng})`;
+      const pinLoc =
+        loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)
+          ? { lat: loc.lat as number, lng: loc.lng as number, name: loc.name }
+          : null;
+      const textCoords = syntheticText ? parseInboundCoords(syntheticText) : null;
+      if (pinLoc || textCoords) {
+        const { getUserStay } = await import("@/lib/access");
+        const s = await getUserStay(email).catch(() => null);
+        const stayCoords = s ? { lat: s.lat, lng: s.lng } : null;
+        if (!syntheticText && pinLoc) {
+          syntheticText = describeShopLocation(pinLoc, stayCoords);
+        } else if (syntheticText && textCoords) {
+          const note = distanceNote(textCoords, stayCoords);
+          if (note) syntheticText = `${syntheticText}${note}`;
+        }
       }
       if (!syntheticText && contact && (contact.name || contact.digits)) {
         syntheticText = `(the shop shared a contact${contact.name ? `: ${contact.name}` : ""}${contact.digits ? ` +${contact.digits}` : ""})`;
