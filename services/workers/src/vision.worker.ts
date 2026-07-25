@@ -24,7 +24,7 @@
 import { Worker, type Job } from "bullmq";
 import { extractOffer, sbSelect } from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
-import { bullConnection } from "@wheeldeal/redis";
+import { bullConnection, drainImageWindow } from "@wheeldeal/redis";
 import {
   VISION_QUEUE,
   type VisionExtractJob,
@@ -103,43 +103,58 @@ export function startVisionWorker(): Worker<VisionExtractJob, VisionChildResult>
   const worker = new Worker<VisionExtractJob, VisionChildResult>(
     VISION_QUEUE,
     async (job: Job<VisionExtractJob>): Promise<VisionChildResult> => {
-      const { waMessageId, fromDigits, senderEmail, caption, raw } = job.data;
+      const { waMessageId, fromDigits, senderEmail, caption, raw, coalesce } = job.data;
       const started = Date.now();
 
       // 1) Thread context - without an RFQ the extractor has no spec to match.
       const ctx = await threadContext(fromDigits, senderEmail);
       if (!ctx) return { ok: false, reason: "no-thread-context" };
 
-      // 2) Media download with the proven backoff. A permanent provider
-      // failure (expired media, 404/500) is a BUSINESS outcome, not an infra
-      // error - return ok:false so the parent clarifies without burning
-      // retries on a blob that will never appear.
-      let media: { mime: string; base64: string } | null = null;
-      for (const wait of MEDIA_RETRY_DELAYS_MS) {
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-        try {
-          media = await fetchMediaBase64(senderEmail, raw);
-          if (media) break;
-        } catch {
-          /* retry */
+      // 1b) COALESCE (Module 4.1): drain every frame buffered for this burst so
+      // a multi-photo price board is OCR'd together in one pass. Falls back to
+      // the single leader frame when the buffer is empty (Redis off / a retry
+      // after the first drain).
+      let frames: unknown[] = [raw];
+      if (coalesce) {
+        const drained = await drainImageWindow(coalesce);
+        if (drained.length) frames = drained;
+      }
+
+      // 2) Media download with the proven backoff, for EVERY frame. A permanent
+      // provider failure (expired media, 404/500) on a single frame is skipped;
+      // only if NONE download do we clarify (business outcome, ok:false - no
+      // infra retry on blobs that will never appear).
+      const media: { mime: string; base64: string }[] = [];
+      for (const frame of frames) {
+        for (const wait of MEDIA_RETRY_DELAYS_MS) {
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          try {
+            const m = await fetchMediaBase64(senderEmail, frame);
+            if (m) {
+              media.push(m);
+              break;
+            }
+          } catch {
+            /* retry this frame */
+          }
         }
       }
-      if (!media) {
+      if (media.length === 0) {
         logger.warn({ waMessageId, fromDigits }, "vision: media permanently unavailable");
         return { ok: false, reason: "media-fetch-failed" };
       }
 
-      // 3) Best-effort audit copy (never blocks, never fails the job).
-      const mediaRef = await storeMediaAudit(waMessageId, media);
+      // 3) Best-effort audit copy of the FIRST frame (never blocks/fails).
+      const mediaRef = await storeMediaAudit(waMessageId, media[0]);
 
-      // 4) The multi-provider OCR chain. extractOffer NEVER throws (hardened
-      // in the Sun House fix): vision-down degrades to the caption backstop
-      // or a clarify-shaped extraction - all of which are ok:true outcomes
-      // the continuation composes through the normal engine.
+      // 4) The multi-provider OCR chain over ALL frames. extractOffer +
+      // chatVision are already multi-image native (they map every image into
+      // the prompt). extractOffer NEVER throws (Sun House fix): vision-down
+      // degrades to the caption backstop or a clarify-shaped extraction.
       const extraction = await extractOffer(
         ctx.rfq,
         caption || "(the shop sent a price-list photo)",
-        [media],
+        media,
         await threadHistory(fromDigits, senderEmail),
         ctx.region
       );
@@ -148,6 +163,7 @@ export function startVisionWorker(): Worker<VisionExtractJob, VisionChildResult>
         {
           waMessageId,
           fromDigits,
+          images: media.length,
           ms: Date.now() - started,
           found: extraction.found,
           price: extraction.pricePerDay ?? null,

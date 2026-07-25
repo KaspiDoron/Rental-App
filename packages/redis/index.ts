@@ -78,6 +78,16 @@ export {
 } from "./offers";
 export type { SessionOfferWrite, CachedRivalQuery, SessionEventPayload } from "./offers";
 
+// Multi-image-per-turn coalescing (Module 4.1) - worker-path burst buffer.
+export {
+  beginImageWindow,
+  drainImageWindow,
+  imageWindowKey,
+  imageBufferKey,
+  IMAGE_WINDOW_SECONDS,
+} from "./image-buffer";
+export type { ImageWindowStart } from "./image-buffer";
+
 // ---------------------------------------------------------------------------
 // Plan-tier outreach budgets (Module 6) - canonical impl in src/lib/budget-
 // cache, re-exported via ./budgets (one schema, both runtimes).

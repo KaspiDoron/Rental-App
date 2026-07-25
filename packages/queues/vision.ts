@@ -17,7 +17,7 @@
 // image, a provider 404/500, or a vision-model outage.
 
 import { FlowProducer } from "bullmq";
-import { bullConnection } from "../redis";
+import { bullConnection, beginImageWindow, IMAGE_WINDOW_SECONDS } from "../redis";
 import { INCOMING_QUEUE, VISION_QUEUE, safeJobId } from "./index";
 
 // ---------------------------------------------------------------------------
@@ -31,8 +31,12 @@ export interface VisionExtractJob {
   remoteJid: string;
   senderEmail: string;
   caption: string;
-  /** The single provider message frame (carries the media keys/thumbnail). */
+  /** The leader provider frame (carries the media keys/thumbnail). Fallback
+   * source when the coalesce buffer is empty (Redis off / already drained). */
   raw: unknown;
+  /** Multi-image coalescing (Module 4.1): when present, the child DRAINS every
+   * buffered frame for this burst and OCRs them together in one pass. */
+  coalesce?: { receiver: string; from: string; leaderWaId: string };
 }
 
 /** Parent job: the turn continuation (composes the reply / fallback). */
@@ -92,21 +96,38 @@ export async function enqueueVisionFlow(req: {
   caption: string;
   raw: unknown;
 }): Promise<void> {
-  const continuation: VisionContinuationJob = {
+  // Multi-image coalescing (Module 4.1): register this frame in its
+  // (receiver, shop) burst window. Only the LEADER schedules a flow; siblings
+  // are buffered and picked up when the leader's delayed child drains them.
+  const { first, leaderWaId } = await beginImageWindow({
+    receiver: req.senderEmail,
+    from: req.fromDigits,
     waMessageId: req.waMessageId,
+    frame: req.raw,
+  });
+  if (!first) return; // a flow is already scheduled for this burst
+
+  const continuation: VisionContinuationJob = {
+    // Attribute the turn to the LEADER frame so the flow jobIds dedup a
+    // redelivered leader and the reply anchors on the first photo.
+    waMessageId: leaderWaId,
     fromDigits: req.fromDigits,
     remoteJid: req.remoteJid,
     senderEmail: req.senderEmail,
     caption: req.caption,
   };
-  const child: VisionExtractJob = { ...continuation, raw: req.raw };
+  const child: VisionExtractJob = {
+    ...continuation,
+    raw: req.raw,
+    coalesce: { receiver: req.senderEmail, from: req.fromDigits, leaderWaId },
+  };
 
   await flowProducer().add({
     name: "vision-continuation",
     queueName: INCOMING_QUEUE,
     data: continuation,
     opts: {
-      jobId: visionParentJobId(req.waMessageId),
+      jobId: visionParentJobId(leaderWaId),
       attempts: 3,
       backoff: { type: "exponential", delay: 3000 },
       removeOnComplete: 1000,
@@ -118,7 +139,11 @@ export async function enqueueVisionFlow(req: {
         queueName: VISION_QUEUE,
         data: child,
         opts: {
-          jobId: visionChildJobId(req.waMessageId),
+          jobId: visionChildJobId(leaderWaId),
+          // Hold the child for the coalesce window so a multi-photo album
+          // collects into one buffer before the single OCR pass runs. A lone
+          // photo just waits out the window (modest, honest added latency).
+          delay: IMAGE_WINDOW_SECONDS * 1000,
           attempts: 3, // media/LLM upstreams are retried inside too - 3 is plenty
           backoff: { type: "exponential", delay: 5000 },
           removeOnComplete: 500,
