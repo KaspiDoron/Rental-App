@@ -32,6 +32,26 @@ function lastSyncStore() {
 }
 
 /**
+ * Distinct users who sent an outbound WhatsApp message recently - the candidate
+ * pool for the scheduler's app-closed inbound-recovery sweep. Cheap single scan.
+ */
+export async function recentActiveSenders(hours = 36, scan = 100): Promise<string[]> {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  const rows = await sbSelect<{ raw: { sender?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&direction=eq.outbound&received_at=gte.${encodeURIComponent(
+      since
+    )}&order=received_at.desc&limit=${scan}`
+  ).catch(() => []);
+  const emails = new Set<string>();
+  for (const r of rows) {
+    const s = r.raw?.sender;
+    if (typeof s === "string" && s.includes("@")) emails.add(s.toLowerCase());
+  }
+  return [...emails];
+}
+
+/**
  * Reconcile recent inbound replies for one user. Returns how many missed
  * messages were recovered (0 on the throttled fast path).
  */

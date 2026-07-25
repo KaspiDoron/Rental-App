@@ -11,6 +11,9 @@ import {
   sendFromUser,
   reassertWebhook,
   sbSelect,
+  recentActiveSenders,
+  syncInboundReplies,
+  pickSweepEmails,
 } from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
 import { bullConnection } from "@wheeldeal/redis";
@@ -27,6 +30,8 @@ const DRAIN_EVERY_MS = 20_000;
 const GC_EVERY_MS = 30 * 60_000; // 30m
 const DLQ_SWEEP_EVERY_MS = 15 * 60_000; // 15m
 const REARM_EVERY_MS = 30 * 60_000; // 30m - reassert webhooks (find+set, throttled ~1h/instance)
+const RECOVERY_EVERY_MS = 60_000; // 1m - app-closed inbound-recovery sweep (<=3 senders/tick)
+const RECOVERY_PER_TICK = 3;
 
 /** Register the repeatable heartbeat jobs (idempotent - same repeat keys). */
 export async function scheduleHeartbeat(): Promise<void> {
@@ -59,6 +64,16 @@ export async function scheduleHeartbeat(): Promise<void> {
   await q.add("webhook-rearm", { kind: "webhook-rearm" } satisfies SchedulerJob, {
     repeat: { every: REARM_EVERY_MS },
     jobId: "heartbeat-webhook-rearm",
+    removeOnComplete: 10,
+    removeOnFail: 20,
+  });
+  // Inbound-recovery sweep: pull recent shop replies for a few senders each
+  // minute so a webhook that briefly missed an event (or a user with the app
+  // closed) still recovers, without the app being open. wa-sync's own throttle
+  // + isVendorThread scoping apply, so this can never over-read or spam.
+  await q.add("inbound-recovery", { kind: "inbound-recovery" } satisfies SchedulerJob, {
+    repeat: { every: RECOVERY_EVERY_MS },
+    jobId: "heartbeat-inbound-recovery",
     removeOnComplete: 10,
     removeOnFail: 20,
   });
@@ -115,6 +130,19 @@ export function startSchedulerWorker(): Worker<SchedulerJob> {
           return null;
         });
         if (res) logger.info(res, "heartbeat webhook-rearm");
+      } else if (job.data.kind === "inbound-recovery") {
+        try {
+          const senders = await recentActiveSenders();
+          const minute = Math.floor(Date.now() / 60_000);
+          const picked = pickSweepEmails(senders, minute, RECOVERY_PER_TICK);
+          let recovered = 0;
+          for (const email of picked) {
+            recovered += await syncInboundReplies(email).catch(() => 0);
+          }
+          if (recovered > 0) logger.info({ picked: picked.length, recovered }, "inbound-recovery sweep");
+        } catch (e) {
+          logger.warn({ err: (e as Error).message }, "inbound-recovery error");
+        }
       }
     },
     { connection: bullConnection(), concurrency: 1 } // one drainer - no herd

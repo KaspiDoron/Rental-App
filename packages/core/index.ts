@@ -12,6 +12,10 @@
 export { processEvolutionWebhook } from "../../src/lib/wa/ingest";
 export type { VisionFlowRequest } from "../../src/lib/wa/ingest";
 
+// Inbound-recovery backstop (app-closed pull) - used by the scheduler sweep.
+export { syncInboundReplies, recentActiveSenders } from "../../src/lib/wa-sync";
+export { pickSweepEmails } from "../../src/lib/wa/sweep";
+
 // Agent loop + composition.
 export { processVendorReply, photoClarifyExtraction } from "../../src/lib/agent-loop";
 export type { ExtractedOffer } from "../../src/lib/agents";
