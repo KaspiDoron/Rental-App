@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { senderSafety, type SenderSafety } from "@/lib/wa-guard";
+import { deriveCountered } from "@/lib/counter-offer";
 
 // The living-workspace feed: one endpoint that tells the user everything
 // their agents are doing, chronologically, across every shop - built ENTIRELY
@@ -234,6 +235,14 @@ export async function GET(req: Request) {
   // A real priced OFFER is the strongest state.
   for (const o of offers) if (o.price_per_day) bumpState(o.vendor_id, "offer");
 
+  // ---- COUNTER-OFFER DETECTION (derived, never cosmetic) --------------------
+  // See deriveCountered(): a vendor is countered once the agent has sent a
+  // bargain move after the shop's opening quote (offer round>=1, or an outbound
+  // bargain timestamped after the first inbound). Emitted as a SEPARATE signal
+  // (not folded into the messaged<active<offer rank) so it never blocks the
+  // priced offer from surfacing - the client only relabels the STAGE.
+  const countered = deriveCountered({ offers, replies, outbound });
+
   // ---- PER-VENDOR LAST MESSAGES (F4 batch status) --------------------------
   // The status screen wants {shop, last shop message, last agent message} for
   // EVERY shop in one response. Previously the client N+1-polled /api/thread per
@@ -435,6 +444,7 @@ export async function GET(req: Request) {
     introBudget,
     whyByVendor,
     vendorStates,
+    countered, // J: vendorIds where the agent countered a shop quote
     lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),

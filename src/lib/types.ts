@@ -45,6 +45,7 @@ export type TrackerStage =
   | "awaiting-response"
   | "negotiating"
   | "offer-received"
+  | "counter-offer" // agent countered the shop's quote - active price haggling
   | "no-response"
   | "declined";
 

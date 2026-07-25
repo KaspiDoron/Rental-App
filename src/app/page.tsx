@@ -692,9 +692,17 @@ export default function Home() {
         "awaiting-response": 4,
         negotiating: 5,
         "offer-received": 6,
+        "counter-offer": 7,
       };
       const stageForState = (s: "messaged" | "active" | "offer") =>
         s === "offer" ? "offer-received" : s === "active" ? "negotiating" : "awaiting-response";
+      // J: vendorIds where the agent has countered the shop's quote this session
+      // (derived server-side from offer rounds / bargain-after-quote). Applied as
+      // a FINAL stage relabel - after the offer/price is seeded - so the priced
+      // offer still surfaces on the card while the stage reads "counter-offer".
+      const counteredSet = new Set<string>(
+        Array.isArray(d.countered) ? (d.countered as string[]) : []
+      );
       const canAdvance = (cur: string | undefined, target: string) =>
         cur !== "declined" &&
         cur !== "no-contact" &&
@@ -703,6 +711,14 @@ export default function Home() {
         // reply (active/offer) revives it.
         !(cur === "no-response" && target === "awaiting-response") &&
         (STAGE_ORDER[target] ?? -1) > (STAGE_ORDER[cur ?? "queued"] ?? -1);
+      // J: relabel a card's stage to "counter-offer" once the agent has countered
+      // this shop's quote - applied LAST (after offer seeding) at every return
+      // site so the priced offer still shows; canAdvance keeps it off terminal
+      // cards and makes it stick once reached (active haggling in progress).
+      const finalizeStage = (b: Vendor): Vendor =>
+        b.id && counteredSet.has(b.id) && canAdvance(b.stage, "counter-offer")
+          ? { ...b, stage: "counter-offer" }
+          : b;
       // Drop rows the user just removed (tombstoned) - a poll that read the
       // server BEFORE the delete committed must not resurrect them. Expired
       // tombstones (>30s) fall away so a genuinely failed delete resurfaces.
@@ -872,18 +888,22 @@ export default function Home() {
                 },
               };
             }
-            return base; // an offer supersedes any queue badge
+            return finalizeStage(base); // an offer supersedes any queue badge
           }
           const held = byVendor.get(base.id);
           if (
             held &&
             (base.queuedUntil !== held.until || base.queuedReason !== (held.reason ?? undefined))
           ) {
-            return { ...base, queuedUntil: held.until, queuedReason: held.reason ?? undefined };
+            return finalizeStage({
+              ...base,
+              queuedUntil: held.until,
+              queuedReason: held.reason ?? undefined,
+            });
           }
           if (!held && base.queuedUntil) {
             const delivered = sentVendors.has(base.id);
-            return {
+            return finalizeStage({
               ...base,
               queuedUntil: undefined,
               queuedReason: undefined,
@@ -894,9 +914,9 @@ export default function Home() {
                 : base.stage === "rfq-sent"
                   ? "found"
                   : base.stage,
-            };
+            });
           }
-          return base;
+          return finalizeStage(base);
         })
       );
     } catch {

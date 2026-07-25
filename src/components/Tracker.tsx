@@ -18,6 +18,7 @@ const ORDER: TrackerStage[] = [
   "awaiting-response",
   "negotiating",
   "offer-received",
+  "counter-offer",
 ];
 
 export function StageBadge({ stage }: { stage: TrackerStage }) {
@@ -33,12 +34,14 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     },
     negotiating: { text: "Negotiating", cls: "bg-brandred-soft text-brandred" },
     "offer-received": { text: "Offer in", cls: "bg-savings-soft text-savings" },
+    "counter-offer": { text: "Counter sent", cls: "bg-brandred-soft text-brandred" },
     "no-response": { text: "No response", cls: "bg-card2 text-faint" },
     declined: { text: "Declined", cls: "bg-brandred-soft text-brandred" },
   };
   const s = map[stage];
   const live =
     stage === "negotiating" ||
+    stage === "counter-offer" ||
     stage === "awaiting-response" ||
     stage === "locating-contact";
   return (
@@ -79,6 +82,8 @@ export function stageCaption(stage: TrackerStage): { emoji: string; text: string
       return { emoji: "🤝", text: "Your agent is haggling with the shop for a lower price." };
     case "offer-received":
       return { emoji: "✅", text: "Price is in - review the shop's offer below." };
+    case "counter-offer":
+      return { emoji: "🔁", text: "Your agent countered the shop's quote - pushing for a better price." };
     case "no-response":
       return { emoji: "💤", text: "No reply yet. Your agent will keep watching for one." };
     case "declined":
