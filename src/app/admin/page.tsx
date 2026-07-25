@@ -342,6 +342,8 @@ export default function AdminPage() {
   const [keyWarning, setKeyWarning] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; label: string; value: string }[] | null>(null);
   const [aiProviders, setAiProviders] = useState<any[]>([]);
+  const [distillMsg, setDistillMsg] = useState<string | null>(null);
+  const [distillBusy, setDistillBusy] = useState(false);
   const [trainingCount, setTrainingCount] = useState(0);
   const [trainMsg, setTrainMsg] = useState<string | null>(null);
   const [trainOk, setTrainOk] = useState(true);
@@ -627,6 +629,26 @@ export default function AdminPage() {
     const data = await res.json();
     if (data.providers) setAiProviders(data.providers);
     if (data.warning) setKeyWarning(data.warning);
+  }
+
+  async function runDistill() {
+    setDistillBusy(true);
+    setDistillMsg(null);
+    try {
+      const res = await fetch("/api/admin/distill", { method: "POST" });
+      const d = await res.json();
+      setDistillMsg(
+        d.error
+          ? `⚠ ${d.error}`
+          : `✓ Distilled ${d.written ?? 0} exemplar(s) from ${d.mined ?? 0} winning turn(s)${
+              d.provider ? ` via ${d.provider}` : ""
+            }.`
+      );
+    } catch {
+      setDistillMsg("⚠ Could not run distillation - try again.");
+    } finally {
+      setDistillBusy(false);
+    }
   }
 
   async function importTraining() {
@@ -1631,6 +1653,22 @@ export default function AdminPage() {
                 </button>
               ))}
             </div>
+            {isOwner && (
+              <div className="mt-3 border-t border-line pt-3">
+                <button
+                  onClick={runDistill}
+                  disabled={distillBusy}
+                  className="btn btn-sm btn-ghost w-full rounded-xl border border-line py-2 text-[12px] font-extrabold disabled:opacity-50"
+                >
+                  {distillBusy ? "Distilling…" : "🧪 Distill now (teach the free models)"}
+                </button>
+                <p className="mt-1 text-[10px] text-faint">
+                  Mines winning negotiation turns and distils them (DeepSeek-preferred) into few-shot
+                  tactics the free models reuse next turn. Runs ~$0.
+                </p>
+                {distillMsg && <p className="mt-1 text-[11px] font-bold text-soft">{distillMsg}</p>}
+              </div>
+            )}
           </div>
 
           {/* Owner-only: reveal & copy raw values */}
