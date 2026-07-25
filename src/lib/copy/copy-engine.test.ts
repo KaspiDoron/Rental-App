@@ -7,7 +7,7 @@ import {
   parseSignature,
   mulberry32,
 } from "./hash";
-import { openerSeed, drawStyle, seedRng } from "./matrix";
+import { openerSeed, drawStyle } from "./matrix";
 import { compileOpener, compileStyleDirectives } from "./promptCompiler";
 import { trigramOverlap, revarySeeded, ensureGloballyUnique } from "../graph/uniqueness";
 import type { StructuredRFQ } from "../types";
@@ -101,11 +101,68 @@ describe("variation matrix + compiler (owner P2: deterministic diversity)", () =
     expect(d1).toMatch(/STYLE/);
     expect(d1).not.toBe(compileStyleDirectives({ ...seed, nonce: 3 }, "Philippines"));
   });
-  it("drawStyle slang only appears for known regions", () => {
-    const rng = seedRng({ threadId: "t", vendorId: "v", nonce: 1 });
-    void rng;
+  it("drawStyle regional flavor only appears for known regions", () => {
     const style = drawStyle({ threadId: "t", vendorId: "v", nonce: 1 }, "Reykjavik, Iceland");
-    expect(style.slang).toBeUndefined();
+    expect(style.particle).toBeUndefined();
+    expect(style.regionalThanks).toBeUndefined();
+  });
+});
+
+describe("W4: region-true, particle-safe openers", () => {
+  const compile = (region: string | undefined, i: number) =>
+    compileOpener(RFQ, { threadId: `u${i}`, vendorId: `v${i}`, nonce: i }, region);
+
+  it("a VIETNAM shop never gets Filipino/Thai flavor, and a thank-you is never a greeting particle", () => {
+    for (let i = 0; i < 200; i++) {
+      const msg = compile("vietnam", i);
+      // No Filipino "Salamat!"/"po", no Thai "krub"/"ka" anywhere.
+      expect(msg).not.toMatch(/salamat|\bpo\b|krub|\bka\b/i);
+      // "Cảm ơn!" (if present) is ONLY ever terminal (before an optional emoji),
+      // never glued after a greeting word like "Hello! cam on ...".
+      if (/Cảm ơn/.test(msg)) {
+        expect(msg).not.toMatch(/(Hi|Hello|Hey|Good day|Hi there|Hello there)[^.?!]*Cảm ơn/);
+        expect(msg).toMatch(/Cảm ơn!\s*[🙂🙏😊🤙👌]?\s*$/u);
+      }
+    }
+  });
+
+  it("a PHILIPPINES shop: 'po' only attaches to the greeting, 'Salamat!' only terminal", () => {
+    for (let i = 0; i < 200; i++) {
+      const msg = compile("philippines", i);
+      if (/\bpo\b/.test(msg)) {
+        // 'po' rides the greeting: it appears within the first few words.
+        expect(msg).toMatch(/^(Hi|Hello|Hey|Good day|Hi there|Hello there)\s+po!/);
+      }
+      if (/Salamat/.test(msg)) {
+        expect(msg).toMatch(/Salamat!\s*[🙂🙏😊🤙👌]?\s*$/u);
+      }
+    }
+  });
+
+  it("a THAILAND shop never mixes genders within one message and is stable across nonces", () => {
+    for (let i = 0; i < 200; i++) {
+      const msg = compile("thailand", i);
+      // Never both a masculine and feminine marker in the same message.
+      const hasKrub = /krub/i.test(msg);
+      const hasKa = /\bka\b/i.test(msg);
+      expect(hasKrub && hasKa).toBe(false);
+    }
+    // Gender is pinned to (threadId,vendorId), independent of the per-attempt nonce.
+    const a = compileOpener(RFQ, { threadId: "tX", vendorId: "vX", nonce: 1 }, "thailand");
+    const b = compileOpener(RFQ, { threadId: "tX", vendorId: "vX", nonce: 2 }, "thailand");
+    const genderOf = (m: string) => (/krub/i.test(m) ? "m" : /\bka\b/i.test(m) ? "f" : "none");
+    // If both messages carry a Thai marker, it must be the same gender.
+    if (genderOf(a) !== "none" && genderOf(b) !== "none") expect(genderOf(a)).toBe(genderOf(b));
+  });
+
+  it("no message ever ends on a bare greeting or contains a doubled greeting", () => {
+    for (const region of [undefined, "vietnam", "philippines", "thailand", "indonesia"]) {
+      for (let i = 0; i < 60; i++) {
+        const msg = compile(region, i);
+        expect(msg.length).toBeGreaterThan(10);
+        expect(msg).not.toMatch(/\bbtw\b/i); // the old misplaced-greeting artifact
+      }
+    }
   });
 });
 

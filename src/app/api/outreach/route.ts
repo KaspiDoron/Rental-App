@@ -171,11 +171,14 @@ export async function POST(req: Request) {
       // skeleton dedup (the Redis window no-ops on Vercel).
       const { compileOpener } = await import("@/lib/copy/promptCompiler");
       const { openerSeed } = await import("@/lib/copy/matrix");
+      const { regionForShop } = await import("@/lib/copy/region");
       const { ensureGloballyUnique } = await import("@/lib/graph/uniqueness");
+      // Region from the SHOP's phone (authoritative), label as fallback.
+      const shopRegion = regionForShop(digits, String(body.region ?? ""));
       const compiled = compileOpener(
         body.rfq,
         openerSeed(session.email, vendorId || digits, new Date().toISOString().slice(0, 13)),
-        String(body.region ?? "") || undefined
+        shopRegion
       );
       outboundText = (await ensureGloballyUnique(compiled, [])).text;
     } catch {
@@ -189,9 +192,10 @@ export async function POST(req: Request) {
   // already localized by composeBargain, so only localize agent RFQs here.
   if (wantsLocal && isAuto && kind === "rfq") {
     const { localizeMessage } = await import("@/lib/agents");
+    const { regionForShop } = await import("@/lib/copy/region");
     const localized = await localizeMessage(
       outboundText,
-      String(body.region ?? "") || undefined,
+      regionForShop(digits, String(body.region ?? "")),
       session.email
     );
     if (localized.english && localized.text !== outboundText) englishGloss = localized.english;

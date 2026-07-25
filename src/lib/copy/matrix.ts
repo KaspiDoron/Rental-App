@@ -10,6 +10,7 @@
 // costume). Every pool entry must read naturally on its own.
 
 import { fnv1a32, mulberry32 } from "./hash";
+import type { ShopRegion } from "./region";
 
 export interface CopySeed {
   threadId: string;
@@ -53,8 +54,11 @@ export const GREETINGS = [
   "Hey!",
   "Good day!",
   "Hi there!",
-  "Hello po!", // respectful PH particle - warm, common from travellers too
+  "Hello there!",
 ] as const;
+// NOTE: region-specific greetings (e.g. the PH "po" particle) are NOT in this
+// pool - they are region-keyed and applied by the compiler, so a Vietnam shop
+// never receives a Filipino particle. See REGION_FLAVOR below.
 
 export const SELF_INTROS = [
   "I'm visiting for a few days and",
@@ -95,18 +99,35 @@ export const SIGN_OFFS = [
   "Thanks!",
   "Thank you!",
   "Thanks a lot!",
-  "Salamat!", // PH
   "Cheers!",
   "", // no sign-off
 ] as const;
+// NOTE: "Salamat!" (a PH THANK-YOU) is region-keyed in REGION_FLAVOR, not in the
+// neutral pool - it must never land region-blind on a non-PH shop.
 
-/** Light, respectful region flavor - at most ONE word, never a costume. */
-export const REGION_SLANG: Record<string, readonly string[]> = {
-  philippines: ["po", "salamat"],
-  thailand: ["krub", "ka"],
-  indonesia: ["terima kasih"],
-  vietnam: ["cam on"],
+/** Region flavor, correctly split into two grammatical roles:
+ *   - `particles`: politeness particles that attach to a GREETING ("po", the
+ *     gendered Thai "krub"/"ka"). Vietnam/Indonesia have none.
+ *   - `thanks`: a local THANK-YOU that can only ever replace a terminal sign-off
+ *     (never glued onto a greeting). Thai thanks is index-paired with the
+ *     particle so the gender agrees within a message.
+ * Diacritics are authored correctly. */
+export interface RegionFlavor {
+  particles: readonly string[];
+  thanks: readonly string[];
+}
+export const REGION_FLAVOR: Record<ShopRegion, RegionFlavor> = {
+  philippines: { particles: ["po"], thanks: ["Salamat!"] },
+  thailand: { particles: ["krub", "ka"], thanks: ["Khop khun krub!", "Khop khun ka!"] }, // index-paired by gender
+  vietnam: { particles: [], thanks: ["Cảm ơn!"] },
+  indonesia: { particles: [], thanks: ["Terima kasih!"] },
 };
+function regionKeyOf(region?: string): ShopRegion | undefined {
+  const k = (region ?? "").toLowerCase();
+  return (["philippines", "thailand", "vietnam", "indonesia"] as ShopRegion[]).find((r) =>
+    k.includes(r)
+  );
+}
 
 export const CONTRACTION_STYLES = ["contracted", "plain", "mixed"] as const;
 export type ContractionStyle = (typeof CONTRACTION_STYLES)[number];
@@ -127,14 +148,38 @@ export interface StyleChoice {
   emoji: string;
   order: SentenceOrder;
   contraction: ContractionStyle;
-  slang: string | undefined;
+  /** A greeting particle (po / krub / ka) for the shop's region, or undefined. */
+  particle: string | undefined;
+  /** A local thank-you (Salamat! / Cảm ơn! / gender-matched Thai), or undefined.
+   * ONLY ever used in the terminal sign-off slot - never on a greeting. */
+  regionalThanks: string | undefined;
 }
 
 /** Draw one full style combination from the matrix - pure + deterministic. */
 export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
   const rng = seedRng(seed);
-  const regionKey = (region ?? "").toLowerCase();
-  const slangPool = Object.entries(REGION_SLANG).find(([k]) => regionKey.includes(k))?.[1];
+  const flavor = (() => {
+    const key = regionKeyOf(region);
+    return key ? REGION_FLAVOR[key] : undefined;
+  })();
+
+  // The particle is pinned to a NONCE-FREE seed so it never flips mid-thread
+  // (critical for the gendered Thai krub/ka): a given (threadId,vendorId) always
+  // resolves the same gender. The thanks index follows the particle index so
+  // "krub" pairs with "Khop khun krub!" and "ka" with "Khop khun ka!".
+  let particle: string | undefined;
+  let regionalThanks: string | undefined;
+  if (flavor) {
+    const genderRng = mulberry32(fnv1a32(`${seed.threadId}|${seed.vendorId}|particle`));
+    const idx = flavor.particles.length ? Math.floor(genderRng() * flavor.particles.length) % flavor.particles.length : 0;
+    // Particle appears sparingly (~1/3) and only when the region actually has one.
+    particle = flavor.particles.length && rng() < 0.33 ? flavor.particles[idx] : undefined;
+    // Regional thanks (terminal) appears sparingly too; gender-matched to the particle.
+    if (flavor.thanks.length && rng() < 0.33) {
+      regionalThanks = flavor.thanks[Math.min(idx, flavor.thanks.length - 1)];
+    }
+  }
+
   return {
     greeting: seededPick(rng, GREETINGS),
     selfIntro: seededPick(rng, SELF_INTROS),
@@ -146,7 +191,7 @@ export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
     emoji: rng() < 0.66 ? seededPick(rng, EMOJIS.filter(Boolean)) : "",
     order: seededPick(rng, SENTENCE_ORDERS),
     contraction: seededPick(rng, CONTRACTION_STYLES),
-    // Slang appears sparingly (~1/3) and only when the region has a pool.
-    slang: slangPool && rng() < 0.33 ? seededPick(rng, slangPool) : undefined,
+    particle,
+    regionalThanks,
   };
 }

@@ -46,8 +46,12 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   const s = drawStyle(seed, region);
   const vehicle = s.vehiclePhrase(vehicleWording(rfq));
   const duration = s.durationPhrase(Math.max(1, rfq.durationDays));
-  const slangGreet = s.slang && s.slang !== "salamat" ? ` ${s.slang}` : "";
-  const slangOff = s.slang === "salamat" ? "Salamat!" : s.signOff;
+  // A politeness PARTICLE (po / krub / ka) attaches to the greeting only. The
+  // regional THANK-YOU (Salamat! / Cảm ơn! / gender-matched Thai) is a terminal
+  // sign-off ONLY - it can never be glued onto a greeting (the "Hello! cam on"
+  // bug). Thanks wins the sign-off slot when present.
+  const greet = s.particle ? s.greeting.replace(/!+$/, "") + ` ${s.particle}!` : s.greeting;
+  const signOff = s.regionalThanks ?? s.signOff;
 
   const intro = s.selfIntro
     ? `${s.selfIntro} ${vehicle} ${duration}.`
@@ -55,9 +59,9 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
 
   let body: string;
   if (s.order === "greet-intro-ask") {
-    body = `${s.greeting}${slangGreet} ${intro} ${s.ask}`;
+    body = `${greet} ${intro} ${s.ask}`;
   } else if (s.order === "greet-ask-intro") {
-    body = `${s.greeting}${slangGreet} ${s.ask} ${s.selfIntro ? `(${vehicle} ${duration})` : `${vehicle} ${duration}.`}`;
+    body = `${greet} ${s.ask} ${s.selfIntro ? `(${vehicle} ${duration})` : `${vehicle} ${duration}.`}`;
   } else {
     // "intro-first": a terse, substance-led opener (a busy traveller getting
     // straight to the point) - the warmth is the appended sign-off + emoji, not
@@ -70,7 +74,7 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   }
 
   let out = applyContraction(body, s.contraction).replace(/\s{2,}/g, " ").trim();
-  if (slangOff) out = `${out} ${slangOff}`;
+  if (signOff) out = `${out} ${signOff}`;
   if (s.emoji) out = `${out} ${s.emoji}`;
   return out.replace(/\s{2,}/g, " ").trim();
 }
@@ -94,7 +98,8 @@ export function compileStyleDirectives(seed: CopySeed, region?: string): string 
       ? "Avoid contractions - slightly formal-simple English."
       : "Mix contractions naturally.",
     s.emoji ? `End with exactly one ${s.emoji} (no other emoji).` : "No emoji this time.",
-    s.slang ? `You may include the local word "${s.slang}" once, naturally.` : "",
+    s.particle ? `You may add the polite particle "${s.particle}" to your greeting, once.` : "",
+    s.regionalThanks ? `You may close with the local thank-you "${s.regionalThanks}" (at the END only).` : "",
     "Never reuse the sentence structure of your previous messages in this chat.",
   ].filter(Boolean);
   return parts.join(" ");

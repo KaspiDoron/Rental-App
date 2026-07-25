@@ -203,21 +203,21 @@ export async function POST(req: Request) {
       : null;
   const compiledRecent: string[] = [];
   const wantLocalLang = Boolean(body.localLang) && session.plan === "ultra";
-  const openerFor = async (vendorId: string): Promise<{ text: string; gloss?: string }> => {
+  const openerFor = async (vendorId: string, shopDigits: string): Promise<{ text: string; gloss?: string }> => {
     if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
     const { compileOpener } = await import("@/lib/copy/promptCompiler");
     const { openerSeed } = await import("@/lib/copy/matrix");
+    const { regionForShop } = await import("@/lib/copy/region");
     const { ensureGloballyUnique } = await import("@/lib/graph/uniqueness");
-    const english = compileOpener(
-      rfqForCompile,
-      openerSeed(session.email, vendorId, batchId),
-      String(body.region ?? "") || undefined
-    );
+    // Region from the SHOP's phone (authoritative), label only as fallback - so
+    // a +84 shop never gets a Filipino sign-off.
+    const shopRegion = regionForShop(shopDigits, String(body.region ?? ""));
+    const english = compileOpener(rfqForCompile, openerSeed(session.email, vendorId, batchId), shopRegion);
     const unique = await ensureGloballyUnique(english, compiledRecent);
     compiledRecent.push(unique.text);
     if (!wantLocalLang) return { text: unique.text };
     const { localizeMessage } = await import("@/lib/agents");
-    const localized = await localizeMessage(unique.text, String(body.region ?? "") || undefined);
+    const localized = await localizeMessage(unique.text, shopRegion);
     return localized.localized
       ? { text: localized.text, gloss: localized.english ?? unique.text }
       : { text: unique.text };
@@ -280,7 +280,7 @@ export async function POST(req: Request) {
 
     // Per-shop compiled opener (falls back to the legacy single message when
     // the caller sent no rfq). Computed before meta so the gloss rides along.
-    const opener = await openerFor(v.id);
+    const opener = await openerFor(v.id, digits);
     const meta = {
       sender: session.email,
       vendorId: v.id,
