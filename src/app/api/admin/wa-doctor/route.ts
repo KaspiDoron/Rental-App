@@ -14,6 +14,7 @@ import { webhookDiagnostics, reassertWebhook, instanceNameFor } from "@/lib/evol
 import { classifyIngestDetailed, type GateRaw } from "@/lib/wa/thread-gate";
 import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
+import { publicRequestOrigin } from "@/lib/request-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +28,11 @@ export async function GET(req: Request) {
   if (!email) return NextResponse.json({ error: "email required" }, { status: 400 });
 
   const enc = encodeURIComponent(email);
+  // Forwarded-aware: lets the expected-URL diagnosis work from the live public
+  // host even before APP_DOMAIN is saved (the canonicalizer still prefers it).
+  const reqOrigin = publicRequestOrigin(req) ?? undefined;
   const [diag, sessionRow, waOk, wa403] = await Promise.all([
-    webhookDiagnostics(email).catch(() => null),
+    webhookDiagnostics(email, reqOrigin).catch(() => null),
     sbSelect<{ status: string | null; host_url: string | null; updated_at: string | null }>(
       "wa_sessions",
       `select=status,host_url,updated_at&email=eq.${enc}&limit=1`
@@ -122,7 +126,13 @@ export async function POST(req: Request) {
   if (action !== "rearm" || !email) {
     return NextResponse.json({ error: "action:rearm + email required" }, { status: 400 });
   }
-  const result = await reassertWebhook(email, { force: true }).catch((e) => ({
+  // Forwarded-aware: the re-arm works from the live public host even before
+  // APP_DOMAIN is saved (canonicalWebhookOrigin prefers APP_DOMAIN and rejects
+  // unroutable bind addresses, so this can never register 0.0.0.0).
+  const result = await reassertWebhook(email, {
+    force: true,
+    requestOrigin: publicRequestOrigin(req) ?? undefined,
+  }).catch((e) => ({
     ok: false,
     changed: false,
     registeredUrl: null,

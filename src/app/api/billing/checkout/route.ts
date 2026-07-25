@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { PLANS } from "@/lib/plans";
 import { createPaypalCheckout, paypalConfigured } from "@/lib/paypal";
+import { requestOrigin } from "@/lib/request-origin";
 
 // Start a checkout for a paid plan via PayPal Subscriptions (no merchant-
 // approval gate, $0/month, supports Israeli residents + Israeli bank payouts).
@@ -18,7 +19,9 @@ export async function POST(req: Request) {
     );
   }
   const { planId } = await req.json().catch(() => ({}));
-  const origin = new URL(req.url).origin;
+  // Proxy-aware: PayPal return/cancel URLs must carry the PUBLIC host, not the
+  // Cloud Run container bind address.
+  const origin = requestOrigin(req);
 
   // TEST MODE sandbox: flagged testers get the plan applied instantly - no
   // real charge, no payment provider round-trip. Only while the owner's

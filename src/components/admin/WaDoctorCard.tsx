@@ -88,12 +88,22 @@ export function WaDoctorCard() {
         body: JSON.stringify({ action: "rearm", email: email.trim() }),
       });
       const d = await res.json();
+      // Speak human: each skip reason maps to the exact next step, so "the
+      // button did nothing" can never happen again.
+      const skipHelp: Record<string, string> = {
+        "no-origin":
+          "⚠ Can't re-arm yet: the public app domain isn't set. Fix it in Command tab → the red 'public domain' box (or Keys → 🔐 Auth & social → Public app domain), then tap Re-arm again.",
+        "no-host":
+          "⚠ Can't re-arm: no WhatsApp host is configured or the security token isn't ready - check EVOLUTION_API_URL + EVOLUTION_API_KEY and SESSION_SECRET in Keys.",
+        throttled: "✓ Recently re-armed - nothing to do.",
+      };
       setRearmMsg(
         d.ok
           ? d.changed
             ? "✓ Webhook re-armed with the current token."
-            : "✓ Webhook already pointed at the current URL."
-          : `⚠ Re-arm skipped${d.skipped ? ` (${d.skipped})` : ""}.`
+            : skipHelp[String(d.skipped ?? "")] ?? "✓ Webhook already pointed at the current URL."
+          : skipHelp[String(d.skipped ?? "")] ??
+              `⚠ Re-arm failed${d.error ? `: ${d.error}` : d.skipped ? ` (${d.skipped})` : ""}.`
       );
       await run();
     } catch {
@@ -176,6 +186,13 @@ export function WaDoctorCard() {
               label="Session (durable mirror)"
               value={report.session.status ?? "none"}
             />
+            {!report.session.status && (
+              <div className="rounded-xl bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
+                WhatsApp isn&apos;t linked for this user on this deployment - there is nothing to
+                re-arm yet. Have them connect WhatsApp (Profile → scan the QR); linking registers
+                the webhook automatically.
+              </div>
+            )}
             <Row ok={report.liveState === "open" ? true : null} label="Live connection" value={report.liveState ?? "unknown"} />
             <Row
               ok={report.hosts.every((h) => h.ok) ? true : false}

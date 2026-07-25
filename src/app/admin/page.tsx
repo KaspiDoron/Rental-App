@@ -500,6 +500,13 @@ export default function AdminPage() {
         j(cfgR), j(uR), j(billR), j(meR), j(aiR), j(trR), j(fbR),
       ]);
       setKeys(cfg.keys ?? []);
+      // Surface the "Public app domain" field: while APP_DOMAIN is unset, the
+      // 🔐 Auth & social group starts EXPANDED so the one key that fixes the
+      // webhook/share/SEO origin is never hidden behind a collapsed header.
+      const appDomain = (cfg.keys ?? []).find((k: KeyInfo) => k.name === "APP_DOMAIN");
+      if (appDomain && !appDomain.configured) {
+        setCollapsedScopes((s) => ({ ...s, auth: false }));
+      }
       setPersistent(Boolean(cfg.persistent));
       setUsers(u.users ?? []);
       setPlans(bill.plans ?? []);

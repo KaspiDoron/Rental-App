@@ -20,6 +20,7 @@ import { deriveWebhookToken, sameWebhookTarget, classifyRegisteredWebhook } from
 import type { TokenState } from "./wa/webhook-token";
 import { jidMatches } from "./wa/jid";
 import { isLinkedFromStatus } from "./wa/linked-status";
+import { routableOrigin } from "./request-origin";
 import { digitsOnly } from "./phone";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
@@ -262,7 +263,11 @@ export async function canonicalWebhookOrigin(requestOrigin?: string): Promise<st
     }
   };
   const configured = await getConfig("APP_DOMAIN").catch(() => null);
-  return norm(configured) ?? norm(requestOrigin) ?? null;
+  // The request-origin candidate must be reachable from Evolution's side: on
+  // Cloud Run the raw request origin is the container bind address
+  // (https://0.0.0.0:8080) - registering that as a webhook silently kills
+  // inbound. APP_DOMAIN is trusted as-is (an explicit owner choice).
+  return norm(configured) ?? routableOrigin(norm(requestOrigin)) ?? null;
 }
 
 // Per-instance re-arm throttle (in-memory, survives warm invocations).
@@ -363,7 +368,10 @@ export async function reassertWebhook(
 /** Read-only webhook diagnostics for the WA doctor: host health, the live
  * connection state, the URL Evolution ACTUALLY holds (via /webhook/find) and how
  * it compares to what we expect (token current/foreign/none, origin match). */
-export async function webhookDiagnostics(email: string): Promise<{
+export async function webhookDiagnostics(
+  email: string,
+  requestOrigin?: string
+): Promise<{
   instance: string;
   hosts: { url: string; ok: boolean; detail: string }[];
   liveState: string | null;
@@ -377,7 +385,7 @@ export async function webhookDiagnostics(email: string): Promise<{
   const instance = instanceNameFor(email);
   const host = await resolveHost(email);
   const token = await webhookToken();
-  const origin = await canonicalWebhookOrigin();
+  const origin = await canonicalWebhookOrigin(requestOrigin);
   const expectedUrl = origin && token ? `${origin}/api/webhooks/evolution?token=${token}` : null;
 
   const hosts: { url: string; ok: boolean; detail: string }[] = [];
@@ -974,7 +982,11 @@ export async function connectInstance(
     }
   }
   const token = await webhookToken();
-  const webhookUrl = `${appOrigin}/api/webhooks/evolution?token=${token}`;
+  // Canonicalize before registering: APP_DOMAIN wins, and an unroutable bind
+  // address (0.0.0.0 on Cloud Run) is rejected rather than handed to Evolution
+  // as a webhook nobody can deliver to.
+  const webhookOrigin = (await canonicalWebhookOrigin(appOrigin)) ?? appOrigin;
+  const webhookUrl = `${webhookOrigin}/api/webhooks/evolution?token=${token}`;
   const digits = digitsOnly(phone);
 
   // NEVER destroy an already-linked session. If the instance is already open,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { connectInstance, evolutionConfigured, resetInstance } from "@/lib/evolution";
+import { requestOrigin } from "@/lib/request-origin";
 
 // Start (or resume) the signed-in user's personal WhatsApp session: creates
 // the Evolution instance and returns a QR code to scan from the Profile page.
@@ -16,7 +17,10 @@ export async function POST(req: Request) {
     });
   }
 
-  const origin = new URL(req.url).origin;
+  // Proxy-aware: on Cloud Run the raw request origin is the container bind
+  // address; the forwarded host is the real public one. connectInstance
+  // canonicalizes again (APP_DOMAIN wins) before registering the webhook.
+  const origin = requestOrigin(req);
   const body = await req.json().catch(() => ({}));
   // Pairing code needs the user's WhatsApp number - prefer the one they typed
   // now, else the phone on their profile.

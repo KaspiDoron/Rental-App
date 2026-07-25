@@ -184,18 +184,59 @@ export function HealthPanel() {
 
 // Ready-made cron ping URL (with the derived security token) to paste straight
 // into cron-job.org - so the owner never has to compute the token by hand.
+// When the server can only see its container bind address (0.0.0.0 on Cloud
+// Run behind a stripped proxy) the card flips into an APP_DOMAIN quick-set so
+// the owner can fix the public domain in one paste - no Keys spelunking, no
+// Secret Manager, no redeploy.
 function CronUrlCard() {
   const [data, setData] = useState<
-    { tokenReady: boolean; pingUrl?: string; webhookUrl?: string; reason?: string } | null
+    {
+      tokenReady: boolean;
+      origin?: string;
+      needsDomain?: boolean;
+      pingUrl?: string;
+      webhookUrl?: string;
+      reason?: string;
+    } | null
   >(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [domainDraft, setDomainDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () =>
     fetch("/api/admin/ping-url")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setData(d))
       .catch(() => {});
+  useEffect(() => {
+    load();
   }, []);
+
+  async function saveDomain() {
+    const v = domainDraft.trim();
+    if (!v) return;
+    setSaving(true);
+    setSaveNote(null);
+    try {
+      const res = await fetch("/api/admin/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "APP_DOMAIN", value: v.startsWith("http") ? v : `https://${v}` }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.error) {
+        setSaveNote(String(d.error ?? "Could not save - try again."));
+      } else {
+        setSaveNote("✓ Saved. Links below now use your public domain.");
+        await load();
+      }
+    } catch {
+      setSaveNote("Could not save - check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function copy(text: string, which: string) {
     try {
@@ -212,6 +253,37 @@ function CronUrlCard() {
   return (
     <div className="mt-3 rounded-2xl border-2 border-line p-3">
       <div className="text-[12px] font-extrabold text-strong">⏰ Cron keep-alive URL</div>
+      {data.needsDomain && (
+        <div className="mt-2 rounded-xl border-2 border-brandred bg-brandred-soft p-2.5">
+          <div className="text-[11px] font-extrabold text-brandred">
+            Your public domain isn&apos;t set - the links below fall back to the container address
+            and shops&apos; replies can&apos;t reach the app.
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <input
+              value={domainDraft}
+              onChange={(e) => setDomainDraft(e.target.value)}
+              placeholder="https://your-app.run.app"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              className="min-w-0 flex-1 rounded-lg border-2 border-line bg-card p-2 font-mono text-[12px] text-strong"
+            />
+            <button
+              onClick={saveDomain}
+              disabled={saving || !domainDraft.trim()}
+              className="btn btn-sm shrink-0 rounded-lg bg-brandblue px-3 py-2 text-[11px] font-extrabold text-white disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] text-faint">
+            Paste your app&apos;s public URL (the address in your browser). Saves to the Key Vault
+            and applies within ~30 seconds - no redeploy.
+          </p>
+        </div>
+      )}
+      {saveNote && <p className="mt-1.5 text-[11px] font-bold text-savings">{saveNote}</p>}
       {!data.tokenReady ? (
         <p className="mt-1 text-[11px] font-bold text-brandred">{data.reason}</p>
       ) : (
