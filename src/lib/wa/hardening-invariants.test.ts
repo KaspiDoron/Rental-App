@@ -74,6 +74,23 @@ describe("anti-ban: send-side STOP-LOSS wired into the one send chokepoint", () 
   });
 });
 
+describe("defense-in-depth: RLS enabled on sensitive tables (deny-all for non-service-role)", () => {
+  it("every sensitive table opts into row level security in schema.sql", () => {
+    const sql = read("supabase/schema.sql");
+    for (const tbl of [
+      "offers",
+      "searches",
+      "bookings",
+      "app_users",
+      "whatsapp_messages",
+      "wa_outbox",
+      "wa_recipient_state",
+    ]) {
+      expect(sql).toMatch(new RegExp(`alter table public\\.${tbl}\\s+enable row level security`));
+    }
+  });
+});
+
 describe("resilience: external fetches are bounded by a hard timeout", () => {
   it("evoFetch aborts on a timeout (a cold Evolution host cannot hang the drain)", () => {
     const evo = read("src/lib/evolution.ts");

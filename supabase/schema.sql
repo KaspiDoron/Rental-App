@@ -940,3 +940,18 @@ create index if not exists bookings_user_created_idx
   on public.bookings (user_email, created_at desc);
 create index if not exists vendor_replies_user_created_idx
   on public.vendor_replies (user_email, created_at desc);
+
+-- ---- Defense-in-depth RLS (Module 3.1) ----------------------------------------
+-- HONEST NOTE: the app reads/writes EVERYTHING with the service_role key, which
+-- BYPASSES RLS - so this changes nothing for the running app. The real tenant
+-- isolation is the app-level query scoping (receiver/sender_key/user_email/
+-- search_id), which is thorough and tested. This block is belt-and-suspenders:
+-- it enables RLS (with NO policy = deny-all for anon/authenticated) on the
+-- remaining sensitive tables that lacked it, so if an anon/authenticated key is
+-- ever pointed at this project it can never read them. Idempotent - safe to
+-- re-run. (whatsapp_messages / wa_outbox / wa_send_claims / wa_recipient_state
+-- and most others already enable RLS above.)
+alter table public.offers    enable row level security;
+alter table public.searches  enable row level security;
+alter table public.bookings  enable row level security;
+alter table public.app_users enable row level security;
