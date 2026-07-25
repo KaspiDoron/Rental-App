@@ -7,7 +7,7 @@
 // workers, off the request path, with retries + DLQ.
 
 import express from "express";
-import { webhookToken } from "@wheeldeal/core";
+import { webhookToken, noteWebhookAccepted, noteWebhook403 } from "@wheeldeal/core";
 import { logger, env } from "@wheeldeal/shared";
 import { claimInboundIds, redis } from "@wheeldeal/redis";
 import { enqueueInbound } from "@wheeldeal/queues";
@@ -41,6 +41,11 @@ app.post(["/api/webhooks/evolution", "/webhooks/evolution"], async (req, res) =>
   try {
     const expected = await webhookToken();
     if (!expected || req.query.token !== expected) {
+      // Throttled breadcrumb so a stale-token 403 storm is visible in-app.
+      void noteWebhook403(
+        "gateway/webhooks/evolution",
+        typeof req.query.token === "string" ? req.query.token : null
+      );
       res.status(403).json({ error: "Forbidden" });
       return;
     }
@@ -49,6 +54,12 @@ app.post(["/api/webhooks/evolution", "/webhooks/evolution"], async (req, res) =>
       res.json({ ok: true });
       return;
     }
+
+    // Durable "last inbound accepted at" (throttled per instance).
+    void noteWebhookAccepted(
+      String(body?.instance ?? body?.instanceName ?? "") || undefined,
+      String(body?.event ?? "") || undefined
+    );
 
     // Ingress dedup (layer 1): all ids already seen -> ack, no enqueue.
     const ids = inboundMessageIds(body);

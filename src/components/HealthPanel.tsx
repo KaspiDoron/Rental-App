@@ -27,6 +27,8 @@ const STATUS_META: Record<ServiceHealth["status"], { bar: string; width: string;
 export function HealthPanel() {
   const [services, setServices] = useState<ServiceHealth[] | null>(null);
   const [guardCounters, setGuardCounters] = useState<Record<string, number> | null>(null);
+  const [webhookSilent, setWebhookSilent] = useState(false);
+  const [webhookLastAt, setWebhookLastAt] = useState<string | null>(null);
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
   const [nextInS, setNextInS] = useState(REFRESH_MS / 1000);
@@ -42,6 +44,8 @@ export function HealthPanel() {
         setNextInS(REFRESH_MS / 1000);
       }
       if (d.guardCounters) setGuardCounters(d.guardCounters);
+      setWebhookSilent(Boolean(d.webhookSilent));
+      setWebhookLastAt(typeof d.webhookLastAcceptedAt === "string" ? d.webhookLastAcceptedAt : null);
     } catch {
       /* keep the last snapshot */
     } finally {
@@ -90,6 +94,28 @@ export function HealthPanel() {
           ? `Last checked ${checkedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · next auto-check in ${mins}m ${Math.floor(nextInS % 60)}s`
           : "Running the first check..."}
       </p>
+
+      {/* WEBHOOK SILENCE ALERT: shops' replies aren't reaching us (Evolution is
+          403ing our webhook - a stale token / lost registration). This is the
+          launch-blocker signature; shout, and point to the one-tap fix. */}
+      {webhookSilent && (
+        <div className="mb-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3">
+          <div className="text-[12px] font-extrabold text-brandred">
+            ⚠ Shops' replies aren't reaching us
+          </div>
+          <p className="mt-1 text-[11px] font-medium text-soft">
+            We've sent messages recently and a WhatsApp session is open, but no inbound event has
+            arrived in 30 min - Evolution is likely rejecting our webhook. Open{" "}
+            <span className="font-extrabold">WA doctor</span> below and tap{" "}
+            <span className="font-extrabold">Re-arm webhook</span>.
+          </p>
+          {webhookLastAt && (
+            <p className="mt-1 text-[10px] text-faint">
+              Last accepted webhook: {new Date(webhookLastAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Overall bar */}
       {services && (

@@ -93,6 +93,32 @@ describe("inbound recovery: webhook re-arm is non-destructive (never touches the
   });
 });
 
+describe("observability: formerly-silent inbound drops now leave a throttled trace", () => {
+  it("the vendor-gate, no-rfq, takeover and pause gates emit inbound-dropped", () => {
+    // ingest.ts vendor-gate + empty-media
+    expect(readCode("src/lib/wa/ingest.ts")).toMatch(/noteInboundDropped\([^)]*"vendor-gate"/);
+    // agent-loop no-rfq-thread + takeover-hold + pause-hold
+    const loop = readCode("src/lib/agent-loop.ts");
+    expect(loop).toMatch(/noteInboundDropped\([^)]*"no-rfq-thread"/);
+    expect(loop).toMatch(/noteInboundDropped\([^)]*"takeover-hold"/);
+    expect(loop).toMatch(/noteInboundDropped\([^)]*"pause-hold"/);
+    // wa-sync gate + error catch
+    const sync = readCode("src/lib/wa-sync.ts");
+    expect(sync).toMatch(/noteInboundDropped\([^)]*"vendor-gate"/);
+    expect(sync).toMatch(/noteInboundDropped\([^)]*"sync-error"/);
+  });
+
+  it("the webhook verifiers trace accept + 403 without logging the full token", () => {
+    const route = readCode("src/app/api/webhooks/evolution/route.ts");
+    expect(route).toMatch(/noteWebhook403/);
+    expect(route).toMatch(/noteWebhookAccepted/);
+    const gateway = readCode("apps/gateway/src/server.ts");
+    expect(gateway).toMatch(/noteWebhook403/);
+    // The 403 path must NOT read the request body before authing.
+    expect(route).not.toMatch(/req\.json\(\)[\s\S]{0,120}noteWebhook403/);
+  });
+});
+
 describe("anti-ban: send-side STOP-LOSS wired into the one send chokepoint", () => {
   it("wa-guard exports noteSendOutcome and evolution.ts feeds it on every outcome", () => {
     expect(read("src/lib/wa-guard.ts")).toMatch(/export async function noteSendOutcome/);

@@ -185,9 +185,45 @@ export async function GET() {
   for (const k of guardKinds) guardCounters[k] = 0;
   for (const r of eventRows) guardCounters[r.kind] = (guardCounters[r.kind] ?? 0) + 1;
 
+  // WEBHOOK SILENCE DETECTOR: the launch-blocker signature is "we sent messages
+  // recently, ≥1 session is open, but NO inbound arrived and NO webhook was
+  // accepted in the last 30 min" - i.e. Evolution is 403ing our webhook (stale
+  // token / lost registration). Surfaced so the Command tab can shout, instead
+  // of the failure being invisible like it was in the live incident.
+  const now = Date.now();
+  const iso30 = new Date(now - 30 * 60_000).toISOString();
+  const iso60 = new Date(now - 60 * 60_000).toISOString();
+  const [outbound60, inbound30, webhookOk30, openSessions] = await Promise.all([
+    sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&received_at=gte.${encodeURIComponent(iso60)}&limit=1`
+    ).catch(() => []),
+    sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.inbound&received_at=gte.${encodeURIComponent(iso30)}&limit=1`
+    ).catch(() => []),
+    sbSelect<{ id: number; created_at: string; detail: string | null }>(
+      "agent_events",
+      `select=id,created_at,detail&kind=eq.webhook-ok&created_at=gte.${encodeURIComponent(
+        iso30
+      )}&order=created_at.desc&limit=1`
+    ).catch(() => []),
+    sbSelect<{ email: string }>(
+      "wa_sessions",
+      `select=email&status=eq.open&limit=1`
+    ).catch(() => []),
+  ]);
+  const webhookSilent =
+    outbound60.length > 0 &&
+    inbound30.length === 0 &&
+    webhookOk30.length === 0 &&
+    openSessions.length > 0;
+
   return NextResponse.json({
     services,
     guardCounters,
+    webhookSilent,
+    webhookLastAcceptedAt: webhookOk30[0]?.created_at ?? null,
     checkedAt: new Date().toISOString(),
   });
 }

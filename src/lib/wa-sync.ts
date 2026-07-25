@@ -12,6 +12,7 @@ import "server-only";
 import { sbSelect, sbInsert } from "./runtime-config";
 import { fetchMessagesRaw, fetchMediaBase64, sendFromUser, resolveChatJid } from "./evolution";
 import { processVendorReply } from "./agent-loop";
+import { noteInboundDropped } from "./wa/webhook-trace";
 import { digitsOnly } from "./phone";
 
 const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
@@ -63,7 +64,10 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // this path used to keep ingesting the friend's private chats for the
       // whole 36h window after the webhook had already stopped.
       const { isVendorThread } = await import("./drill");
-      if (!(await isVendorThread(digits, email))) continue;
+      if (!(await isVendorThread(digits, email))) {
+        void noteInboundDropped(email, digits, "vendor-gate", { via: "sync" });
+        continue;
+      }
       // Resolve the EXACT chat JID (handles @lid privacy JIDs and format
       // variants). A hardcoded "<digits>@s.whatsapp.net" misses those, which is
       // what made the server-side filter fall through to an UNSCOPED whole-inbox
@@ -154,8 +158,12 @@ export async function syncInboundReplies(email: string): Promise<number> {
           send: (to, message) => sendFromUser(email, to, message),
         }).catch(() => {});
       }
-    } catch {
-      /* one broken thread must not kill the sync */
+    } catch (e) {
+      /* one broken thread must not kill the sync - but trace it (the pull
+         failing silently is exactly what could hide a real shop reply). */
+      void noteInboundDropped(email, digits, "sync-error", {
+        msg: e instanceof Error ? e.message.slice(0, 120) : "unknown",
+      });
     }
   }
   return recovered;

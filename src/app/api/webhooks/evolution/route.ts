@@ -14,16 +14,24 @@
 import { NextResponse } from "next/server";
 import { webhookToken } from "@/lib/evolution";
 import { processEvolutionWebhook } from "@/lib/wa/ingest";
+import { noteWebhookAccepted, noteWebhook403 } from "@/lib/wa/webhook-trace";
 
 export async function POST(req: Request) {
   const url = new URL(req.url);
+  const presented = url.searchParams.get("token");
   const expected = await webhookToken();
-  if (!expected || url.searchParams.get("token") !== expected) {
+  if (!expected || presented !== expected) {
+    // Leave a throttled breadcrumb (per process) so a stale-token 403 storm is
+    // visible in-app instead of silent. NO body parse, NO full token logged.
+    void noteWebhook403("webhooks/evolution", presented);
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ ok: true });
+
+  // Durable "last inbound accepted at" (throttled per instance).
+  void noteWebhookAccepted(String((body as { instance?: string; instanceName?: string })?.instance ?? (body as { instanceName?: string })?.instanceName ?? "") || undefined, String((body as { event?: string })?.event ?? "") || undefined);
 
   await processEvolutionWebhook(body, { origin: url.origin, token: expected });
 

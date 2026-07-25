@@ -75,6 +75,7 @@ export {
   emailForInstance,
   sendFromUser,
 } from "../../src/lib/evolution";
+export { noteWebhookAccepted, noteWebhook403 } from "../../src/lib/wa/webhook-trace";
 export {
   guardOutbound,
   drainOutbox,

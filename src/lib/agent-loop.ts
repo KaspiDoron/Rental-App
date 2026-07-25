@@ -42,6 +42,7 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
 }
 import { floorPriceFor, credibleFloor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
+import { noteInboundDropped } from "./wa/webhook-trace";
 import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
 import { digitsOnly } from "./phone";
@@ -241,7 +242,13 @@ export async function processVendorReply(opts: {
     )}${senderFilter}&order=received_at.desc&limit=1`
   );
   const ctx = prior[0]?.raw;
-  if (!ctx?.rfq) return; // reply without a known thread - stored, not processed
+  if (!ctx?.rfq) {
+    // Formerly silent. A shop reply we stored but can't attribute to an RFQ
+    // thread (missing/older-than-window outbound anchor) leaves a throttled
+    // trace so the WA doctor can explain "why no agent reply".
+    void noteInboundDropped(opts.senderEmail, from, "no-rfq-thread");
+    return; // reply without a known thread - stored, not processed
+  }
   // "(unverified)" PURGE at the source: a historical thread whose outbound meta
   // carries the legacy drill suffix must not propagate it into pushes, events,
   // offers or engine turns.
@@ -700,8 +707,18 @@ export async function processVendorReply(opts: {
       // unreadable) - talking over a human is an absolute-veto violation, so an
       // unknown state must not proceed. The inbound is already stored/pushed;
       // only the automated answer is withheld, and it resumes once readable.
-      if ((await isThreadTakenOver(ctx.sender, from)) !== false) return;
+      const takeover = await isThreadTakenOver(ctx.sender, from);
+      if (takeover !== false) {
+        // Distinguish a genuine takeover from an unreadable store (which also
+        // fails closed): a Supabase blip silently muting every reply is exactly
+        // the kind of failure this trace surfaces.
+        void noteInboundDropped(opts.senderEmail, from, "takeover-hold", {
+          state: takeover === true ? "taken-over" : "unreadable",
+        });
+        return;
+      }
     } catch {
+      void noteInboundDropped(opts.senderEmail, from, "takeover-hold", { state: "error" });
       return; // unreadable -> fail closed (do not auto-reply)
     }
   }
@@ -714,8 +731,15 @@ export async function processVendorReply(opts: {
       const { isSessionPaused } = await import("./session-flags");
       // Fail CLOSED on true (paused) OR null (unreadable): "hold everything" is
       // absolute, so an unknown pause state withholds the auto-reply.
-      if ((await isSessionPaused(ctx.sender)) !== false) return;
+      const paused = await isSessionPaused(ctx.sender);
+      if (paused !== false) {
+        void noteInboundDropped(opts.senderEmail, from, "pause-hold", {
+          state: paused === true ? "paused" : "unreadable",
+        });
+        return;
+      }
     } catch {
+      void noteInboundDropped(opts.senderEmail, from, "pause-hold", { state: "error" });
       return; // unreadable -> fail closed
     }
   }

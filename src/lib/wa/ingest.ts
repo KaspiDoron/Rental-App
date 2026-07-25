@@ -14,6 +14,7 @@ import {
   emailForInstance,
   sendFromUser,
 } from "@/lib/evolution";
+import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 
 // PRIVACY HARD RULE: WheelDeal must NEVER read a user's personal chats. A
 // message is stored/processed ONLY if it comes from a number THIS USER's agent
@@ -247,7 +248,12 @@ export async function processEvolutionWebhook(
       // Not a rental-shop thread THIS user opened? Drop it - never stored,
       // never read. (Applies to fromMe too: private chats stay sacred, and a
       // finished drill stops ingesting the friend's messages after 12h.)
-      if (!(await isVendorThread(from, email))) continue;
+      if (!(await isVendorThread(from, email))) {
+        // Formerly a fully silent drop. Leave a throttled trace so a genuine
+        // shop reply lost to a missing RFQ anchor is diagnosable (WA doctor).
+        void noteInboundDropped(email, from, "vendor-gate", { via: "webhook" });
+        continue;
+      }
 
       // ---- HUMAN TAKEOVER DETECTION ------------------------------------------
       // A fromMe message in a shop thread is either (a) our own bot send
@@ -415,8 +421,13 @@ export async function processEvolutionWebhook(
       }
 
       // A shop that sends ONLY a price-list photo or a voice note (no caption)
-      // is the common case - read the media, don't skip it.
-      if (!syntheticText && !hasImage && !hasAudio && !docIsImage) continue;
+      // is the common case - read the media, don't skip it. A frame with NO
+      // text and NO media (sticker/reaction/system) is a real nothing-to-do
+      // drop, but leave a throttled trace so it is never mistaken for silence.
+      if (!syntheticText && !hasImage && !hasAudio && !docIsImage) {
+        void noteInboundDropped(email, from, "empty-media", { via: "webhook" });
+        continue;
+      }
 
       // Price-list photo (or image-typed document)?
       //
