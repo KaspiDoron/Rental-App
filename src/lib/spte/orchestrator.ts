@@ -2,7 +2,7 @@
 // is the single-pass replacement for runGraphTurn: pre-rails (deterministic,
 // free) -> reflex tier OR single pass (<=1 LLM call) -> post-rails
 // (deterministic, free) -> digest merge + outcome. IO is injected so it runs in
-// both the Vercel and the worker runtime and is unit-testable without a DB.
+// both the web and the worker runtime and is unit-testable without a DB.
 
 import type {
   MoveKind,

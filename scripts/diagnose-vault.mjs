@@ -3,8 +3,8 @@
 //
 // "All my keys are gone!" is almost always NOT data loss. The vault stores every
 // key AES-256-GCM encrypted in Supabase `app_config`, with the encryption key
-// derived from SESSION_SECRET. If SESSION_SECRET changes (e.g. a Vercel -> Cloud
-// Run migration), every row becomes UNDECRYPTABLE - the rows are still there, the
+// derived from SESSION_SECRET. If SESSION_SECRET changes (e.g. a host
+// migration), every row becomes UNDECRYPTABLE - the rows are still there, the
 // app just can't read them, so the admin panel shows "no key / 0 set".
 //
 // This script tells you EXACTLY which case you are in, WITHOUT ever printing a
@@ -12,7 +12,7 @@
 //   - how many app_config rows exist,
 //   - how many decrypt with the CURRENT SESSION_SECRET,
 //   - (optional) how many decrypt with one or more CANDIDATE secrets you pass in
-//     (e.g. paste your old Vercel SESSION_SECRET to prove it unlocks them before
+//     (e.g. paste your old SESSION_SECRET to prove it unlocks them before
 //     you set it on Cloud Run).
 // It prints only KEY NAMES and OK/FAIL - never the decrypted values.
 //
@@ -136,7 +136,7 @@ async function main() {
   } else {
     console.log(`  ✗ None of the secrets tried decrypt the rows. The values ARE still in`);
     console.log(`    Supabase but are locked under a SESSION_SECRET you have not provided.`);
-    console.log(`    Find your ORIGINAL secret (Vercel -> Settings -> Environment Variables,`);
+    console.log(`    Find your ORIGINAL secret (from your previous host's env,`);
     console.log(`    the SESSION_SECRET value) and re-run with --try-secret "<that value>".`);
     console.log(`    If the original secret is truly lost, the values cannot be decrypted by`);
     console.log(`    anyone and must be re-pasted in Admin -> Keys.`);

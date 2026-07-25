@@ -168,7 +168,7 @@ export async function POST(req: Request) {
       // Module 4: the deterministic variation-matrix compiler (seed =
       // user|vendor|hour) + the global-uniqueness guard, replacing the old
       // Math.random template pools - reproducible diversity, cross-fleet
-      // skeleton dedup (the Redis window no-ops on Vercel).
+      // skeleton dedup (the Redis window no-ops when REDIS_URL is unset).
       const { compileOpener } = await import("@/lib/copy/promptCompiler");
       const { openerSeed } = await import("@/lib/copy/matrix");
       const { regionForShop } = await import("@/lib/copy/region");
@@ -461,5 +461,5 @@ export async function POST(req: Request) {
   });
 }
 
-// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+// maxDuration: lift the request-timeout ceiling for slow AI/WhatsApp upstreams.
 export const maxDuration = 60;

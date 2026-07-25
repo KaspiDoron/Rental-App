@@ -1472,7 +1472,7 @@ export default function AdminPage() {
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
             {persistent
               ? "Persistence is on - edits are encrypted, saved to Supabase, applied within ~30s, and survive restarts."
-              : "Persistence is OFF: Supabase is not connected, so anything you paste here resets on the next deploy and is NOT shared across instances. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in your host env (Vercel or Cloud Run), run schema.sql, then redeploy - your saved keys are still in Supabase and reappear once it reconnects."}
+              : "Persistence is OFF: Supabase is not connected, so anything you paste here resets on the next deploy and is NOT shared across instances. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in your host env (GCP Secret Manager), run schema.sql, then redeploy - your saved keys are still in Supabase and reappear once it reconnects."}
           </div>
 
           {keyWarning && (

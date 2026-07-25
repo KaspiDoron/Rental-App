@@ -56,5 +56,5 @@ export async function POST(req: Request) {
   return NextResponse.json({ result, input });
 }
 
-// Vercel: allow slow AI upstreams (Hobby default is ~10s - too short).
+// maxDuration: lift the request-timeout ceiling for slow AI upstreams.
 export const maxDuration = 60;

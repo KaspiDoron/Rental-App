@@ -23,7 +23,7 @@ on:
     branches:
       - main
       - master
-      # The live production branch of this repo (Vercel-era naming, kept).
+      # The live production branch of this repo (legacy naming, kept).
       - claude/rental-negotiation-app-pc33ux
       # The active development branch - runs `verify` on push, never `deploy`.
       - claude/rental-agents-legal-setup-o7rgcv

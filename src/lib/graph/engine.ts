@@ -9,7 +9,7 @@
 // Pipeline Studio replays the EXACT traversed path of every real WhatsApp
 // event. State checkpoints to negotiation_threads between events; strategic
 // waits park a wakeup in graph_wakeups, drained opportunistically at the same
-// call sites as the wa_outbox queue (no cron needed on Vercel Hobby).
+// call sites as the wa_outbox queue (no external cron needed).
 
 import "server-only";
 import { getConfig, setConfig, sbInsert, sbSelect, sbUpdate } from "../runtime-config";
@@ -1023,7 +1023,7 @@ async function runTailGates(args: {
     if (!isLocalizedBargain) {
       const recent = await io.recentOutboundGlobal(6, 200).catch(() => []);
       // Module 4: two-layer guard - the in-process trigram compare (DB-fed)
-      // PLUS the cross-fleet Redis signature window (no-op on Vercel). The
+      // PLUS the cross-fleet Redis signature window (no-op when REDIS_URL is unset). The
       // accepted text's compact signature is recorded so every other worker
       // sees this skeleton within one ZRANGE.
       const fresh = await ensureGloballyUnique(text, recent);

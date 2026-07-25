@@ -19,7 +19,7 @@ idea requires a rewrite.
 - **Value**: travellers who do not book immediately stay engaged; a shop's
   later counter-offer becomes a push/email that pulls them back into the app.
 - **Ask**: M. Reuses the reply loop + email module; needs a small
-  `price_watches` table and a cron (Vercel cron is free).
+  `price_watches` table and a scheduled worker (the GCE scheduler runs one).
 
 ### 3. Trip mode - multi-day itinerary rentals
 - **Value**: travellers hopping Samui -> Phangan -> Phuket set up all three

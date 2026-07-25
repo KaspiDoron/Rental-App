@@ -885,7 +885,7 @@ create index if not exists graph_wakeups_user_idx
   on public.graph_wakeups (user_email);
 
 -- ---- Send-slot claims (lock-free concurrency control for sends) -------------------
--- Vercel serverless has no locks: 5+ concurrent drain callers each read the
+-- Serverless runtimes have no shared locks: 5+ concurrent drain callers each read the
 -- same pacing state and could all pass the min-gap/caps together. A claim row
 -- with a PRIMARY KEY makes the decision atomic: the invocation whose INSERT
 -- succeeds owns the slot; a 409 conflict means another invocation won.

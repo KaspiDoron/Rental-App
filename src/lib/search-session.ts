@@ -62,7 +62,7 @@ export async function cheapestRivalFor(
 
   // HOT PATH (Module 2): O(log n) Redis ZSET read, scoped to this exact
   // session + vehicle + currency. Only authoritative for sessions the worker
-  // runtime ingested (the `live` flag) - on Vercel or for a Vercel-era
+  // runtime ingested (the `live` flag) - for a keyless host or a legacy
   // session this returns null and the Postgres path below stays the truth.
   if (session.id != null) {
     const { cheapestCachedRival } = await import("./rival-cache");

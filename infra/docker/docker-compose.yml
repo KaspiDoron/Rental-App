@@ -2,8 +2,8 @@
 #   redis   ~150MB (maxmemory 160mb, AOF persisted)  - queues + hot state
 #   gateway ~80MB                                     - webhook ingress (<200ms ack)
 #   workers ~200MB                                    - all five BullMQ consumers
-# OWNER RULE R1: the Next.js frontend stays on VERCEL permanently ($0, its own
-# RAM) - no web service ever runs on this VM. The VM is strictly
+# OWNER RULE R1: the Next.js frontend runs as a separate Cloud Run service
+# (root Dockerfile) - no web service ever runs on this VM. The VM is strictly
 # gateway + workers + redis (~450MB, comfortable headroom on 1GB).
 # DB + storage stay on SUPABASE (external, free) - nothing DB-shaped runs here.
 #

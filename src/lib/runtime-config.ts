@@ -4,7 +4,7 @@
 //   1. Host environment variables (process.env) - the bootstrap / source of truth.
 //   2. The admin Key Vault - persisted to Supabase, encrypted at rest, and read
 //      back here at request time. This is what makes "paste a key in the admin
-//      panel and it takes effect" work on serverless hosts like Vercel, where
+//      panel and it takes effect" work on serverless hosts like GCP Cloud Run, where
 //      per-instance memory resets and the app cannot write its own env vars.
 //
 // Resolution order for any key: Supabase override → process.env. Supabase reads
@@ -41,7 +41,7 @@ function state() {
 }
 
 function supabase(): { url: string; key: string } | null {
-  // trim(): pasted Vercel env values often carry an invisible trailing
+  // trim(): pasted env values often carry an invisible trailing
   // newline/space, which Supabase rejects as "Invalid API key".
   const url = (
     process.env.SUPABASE_URL ||
@@ -85,7 +85,7 @@ export async function supabaseDiagnostics(): Promise<SupabaseDiagnostics> {
       reachable: false,
       appConfigOk: false,
       detail:
-        "SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY are not set in the host environment (Vercel -> Settings -> Environment Variables).",
+        "SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY are not set in the host environment (GCP Secret Manager).",
     };
   }
   const urlOk = /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(conn.url);
@@ -97,7 +97,7 @@ export async function supabaseDiagnostics(): Promise<SupabaseDiagnostics> {
       keyRole,
       reachable: false,
       appConfigOk: false,
-      detail: `SUPABASE_SERVICE_ROLE_KEY currently holds the "${keyRole}" key - that is the WRONG key. In Supabase: Settings -> API -> "Project API keys" -> copy the one labelled service_role (secret), paste it into Vercel, and redeploy.`,
+      detail: `SUPABASE_SERVICE_ROLE_KEY currently holds the "${keyRole}" key - that is the WRONG key. In Supabase: Settings -> API -> "Project API keys" -> copy the one labelled service_role (secret), paste it into GCP Secret Manager, and redeploy.`,
     };
   }
   try {
@@ -113,7 +113,7 @@ export async function supabaseDiagnostics(): Promise<SupabaseDiagnostics> {
         reachable: true,
         appConfigOk: false,
         detail:
-          "Supabase says the API key is invalid (401). Re-copy the service_role key from Supabase -> Settings -> API (watch for missing characters or extra spaces), update SUPABASE_SERVICE_ROLE_KEY in Vercel, and redeploy. If you rotated/regenerated your project's keys, the old value is dead.",
+          "Supabase says the API key is invalid (401). Re-copy the service_role key from Supabase -> Settings -> API (watch for missing characters or extra spaces), update SUPABASE_SERVICE_ROLE_KEY in GCP Secret Manager, and redeploy. If you rotated/regenerated your project's keys, the old value is dead.",
       };
     }
     if (res.status === 404) {
@@ -165,7 +165,7 @@ export function supabaseConfigured(): boolean {
 /**
  * fetch with a HARD timeout. undici's fetch has no short overall request
  * timeout, so a Supabase connection that accepts but stalls would block the
- * handler until Vercel's maxDuration - and a single guardOutbound/drain pass
+ * handler until Cloud Run's request timeout - and a single guardOutbound/drain pass
  * makes a dozen serial DB round-trips, so one stall cascades into killed
  * requests across the fleet instead of degrading gracefully. On abort the call
  * throws (AbortError), which every helper's existing catch already maps to its
@@ -178,9 +178,9 @@ async function timedFetch(url: string, init: RequestInit, ms = 8000): Promise<Re
   // soon as response HEADERS arrive, but the read helpers then `await
   // res.json()`/`res.text()`, and that body read shares this AbortController.
   // Clearing the timer here would leave the body read unbounded (undici's
-  // default bodyTimeout is ~300s, far past Vercel's function limit), so a DB
+  // default bodyTimeout is ~300s, far past Cloud Run's request limit), so a DB
   // that streams headers then stalls mid-body would still hang the handler - and
-  // on the drain path a hung handler that Vercel kills LOSES an already-claimed
+  // on the drain path a hung handler that Cloud Run terminates LOSES an already-claimed
   // row. Keeping the deadline armed bounds headers+body together; once the body
   // is fully read the pending abort is a harmless no-op on a settled request.
   // unref() so a still-pending timer never keeps the runtime alive.
@@ -417,7 +417,7 @@ function cryptoKey(): Buffer {
 }
 
 // Secrets to TRY when DECRYPTING, newest first. This is the graceful-recovery
-// path for a rotated SESSION_SECRET (e.g. a Vercel -> Cloud Run migration): the
+// path for a rotated SESSION_SECRET (e.g. a host migration): the
 // vault is AES-encrypted with a key derived from SESSION_SECRET, so a changed
 // secret makes every stored key undecryptable and the whole vault reads empty.
 // Set SESSION_SECRET_PREVIOUS to the OLD secret (comma-separated for several) and
@@ -525,7 +525,7 @@ export async function getConfig(name: string): Promise<string | undefined> {
  * pasted into the Key Vault). getConfig already fails over from the vault to
  * `process.env.GOOGLE_OAUTH_CLIENT_ID`; this adds the alternate PUBLIC env name
  * that the build inlines (`NEXT_PUBLIC_GOOGLE_CLIENT_ID`), which is the name the
- * client ID is usually provided under on a fresh Cloud Run / Vercel deploy. The
+ * client ID is usually provided under on a fresh Cloud Run deploy. The
  * client ID is public by design, so surfacing it from any of these sources is
  * safe - it only ever gates which account the button signs in as. `||` (not
  * `??`) also skips an empty-string stored value, not just a null one.
@@ -557,7 +557,7 @@ export async function setConfig(
       ok: true,
       persistent: false,
       error:
-        "Saved for this session only: Supabase is not connected (set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Vercel), so the value will reset on the next deploy/restart.",
+        "Saved for this session only: Supabase is not connected (set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in GCP Secret Manager), so the value will reset on the next deploy/restart.",
     };
   }
 
@@ -590,7 +590,7 @@ export async function setConfig(
       const detail = await res.text().catch(() => "");
       const hint =
         res.status === 401
-          ? "Invalid Supabase key: SUPABASE_SERVICE_ROLE_KEY in Vercel is wrong (it may be the anon key, have a typo, or the project keys were rotated). Copy the service_role key from Supabase -> Settings -> API, update Vercel, redeploy, then use Admin -> Keys -> Test Supabase."
+          ? "Invalid Supabase key: SUPABASE_SERVICE_ROLE_KEY in GCP Secret Manager is wrong (it may be the anon key, have a typo, or the project keys were rotated). Copy the service_role key from Supabase -> Settings -> API, update GCP Secret Manager, redeploy, then use Admin -> Keys -> Test Supabase."
           : /relation .*app_config.* does not exist|404/.test(detail + res.status)
           ? "The app_config table is missing - run supabase/schema.sql in the Supabase SQL Editor."
           : detail.slice(0, 180);

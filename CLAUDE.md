@@ -8,7 +8,7 @@ Guidance for Claude (and humans) working in this repo.
 car / motorbike / scooter rentals near a traveller's hotel. AI agents structure
 the request, discover partner vendors within a radius, and run a live, gamified
 negotiation funnel. Next.js 14 (App Router) + TypeScript + Tailwind, deployed on
-Vercel free tier. Runs fully in **demo mode** with zero external services.
+GCP (Cloud Run) free tier. Runs fully in **demo mode** with zero external services.
 
 ## Golden rules
 
@@ -87,10 +87,12 @@ the outbox/wakeup draining.
 
 ## Deploy
 
-Bootstrap env vars in Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`, `ADMIN_EMAILS`. Run
+Bootstrap env vars in GCP Secret Manager: `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`,
+`ADMIN_EMAILS`, `APP_DOMAIN` (the public GCP gateway URL). Run
 `supabase/schema.sql`. All other keys can be pasted in Admin -> Keys. See
-`GUIDE.md` for the step-by-step.
+`GUIDE.md` for the step-by-step. Deployment is GCP-only (Cloud Run web +
+gateway + workers).
 
 ## Working branch
 
@@ -106,7 +108,6 @@ Claude Code session; NO keys are stored in the repo.
 | Service | MCP | Notes |
 |---|---|---|
 | Supabase | `https://mcp.supabase.com/mcp?project_ref=...` | DB, app_config vault, tables |
-| Vercel | `https://mcp.vercel.com` | deploys, env, domains (official remote MCP) |
 | GitHub | built into Claude Code remote sessions | PRs, issues, CI |
 
 Services with NO official MCP server as of 2026-07 (use their REST APIs via

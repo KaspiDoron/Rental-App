@@ -23,9 +23,9 @@
 #
 # The .env secret's payload is the literal infra/docker/.env (SUPABASE_URL,
 # SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL pooled:6543, SESSION_SECRET,
-# ADMIN_EMAILS, EVOLUTION_API_URL/KEY, APP_DOMAIN=<Vercel frontend>, ...).
-# SESSION_SECRET MUST equal the Vercel value or webhook tokens + app_config
-# decryption break. NOTE: APP_DOMAIN is the VERCEL FRONTEND origin (SSE CORS) -
+# ADMIN_EMAILS, EVOLUTION_API_URL/KEY, APP_DOMAIN=<Cloud Run frontend>, ...).
+# SESSION_SECRET MUST equal the web service value or webhook tokens + app_config
+# decryption break. NOTE: APP_DOMAIN is the CLOUD RUN FRONTEND origin (SSE CORS) -
 # it is SEPARATE from the gateway's own wd-api-domain.
 set -euo pipefail
 exec > >(tee /var/log/wd-startup.log) 2>&1
@@ -82,7 +82,7 @@ fi
 gcloud secrets versions access latest --secret="$SECRET_NAME" > "$APP_DIR/infra/docker/.env"
 chmod 600 "$APP_DIR/infra/docker/.env"
 
-# --- Bring the stack up (redis + gateway + workers; NO web - stays on Vercel)-
+# --- Bring the stack up (redis + gateway + workers; NO web - separate Cloud Run)-
 cd "$APP_DIR/infra/docker"
 docker compose --env-file .env up -d --build
 

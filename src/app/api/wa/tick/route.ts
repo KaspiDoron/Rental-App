@@ -3,7 +3,7 @@ import { webhookToken, sendFromUser } from "@/lib/evolution";
 import { sbSelect, sbInsertClaim } from "@/lib/runtime-config";
 
 // SELF-CHAINING QUEUE DRIVER - the fix for "I locked my phone and nothing
-// sent for an hour". On Vercel Hobby there is no background worker: the
+// sent for an hour". When no background worker is running: the
 // queue only moved when someone's app polled or the external pinger fired.
 // This route keeps a staggered batch progressing on its own:
 //

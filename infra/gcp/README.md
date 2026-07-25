@@ -1,8 +1,9 @@
 # WheelDeal on GCE — 5-minute deploy runbook
 
 The VM runs **redis + gateway + workers** only (~450MB on a free-tier
-`e2-micro`). The Next.js frontend stays on **Vercel**; the DB + storage stay on
-**Supabase**. There is no `web` container and nothing DB-shaped on the VM.
+`e2-micro`). The Next.js frontend runs as a separate **Cloud Run** service
+(built from the root `Dockerfile`); the DB + storage stay on **Supabase**. There
+is no `web` container and nothing DB-shaped on the VM.
 
 **Zero-DNS routing:** the gateway is served at **`<static-ip>.sslip.io`**.
 sslip.io is a public wildcard resolver (`A.B.C.D.sslip.io → A.B.C.D`), so the
@@ -20,7 +21,7 @@ gateway :8080 → BullMQ/Redis → workers → the negotiation engine.
 | Gateway (webhook ingress, <200ms ack, SSE) | GCE VM :8080 behind nginx | `apps/gateway` via `tsx` |
 | Workers (5 BullMQ consumers) | GCE VM | `services/workers` via `tsx` |
 | Redis (queues + hot state) | GCE VM container | `maxmemory 160mb`, AOF, `no-appendfsync-on-rewrite yes` |
-| Frontend | Vercel | unchanged |
+| Frontend | Cloud Run (root `Dockerfile`) | Next.js standalone image |
 | Postgres + Storage | Supabase | pooled (Supavisor, port 6543) for the `pg` path |
 
 ## Step 1 — create the secrets (Cloud Shell)
@@ -38,9 +39,9 @@ SUPABASE_DB_URL=postgresql://postgres.REPLACE_REF:REPLACE_DB_PASSWORD@aws-0-REPL
 NEXT_PUBLIC_SUPABASE_ANON_KEY=REPLACE_ANON_KEY
 
 # --- Sessions / admin --------------------------------------------------------
-# MUST be byte-identical to the SESSION_SECRET in your Vercel project, or every
-# webhook 403s and admin-pasted keys can't decrypt (openssl rand -hex 32).
-SESSION_SECRET=REPLACE_WITH_EXACT_VERCEL_SESSION_SECRET
+# MUST be byte-identical to the SESSION_SECRET on your Cloud Run web service, or
+# every webhook 403s and admin-pasted keys can't decrypt (openssl rand -hex 32).
+SESSION_SECRET=REPLACE_WITH_EXACT_WEB_SESSION_SECRET
 ADMIN_EMAILS=REPLACE_owner@example.com
 
 # --- Evolution (WhatsApp bridge) - single-host form --------------------------
@@ -48,9 +49,9 @@ EVOLUTION_API_URL=http://REPLACE_EVOLUTION_HOST:8080
 EVOLUTION_API_KEY=REPLACE_EVOLUTION_API_KEY
 
 # --- Public identity ---------------------------------------------------------
-# The VERCEL FRONTEND origin (drives the gateway's SSE CORS allow-origin).
+# The Cloud Run FRONTEND origin (drives the gateway's SSE CORS allow-origin).
 # This is SEPARATE from the gateway's own <ip>.sslip.io domain.
-APP_DOMAIN=https://REPLACE_your-frontend.vercel.app
+APP_DOMAIN=https://REPLACE_your-frontend.run.app
 
 # --- Optional tuning ---------------------------------------------------------
 LOG_LEVEL=info

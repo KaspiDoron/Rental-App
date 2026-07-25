@@ -2,7 +2,7 @@
 // cron (blueprint Module 6): a repeatable BullMQ job drains the parked outbox
 // (business-hours / pacing queue) and due graph wakeups (strategic waits)
 // every 20s, 24/7, whether or not any user has the app open. This is the
-// production fix for "no vercel.json cron + dropped tick fetch".
+// production fix for "no external cron + dropped tick fetch".
 
 import { Worker, type Job } from "bullmq";
 import {

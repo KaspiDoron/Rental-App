@@ -115,7 +115,7 @@ export function ensureGloballyFresh(
 // recent-send memory. ONE ZSET `copy:sigs` holding compact 24-char members
 // (simhash64 hex + fnv1a32 hex - see copy/hash.ts), score = timestamp,
 // trimmed to SIG_CAP by rank + 48h EXPIRE: ~200KB worst case, never raw text.
-// REDIS_URL-gated via the shared hot-state client - a strict no-op on Vercel,
+// REDIS_URL-gated via the shared hot-state client - a strict no-op when REDIS_URL is unset,
 // where the DB-based ensureGloballyFresh above remains the only layer.
 // ---------------------------------------------------------------------------
 
@@ -129,7 +129,7 @@ const SIG_WINDOW = 300; // compare vs the most recent N signatures (one ZRANGE)
 const HAMMING_MAX = 10; // ≤10/64 differing bits = same structural skeleton
 
 /** Record an ACCEPTED outbound's signature in the sliding window. No-op on
- * Vercel; never throws. */
+ * when REDIS_URL is unset; never throws. */
 export async function recordCopySignature(text: string): Promise<void> {
   try {
     const r = await hotStateClient();
@@ -146,7 +146,7 @@ export async function recordCopySignature(text: string): Promise<void> {
 async function collidesGlobally(text: string): Promise<boolean> {
   try {
     const r = await hotStateClient();
-    if (!r) return false; // Vercel / Redis down -> the DB layer already ran
+    if (!r) return false; // no REDIS_URL / Redis down -> the DB layer already ran
     const sim = simhash64(text);
     const exact = copySignature(text).slice(16);
     const recent = await r.zrange(SIG_KEY, -SIG_WINDOW, -1);

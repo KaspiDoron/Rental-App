@@ -28,7 +28,7 @@ Owner constraints locked for V2 (from the direction update):
    (Bug 3). Fixing the crash is a Render ops action, not app code - and the
    repo's own `render.yaml` header says its committed crash-fix env vars require
    a Manual Sync that may never have been applied.
-2. **Production still runs the legacy Vercel path.** The GCP gateway/worker/Redis
+2. **Production still runs the legacy web path.** The GCP gateway/worker/Redis
    stack (modules M1-M7) is fully built but not provisioned (task #127). Every
    REDIS_URL-gated feature - session rival cache, copy-signature uniqueness,
    budget gates, SSE - is silently inert in production today. Several V1 bugs
@@ -45,7 +45,7 @@ Owner constraints locked for V2 (from the direction update):
 5. **The blackboard is already half-built.** `src/lib/rival-cache.ts` (session
    offer ZSET + aggregates + pub/sub) is the embryo of the Session Blackboard;
    V2 promotes it to the canonical cross-thread intelligence store with a
-   Postgres RPC twin so it works on the Vercel path TODAY, not only post-GCP.
+   Postgres RPC twin so it works on the legacy web path TODAY, not only post-GCP.
 
 ---
 
@@ -55,7 +55,7 @@ Verified (F1 audit + owner screenshots):
 
 | Piece | Where it runs today | State |
 |---|---|---|
-| Next.js app + all APIs | Vercel | LIVE |
+| Next.js app + all APIs | web host (migrating to Cloud Run) | LIVE |
 | Postgres + storage | Supabase | LIVE |
 | WhatsApp bridge (Evolution) | Render `wd-evolution` (docker, starter plan) | LIVE, **crash-looping** |
 | Unattended queue drain | Render cron `wd-queue-drain` -> `/api/wa/ping` every 1 min | LIVE |
@@ -393,7 +393,7 @@ REDIS_URL, gateway undeployed, zero EventSource consumer anywhere in src/).
 
 Fix directive (isolated, two stages):
 
-- Stage 1 (ships now, Vercel path): `sw.js` push handler postMessages all
+- Stage 1 (ships now, legacy web path): `sw.js` push handler postMessages all
   window clients; page listens on `navigator.serviceWorker` message ->
   bumps `syncNonce` (the existing refocus mechanism, page.tsx:865) for an
   instant refetch; `notificationclick` prefers `focus()` when the URL already
@@ -479,7 +479,7 @@ governance pattern (`policy.ts`, `ops/golden.ts` - re-targeted, see 4.8).
 
 | Proposal | Verdict | Grounding |
 |---|---|---|
-| Global Session Blackboard | ACCEPT - and it is half-built | `rival-cache.ts` session ZSET/agg/pub-sub (M2) is exactly this; today it is Redis-gated dark on Vercel and only consulted at compose time. Promote to canonical, with a Postgres RPC twin so it is LIVE pre-GCP. |
+| Global Session Blackboard | ACCEPT - and it is half-built | `rival-cache.ts` session ZSET/agg/pub-sub (M2) is exactly this; today it is Redis-gated dark on the legacy web path and only consulted at compose time. Promote to canonical, with a Postgres RPC twin so it is LIVE pre-GCP. |
 | Single-pass per thread | ACCEPT - the decisive cost/latency win | Today's turn = up to 4 LLM calls (extractOffer -> runDirector -> composeForNode -> judge). One structured pass cuts token spend ~60-75% and removes 2-3 network round-trips. |
 | Cross-thread leverage at read time | ACCEPT | `cheapestRivalFor` exists but is Postgres-slow and late; the blackboard makes "Shop B offered 200" a hot read injected into every prompt. |
 | Human phrasing + jitter without critic agents | ACCEPT (phrasing in-pass; jitter is already deterministic) | Style directives/persona live in the single pass; typing delays already exist as humanized `not_before` parking - 0 tokens. |
@@ -630,7 +630,7 @@ $$;
 ```
 
 Blackboard runtime layout (Redis on the VM; the RPC above IS the fallback -
-identical shape, one query - so the Vercel path is first-class, not degraded):
+identical shape, one query - so the legacy web path is first-class, not degraded):
 
 ```
 bb:<sessionId>:offers      ZSET  member=vendorId score=pricePerDay   (exists: rival-cache)

@@ -76,7 +76,7 @@ async function fetchCloudMedia(
   if (!token) return null;
   // Both Graph fetches are awaited INLINE in the webhook before it returns 200
   // to Meta. A stalled Meta CDN with no timeout would hang the shared handler
-  // until Vercel kills it -> Meta gets no 200, re-delivers, and can disable the
+  // until the platform kills it -> Meta gets no 200, re-delivers, and can disable the
   // callback, and the end-of-handler drain never runs. Bound both calls, and
   // cap the download so an oversized media object cannot exhaust memory.
   const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
@@ -301,5 +301,5 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true });
 }
 
-// Vercel: allow slow AI/WhatsApp upstreams (Hobby default is ~10s - too short).
+// maxDuration: lift the request-timeout ceiling for slow AI/WhatsApp upstreams.
 export const maxDuration = 60;

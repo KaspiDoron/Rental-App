@@ -8,16 +8,13 @@ import "./globals.css";
 
 // Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
 // (og:image) work. Priority: admin-set APP_DOMAIN (Key Vault, no redeploy) ->
-// explicit NEXT_PUBLIC_SITE_URL -> Vercel's production domain -> current
-// deployment URL -> fallback.
+// explicit NEXT_PUBLIC_SITE_URL -> APP_DOMAIN from the host env (GCP Secret
+// Manager) -> neutral fallback. GCP-only: no platform-injected deploy URL.
 function envSiteUrl(): string {
+  const appDomain = process.env.APP_DOMAIN;
   return (
     process.env.NEXT_PUBLIC_SITE_URL ||
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : "https://wheeldeal.vercel.app")
+    (appDomain ? (appDomain.startsWith("http") ? appDomain : `https://${appDomain}`) : "https://wheeldeal.app")
   );
 }
 const title = "WheelDeal - cheapest local rides, negotiated for you";

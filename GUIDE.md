@@ -7,12 +7,16 @@ nothing configured (demo mode); each section below switches on a real feature.
 
 ## 1. Deploy the app (get your live link)
 
-1. Go to **vercel.com** and sign in with GitHub.
-2. **Add New -> Project -> Import** the `Rental-App` repo.
-3. Branch: `claude/rental-negotiation-app-pc33ux` (or merge it to `main` first).
-4. Framework: **Next.js** (auto-detected). Root: `./`. Leave build settings as-is.
-5. Click **Deploy**. After ~1 minute you get a live URL like
-   `https://rental-app-xxxx.vercel.app`.
+The app deploys to **Google Cloud** only. The Next.js frontend runs as a
+**Cloud Run** service (built from the root `Dockerfile`); the gateway + workers
++ Redis run on a small GCE VM. Follow the runbook in
+[`infra/gcp/README.md`](./infra/gcp/README.md):
+
+1. Create the bootstrap secret in **GCP Secret Manager** (Supabase keys,
+   `SESSION_SECRET`, `ADMIN_EMAILS`, `APP_DOMAIN`).
+2. Deploy the web image to Cloud Run from the root `Dockerfile`.
+3. Provision the gateway/workers VM with `./infra/gcp/deploy.sh`.
+4. You get a live URL like `https://rental-app-xxxx.run.app`.
 
 That URL is your app. It works immediately in demo mode.
 
@@ -31,7 +35,7 @@ This lets you paste all other keys inside the app and have them stick.
    - **Project URL**
    - **service_role** secret key
    - **anon** public key
-3. In Vercel: **Settings -> Environment Variables** and add:
+3. In **GCP Secret Manager** (and your Cloud Run service env) add:
    | Name | Value |
    |---|---|
    | `SUPABASE_URL` | the Project URL |
@@ -45,7 +49,7 @@ This lets you paste all other keys inside the app and have them stick.
    saved keys.)
 5. In Supabase, open **SQL Editor**, paste the contents of
    `supabase/schema.sql` from this repo, and click **Run**.
-6. Back in Vercel, **Redeploy** so the new variables load.
+6. Redeploy the Cloud Run web service so the new variables load.
 
 Now sign in to your live app with `kaspidoron@gmail.com` (the owner signs in
 with email only - no phone or terms needed), open **Admin -> Keys**, and you'll
@@ -79,7 +83,7 @@ open-now status, phone-based WhatsApp links and live Google reviews.
    screen** -> External -> fill the 3 required fields -> Save.
 2. **Credentials -> Create credentials -> OAuth client ID -> Web application**.
 3. Under **Authorized JavaScript origins** add your live URL
-   (e.g. `https://rental-app-xxxx.vercel.app`).
+   (e.g. `https://rental-app-xxxx.run.app`).
 4. Copy the **Client ID** (ends with `.apps.googleusercontent.com`).
 5. In your app: **Admin -> Keys -> Google OAuth Client ID** -> paste -> Apply.
 
@@ -89,7 +93,7 @@ The "Continue with Google" button now appears on the sign-in page.
 
 ## 4. Turn on the AI agents
 
-You can paste these in **Admin -> Keys** (recommended) or add them in Vercel.
+You can paste these in **Admin -> Keys** (recommended) or add them in GCP Secret Manager.
 
 - `GROQ_TOKEN`, `GEMINI_TOKEN`, `OPENROUTER_TOKEN`, `CEREBRAS_TOKEN` - your AI
   gateway keys (use fresh ones; rotate any that were shared in chat).
@@ -195,7 +199,7 @@ Adoption is measurable via the new `billing_events.funding_source` column.
 
 ## Quick reference: where each key goes
 
-- **Vercel env vars (once):** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+- **GCP Secret Manager env vars (once):** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`, `OWNER_EMAIL`,
   `ADMIN_EMAILS`.
 - **Admin -> Keys (in-app, any time):** `GOOGLE_MAPS_API_KEY`,
@@ -358,7 +362,7 @@ The shared Supabase DB means adding/removing hosts never makes a user re-link.
    cores + 24 GB total, plus 2 AMD micros). Each VM = one host line.
 
 Note: hosts are `http://` (not https). That is fine - the app calls them
-server-side from Vercel, so there is no browser mixed-content issue.
+server-side from Cloud Run, so there is no browser mixed-content issue.
 
 "Estimated cost EUR1.85/month" scare: Oracle's cost estimator IGNORES the free
 tier (it literally says "does not reflect any tier unit pricing") and prices the
@@ -457,7 +461,7 @@ legal entity name in `OPERATOR_NAME` (`src/lib/legal.ts`) when you have one.
 
 When you buy a real domain (e.g. `https://wheeldeal.app`):
 
-1. Point the domain at Vercel (Project -> Settings -> Domains).
+1. Point the domain at your Cloud Run web service (map a custom domain).
 2. In the app: **Admin -> Keys -> "Public app domain"** (`APP_DOMAIN`) - paste
    the full `https://...` URL. Takes effect within ~30 seconds, no redeploy.
 

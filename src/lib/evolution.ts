@@ -610,7 +610,7 @@ async function evoFetch(
 ): Promise<{ ok: boolean; status: number; data: any }> {
   // HARD TIMEOUT. undici's fetch has no short overall request timeout, so a
   // cold/asleep Evolution host (Render free tier) could hang the caller until
-  // Vercel kills the whole function - which, on the drain path, permanently
+  // The platform kills the whole function - which, on the drain path, permanently
   // LOSES an already-claimed outbox row. Bounding every call well under the 60s
   // function limit turns a fatal hang into a transient failure the drain
   // re-queues. The sibling probes (hostHealthDetail 4.5s, pingAllHosts 7s)

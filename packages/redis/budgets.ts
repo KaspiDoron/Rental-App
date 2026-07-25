@@ -2,7 +2,7 @@
 //
 // The CANONICAL implementation lives in src/lib/budget-cache.ts (the "brain in
 // src/lib, packages re-export" pattern) because the same code runs in both
-// runtimes during the dual-run: REDIS_URL-gated no-ops on Vercel (the mass
+// runtimes during the dual-run: REDIS_URL-gated no-ops when unset (the mass
 // route keeps its Postgres budget), the full INCR/ZSET hot path on the VM.
 // Services import from HERE so the physical relocation later is a path change.
 

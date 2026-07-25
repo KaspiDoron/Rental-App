@@ -179,7 +179,7 @@ describe("uniqueness guard (owner P1/P3)", () => {
     expect(verdict.changed).toBe(true);
     expect(verdict.text).not.toBe(draft);
   });
-  it("no REDIS_URL -> the Redis layer is a strict no-op (Vercel behavior)", async () => {
+  it("no REDIS_URL -> the Redis layer is a strict no-op (keyless behavior)", async () => {
     const verdict = await ensureGloballyUnique("A perfectly fresh sentence here.", []);
     expect(verdict.changed).toBe(false); // nothing to collide with, no throw
   });

@@ -34,8 +34,8 @@ paid public signups; the P2 list before hundreds of concurrent users.**
   the replies/status polls, and `/api/wa/ping` hit by an EXTERNAL cron
   (cron-job.org). `/api/queue` (the queued-messages VIEWER) deliberately does
   NOT drain - opening the list to review or remove messages must never be the
-  event that sends them. Vercel Hobby crons run at most once per day, so the
-  external pinger is the correct choice on this tier - but it is a single
+  event that sends them. On a serverless free tier a cron might run at most
+  once per day, so the external pinger was the fallback there - but it is a single
   point of failure: if it lapses, queued messages only move while someone has
   the app open. **Action: keep two independent pinger services pointed at
   `/api/wa/ping` (5-10 min).**
@@ -203,7 +203,7 @@ message, and no external call can hang a handler:**
 - **Every external fetch is time-bounded.** `evoFetch` (Evolution) now aborts at
   12s and Supabase's REST helpers (`runtime-config.ts` `timedFetch`) at 8s - a
   cold/asleep host or a stalled DB connection returns a transient failure the
-  drain retries, instead of hanging a request until Vercel kills the function
+  drain retries, instead of hanging a request until the platform kills the function
   (which, mid-drain, previously LOST an already-claimed row). Pinned by
   `hardening-invariants.test.ts`.
 - **Pairing state is honest** (`isLinkedForUi` / `isLinkedFromStatus`, pinned by
@@ -255,8 +255,8 @@ volume outgrows it, not a launch blocker.
 
 ## For hundreds of concurrent users (P2)
 
-1. **Dedicated worker for draining** (QStash/Upstash schedule or a Pro-tier
-   Vercel cron every minute) + adaptive batch size (5 → 25) so the queue
+1. **Dedicated worker for draining** (the GCE `scheduler.worker` drains every
+   minute) + adaptive batch size (5 → 25) so the queue
    drains independently of user traffic.
 2. **Atomic counters for limits**: `checkDailyLimit` and the WA volume caps
    are read-then-write - under concurrency a user can exceed a limit by the

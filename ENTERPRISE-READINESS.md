@@ -55,11 +55,11 @@ opening public signups.**
 
 | # | Severity | Finding | Recommendation |
 | --- | --- | --- | --- |
-| 1 | P1 | Next.js 14.2.35 carries published advisories (DoS, cache poisoning; most severe apply to self-hosted deployments - Vercel mitigates several at the platform layer). `npm audit fix` requires Next 16, a breaking upgrade. | Schedule a dedicated Next 15/16 migration pass before public launch; do not `--force` it casually. |
+| 1 | P1 | Next.js 14.2.35 carries published advisories (DoS, cache poisoning; most severe apply to self-hosted deployments - which now includes our GCP hosting, so there is no platform-layer mitigation). `npm audit fix` requires Next 16, a breaking upgrade. | Schedule a dedicated Next 15/16 migration pass before public launch; do not `--force` it casually. |
 | 2 | P1 | No automated tests (unit/e2e). All verification is typecheck + build + manual flows. | Add a small Playwright smoke suite (login, search, offer render) and unit tests for `agent-loop` decision ladder and extraction math - these encode the business rules that keep breaking. |
-| 3 | P1 | No error monitoring/alerting (Sentry or similar); failures surface only in Vercel logs. | Wire Sentry (free tier) into `app/error.tsx` + API catch paths. |
+| 3 | P1 | No error monitoring/alerting (Sentry or similar); failures surface only in Cloud Run / GCE logs. | Wire Sentry (free tier) into `app/error.tsx` + API catch paths. |
 | 4 | P2 | ESLint is not configured (`next lint` prompts for setup). | Adopt `eslint-config-next` strict; fix on a quiet day - typecheck currently carries the load. |
-| 5 | P2 | ~40 fast DB-only routes omit `maxDuration`; on Vercel Hobby they get ~10s. All AI/WhatsApp routes already set 60s. | Fine as-is; add `maxDuration` if any of them ever grows a slow upstream. |
+| 5 | P2 | ~40 fast DB-only routes omit `maxDuration`; on Cloud Run the service request-timeout applies instead (default 300s). All AI/WhatsApp routes already set 60s. | Fine as-is; `maxDuration` is a no-op on Cloud Run. |
 | 6 | P2 | Single-instance in-memory caches (runtime config 30s, agent memory) mean brief cross-instance inconsistency on serverless. | Acceptable at this scale; revisit if traffic multiplies. |
 | 7 | P3 | FX rates in `currency.ts` and country seed floors in `market.ts` are static approximations (labelled "≈" in the UI; AI refresh replaces floors weekly per area). | Optionally swap in a free FX API later. |
 | 8 | P3 | WhatsApp automation via Evolution API rides on the user's personal number; a ban risk always remains despite the anti-ban engine (disclosed in Terms). | Keep limits conservative; long-term, offer the official Cloud API path for power users. |
@@ -68,7 +68,7 @@ opening public signups.**
 
 1. Run `supabase/schema.sql` (idempotent) - includes the new
    `vendor_tag_signals` table.
-2. Set bootstrap env vars in Vercel: `SUPABASE_URL`,
+2. Set bootstrap env vars in GCP Secret Manager: `SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
    `SESSION_SECRET`, `ADMIN_EMAILS` (everything else via Admin -> Keys).
 3. Rotate any key that was ever shared in chat/screenshots.

@@ -27,8 +27,8 @@ describe("rival-cache key schema (shared by both runtimes + the SSE stream)", ()
   });
 });
 
-describe("REDIS_URL gating - Vercel is a strict no-op", () => {
-  // In this test env REDIS_URL is unset, exactly like Vercel.
+describe("REDIS_URL gating - a strict no-op when unset", () => {
+  // In this test env REDIS_URL is unset.
   it("cheapestCachedRival returns null (callers fall back to Postgres)", async () => {
     expect(
       await cheapestCachedRival({

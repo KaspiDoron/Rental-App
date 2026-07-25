@@ -1,13 +1,13 @@
 // Unattended queue-drain pinger for the wd-queue-drain Render cron.
 //
-// Runs once per cron fire: hit the Vercel app's /api/wa/ping (which drains the
+// Runs once per cron fire: hit the app's /api/wa/ping (which drains the
 // outbox + graph wakeups and kicks the self-chaining tick), then exit. Baked
 // into a Docker image so the command is a clean exec array with ZERO shell
 // quoting - the inline `dockerCommand` string kept being mis-parsed by Render
 // (exit 127, "command not found" on the whole string).
 //
 // Reads two env vars set on the cron service (sync:false, never committed):
-//   WD_APP_URL    = https://<app>.vercel.app   (no trailing slash)
+//   WD_APP_URL    = https://<app>.run.app   (no trailing slash)
 //   WD_PING_TOKEN = the raw webhook token (Owner -> Keys) - NO url/query prefix
 
 const base = (process.env.WD_APP_URL || "").replace(/\/+$/, "");

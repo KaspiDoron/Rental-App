@@ -30,7 +30,7 @@ declare global {
 }
 
 // fetch with a hard 12s timeout so a stalled Google Places response cannot hang
-// a search request for the full Vercel maxDuration under load. The deadline
+// a search request for the full request-timeout ceiling under load. The deadline
 // stays armed across the body read (fetch resolves at headers; callers then
 // await res.json()/res.text()); the timer is unref'd so it never holds the
 // runtime, and an abort after completion is a harmless no-op. On abort fetch
@@ -43,7 +43,7 @@ async function timedFetch(url: string, init: RequestInit = {}, ms = 12_000): Pro
 }
 
 export async function mapsKey(): Promise<string | undefined> {
-  // Trim defensively: a key pasted into Vercel with a trailing newline/space
+  // Trim defensively: a key pasted into the host env with a trailing newline/space
   // breaks the X-Goog-Api-Key header while LOOKING configured.
   const k = (await getConfig("GOOGLE_MAPS_API_KEY"))?.trim();
   if (k) {
@@ -225,7 +225,7 @@ async function nominatimUA(): Promise<string> {
   const site =
     (await getConfig("APP_DOMAIN").catch(() => null)) ||
     process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.VERCEL_URL ||
+    process.env.APP_DOMAIN ||
     "wheeldeal.app";
   return `WheelDeal/1.0 (vehicle-rental app; ${site.replace(/^https?:\/\//, "")})`;
 }
@@ -249,7 +249,7 @@ export async function searchPlaces(
   // production autocomplete look broken while the key sat unset).
   if (!key) {
     googleError =
-      "Google Maps key is not reaching the server - check GOOGLE_MAPS_API_KEY in Admin -> Keys (or Vercel env), then run 'Test Google key'";
+      "Google Maps key is not reaching the server - check GOOGLE_MAPS_API_KEY in Admin -> Keys (or the host env), then run 'Test Google key'";
   }
 
   if (key && !opts?.skipAutocomplete) {
@@ -318,7 +318,7 @@ export async function searchPlaces(
   }
 
   // 4) OpenStreetMap Nominatim - free, real data, no key needed. NOTE: it
-  // often throttles/blocks datacenter IPs (Vercel), so its failure must also
+  // often throttles/blocks datacenter IPs, so its failure must also
   // surface instead of masquerading as "no matches".
   try {
     const res = await timedFetch(

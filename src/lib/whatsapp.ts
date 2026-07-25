@@ -42,7 +42,7 @@ export async function sendWhatsApp(
   if (!token || !phoneId) return clickToChat(to, message);
 
   // Hard 12s timeout: a stalled Graph API response must not hang the outreach
-  // request for the full Vercel maxDuration. On abort fetch throws -> the catch
+  // request for the full request-timeout ceiling. On abort fetch throws -> the catch
   // below returns an error result (transient on the drain path -> re-queued).
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);

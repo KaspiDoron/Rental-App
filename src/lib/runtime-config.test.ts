@@ -5,8 +5,8 @@ import { encryptString, decryptString } from "./runtime-config";
 
 // SESSION_SECRET rotation recovery: a value encrypted under an OLD secret must
 // still decrypt after the secret rotates, PROVIDED the old secret is offered via
-// SESSION_SECRET_PREVIOUS. This is the "all my keys vanished after the Vercel ->
-// Cloud Run migration" recovery path - the vault rows are intact, just locked
+// SESSION_SECRET_PREVIOUS. This is the "all my keys vanished after the host
+// migration" recovery path - the vault rows are intact, just locked
 // under the previous key.
 
 const OLD = "old-session-secret-value-1234567890";

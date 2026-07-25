@@ -166,5 +166,5 @@ export async function POST(req: Request) {
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
-// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+// maxDuration: lift the request-timeout ceiling for slow upstreams.
 export const maxDuration = 60;

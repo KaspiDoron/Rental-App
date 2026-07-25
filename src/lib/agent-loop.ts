@@ -565,7 +565,7 @@ export async function processVendorReply(opts: {
     }
     // HOT-STATE WRITE-THROUGH (Module 2): mirror the offer into the Redis
     // session aggregates (lowest-rival ZSET + OFFERS IN / BARGAINED HSET) and
-    // publish the delta for the SSE stream. REDIS_URL-gated no-op on Vercel;
+    // publish the delta for the SSE stream. REDIS_URL-gated no-op when unset;
     // never throws; Postgres above remains the source of truth.
     if (searchId != null) {
       const { recordSessionOffer } = await import("./rival-cache");

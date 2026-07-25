@@ -7,14 +7,14 @@
 // This file is the CANONICAL implementation (the "brain in src/lib, packages
 // re-export" pattern - @wheeldeal/redis/offers re-exports from here) because
 // the same code runs in BOTH runtimes during the dual-run:
-//   - On VERCEL: REDIS_URL is unset -> every function is an instant no-op /
+//   - With no REDIS_URL: every function is an instant no-op /
 //     null. Zero behavior change, zero connection attempts, build unaffected.
 //   - On the VM (workers/gateway): REDIS_URL is set -> full hot path.
 //
 // DUAL-RUN CORRECTNESS RULE: Redis is authoritative ONLY for sessions whose
 // offers were written through the worker path. The first worker-side write
 // sets a `live` flag; the cached-rival read returns null unless that flag
-// exists, so a Vercel-era session can never read a stale or incomplete cache
+// exists, so a keyless-era session can never read a stale or incomplete cache
 // - it silently falls through to the Postgres path.
 //
 // Never throws: a Redis hiccup degrades to "no cache" (callers fall back).
@@ -39,7 +39,7 @@ export type RedisLike = {
 
 let client: RedisLike | null | undefined; // undefined = not tried, null = unavailable
 
-/** The shared lazy, REDIS_URL-gated hot-state client - null on Vercel / when
+/** The shared lazy, REDIS_URL-gated hot-state client - null when REDIS_URL is unset /
  * Redis is down. Exported so sibling hot-state modules (the copy-uniqueness
  * signature window) reuse ONE connection instead of opening their own. */
 export async function hotStateClient(): Promise<RedisLike | null> {
@@ -113,7 +113,7 @@ export interface SessionEventPayload {
   detail?: string;
 }
 
-/** Publish a delta on the session channel (SSE fan-out subscribes). No-op on Vercel. */
+/** Publish a delta on the session channel (SSE fan-out subscribes). No-op when REDIS_URL is unset. */
 export async function publishSessionEvent(
   searchId: string | number,
   event: SessionEventPayload
@@ -130,7 +130,7 @@ export async function publishSessionEvent(
 /**
  * Record/refresh a shop's offer for a search session and recompute the
  * dashboard aggregates. Sets the `live` authority flag (worker-side writes
- * only reach here - Vercel is a no-op). BARGAINED mirrors the UI's truthful
+ * only reach here - a no-op when unset). BARGAINED mirrors the UI's truthful
  * calc: sum of max(0, list - current) * durationDays across vendors.
  */
 export async function recordSessionOffer(w: SessionOfferWrite): Promise<void> {
@@ -201,8 +201,8 @@ export interface CachedRivalQuery {
 
 /**
  * The cheapest OTHER shop's live offer for this exact session/vehicle/currency,
- * or null. Null also when: no REDIS_URL (Vercel), the session isn't flagged
- * `live` (Vercel-era session - cache not authoritative), or Redis is down.
+ * or null. Null also when: no REDIS_URL, the session isn't flagged
+ * `live` (legacy session - cache not authoritative), or Redis is down.
  * Callers ALWAYS fall back to the Postgres path on null.
  */
 export async function cheapestCachedRival(q: CachedRivalQuery): Promise<number | null> {

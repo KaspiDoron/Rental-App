@@ -1,7 +1,7 @@
 // @wheeldeal/core - the negotiation brain's single import surface for every
 // non-Next runtime (gateway, workers, future CLIs). Re-exports the proven
 // modules from src/lib so the GCP services and the legacy Next app run the
-// SAME code during the dual-run migration. When Vercel is decommissioned the
+// SAME code during the dual-run migration. When the legacy web host is decommissioned the
 // files physically move here and only these re-export paths change.
 //
 // Node runtimes must alias "server-only" to shims/server-only.ts (see the

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Module-6 budget engine tested against an in-memory Redis fake. We stub
-// REDIS_URL so hotStateClient() builds the mock (Vercel-off behavior is proven
+// REDIS_URL so hotStateClient() builds the mock (REDIS-off behavior is proven
 // separately by the "no REDIS_URL" block at the bottom, which runs in a child
 // import with the env unset).
 
@@ -179,9 +179,9 @@ describe("concurrent-campaign gate", () => {
   });
 });
 
-describe("REDIS_URL off (Vercel) - strict no-op, callers fall back to Postgres", () => {
+describe("REDIS_URL off - strict no-op, callers fall back to Postgres", () => {
   it("introUsage / tryAcquireCampaignSlot / completeVendorJob all return null", async () => {
-    vi.unstubAllEnvs(); // REDIS_URL unset, exactly like Vercel
+    vi.unstubAllEnvs(); // REDIS_URL unset
     vi.resetModules();
     const b = await import("./budget-cache");
     expect(await b.introUsage("u@x.com", 6)).toBeNull();

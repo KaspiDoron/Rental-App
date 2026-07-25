@@ -13,7 +13,7 @@ import type { StructuredRFQ } from "@/lib/types";
 // an optional conversation context. 100% visibility, zero WhatsApp traffic.
 //
 // Body: { kind: "image"|"audio", mime, base64, context?, region?, rfq? }
-// (base64 within Vercel's 4.5MB body limit; the client downscales/caps first.)
+// (base64 within the platform's request-body limit; the client downscales/caps first.)
 
 const DEFAULT_RFQ: StructuredRFQ = {
   vehicleClass: "scooter",

@@ -75,7 +75,7 @@ function die(msg) {
 if (!URL || !KEY) {
   die(
     "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must both be set in the environment.\n" +
-      "    Copy them from your host (Vercel / Cloud Run) or Supabase -> Settings -> API\n" +
+      "    Copy them from your host (GCP Secret Manager / Cloud Run) or Supabase -> Settings -> API\n" +
       "    (use the service_role secret, NOT the anon key), then re-run."
   );
 }

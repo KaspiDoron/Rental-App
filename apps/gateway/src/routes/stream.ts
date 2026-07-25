@@ -1,4 +1,4 @@
-// SSE stream (Module 2) - the realtime bridge from the VM to the Vercel
+// SSE stream (Module 2) - the realtime bridge from the VM to the web
 // frontend. Subscribes to the session's Redis pub/sub channel and forwards
 // deltas as Server-Sent Events, so OFFERS IN / BARGAINED / new counters
 // re-render the instant a worker writes them - no polling latency. Polling

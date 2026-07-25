@@ -17,7 +17,7 @@
 //      not an error.
 //
 // Same contract as rival-cache.ts: the ONE shared `hotStateClient()` (REDIS_URL
-// gated) - null on Vercel => every function is a no-op / returns null, and
+// gated) - null when REDIS_URL is unset => every function is a no-op / returns null, and
 // callers fall back to the Postgres budget path. NEVER throws.
 
 import { hotStateClient } from "./rival-cache";

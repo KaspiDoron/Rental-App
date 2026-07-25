@@ -56,5 +56,5 @@ export async function GET(req: Request) {
   return NextResponse.json({ results, error });
 }
 
-// Vercel: allow slow upstreams (Hobby default is ~10s - too short).
+// maxDuration: lift the request-timeout ceiling for slow upstreams.
 export const maxDuration = 60;

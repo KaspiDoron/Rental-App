@@ -5,7 +5,7 @@ you want in plain English; WheelDeal's AI agent ecosystem finds partner rental
 vendors near your hotel, sends structured RFQs, negotiates the price down in
 real time, and locks in the cheapest deal - all from your phone.
 
-> Built mobile-first, on 100% zero-cost tiers (Next.js on Vercel · OpenStreetMap
+> Built mobile-first, on 100% zero-cost tiers (Next.js on GCP Cloud Run · OpenStreetMap
 > · Supabase-ready · free-tier LLM gateways). Runs fully in **demo mode** with
 > no keys or external services required.
 
@@ -54,13 +54,13 @@ npm run dev                  # http://localhost:3000
 Sign in from `/login` with any email. To unlock the admin workspace, sign in
 with an email listed in `ADMIN_EMAILS` (default: `kaspidoron@gmail.com`, the owner).
 
-## ☁️ Deploy to Vercel (free tier, ~3 clicks)
+## ☁️ Deploy to Google Cloud (free tier)
 
 1. Push this repo to GitHub (already done if you're reading this there).
-2. Go to **vercel.com → New Project → Import** this repository.
-3. (Optional) Add environment variables from `.env.example` in **Settings →
-   Environment Variables**. None are required for a working demo.
-4. **Deploy.** Vercel auto-detects Next.js and gives you a public URL.
+2. Build the Next.js frontend into a **Cloud Run** service from the root
+   `Dockerfile` (it emits a standalone image, listens on `$PORT`).
+3. Provision the gateway + workers + Redis VM with `./infra/gcp/deploy.sh`.
+4. Full step-by-step: [`infra/gcp/README.md`](./infra/gcp/README.md).
 
 > The app is 100% functional with zero env vars. Add LLM / Supabase / WhatsApp
 > keys to switch on live AI, persistence, and real messaging.

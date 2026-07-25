@@ -448,7 +448,7 @@ export async function processEvolutionWebhook(
         continue; // the flow's continuation owns this turn from here
       }
 
-      // VERCEL/INLINE PATH: download WITH RETRY so the vision agent can read
+      // INLINE PATH: download WITH RETRY so the vision agent can read
       // the prices - a transient media failure must not lose the offer.
       const images: { mime: string; base64: string }[] = [];
       let mediaFetchFailed = false;

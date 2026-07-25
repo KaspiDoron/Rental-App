@@ -27,7 +27,7 @@ export async function GET() {
     adsenseClient: adsense ?? null,
     testMode: on(testMode),
     // Client polling cadence: SCALE_MODE stretches intervals to cut function
-    // invocations under load (Vercel Hobby has no workers to add).
+    // invocations under load (a single instance has no workers to add).
     poll: scaled
       ? { activityMs: 15000, repliesMs: 20000, tagsMs: 300000 }
       : { activityMs: 6000, repliesMs: 8000, tagsMs: 120000 },
