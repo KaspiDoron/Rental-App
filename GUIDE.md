@@ -469,3 +469,13 @@ That single key now drives the share-preview/SEO URLs (OpenGraph, canonical),
 the geocoding fallback identity and the push-notification sender identity.
 WhatsApp webhooks and billing redirect URLs need NO action - they derive from
 the live request origin automatically.
+
+## Reply alerts (Web Push) - zero setup
+
+Nothing to configure. The first time a signed-in user opens the app, the server
+mints its own Web Push (VAPID) keypair and stores it encrypted in the Key Vault
+- no terminal, no key generation, no pasting. You can see both keys (masked) in
+**Admin -> Keys** under Messaging. Paste your own pair there only if you want to
+override the generated one - note that replacing keys disconnects devices that
+already subscribed (they re-subscribe on their next visit; dead subscriptions
+are pruned automatically).

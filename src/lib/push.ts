@@ -10,7 +10,8 @@
 import "server-only";
 import webpush from "web-push";
 import { createHash } from "crypto";
-import { getConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
+import { getConfig, setConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
+import { generateVapidPair, vapidPairMatches } from "./push-keys";
 
 interface PushSub {
   endpoint: string;
@@ -44,9 +45,57 @@ async function ensureVapid(): Promise<string | null> {
   return pub;
 }
 
-/** The public key the browser needs to subscribe (null when push is off). */
+/**
+ * AUTO-PROVISION (terminal-free owner): mint a VAPID pair on first use and
+ * persist it in the encrypted Key Vault, so alerts work with zero setup.
+ * Rules that keep it safe:
+ *   - Exactly one key set (half-pasted manual config) -> null, NEVER clobber.
+ *   - Only keys that PERSISTED count: ephemeral keys would strand every
+ *     browser subscription on the next instance recycle, so a failed vault
+ *     write rolls back and the feature stays hidden (the pre-fix behavior).
+ *   - Two instances can race the first call; upserts are last-writer-wins per
+ *     key, so after writing we re-read and PROVE the stored pair belong
+ *     together (vapidPairMatches re-derives the public point from the private
+ *     scalar). One retry, then give up to the graceful-hide path.
+ */
+async function provisionVapidKeys(): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const pair = generateVapidPair();
+    // Private first: a crash between the writes leaves a half-set pair, which
+    // reads as "unconfigured" (safe) instead of a public key nobody can sign for.
+    const wPriv = await setConfig("VAPID_PRIVATE_KEY", pair.privateKey);
+    const wPub = wPriv.persistent ? await setConfig("VAPID_PUBLIC_KEY", pair.publicKey) : wPriv;
+    if (!wPriv.persistent || !wPub.persistent) {
+      await setConfig("VAPID_PRIVATE_KEY", "").catch(() => {});
+      await setConfig("VAPID_PUBLIC_KEY", "").catch(() => {});
+      return null; // vault unavailable - keep alerts hidden rather than strand subs
+    }
+    // Re-read what actually won (setConfig cleared the cache) and verify the
+    // stored pair is internally consistent - ours or a concurrent winner's.
+    const [pub, priv] = await Promise.all([
+      getConfig("VAPID_PUBLIC_KEY"),
+      getConfig("VAPID_PRIVATE_KEY"),
+    ]);
+    if (pub && priv && vapidPairMatches(pub, priv)) {
+      await sbInsert("agent_events", [
+        { kind: "vapid-autogen", detail: `web push keys auto-generated (pub ${pub.slice(0, 8)}...)` },
+      ]).catch(() => {});
+      return pub;
+    }
+  }
+  return null;
+}
+
+/** The public key the browser needs to subscribe (null when push is off).
+ * First signed-in call auto-provisions the keypair - see provisionVapidKeys. */
 export async function vapidPublicKey(): Promise<string | null> {
-  return (await getConfig("VAPID_PUBLIC_KEY")) || null;
+  const [pub, priv] = await Promise.all([
+    getConfig("VAPID_PUBLIC_KEY"),
+    getConfig("VAPID_PRIVATE_KEY"),
+  ]);
+  if (pub && priv) return pub;
+  if (pub || priv) return null; // half-configured: let the admin finish, never overwrite
+  return provisionVapidKeys();
 }
 
 /** Persist a browser push subscription for a user (idempotent on endpoint). */
