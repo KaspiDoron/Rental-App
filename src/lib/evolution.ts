@@ -16,6 +16,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runtime-config";
+import { deriveWebhookToken, sameWebhookTarget } from "./wa/webhook-token";
 import { jidMatches } from "./wa/jid";
 import { isLinkedFromStatus } from "./wa/linked-status";
 import { digitsOnly } from "./phone";
@@ -233,17 +234,129 @@ export function instanceNameFor(email: string): string {
   return `wd-${createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16)}`;
 }
 
-/** Webhook token derived from a stable secret so it works across all hosts. */
+/** Webhook token derived from a stable secret so it works across all hosts.
+ * Derivation lives in the pure `wa/webhook-token` module (unit-tested); this
+ * wrapper keeps the no-hosts gate. There is deliberately NO previous-secret
+ * acceptance - the fix for a rotated secret is to RE-ARM Evolution's stored URL
+ * with the current token (reassertWebhook), not to accept stale tokens. */
 export async function webhookToken(): Promise<string | null> {
   if ((await getHosts()).length === 0) return null;
-  const secret = process.env.SESSION_SECRET;
-  // A predictable fallback secret would make the webhook/ping token guessable.
-  // In production we require a real SESSION_SECRET (same one the sessions use).
-  if (!secret || secret.length < 16) {
-    if (process.env.NODE_ENV === "production") return null;
-    return createHash("sha256").update("wd-webhook:dev-only").digest("hex").slice(0, 32);
+  return deriveWebhookToken({ secret: process.env.SESSION_SECRET, nodeEnv: process.env.NODE_ENV });
+}
+
+/** The canonical public origin the webhook must point at. The admin-set
+ * APP_DOMAIN (the GCP gateway URL) WINS over the request origin, so a
+ * preview/tap-time origin can never get baked into Evolution. Returns null when
+ * neither resolves (caller skips the re-arm). */
+export async function canonicalWebhookOrigin(requestOrigin?: string): Promise<string | null> {
+  const norm = (s?: string | null): string | null => {
+    if (!s) return null;
+    let v = s.trim();
+    if (!v) return null;
+    if (!/^https?:\/\//.test(v)) v = `https://${v}`;
+    try {
+      return new URL(v).origin;
+    } catch {
+      return null;
+    }
+  };
+  const configured = await getConfig("APP_DOMAIN").catch(() => null);
+  return norm(configured) ?? norm(requestOrigin) ?? null;
+}
+
+// Per-instance re-arm throttle (in-memory, survives warm invocations).
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_wh_rearm__: Map<string, number> | undefined;
+}
+function rearmStore(): Map<string, number> {
+  if (!globalThis.__wd_wh_rearm__) globalThis.__wd_wh_rearm__ = new Map();
+  return globalThis.__wd_wh_rearm__;
+}
+const REARM_THROTTLE_MS = 60 * 60 * 1000; // ~1h per instance unless forced
+
+/**
+ * Re-assert the user's webhook URL on Evolution with the CURRENT token, WITHOUT
+ * touching the session. This is the fix for a rotated SESSION_SECRET (Evolution
+ * still holds a URL with the old token) and for preview-origin pairings. It ONLY
+ * ever calls GET /webhook/find + POST /webhook/set - never instance
+ * create/logout/delete - so it can never break the working outbound path. Every
+ * Evolution call is guarded; read-before-write skips the set when the canonical
+ * URL is already registered.
+ */
+export async function reassertWebhook(
+  email: string,
+  opts: { requestOrigin?: string; force?: boolean } = {}
+): Promise<{
+  ok: boolean;
+  changed: boolean;
+  registeredUrl: string | null;
+  skipped?: "no-origin" | "no-host" | "throttled";
+}> {
+  const instance = instanceNameFor(email);
+  const host = await resolveHost(email);
+  if (!host) return { ok: false, changed: false, registeredUrl: null, skipped: "no-host" };
+
+  const origin = await canonicalWebhookOrigin(opts.requestOrigin);
+  if (!origin) return { ok: false, changed: false, registeredUrl: null, skipped: "no-origin" };
+
+  const store = rearmStore();
+  const now = Date.now();
+  if (!opts.force && now - (store.get(instance) ?? 0) < REARM_THROTTLE_MS) {
+    return { ok: true, changed: false, registeredUrl: null, skipped: "throttled" };
   }
-  return createHash("sha256").update(`wd-webhook:${secret}`).digest("hex").slice(0, 32);
+  store.set(instance, now);
+
+  const token = await webhookToken();
+  if (!token) return { ok: false, changed: false, registeredUrl: null, skipped: "no-host" };
+  const webhookUrl = `${origin}/api/webhooks/evolution?token=${token}`;
+  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+
+  // Read-before-write: don't churn a healthy instance.
+  let registeredUrl: string | null = null;
+  try {
+    const found = await evoFetch(host, `/webhook/find/${instance}`);
+    registeredUrl =
+      (typeof found.data?.url === "string" && found.data.url) ||
+      (typeof found.data?.webhook?.url === "string" && found.data.webhook.url) ||
+      null;
+  } catch {
+    /* proceed to set */
+  }
+  if (registeredUrl && sameWebhookTarget(registeredUrl, origin, token)) {
+    return { ok: true, changed: false, registeredUrl };
+  }
+
+  // ONLY /webhook/set - never touch the session.
+  const set = await evoFetch(host, `/webhook/set/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({
+      webhook: { enabled: true, url: webhookUrl, byEvents: false, events },
+      enabled: true,
+      url: webhookUrl,
+      events,
+    }),
+  }).catch(() => ({ ok: false, status: 0, data: {} }));
+
+  // Visibility when APP_DOMAIN overrode a different request origin.
+  if (opts.requestOrigin) {
+    try {
+      if (new URL(opts.requestOrigin).origin !== origin) {
+        await sbInsert("agent_events", [
+          {
+            kind: "webhook-origin-override",
+            vendor_id: "",
+            vendor_name: instance,
+            detail: `Re-armed webhook to ${origin} (request origin was ${new URL(opts.requestOrigin).origin}).`,
+          },
+        ]).catch(() => {});
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  return { ok: set.ok, changed: set.ok, registeredUrl: set.ok ? webhookUrl : registeredUrl };
 }
 
 // ---- host health (short-lived cache) --------------------------------------------
@@ -709,6 +822,23 @@ export async function ensureConnected(
   // If we've failed the user over to a different host, the instance may not
   // exist there yet - creating it makes Evolution load the SHARED creds from
   // the database and reconnect the session (no re-linking needed).
+  //
+  // CRITICAL: this recreate MUST carry the webhook, or a host restart silently
+  // recreates a webhook-LESS instance (outbound keeps working, inbound stops).
+  // Resolve the canonical origin (APP_DOMAIN - the GCP gateway) + current token.
+  const recreateOrigin = await canonicalWebhookOrigin();
+  const recreateToken = await webhookToken();
+  const recreateEvents = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+  const recreateWebhook =
+    recreateOrigin && recreateToken
+      ? {
+          webhook: {
+            url: `${recreateOrigin}/api/webhooks/evolution?token=${recreateToken}`,
+            byEvents: false,
+            events: recreateEvents,
+          },
+        }
+      : {};
   await evoFetch(host, "/instance/create", {
     method: "POST",
     body: JSON.stringify({
@@ -722,6 +852,7 @@ export async function ensureConnected(
       // recreate either (data minimization must be set at create time on EVERY
       // instance/create path, not applied post-hoc via a best-effort settings call).
       syncFullHistory: false,
+      ...recreateWebhook,
     }),
   });
   // Kick a reconnect on the resolved host.
@@ -750,6 +881,9 @@ export async function ensureConnected(
     if (state === "open") {
       markOpen(email).catch(() => {});
       await saveSession(email, instance, "open", host.url);
+      // Ensure the reconnected instance points at the current webhook URL
+      // (throttled; find+set only - never re-arms more than ~1/hour/instance).
+      reassertWebhook(email).catch(() => {});
       return { ok: true, state };
     }
   }
@@ -806,6 +940,10 @@ export async function connectInstance(
   const existing = await connectionState(email);
   if (existing === "open") {
     await markOpen(email);
+    // RE-ARM the webhook even for an already-open instance: this is the only
+    // non-destructive path to refresh a stale URL (secret rotation / a
+    // preview-origin pairing) without wiping the live session. find+set only.
+    await reassertWebhook(email, { requestOrigin: appOrigin, force: true }).catch(() => {});
     return { ok: true, state: "open" };
   }
 

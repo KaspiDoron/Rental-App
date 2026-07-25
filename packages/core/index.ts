@@ -71,6 +71,7 @@ export {
 // WhatsApp transport + anti-ban guard (Redis port lands in Module 6).
 export {
   webhookToken,
+  reassertWebhook,
   emailForInstance,
   sendFromUser,
 } from "../../src/lib/evolution";

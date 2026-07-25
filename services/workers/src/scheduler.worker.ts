@@ -5,7 +5,13 @@
 // production fix for "no vercel.json cron + dropped tick fetch".
 
 import { Worker, type Job } from "bullmq";
-import { drainOutbox, drainGraphWakeups, sendFromUser } from "@wheeldeal/core";
+import {
+  drainOutbox,
+  drainGraphWakeups,
+  sendFromUser,
+  reassertWebhook,
+  sbSelect,
+} from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
 import { bullConnection } from "@wheeldeal/redis";
 import {
@@ -20,6 +26,7 @@ import {
 const DRAIN_EVERY_MS = 20_000;
 const GC_EVERY_MS = 30 * 60_000; // 30m
 const DLQ_SWEEP_EVERY_MS = 15 * 60_000; // 15m
+const REARM_EVERY_MS = 30 * 60_000; // 30m - reassert webhooks (find+set, throttled ~1h/instance)
 
 /** Register the repeatable heartbeat jobs (idempotent - same repeat keys). */
 export async function scheduleHeartbeat(): Promise<void> {
@@ -46,6 +53,32 @@ export async function scheduleHeartbeat(): Promise<void> {
     removeOnComplete: 10,
     removeOnFail: 20,
   });
+  // Webhook re-arm: reassert every open instance's webhook URL with the CURRENT
+  // token (find+set only - never touches the session). This is what recovers
+  // inbound after a SESSION_SECRET rotation without any manual Evolution edit.
+  await q.add("webhook-rearm", { kind: "webhook-rearm" } satisfies SchedulerJob, {
+    repeat: { every: REARM_EVERY_MS },
+    jobId: "heartbeat-webhook-rearm",
+    removeOnComplete: 10,
+    removeOnFail: 20,
+  });
+}
+
+/** Reassert the webhook for every currently-open instance (bounded fan-out).
+ * Each reassertWebhook is throttled ~1h/instance internally, so a 30m tick is a
+ * no-op for healthy instances. Also runnable once on gateway boot. */
+export async function rearmOpenWebhooks(limit = 50): Promise<{ scanned: number; rearmed: number }> {
+  const rows = await sbSelect<{ email: string }>(
+    "wa_sessions",
+    `select=email&status=eq.open&order=updated_at.desc&limit=${limit}`
+  ).catch(() => [] as { email: string }[]);
+  let rearmed = 0;
+  for (const r of rows) {
+    if (!r.email) continue;
+    const res = await reassertWebhook(r.email).catch(() => null);
+    if (res?.changed) rearmed += 1;
+  }
+  return { scanned: rows.length, rearmed };
 }
 
 export function startSchedulerWorker(): Worker<SchedulerJob> {
@@ -76,6 +109,12 @@ export function startSchedulerWorker(): Worker<SchedulerJob> {
           Number((incoming as { waiting?: number }).waiting ?? 0);
         if (depth > 0) logger.warn({ outreach, incoming }, "DLQ depth > 0 - inspect Bull Board");
         else logger.info({ outreach, incoming }, "heartbeat dlq-sweep - clean");
+      } else if (job.data.kind === "webhook-rearm") {
+        const res = await rearmOpenWebhooks().catch((e) => {
+          logger.warn({ err: (e as Error).message }, "webhook re-arm error");
+          return null;
+        });
+        if (res) logger.info(res, "heartbeat webhook-rearm");
       }
     },
     { connection: bullConnection(), concurrency: 1 } // one drainer - no herd

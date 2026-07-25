@@ -39,7 +39,7 @@ export interface OutboundJob {
 // Outreach batch/vendor/sync schemas live in ./outreach (re-exported below).
 
 export interface SchedulerJob {
-  kind: "drain" | "wakeup" | "dlq-sweep" | "gc";
+  kind: "drain" | "wakeup" | "dlq-sweep" | "gc" | "webhook-rearm" | "inbound-recovery";
   threadKey?: string;
 }
 

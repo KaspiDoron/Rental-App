@@ -64,6 +64,35 @@ describe("anti-ban: pairing-layer client fingerprint (the ban happened AT pairin
   });
 });
 
+describe("inbound recovery: webhook re-arm is non-destructive (never touches the session)", () => {
+  it("reassertWebhook only calls /webhook/find + /webhook/set - never create/logout/delete", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    const start = evo.indexOf("export async function reassertWebhook");
+    expect(start).toBeGreaterThan(-1);
+    // Bound the scan to the function body (up to the next top-level export).
+    const body = evo.slice(start, evo.indexOf("\nexport ", start + 40));
+    expect(body).toMatch(/\/webhook\/set\//);
+    // The destructive session ops must NOT appear anywhere in the re-arm path.
+    expect(body).not.toMatch(/instance\/create/);
+    expect(body).not.toMatch(/instance\/logout/);
+    expect(body).not.toMatch(/instance\/delete/);
+  });
+
+  it("connectInstance re-arms the webhook on the already-open early-return", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    // The open-early-return block must reference reassertWebhook (a stale URL is
+    // otherwise never refreshed for an already-linked user).
+    expect(evo).toMatch(/existing === "open"[\s\S]{0,320}reassertWebhook/);
+  });
+
+  it("ensureConnected's failover recreate carries a webhook field (no webhook-less instance)", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    expect(evo).toMatch(/recreateWebhook/);
+    // and the derivation is present so the body can include it
+    expect(evo).toMatch(/canonicalWebhookOrigin\(\)/);
+  });
+});
+
 describe("anti-ban: send-side STOP-LOSS wired into the one send chokepoint", () => {
   it("wa-guard exports noteSendOutcome and evolution.ts feeds it on every outcome", () => {
     expect(read("src/lib/wa-guard.ts")).toMatch(/export async function noteSendOutcome/);
