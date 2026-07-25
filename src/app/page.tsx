@@ -204,6 +204,28 @@ export default function Home() {
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   // Will - the conversational layer. Session pause + compare live here too.
   const [willOpen, setWillOpen] = useState(false);
+  // W7: per-stage dismissal of the inline Will guide. Dismissing hides the
+  // banner for THAT stage only (persisted for the session); a stage change
+  // resurfaces it - it is guidance, not chrome. A small summon chip stays so
+  // Will is always one tap away.
+  const [dismissedStages, setDismissedStages] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("wd_will_dismissed");
+      if (raw) setDismissedStages(new Set(JSON.parse(raw) as string[]));
+    } catch {
+      /* private mode - in-memory only */
+    }
+  }, []);
+  const dismissWillStage = useCallbackRef((stage: string) => {
+    setDismissedStages((prev) => {
+      const next = new Set(prev).add(stage);
+      try {
+        sessionStorage.setItem("wd_will_dismissed", JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  });
   const [paused, setPaused] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   // Poll cadence from the server (SCALE_MODE stretches these under load). Fast
@@ -1681,6 +1703,19 @@ export default function Home() {
     return max ? new Date(max).toISOString() : null;
   }, [queueItems]);
 
+  // W7: the current Will guide stage (shared by the inline banner + summon chip).
+  const willStageNow = useMemo(
+    () =>
+      willStageFrom({
+        waConnected,
+        phase,
+        vendorCount: vendors.length,
+        offerCount,
+        closing: Boolean(bookingVendor),
+      }),
+    [waConnected, phase, vendors.length, offerCount, bookingVendor]
+  );
+
   // A row overdue by >5 min means sending fell behind (typically: the app was
   // closed and no background driver ran) - say so instead of a silent stall.
   const queueStalled = useMemo(
@@ -1732,17 +1767,12 @@ export default function Home() {
         {/* Will as an INTEGRATED, inline guide (R4): a stage-aware banner that
             walks the user step-by-step through the lifecycle. Replaces the
             floating side widget. */}
-        {session && !willOpen && (
+        {session && !willOpen && !dismissedStages.has(willStageNow) && (
           <WillGuide
-            stage={willStageFrom({
-              waConnected,
-              phase,
-              vendorCount: vendors.length,
-              offerCount,
-              closing: Boolean(bookingVendor),
-            })}
+            stage={willStageNow}
             busy={will.busy || phase === "profiling" || phase === "running"}
             onOpen={() => setWillOpen(true)}
+            onDismiss={() => dismissWillStage(willStageNow)}
           />
         )}
         <section className={`surface relative mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
@@ -2693,6 +2723,20 @@ export default function Home() {
         </Modal>
       )}
 
+      {/* W7: summon chip - when the inline guide is dismissed for this stage,
+          Will stays one tap away as a small avatar button above the TabBar. No
+          drag, no auto-nap; a stage change resurfaces the full banner. */}
+      {session && !willOpen && dismissedStages.has(willStageNow) && (
+        <button
+          onClick={() => setWillOpen(true)}
+          aria-label={t("Ask Will")}
+          className="fixed right-3 z-[900] flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
+          style={{ bottom: "calc(72px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          <WillAvatar size={22} wave={false} />
+          {t("Ask Will")}
+        </button>
+      )}
       {/* Will - the living companion on the edge of the screen. The TabBar is
           the primary bottom element; Will's full chat opens from him. */}
       {willOpen && (

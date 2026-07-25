@@ -15,9 +15,9 @@ function money(v: number, cur?: string): string {
 export async function composeStatus(email: string, ctx: WillContext): Promise<string> {
   const enc = encodeURIComponent(email);
   const [outbox, wakeups, safety] = await Promise.all([
-    sbSelect<{ id: number }>(
+    sbSelect<{ id: number; not_before: string; meta: { kind?: string; reason?: string } | null }>(
       "wa_outbox",
-      `select=id&sender_key=eq.${enc}&limit=20`
+      `select=id,not_before,meta&sender_key=eq.${enc}&order=not_before.asc&limit=20`
     ).catch(() => []),
     sbSelect<{ not_before: string; payload: { vendorName?: string; reason?: string } | null }>(
       "graph_wakeups",
@@ -47,7 +47,27 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
     ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
   ).length;
   if (talking > 0) bits.push(`${talking} conversation${talking === 1 ? "" : "s"} open`);
-  if (outbox.length > 0) bits.push(`${outbox.length} message${outbox.length === 1 ? "" : "s"} queued for opening hours`);
+  if (outbox.length > 0) {
+    // Answer "when will my message send?" HONESTLY, from the real not_before -
+    // the next one's time, or "held for opening hours" when that is the reason.
+    const nextDue = outbox
+      .map((r) => ({ at: Date.parse(r.not_before), reason: r.meta?.reason ?? "" }))
+      .filter((r) => Number.isFinite(r.at))
+      .sort((a, b) => a.at - b.at)[0];
+    const heldForHours = nextDue && /hour|open/i.test(nextDue.reason);
+    const clock =
+      nextDue && nextDue.at > Date.now()
+        ? new Date(nextDue.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : null;
+    const noun = `${outbox.length} message${outbox.length === 1 ? "" : "s"} queued`;
+    bits.push(
+      heldForHours
+        ? `${noun}, held for the shop's opening hours`
+        : clock
+          ? `${noun} - the next goes out around ${clock}`
+          : `${noun}, sending at the next safe slot`
+    );
+  }
   const wait = wakeups.find((w) => Date.parse(w.not_before) > Date.now());
   if (wait) {
     const at = new Date(wait.not_before).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
