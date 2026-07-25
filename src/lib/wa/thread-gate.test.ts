@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyIngest,
+  classifyIngestDetailed,
   isRfqAnchor,
   isDrillAnchor,
   DRILL_INGEST_WINDOW_MS,
@@ -75,4 +76,49 @@ describe("classifyIngest - when is inbound ingestible", () => {
       classifyIngest([row({ vendorId: "test-84912", rfq: {} }, DRILL_INGEST_WINDOW_MS + 60_000)], NOW)
     ).toBe(false); // past 3h - drill window wins even though rfq present
   });
+});
+
+describe("classifyIngestDetailed - the WA-doctor reason (ok matches classifyIngest)", () => {
+  const cases: { name: string; rows: ReturnType<typeof row>[]; ok: boolean; reason: string }[] = [
+    { name: "no outbound at all", rows: [], ok: false, reason: "no-outbound" },
+    {
+      name: "outbounds but no RFQ anchor",
+      rows: [row({ kind: "human-manual" }, 60_000)],
+      ok: false,
+      reason: "no-rfq-anchor",
+    },
+    {
+      name: "active RFQ thread inside window",
+      rows: [row({ rfq: {}, vendorId: "shop1" }, 60 * 60_000)],
+      ok: true,
+      reason: "active-thread",
+    },
+    {
+      name: "RFQ thread past the 14d window",
+      rows: [row({ rfq: {}, vendorId: "shop1" }, REAL_THREAD_INGEST_WINDOW_MS + 60_000)],
+      ok: false,
+      reason: "thread-expired",
+    },
+    {
+      name: "drill inside 3h window",
+      rows: [row({ drill: true, vendorId: "drill-1" }, 60 * 60_000)],
+      ok: true,
+      reason: "drill-window-active",
+    },
+    {
+      name: "drill past 3h window",
+      rows: [row({ drill: true, vendorId: "drill-1" }, DRILL_INGEST_WINDOW_MS + 60_000)],
+      ok: false,
+      reason: "drill-expired",
+    },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      const d = classifyIngestDetailed(c.rows, NOW);
+      expect(d.ok).toBe(c.ok);
+      expect(d.reason).toBe(c.reason);
+      // ok must always agree with the boolean gate
+      expect(classifyIngest(c.rows, NOW)).toBe(c.ok);
+    });
+  }
 });

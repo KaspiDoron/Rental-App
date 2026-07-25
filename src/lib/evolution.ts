@@ -16,7 +16,8 @@
 import "server-only";
 import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runtime-config";
-import { deriveWebhookToken, sameWebhookTarget } from "./wa/webhook-token";
+import { deriveWebhookToken, sameWebhookTarget, classifyRegisteredWebhook } from "./wa/webhook-token";
+import type { TokenState } from "./wa/webhook-token";
 import { jidMatches } from "./wa/jid";
 import { isLinkedFromStatus } from "./wa/linked-status";
 import { digitsOnly } from "./phone";
@@ -357,6 +358,49 @@ export async function reassertWebhook(
   }
 
   return { ok: set.ok, changed: set.ok, registeredUrl: set.ok ? webhookUrl : registeredUrl };
+}
+
+/** Read-only webhook diagnostics for the WA doctor: host health, the live
+ * connection state, the URL Evolution ACTUALLY holds (via /webhook/find) and how
+ * it compares to what we expect (token current/foreign/none, origin match). */
+export async function webhookDiagnostics(email: string): Promise<{
+  instance: string;
+  hosts: { url: string; ok: boolean; detail: string }[];
+  liveState: string | null;
+  webhook: {
+    expectedUrl: string | null;
+    registeredUrl: string | null;
+    tokenState: TokenState;
+    originMatch: boolean | null;
+  };
+}> {
+  const instance = instanceNameFor(email);
+  const host = await resolveHost(email);
+  const token = await webhookToken();
+  const origin = await canonicalWebhookOrigin();
+  const expectedUrl = origin && token ? `${origin}/api/webhooks/evolution?token=${token}` : null;
+
+  const hosts: { url: string; ok: boolean; detail: string }[] = [];
+  for (const h of await getHosts()) {
+    const hd = await hostHealthDetail(h);
+    hosts.push({ url: h.url, ok: hd.ok, detail: hd.detail });
+  }
+
+  let registeredUrl: string | null = null;
+  if (host) {
+    const found = await evoFetch(host, `/webhook/find/${instance}`).catch(() => ({
+      ok: false,
+      status: 0,
+      data: {} as any,
+    }));
+    registeredUrl =
+      (typeof found.data?.url === "string" && found.data.url) ||
+      (typeof found.data?.webhook?.url === "string" && found.data.webhook.url) ||
+      null;
+  }
+  const { tokenState, originMatch } = classifyRegisteredWebhook(registeredUrl, token, origin);
+  const liveState = await connectionState(email).catch(() => null);
+  return { instance, hosts, liveState, webhook: { expectedUrl, registeredUrl, tokenState, originMatch } };
 }
 
 // ---- host health (short-lived cache) --------------------------------------------

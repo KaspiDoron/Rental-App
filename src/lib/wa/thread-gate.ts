@@ -51,10 +51,34 @@ export function classifyIngest(
   rows: { received_at: string; raw: GateRaw | null }[],
   nowMs: number
 ): boolean {
-  if (!rows.length) return false;
+  return classifyIngestDetailed(rows, nowMs).ok;
+}
+
+export type IngestReason =
+  | "no-outbound" // we never messaged this number as a shop
+  | "no-rfq-anchor" // outbounds exist but none is an RFQ/agent send
+  | "thread-expired" // real thread, but the last send is past the 14d window
+  | "drill-window-active" // a drill rehearsal still inside its 3h window (ingestible)
+  | "drill-expired" // a drill rehearsal past its 3h window (retired)
+  | "active-thread"; // a real RFQ thread inside the window (ingestible)
+
+/** The same decision as classifyIngest, but reporting WHY - the load-bearing
+ * signal the WA doctor shows so an operator can see exactly which gate dropped a
+ * shop reply. `ok` matches classifyIngest exactly. */
+export function classifyIngestDetailed(
+  rows: { received_at: string; raw: GateRaw | null }[],
+  nowMs: number
+): { ok: boolean; reason: IngestReason } {
+  if (!rows.length) return { ok: false, reason: "no-outbound" };
   const newestAge = nowMs - Date.parse(rows[0].received_at);
-  if (!Number.isFinite(newestAge)) return false;
-  if (rows.some((r) => isDrillAnchor(r.raw))) return newestAge < DRILL_INGEST_WINDOW_MS;
-  if (!rows.some((r) => isRfqAnchor(r.raw))) return false;
-  return newestAge < REAL_THREAD_INGEST_WINDOW_MS;
+  if (!Number.isFinite(newestAge)) return { ok: false, reason: "no-outbound" };
+  if (rows.some((r) => isDrillAnchor(r.raw))) {
+    return newestAge < DRILL_INGEST_WINDOW_MS
+      ? { ok: true, reason: "drill-window-active" }
+      : { ok: false, reason: "drill-expired" };
+  }
+  if (!rows.some((r) => isRfqAnchor(r.raw))) return { ok: false, reason: "no-rfq-anchor" };
+  return newestAge < REAL_THREAD_INGEST_WINDOW_MS
+    ? { ok: true, reason: "active-thread" }
+    : { ok: false, reason: "thread-expired" };
 }

@@ -21,6 +21,10 @@ const HealthPanel = dynamic(
   () => import("@/components/HealthPanel").then((m) => m.HealthPanel),
   { ssr: false, loading: () => <LoadingDots label="Loading service health" /> }
 );
+const WaDoctorCard = dynamic(
+  () => import("@/components/admin/WaDoctorCard").then((m) => m.WaDoctorCard),
+  { ssr: false, loading: () => <LoadingDots label="Loading WA doctor" /> }
+);
 const OpsCenterPanel = dynamic(
   () => import("@/components/ops/OpsCenter").then((m) => m.OpsCenter),
   { ssr: false, loading: () => <LoadingDots label="Loading the Ops Center" /> }
@@ -1454,6 +1458,9 @@ export default function AdminPage() {
         <div className="space-y-3">
           {/* Live service health with 10-minute auto-refresh (item #12) */}
           <HealthPanel />
+
+          {/* WA doctor: one-tap inbound incident tracer + webhook re-arm */}
+          <WaDoctorCard />
 
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
