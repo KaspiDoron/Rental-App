@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { bucketTurnsPerHour, moveMix, providerMix, latencyStats } from "@/lib/admin/engine-stats";
 
 // SESSION BLACKBOARD INSPECTOR (owner-only). A single live snapshot of the
 // ENGINE_V3 (SPTE) runtime: recent single-pass turns with their move + model
@@ -112,6 +113,34 @@ export async function GET() {
   ).catch(() => []);
   const turnsLast6h = turnCountRows.length;
 
+  // ---- Chart aggregations (Tier-2): move mix, provider mix, per-hour bars and
+  // latency percentiles over a WIDER 6h turn sample than the 30-row live stream.
+  // Detail-only slim query so the charts reflect the real fleet, not the head.
+  const CHART_SAMPLE_CAP = 600;
+  const chartRows = await sbSelect<{ detail: string | null; created_at: string }>(
+    "agent_events",
+    `select=detail,created_at&kind=eq.engine-v3-turn&created_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&order=created_at.desc&limit=${CHART_SAMPLE_CAP}`
+  ).catch(() => []);
+  const statTurns = chartRows.map((r) => {
+    let d: { move?: string; provider?: string | null; latencyMs?: number | null } = {};
+    try {
+      d = JSON.parse(r.detail ?? "{}");
+    } catch {
+      /* keep empty */
+    }
+    return { at: r.created_at, move: d.move, provider: d.provider, latencyMs: d.latencyMs };
+  });
+  const charts = {
+    turnsPerHour: bucketTurnsPerHour(statTurns, now, 6),
+    moveMix: moveMix(statTurns).slice(0, 8),
+    providerMix: providerMix(statTurns).slice(0, 8),
+    latency: latencyStats(statTurns),
+    sampled: statTurns.length,
+    sampleCapped: statTurns.length >= CHART_SAMPLE_CAP,
+  };
+
   return NextResponse.json({
     engine: "ENGINE_V3 (SPTE - Shared Session Blackboard + Single-Pass)",
     generatedAt: new Date(now).toISOString(),
@@ -129,5 +158,6 @@ export async function GET() {
     queue: { depth: queue.length, dueNow, nextAt },
     sockets: { live: liveSockets, total: sessions.length, stampedAt: socketsStampedAt },
     webhook: { lastInboundAt: inbound[0]?.received_at ?? null, lastAcceptedAt, last403At },
+    charts,
   });
 }
