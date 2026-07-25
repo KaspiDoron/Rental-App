@@ -18,6 +18,14 @@ export interface OfferMargin {
   list_price_per_day: number | string | null;
 }
 
+/** Pure, testable: the p-th percentile of a numeric array (nearest-rank). */
+export function percentile(values: number[], p: number): number | null {
+  const xs = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!xs.length) return null;
+  const rank = Math.ceil((p / 100) * xs.length);
+  return xs[Math.min(xs.length - 1, Math.max(0, rank - 1))];
+}
+
 /** Pure, testable: average realized discount % across offers (list -> paid). */
 export function avgDiscountPct(offers: OfferMargin[]): { pct: number | null; sampled: number } {
   let sum = 0;
@@ -40,6 +48,7 @@ export interface FieldKpis {
   searches30d: number;
   bookings30d: number;
   escalationPct: number | null;
+  responseLatencyMs: { p50: number | null; p95: number | null; samples: number };
   windowDays: number;
   note: string;
 }
@@ -59,9 +68,11 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
       "agent_events",
       `select=id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${since}&limit=10000`
     ).catch(() => []),
-    sbSelect<{ id: number }>(
+    // engine-v3-turn events double as the escalation denominator (count) AND
+    // the response-latency source (each carries `latencyMs` on a delivered reply).
+    sbSelect<{ detail: string }>(
       "agent_events",
-      `select=id&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
+      `select=detail&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
     ).catch(() => []),
   ]);
 
@@ -73,6 +84,17 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
     ? Number(((takeovers.length / threads.length) * 100).toFixed(1))
     : null;
 
+  // Response latency p50/p95 from the per-turn stamps (delivered replies only).
+  const latencies: number[] = [];
+  for (const t of threads) {
+    try {
+      const ms = (JSON.parse(t.detail) as { latencyMs?: number | null }).latencyMs;
+      if (typeof ms === "number" && ms >= 0) latencies.push(ms);
+    } catch {
+      /* skip unparseable rows */
+    }
+  }
+
   return {
     discountMarginPct,
     offersSampled: sampled,
@@ -80,7 +102,12 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
     searches30d: searches.length,
     bookings30d: bookings.length,
     escalationPct,
+    responseLatencyMs: {
+      p50: percentile(latencies, 50),
+      p95: percentile(latencies, 95),
+      samples: latencies.length,
+    },
     windowDays,
-    note: "Durable, last 30 days (sampled to 10k rows). Latency p50/p95 is a fast-follow (needs a per-turn latency log).",
+    note: "Durable, last 30 days (sampled to 10k rows). Latency = per-turn engine response time on delivered replies.",
   };
 }

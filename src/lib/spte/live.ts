@@ -162,6 +162,8 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
  * move, the send + wakeups + telemetry are best-effort and never throw.
  */
 export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promise<SpteLiveResult> {
+  // Turn wall-clock, stamped on the telemetry event -> the response-latency KPI.
+  const startedAt = Date.now();
   // ---- pre-send (fallible): build the blackboard context + run the pass ------
   const tc = await buildTurnContext(input, io);
   const outcome = await runTurn(tc); // never throws, never silent on a composable move
@@ -248,6 +250,9 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         quote: input.usablePrice ?? null,
         materialDrop: outcome.materialDrop,
         delivered,
+        // Response latency (ms) for this turn - feeds the p50/p95 KPI. Only a
+        // real reply that actually went out is a meaningful latency sample.
+        latencyMs: delivered === "sent" ? Date.now() - startedAt : null,
         text: send?.slice(0, 200) ?? null,
         vehicleKey: vehicleKeyFor(input.rfq),
       }).slice(0, 1400),

@@ -1,6 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { avgDiscountPct } from "./kpis";
+import { avgDiscountPct, percentile } from "./kpis";
+
+describe("percentile - response-latency p50/p95", () => {
+  it("nearest-rank percentiles over a sample", () => {
+    const xs = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+    expect(percentile(xs, 50)).toBe(500);
+    expect(percentile(xs, 95)).toBe(1000);
+    expect(percentile(xs, 100)).toBe(1000);
+  });
+  it("handles unsorted input and a single value", () => {
+    expect(percentile([900, 100, 500], 50)).toBe(500);
+    expect(percentile([42], 95)).toBe(42);
+  });
+  it("returns null for an empty sample", () => {
+    expect(percentile([], 50)).toBeNull();
+  });
+});
 
 describe("avgDiscountPct - durable discount margin from offers", () => {
   it("averages the realized (list -> paid) discount as a percentage", () => {
