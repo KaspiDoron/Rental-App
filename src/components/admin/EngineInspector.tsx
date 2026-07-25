@@ -34,11 +34,11 @@ interface Snapshot {
   engine: string;
   generatedAt: string;
   turns: Turn[];
-  stats: { turnsLast6h: number; failoversLast6h: number; unconfirmedSendsLast6h: number };
+  stats: { turnsLast6h: number; turnsCapped?: boolean; failoversLast6h: number; unconfirmedSendsLast6h: number };
   session: { lowestByVehicle: { key: string; shop: string; pricePerDay: number; currency: string }[]; activeOffers: number };
   queue: { depth: number; dueNow: number; nextAt: string | null };
-  sockets: { live: number; total: number };
-  webhook: { lastInboundAt: string | null };
+  sockets: { live: number; total: number; stampedAt?: string | null };
+  webhook: { lastInboundAt: string | null; lastAcceptedAt?: string | null; last403At?: string | null };
 }
 
 function ago(iso?: string | null): string {
@@ -124,7 +124,10 @@ export function EngineInspector() {
       {snap && (
         <>
           <div className="grid grid-cols-3 gap-2">
-            <Stat label="Turns (6h)" value={snap.stats.turnsLast6h} />
+            <Stat
+              label="Turns (6h)"
+              value={`${snap.stats.turnsLast6h}${snap.stats.turnsCapped ? "+" : ""}`}
+            />
             <Stat
               label="Failovers"
               value={snap.stats.failoversLast6h}
@@ -139,11 +142,29 @@ export function EngineInspector() {
               value={`${snap.queue.dueNow} / ${snap.queue.depth}`}
             />
             <Stat
-              label="WA sockets live"
+              label="WA sockets (mirror)"
               value={`${snap.sockets.live} / ${snap.sockets.total}`}
-              tone={snap.sockets.live > 0 ? "text-savings" : "text-brandred"}
+              tone={snap.sockets.live > 0 ? "text-soft" : "text-brandred"}
             />
             <Stat label="Last inbound" value={ago(snap.webhook.lastInboundAt)} />
+          </div>
+
+          {/* WEBHOOK LIVENESS - the row that actually proves inbound is alive.
+              A recent accept = healthy; a recent 403 with no accept = Evolution
+              is rejecting our webhook (re-arm). The socket mirror above never
+              downgrades, so it is NOT proof of liveness - this row is. */}
+          <div className="grid grid-cols-3 gap-2">
+            <Stat
+              label="Webhook accepted"
+              value={ago(snap.webhook.lastAcceptedAt)}
+              tone={snap.webhook.lastAcceptedAt ? "text-savings" : "text-brandred"}
+            />
+            <Stat
+              label="Webhook 403"
+              value={ago(snap.webhook.last403At)}
+              tone={snap.webhook.last403At ? "text-brandred" : "text-faint"}
+            />
+            <Stat label="Sockets stamped" value={ago(snap.sockets.stampedAt)} />
           </div>
 
           {/* Global blackboard: lowest offer per vehicle bucket in the session. */}

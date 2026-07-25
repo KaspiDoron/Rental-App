@@ -79,21 +79,46 @@ export async function GET() {
     `select=email,status,updated_at&order=updated_at.desc&limit=50`
   ).catch(() => []);
   const liveSockets = sessions.filter((s) => String(s.status ?? "").toLowerCase() === "open").length;
+  // Newest stamp so the client can be HONEST that "open" is a durable mirror
+  // (it never downgrades on a real socket loss), not a live-liveness claim.
+  const socketsStampedAt = sessions[0]?.updated_at ?? null;
 
-  // ---- Webhook delivery confirmations: recent inbound ------------------------
-  const inbound = await sbSelect<{ from_number: string; created_at: string }>(
+  // ---- Webhook liveness: recent inbound + accept/403 breadcrumbs -------------
+  // BUG FIX: whatsapp_messages has NO `created_at` column - the timestamp is
+  // `received_at`. The old query filtered/ordered on created_at, PostgREST
+  // 400'd, sbSelect swallowed it, and LAST INBOUND was permanently "-".
+  const inbound = await sbSelect<{ from_number: string; received_at: string }>(
     "whatsapp_messages",
-    `select=from_number,created_at&direction=eq.inbound&created_at=gte.${encodeURIComponent(
-      new Date(now - 3600_000).toISOString()
-    )}&order=created_at.desc&limit=1`
+    `select=from_number,received_at&direction=eq.inbound&received_at=gte.${encodeURIComponent(
+      new Date(now - 6 * 3600_000).toISOString()
+    )}&order=received_at.desc&limit=1`
   ).catch(() => []);
+  const webhookEvents = await sbSelect<{ kind: string; created_at: string }>(
+    "agent_events",
+    `select=kind,created_at&kind=in.(webhook-ok,webhook-403)&created_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&order=created_at.desc&limit=20`
+  ).catch(() => []);
+  const lastAcceptedAt = webhookEvents.find((e) => e.kind === "webhook-ok")?.created_at ?? null;
+  const last403At = webhookEvents.find((e) => e.kind === "webhook-403")?.created_at ?? null;
+
+  // ---- REAL 6h turn count (the tile used turns.length, capped at 30) ---------
+  const TURN_COUNT_CAP = 1000;
+  const turnCountRows = await sbSelect<{ id: number }>(
+    "agent_events",
+    `select=id&kind=eq.engine-v3-turn&created_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&limit=${TURN_COUNT_CAP}`
+  ).catch(() => []);
+  const turnsLast6h = turnCountRows.length;
 
   return NextResponse.json({
     engine: "ENGINE_V3 (SPTE - Shared Session Blackboard + Single-Pass)",
     generatedAt: new Date(now).toISOString(),
     turns,
     stats: {
-      turnsLast6h: turns.length,
+      turnsLast6h, // real count (may show "1000+" at the cap), not turns.length
+      turnsCapped: turnsLast6h >= TURN_COUNT_CAP,
       failoversLast6h: fallbacks,
       unconfirmedSendsLast6h: unconfirmed,
     },
@@ -102,7 +127,7 @@ export async function GET() {
       activeOffers: offers.length,
     },
     queue: { depth: queue.length, dueNow, nextAt },
-    sockets: { live: liveSockets, total: sessions.length },
-    webhook: { lastInboundAt: inbound[0]?.created_at ?? null },
+    sockets: { live: liveSockets, total: sessions.length, stampedAt: socketsStampedAt },
+    webhook: { lastInboundAt: inbound[0]?.received_at ?? null, lastAcceptedAt, last403At },
   });
 }
