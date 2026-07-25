@@ -422,6 +422,52 @@ export async function GET(req: Request) {
     introBudget = await newContactBudget(email, session.plan);
   } catch {}
 
+  // HONEST ETA (W2): the queue rows above carry not_before (a LOWER bound). Turn
+  // it into a realistic [etaFrom, etaTo] window by simulating the drain's min-gap
+  // + cold budget + drain cadence over queue position, so the UI can show a
+  // "~10:20-10:25" range instead of a point estimate that silently slips.
+  let queueEtaDoneBy: string | null = null;
+  try {
+    const { getPolicies } = await import("@/lib/wa-guard");
+    const { computeQueueEtas } = await import("@/lib/wa/eta");
+    const policies = await getPolicies();
+    const lastOut = await sbSelect<{ received_at: string }>(
+      "whatsapp_messages",
+      `select=received_at&direction=eq.outbound&raw->>sender=eq.${enc}&order=received_at.desc&limit=1`
+    ).catch(() => []);
+    const stealth =
+      waHealth?.state === "paused" ? 2.5 : waHealth?.state === "pacing" ? 1.5 : 1;
+    const etas = computeQueueEtas(
+      queue.map((q) => ({
+        id: q.id,
+        notBeforeMs: Date.parse(q.notBefore),
+        kind: q.kind,
+        rawReason: q.rawReason,
+      })),
+      {
+        nowMs: now,
+        lastSendAtMs: lastOut[0]?.received_at ? Date.parse(lastOut[0].received_at) : null,
+        minGapSec: policies.min_gap_seconds,
+        gapJitterSec: policies.gap_jitter_seconds,
+        stealth,
+        introRemaining: introBudget?.remaining ?? 0,
+        introNextFreeAtMs: introBudget?.nextFreeAt ? Date.parse(introBudget.nextFreeAt) : null,
+      }
+    );
+    let maxTo = 0;
+    for (const q of queue as (typeof queue[number] & { etaFrom?: string; etaTo?: string })[]) {
+      const w = etas.get(q.id);
+      if (w) {
+        q.etaFrom = new Date(w.etaFromMs).toISOString();
+        q.etaTo = new Date(w.etaToMs).toISOString();
+        maxTo = Math.max(maxTo, w.etaToMs);
+      }
+    }
+    queueEtaDoneBy = maxTo ? new Date(maxTo).toISOString() : null;
+  } catch {
+    /* ETA is best-effort - the rows still carry notBefore */
+  }
+
   // Numbers the user explicitly cancelled (removed queued messages) - the UI
   // shows those shops as "paused by you" instead of pretending nothing
   // happened, and the resume CTA is the explicit action that clears it.
@@ -445,6 +491,7 @@ export async function GET(req: Request) {
     whyByVendor,
     vendorStates,
     countered, // J: vendorIds where the agent countered a shop quote
+    queueEtaDoneBy, // W2: honest "all done by" (max etaTo across the queue)
     lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),

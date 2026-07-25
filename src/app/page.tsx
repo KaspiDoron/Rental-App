@@ -24,6 +24,24 @@ import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
+
+// W2: honest queue ETA label. A due row never shows a past clock time - it
+// shows the paced-slot copy; otherwise a "~10:20-10:25" envelope (collapsed to
+// a single time when both ends land in the same minute).
+function etaRangeLabel(
+  from: string | undefined,
+  to: string | undefined,
+  due: boolean,
+  notBefore: string,
+  t: (s: string) => string
+): string {
+  if (due) return t("sending at the next safe slot - paced to protect your number");
+  const start = from ?? (notBefore || undefined);
+  if (!start) return "";
+  const a = formatClock(start);
+  const b = to ? formatClock(to) : a;
+  return a === b ? `~${a}` : `~${a}-${b}`;
+}
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
@@ -296,7 +314,7 @@ export default function Home() {
     }
   }
   const [queueItems, setQueueItems] = useState<
-    { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string }[]
+    { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string; etaFrom?: string; etaTo?: string }[]
   >([]);
   // The plan's rolling introductions budget (Free ~10/6h, Pro ~15/4h, Ultra
   // ~40/3h), shown as a standing meter in the queued panel so the pacing limit
@@ -1618,6 +1636,22 @@ export default function Home() {
     [queueItems, stageCounts.messaged, stageCounts.offers]
   );
 
+  // W2: the honest ETA head (earliest not-yet-due row) + the "all done by" from
+  // the server-simulated envelope, so the panel shows real ranges, not the raw
+  // not_before lower bound.
+  const queueEtaHead = useMemo(
+    () => queueItems.find((q) => !q.due && (q.etaFrom || q.notBefore)) ?? null,
+    [queueItems]
+  );
+  const queueEtaDoneByStr = useMemo(() => {
+    let max = 0;
+    for (const q of queueItems) {
+      const to = q.etaTo ? Date.parse(q.etaTo) : 0;
+      if (to > max) max = to;
+    }
+    return max ? new Date(max).toISOString() : null;
+  }, [queueItems]);
+
   // A row overdue by >5 min means sending fell behind (typically: the app was
   // closed and no background driver ran) - say so instead of a silent stall.
   const queueStalled = useMemo(
@@ -2193,12 +2227,16 @@ export default function Home() {
                   : ""}
                 {queueProgress.dueNow
                   ? t("next one leaves any moment")
-                  : queueProgress.nextAt
-                    ? `${t("next at")} ~${formatClock(queueProgress.nextAt)}`
+                  : queueEtaHead
+                    ? `${t("next at")} ${etaRangeLabel(queueEtaHead.etaFrom, queueEtaHead.etaTo, false, queueEtaHead.notBefore, t)}`
+                    : queueProgress.nextAt
+                      ? `${t("next at")} ~${formatClock(queueProgress.nextAt)}`
+                      : ""}
+                {queueEtaDoneByStr && queueProgress.waiting > 1
+                  ? ` · ${t("all done by")} ~${formatClock(queueEtaDoneByStr)}`
+                  : queueProgress.doneBy && queueProgress.waiting > 1
+                    ? ` · ${t("all done by")} ~${formatClock(queueProgress.doneBy)}`
                     : ""}
-                {queueProgress.doneBy && queueProgress.waiting > 1
-                  ? ` · ${t("all done by")} ~${formatClock(queueProgress.doneBy)}`
-                  : ""}
                 {" - "}
                 {t("your agent messages shops one at a time, the way a person would")}
               </p>
@@ -2244,9 +2282,11 @@ export default function Home() {
                     </span>
                     <span className="block text-[10px] text-faint">
                       {t(q.reason)}
-                      {q.notBefore
-                        ? ` · ~${formatClock(q.notBefore)}`
-                        : ""}
+                      {q.due
+                        ? ` · ${etaRangeLabel(q.etaFrom, q.etaTo, true, q.notBefore, t)}`
+                        : q.etaFrom || q.notBefore
+                          ? ` · ${etaRangeLabel(q.etaFrom, q.etaTo, false, q.notBefore, t)}`
+                          : ""}
                     </span>
                   </span>
                   <button

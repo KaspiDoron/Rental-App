@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyQueueReason, queueReasonLabel, queueEta } from "./queue-reason";
+import { classifyQueueReason, queueReasonLabel, queueEta, queueEtaRange } from "./queue-reason";
 
 // The bug this file exists to prevent: the guard held messages for PACING
 // while every surface claimed "waiting for the shop to open" - a lie the
@@ -54,5 +54,20 @@ describe("queueEta", () => {
     expect(queueEta(new Date(Date.now() + 10_000).toISOString())).toBe("sends any moment now");
     expect(queueEta(undefined)).toBe("");
     expect(queueEta(null)).toBe("");
+  });
+  it("an overdue row does NOT claim 'any moment' - it says paced-slot honestly", () => {
+    expect(queueEta(new Date(Date.now() - 3 * 60_000).toISOString())).toBe(
+      "sending at the next safe slot"
+    );
+  });
+});
+
+describe("queueEtaRange", () => {
+  const fmt = (iso: string) => iso.slice(11, 16); // HH:MM
+  it("shows a range, collapses to one time when equal, empty without a start", () => {
+    expect(queueEtaRange("2026-07-25T10:20:00Z", "2026-07-25T10:25:00Z", fmt)).toBe("~10:20-10:25");
+    expect(queueEtaRange("2026-07-25T10:20:00Z", "2026-07-25T10:20:40Z", fmt)).toBe("~10:20");
+    expect(queueEtaRange("2026-07-25T10:20:00Z", null, fmt)).toBe("~10:20");
+    expect(queueEtaRange(null, "2026-07-25T10:25:00Z", fmt)).toBe("");
   });
 });

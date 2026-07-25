@@ -59,12 +59,30 @@ export function queueReasonLabel(raw?: string | null): string {
   }
 }
 
-/** "sends in ~3 min" / "sends in ~2 h" - honest ETA from not_before. */
+/** "sends in ~3 min" / "sends in ~2 h" - honest ETA from not_before. A row that
+ * is already due does NOT claim "any moment" (the drain still paces it): it says
+ * so honestly. */
 export function queueEta(notBefore?: string | null): string {
   if (!notBefore) return "";
   const ms = Date.parse(notBefore) - Date.now();
-  if (!Number.isFinite(ms) || ms <= 45_000) return "sends any moment now";
+  if (!Number.isFinite(ms)) return "";
+  if (ms <= 0) return "sending at the next safe slot";
+  if (ms <= 45_000) return "sends any moment now";
   const min = Math.round(ms / 60_000);
   if (min < 90) return `sends in ~${min} min`;
   return `sends in ~${Math.round(min / 60)} h`;
+}
+
+/** A clock-time range "~10:20-10:25" (collapsed to one time when equal), for the
+ * server-simulated [etaFrom, etaTo] envelope. Pure; caller supplies the clock
+ * formatter so this stays free of locale/import deps. */
+export function queueEtaRange(
+  etaFrom: string | null | undefined,
+  etaTo: string | null | undefined,
+  fmt: (iso: string) => string
+): string {
+  if (!etaFrom) return "";
+  const a = fmt(etaFrom);
+  const b = etaTo ? fmt(etaTo) : a;
+  return a === b ? `~${a}` : `~${a}-${b}`;
 }
