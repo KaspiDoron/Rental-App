@@ -47,6 +47,7 @@ export interface SecurityPolicies {
   day_cap: number;              // absolute per-day ceiling
   min_gap_seconds: number;      // min seconds between two sends (jittered up)
   gap_jitter_seconds: number;   // random extra gap 0..N
+  reply_gap_seconds: number;    // per-engaged-shop min gap for REPLIES (tighter 3-7s lane)
   warmup_days: number;          // days a new number stays on half budget
   business_hour_start: number;  // recipient local hour (0-23)
   business_hour_end: number;    // recipient local hour (0-23)
@@ -91,6 +92,13 @@ const DEFAULTS: SecurityPolicies = {
   // both numbers (DB override) if a number ever shows soft-restriction signs.
   min_gap_seconds: 12,
   gap_jitter_seconds: 16,
+  // REPLY lane: replies to an ALREADY-ENGAGED shop (a two-way conversation the
+  // shop started - low ban-risk) pace at ~5s per shop instead of the 12s cold
+  // min-gap, so the back-and-forth feels responsive (the "3-7s response lane").
+  // Cold first-contacts keep min_gap_seconds - velocity to NEW numbers is the
+  // real ban vector, and the atomic fleet ceiling + stop-loss still apply.
+  // Owner-tunable via a whatsapp_security_policies row `reply_gap_seconds`.
+  reply_gap_seconds: 5,
   warmup_days: 7,
   // Wide default window (8-21): real rental shops open early and close late.
   // Google "open now" (shopOpenNow) is the primary truth when the client has
@@ -1671,7 +1679,9 @@ export async function drainOutbox(
       toDigits: row.to_number,
       text: verdict.text,
       auto: true,
-      gapSeconds: p.min_gap_seconds,
+      // REPLY lane paces per engaged shop at the tighter reply_gap (~5s); a cold
+      // intro (rfq) keeps the strict 12s per-sender velocity lane.
+      gapSeconds: isReplyRow ? p.reply_gap_seconds : p.min_gap_seconds,
       // A reply/follow-up to an already-engaged shop paces PER-RECIPIENT, so 40
       // live threads do not serialize through one per-sender window. A cold
       // intro (rfq) keeps the strict per-sender velocity lane. The fleet gap is
@@ -1860,7 +1870,8 @@ export async function claimForSend(
     toDigits,
     text,
     auto,
-    gapSeconds: p.min_gap_seconds,
+    // Engaged replies (perRecipient) use the tighter reply lane; cold keep 12s.
+    gapSeconds: perRecipient ? p.reply_gap_seconds : p.min_gap_seconds,
     perRecipient,
     fleetGapSeconds: perRecipient ? replyFleetGapSeconds(p) : undefined,
   });
