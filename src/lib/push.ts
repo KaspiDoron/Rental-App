@@ -9,6 +9,7 @@
 
 import "server-only";
 import webpush from "web-push";
+import { createHash } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
 
 interface PushSub {
@@ -24,7 +25,10 @@ async function ensureVapid(): Promise<string | null> {
     getConfig("VAPID_PRIVATE_KEY"),
   ]);
   if (!pub || !priv) return null;
-  if (configured !== pub) {
+  // Key the cache on BOTH keys - a private-key-only rotation (public unchanged)
+  // would otherwise keep stale VAPID details on a warm serverless instance.
+  const fingerprint = `${pub}:${createHash("sha256").update(priv).digest("hex").slice(0, 8)}`;
+  if (configured !== fingerprint) {
     const admins = (await getConfig("ADMIN_EMAILS")) || "";
     const subject = admins.split(",")[0]?.trim();
     // Fallback subject derives from the admin-set APP_DOMAIN so push identity
@@ -35,7 +39,7 @@ async function ensureVapid(): Promise<string | null> {
       if (domain) host = new URL(domain.startsWith("http") ? domain : `https://${domain}`).hostname;
     } catch {}
     webpush.setVapidDetails(subject ? `mailto:${subject}` : `mailto:hello@${host}`, pub, priv);
-    configured = pub;
+    configured = fingerprint;
   }
   return pub;
 }
@@ -53,6 +57,26 @@ export async function saveSubscription(email: string, sub: PushSub): Promise<boo
   return sbInsert("push_subscriptions", [
     { user_email: email, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth },
   ]);
+}
+
+/** How many device subscriptions this user has (the server truth for "alerts
+ * on" - a real toggle reflects THIS, not a localStorage flag). */
+export async function subscriptionCount(email: string): Promise<number> {
+  const rows = await sbSelect<{ endpoint: string }>(
+    "push_subscriptions",
+    `select=endpoint&user_email=eq.${encodeURIComponent(email)}&limit=50`
+  ).catch(() => []);
+  return rows.length;
+}
+
+/** Turn alerts OFF: remove this user's subscriptions (all, or one endpoint). */
+export async function removeSubscriptions(email: string, endpoint?: string): Promise<number> {
+  const filter = endpoint
+    ? `endpoint=eq.${encodeURIComponent(endpoint)}`
+    : `user_email=eq.${encodeURIComponent(email)}`;
+  const before = endpoint ? 1 : await subscriptionCount(email);
+  await sbDelete("push_subscriptions", filter).catch(() => {});
+  return before;
 }
 
 interface SubRow {

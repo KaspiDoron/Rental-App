@@ -13,6 +13,7 @@ import { WaConnect } from "@/components/WaConnect";
 import { AdBanner } from "@/components/AdBanner";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import LocationConfig from "@/components/LocationConfig";
+import { AlertsToggle } from "@/components/AlertsToggle";
 import { SiteFooter } from "@/components/SiteFooter";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
@@ -660,6 +661,9 @@ export default function ProfilePage() {
             ))}
           </div>
         </section>
+
+        {/* Alerts (browser push) - a real on/off toggle bound to server truth */}
+        <AlertsToggle t={t} />
 
         {/* Travel preferences */}
         <section className="surface rounded-blob p-4">

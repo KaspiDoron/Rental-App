@@ -192,6 +192,9 @@ export default function Home() {
     "idle" | "pending" | "on" | "denied" | "unsupported" | "ios-install" | "error"
   >("idle");
   const [pushNote, setPushNote] = useState<string | null>(null);
+  // null = unknown (pre-flight not run); false = server has no VAPID keys, so we
+  // HIDE the Notify button rather than lead the user to a dead end.
+  const [pushConfigured, setPushConfigured] = useState<boolean | null>(null);
   // Living workspace: the cross-shop activity feed + honest WA safety state,
   // all from ONE /api/activity poll (which also replaced the queue poll).
   const [activityItems, setActivityItems] = useState<FeedItem[]>([]);
@@ -277,12 +280,19 @@ export default function Home() {
         setPushState("denied");
         return;
       }
-      const { key } = await (await fetch("/api/push/vapid")).json();
+      const vapid = await (await fetch("/api/push/vapid")).json();
+      const key = vapid?.key;
       if (!key) {
+        setPushConfigured(false);
         setPushState("error");
-        setPushNote(t("Alerts aren't configured on the server yet. Nothing you did wrong."));
+        setPushNote(
+          vapid?.reason === "signin"
+            ? t("Sign in to turn on reply alerts.")
+            : t("Alerts are being switched on for everyone - check back soon. Nothing you did wrong.")
+        );
         return;
       }
+      setPushConfigured(true);
       const reg = await navigator.serviceWorker.register("/sw.js");
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
@@ -1050,6 +1060,25 @@ export default function Home() {
     }
     if (perm === "granted" && flagged) setPushState("on");
   }, []);
+
+  // Pre-flight: learn whether the server has push configured BEFORE offering the
+  // button, so an unconfigured server hides the opt-in instead of leading the
+  // user to grant OS permission only to hit a dead end.
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    (async () => {
+      try {
+        const d = await (await fetch("/api/push/vapid")).json();
+        if (alive) setPushConfigured(Boolean(d?.key));
+      } catch {
+        /* leave unknown - the button still works, enable() re-checks */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session]);
 
   // Poll the consolidated activity endpoint while there are vendors on
   // screen (cheap, user-scoped). Pauses in hidden tabs - no wasted requests.
@@ -2164,7 +2193,7 @@ export default function Home() {
                       <span className="rounded-xl bg-savings-soft px-2.5 py-1 text-[11px] font-extrabold text-savings">
                         ✅ {t("Alerts on")}
                       </span>
-                    ) : (
+                    ) : pushConfigured === false ? null : (
                       <button
                         onClick={enablePush}
                         disabled={pushState === "pending"}
