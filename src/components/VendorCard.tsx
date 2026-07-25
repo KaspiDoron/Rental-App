@@ -34,6 +34,7 @@ function VendorCardInner({
   onPickupConsent,
   whyDecisionId,
   onWhy,
+  onOpenThread,
   riskNote,
 }: {
   vendor: Vendor;
@@ -60,6 +61,8 @@ function VendorCardInner({
   // "Why this move?" - the latest director decision for this shop (live data).
   whyDecisionId?: string;
   onWhy?: (decisionId: string) => void;
+  // Open the full-screen per-agency dashboard (transcript + map + offer + state).
+  onOpenThread?: (vendor: Vendor) => void;
   // Inbound-risk warning from the safety screen ("asked for your passport...").
   riskNote?: string;
 }) {
@@ -419,11 +422,21 @@ function VendorCardInner({
               may be localized/rewritten before it leaves). */}
           {vendor.stage &&
             !["queued", "locating-contact", "found", "no-contact"].includes(vendor.stage) && (
-              <ThreadPeek
-                vendorId={vendor.id}
-                fallbackReceived={offer?.message}
-                since={searchEpoch}
-              />
+              <>
+                <ThreadPeek
+                  vendorId={vendor.id}
+                  fallbackReceived={offer?.message}
+                  since={searchEpoch}
+                />
+                {onOpenThread && (
+                  <button
+                    onClick={() => onOpenThread(vendor)}
+                    className="mt-1.5 w-full rounded-xl border-2 border-line py-1.5 text-[11px] font-extrabold text-brandblue lift"
+                  >
+                    💬 Full conversation
+                  </button>
+                )}
+              </>
             )}
         </div>
 

@@ -55,12 +55,13 @@ export async function GET(req: Request) {
       sbSelect<{
         delivered: boolean;
         read: boolean;
+        blocked: boolean;
         last_read_at: string | null;
         last_reply_at: string | null;
         last_sent_at: string | null;
       }>(
         "wa_recipient_state",
-        `select=delivered,read,last_read_at,last_reply_at,last_sent_at&sender_key=eq.${encodeURIComponent(
+        `select=delivered,read,blocked,last_read_at,last_reply_at,last_sent_at&sender_key=eq.${encodeURIComponent(
           session.email
         )}&to_number=eq.${encodeURIComponent(digits)}&limit=1`
       ).catch(() => []),
@@ -93,10 +94,20 @@ export async function GET(req: Request) {
           sent: Boolean(rs.last_sent_at) || outs.length > 0,
           delivered: Boolean(rs.delivered),
           read: Boolean(rs.read),
+          blocked: Boolean(rs.blocked),
           replied,
           lastReadAt: rs.last_read_at,
+          lastReplyAt: rs.last_reply_at,
         }
-      : { sent: outs.length > 0, delivered: false, read: false, replied, lastReadAt: null };
+      : {
+          sent: outs.length > 0,
+          delivered: false,
+          read: false,
+          blocked: false,
+          replied,
+          lastReadAt: null,
+          lastReplyAt: null,
+        };
     return NextResponse.json({ messages, delivery });
   }
 

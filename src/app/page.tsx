@@ -45,6 +45,7 @@ function etaRangeLabel(
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
+import { ThreadDashboard } from "@/components/ThreadDashboard";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
 import type { WillContext } from "@/lib/will-commands";
@@ -202,6 +203,7 @@ export default function Home() {
   const [whyByVendor, setWhyByVendor] = useState<Record<string, string>>({});
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
+  const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
   // Will - the conversational layer. Session pause + compare live here too.
   const [willOpen, setWillOpen] = useState(false);
   // W7: per-stage dismissal of the inline Will guide. Dismissing hides the
@@ -2492,7 +2494,11 @@ export default function Home() {
             items={activityItems}
             onWhy={(id) => setWhyDecision(id)}
             onJump={(vendorId) => scrollToVendor(vendorId)}
-            onTranscript={(id, name) => setTranscriptFor({ id, name })}
+            onTranscript={(id, name) => {
+              const v = vendors.find((x) => x.id === id);
+              if (v) setDashboardFor(v);
+              else setTranscriptFor({ id, name });
+            }}
           />
         ) : view === "map" && vendors.length > 0 && origin ? (
           <div className="relative z-0 mt-3">
@@ -2536,6 +2542,7 @@ export default function Home() {
                   onPickupConsent={pickupConsent}
                   whyDecisionId={whyByVendor[v.id]}
                   onWhy={openWhy}
+                  onOpenThread={(vend) => setDashboardFor(vend)}
                   riskNote={riskByVendor[v.id]}
                 />
               </div>
@@ -2651,6 +2658,23 @@ export default function Home() {
       {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
       {whyDecision && <WhyThisSheet decisionId={whyDecision} onClose={() => setWhyDecision(null)} />}
+      {dashboardFor && (
+        <ThreadDashboard
+          vendor={dashboardFor}
+          rfq={rfq}
+          searchEpoch={searchEpoch || undefined}
+          queueItem={(() => {
+            const q = queueItems.find((it) => it.vendorId === dashboardFor.id);
+            return q ? { etaFrom: q.etaFrom, etaTo: q.etaTo, reason: q.reason, due: q.due } : null;
+          })()}
+          whyDecisionId={whyByVendor[dashboardFor.id]}
+          onClose={() => setDashboardFor(null)}
+          onBook={setBookingVendor}
+          onBargain={setBargainVendor}
+          onReviews={setReviewsVendor}
+          onWhy={openWhy}
+        />
+      )}
       {transcriptFor && (
         <TranscriptSheet
           vendorId={transcriptFor.id}
