@@ -43,6 +43,8 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
 import { floorPriceFor, credibleFloor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
 import { noteInboundDropped } from "./wa/webhook-trace";
+import { waDigits } from "./wa/phone-key";
+import { resolveThreadContext } from "./wa/thread-context";
 import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
 import { digitsOnly } from "./phone";
@@ -192,13 +194,15 @@ export async function processVendorReply(opts: {
     if (!opts.waMessageId) return; // synthetic/system event - nothing real
     text = "(the shop sent a photo/attachment that couldn't be loaded)";
   }
-  const from = digitsOnly(opts.fromDigits);
+  // waDigits (not digitsOnly): strips the multi-device JID suffix (":12") so a
+  // multi-device reply keys to the same shop as the outbound anchor.
+  const from = waDigits(opts.fromDigits);
   // ORIGIN ASSERTION (privacy): if the caller gave us the message's true chat
   // JID, it MUST match the number we are about to attribute this reply to. A
   // mismatch means the message came from a different chat (a personal contact
   // swept in by a mis-scoped read) - refuse to attribute it as a shop reply.
   if (opts.remoteJid) {
-    const originDigits = digitsOnly(opts.remoteJid);
+    const originDigits = waDigits(opts.remoteJid);
     const isPhoneJid = /@s\.whatsapp\.net$|@c\.us$/.test(opts.remoteJid);
     // Phone JIDs must match by digits; a privacy @lid JID cannot be verified
     // against a phone number, so we fail closed (do not attribute).
@@ -234,21 +238,25 @@ export async function processVendorReply(opts: {
     }
   }
 
-  // Find the thread: the last outbound THIS USER sent this number.
-  const prior = await sbSelect<OutboundRow & { received_at: string }>(
-    "whatsapp_messages",
-    `select=id,to_number,raw,received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      from
-    )}${senderFilter}&order=received_at.desc&limit=1`
-  );
-  const ctx = prior[0]?.raw;
-  if (!ctx?.rfq) {
-    // Formerly silent. A shop reply we stored but can't attribute to an RFQ
-    // thread (missing/older-than-window outbound anchor) leaves a throttled
-    // trace so the WA doctor can explain "why no agent reply".
-    void noteInboundDropped(opts.senderEmail, from, "no-rfq-thread");
+  // Find the thread through THE shared resolver (src/lib/wa/thread-context.ts).
+  // It scans a window of recent outbound rows for the newest one carrying an
+  // RFQ, instead of demanding that the very newest row carry it. That single
+  // change is what stops one human-manual takeover row - or one send whose
+  // client omitted body.rfq - from orphaning a live negotiation forever.
+  // Number matching is spelling-tolerant, so threads stored under a national
+  // format ("09661952196") still resolve for an international inbound.
+  const resolved = await resolveThreadContext(from, opts.senderEmail ?? "");
+  const ctx = resolved.ctx as (OutboundRow["raw"] & { rfq?: unknown }) | null;
+  if (!resolved.rfq || !ctx) {
+    // Still no anchor: we genuinely never sent this number an RFQ. Trace it so
+    // the WA doctor can explain "why no agent reply" instead of going silent.
+    void noteInboundDropped(opts.senderEmail, from, "no-rfq-thread", {
+      anchors: resolved.anchors,
+      gate: resolved.reason,
+    });
     return; // reply without a known thread - stored, not processed
   }
+  const priorAt = resolved.newestAt;
   // "(unverified)" PURGE at the source: a historical thread whose outbound meta
   // carries the legacy drill suffix must not propagate it into pushes, events,
   // offers or engine turns.
@@ -263,16 +271,14 @@ export async function processVendorReply(opts: {
   // session must never keep talking to shops. A new search re-opens the shop
   // with a fresh outbound, which then postdates the marker.
   let sessionClosed = false;
-  if (ctx.sender && prior[0]?.received_at) {
+  if (ctx.sender && priorAt) {
     const marker = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
         ctx.sender
       )}&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
     );
-    sessionClosed = Boolean(
-      marker[0] && marker[0].received_at > prior[0].received_at
-    );
+    sessionClosed = Boolean(marker[0] && marker[0].received_at > priorAt);
   }
 
   const rfq = ctx.rfq as StructuredRFQ;
@@ -318,7 +324,7 @@ export async function processVendorReply(opts: {
   // price yet"). Instead, extract from the WHOLE unread inbound buffer since our
   // last outbound, chronologically, so one read sees the vehicle AND its price.
   const { coalesceUnreadInbound } = await import("./wa/coalesce");
-  const extractText = coalesceUnreadInbound(thread, prior[0]?.received_at ?? "", text) || text;
+  const extractText = coalesceUnreadInbound(thread, priorAt ?? "", text) || text;
   // PENDING REPLIES COUNT TOO. A reply parked in wa_outbox with a human
   // "thinking" delay is NOT yet in whatsapp_messages. Without counting it, a
   // SECOND shop message arriving inside that 45-240s window reads the counters
@@ -1298,6 +1304,10 @@ export async function processVendorReply(opts: {
       await afterSend(ctx.sender ?? "system", from);
       await sbInsert("whatsapp_messages", [
         {
+          // Provider id: lets the webhook's fromMe echo-check recognise OUR
+          // send by id instead of guessing from the body (a wrong guess wrote a
+          // fake "human takeover" row that orphaned the thread).
+          wa_message_id: (result as { messageId?: string }).messageId ?? null,
           to_number: from,
           body: verdict.text,
           type: "text",

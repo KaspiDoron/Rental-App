@@ -95,12 +95,23 @@ export async function GET(req: Request) {
     const { sendFromUser } = await import("@/lib/evolution");
     // Tagged failures: a broken drain must show up in the server logs, not
     // vanish into a blanket catch (it silently stops all queued sends).
-    void drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
-      console.error("[drain:outbox]", e instanceof Error ? e.message : e)
-    );
+    // AWAITED, not fire-and-forget. On Cloud Run the CPU is throttled to ~0
+    // once the response is flushed, so a `void` drain was suspended mid-send:
+    // messages the UI had already moved past stayed in the outbox forever.
+    // Bounded so a slow host can never hold the poll open.
+    const DRAIN_BUDGET_MS = 8_000;
+    const bounded = <T,>(p: Promise<T>) =>
+      Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    void drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
-      console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
+    await bounded(
+      drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+        console.error("[drain:outbox]", e instanceof Error ? e.message : e)
+      )
+    );
+    await bounded(
+      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+        console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
+      )
     );
   } catch (e) {
     console.error("[drain:init]", e instanceof Error ? e.message : e);
@@ -500,3 +511,9 @@ export async function GET(req: Request) {
 
 // maxDuration: lift the request-timeout ceiling for slow upstreams.
 export const maxDuration = 60;
+// NEVER CACHE. This is the live activity poll and its URL is byte-identical on
+// every tick, so without this the browser/CDN could serve the FIRST (empty)
+// response forever - the app showed "Nothing on the wire yet" while WhatsApp
+// was actively exchanging messages, and froze the queue ETA at a past time.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;

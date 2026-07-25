@@ -410,6 +410,8 @@ export async function POST(req: Request) {
     // webhook can match the inbound reply and keep the loop fully in-app.
     await sbInsert("whatsapp_messages", [
       {
+        // Provider id -> the webhook echo-check matches by id, never by body.
+        wa_message_id: (result as { messageId?: string }).messageId ?? null,
         to_number: digits,
         body: guardedMessage,
         type: "text",

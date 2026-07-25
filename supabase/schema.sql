@@ -565,6 +565,17 @@ create table if not exists public.wa_processed (
   wa_message_id text primary key,
   created_at    timestamptz not null default now()
 );
+
+-- STORE-level inbound idempotency (distinct from wa_processed, which guards the
+-- agent REPLY). Evolution redelivers webhooks and the recovery sync re-pulls the
+-- same window; without this claim one shop photo became two "[photo]" rows in
+-- the transcript. Kept separate so a message dropped before its reply (e.g. an
+-- unresolved thread) stays replayable once the thread is repaired.
+create table if not exists public.wa_inbound_seen (
+  wa_message_id text primary key,
+  created_at    timestamptz not null default now()
+);
+alter table public.wa_inbound_seen enable row level security;
 alter table public.wa_processed enable row level security;
 
 -- ---- Rental funnel build-out: richer booking + offer terms ---------------------

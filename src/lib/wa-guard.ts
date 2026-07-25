@@ -1566,7 +1566,7 @@ export async function drainOutbox(
     senderKey: string,
     to: string,
     text: string
-  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean }>
+  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string }>
 ): Promise<number> {
   const dueRows = await sbSelect<OutboxRow>(
     "wa_outbox",
@@ -1714,7 +1714,7 @@ export async function drainOutbox(
     // transient failure so the branch below re-queues it. With the evoFetch
     // hard timeout in place, a slow host now returns {ok:false} rather than
     // hanging, but this keeps any other throw safe too.
-    let r: { ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean };
+    let r: { ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string };
     try {
       r = await send(row.sender_key, row.to_number, verdict.text);
     } catch (e) {
@@ -1731,6 +1731,13 @@ export async function drainOutbox(
       await afterSend(row.sender_key, row.to_number);
       await sbInsert("whatsapp_messages", [
         {
+          // STORE THE PROVIDER MESSAGE ID. Without it the webhook's fromMe
+          // echo-check ("did WE send this?") could never match by id and fell
+          // back to a 10-minute body comparison - so our own humanized send,
+          // echoed back late or with varied text, was misfiled as a HUMAN
+          // TAKEOVER. That wrote an rfq-less outbound row on top of the thread
+          // and every later shop reply died as "no-rfq-thread".
+          wa_message_id: r.messageId ?? null,
           to_number: row.to_number,
           body: verdict.text,
           type: "text",

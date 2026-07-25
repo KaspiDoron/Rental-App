@@ -1549,6 +1549,8 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         await afterSend(senderKey, toNumber);
         await sbInsert("whatsapp_messages", [
           {
+            // Provider id -> the webhook echo-check matches by id, never by body.
+            wa_message_id: (result as { messageId?: string }).messageId ?? null,
             to_number: toNumber,
             body: verdict.text,
             type: "text",

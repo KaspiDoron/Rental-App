@@ -184,6 +184,11 @@ export default function Home() {
   const [visibleCount, setVisibleCount] = useState(20);
   // Live status panel (expandable) + user-facing queued-message list (bug #1/#9).
   const [statusOpen, setStatusOpen] = useState(false);
+  // AUTO-EXPAND once sending actually begins (issue 5.2): the live progress is
+  // the whole point of the panel, and defaulting it closed meant the user
+  // watched a static summary while messages were flying. Fires once per search
+  // so a deliberate collapse is never fought.
+  const autoOpenedRef = useRef(false);
   // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
   const [showGame, setShowGame] = useState(false);
   // B6: distinct states so the toggle gives real feedback. 'pending' shows a
@@ -204,6 +209,11 @@ export default function Home() {
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
+  // Live-poll health. clockSkewRef corrects `since` against the SERVER clock
+  // (the filter runs on server timestamps); feedStale surfaces a failing poll
+  // instead of freezing the screen on a stale snapshot.
+  const clockSkewRef = useRef(0);
+  const [feedStale, setFeedStale] = useState(false);
   // Will - the conversational layer. Session pause + compare live here too.
   const [willOpen, setWillOpen] = useState(false);
   // W7: per-stage dismissal of the inline Will guide. Dismissing hides the
@@ -723,7 +733,23 @@ export default function Home() {
     if (!session) return;
     try {
       // One consolidated poll: activity feed + queue + WA safety state.
-      const d = await (await fetch(`/api/activity?since=${searchEpoch || Date.now() - 86400000}`)).json();
+      // cache:"no-store" + a changing cache-buster: the URL was byte-identical
+      // on every poll, so the browser could serve the first (empty) response
+      // forever - the "Nothing on the wire yet" freeze.
+      // skewMs corrects the client clock against the server's: `since` filters
+      // SERVER row timestamps, so a phone running minutes fast hid every row
+      // written in that window.
+      const res = await fetch(
+        `/api/activity?since=${(searchEpoch || Date.now() - 86400000) + clockSkewRef.current}&t=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`activity ${res.status}`);
+      const d = await res.json();
+      if (typeof d.now === "string") {
+        const serverNow = Date.parse(d.now);
+        if (Number.isFinite(serverNow)) clockSkewRef.current = serverNow - Date.now();
+      }
+      setFeedStale(false);
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
@@ -972,7 +998,10 @@ export default function Home() {
         })
       );
     } catch {
-      /* keep the last snapshot */
+      // NEVER silently freeze. The old blanket catch kept the last snapshot with
+      // zero indication, so a failing poll was indistinguishable from a stalled
+      // agent - the UI simply stopped updating and nobody could tell why.
+      setFeedStale(true);
     }
   });
 
@@ -1039,6 +1068,19 @@ export default function Home() {
       refreshQueue();
     }
   }
+
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    const sending =
+      queueItems.length > 0 ||
+      vendors.some(
+        (v) => v.queuedUntil || v.stage === "rfq-sent" || v.stage === "awaiting-response"
+      );
+    if (sending) {
+      autoOpenedRef.current = true;
+      setStatusOpen(true);
+    }
+  }, [queueItems.length, vendors]);
 
   // REALTIME FEEL: the moment the app regains focus/visibility (user flips
   // back from WhatsApp), bump this nonce - both pollers below depend on it,
@@ -2038,15 +2080,20 @@ export default function Home() {
           </div>
         )}
 
+        {feedStale && vendors.length > 0 && (
+          <p className="mt-3 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            ⏳ {t("Reconnecting - live updates paused for a moment. Your agents keep working.")}
+          </p>
+        )}
         {vendors.length > 0 && (
           <div className="mt-3 grid grid-cols-3 gap-2">
             <Stat label={t("Shops found")} value={vendors.length} />
             <Stat label={t("Offers in")} value={offersIn} accent />
-            <div className="surface rounded-blob p-3 text-center">
-              <div className="text-[10px] font-extrabold uppercase tracking-wide text-savings">
+            <div className="surface rounded-blob px-2 py-4 text-center">
+              <div className="text-[11px] font-extrabold uppercase tracking-wide text-savings">
                 {t("Bargained")}
               </div>
-              <div className="text-lg font-extrabold text-savings">
+              <div className="mt-0.5 text-[28px] leading-none font-extrabold text-savings">
                 {/* Savings in the shops' LOCAL currency - no symbol before any
                     offer exists (a "$0" would presume the wrong currency) */}
                 {offersIn > 0 ? savingsSymbol : ""}
@@ -2196,7 +2243,9 @@ export default function Home() {
                       <div key={v.id} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
                         <span className="truncate font-bold text-soft">{v.name}</span>
                         <span className="shrink-0 text-faint">
-                          {v.queuedUntil ? `~${formatClock(v.queuedUntil)}` : t("shortly")}
+                          {v.queuedUntil && Date.parse(v.queuedUntil) > Date.now()
+                            ? `~${formatClock(v.queuedUntil)}`
+                            : t("next safe slot")}
                         </span>
                       </div>
                     ))}
@@ -2289,7 +2338,13 @@ export default function Home() {
                 {queueProgress.dueNow
                   ? t("next one leaves any moment")
                   : queueEtaHead
-                    ? `${t("next at")} ${etaRangeLabel(queueEtaHead.etaFrom, queueEtaHead.etaTo, false, queueEtaHead.notBefore, t)}`
+                    ? `${t("next at")} ${etaRangeLabel(
+                        queueEtaHead.etaFrom,
+                        queueEtaHead.etaTo,
+                        Date.parse(queueEtaHead.etaFrom ?? queueEtaHead.notBefore) <= Date.now(),
+                        queueEtaHead.notBefore,
+                        t
+                      )}`
                     : queueProgress.nextAt
                       ? `${t("next at")} ~${formatClock(queueProgress.nextAt)}`
                       : ""}
@@ -2814,9 +2869,9 @@ function Tag({ children }: { children: React.ReactNode }) {
 
 function Stat({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
-    <div className="surface rounded-blob p-3 text-center">
-      <div className="text-[10px] font-extrabold uppercase tracking-wide text-faint">{label}</div>
-      <div className={`text-lg font-extrabold ${accent ? "text-brandblue" : "text-strong"}`}>
+    <div className="surface rounded-blob px-2 py-4 text-center">
+      <div className="text-[11px] font-extrabold uppercase tracking-wide text-faint">{label}</div>
+      <div className={`mt-0.5 text-[28px] leading-none font-extrabold ${accent ? "text-brandblue" : "text-strong"}`}>
         <AnimatedNumber value={value} />
       </div>
     </div>

@@ -2,6 +2,7 @@
 // heuristic when no LLM key is configured, so the product is always functional.
 
 import "server-only";
+import { article } from "./copy/matrix";
 import { chat, extractJson } from "./ai";
 import type {
   StructuredRFQ,
@@ -321,16 +322,16 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   // no two shops get an identical payload, but every variant is this shape.
   const opener = when
     ? pick([
-        `Hi! Do you have a ${vehicle} available for ${days} starting ${when}?`,
-        `Hello! Is a ${vehicle} available for ${days} from ${when}?`,
-        `Hi there! Do you have a ${vehicle} free for ${days} starting ${when}?`,
-        `Hey! Could I rent a ${vehicle} for ${days} from ${when}?`,
+        `Hi! Do you have ${article(vehicle)} ${vehicle} available for ${days} starting ${when}?`,
+        `Hello! Is ${article(vehicle)} ${vehicle} available for ${days} from ${when}?`,
+        `Hi there! Do you have ${article(vehicle)} ${vehicle} free for ${days} starting ${when}?`,
+        `Hey! Could I rent ${article(vehicle)} ${vehicle} for ${days} from ${when}?`,
       ])
     : pick([
-        `Hi! Do you have a ${vehicle} available for ${days}?`,
-        `Hello! Is a ${vehicle} available for ${days}?`,
-        `Hi there! Do you have a ${vehicle} free for ${days}?`,
-        `Hey! Could I rent a ${vehicle} for ${days}?`,
+        `Hi! Do you have ${article(vehicle)} ${vehicle} available for ${days}?`,
+        `Hello! Is ${article(vehicle)} ${vehicle} available for ${days}?`,
+        `Hi there! Do you have ${article(vehicle)} ${vehicle} free for ${days}?`,
+        `Hey! Could I rent ${article(vehicle)} ${vehicle} for ${days}?`,
       ]);
   const dropOff = rfq.oneWayDropOff
     ? ` I'd need to drop it off in ${rfq.oneWayDropOff} (one-way).`

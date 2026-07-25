@@ -337,7 +337,11 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
-  const [persistent, setPersistent] = useState(false);
+  // TRI-STATE (null = still checking). It used to default to `false`, so the
+  // alarming "Persistence is OFF" banner was shown for the entire duration of
+  // the initial 7-way load - including the slow live health probes - and only
+  // then flipped green. Unknown must never render as broken.
+  const [persistent, setPersistent] = useState<boolean | null>(null);
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [billingOn, setBillingOn] = useState(false);
   const [newAdmin, setNewAdmin] = useState("");
@@ -487,8 +491,21 @@ export default function AdminPage() {
 
       const j = (r: PromiseSettledResult<Response>) =>
         r.status === "fulfilled" ? r.value.json().catch(() => ({})) : Promise.resolve({});
-      const [cfgR, uR, billR, meR, aiR, trR, fbR] = await Promise.allSettled([
-        fetch("/api/admin/config"),
+
+      // KEYS + PERSISTENCE FIRST, on their own round trip. These were batched
+      // with ai-status (which probes every provider over the network), so the
+      // Keys page and the persistence banner waited on the SLOWEST call in the
+      // group - minutes on a cold start. They are cheap; nothing may block them.
+      const cfgOnly = await Promise.allSettled([fetch("/api/admin/config")]);
+      const cfgEarly = await j(cfgOnly[0]);
+      if (cfgEarly.keys) {
+        setKeys(cfgEarly.keys);
+        setPersistent(Boolean(cfgEarly.persistent));
+        const early = (cfgEarly.keys as KeyInfo[]).find((k) => k.name === "APP_DOMAIN");
+        if (early && !early.configured) setCollapsedScopes((c) => ({ ...c, auth: false }));
+      }
+
+      const [uR, billR, meR, aiR, trR, fbR] = await Promise.allSettled([
         fetch("/api/admin/users"),
         fetch("/api/billing/checkout"),
         fetch("/api/auth/me"),
@@ -496,9 +513,10 @@ export default function AdminPage() {
         fetch("/api/admin/training"),
         fetch("/api/admin/feedback"),
       ]);
-      const [cfg, u, bill, me, ai, tr, fb] = await Promise.all([
-        j(cfgR), j(uR), j(billR), j(meR), j(aiR), j(trR), j(fbR),
+      const [u, bill, me, ai, tr, fb] = await Promise.all([
+        j(uR), j(billR), j(meR), j(aiR), j(trR), j(fbR),
       ]);
+      const cfg = cfgEarly;
       setKeys(cfg.keys ?? []);
       // Surface the "Public app domain" field: while APP_DOMAIN is unset, the
       // 🔐 Auth & social group starts EXPANDED so the one key that fixes the
@@ -639,7 +657,16 @@ export default function AdminPage() {
     });
     const data = await res.json();
     if (data.providers) setAiProviders(data.providers);
-    if (data.warning) setKeyWarning(data.warning);
+    // SURFACE FAILURES. This used to update nothing when the POST returned an
+    // error (unknown provider, or a vault write that did not persist), so the
+    // star silently stayed on the old provider and the click looked ignored.
+    if (data.error || (!res.ok && !data.providers)) {
+      setKeyWarning(
+        `Could not switch provider: ${data.error ?? res.status}. If persistence is off, the choice cannot be saved.`
+      );
+    } else if (data.warning) {
+      setKeyWarning(data.warning);
+    }
   }
 
   async function runDistill() {
@@ -1471,15 +1498,19 @@ export default function AdminPage() {
 
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
-              persistent
-                ? "border-savings bg-savings-soft text-savings"
-                : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+              persistent === null
+                ? "border-line bg-card2 text-soft"
+                : persistent
+                  ? "border-savings bg-savings-soft text-savings"
+                  : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
             }`}
           >
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
-            {persistent
-              ? "Persistence is on - edits are encrypted, saved to Supabase, applied within ~30s, and survive restarts."
-              : "Persistence is OFF: Supabase is not connected, so anything you paste here resets on the next deploy and is NOT shared across instances. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in your host env (GCP Secret Manager), run schema.sql, then redeploy - your saved keys are still in Supabase and reappear once it reconnects."}
+            {persistent === null
+              ? "Checking the key vault connection…"
+              : persistent
+                ? "Persistence is on - edits are encrypted, saved to Supabase, applied within ~30s, and survive restarts."
+                : "Persistence is OFF: Supabase is not connected, so anything you paste here resets on the next deploy and is NOT shared across instances. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in your host env (GCP Secret Manager), run schema.sql, then redeploy - your saved keys are still in Supabase and reappear once it reconnects."}
           </div>
 
           {keyWarning && (

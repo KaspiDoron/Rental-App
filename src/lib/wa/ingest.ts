@@ -27,6 +27,8 @@ import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 // second copy is how the drill window got skipped on the recovery path).
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
+import { waDigits } from "@/lib/wa/phone-key";
+import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
 // The region of the last outbound to this shop - primes the voice transcriber
@@ -227,7 +229,12 @@ export async function processEvolutionWebhook(
       if (!data?.key) continue;
       const remoteJid = String(data.key.remoteJid ?? "");
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
-      const from = remoteJid.split("@")[0];
+      // waDigits, NOT a raw split: a multi-device JID carries a device suffix
+      // ("6391...:12@s.whatsapp.net"). Splitting on "@" alone kept the ":12",
+      // producing a routing key that matched NO outbound anchor - the reply was
+      // stored against a number the thread lookup could never find.
+      const from = waDigits(remoteJid);
+      if (!from) continue;
 
       // Resolve the RECEIVING user FIRST - every store/read below is scoped to
       // them. An unresolvable instance is never ingested (a receiver-less row
@@ -369,6 +376,13 @@ export async function processEvolutionWebhook(
         syntheticText = `(the shop shared a contact${contact.name ? `: ${contact.name}` : ""}${contact.digits ? ` +${contact.digits}` : ""})`;
       }
 
+      // IDEMPOTENT STORE. Evolution redelivers (and the recovery sync pulls the
+      // same message), and this insert used to be unconditional - so ONE photo
+      // became two "[photo]" rows a minute apart in the transcript. Claim the
+      // provider message id first; only the winner writes the row. Redis/BullMQ
+      // dedupe layers only exist on the worker path, so on the serverless path
+      // this claim is the ONLY thing standing between a retry and a duplicate.
+      if (msgId && !(await claimInboundStore(msgId))) continue;
       await sbInsert("whatsapp_messages", [
         {
           wa_message_id: msgId,
@@ -519,9 +533,18 @@ export async function processEvolutionWebhook(
           return sendFromUser(email, to, message);
         },
       });
-      } catch {
+      } catch (e) {
         // One bad message in the batch must not drop its siblings (DEFECT 5) -
-        // the webhook already 200s so Evolution never redelivers. Skip this item.
+        // the webhook already 200s so Evolution never redelivers. Skip this
+        // item, but NEVER silently: this catch swallowed a whole photo turn
+        // (media download / vision throw) with zero trace, so the WA doctor
+        // reported a healthy thread while the shop got no answer.
+        void noteInboundDropped(
+          undefined,
+          String(data?.key?.remoteJid ?? "").split("@")[0],
+          "ingest-error",
+          { error: e instanceof Error ? e.message.slice(0, 120) : "unknown" }
+        );
       }
     }
   } catch {

@@ -69,13 +69,28 @@ export const SELF_INTROS = [
   "", // no intro - straight to the point (a real texting style)
 ] as const;
 
+/**
+ * Correct indefinite article for the vehicle phrase. Every template below
+ * hardcoded "a", so the single most common request in this app - an AUTOMATIC
+ * scooter - went out to real shops as "a automatic scooter". Sound, not
+ * spelling, decides: "an 11-seater" but "a 125cc".
+ */
+export function article(word: string): "a" | "an" {
+  const w = (word || "").trim().toLowerCase();
+  if (!w) return "a";
+  // Leading digits are read aloud: 8/11/18 take "an", everything else "a".
+  const digits = w.match(/^(\d+)/)?.[1];
+  if (digits) return /^(8|11|18)/.test(digits) ? "an" : "a";
+  return /^[aeiou]/.test(w) ? "an" : "a";
+}
+
 export const VEHICLE_PHRASINGS = [
-  (v: string) => `looking to rent a ${v}`,
-  (v: string) => `need a ${v}`,
-  (v: string) => `hoping to get a ${v}`,
-  (v: string) => `after a ${v}`,
-  (v: string) => `want to rent a ${v}`,
-  (v: string) => `looking for a ${v} to rent`,
+  (v: string) => `looking to rent ${article(v)} ${v}`,
+  (v: string) => `need ${article(v)} ${v}`,
+  (v: string) => `hoping to get ${article(v)} ${v}`,
+  (v: string) => `after ${article(v)} ${v}`,
+  (v: string) => `want to rent ${article(v)} ${v}`,
+  (v: string) => `looking for ${article(v)} ${v} to rent`,
 ] as const;
 
 export const DURATION_PHRASINGS = [
