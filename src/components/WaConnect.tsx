@@ -6,6 +6,17 @@ import { Icon } from "./icons";
 import { WaTermsModal } from "./WaTermsModal";
 import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
+import { deriveConnectionPhase, isFrozen } from "@/lib/wa/connection-state";
+
+// Once the shown code lapses the user is most likely still typing it, so we do
+// NOT swap it out immediately - we wait this long, and only then quietly ask
+// Evolution to re-issue one on the SAME instance (never a teardown).
+const LAPSED_GRACE_MS = 20_000;
+// Bound on those automatic re-issues, so a broken server can't loop forever.
+const MAX_AUTO_REISSUES = 4;
+// Overall give-up. Past this we stop polling and say so plainly instead of
+// spinning silently, which is what the old unbounded poll did.
+const PAIRING_DEADLINE_MS = 4 * 60_000;
 
 // The ONE WhatsApp-connect experience, used identically in signup and in the
 // Profile page. Pairing-code first (works on the same phone - no camera or
@@ -24,6 +35,9 @@ export function WaConnect({
     available: boolean;
     connected: boolean;
     reconnecting?: boolean;
+    /** Raw Evolution state - previously fetched and then ignored, which is why
+     *  the UI had no way to tell "waiting to be scanned" from "verifying". */
+    state?: string | null;
   } | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
@@ -33,69 +47,88 @@ export function WaConnect({
   const [copied, setCopied] = useState(false);
   const [method, setMethod] = useState<"code" | "qr">("code");
   const [showTerms, setShowTerms] = useState(false);
-  const [waitStep, setWaitStep] = useState(0);
   const [hostDown, setHostDown] = useState(false);
-  // Pairing codes really die in ~1 minute (B1). Track expiry + a live
-  // countdown, and auto-mint a fresh code when the shown one lapses.
+  const [failed, setFailed] = useState(false);
+  // Pairing codes really die in ~1 minute (B1). Track expiry + a live countdown.
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
-  const autoRefreshes = useRef(0);
+  const autoReissues = useRef(0);
+  const startedAt = useRef<number | null>(null);
   const poll = useRef<ReturnType<typeof setInterval>>();
 
-  // Plain-language, reassuring status shown while WhatsApp finishes linking, so
-  // the user understands WHY they are waiting instead of staring at a spinner.
-  const WAIT_STEPS = [
-    t("Waking up your assistant..."),
-    t("Creating your private, secure link..."),
-    t("Waiting for WhatsApp to confirm on your phone..."),
-    t("Almost there - saving your connection so you never redo this..."),
-  ];
-  const showingCode = pairingCode || qr;
-  useEffect(() => {
-    if (!showingCode) return;
-    setWaitStep(0);
-    const id = setInterval(() => setWaitStep((s) => (s + 1) % WAIT_STEPS.length), 4000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showingCode]);
+  const showingCode = Boolean(pairingCode || qr);
+
+  // ONE derived truth for the whole screen. Previously the component branched
+  // only on `connected`, so a live code, a rotating "Almost there..." line and a
+  // "the server never gave us a code" banner could all render at once.
+  const phase = deriveConnectionPhase({
+    state: wa?.state ?? null,
+    paired: wa?.connected === true,
+    hasCredential: showingCode,
+    credentialMsLeft: secondsLeft === null ? null : secondsLeft * 1000,
+    requesting: busy,
+    hostDown,
+    failed,
+  });
+  const frozen = isFrozen(phase);
 
   useEffect(() => {
-    fetch("/api/wa/status")
+    fetch("/api/wa/status", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setWa(d))
       .catch(() => {});
     return () => clearInterval(poll.current);
   }, []);
 
-  // Live countdown on the shown pairing code; when it lapses, auto-mint a
-  // fresh one (bounded - a down server must not cause an infinite loop).
+  // Live countdown on the shown credential. Works for the QR path too - it used
+  // to require a pairingCode, so a QR sat on screen forever with no timer and
+  // no recovery.
   useEffect(() => {
-    if (!expiresAt || !pairingCode) {
+    if (!expiresAt || !showingCode) {
       setSecondsLeft(null);
       return;
     }
     const id = setInterval(() => {
-      const left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-      setSecondsLeft(left);
-      if (left <= 0) {
-        clearInterval(id);
-        setExpiresAt(null);
-        if (autoRefreshes.current < 4) {
-          autoRefreshes.current += 1;
-          void connect(true);
-        } else {
-          setPairingCode(null);
-          setErr(t("The code expired - tap Try again for a fresh one."));
-        }
-      }
+      setSecondsLeft(Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)));
     }, 500);
     return () => clearInterval(id);
+  }, [expiresAt, showingCode]);
+
+  // When the shown code lapses we do NOT yank it away: the user is probably
+  // mid-entry and WhatsApp may already be verifying. Wait out a grace period,
+  // then quietly ask for a replacement on the SAME instance (fresh=false, so no
+  // teardown). This replaced a hard connect(fresh:true) that deleted and
+  // recreated the instance every 55s - the destroy-race that broke pairing.
+  useEffect(() => {
+    if (secondsLeft === null || secondsLeft > 0) return;
+    if (wa?.connected || failed) return;
+    if (autoReissues.current >= MAX_AUTO_REISSUES) return;
+    const id = setTimeout(() => {
+      autoReissues.current += 1;
+      void connect(false);
+    }, LAPSED_GRACE_MS);
+    return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expiresAt, pairingCode]);
+  }, [secondsLeft, wa?.connected, failed]);
+
+  // Overall deadline - the old poll ran forever with no way to say "this isn't
+  // working". Anchored to the first connect attempt, cleared on success.
+  useEffect(() => {
+    if (!showingCode || wa?.connected || failed) return;
+    const id = setInterval(() => {
+      if (startedAt.current && Date.now() - startedAt.current > PAIRING_DEADLINE_MS) {
+        clearInterval(poll.current);
+        setFailed(true);
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [showingCode, wa?.connected, failed]);
 
   async function connect(fresh = false) {
     setBusy(true);
     setErr(null);
+    setFailed(false);
+    if (startedAt.current === null) startedAt.current = Date.now();
     try {
       const res = await fetch("/api/wa/connect", {
         method: "POST",
@@ -113,29 +146,53 @@ export function WaConnect({
         setErr(d.error ?? t("Our WhatsApp server is restarting - give it a minute, then tap Try again."));
         return;
       }
-      if (d.pairingCode) {
-        setPairingCode(d.pairingCode);
+
+      // STALE-STATE KILL: a response that carries no credential must CLEAR the
+      // old one. Guarded sets left a dead code on screen next to an error
+      // saying no code was issued - the exact contradiction users reported.
+      const gotCode = typeof d.pairingCode === "string" && d.pairingCode.length > 0;
+      const gotQr = typeof d.qr === "string" && d.qr.length > 0;
+      setPairingCode(gotCode ? d.pairingCode : null);
+      setQr(gotQr ? d.qr : null);
+      if (gotCode || gotQr) {
         const ttl = Number(d.pairingExpiresInMs);
         setExpiresAt(Number.isFinite(ttl) && ttl > 0 ? Date.now() + ttl : null);
+        // A credential IS on screen, so any earlier soft error is now history.
+        setErr(null);
+      } else {
+        setExpiresAt(null);
+        setErr(
+          d.error ?? t("Could not get a code yet - tap Try again in a few seconds.")
+        );
       }
-      if (d.qr) setQr(d.qr);
-      // Soft error (reachable but no code/QR yet) - surface it but keep the UI.
-      if (d.error) setErr(d.error);
-      else if (!d.pairingCode && !d.qr) {
-        setErr(t("Could not get a code yet - tap Try again in a few seconds."));
-      }
+
       clearInterval(poll.current);
       poll.current = setInterval(async () => {
-        const s = await (await fetch("/api/wa/status")).json();
-        setWa(s);
-        if (s.connected) {
-          clearInterval(poll.current);
-          setQr(null);
-          setPairingCode(null);
-          setExpiresAt(null);
-          onConnected?.();
+        try {
+          // pairing=1 skips the outbox/wakeup drains on the server: during
+          // pairing there is nothing to drain and they dominated the latency.
+          const s = await (
+            await fetch(`/api/wa/status?pairing=1&t=${Date.now()}`, { cache: "no-store" })
+          ).json();
+          setWa(s);
+          if (s.connected) {
+            clearInterval(poll.current);
+            setQr(null);
+            setPairingCode(null);
+            setExpiresAt(null);
+            setErr(null);
+            setFailed(false);
+            startedAt.current = null;
+            onConnected?.();
+          }
+        } catch {
+          /* a dropped poll is not fatal - the next tick retries */
         }
-      }, 3000);
+      }, 2000);
+    } catch {
+      // Previously absent: a network failure escaped as an unhandled rejection,
+      // leaving the button un-busy with no message and no poll installed.
+      setErr(t("Could not reach the server - check your connection and tap Try again."));
     } finally {
       setBusy(false);
     }
@@ -337,12 +394,15 @@ export function WaConnect({
                   </span>
                 </button>
               ) : null}
-              {pairingCode && secondsLeft !== null && (
+              {pairingCode && secondsLeft !== null && secondsLeft > 0 && (
                 <p className="mt-1.5 text-center text-[11px] font-bold text-soft">
                   {secondsLeft > 10 ? "⏳" : "⚠️"}{" "}
                   {t("Enter it within")} <span className="font-mono text-brandblue">{secondsLeft}s</span>
-                  {" - "}
-                  {t("a fresh code appears here automatically when this one expires.")}
+                </p>
+              )}
+              {pairingCode && secondsLeft === 0 && (
+                <p className="mt-1.5 text-center text-[11px] font-bold text-soft">
+                  {t("If you already typed this code, just wait - we are checking with WhatsApp.")}
                 </p>
               )}
               {!pairingCode && (
@@ -382,27 +442,48 @@ export function WaConnect({
               <p className="text-center text-[11px] font-bold text-faint">{t("QR not available - use the code method.")}</p>
             ))}
 
-          {/* Plain-language "what's happening now" so waiting feels purposeful */}
-          <div className="mt-2 rounded-xl bg-brandblue-soft p-2.5">
-            <div className="flex items-center gap-2 text-[11px] font-bold text-brandblue">
-              <LoadingDots />
-              <span>{WAIT_STEPS[waitStep]}</span>
+          {/* ONE status line, driven by the real phase. This used to be a 4s
+              rotation through four hardcoded reassurances that ran regardless of
+              what was actually happening - it cheerfully said "Almost there"
+              while the screen was showing an error. */}
+          {phase === "FAILED" ? (
+            <div className="mt-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              {hostDown
+                ? t("Our WhatsApp server is restarting - nothing is wrong on your side. Give it a minute, then tap Try again.")
+                : t("This is taking longer than it should. Tap Try again for a fresh code, or use the QR tab from a computer.")}
             </div>
-            <p className="mt-1 text-[10px] font-bold text-brandblue/80">
-              {t("The whole link takes about 2 minutes. Type each code while its timer runs - this screen turns green by itself when done.")}
-            </p>
-          </div>
+          ) : (
+            <div className="mt-2 rounded-xl bg-brandblue-soft p-2.5">
+              <div className="flex items-center gap-2 text-[11px] font-bold text-brandblue">
+                {!frozen && <LoadingDots />}
+                <span>
+                  {phase === "AUTHENTICATING"
+                    ? t("Verifying with WhatsApp - keep this screen open.")
+                    : phase === "GENERATING_QR"
+                      ? t("Asking WhatsApp for your code...")
+                      : t("Enter the code in WhatsApp - this screen turns green by itself.")}
+                </span>
+              </div>
+              {phase === "AUTHENTICATING" && (
+                <p className="mt-1 text-[10px] font-bold text-brandblue/80">
+                  {t("Do not close or refresh - we are not sending a new code while this finishes.")}
+                </p>
+              )}
+            </div>
+          )}
           <div className="mt-2 flex items-center justify-end">
             <button
               onClick={() => {
-                autoRefreshes.current = 0;
-                // A still-valid on-screen code must not be destroyed by an
-                // impatient tap (the server soft-repolls it); a dead or missing
-                // code forces a genuinely fresh instance + code.
-                const codeStillLive = Boolean(pairingCode && secondsLeft !== null && secondsLeft > 0);
+                autoReissues.current = 0;
+                startedAt.current = Date.now();
+                // A still-valid on-screen code is only re-polled; a dead or
+                // missing one earns a genuinely fresh instance. Either way the
+                // server never wipes a handshake that is mid-verification.
+                const codeStillLive = Boolean(showingCode && secondsLeft !== null && secondsLeft > 0);
                 void connect(!codeStillLive);
               }}
-              disabled={busy}
+              disabled={busy || frozen}
+              title={frozen ? t("WhatsApp is verifying - please wait") : undefined}
               className="btn btn-sm chip rounded-xl bg-card px-3 text-[11px] font-bold text-brandblue disabled:opacity-60"
             >
               {busy ? <LoadingDots /> : `↻ ${t("Try again / new code")}`}
@@ -411,8 +492,12 @@ export function WaConnect({
         </div>
       )}
 
-      {err && (
+      {/* The error lives in exactly ONE place. It previously ALSO rendered here
+          unconditionally, which is how a valid code and "the server didn't hand
+          out a code" ended up on screen together. */}
+      {err && !showingCode && (
         <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          {hostDown ? "🔧 " : ""}
           {err}
         </p>
       )}

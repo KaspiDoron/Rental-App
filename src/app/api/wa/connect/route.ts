@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { connectInstance, evolutionConfigured, resetInstance } from "@/lib/evolution";
+import { connectInstance, evolutionConfigured } from "@/lib/evolution";
 import { requestOrigin } from "@/lib/request-origin";
 
 // Start (or resume) the signed-in user's personal WhatsApp session: creates
@@ -39,13 +39,20 @@ export async function POST(req: Request) {
       acceptedTerms: true,
     }).catch(() => {});
   }
-  // fresh=true (the client's auto-refresh when a shown code expired, or an
-  // explicit "New code" tap): guarantee a brand-new session/code by hard
-  // resetting first - the previously dead-code path (B1).
-  if (body.fresh === true) {
-    await resetInstance(session.email).catch(() => {});
-  }
-  const result = await connectInstance(session.email, origin, phone);
+  // fresh=true is an EXPLICIT user "Try again / new code" tap. It is handed to
+  // connectInstance as permission to rebuild, NOT executed here.
+  //
+  // This used to call resetInstance() first, which wrote status "disconnected"
+  // and therefore made connectInstance's `existing === "connecting"` guard
+  // unreachable - so EVERY refresh took the destructive logout+delete+recreate
+  // path and wiped whatever handshake the user's phone was completing. Combined
+  // with the client's automatic 55s code-expiry refresh that meant up to four
+  // full instance rebuilds per pairing (~3.7 min of self-inflicted churn), which
+  // both broke the pairing and hammered the Evolution container. connectInstance
+  // now re-issues the code on the SAME instance instead.
+  const result = await connectInstance(session.email, origin, phone, {
+    fresh: body.fresh === true,
+  });
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }
 

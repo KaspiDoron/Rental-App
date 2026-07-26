@@ -945,11 +945,18 @@ export async function ensureConnected(
 /**
  * Create (or reuse) the user's instance and point its webhook at us.
  * Returns a QR code (base64 image) while the session is not yet paired.
+ *
+ * `opts.fresh` is PERMISSION to rebuild, never an order: it lets an explicit
+ * user "Try again" tap force the destructive logout+delete+recreate. It is
+ * deliberately NOT set by the client's automatic code-expiry refresh, because
+ * a `connecting` instance is a live handshake and re-issuing its code via
+ * /instance/connect achieves the same result without any teardown.
  */
 export async function connectInstance(
   email: string,
   appOrigin: string,
-  phone?: string
+  phone?: string,
+  opts?: { fresh?: boolean }
 ): Promise<{
   ok: boolean;
   state?: string;
@@ -1003,62 +1010,72 @@ export async function connectInstance(
     return { ok: true, state: "open" };
   }
 
-  // A pairing that started SECONDS ago is mid-handshake, not stale. A second
-  // Connect tap (very common in the signup funnel: impatient double-tap, a
-  // re-render, a refocused tab) used to logout+delete the in-progress
-  // instance - destroying the exact pairing the phone was about to complete
-  // ("my WhatsApp disconnected by itself"). While the SHOWN CODE is still
-  // inside its real ~55s validity window we RE-POLL the same instance instead
-  // of wiping it. Past the TTL the old 90s grace was actively harmful: it
-  // handed back the SAME dead code ("Invalid code, try again") - so an
-  // expired code now always falls through to the clean hard reset below.
-  let codeAgeMs = NaN;
-  if (existing === "connecting") {
+  // A `connecting` instance is a LIVE HANDSHAKE. Never logout+delete it just
+  // because the code we happened to show aged out: the phone may be typing that
+  // code right now, and wiping the instance is what produced "my WhatsApp
+  // disconnected by itself" plus an endless re-pair loop.
+  //
+  // `/instance/connect` RE-ISSUES a code on the SAME instance, so an expired
+  // code is refreshed with zero teardown. That kills the destroy/recreate storm
+  // that the client's 55s auto-refresh used to drive (up to 4 full instance
+  // rebuilds per pairing) - the same churn that hammers the Evolution
+  // container. Only an explicit user "Try again" (opts.fresh) or an instance
+  // that hands back NO code at all falls through to the destructive recreate.
+  if (existing === "connecting" && !opts?.fresh) {
     const row = await sbSelect<{ updated_at: string | null; pairing_code_issued_at?: string | null }>(
       "wa_sessions",
       `select=updated_at,pairing_code_issued_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
     ).catch(() => []);
     const issued = row[0]?.pairing_code_issued_at ?? row[0]?.updated_at;
     const startedMs = issued ? Date.parse(issued) : NaN;
-    codeAgeMs = Number.isFinite(startedMs) ? Date.now() - startedMs : NaN;
-    if (Number.isFinite(codeAgeMs) && codeAgeMs < PAIRING_TTL_MS) {
-      const conn = await evoFetch(
-        host,
-        `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
-      );
-      const rawPairing =
-        conn.data?.pairingCode ?? conn.data?.qrcode?.pairingCode ?? conn.data?.instance?.pairingCode;
-      const pairing =
-        typeof rawPairing === "string" &&
-        /^[A-Za-z0-9]{3,}-?[A-Za-z0-9]{0,}$/.test(rawPairing) &&
-        rawPairing.length <= 12
-          ? rawPairing
-          : undefined;
-      const qrNow =
-        conn.data?.base64 ??
-        conn.data?.qrcode?.base64 ??
-        (typeof conn.data?.code === "string" && conn.data.code.startsWith("data:")
-          ? conn.data.code
-          : undefined);
-      // The state may have flipped to open while we polled - honor it.
-      const nowState = await connectionState(email);
-      if (nowState === "open") {
-        await markOpen(email);
-        return { ok: true, state: "open" };
-      }
-      if (pairing || qrNow) {
-        return {
-          ok: true,
-          state: "connecting",
-          qr: qrNow,
-          pairingCode: pairing,
-          // Remaining life of the ALREADY-issued code, not a fresh window.
-          pairingExpiresInMs: Math.max(1_000, PAIRING_TTL_MS - codeAgeMs),
-        };
-      }
-      // No code from the live handshake - fall through to the clean recreate
-      // (the pairing is likely genuinely wedged).
+    const codeAgeMs = Number.isFinite(startedMs) ? Date.now() - startedMs : NaN;
+    // Inside the window the SAME code is still on the user's screen, so report
+    // its remaining life. Past the window Evolution mints a NEW one, so the
+    // window restarts and we re-stamp it.
+    const stillLive = Number.isFinite(codeAgeMs) && codeAgeMs < PAIRING_TTL_MS;
+
+    const conn = await evoFetch(
+      host,
+      `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
+    );
+    const rawPairing =
+      conn.data?.pairingCode ?? conn.data?.qrcode?.pairingCode ?? conn.data?.instance?.pairingCode;
+    const pairing =
+      typeof rawPairing === "string" &&
+      /^[A-Za-z0-9]{3,}-?[A-Za-z0-9]{0,}$/.test(rawPairing) &&
+      rawPairing.length <= 12
+        ? rawPairing
+        : undefined;
+    const qrNow =
+      conn.data?.base64 ??
+      conn.data?.qrcode?.base64 ??
+      (typeof conn.data?.code === "string" && conn.data.code.startsWith("data:")
+        ? conn.data.code
+        : undefined);
+    // The state may have flipped to open while we polled - honor it.
+    const nowState = await connectionState(email);
+    if (nowState === "open") {
+      await markOpen(email);
+      return { ok: true, state: "open" };
     }
+    if (pairing || qrNow) {
+      if (!stillLive) {
+        // A newly-minted code: restart the validity window so the client's
+        // countdown reflects the code actually on screen.
+        await saveSession(email, instance, "connecting", host.url, new Date()).catch(() => {});
+      }
+      return {
+        ok: true,
+        state: "connecting",
+        qr: qrNow,
+        pairingCode: pairing,
+        pairingExpiresInMs: stillLive
+          ? Math.max(1_000, PAIRING_TTL_MS - codeAgeMs)
+          : PAIRING_TTL_MS,
+      };
+    }
+    // No code at all from the live handshake - the pairing is genuinely wedged,
+    // so fall through to the clean recreate below.
   }
 
   // Otherwise start from a CLEAN slate. A leftover half-linked instance (from a
@@ -1067,7 +1084,10 @@ export async function connectInstance(
   // guarantees the code we show is the current, valid one.
   await evoFetch(host, `/instance/logout/${instance}`, { method: "DELETE" });
   await evoFetch(host, `/instance/delete/${instance}`, { method: "DELETE" });
-  await new Promise((r) => setTimeout(r, 600));
+  // Settle window so Evolution finishes tearing the instance down before we
+  // recreate the same name. 250ms is enough in practice and this now runs only
+  // on an explicit "Try again", not on every 55s code refresh.
+  await new Promise((r) => setTimeout(r, 250));
 
   // Anti-ban instance hardening (from the WhatsApp ban-vector research):
   //  - always_online:false  -> the device NEVER shows as permanently online
@@ -1159,29 +1179,33 @@ export async function connectInstance(
     }
   }
 
-  // Make sure the webhook is set even for pre-existing instances.
-  await evoFetch(host, `/webhook/set/${instance}`, {
-    method: "POST",
-    body: JSON.stringify({
-      webhook: { enabled: true, url: webhookUrl, byEvents: false, events },
-      enabled: true,
-      url: webhookUrl,
-      events,
-    }),
-  });
-
-  // Apply the hardening settings (also covers pre-existing instances). Best
-  // effort - older Evolution builds ignore unknown fields.
-  await evoFetch(host, `/settings/set/${instance}`, {
-    method: "POST",
-    body: JSON.stringify(hardening),
-  }).catch(() => {});
-  if (proxy) {
-    await evoFetch(host, `/proxy/set/${instance}`, {
+  // Webhook + hardening + proxy are INDEPENDENT of each other, so run them
+  // concurrently. Serially these were three round-trips (each up to the 12s
+  // evoFetch ceiling) stacked directly in front of the user's code, for no
+  // ordering benefit. Only the webhook is required; the other two are
+  // best-effort on older Evolution builds that ignore unknown fields.
+  const [webhookSet] = await Promise.all([
+    evoFetch(host, `/webhook/set/${instance}`, {
       method: "POST",
-      body: JSON.stringify({ enabled: true, ...proxy }),
-    }).catch(() => {});
-  }
+      body: JSON.stringify({
+        webhook: { enabled: true, url: webhookUrl, byEvents: false, events },
+        enabled: true,
+        url: webhookUrl,
+        events,
+      }),
+    }),
+    evoFetch(host, `/settings/set/${instance}`, {
+      method: "POST",
+      body: JSON.stringify(hardening),
+    }).catch(() => undefined),
+    proxy
+      ? evoFetch(host, `/proxy/set/${instance}`, {
+          method: "POST",
+          body: JSON.stringify({ enabled: true, ...proxy }),
+        }).catch(() => undefined)
+      : Promise.resolve(undefined),
+  ]);
+  void webhookSet;
 
   const pickPairing = (d: any): string | undefined => {
     const raw = d?.pairingCode ?? d?.qrcode?.pairingCode ?? d?.instance?.pairingCode;
@@ -1202,9 +1226,14 @@ export async function connectInstance(
   // Otherwise poll the connect endpoint a few times. Baileys sometimes needs a
   // moment to mint the code; we DON'T recreate the instance (that would
   // invalidate an already-shown code and cause "couldn't link device").
-  const attempts = digits ? 4 : 1;
+  // Adaptive backoff instead of a flat 1400ms x 4: Baileys usually mints the
+  // code on the first or second look, so a short first wait returns most users
+  // in well under a second of added latency, while the later steps still give a
+  // slow host room. Worst case is now ~2.9s of sleep instead of ~4.2s.
+  const POLL_BACKOFF_MS = [0, 300, 800, 1800];
+  const attempts = digits ? POLL_BACKOFF_MS.length : 1;
   for (let i = 0; i < attempts && !pairingCode; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 1400));
+    if (i > 0) await new Promise((r) => setTimeout(r, POLL_BACKOFF_MS[i]));
     const conn = await evoFetch(
       host,
       `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`

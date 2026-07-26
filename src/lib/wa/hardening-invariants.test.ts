@@ -48,6 +48,36 @@ describe("privacy/data-minimization: syncFullHistory is never requested true", (
   });
 });
 
+describe("pairing: a live handshake is never destroyed by a code refresh", () => {
+  it("connect/route.ts does NOT pre-reset the instance (that killed the connecting-guard)", () => {
+    // resetInstance() wrote status "disconnected", so connectInstance's
+    // `existing === "connecting"` guard could never fire and EVERY refresh took
+    // the logout+delete+recreate path - wiping the pairing the phone was
+    // completing, and churning the Evolution container into a crash loop.
+    const route = readCode("src/app/api/wa/connect/route.ts");
+    expect(route).not.toMatch(/resetInstance\(/);
+    // `fresh` is forwarded as permission for connectInstance to decide.
+    expect(route).toMatch(/connectInstance\([\s\S]{0,200}fresh:/);
+  });
+
+  it("connectInstance re-issues on the SAME instance for a non-fresh connecting session", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    // The guard is reachable (gated on !opts.fresh, not on a code-age window
+    // that expired into the destructive path).
+    expect(evo).toMatch(/existing === "connecting" && !opts\?\.fresh/);
+    // ...and the destructive pair still exists only BELOW it, as the last resort.
+    expect(evo).toMatch(/instance\/logout\//);
+  });
+
+  it("the client's automatic code refresh never asks for a hard reset", () => {
+    const ui = readCode("src/components/WaConnect.tsx");
+    // The lapsed-code timer re-issues with fresh=false. A literal connect(true)
+    // on a timer is exactly the regression this pins against.
+    expect(ui).toMatch(/connect\(false\)/);
+    expect(ui).not.toMatch(/autoRefreshes/);
+  });
+});
+
 describe("anti-ban: pairing-layer client fingerprint (the ban happened AT pairing)", () => {
   it("presents a standard Chrome-on-macOS fingerprint, never the flagged default", () => {
     const evo = read("src/lib/evolution.ts");

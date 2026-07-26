@@ -386,19 +386,30 @@ export default function ProfilePage() {
                 {t("Connect your own number so agents bargain as YOU - shops see a real traveller, and every reply lands in the app automatically.")}
               </p>
             </div>
+            {/* Tri-state: this pill is fetched ONCE on mount, so before the
+                answer lands it must say "checking" rather than assert NOT
+                CONNECTED - and it has to follow WaConnect when the user links,
+                or the two disagree for the rest of the visit. */}
             <span
               className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
-                wa?.connected
-                  ? "bg-savings-soft text-savings"
-                  : "bg-card2 text-faint"
+                wa === null
+                  ? "bg-card2 text-faint"
+                  : wa.connected
+                    ? "bg-savings-soft text-savings"
+                    : "bg-card2 text-faint"
               }`}
             >
-              {wa?.connected ? t("CONNECTED") : t("NOT CONNECTED")}
+              {wa === null ? t("CHECKING...") : wa.connected ? t("CONNECTED") : t("NOT CONNECTED")}
             </span>
           </div>
 
           <div className="mt-3">
-            <WaConnect phone={profile?.phone} />
+            <WaConnect
+              phone={profile?.phone}
+              onConnected={() =>
+                setWa((w) => ({ available: true, ...(w ?? {}), connected: true }))
+              }
+            />
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-faint">
             {t("Human-pace sending limits apply automatically to keep your number safe. Details are in the Terms of Use.")}

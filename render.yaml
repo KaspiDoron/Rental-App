@@ -19,6 +19,19 @@
 #   2. DATABASE_SAVE_IS_ON_WHATSAPP=false - stop persisting those rows at all.
 # To apply: Render dashboard -> Blueprints -> your repo -> "Manual Sync" (it
 # re-reads this file), or delete + re-create the Blueprint. Zero other work.
+#
+# CRASH FIX 2 ("Exited with status 1" alerts during pairing):
+# Status 1 is an UNCAUGHT EXCEPTION inside Evolution, NOT an out-of-memory kill
+# (an OOM kill is SIGKILL -> exit 137). The trigger was on our side: the app's
+# connect screen used to hard logout+delete+recreate this instance every 55s
+# while a user paired - up to 4 full Baileys teardowns per attempt. That churn
+# is what surfaced the unhandled rejection.
+# The real fix lives in the app: /api/wa/connect no longer pre-resets, and
+# connectInstance re-issues the pairing code on the SAME instance
+# (src/lib/evolution.ts). NODE_OPTIONS below is only headroom insurance - it is
+# NOT the fix for exit 1.
+# If exit-1 alerts persist, read wd-evolution -> Logs for the stack trace; a
+# named subsystem (as with OnWhatsappCache above) points at a targeted env fix.
 
 databases:
   - name: wd-evo-db
@@ -80,6 +93,11 @@ services:
         value: "8080"
       - key: AUTHENTICATION_API_KEY
         value: wd-pool-9x7k2mQ4pL8vT1nR
+      # Heap ceiling below the 512MB container limit so V8 collects hard instead
+      # of the box being SIGKILLed under a burst. Insurance only - the crashes
+      # we actually saw were exit 1 (uncaught exception), not exit 137 (OOM).
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=384"
       - key: DATABASE_ENABLED
         value: "true"
       - key: DATABASE_PROVIDER

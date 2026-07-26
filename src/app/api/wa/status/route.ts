@@ -7,18 +7,27 @@ import {
   touchActivity,
   markOpen,
 } from "@/lib/evolution";
+import { deriveConnectionPhase } from "@/lib/wa/connection-state";
 
 // Current state of the user's personal WhatsApp session.
 //
 // A transient drop (Render sleeping/restarting) is NOT treated as "disconnected"
 // - if the user has paired before, we report connected+reconnecting so the UI
 // stays calm and the send path auto-resumes from saved credentials.
-export async function GET() {
+export const dynamic = "force-dynamic";
+
+export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
   const available = await evolutionConfigured();
   if (!available) return NextResponse.json({ available: false, connected: false });
+
+  // PAIRING HOT PATH: while the connect screen polls every ~2s the user has no
+  // outbox to drain, and firing two full drains per poll turned a cheap status
+  // read into the most expensive request in the app right when latency matters
+  // most. The client sets ?pairing=1 for those polls.
+  const pairing = new URL(req.url).searchParams.get("pairing") === "1";
 
   const state = await connectionState(session.email);
   // "paired" = the user GENUINELY linked before (durable status "open"), not
@@ -39,18 +48,20 @@ export async function GET() {
 
   // Opportunistic anti-ban outbox drain: the app polling status while open is
   // our free "worker tick" for business-hours / pacing-queued messages.
-  try {
-    const { drainOutbox } = await import("@/lib/wa-guard");
-    const { sendFromUser } = await import("@/lib/evolution");
-    drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
-      () => {}
-    );
-    const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
-      () => {}
-    );
-  } catch {
-    /* best-effort */
+  if (!pairing) {
+    try {
+      const { drainOutbox } = await import("@/lib/wa-guard");
+      const { sendFromUser } = await import("@/lib/evolution");
+      drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
+        () => {}
+      );
+      const { drainGraphWakeups } = await import("@/lib/graph/engine");
+      drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text)).catch(
+        () => {}
+      );
+    } catch {
+      /* best-effort */
+    }
   }
 
   return NextResponse.json({
@@ -60,6 +71,11 @@ export async function GET() {
     connected: state === "open" || paired,
     live: state === "open",
     reconnecting: paired && state !== "open",
+    // Server-side phase for callers with no credential context (e.g. the
+    // Profile pill). The connect screen re-derives with the same pure function,
+    // adding what only it knows: whether a code is on screen and its remaining
+    // life. One definition, two levels of detail.
+    phase: deriveConnectionPhase({ state, paired }),
   });
 }
 
