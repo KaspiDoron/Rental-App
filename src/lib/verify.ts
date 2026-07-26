@@ -14,6 +14,7 @@ import {
   supabaseConfigured,
 } from "./runtime-config";
 import { sendEmail } from "./email";
+import { boundedSet } from "./bounded-map";
 
 const TTL_MS = 15 * 60_000; // codes expire after 15 minutes
 const RESEND_GAP_MS = 30_000; // do not spam: 30s between sends per email
@@ -154,7 +155,7 @@ async function writeRow(email: string, row: Row): Promise<void> {
       "email"
     );
   } else {
-    memStore().set(email, row);
+    boundedSet(memStore(), email, row, 5000);
   }
 }
 

@@ -8,10 +8,14 @@
 
 import express from "express";
 import { webhookToken, noteWebhookAccepted, noteWebhook403 } from "@wheeldeal/core";
-import { logger, env } from "@wheeldeal/shared";
+import { logger, env, installProcessGuards } from "@wheeldeal/shared";
 import { claimInboundIds, redis } from "@wheeldeal/redis";
 import { enqueueInbound } from "@wheeldeal/queues";
 import { registerStreamRoute } from "./routes/stream";
+
+// The gateway is top-level side-effecting (no main() to .catch), so this is the
+// only thing standing between an escaped rejection and a silent process death.
+installProcessGuards("gateway");
 
 const app = express();
 app.use(express.json({ limit: "8mb" })); // Evolution payloads carry base64 previews
@@ -24,8 +28,20 @@ function inboundMessageIds(body: any): string[] {
     .filter((id: string) => id.length > 0);
 }
 
-// Health/readiness for compose + the GCP LB.
-app.get("/healthz", async (_req, res) => {
+// LIVENESS - "is this process alive". Deliberately dependency-free: it must
+// never fail for a reason a restart cannot fix.
+//
+// This used to ping Redis and return 503 on failure, while being wired up as
+// the health check. A Redis blip therefore made the orchestrator kill and
+// restart a perfectly healthy gateway - the probe manufactured the outage it
+// was supposed to detect. Dependency checks belong in readiness, below.
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true, uptimeSec: Math.round(process.uptime()) });
+});
+
+// READINESS - "should traffic be routed here". Safe to fail: a load balancer
+// pulls this instance out and puts it back when Redis returns.
+app.get("/readyz", async (_req, res) => {
   try {
     await redis().ping();
     res.json({ ok: true, redis: true });

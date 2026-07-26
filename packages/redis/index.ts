@@ -120,12 +120,27 @@ export type { CampaignSlot, CampaignState, CampaignInit } from "./budgets";
 import { eventsChannel as chanFor } from "./offers";
 import type { SessionEventPayload as SessionEvent } from "./offers";
 
+// Every SSE client attaches a listener to the ONE shared subscriber connection,
+// so two things need care:
+//
+//  1. REFCOUNTING. The unsubscribe used to be unconditional: with two viewers on
+//     the same search, the first one to close called `unsubscribe(chan)` and
+//     silently killed live updates for the other, who then sat on a connection
+//     that would never emit again. We now only leave the channel when the last
+//     listener for it goes.
+//  2. LISTENER CEILING. Node warns (and leaks are masked) past 10 listeners on
+//     one emitter; a handful of concurrent viewers is completely normal here.
+const chanRefs = new Map<string, number>();
+
 export function subscribeSessionEvents(
   searchId: string | number,
   onEvent: (e: SessionEvent) => void
 ): () => void {
   const chan = chanFor(searchId);
   const sub = redisSubscriber();
+  // Headroom for concurrent viewers; the real leak guard is the cleanup below.
+  if (typeof sub.setMaxListeners === "function") sub.setMaxListeners(200);
+
   const handler = (channel: string, message: string) => {
     if (channel !== chan) return;
     try {
@@ -134,10 +149,26 @@ export function subscribeSessionEvents(
       /* malformed event - skip */
     }
   };
-  sub.subscribe(chan).catch(() => {});
+
+  const refs = (chanRefs.get(chan) ?? 0) + 1;
+  chanRefs.set(chan, refs);
+  // Only the FIRST subscriber issues SUBSCRIBE; the rest just add a listener.
+  if (refs === 1) sub.subscribe(chan).catch(() => {});
   sub.on("message", handler);
+
+  let released = false;
   return () => {
+    // Idempotent: a double-close (req close + res error both firing) must not
+    // drive the refcount negative and unsubscribe a channel others still use.
+    if (released) return;
+    released = true;
     sub.off("message", handler);
-    sub.unsubscribe(chan).catch(() => {});
+    const left = (chanRefs.get(chan) ?? 1) - 1;
+    if (left <= 0) {
+      chanRefs.delete(chan);
+      sub.unsubscribe(chan).catch(() => {});
+    } else {
+      chanRefs.set(chan, left);
+    }
   };
 }

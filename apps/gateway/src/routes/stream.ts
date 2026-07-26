@@ -75,9 +75,13 @@ export function registerStreamRoute(app: Express): void {
 
     const cleanup = () => {
       clearInterval(heartbeat);
-      unsubscribe();
+      unsubscribe(); // idempotent + refcounted, so a double-fire is safe
     };
     req.on("close", cleanup);
+    // `res.close` was missing: a response-side close that emits neither a
+    // request-close nor an error left the heartbeat interval running forever,
+    // writing to a dead socket every 25s for the life of the process.
+    res.on("close", cleanup);
     res.on("error", cleanup);
     logger.info({ searchId }, "sse stream opened");
   });

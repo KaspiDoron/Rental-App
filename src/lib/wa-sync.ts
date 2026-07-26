@@ -14,6 +14,7 @@ import { fetchMessagesRaw, fetchMediaBase64, sendFromUser, resolveChatJid } from
 import { processVendorReply } from "./agent-loop";
 import { noteInboundDropped } from "./wa/webhook-trace";
 import { digitsOnly } from "./phone";
+import { boundedSet } from "./bounded-map";
 
 const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
 const THREAD_WINDOW_H = 36; // only threads we messaged in the last 36h
@@ -59,7 +60,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
   const store = lastSyncStore();
   const last = store.get(email) ?? 0;
   if (Date.now() - last < SYNC_MIN_GAP_MS) return 0;
-  store.set(email, Date.now());
+  boundedSet(store, email, Date.now(), 5000);
 
   // The numbers this user recently messaged (their open shop threads).
   const since = new Date(Date.now() - THREAD_WINDOW_H * 3600_000).toISOString();

@@ -110,4 +110,4 @@ fi
 echo "[wd] startup complete $(date -u)."
 echo "[wd] Gateway live. Set the Evolution webhook to:"
 echo "[wd]   https://$API_DOMAIN/api/webhooks/evolution?token=<sha256('wd-webhook:'+SESSION_SECRET)[:32]>"
-echo "[wd] Health: curl https://$API_DOMAIN/healthz"
+echo "[wd] Health: curl https://$API_DOMAIN/readyz"

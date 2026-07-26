@@ -12,6 +12,7 @@
 
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { sbInsert, sbSelect, sbDelete, supabaseConfigured } from "./runtime-config";
+import { boundedSet } from "./bounded-map";
 
 export type PlanId = "free" | "pro" | "ultra";
 
@@ -70,7 +71,7 @@ function cache() {
 }
 
 function remember(rec: UserRecord) {
-  cache().set(rec.email, { rec, fetchedAt: Date.now() });
+  boundedSet(cache(), rec.email, { rec, fetchedAt: Date.now() }, 5000);
 }
 
 // ---- password hashing --------------------------------------------------------

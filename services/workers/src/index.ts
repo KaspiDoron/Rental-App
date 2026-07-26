@@ -3,7 +3,7 @@
 // separate BullMQ consumer with its own concurrency; graceful shutdown drains
 // in-flight jobs before exit so a deploy never drops a half-processed reply.
 
-import { logger } from "@wheeldeal/shared";
+import { logger, installProcessGuards } from "@wheeldeal/shared";
 import { startIncomingWorker } from "./incoming.worker";
 import { startOutboundWorker } from "./outbound.worker";
 import { startVisionWorker } from "./vision.worker";
@@ -11,6 +11,9 @@ import { startOutreachWorker } from "./outreach.worker";
 import { startSchedulerWorker, scheduleHeartbeat, rearmOpenWebhooks } from "./scheduler.worker";
 
 async function main() {
+  // Install BEFORE any worker starts, so a rejection thrown during boot is
+  // reported rather than killing the process anonymously.
+  installProcessGuards("workers");
   const workers = [
     startIncomingWorker(),
     startOutboundWorker(),
@@ -28,12 +31,26 @@ async function main() {
   logger.info({ workers: workers.length }, "workers up (heartbeat drain every 20s)");
 
   let shuttingDown = false;
+  // Hard ceiling on the drain. `close()` waits for in-flight jobs, and a job
+  // wedged on a slow upstream could block exit indefinitely - the orchestrator
+  // would then SIGKILL us anyway, just later and less cleanly.
+  const DRAIN_DEADLINE_MS = 15_000;
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, async () => {
       if (shuttingDown) return;
       shuttingDown = true;
       logger.info({ sig }, "workers shutting down (draining in-flight jobs)");
-      await Promise.allSettled(workers.map((w) => w.close()));
+      const forced = setTimeout(() => {
+        logger.warn({ sig, ms: DRAIN_DEADLINE_MS }, "drain deadline hit - exiting anyway");
+        process.exit(0);
+      }, DRAIN_DEADLINE_MS);
+      forced.unref();
+      try {
+        await Promise.allSettled(workers.map((w) => w.close()));
+      } catch {
+        /* allSettled cannot reject; belt and braces for a throwing close() */
+      }
+      clearTimeout(forced);
       process.exit(0);
     });
   }

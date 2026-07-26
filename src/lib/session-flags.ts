@@ -7,6 +7,13 @@
 // must be absolute.
 
 import { sbInsert, sbSelectStrict } from "./runtime-config";
+import { boundedSet } from "./bounded-map";
+
+// These caches live for the whole PROCESS lifetime in the workers (which import
+// all of src/lib), so an unbounded Map grows one entry per user - and the
+// takeover one per user x shop. Both are 30s-TTL freshness caches over
+// authoritative Supabase rows, so evicting a cold entry just costs one re-read.
+const CACHE_CAP = 5000;
 
 interface CacheEntry {
   paused: boolean;
@@ -37,7 +44,7 @@ export async function setSessionPaused(email: string, paused: boolean): Promise<
       raw: { sender: email, kind },
     },
   ]);
-  cache().set(email, { paused, at: Date.now() });
+  boundedSet(cache(), email, { paused, at: Date.now() }, CACHE_CAP);
   return ok;
 }
 
@@ -73,7 +80,7 @@ export async function setThreadTakeover(
       raw: { sender: email, digits, kind },
     },
   ]);
-  takeoverCache().set(key, { paused: on, at: Date.now() });
+  boundedSet(takeoverCache(), key, { paused: on, at: Date.now() }, CACHE_CAP);
   return ok;
 }
 
@@ -111,7 +118,7 @@ export async function isThreadTakenOver(
     return res.error === "missing" ? false : hit?.paused === true ? true : null;
   }
   const on = res.rows[0]?.raw?.kind === "human-takeover";
-  takeoverCache().set(key, { paused: on, at: Date.now() });
+  boundedSet(takeoverCache(), key, { paused: on, at: Date.now() }, CACHE_CAP);
   return on;
 }
 
@@ -136,7 +143,7 @@ export async function isSessionPaused(email: string): Promise<boolean | null> {
     return res.error === "missing" ? false : hit?.paused === true ? true : null;
   }
   const paused = res.rows[0]?.raw?.kind === "session-paused";
-  cache().set(email, { paused, at: Date.now() });
+  boundedSet(cache(), email, { paused, at: Date.now() }, CACHE_CAP);
   return paused;
 }
 

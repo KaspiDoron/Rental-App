@@ -109,7 +109,7 @@ The token is `sha256("wd-webhook:"+SESSION_SECRET)` truncated to the first 32
 hex chars. Verify:
 
 ```bash
-curl https://<ip>.sslip.io/healthz                         # {"ok":true,"redis":true}
+curl https://<ip>.sslip.io/readyz                          # {"ok":true,"redis":true}
 curl -s -o /dev/null -w '%{http_code}\n' \
      "https://<ip>.sslip.io/api/webhooks/evolution?token=nope"   # 403
 # on the VM:

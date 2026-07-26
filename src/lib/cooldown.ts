@@ -8,6 +8,7 @@
 
 import "server-only";
 import { sbInsert, sbSelect, sbDelete } from "./runtime-config";
+import { boundedSet } from "./bounded-map";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -25,7 +26,7 @@ export async function setCooldown(
   reason?: string
 ): Promise<void> {
   const until = Date.now() + minutes * 60_000;
-  mem().set(`${email}:${kind}`, until);
+  boundedSet(mem(), `${email}:${kind}`, until, 5000);
   try {
     await sbInsert(
       "user_cooldowns",
@@ -103,7 +104,7 @@ export async function noteAuthFailure(
   const now = Date.now();
   const rec = attempts().get(key);
   if (!rec || now - rec.first > windowMin * 60_000) {
-    attempts().set(key, { n: 1, first: now });
+    boundedSet(attempts(), key, { n: 1, first: now }, 5000);
     return { locked: false, lockedMinutes: 0 };
   }
   rec.n += 1;

@@ -70,5 +70,5 @@ echo "Watch it:  gcloud compute ssh $NAME --zone $ZONE --command 'sudo tail -n 4
 echo
 echo "When it finishes (~3-5 min), set the Evolution dashboard webhook URL to:"
 echo "   https://$API_DOMAIN/api/webhooks/evolution?token=<sha256('wd-webhook:'+SESSION_SECRET) first 32 hex chars>"
-echo "Verify:  curl https://$API_DOMAIN/healthz   ->   {\"ok\":true,\"redis\":true}"
+echo "Verify:  curl https://$API_DOMAIN/readyz    ->   {\"ok\":true,\"redis\":true}"
 echo "         curl -s -o /dev/null -w '%{http_code}\\n' 'https://$API_DOMAIN/api/webhooks/evolution?token=nope'  ->  403"
