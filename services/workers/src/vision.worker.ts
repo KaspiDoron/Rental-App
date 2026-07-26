@@ -41,15 +41,19 @@ async function threadContext(
   fromDigits: string,
   senderEmail: string
 ): Promise<{ rfq: StructuredRFQ; region?: string } | null> {
+  // 12-row WINDOW, not limit=1. A later takeover / rfq-less outbound row on top
+  // of the thread used to hide the anchor, so a shop's price-card PHOTO was
+  // dropped for "no rfq" even on a healthy thread (the live Eagle's Eye drop).
+  // Take the newest outbound row that actually carries an rfq.
   const rows = await sbSelect<{ raw: { rfq?: StructuredRFQ; region?: string } | null }>(
     "whatsapp_messages",
     `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
       fromDigits
-    )}&raw->>sender=eq.${encodeURIComponent(senderEmail)}&order=received_at.desc&limit=1`
+    )}&raw->>sender=eq.${encodeURIComponent(senderEmail)}&order=received_at.desc&limit=12`
   ).catch(() => []);
-  const raw = rows[0]?.raw;
-  if (!raw?.rfq) return null;
-  return { rfq: raw.rfq, region: typeof raw.region === "string" ? raw.region : undefined };
+  const anchor = rows.find((r) => r.raw?.rfq != null)?.raw;
+  if (!anchor?.rfq) return null;
+  return { rfq: anchor.rfq, region: typeof anchor.region === "string" ? anchor.region : undefined };
 }
 
 /** Compact recent history (oldest first) so the extractor never attributes OUR

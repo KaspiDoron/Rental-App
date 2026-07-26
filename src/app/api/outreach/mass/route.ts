@@ -53,6 +53,20 @@ export async function POST(req: Request) {
   if (!message || vendors.length === 0) {
     return NextResponse.json({ error: "message and vendors required" }, { status: 400 });
   }
+  // RFQ INTEGRITY: this route stamps every stored opener with kind:"rfq", so it
+  // MUST carry a real rfq or the thread has no anchor - a shop reply then reads
+  // as "RFQ anchor MISSING" (the live Eagle's Eye drop) and every strategic-wait
+  // wakeup dies. Fail loudly instead of storing a null-rfq cold opener.
+  const rfqOk =
+    body.rfq &&
+    typeof body.rfq === "object" &&
+    typeof (body.rfq as { durationDays?: unknown }).durationDays === "number";
+  if (!rfqOk) {
+    return NextResponse.json(
+      { error: "rfq required (a cold opener must carry its structured request)" },
+      { status: 400 }
+    );
+  }
 
   // Per-SESSION cap (backend truth, cannot be bypassed by repeat taps): count
   // the distinct shops already contacted or queued since this search session

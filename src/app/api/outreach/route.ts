@@ -156,6 +156,19 @@ export async function POST(req: Request) {
   const isAuto = kind !== "custom";
   const wantsLocal = Boolean(body.localLang) && session.plan === "ultra";
 
+  // RFQ INTEGRITY: an agent send stamped kind rfq/bargain/clarify MUST carry a
+  // real rfq, or the stored thread has no anchor (the "RFQ anchor MISSING" drop)
+  // and inbound replies can never be attributed. A user-typed "custom" is exempt.
+  if (
+    (kind === "rfq" || kind === "bargain" || kind === "clarify") &&
+    !(body.rfq && typeof body.rfq === "object" && typeof (body.rfq as { durationDays?: unknown }).durationDays === "number")
+  ) {
+    return NextResponse.json(
+      { error: `rfq required for a ${kind} send (the thread anchor)` },
+      { status: 400 }
+    );
+  }
+
   let outboundText = message;
   let englishGloss: string | undefined;
 

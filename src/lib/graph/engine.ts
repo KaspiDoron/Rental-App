@@ -1777,16 +1777,16 @@ export async function buildTurnFromThread(
     }
   }
 
-  const prior = await sbSelect<StoredMsg>(
-    "whatsapp_messages",
-    `select=direction,body,raw,received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      toDigits
-    )}&raw->>sender=eq.${encodeURIComponent(userEmail)}&order=received_at.desc&limit=1`
-  );
-  const ctx = (prior[0]?.raw ?? null) as GraphTurnInput["ctx"] & {
+  // Use THE shared resolver (12-row RFQ window), not a limit=1 newest-row read.
+  // The old query took only the single newest outbound, so a later takeover /
+  // rfq-less row orphaned the whole thread and every strategic-wait wakeup died
+  // silently here - the same class of bug as the live "RFQ anchor MISSING".
+  const { resolveThreadContext } = await import("../wa/thread-context");
+  const resolved = await resolveThreadContext(toDigits, userEmail);
+  const ctx = (resolved.ctx ?? null) as GraphTurnInput["ctx"] & {
     rfq?: import("../types").StructuredRFQ | null;
   };
-  if (!ctx?.rfq) return null;
+  if (!resolved.rfq || !ctx) return null;
   // Resolve the traveller's consented stay FRESH (never the frozen outbound
   // meta) so a hotel added after the thread started is used on the next tick.
   if (ctx.sender) {
@@ -1801,14 +1801,14 @@ export async function buildTurnFromThread(
 
   // Session lifecycle: the same closed-session guard the live loop uses.
   let sessionClosed = false;
-  if (ctx.sender && prior[0]?.received_at) {
+  if (ctx.sender && resolved.newestAt) {
     const marker = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
         ctx.sender
       )}&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
     ).catch(() => []);
-    sessionClosed = Boolean(marker[0] && marker[0].received_at > prior[0].received_at);
+    sessionClosed = Boolean(marker[0] && marker[0].received_at > resolved.newestAt);
   }
 
   const threadRows = await sbSelect<StoredMsg>(
@@ -1846,7 +1846,7 @@ export async function buildTurnFromThread(
       (m) => m.direction === "outbound" && (m.raw as { kind?: string } | null)?.kind === k
     ).length;
 
-  const rfq = ctx.rfq;
+  const rfq = resolved.rfq; // non-null: guarded by `if (!resolved.rfq) return null`
   const { floorPriceFor } = await import("../market");
   const { currencyForRegion } = await import("../agents");
   const cur = currencyForRegion(ctx.region || undefined) || "USD";
