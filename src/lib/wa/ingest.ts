@@ -27,7 +27,7 @@ import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 // second copy is how the drill window got skipped on the recovery path).
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
-import { waDigits } from "@/lib/wa/phone-key";
+import { waDigits, threadNumberOr } from "@/lib/wa/phone-key";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
@@ -276,12 +276,19 @@ export async function processEvolutionWebhook(
           const msgId = String(data.key.id ?? "");
           const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
           // Echo check 1: a bot send is already recorded with this provider id.
+          // TOLERANT number matching on BOTH echo checks. With an exact
+          // `to_number=eq.` a shop stored under a national spelling never
+          // matched, so our OWN send echoed back was misread as a human
+          // takeover: the agent stood down permanently and wrote an rfq-less
+          // row on top of the thread. Same variants the resolver uses.
+          const echoOr = threadNumberOr("to_number", from);
+          const numFilter = echoOr ? `&or=${echoOr}` : `&to_number=eq.${encodeURIComponent(from)}`;
           const byId = msgId
             ? await sbSelect(
                 "whatsapp_messages",
-                `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-                  from
-                )}&wa_message_id=eq.${encodeURIComponent(msgId)}&limit=1`
+                `select=id&direction=eq.outbound&wa_message_id=eq.${encodeURIComponent(
+                  msgId
+                )}&limit=1${numFilter}`
               )
             : [];
           if (byId.length > 0) continue;
@@ -289,11 +296,11 @@ export async function processEvolutionWebhook(
           // (every bot/app send is inserted at send time).
           const recentOut = await sbSelect<{ body: string | null }>(
             "whatsapp_messages",
-            `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-              from
-            )}&raw->>sender=eq.${encodeURIComponent(email)}&received_at=gte.${encodeURIComponent(
+            `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+              email
+            )}&received_at=gte.${encodeURIComponent(
               new Date(Date.now() - 10 * 60_000).toISOString()
-            )}&order=received_at.desc&limit=10`
+            )}&order=received_at.desc&limit=10${numFilter}`
           );
           const isEcho = recentOut.some(
             (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized

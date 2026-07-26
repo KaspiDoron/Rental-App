@@ -12,6 +12,8 @@ import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { webhookDiagnostics, reassertWebhook, instanceNameFor } from "@/lib/evolution";
 import { classifyIngestDetailed, type GateRaw } from "@/lib/wa/thread-gate";
+import { threadNumberOr } from "@/lib/wa/phone-key";
+import { resolveThreadContext } from "@/lib/wa/thread-context";
 import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
 import { publicRequestOrigin } from "@/lib/request-origin";
@@ -67,14 +69,25 @@ export async function GET(req: Request) {
   // ---- Optional per-number thread trace (the "why no reply" answer) ---------
   if (number) {
     const encNum = encodeURIComponent(number);
+    const outOr = threadNumberOr("to_number", number);
+    const inOr = threadNumberOr("from_number", number);
     const [outbound, inbound, dropTrace] = await Promise.all([
+      // TOLERANT matching, exactly like the engine. An exact `to_number=eq.`
+      // read here could show "0 anchors" for a thread the resolver finds fine
+      // (or vice versa) because a shop's number may be stored in a national
+      // spelling - a doctor that disagrees with the engine sends you hunting
+      // the wrong bug.
       sbSelect<{ received_at: string; raw: GateRaw | null }>(
         "whatsapp_messages",
-        `select=received_at,raw&direction=eq.outbound&to_number=eq.${encNum}&raw->>sender=eq.${enc}&order=received_at.desc&limit=10`
+        `select=received_at,raw&direction=eq.outbound&raw->>sender=eq.${enc}&order=received_at.desc&limit=10${
+          outOr ? `&or=${outOr}` : `&to_number=eq.${encNum}`
+        }`
       ).catch(() => []),
       sbSelect<{ id: number; received_at: string }>(
         "whatsapp_messages",
-        `select=id,received_at&direction=eq.inbound&from_number=eq.${encNum}&raw->>receiver=eq.${enc}&order=received_at.desc&limit=5`
+        `select=id,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&order=received_at.desc&limit=5${
+          inOr ? `&or=${inOr}` : `&from_number=eq.${encNum}`
+        }`
       ).catch(() => []),
       sbSelect<{ created_at: string; detail: string | null }>(
         "agent_events",
@@ -86,14 +99,20 @@ export async function GET(req: Request) {
       outbound.map((o) => ({ received_at: o.received_at, raw: o.raw })),
       Date.now()
     );
-    const newestCtx = outbound[0]?.raw;
+    // THE ANCHOR VERDICT MUST COME FROM THE ENGINE'S OWN RESOLVER. This used to
+    // be `outbound[0]?.raw?.rfq != null` - the newest row only - which is the
+    // exact predicate resolveThreadContext was written to replace. So the doctor
+    // could report "RFQ anchor MISSING" on a thread the agent handles perfectly
+    // (any rfq-less row on top), or the reverse. One predicate, one truth.
+    const resolved = await resolveThreadContext(number, email).catch(() => null);
     const [takenOver, paused] = await Promise.all([
       isThreadTakenOver(email, number).catch(() => null),
       isSessionPaused(email).catch(() => null),
     ]);
-    // Match this number's drop traces (detail carries the digits).
-    const lastDrop =
-      dropTrace.find((d) => (d.detail ?? "").includes(number)) ?? dropTrace[0] ?? null;
+    // ONLY this number's drop traces. The old `?? dropTrace[0]` fallback showed
+    // an unrelated thread's drop as if it belonged to this one - which is how a
+    // stale trace from another shop reads as a live failure here.
+    const lastDrop = dropTrace.find((d) => (d.detail ?? "").includes(number)) ?? null;
 
     report.thread = {
       digits: number,
@@ -103,7 +122,10 @@ export async function GET(req: Request) {
         hasRfq: o.raw?.rfq != null,
       })),
       gate: { ingestible: gate.ok, reason: gate.reason },
-      ctxRfqPresent: newestCtx?.rfq != null,
+      // What the AGENT sees, not what the newest row happens to carry.
+      ctxRfqPresent: resolved?.rfq != null,
+      /** true when the anchor came from self-healing recovery, not a stored row. */
+      anchorRepaired: resolved?.repaired === true,
       takenOver,
       paused,
       recentInbound: inbound.map((i) => ({ at: i.received_at, id: String(i.id) })),

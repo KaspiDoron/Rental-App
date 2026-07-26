@@ -45,6 +45,8 @@ export interface ThreadContext {
   anchors: number;
   /** received_at of the newest outbound row (session-close comparisons). */
   newestAt: string | null;
+  /** True when `rfq` came from anchor RECOVERY, not from an outbound row. */
+  repaired?: boolean;
 }
 
 const WINDOW = 12; // recent outbound rows scanned for an RFQ anchor
@@ -71,9 +73,9 @@ export async function resolveThreadContext(
   const or = threadNumberOr("to_number", digits);
   if (!or) return empty;
 
-  const rows = await sbSelect<{ received_at: string; raw: ThreadRaw | null }>(
+  const rows = await sbSelect<{ id: number; received_at: string; raw: ThreadRaw | null }>(
     "whatsapp_messages",
-    `select=received_at,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=id,received_at,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       senderEmail
     )}&order=received_at.desc&limit=${WINDOW}&or=${or}`
   ).catch(() => []);
@@ -88,6 +90,52 @@ export async function resolveThreadContext(
   const anchor = rows.find((r) => r.raw?.rfq != null) ?? null;
   // Identity (vendor/region) can come from any recent row, newest wins.
   const identity = rows.find((r) => r.raw?.vendorId) ?? anchor ?? rows[0];
+
+  // SELF-HEAL. We demonstrably messaged this shop (rows.length > 0) and the
+  // gate says the thread is live, yet NO row carries an rfq - so every reply
+  // would die as "no-rfq-thread" forever. Recover the RFQ from the traveller's
+  // own recent search and repair the row, instead of going permanently silent.
+  if (!anchor && gate.ok) {
+    const { recoverRfqForSender } = await import("./anchor-recovery");
+    const recovered = await recoverRfqForSender(senderEmail).catch(() => null);
+    if (recovered) {
+      const target = identity ?? rows[0];
+      // Persist onto the newest outbound row so the heal is permanent (one
+      // recovery per thread, not one per inbound message) and the WA doctor
+      // reports a healthy anchor from here on. Best-effort: if the write fails
+      // we still proceed with THIS turn using the recovered rfq.
+      if (target) {
+        const { sbUpdate } = await import("../runtime-config");
+        await sbUpdate(
+          "whatsapp_messages",
+          `id=eq.${target.id}`,
+          { raw: { ...(target.raw ?? {}), rfq: recovered, rfqRecovered: true } }
+        ).catch(() => {});
+      }
+      // Never silent: the repair is an event the owner can see in the doctor.
+      const { sbInsert } = await import("../runtime-config");
+      await sbInsert("agent_events", [
+        {
+          kind: "anchor-repaired",
+          user_email: senderEmail,
+          vendor_name: identity?.raw?.vendorName ?? digits,
+          detail: `Re-anchored ${digits} from the traveller's recent search (no outbound row carried an rfq).`,
+        },
+      ]).catch(() => {});
+      return {
+        ok: gate.ok,
+        reason: gate.reason,
+        rfq: recovered,
+        ctx: (target?.raw ?? null) as ThreadRaw | null,
+        vendorId: identity?.raw?.vendorId,
+        vendorName: identity?.raw?.vendorName,
+        region: identity?.raw?.region || undefined,
+        anchors: rows.length,
+        newestAt: rows[0]?.received_at ?? null,
+        repaired: true,
+      };
+    }
+  }
 
   return {
     ok: gate.ok,

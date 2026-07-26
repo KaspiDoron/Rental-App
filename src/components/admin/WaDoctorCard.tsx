@@ -28,6 +28,7 @@ interface DoctorReport {
     anchors: { at: string; kind: string | null; hasRfq: boolean }[];
     gate: { ingestible: boolean; reason: string };
     ctxRfqPresent: boolean;
+    anchorRepaired?: boolean;
     takenOver: boolean | null;
     paused: boolean | null;
     recentInbound: { at: string; id: string }[];
@@ -210,7 +211,17 @@ export function WaDoctorCard() {
                   label="Ingest gate"
                   value={`${report.thread.gate.ingestible ? "OK" : "DROP"} · ${report.thread.gate.reason}`}
                 />
-                <Row ok={report.thread.ctxRfqPresent} label="RFQ thread anchor" value={report.thread.ctxRfqPresent ? "present" : "MISSING"} />
+                <Row
+                  ok={report.thread.ctxRfqPresent}
+                  label="RFQ thread anchor"
+                  value={
+                    report.thread.ctxRfqPresent
+                      ? report.thread.anchorRepaired
+                        ? "recovered from your last search"
+                        : "present"
+                      : "MISSING"
+                  }
+                />
                 <Row
                   ok={report.thread.takenOver === false ? true : report.thread.takenOver === true ? false : null}
                   label="Human takeover hold"

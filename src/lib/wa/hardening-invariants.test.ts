@@ -78,6 +78,40 @@ describe("pairing: a live handshake is never destroyed by a code refresh", () =>
   });
 });
 
+describe("inbound: a live thread can never die of a missing RFQ anchor", () => {
+  it("resolveThreadContext self-heals from the traveller's recent search", () => {
+    const ctx = readCode("src/lib/wa/thread-context.ts");
+    // Recovery is attempted ONLY for a thread we actually messaged and whose
+    // gate passed - never as a way to invent an outreach that never happened.
+    expect(ctx).toMatch(/if \(!anchor && gate\.ok\)/);
+    expect(ctx).toMatch(/recoverRfqForSender/);
+    // ...and the heal is persisted, so it is one repair per thread, not one
+    // per inbound message.
+    expect(ctx).toMatch(/rfqRecovered: true/);
+  });
+
+  it("the WA doctor asks the ENGINE for the anchor verdict, not the newest row", () => {
+    const doc = readCode("src/app/api/admin/wa-doctor/route.ts");
+    // The old `outbound[0]?.raw?.rfq != null` is the exact predicate the
+    // resolver replaced; a doctor using it reports failures the agent does not
+    // have (and misses ones it does).
+    expect(doc).not.toMatch(/newestCtx\?\.rfq/);
+    expect(doc).toMatch(/resolveThreadContext\(number, email\)/);
+    // A drop trace from ANOTHER number must never be shown as this thread's.
+    expect(doc).not.toMatch(/\?\? dropTrace\[0\]/);
+  });
+
+  it("number matching is tolerant on EVERY read path (engine, doctor, echo)", () => {
+    for (const f of [
+      "src/lib/wa/thread-context.ts",
+      "src/app/api/admin/wa-doctor/route.ts",
+      "src/lib/wa/ingest.ts",
+    ]) {
+      expect(readCode(f)).toMatch(/threadNumberOr\(/);
+    }
+  });
+});
+
 describe("gating: the Find-Deals blur-lock actually renders when unpaired", () => {
   it("waits FOR hydration (`restored`), never `!restored`", () => {
     // `restored` is a hydration-DONE flag - setRestored(true) runs
