@@ -33,7 +33,7 @@ vi.mock("../market", () => ({
   regionKeysFor: () => ["chiang-mai"],
 }));
 
-import { replayConversation } from "../simulate";
+import { replayConversation, replaySpteTurns } from "../simulate";
 import { evaluateCase, evaluateTurn } from "./golden";
 import { defaultGraphSpec } from "../graph/default-graph";
 import type { GoldenCase } from "./types";
@@ -122,6 +122,176 @@ describe("golden replay harness", () => {
     // (the exact behavior the owner demanded in the negotiation audit).
     expect(run.turns[1].action).toBe("bargain");
     expect(run.turns[1].state.rounds).toBe(2);
+  });
+
+  // --------------------------------------------------------------------------
+  // THE PRIMARY ENGINE. Everything above gates the GRAPH engine, which is the
+  // dormant fallback. These two cases are frozen from the live Krabi threads of
+  // 26 Jul and gate SPTE - the engine that actually answers shops.
+  // --------------------------------------------------------------------------
+  describe("SPTE replay - real misreads frozen so they cannot come back", () => {
+    it("MARLIN: a price MENU is resolved, never answered with a goodbye", async () => {
+      const marlin: GoldenCase = {
+        id: 101,
+        name: "menu of two tiers -> option-probe, not redirect-close",
+        thread_key: null,
+        rfq: RFQ,
+        region: "Krabi, Thailand",
+        floor: { floor: 150, typical: 240, currency: "THB" },
+        turns: [
+          {
+            // Verbatim. The old engine read "Normal scooters?" as the shop
+            // naming a different vehicle, returned wrongVehicle, and the whole
+            // thread became terminal after one message.
+            shopSays: "Hi! Normal scooters? Some models 200 and some new 250/day",
+            stubExtraction: {
+              found: true,
+              pricePerDay: 200,
+              currency: "THB",
+              vehicleVerdict: "unclear",
+              variance: true,
+              confidence: "medium",
+            },
+          },
+        ],
+        expects: [
+          {
+            move: "option-probe",
+            moveNot: ["redirect-close", "close", "silent"],
+            // It must not ask for the price it was just given twice.
+            noMessageContains: ["send it as text"],
+          },
+        ],
+        enabled: true,
+        created_at: "t",
+      };
+      const spte = await replaySpteTurns({
+        turns: marlin.turns,
+        rfq: RFQ,
+        floor: marlin.floor,
+      });
+      // Both tiers were read - the 200 is no longer thrown away.
+      expect(spte.turns[0].optionCount).toBe(2);
+      expect(spte.turns[0].move).toBe("option-probe");
+      // The reply names what the shop actually said.
+      expect(spte.turns[0].ourReply).toMatch(/200|250/);
+
+      const graph = await replayConversation({
+        turns: marlin.turns,
+        rfq: RFQ,
+        region: marlin.region ?? undefined,
+        floor: marlin.floor,
+        spec: defaultGraphSpec(),
+      });
+      expect(evaluateCase(marlin, graph.turns, spte.turns).pass).toBe(true);
+    });
+
+    it("PRICE BOARD: a photo is read and confirmed, never retyped by the shop", async () => {
+      const board: GoldenCase = {
+        id: 102,
+        name: "photo price board -> clarify that confirms the read",
+        thread_key: null,
+        rfq: RFQ,
+        region: "Krabi, Thailand",
+        floor: { floor: 150, typical: 240, currency: "THB" },
+        turns: [
+          {
+            shopSays: "",
+            imageKind: "price_sheet",
+            stubExtraction: {
+              found: true,
+              pricePerDay: 250,
+              sheetPricePerDay: 250,
+              currency: "THB",
+              vehicleVerdict: "match",
+              confidence: "medium",
+            },
+          },
+        ],
+        expects: [
+          {
+            move: "bargain",
+            // The live failure, verbatim: four boards arrived and we asked for
+            // the price "as text". Never again, on either engine.
+            noMessageContains: ["as text", "send the price"],
+          },
+        ],
+        enabled: true,
+        created_at: "t",
+      };
+      const spte = await replaySpteTurns({ turns: board.turns, rfq: RFQ, floor: board.floor });
+      // A price we READ is a live quote, so the ladder is bargain-first - the
+      // shop is never asked to retype a board we already understood.
+      expect(spte.turns[0].move).toBe("bargain");
+      expect(spte.turns[0].ourReply ?? "").not.toMatch(/as text/i);
+    });
+
+    it("a regression re-appearing FAILS the gate (the move assertion bites)", async () => {
+      const impossible: GoldenCase = {
+        id: 103,
+        name: "guard against a silent pass",
+        thread_key: null,
+        rfq: RFQ,
+        region: null,
+        floor: { floor: 150, typical: 240, currency: "THB" },
+        turns: [
+          {
+            shopSays: "Hi! Normal scooters? Some models 200 and some new 250/day",
+            stubExtraction: {
+              found: true,
+              pricePerDay: 200,
+              currency: "THB",
+              vehicleVerdict: "unclear",
+              variance: true,
+              confidence: "medium",
+            },
+          },
+        ],
+        // Asserting the OLD broken behaviour must fail.
+        expects: [{ move: "redirect-close" }],
+        enabled: true,
+        created_at: "t",
+      };
+      const spte = await replaySpteTurns({
+        turns: impossible.turns,
+        rfq: RFQ,
+        floor: impossible.floor,
+      });
+      const graph = await replayConversation({
+        turns: impossible.turns,
+        rfq: RFQ,
+        floor: impossible.floor,
+        spec: defaultGraphSpec(),
+      });
+      const res = evaluateCase(impossible, graph.turns, spte.turns);
+      expect(res.pass).toBe(false);
+      expect(res.turns[0].failures.join(" ")).toContain("move");
+    });
+
+    it("a case that asserts a move but never replayed SPTE is a failure, not a pass", () => {
+      const played = {
+        shopSays: "s",
+        action: "bargain",
+        ourReply: "x",
+        path: [],
+        state: {},
+        stages: [],
+      } as unknown as Parameters<typeof evaluateTurn>[1];
+      expect(evaluateTurn({ move: "option-probe" }, played)).toHaveLength(1);
+    });
+
+    it("replay is bit-stable: same case, same moves, every run", async () => {
+      const turns = [
+        {
+          shopSays: "Some models 200 and some new 250/day",
+          stubExtraction: { found: true, pricePerDay: 200, currency: "THB", variance: true },
+        },
+      ];
+      const a = await replaySpteTurns({ turns, rfq: RFQ, floor: { floor: 150, currency: "THB" } });
+      const b = await replaySpteTurns({ turns, rfq: RFQ, floor: { floor: 150, currency: "THB" } });
+      expect(a.turns.map((t) => t.move)).toEqual(b.turns.map((t) => t.move));
+      expect(a.turns.map((t) => t.ourReply)).toEqual(b.turns.map((t) => t.ourReply));
+    });
   });
 
   it("evaluateTurn covers every expectation dimension", () => {

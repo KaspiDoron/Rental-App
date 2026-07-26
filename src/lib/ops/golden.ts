@@ -7,7 +7,7 @@
 
 import "server-only";
 import { sbSelect } from "../runtime-config";
-import { replayConversation } from "../simulate";
+import { replayConversation, replaySpteTurns } from "../simulate";
 import type { PlayedTurn } from "../simulate";
 import type { GraphSpec } from "../graph/types";
 import type { PolicyOverlay } from "./overlay";
@@ -18,10 +18,29 @@ const MAX_CASES = 24;
 /** Pure expectation checker - unit-tested. */
 export function evaluateTurn(
   expected: GoldenExpect | undefined,
-  played: PlayedTurn
+  played: PlayedTurn,
+  /** The same turn as run by the PRIMARY engine, when the case asserts a move. */
+  spte?: { move: string; ourReply: string | null }
 ): string[] {
   if (!expected) return [];
   const failures: string[] = [];
+  // PRIMARY ENGINE first: `move` is the assertion that gates production. A case
+  // that asks for a move but never reached the SPTE replay is a failure, not a
+  // silent pass - an eval gate that skips when it cannot check is not a gate.
+  if (expected.move) {
+    if (!spte) failures.push(`move: expected "${expected.move}", SPTE replay did not run`);
+    else if (spte.move !== expected.move) {
+      failures.push(`move: expected "${expected.move}", got "${spte.move}"`);
+    }
+  }
+  for (const banned of expected.moveNot ?? []) {
+    if (spte?.move === banned) failures.push(`move: "${banned}" is forbidden here`);
+  }
+  for (const banned of expected.noMessageContains ?? []) {
+    if ((spte?.ourReply ?? "").toLowerCase().includes(banned.toLowerCase())) {
+      failures.push(`SPTE message contains banned "${banned}"`);
+    }
+  }
   if (expected.action && played.action !== expected.action) {
     failures.push(`action: expected "${expected.action}", got "${played.action}"`);
   }
@@ -48,10 +67,14 @@ export function evaluateTurn(
   return failures;
 }
 
-export function evaluateCase(gc: GoldenCase, playedTurns: PlayedTurn[]): ReplayCaseResult {
+export function evaluateCase(
+  gc: GoldenCase,
+  playedTurns: PlayedTurn[],
+  spteTurns: Array<{ move: string; ourReply: string | null }> = []
+): ReplayCaseResult {
   const turns = playedTurns.map((played, i) => {
     const expected = gc.expects[i] ?? {};
-    const failures = evaluateTurn(expected, played);
+    const failures = evaluateTurn(expected, played, spteTurns[i]);
     return {
       turn: i,
       shopSays: played.shopSays?.slice(0, 300),
@@ -62,6 +85,10 @@ export function evaluateCase(gc: GoldenCase, playedTurns: PlayedTurn[]): ReplayC
         path: played.path,
         target: played.state.lastTarget,
         message: (played.ourReply ?? "").slice(0, 300) || undefined,
+        // What the PRIMARY engine did - so a failure report names the thing
+        // that actually shipped, not just the dormant graph's action.
+        move: spteTurns[i]?.move,
+        spteMessage: (spteTurns[i]?.ourReply ?? "").slice(0, 300) || undefined,
       },
       failures,
     };
@@ -87,15 +114,24 @@ export async function runGoldenCase(
   opts: { spec?: GraphSpec; overlay?: PolicyOverlay } = {}
 ): Promise<ReplayCaseResult> {
   try {
-    const { turns } = await replayConversation({
-      turns: gc.turns,
-      rfq: gc.rfq,
-      region: gc.region ?? undefined,
-      floor: gc.floor,
-      spec: opts.spec,
-      overlay: opts.overlay,
-    });
-    return evaluateCase(gc, turns);
+    // Both engines replay the same frozen thread: the graph engine for the
+    // action/edge assertions, SPTE - the one that actually answers shops - for
+    // the move assertions. Only cases that ask for a move pay for the second.
+    const wantsMove = gc.expects.some((e) => e?.move || e?.moveNot?.length || e?.noMessageContains?.length);
+    const [{ turns }, spte] = await Promise.all([
+      replayConversation({
+        turns: gc.turns,
+        rfq: gc.rfq,
+        region: gc.region ?? undefined,
+        floor: gc.floor,
+        spec: opts.spec,
+        overlay: opts.overlay,
+      }),
+      wantsMove
+        ? replaySpteTurns({ turns: gc.turns, rfq: gc.rfq, floor: gc.floor })
+        : Promise.resolve({ turns: [] as Awaited<ReturnType<typeof replaySpteTurns>>["turns"] }),
+    ]);
+    return evaluateCase(gc, turns, spte.turns);
   } catch (e) {
     return {
       caseId: gc.id,

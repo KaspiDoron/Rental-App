@@ -60,6 +60,15 @@ export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
     return finalize(ctx, artifact, { tier: "R", reason: "reflex" }, rail.ok ? rail.finalText : undefined);
   }
 
+  // REPLAY: no network, no model, byte-stable. The legal move set and every
+  // rail above and below are the REAL ones - only the composition is frozen,
+  // which is exactly the property a regression gate needs.
+  if (ctx.deterministic) {
+    const fb = fallbackArtifact(ctx);
+    const rail = runPostRails(ctx, fb);
+    return finalize(ctx, fb, { tier: "R", reason: "replay" }, rail.ok ? rail.finalText : undefined);
+  }
+
   // TIER F / M: the turn's ONE LLM call, schema-validated + move-coerced.
   const { artifact, route } = await runSinglePass(ctx);
 

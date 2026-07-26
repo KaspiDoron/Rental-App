@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
 import { sbSelect, sbInsert, sbInsertReturning, sbUpdate } from "@/lib/runtime-config";
 import type { ReviewInput, ReviewVerdict, OutcomeImpact, ReviewStatus } from "@/lib/ops/types";
+import { compileMisreadLesson, isMisreadKind, lessonNote, misreadTag } from "@/lib/ops/misread";
 
 // Ops Center: owner reviews of agent decisions - the feedback that actually
 // teaches the system. Upserted per (thread, decision). Two side effects make
@@ -68,6 +69,29 @@ export async function POST(req: Request) {
   if (typeof body.bookmark === "boolean") patch.bookmark = body.bookmark;
   if (body.status !== undefined && STATUSES.includes(body.status)) patch.status = body.status;
 
+  // Owner-facing notes about what the correction actually did.
+  let lessonNoteOut: string | null = null;
+  let goldenNote: string | null = null;
+
+  // MISREAD CORRECTION. Validated against the closed vocabulary before it can
+  // touch a row - an unknown label would compile into a lesson nothing can
+  // retrieve. Rides `tags` (an existing column), so there is no migration.
+  const misread =
+    body.misread && isMisreadKind(body.misread.actualMeaning) &&
+    String(body.misread.shopMessage ?? "").trim()
+      ? {
+          shopMessage: String(body.misread.shopMessage).slice(0, 600),
+          actualMeaning: body.misread.actualMeaning,
+          shouldHaveMoved: body.misread.shouldHaveMoved,
+        }
+      : null;
+  if (misread) {
+    const tags = new Set<string>(Array.isArray(patch.tags) ? (patch.tags as string[]) : []);
+    tags.add(misreadTag(misread.actualMeaning));
+    if (misread.shouldHaveMoved) tags.add(`move:${misread.shouldHaveMoved}`);
+    patch.tags = [...tags].slice(0, 10);
+  }
+
   // Existing review for this (thread, decision)?
   const filter = decisionId
     ? `thread_key=eq.${encodeURIComponent(threadKey)}&decision_id=eq.${encodeURIComponent(decisionId)}`
@@ -121,6 +145,96 @@ export async function POST(req: Request) {
     typeof body.betterResponse === "string" &&
     body.betterResponse.trim().length > 0 &&
     body.betterResponse.trim() !== (existing[0]?.better_response ?? "").trim();
+
+  // A MISREAD becomes a retrievable lesson. Written to the same agent_training
+  // table the other teaching uses, but tagged in `note` so loadCoaching can
+  // fetch ONLY the lessons that apply to the turn in front of it - a menu
+  // lesson on a menu turn, not blended into every prompt forever.
+  if (misread) {
+    const thread = await sbSelect<{ vendor_name: string | null }>(
+      "negotiation_threads",
+      `select=vendor_name&thread_key=eq.${encodeURIComponent(threadKey)}&limit=1`
+    ).catch(() => []);
+    // PARKED first. `loadCoaching` reads source="ops-lesson" only, so writing
+    // "-pending" means the lesson exists but changes no behaviour yet. It is
+    // promoted below, and only if the whole golden suite still passes.
+    const lessonRows = await sbInsertReturning<{ id: number }>("agent_training", [
+      {
+        text: compileMisreadLesson(misread, {
+          vendorName: thread[0]?.vendor_name ?? undefined,
+          why: body.feedback ?? undefined,
+        }),
+        note: lessonNote(misread.actualMeaning),
+        added_by: session.email,
+        source: "ops-lesson-pending",
+      },
+    ]).catch(() => []);
+
+    // FREEZE THE THREAD AS A GOLDEN CASE. A correction that only edits a prompt
+    // can silently rot; a frozen case makes the same misread fail the gate
+    // forever. Only assertable when the owner named the move it should have
+    // made - otherwise there is nothing for the replay to check.
+    if (misread.shouldHaveMoved) {
+      const candidate = {
+        name: `misread ${misread.actualMeaning} - ${thread[0]?.vendor_name ?? "shop"}`.slice(0, 80),
+        thread_key: threadKey,
+        rfq: {},
+        region: null,
+        floor: null,
+        turns: [{ shopSays: misread.shopMessage, stubExtraction: {} }],
+        expects: [{ move: misread.shouldHaveMoved }],
+        // Enabled only if it PASSES right now. A case the engine already fails
+        // would block every future activation on day one - an honest "we still
+        // get this wrong" belongs in the response, not in the gate.
+        enabled: false,
+      };
+      try {
+        const { runGoldenCase } = await import("@/lib/ops/golden");
+        const probe = await runGoldenCase({
+          ...candidate,
+          id: 0,
+          created_at: new Date().toISOString(),
+        } as never);
+        candidate.enabled = probe.pass;
+        await sbInsert("agent_golden_cases", [candidate]).catch(() => {});
+        goldenNote = probe.pass
+          ? "Frozen as a golden case - this misread can never come back silently."
+          : `Frozen but NOT enabled: the engine still answers "${probe.turns[0]?.got?.move ?? "?"}" here.`;
+      } catch {
+        /* freezing is a bonus - never block the correction itself */
+      }
+    }
+
+    // ACTIVATE the lesson only behind a green suite, and version the change so
+    // it has the same one-click rollback every other behaviour change has.
+    try {
+      const { runGoldenSuite } = await import("@/lib/ops/golden");
+      const report = await runGoldenSuite();
+      if (report.passed === report.total && lessonRows[0]?.id) {
+        await sbUpdate("agent_training", `id=eq.${lessonRows[0].id}`, {
+          source: "ops-lesson",
+        }).catch(() => {});
+        const { saveVersionedSpec } = await import("@/lib/policy");
+        const { getPolicyOverlay } = await import("@/lib/ops/overlay");
+        // The overlay itself is UNCHANGED - this row exists so the lesson's
+        // activation is a versioned, rollbackable event like any other.
+        await saveVersionedSpec({
+          kind: "policy_overlay",
+          spec: await getPolicyOverlay(),
+          note: `lesson activated: ${misread.actualMeaning}`,
+          author: session.email,
+          replayReport: report,
+        }).catch(() => {});
+        const { bustCoachingCache } = await import("@/lib/spte/coaching");
+        bustCoachingCache();
+        lessonNoteOut = "Lesson is live - the suite still passes.";
+      } else {
+        lessonNoteOut = `Lesson saved but NOT activated: ${report.total - report.passed} of ${report.total} golden cases would break.`;
+      }
+    } catch {
+      lessonNoteOut = "Lesson saved. Activation check could not run.";
+    }
+  }
 
   if (becameBookmarked || newCorrection) {
     const [outs, ins, thread] = await Promise.all([
@@ -191,7 +305,7 @@ export async function POST(req: Request) {
     /* not wired yet / best-effort */
   }
 
-  return NextResponse.json({ ok: true, id: reviewId });
+  return NextResponse.json({ ok: true, id: reviewId, lesson: lessonNoteOut, golden: goldenNote });
 }
 
 export const maxDuration = 60;

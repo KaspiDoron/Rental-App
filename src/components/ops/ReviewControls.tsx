@@ -7,6 +7,8 @@
 
 import { useState } from "react";
 import type { OutcomeImpact, ReviewVerdict } from "@/lib/ops/types";
+import { MISREAD_KINDS, MISREAD_LABEL, type MisreadKind } from "@/lib/ops/misread";
+import type { MoveKind } from "@/lib/spte/types";
 
 interface Initial {
   rating?: number | null;
@@ -20,15 +22,30 @@ interface Initial {
   status?: string | null;
 }
 
+/** The moves worth naming as "it should have done this instead". Kept short on
+ *  purpose - a correction the owner has to scroll for is a correction nobody
+ *  files. Every value is a real MoveKind, so a pick compiles into behaviour. */
+const SUGGESTABLE_MOVES: MoveKind[] = [
+  "option-probe",
+  "bargain",
+  "answer",
+  "clarify",
+  "pickup-location",
+  "deposit-probe",
+];
+
 export function ReviewControls({
   threadKey,
   decisionId,
   initial,
+  pinnedMessage,
   onSaved,
 }: {
   threadKey: string;
   decisionId?: string | null;
   initial?: Initial | null;
+  /** The shop message the owner tapped in the transcript, if any. */
+  pinnedMessage?: string | null;
   onSaved?: () => void;
 }) {
   const [rating, setRating] = useState<number | null>(initial?.rating ?? null);
@@ -44,6 +61,9 @@ export function ReviewControls({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [coachBusy, setCoachBusy] = useState(false);
+  // The misread correction - what the shop's message ACTUALLY meant.
+  const [misreadKind, setMisreadKind] = useState<MisreadKind | null>(null);
+  const [shouldHaveMoved, setShouldHaveMoved] = useState<MoveKind | null>(null);
 
   // Route the feedback through the Coach: an agent converts it into concrete
   // instruction patches on the live pipeline (versioned, rollbackable).
@@ -97,11 +117,33 @@ export function ReviewControls({
             .map((t) => t.trim())
             .filter(Boolean),
           bookmark,
+          ...(misreadKind && pinnedMessage
+            ? {
+                misread: {
+                  shopMessage: pinnedMessage,
+                  actualMeaning: misreadKind,
+                  ...(shouldHaveMoved ? { shouldHaveMoved } : {}),
+                },
+              }
+            : {}),
           ...extra,
         }),
       });
       const d = await res.json();
-      setSaved(d?.ok ? "Saved - the agents learn from this." : d?.error ?? "Save failed.");
+      setSaved(
+        d?.ok
+          ? [
+              "Saved - the agents learn from this.",
+              // Say plainly whether the lesson is LIVE or parked behind a
+              // failing gate. "Saved" alone would imply a behaviour change
+              // that may not have happened.
+              d.lesson,
+              d.golden,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          : d?.error ?? "Save failed."
+      );
       if (d?.ok) onSaved?.();
     } catch {
       setSaved("Could not reach the server.");
@@ -187,6 +229,56 @@ export function ReviewControls({
           </button>
         ))}
       </div>
+
+      {/* MISREAD CORRECTION. Everything else on this panel judges our MOVE;
+          this judges our COMPREHENSION, which is where the failures start. */}
+      {pinnedMessage ? (
+        <div className="rounded-xl border-2 border-brandyellow/40 bg-brandyellow-soft p-2.5">
+          <div className="text-[11px] font-extrabold uppercase tracking-wide text-[#8a6100] dark:text-brandyellow">
+            The agent misread this
+          </div>
+          <p className="mt-1 line-clamp-3 border-l-2 border-line pl-2 text-[11px] italic text-soft">
+            &ldquo;{pinnedMessage}&rdquo;
+          </p>
+          <div className="mt-2 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+            It actually was
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {MISREAD_KINDS.map((k) => (
+              <button
+                key={k}
+                onClick={() => setMisreadKind(misreadKind === k ? null : k)}
+                className={chip(misreadKind === k)}
+                title={MISREAD_LABEL[k]}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+          {misreadKind && (
+            <>
+              <div className="mt-2 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                It should have (optional)
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {SUGGESTABLE_MOVES.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setShouldHaveMoved(shouldHaveMoved === m ? null : m)}
+                    className={chip(shouldHaveMoved === m, "green")}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-soft">
+                Saving turns this into a lesson the engine reads on every future turn
+                that looks like this one.
+              </p>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {/* Correction - what SHOULD have been sent */}
       <textarea

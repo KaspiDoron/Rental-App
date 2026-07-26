@@ -95,6 +95,9 @@ export function ConversationPanel({
 }) {
   const [data, setData] = useState<Transcript | null>(null);
   const [openDecision, setOpenDecision] = useState<string | null>(null);
+  // The shop message the owner says we misread. One per panel session -
+  // a correction is about ONE message, not a vague "this went badly".
+  const [pinned, setPinned] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [goldenNote, setGoldenNote] = useState<string | null>(null);
 
@@ -277,6 +280,17 @@ export function ConversationPanel({
                     )}
                     <div className={`mt-1 flex items-center gap-2 text-[9px] ${m.dir === "out" ? "text-white/60" : "text-faint"}`}>
                       <span>{new Date(m.at).toLocaleString()}</span>
+                      {/* Only a SHOP message can be misread by us. Pinning one
+                          is what turns "this thread went wrong" into a
+                          correction the engine can actually compile. */}
+                      {m.dir === "in" && m.text?.trim() && (
+                        <button
+                          onClick={() => setPinned(pinned === m.text ? null : m.text)}
+                          className={`font-extrabold underline ${pinned === m.text ? "text-brandblue" : ""}`}
+                        >
+                          {pinned === m.text ? "📌 Pinned as misread" : "📌 Agent misread this"}
+                        </button>
+                      )}
                       {m.decisionId && decision && (
                         <button
                           onClick={() => setOpenDecision(open ? null : m.id)}
@@ -297,6 +311,7 @@ export function ConversationPanel({
                     scores={scoresFor(m.decisionId)}
                     review={reviewFor(m.decisionId)}
                     threadKey={data.threadKey}
+                    pinnedMessage={pinned}
                     onSaved={load}
                   />
                 )}
@@ -326,6 +341,7 @@ export function ConversationPanel({
           threadKey={data.threadKey}
           decisionId={null}
           initial={reviewFor(null)}
+          pinnedMessage={pinned}
           onSaved={load}
         />
       </div>
@@ -339,6 +355,7 @@ function DecisionRecord({
   scores,
   review,
   threadKey,
+  pinnedMessage,
   onSaved,
 }: {
   decisionId: string;
@@ -346,6 +363,7 @@ function DecisionRecord({
   scores: ScoreRow[];
   review: ReviewRow | null;
   threadKey: string;
+  pinnedMessage?: string | null;
   onSaved: () => void;
 }) {
   const [view, setView] = useState<"ladder" | "trace" | "review" | "rule">("ladder");
@@ -450,6 +468,7 @@ function DecisionRecord({
           threadKey={threadKey}
           decisionId={decisionId}
           initial={review}
+          pinnedMessage={pinnedMessage}
           onSaved={onSaved}
         />
       )}

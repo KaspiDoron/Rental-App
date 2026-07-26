@@ -47,6 +47,13 @@ export interface ReviewInput {
   tags?: string[];
   bookmark?: boolean;
   status?: ReviewStatus;
+  /**
+   * "The agent misunderstood what the shop MEANT." Every field above judges our
+   * MOVE; this one judges our COMPREHENSION, which is where the live failures
+   * actually start. Pins the shop message and labels it from a closed
+   * vocabulary, so the correction compiles into behaviour instead of prose.
+   */
+  misread?: import("./misread").MisreadCorrection;
 }
 
 // ---- Versioned behavior changes -------------------------------------------------
@@ -86,6 +93,14 @@ export interface GoldenExpect {
   pathContains?: string[]; // node ids that must appear in the path
   targetAtLeast?: number; // lastTarget must be >= this (no deal-killing lowball)
   noMessageContains?: string[]; // banned substrings in the composed message
+  /**
+   * The move the PRIMARY engine (SPTE) must choose this turn. `action`/`edgeId`
+   * above gate the dormant graph engine; this is what gates the one that
+   * actually answers shops. Checked against replaySpteTurns.
+   */
+  move?: import("../spte/types").MoveKind;
+  /** Moves that must NOT be chosen - e.g. a menu must never end in a goodbye. */
+  moveNot?: Array<import("../spte/types").MoveKind>;
 }
 
 export interface GoldenCase {
@@ -110,7 +125,16 @@ export interface ReplayCaseResult {
     turn: number;
     shopSays?: string;
     expected: GoldenExpect;
-    got: { action: string; edgeId?: string; path: string[]; target?: number; message?: string };
+    got: {
+      action: string;
+      edgeId?: string;
+      path: string[];
+      target?: number;
+      message?: string;
+      /** What the PRIMARY (SPTE) engine chose, when the case asserted a move. */
+      move?: string;
+      spteMessage?: string;
+    };
     failures: string[];
   }[];
 }

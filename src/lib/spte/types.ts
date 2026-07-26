@@ -121,6 +121,11 @@ export interface TurnContext {
   guards: { floorPerDay?: number; maxRounds: number };
   /** Event that triggered this turn - a real inbound, a wakeup, or a swarm poke. */
   event: "shop-message" | "tick" | "rival-improved";
+  /** REPLAY ONLY. Skips the single LLM pass and composes from the deterministic
+   *  templates, so a frozen thread yields the same move and the same bytes on
+   *  every run - what makes the golden suite usable as an eval gate. The live
+   *  path never sets this (the graph engine's `llmAllowed:false` equivalent). */
+  deterministic?: boolean;
 }
 
 /** The single pass's entire structured JSON output. */
@@ -151,5 +156,5 @@ export interface ModelRoute {
   tier: "R" | "F" | "M";
   provider?: "groq" | "gemini" | "cerebras" | "openrouter";
   model?: string;
-  reason: "reflex" | "default" | "multimodal" | "high-stakes" | "quota-overflow";
+  reason: "reflex" | "default" | "multimodal" | "high-stakes" | "quota-overflow" | "replay";
 }

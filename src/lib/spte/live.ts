@@ -134,7 +134,11 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
  *  rivals = other shops' live quotes in the SAME currency; lowest = the session's
  *  cheapest quote across all shops. Best-effort - a read failure yields an empty
  *  snapshot (the single pass still composes a safe move, never invents a rival). */
-async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<SessionSnapshot> {
+async function buildSession(
+  input: GraphTurnInput,
+  io: GraphIO,
+  verified: VerifiedExtraction
+): Promise<SessionSnapshot> {
   const email = input.ctx.sender ?? "";
   const thisVendor = input.ctx.vendorId ?? "";
   let rivals: SessionSnapshot["rivals"] = [];
@@ -179,8 +183,23 @@ async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<Session
   // Few-shot coaching (owner teaching + Ops learning + distilled winning
   // traces) - the primary engine now learns like the graph engine does.
   // Best-effort; "" when nothing has been taught/distilled yet.
+  // SITUATIONAL retrieval: the owner's lessons about THIS kind of message
+  // (a menu on screen, a price board, a location request) instead of one
+  // global tone block on every turn. Derived from verified facts, never from
+  // the shop's wording.
+  const { situationKinds } = await import("../ops/misread");
+  const situation = situationKinds({
+    optionCount: verified.options?.length,
+    variance: verified.variance,
+    hadImage: verified.hadImage,
+    imageKind: verified.imageKind,
+    askedLocation: verified.askedLocation,
+    askedQuestion: verified.askedQuestion,
+    declined: verified.declined,
+    firm: verified.firm,
+  });
   const { loadCoaching } = await import("./coaching");
-  const coaching = await loadCoaching().catch(() => "");
+  const coaching = await loadCoaching(situation).catch(() => "");
   return {
     sessionId: input.event.threadKey,
     rfq: input.rfq,
@@ -226,7 +245,8 @@ function metaKindFor(move: MoveKind): string {
 }
 
 async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<TurnContext> {
-  const session = await buildSession(input, io);
+  const verified = mapVerified(input);
+  const session = await buildSession(input, io, verified);
   const text = input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
     ? input.event.shopMessage ?? ""
     : "";
@@ -251,7 +271,7 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
       digest: buildDigest(input),
     },
     tail: buildTail(input),
-    inbound: { text, verified: mapVerified(input) },
+    inbound: { text, verified },
     legalMoves: [], // computed deterministically inside runTurn (legalMovesFor)
     guards: { floorPerDay: input.floorPrice, maxRounds: 6 },
     event: input.event.kind === "tick" ? "tick" : "shop-message",

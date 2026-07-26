@@ -652,6 +652,132 @@ export async function replayConversation(args: {
   return { turns: played };
 }
 
+// ---------------------------------------------------------------------------
+// DETERMINISTIC replay for the PRIMARY engine (SPTE).
+//
+// replayConversation above drives the GRAPH engine, which is the dormant
+// fallback. SPTE is what runs in production, so a suite that only gates the
+// graph gates the wrong thing - "it can never regress" was not true for the
+// engine that actually answers shops.
+//
+// Same discipline, none of the IO: the context is built straight from the
+// frozen case (no DB, no network), `deterministic:true` stands in for
+// `llmAllowed:false`, and the clock never appears. The legal move set, the
+// post-rails and the digest merge are the REAL ones - only composition is
+// frozen. Same case + same code => same moves, every run.
+// ---------------------------------------------------------------------------
+
+export interface PlayedSpteTurn {
+  shopSays: string;
+  move: import("./spte/types").MoveKind;
+  legalMoves: import("./spte/types").MoveKind[];
+  ourReply: string | null;
+  optionCount: number;
+}
+
+export async function replaySpteTurns(args: {
+  turns: import("./ops/types").GoldenTurn[];
+  rfq?: Partial<StructuredRFQ>;
+  floor?: { floor?: number; typical?: number; currency?: string } | null;
+}): Promise<{ turns: PlayedSpteTurn[] }> {
+  const { runTurn } = await import("./spte/orchestrator");
+  const { emptyDigest } = await import("./spte/digest");
+  const { optionsFromThread } = await import("./offer-options");
+  const rfq: StructuredRFQ = { ...DEFAULT_RFQ, ...(args.rfq ?? {}) };
+
+  let digest = emptyDigest();
+  const inboundSoFar: string[] = [];
+  const outbound: string[] = [];
+  const played: PlayedSpteTurn[] = [];
+
+  for (const turn of args.turns.slice(0, 10)) {
+    const stub = (turn.stubExtraction ?? {}) as Record<string, unknown>;
+    inboundSoFar.push(turn.shopSays);
+    const currency = (stub.currency as string) || args.floor?.currency || "THB";
+
+    // Options are DERIVED from the thread, exactly as the live glue derives
+    // them - a frozen case cannot hand-wave a menu into existence.
+    const options = optionsFromThread(inboundSoFar, { durationDays: rfq.durationDays });
+
+    const verified: import("./spte/types").VerifiedExtraction = {
+      found: Boolean(stub.found),
+      pricePerDay: typeof stub.pricePerDay === "number" ? stub.pricePerDay : undefined,
+      currency,
+      declined: stub.declined === true,
+      wrongVehicle: stub.vehicleVerdict === "mismatch",
+      vehicleUnclear: stub.vehicleVerdict === "unclear",
+      askedQuestion: stub.askedQuestion === true,
+      askedLocation: stub.askedLocation === true,
+      askedLicense: stub.askedLicense === true,
+      askedLicensePhoto: stub.askedLicensePhoto === true,
+      firm: stub.firm === true,
+      options,
+      variance: stub.variance === true,
+      hadImage: Boolean(turn.imageKind),
+      imageKind: turn.imageKind as import("./spte/types").VerifiedExtraction["imageKind"],
+      sheetPricePerDay:
+        typeof stub.sheetPricePerDay === "number" ? stub.sheetPricePerDay : undefined,
+    };
+
+    const rivals = (turn.rivalOffers ?? [])
+      .filter((r) => typeof r.pricePerDay === "number" && r.currency === currency)
+      .map((r) => ({
+        vendorId: r.vendorId ?? "rival",
+        shop: r.vendorId ?? "Another shop",
+        pricePerDay: r.pricePerDay as number,
+        currency,
+      }));
+    if (!rivals.length && typeof turn.rivalPricePerDay === "number") {
+      rivals.push({
+        vendorId: "rival",
+        shop: "Another shop",
+        pricePerDay: turn.rivalPricePerDay,
+        currency,
+      });
+    }
+
+    const ctx: import("./spte/types").TurnContext = {
+      session: {
+        sessionId: "replay",
+        rfq,
+        currency,
+        benchmark: null,
+        lowest: rivals[0]
+          ? { vendorId: rivals[0].vendorId, shop: rivals[0].shop, pricePerDay: rivals[0].pricePerDay }
+          : null,
+        rivals,
+      },
+      thread: {
+        threadKey: "replay@wheeldeal:0000",
+        vendorId: "replay-shop",
+        shop: "Golden Shop",
+        digest: { ...digest, options },
+      },
+      tail: [
+        ...outbound.map((text) => ({ dir: "out" as const, text, at: "" })),
+        { dir: "in" as const, text: turn.shopSays, at: "" },
+      ],
+      inbound: { text: turn.shopSays, verified },
+      legalMoves: [],
+      guards: { floorPerDay: args.floor?.floor, maxRounds: 6 },
+      event: "shop-message",
+      deterministic: true,
+    };
+
+    const outcome = await runTurn(ctx);
+    digest = outcome.digest;
+    if (outcome.text) outbound.push(outcome.text);
+    played.push({
+      shopSays: turn.shopSays,
+      move: outcome.move,
+      legalMoves: ctx.legalMoves,
+      ourReply: outcome.text ?? null,
+      optionCount: options.length,
+    });
+  }
+  return { turns: played };
+}
+
 export async function simulateConversation(args: {
   turns: ConversationTurn[];
   rfq?: Partial<StructuredRFQ>;
