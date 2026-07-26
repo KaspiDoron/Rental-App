@@ -7,6 +7,7 @@ import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
+import { ShopPhoto } from "./ShopPhoto";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/currency";
 import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
@@ -292,8 +293,7 @@ function VendorCardInner({
       )}
       {vendor.photoUrl && (
         <div className="relative h-32 w-full">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={vendor.photoUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+          <ShopPhoto src={vendor.photoUrl} className="h-full w-full" />
           {vendor.openNow !== undefined && (
             <span
               className={`absolute left-3 top-3 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${

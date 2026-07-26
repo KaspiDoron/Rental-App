@@ -64,6 +64,21 @@ export function PhotoGallery({
         </button>
       </div>
 
+      {/* EVERY photo failed. Google Place Photos is its own billed SKU and can
+          stop serving while search keeps working, and a black void with no
+          words reads as a broken app rather than a missing decoration. */}
+      {visible.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-8 text-center">
+          <span className="text-3xl opacity-50">🖼</span>
+          <p className="text-[13px] font-extrabold text-white/90">
+            Photos are not loading right now
+          </p>
+          <p className="max-w-[16rem] text-[11px] text-white/60">
+            This is only the pictures - the shop, its rating and your negotiation
+            are all unaffected.
+          </p>
+        </div>
+      ) : (
       <div className="relative flex flex-1 items-center">
         <div
           ref={trackRef}
@@ -109,6 +124,7 @@ export function PhotoGallery({
           </>
         )}
       </div>
+      )}
 
       {visible.length > 1 && (
         <div className="flex items-center justify-center gap-1.5 pb-safe pt-2">

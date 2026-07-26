@@ -601,10 +601,14 @@ export default function AdminPage() {
           `Places Autocomplete (New): ${d.placesAutocomplete?.ok ? "OK" : "FAILED"} - ${d.placesAutocomplete?.detail}`,
           `Places API (legacy): ${d.placesLegacy?.ok ? "OK" : "FAILED"} - ${d.placesLegacy?.detail}`,
           `Geocoding: ${d.geocoding?.ok ? "OK" : "FAILED"} - ${d.geocoding?.detail}`,
+          // Shop photos are their own billed SKU and can fail alone. Without
+          // this line the panel read all-green while every card photo was
+          // broken, because nothing here had ever fetched an actual image.
+          `Place Photos: ${d.placePhotos?.ok ? "OK" : "FAILED"} - ${d.placePhotos?.detail}`,
         ];
         setDiag({
           kind,
-          ok: Boolean(d.placesNew?.ok || d.placesLegacy?.ok),
+          ok: Boolean((d.placesNew?.ok || d.placesLegacy?.ok) && d.placePhotos?.ok),
           text: d.keyConfigured ? lines.join("\n") : "No Google Maps key configured yet.",
         });
       }

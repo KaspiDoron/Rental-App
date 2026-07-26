@@ -16,6 +16,7 @@ import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
 import { stageCaption, StageBadge } from "./Tracker";
 import { ShopAvatar } from "./ShopAvatar";
+import { ShopPhoto } from "./ShopPhoto";
 import { moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -162,10 +163,7 @@ function ShopCard({
         selected ? "ring-2 ring-brandblue" : ""
       }`}
     >
-      {v.photoUrl && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={v.photoUrl} alt="" loading="lazy" decoding="async" className="h-24 w-full object-cover" />
-      )}
+      {v.photoUrl && <ShopPhoto src={v.photoUrl} className="h-24 w-full" />}
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5">

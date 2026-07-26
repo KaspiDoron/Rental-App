@@ -13,6 +13,7 @@ import { useI18n } from "@/lib/i18n";
 import { lockBodyScroll } from "@/lib/scroll-lock";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
+import { ShopPhoto } from "./ShopPhoto";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { MessageBubble, type ThreadMsg } from "./MessageBubble";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
@@ -203,8 +204,7 @@ export function ThreadDashboard({
             onClick={() => setGallery(true)}
             className="relative block h-32 w-full overflow-hidden rounded-2xl border border-line"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={photos[0]} alt={vendor.name} className="h-full w-full object-cover" />
+            <ShopPhoto src={photos[0]} className="h-full w-full" />
             {photos.length > 1 && (
               <span className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-extrabold text-white">
                 🖼 {photos.length} {t("photos")}

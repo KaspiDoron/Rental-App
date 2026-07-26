@@ -684,6 +684,58 @@ export interface MapsDiagnostics {
   placesAutocomplete: { ok: boolean; detail: string };
   placesLegacy: { ok: boolean; detail: string };
   geocoding: { ok: boolean; detail: string };
+  /** Shop photos. Billed as its own SKU and enabled separately from search,
+   *  so it can fail on its own - which is exactly how it failed in the field:
+   *  every card photo broken while this whole panel reported green, because
+   *  nothing here had ever actually fetched an image. */
+  placePhotos: { ok: boolean; detail: string };
+}
+
+/**
+ * Fetch ONE real photo end to end and report Google's verbatim answer.
+ *
+ * Deliberately does the whole round trip - search for a place that has photos,
+ * then pull the media - because those are two different SKUs and only the
+ * second one produces the bytes a traveller sees.
+ */
+async function probePlacePhoto(key: string, lat: number, lng: number): Promise<{ ok: boolean; detail: string }> {
+  const { places, error } = await newTextSearch(
+    key,
+    {
+      textQuery: "scooter rental",
+      maxResultCount: 1,
+      locationBias: { circle: { center: { latitude: lat, longitude: lng }, radius: 10000 } },
+    },
+    "places.id,places.photos"
+  );
+  if (!places) return { ok: false, detail: `search failed: ${error ?? "unknown"}` };
+  const name = (places[0]?.photos as any[] | undefined)?.[0]?.name;
+  if (!name) return { ok: false, detail: "No place with photos nearby - inconclusive." };
+  try {
+    const res = await timedFetch(
+      `${NEW_BASE}/${name}/media?key=${key}&maxWidthPx=200`,
+      { cache: "no-store" }
+    );
+    if (res.ok) {
+      const type = res.headers.get("Content-Type") ?? "";
+      return type.startsWith("image/")
+        ? { ok: true, detail: `OK - ${type}.` }
+        : { ok: false, detail: `Got ${res.status} but Content-Type was "${type}", not an image.` };
+    }
+    // The whole point: surface Google's own words. "Places API (New) has not
+    // been used in project X" and "quota exceeded" are different problems with
+    // different fixes, and a bare 404 told the owner neither.
+    const body = await res.text().catch(() => "");
+    let msg = "";
+    try {
+      msg = JSON.parse(body)?.error?.message ?? "";
+    } catch {
+      msg = body.slice(0, 300);
+    }
+    return { ok: false, detail: `Google responded ${res.status}${msg ? `: ${msg}` : ""}` };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : "network error" };
+  }
 }
 
 /** Run a real request against each Google API and report the exact outcome. */
@@ -697,12 +749,13 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
       placesAutocomplete: off,
       placesLegacy: off,
       geocoding: off,
+      placePhotos: off,
     };
   }
 
   const probe = { lat: -8.6478, lng: 115.1385 }; // Canggu, Bali
 
-  const [n, a, l, g] = await Promise.all([
+  const [n, a, l, g, ph] = await Promise.all([
     (async () => {
       const { places, error } = await newTextSearch(
         key,
@@ -753,7 +806,15 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
         return { ok: false, detail: e instanceof Error ? e.message : "network error" };
       }
     })(),
+    probePlacePhoto(key, probe.lat, probe.lng),
   ]);
 
-  return { keyConfigured: true, placesNew: n, placesAutocomplete: a, placesLegacy: l, geocoding: g };
+  return {
+    keyConfigured: true,
+    placesNew: n,
+    placesAutocomplete: a,
+    placesLegacy: l,
+    geocoding: g,
+    placePhotos: ph,
+  };
 }
