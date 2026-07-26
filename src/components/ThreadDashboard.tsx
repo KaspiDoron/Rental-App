@@ -90,7 +90,11 @@ export function ThreadDashboard({
     const load = () => {
       const q = new URLSearchParams({ vendorId: vendor.id!, full: "1" });
       if (searchEpoch) q.set("since", String(searchEpoch));
-      fetch(`/api/thread?${q.toString()}`)
+      // Cache-bust: a Safari / Cloud Run intermediary caching this GET froze the
+      // transcript on the first snapshot (the "app out of sync with WhatsApp"
+      // report). no-store + a per-tick token guarantees a fresh read each poll.
+      q.set("t", String(Date.now()));
+      fetch(`/api/thread?${q.toString()}`, { cache: "no-store" })
         .then((r) => r.json())
         .then((d) => {
           if (!alive) return;

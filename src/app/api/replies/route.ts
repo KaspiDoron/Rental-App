@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 
+// A live poll - never statically cached, or new shop offers stop popping in.
+export const dynamic = "force-dynamic";
+
 // Live feed of the signed-in user's vendor replies (auto-ingested by the
 // WhatsApp webhook or added manually). The app polls this while agents are
 // waiting on shops, so confirmed offers pop into the cards by themselves and

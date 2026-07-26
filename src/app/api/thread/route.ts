@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 
+// A live transcript poll: it must never be statically cached or the ThreadDashboard
+// freezes on its first snapshot (the "app out of sync with WhatsApp" report).
+export const dynamic = "force-dynamic";
+
 // Last exchange with one rental shop: the newest message WE sent it and the
 // newest reply IT sent back - powers the sent/received peek on the card.
 // Scoped to the signed-in user's own threads (thread context carries sender).

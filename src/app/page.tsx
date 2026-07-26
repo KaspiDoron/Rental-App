@@ -1230,7 +1230,9 @@ export default function Home() {
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.
-        const res = await fetch(`/api/replies?since=${searchEpoch}`, { cache: "no-store" });
+        const res = await fetch(`/api/replies?since=${searchEpoch}&t=${Date.now()}`, {
+          cache: "no-store",
+        });
         const d = await res.json();
         if (cancelled) return;
         // Shops that walked away: the card says so honestly - it never keeps
