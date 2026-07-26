@@ -52,6 +52,12 @@ export interface ThreadDigest {
   quotedPricePerDay?: number;
   round: number;
   tone?: "friendly" | "curt" | "eager" | "reluctant";
+  // Thread-derived negotiation state (src/lib/spte/thread-facts.ts). Recomputed
+  // every turn from the loaded rows - never persisted, never stale.
+  firmCount?: number; // shop said "last price" this many times
+  depositKnown?: boolean; // the shop already told us its deposit terms
+  fulfillmentKnown?: boolean; // the shop already told us delivery-vs-pickup
+  lastOutbound?: string[]; // our last 5 messages - the anti-repetition memory
 }
 
 export interface VerifiedExtraction {
@@ -67,6 +73,8 @@ export interface VerifiedExtraction {
   askedLicense?: boolean;
   /** The shop asked to SEE / get a photo/copy of the license. */
   askedLicensePhoto?: boolean;
+  /** The shop refused to lower a price it already gave ("last price"). */
+  firm?: boolean;
 }
 
 export interface TurnContext {

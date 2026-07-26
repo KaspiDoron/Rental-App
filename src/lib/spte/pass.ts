@@ -10,6 +10,7 @@
 import { chat, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
 import { coerceToLegal } from "./policy";
+import { isRepetitive } from "../wa/similarity";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -49,6 +50,8 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "- NEVER invent a competitor price or a market rate. Use ONLY the verified numbers given here. " +
     "If you cite a rival, cite one from the RIVAL OFFERS list verbatim.\n" +
     "- NEVER agree an exact pickup/delivery time - say the traveller will confirm the time directly.\n" +
+    "- When asking about deposit or delivery/pickup, make it clear we are still deciding between a few shops - never imply a guaranteed booking.\n" +
+    "- If the shop has said its price is final/last more than once, DO NOT ask for a lower price again - accept warmly or move to logistics.\n" +
     "- LICENSE POLICY: if the shop asks whether you have a (international) driving license, answer firmly: " +
     "you have a valid international driving license for this vehicle category. If the shop asks to SEE or get a " +
     "photo/copy of the license, politely defer: you will share it once the rate and rental details are agreed - " +
@@ -65,23 +68,68 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // Duration is real leverage: a multi-day rental earns a longer-stay discount,
   // and the cheapest session rival is the strongest anchor to cite verbatim.
   const days = s.rfq.durationDays;
-  const durationLeverage =
-    days >= 5
-      ? `LEVERAGE: ${days} days is a long rental - push for a multi-day / weekly discount off the daily rate.\n`
-      : days >= 3
-        ? `LEVERAGE: ${days} days - mention the multi-day booking when you ask for a better rate.\n`
+  const dg = ctx.thread.digest;
+  const round = dg.round ?? 0;
+
+  // ROUND-AWARE directive (ported from composeBargain): each push has a distinct
+  // shape so four turns never read as one template. The model varies the words;
+  // this varies the ANGLE.
+  const roundPlay = ctx.legalMoves.includes("bargain")
+    ? round <= 0
+      ? `BARGAIN ANGLE (first push): warmly say the quote is a bit high for you, use the ${days}-day rental as your reason, and ask for a friendly better daily rate. Vary the exact wording.\n`
+      : round === 1
+        ? `BARGAIN ANGLE (second push): DO NOT repeat the "since I'm booking for ${days} days" line - you already used it. Switch lever: ask for a small round-number discount, or a free extra (helmet/fuel/delivery), or mention you're ready to book right now.\n`
+        : `BARGAIN ANGLE (final gentle nudge): one last soft ask, then you will accept. Use a DIFFERENT phrasing and lever from your earlier messages.\n`
+    : "";
+
+  // FIRM state - the two-firms-stop rule made explicit to the model too.
+  const firmNote =
+    (dg.firmCount ?? 0) >= 2
+      ? `The shop has said this is their LAST/BEST price ${dg.firmCount} times. STOP asking for a lower price - do not haggle again. Instead move on to logistics (deposit, delivery/pickup) or accept warmly.\n`
+      : (dg.firmCount ?? 0) === 1
+        ? `The shop called this their best price once. Only push again if you have real leverage (a cheaper rival or a price well above market); otherwise switch to logistics.\n`
         : "";
+
+  // QUESTION obligation - answer what the shop asked, first.
+  const questionNote =
+    ctx.inbound.verified.askedQuestion || ctx.inbound.verified.askedLocation
+      ? `The shop ASKED YOU something in their last message. Your reply MUST answer their question first, in a natural way, before anything else.\n`
+      : "";
+
+  // ANTI-REPETITION - the real fix for "same sentence every turn". The model
+  // never saw its own prior sends; now it does, with a hard rule.
+  const priorSends = (dg.lastOutbound ?? []).filter(Boolean);
+  const repetitionNote = priorSends.length
+    ? `YOUR PREVIOUS MESSAGES in this chat (NEVER reuse their sentence structure or a lever you already played - a repeated line reads as a bot):\n${priorSends
+        .map((m) => `  • ${m}`)
+        .join("\n")}\n`
+    : "";
+
+  const durationLeverage =
+    round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
+      ? `Duration is your lever this first push: ${days} days is a long rental.\n`
+      : "";
+
+  // Rival leverage is a HARD rule when a verified cheaper rival exists (ported
+  // from composeBargain) - "you MAY cite" let the model ignore Shop A's 300.
+  const cheaperRival =
+    s.rivals.find((r) => typeof ctx.inbound.verified.pricePerDay === "number" && r.pricePerDay < (ctx.inbound.verified.pricePerDay as number)) ??
+    (s.rivals.length ? s.rivals[0] : null);
   const rivalLeverage =
-    s.rivals.length > 0
-      ? `LEVERAGE: the cheapest other shop this search is ${s.rivals[0].shop} at ${s.rivals[0].pricePerDay} ${s.rivals[0].currency}/day - you MAY cite it verbatim to ask this shop to match or beat it.\n`
+    cheaperRival && ctx.legalMoves.includes("bargain")
+      ? `HARD LEVERAGE: another real shop THIS SEARCH quoted ${cheaperRival.pricePerDay} ${cheaperRival.currency}/day (${cheaperRival.shop}). If you bargain, you MUST name this ${cheaperRival.pricePerDay}/day and ask this shop to match or beat it - do not omit or soften it.\n`
       : "";
 
   const user =
     `VEHICLE WANTED: ${vehicleLine(ctx)} for ${s.rfq.durationDays} days.\n` +
     `${bench}\n${prior}\n` +
     `RIVAL OFFERS (other shops, this search):\n${rivalLines}\n\n` +
+    roundPlay +
+    firmNote +
+    questionNote +
     durationLeverage +
     rivalLeverage +
+    repetitionNote +
     `THIS SHOP so far:\n${digest}\n\n` +
     `RECENT MESSAGES:\n${tail || "(none yet)"}\n\n` +
     `SHOP JUST SAID: ${ctx.inbound.text || "(nothing - a scheduled follow-up)"}\n` +
@@ -130,9 +178,11 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
         return `Yes, I have a valid international driving license for this. What would your best price per day be?`;
       return `Good question! Let's sort the main thing first - what's your best price per day for the ${days} days? Then we can go over the details.`;
     case "deposit-probe":
-      return `Great - and what deposit do you need? Cash or passport?`;
+      // Non-commitment guardrail (issue 5): learn the terms while making clear
+      // we are still comparing shops - never imply a guaranteed booking.
+      return `Thanks! We're finalizing our pick between a few shops today - could you let me know your deposit? Cash amount or passport?`;
     case "fulfillment-probe":
-      return `Could you deliver it, or do I pick it up at your shop?`;
+      return `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
     case "momentum":
       return `Hi again! Just checking in - any chance on that better rate for ${days} days?`;
     default:
@@ -169,12 +219,19 @@ export function fallbackArtifact(ctx: TurnContext): TurnArtifact {
 export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnArtifact; route: ModelRoute }> {
   const route = pickRoute(ctx);
   const { system, user } = buildPrompt(ctx);
+  const recent = (ctx.thread.digest.lastOutbound ?? []).filter(Boolean);
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    // On the retry, add a hard anti-repetition nudge (the keyless backstop for
+    // the Redis signature guard that is dark on Cloud Run).
+    const userMsg =
+      attempt === 0
+        ? user
+        : `${user}\n\nYour previous draft repeated an earlier message almost word for word. Rewrite it from scratch with a DIFFERENT sentence structure and a DIFFERENT lever.`;
     const raw = await chat(
       [
         { role: "system", content: system },
-        { role: "user", content: user },
+        { role: "user", content: userMsg },
       ],
       { maxTokens: 500, budgetMs: 9000 }
     );
@@ -194,6 +251,17 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
       };
       // NEVER trust an out-of-set move (the B7 lesson, generalized).
       artifact.move = coerceToLegal(artifact, ctx.legalMoves);
+      // Anti-repetition: a near-duplicate of a recent send is rejected ONCE (so
+      // the retry above fires); on the second pass we accept it rather than go
+      // silent - a slightly repetitive reply still beats no reply.
+      if (
+        attempt === 0 &&
+        artifact.message &&
+        recent.length > 0 &&
+        isRepetitive(artifact.message, recent)
+      ) {
+        continue;
+      }
       return { artifact, route };
     }
     // malformed JSON -> retry once, then fall through.

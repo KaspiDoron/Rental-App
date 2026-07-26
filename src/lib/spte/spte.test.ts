@@ -62,6 +62,53 @@ describe("SPTE policy rails (legal move computation)", () => {
     const c = ctx({ verified: { found: false, askedLocation: true } });
     expect(legalMovesFor(c)).toContain("pickup-location");
   });
+
+  it("ANSWER precedes bargain when the shop asked a question (issue: ignored questions)", () => {
+    // "Closed deal sir 300, free delivery. Around what time?" - price AND a
+    // question. The reply must answer first, so answer must lead the ladder.
+    const c = ctx({ verified: { found: true, pricePerDay: 300, askedQuestion: true } });
+    const legal = legalMovesFor(c);
+    expect(legal.indexOf("answer")).toBeLessThan(legal.indexOf("bargain"));
+  });
+
+  it("TWO firm refusals retire bargaining and unlock logistics probes", () => {
+    const c = ctx({ verified: { found: true, pricePerDay: 300 } });
+    c.thread.digest = { ...emptyDigest(), firmCount: 2 };
+    const legal = legalMovesFor(c);
+    expect(legal).not.toContain("bargain");
+    expect(legal).toContain("deposit-probe");
+    expect(legal).toContain("fulfillment-probe");
+  });
+
+  it("ONE firm refusal still allows a push WITH leverage (cheaper rival)", () => {
+    const c = ctx({
+      verified: { found: true, pricePerDay: 400 },
+      session: {
+        sessionId: "s1",
+        rfq: { vehicleClass: "scooter", engineSizeCc: 125, transmission: "any", durationDays: 4, accessories: [], fulfillment: "any", vendorMessage: "" },
+        currency: "PHP",
+        benchmark: null,
+        lowest: null,
+        rivals: [{ vendorId: "v2", shop: "Shop B", pricePerDay: 300, currency: "PHP" }],
+      },
+    });
+    c.thread.digest = { ...emptyDigest(), firmCount: 1 };
+    expect(legalMovesFor(c)).toContain("bargain");
+  });
+
+  it("ONE firm refusal WITHOUT leverage retires bargaining (price near floor, no rival)", () => {
+    const c = ctx({ verified: { found: true, pricePerDay: 300 }, guards: { maxRounds: 6, floorPerDay: 290 } });
+    c.thread.digest = { ...emptyDigest(), firmCount: 1 };
+    const legal = legalMovesFor(c);
+    expect(legal).not.toContain("bargain");
+    expect(legal).toContain("deposit-probe");
+  });
+
+  it("deposit + fulfillment known + price -> present the deal", () => {
+    const c = ctx({ verified: { found: true, pricePerDay: 300 } });
+    c.thread.digest = { ...emptyDigest(), firmCount: 2, depositKnown: true, fulfillmentKnown: true, quotedPricePerDay: 300 };
+    expect(legalMovesFor(c)).toContain("present");
+  });
 });
 
 describe("SPTE reflex tier (0-token)", () => {

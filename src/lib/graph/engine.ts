@@ -1419,12 +1419,19 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         });
       }
       for (const o of offers) {
-        if (rows.has(o.vendor_id)) continue;
+        const existing = rows.get(o.vendor_id);
+        // A real `offers` row WINS over a PRICELESS thread row. Previously the
+        // thread row always short-circuited (`if (rows.has) continue`), so a
+        // stale/empty negotiation_threads row masked a genuine offer - which is
+        // exactly why Shop A's confirmed 300 never reached Shop B's prompt.
+        if (existing && typeof existing.pricePerDay === "number") continue;
         rows.set(o.vendor_id, {
           vendorId: o.vendor_id,
           vendorName: o.vendor_name || o.vendor_id,
           pricePerDay: o.price_per_day,
           currency: o.currency,
+          phase: existing?.phase,
+          complete: existing?.complete,
           isThisShop: o.vendor_id === thisVendorId,
         });
       }

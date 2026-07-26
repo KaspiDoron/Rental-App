@@ -39,16 +39,33 @@ export function sanitizeAiText(s: string): string {
  * inline code, **bold**, and genuinely dangling asterisks are removed.
  */
 export function stripWaFormatting(s: string): string {
+  return fixParticlePunctuation(
+    s
+      .replace(/```[a-z]*\n?/gi, "") // code fences
+      .replace(/`([^`]+)`/g, "$1") // inline code -> inner text
+      .replace(/\*\*([^*]+)\*\*/g, "$1") // **bold** -> inner (double * is unambiguous)
+      // Leading/standalone asterisk(s) hugging the START of a word ("*good"):
+      .replace(/(^|[\s(])\*+(?=\S)/g, "$1")
+      // Trailing asterisk(s) hugging the END of a word ("word*"):
+      .replace(/(\S)\*+(?=\s|$)/g, "$1")
+      .replace(/`+/g, "") // any surviving stray backticks
+      // Collapse the doubled spaces the removals leave behind.
+      .replace(/[ \t]{2,}/g, " ")
+      .trim()
+  );
+}
+
+/**
+ * A politeness particle (po / krub / kraap / ka / ka) belongs INSIDE the
+ * sentence, never orphaned after its own "!" - the LLM-directive path produced
+ * "Hi there! po!" (live evidence). Pull the particle back onto the preceding
+ * clause and collapse the doubled terminator: "Hi there! po!" -> "Hi there po!".
+ */
+export function fixParticlePunctuation(s: string): string {
   return s
-    .replace(/```[a-z]*\n?/gi, "") // code fences
-    .replace(/`([^`]+)`/g, "$1") // inline code -> inner text
-    .replace(/\*\*([^*]+)\*\*/g, "$1") // **bold** -> inner (double * is unambiguous)
-    // Leading/standalone asterisk(s) hugging the START of a word ("*good"):
-    .replace(/(^|[\s(])\*+(?=\S)/g, "$1")
-    // Trailing asterisk(s) hugging the END of a word ("word*"):
-    .replace(/(\S)\*+(?=\s|$)/g, "$1")
-    .replace(/`+/g, "") // any surviving stray backticks
-    // Collapse the doubled spaces the removals leave behind.
+    .replace(/([!?.])\s+(po|krub|kraap|krap|ka|kaa|krab)\b([!?.]*)/gi, " $2$3")
+    .replace(/\s+([!?.,])/g, "$1") // no space before punctuation
+    .replace(/([!?]){2,}/g, "$1") // collapse doubled terminators
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }

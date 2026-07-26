@@ -352,7 +352,12 @@ export async function processVendorReply(opts: {
     thread.filter(
       (m) =>
         m.direction === "outbound" &&
-        (m.raw?.kind === "auto-bargain" || m.raw?.kind === "bargain")
+        // SPTE stamps the semantic move in raw.move; the legacy paths use
+        // raw.kind. Count BOTH so a thread whose sends were mis-stamped "reply"
+        // (the round-cap-never-binds bug) still heals its round counter.
+        (m.raw?.kind === "auto-bargain" ||
+          m.raw?.kind === "bargain" ||
+          (m.raw as { move?: string } | null)?.move === "bargain")
     ).length +
     pendingKind("auto-bargain") +
     pendingKind("bargain");
@@ -797,6 +802,10 @@ export async function processVendorReply(opts: {
     history,
     priorOutbound: thread
       .filter((m) => m.direction === "outbound")
+      .map((m) => m.body ?? "")
+      .filter(Boolean),
+    priorInbound: thread
+      .filter((m) => m.direction === "inbound")
       .map((m) => m.body ?? "")
       .filter(Boolean),
     legacyCounts: {

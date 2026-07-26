@@ -15,6 +15,7 @@
 import type { GraphIO, GraphTurnInput } from "../graph/types";
 import { runTurn } from "./orchestrator";
 import { emptyDigest } from "./digest";
+import { deriveThreadFacts } from "./thread-facts";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
@@ -48,6 +49,9 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     askedQuestion: text ? shopAskedQuestion(text) : false,
     askedLicense: text ? shopAskedLicense(text) : false,
     askedLicensePhoto: text ? shopAskedLicensePhoto(text) : false,
+    // The shop refused to lower ("last price") - the deterministic extractor
+    // read it (agents.ts FIRM_RX) and it USED to be dropped on the floor here.
+    firm: Boolean((ex as { shopFirm?: boolean } | null)?.shopFirm),
   };
 }
 
@@ -57,18 +61,41 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
  *  single pass needs, and they are always recomputed from the source of truth. */
 function buildDigest(input: GraphTurnInput): ThreadDigest {
   const base = emptyDigest();
-  const round = input.legacyCounts?.bargain ?? 0;
   const tone = ((): ThreadDigest["tone"] => {
     const t = (input.extraction as { shopTone?: string } | null)?.shopTone;
     if (t === "annoyed") return "reluctant";
     if (t === "warm") return "friendly";
     return undefined;
   })();
+  // THREAD-DERIVED STATE (thread-facts.ts): round / firm / deposit / fulfillment
+  // recomputed from the actual message history the caller loaded, so the round
+  // cap and the two-firms-stop rule finally bind. The current inbound firm read
+  // (from the extractor) is OR-ed in so "last price" counts on the turn it lands.
+  const inbound = input.priorInbound ?? [];
+  const outbound = input.priorOutbound ?? [];
+  const curInbound =
+    input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
+      ? input.event.shopMessage ?? ""
+      : "";
+  const facts = deriveThreadFacts({
+    inbound,
+    outbound,
+    currentInbound: curInbound,
+    priorBargainCount: input.legacyCounts?.bargain ?? 0,
+  });
+  // The deterministic extractor may flag firmness (shopFirm) on wording the
+  // text regex misses; ensure at least 1 when it did.
+  const curFirm = Boolean((input.extraction as { shopFirm?: boolean } | null)?.shopFirm);
+  const firmCount = curFirm ? Math.max(facts.firmCount, 1) : facts.firmCount;
   return {
     ...base,
-    round,
+    round: facts.bargainRounds,
     quotedPricePerDay: input.usablePrice,
     tone,
+    firmCount,
+    depositKnown: facts.depositKnown,
+    fulfillmentKnown: facts.fulfillmentKnown,
+    lastOutbound: facts.lastOutbound,
   };
 }
 
@@ -129,10 +156,29 @@ function buildTail(input: GraphTurnInput): TurnContext["tail"] {
   return out;
 }
 
-/** Map a closed MoveKind to the outbox meta.kind used by the drain/pacing (a
- *  reply is NEVER a cold "rfq" - it paces per-recipient). */
-function metaKindFor(_move: MoveKind): string {
-  return "reply";
+/** Map a closed MoveKind to the outbox meta.kind used by drain/pacing AND by the
+ *  round/answer counters in agent-loop. A bargain MUST stamp "auto-bargain" or
+ *  the round cap never binds (the 4-pushes-to-one-shop bug); an answer stamps
+ *  "auto-answer". None of these are the cold "rfq" kind, so reply-lane pacing is
+ *  preserved (only "rfq" is a cold intro). */
+function metaKindFor(move: MoveKind): string {
+  switch (move) {
+    case "bargain":
+      return "auto-bargain";
+    case "clarify":
+      return "auto-clarify";
+    case "answer":
+    case "deposit-probe":
+    case "fulfillment-probe":
+    case "pickup-location":
+      return "auto-answer";
+    case "close":
+    case "closing-message":
+    case "redirect-close":
+      return "auto-close";
+    default:
+      return "reply";
+  }
 }
 
 async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<TurnContext> {

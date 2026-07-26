@@ -91,7 +91,10 @@ describe("SPTE live glue", () => {
     expect(res.move).toBe("bargain");
     expect(sent.length).toBe(1);
     expect(sent[0].via).toBe("guardAndSend");
-    expect((sent[0].meta as { kind?: string }).kind).toBe("reply");
+    // A bargain now stamps "auto-bargain" (not "reply") so the round counter in
+    // agent-loop actually advances - the fix for 4 pushes to one shop.
+    expect((sent[0].meta as { kind?: string }).kind).toBe("auto-bargain");
+    expect((sent[0].meta as { move?: string }).move).toBe("bargain");
   });
 
   it("stays silent (no send) on a declined+closed thread", async () => {

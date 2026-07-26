@@ -31,23 +31,45 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     return dedupe(moves);
   }
 
-  // The shop asked for our delivery location mid-session.
+  // ANSWER-FIRST when the shop asked something. This MUST precede bargain in the
+  // ladder: coerceToLegal and the fallback both take legal[0], so if bargain led
+  // the list a question would go unanswered (the live "agent ignored 'Around
+  // what time?'" bug). A question the shop asks is owed a reply before any push.
+  const askedQ = v.askedQuestion || v.askedLicense || v.askedLicensePhoto;
   if (v.askedLocation) moves.push("pickup-location");
+  if (askedQ) moves.push("answer");
+
+  // FIRM LADDER (graph parity, the two-firms-stop rule). The shop said "last
+  // price" firmCount times:
+  //   - >=2  -> price bargaining is OVER. Never push again.
+  //   - ===1 -> one more push is allowed ONLY with real leverage (a verified
+  //             cheaper rival, or a price still far above the floor).
+  //   -  0   -> bargain freely (subject to the round cap).
+  const firmCount = d.firmCount ?? 0;
+  const rivalCheaper =
+    typeof ctx.session.rivals?.[0]?.pricePerDay === "number" &&
+    typeof v.pricePerDay === "number" &&
+    ctx.session.rivals[0].pricePerDay < v.pricePerDay;
+  const priceFarAboveFloor =
+    typeof ctx.guards.floorPerDay === "number" &&
+    typeof v.pricePerDay === "number" &&
+    v.pricePerDay > ctx.guards.floorPerDay * 1.25;
+  const firmAllowsBargain =
+    firmCount >= 2 ? false : firmCount === 1 ? rivalCheaper || priceFarAboveFloor : true;
 
   // A live price is the pivot: bargain-first is structural (never probe deposit/
-  // delivery while a legal bargain move exists - the price-first rule).
+  // delivery while a legal bargain move exists), BUT the firm ladder and the
+  // round cap can retire bargaining, which is exactly what unlocks the
+  // logistics close-out below.
   const priceKnown = v.found && typeof v.pricePerDay === "number";
   const roundsLeft = (d.round ?? 0) < ctx.guards.maxRounds;
-  if (priceKnown && roundsLeft && !dealComplete(ctx)) {
+  if (priceKnown && roundsLeft && firmAllowsBargain && !dealComplete(ctx)) {
     moves.push("bargain");
   }
 
-  // The shop asked us something -> answer. A license ask counts even when the
-  // generic question detector missed it (shops often drop the "?").
-  if (v.askedQuestion || v.askedLicense || v.askedLicensePhoto) moves.push("answer");
-
-  // Missing qualification info -> probe (only once bargaining is exhausted or
-  // no price move is legal, preserving bargain-first).
+  // Missing qualification info -> probe. Reachable now because bargain retires
+  // on firm/round-cap: this IS the mandatory INFO_DISCOVERY phase. Once we have
+  // a settled price we MUST learn deposit + delivery before going quiet.
   if (!moves.includes("bargain")) {
     if (!priceKnown) moves.push("clarify");
     if (priceKnown && !depositKnown(ctx)) moves.push("deposit-probe");
@@ -128,18 +150,28 @@ export function coerceToLegal(artifact: TurnArtifact, legal: MoveKind[]): MoveKi
   return legal[0] ?? "silent";
 }
 
-// ---- fact helpers (read from the digest; all deterministic) -----------------
+// ---- fact helpers (read from the thread-derived digest; all deterministic) ---
 function hasClosed(ctx: TurnContext): boolean {
   return ctx.thread.digest.facts.some((f) => /closed|goodbye|declined/i.test(f));
 }
 function dealComplete(ctx: TurnContext): boolean {
   return depositKnown(ctx) && fulfillmentKnown(ctx) && typeof ctx.thread.digest.quotedPricePerDay === "number";
 }
+// deposit/fulfillment now come from thread-facts (digest.depositKnown /
+// .fulfillmentKnown), computed from the real message history. The old `facts`
+// scan was permanently false (facts was always []), which is why the logistics
+// close-out never triggered. Keep the facts scan as a belt-and-braces OR.
 function depositKnown(ctx: TurnContext): boolean {
-  return ctx.thread.digest.facts.some((f) => /deposit/i.test(f));
+  return (
+    ctx.thread.digest.depositKnown === true ||
+    ctx.thread.digest.facts.some((f) => /deposit/i.test(f))
+  );
 }
 function fulfillmentKnown(ctx: TurnContext): boolean {
-  return ctx.thread.digest.facts.some((f) => /delivery|pickup|on-shop|in-store/i.test(f));
+  return (
+    ctx.thread.digest.fulfillmentKnown === true ||
+    ctx.thread.digest.facts.some((f) => /delivery|pickup|on-shop|in-store/i.test(f))
+  );
 }
 function dedupe(m: MoveKind[]): MoveKind[] {
   return Array.from(new Set(m));

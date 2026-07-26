@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { stripWaFormatting, sanitizeAiText } from "./text";
+import { stripWaFormatting, sanitizeAiText, fixParticlePunctuation } from "./text";
+
+describe("fixParticlePunctuation - the live 'Hi there! po!' bug", () => {
+  it("pulls an orphaned particle back onto its clause", () => {
+    expect(fixParticlePunctuation("Hi there! po!")).toBe("Hi there po!");
+    expect(fixParticlePunctuation("Hello! po What would it cost?")).toBe("Hello po What would it cost?");
+    expect(fixParticlePunctuation("Sawasdee! krub!")).toBe("Sawasdee krub!");
+  });
+  it("leaves clean text untouched", () => {
+    expect(fixParticlePunctuation("Hi there po! Any chance on a better rate?")).toBe(
+      "Hi there po! Any chance on a better rate?"
+    );
+    expect(fixParticlePunctuation("Thanks so much!")).toBe("Thanks so much!");
+  });
+  it("runs inside stripWaFormatting (the outbound scrub path)", () => {
+    expect(stripWaFormatting("Hi there! po!")).toBe("Hi there po!");
+  });
+});
 
 describe("stripWaFormatting - the shop never sees markdown/`*` artifacts", () => {
   it("kills the exact reported artifacts (leading/standalone asterisk)", () => {

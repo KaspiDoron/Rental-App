@@ -302,6 +302,9 @@ export interface GraphTurnInput {
   sessionClosed: boolean;
   history: string;
   priorOutbound: string[];
+  // Every inbound (shop) message body in this thread, chronological - the SPTE
+  // engine derives firm-count / deposit-known / fulfillment-known from these.
+  priorInbound?: string[];
   // Legacy message-scan counters (dual-read backstop during migration).
   legacyCounts: { clarify: number; bargain: number; answer: number; close: number };
   humanDelay: boolean;
