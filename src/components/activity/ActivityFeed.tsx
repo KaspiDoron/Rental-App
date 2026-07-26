@@ -5,6 +5,7 @@
 // /api/activity (already persisted by the live engine).
 
 import { Icon } from "../icons";
+import { ShopAvatar } from "../ShopAvatar";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal } from "@/lib/currency";
 
@@ -44,11 +45,14 @@ export function ActivityFeed({
   onWhy,
   onJump,
   onTranscript,
+  phoneOf,
 }: {
   items: FeedItem[];
   onWhy: (decisionId: string) => void;
   onJump: (vendorId: string) => void;
   onTranscript: (vendorId: string, vendorName: string) => void;
+  /** Resolves a shop's WhatsApp number so its avatar can load. Session-only. */
+  phoneOf?: (vendorId: string) => string | undefined;
 }) {
   const { t } = useI18n();
 
@@ -99,8 +103,13 @@ export function ActivityFeed({
                 {it.vendorName && (
                   <button
                     onClick={() => it.vendorId && onJump(it.vendorId)}
-                    className="chip mt-0.5 text-[11px] font-extrabold text-brandblue"
+                    className="chip mt-0.5 inline-flex items-center gap-1 text-[11px] font-extrabold text-brandblue"
                   >
+                    <ShopAvatar
+                      name={it.vendorName}
+                      phone={it.vendorId ? phoneOf?.(it.vendorId) : undefined}
+                      size="sm"
+                    />
                     {it.vendorName} →
                   </button>
                 )}

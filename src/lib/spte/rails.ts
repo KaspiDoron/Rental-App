@@ -62,6 +62,28 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
     return { ok: false, rejected: { rule: check.violation ?? "numbers", detail: check.detail } };
   }
 
+  // 2b) LOCATION INTEGRITY (graph/nodes.ts:490 parity). A message that shares
+  //     where the traveller is must carry the VERIFIED address, and must not
+  //     carry any map link other than the one the consent gate approved. A
+  //     model that paraphrased the address into a nearby landmark, or minted
+  //     its own maps URL, is rejected - the caller then sends the template,
+  //     which is composed from the gate and cannot drift.
+  if (artifact.move === "pickup-location") {
+    const approved = ctx.share?.mapsLink;
+    const address = ctx.share?.addressText;
+    if (!address || !text.includes(address)) {
+      return { ok: false, rejected: { rule: "location", detail: "verified address missing" } };
+    }
+    const links = text.match(/https?:\/\/\S+/gi) ?? [];
+    if (links.some((l) => l.replace(/[).,]+$/, "") !== approved)) {
+      return { ok: false, rejected: { rule: "location", detail: "unapproved link" } };
+    }
+    // Bare coordinates are never ours to write - the gate emits a link or text.
+    if (/-?\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}/.test(text.replace(approved ?? "", ""))) {
+      return { ok: false, rejected: { rule: "location", detail: "raw coordinates" } };
+    }
+  }
+
   // 3) Never finalize a time.
   if (TIME_COMMIT_RX.test(text) && !/confirm.*time/i.test(text)) {
     text = text.replace(TIME_COMMIT_RX, "").replace(/\s{2,}/g, " ").trim();

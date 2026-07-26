@@ -1,0 +1,104 @@
+import { getSession } from "@/lib/session";
+import { sbSelect } from "@/lib/runtime-config";
+
+// SHOP MEDIA PROXY - the bytes behind a "[photo]" row in Full conversation.
+//
+// Nothing new is stored to make this work. The row already carries the
+// provider message KEY in `raw.media` (ingest.ts), and WhatsApp still holds the
+// bytes; this route redeems the one for the other on demand. When WhatsApp has
+// expired the media, it falls back to the audit copy the vision worker already
+// wrote to Supabase Storage.
+//
+// Two hard rules, both mirroring /api/negotiate/consent:
+//   - The row must be INBOUND TO THIS USER (`raw->>receiver=eq.<email>`). The
+//     same message id in another traveller's thread is a 404 here.
+//   - The response is `private, no-store`. A shop's price board is one
+//     traveller's negotiation intel, never a shared CDN object.
+export const dynamic = "force-dynamic";
+
+// A WhatsApp message id is base32-ish. Anything else is rejected before a
+// single upstream call - the /api/photo discipline: never interpolate an
+// unvalidated value into a URL.
+const ID_RX = /^[A-Za-z0-9_-]{4,80}$/;
+const AUDIT_EXTS = ["jpg", "png", "webp"] as const;
+
+type MediaRow = {
+  wa_message_id: string | null;
+  type: string | null;
+  raw: { media?: { key?: unknown; kind?: string; mime?: string | null } } | null;
+};
+
+function contentTypeFor(kind: string | undefined, mime: string | null | undefined): string {
+  if (mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)) return mime;
+  if (kind === "audio") return "audio/ogg";
+  return "image/jpeg";
+}
+
+/** The audit copy the vision worker wrote, if WhatsApp no longer has the bytes. */
+async function auditCopy(waMessageId: string): Promise<Response | null> {
+  const base = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key) return null;
+  for (const ext of AUDIT_EXTS) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10_000);
+      let res: Response;
+      try {
+        res = await fetch(`${base}/storage/v1/object/wa-media/${waMessageId}.${ext}`, {
+          headers: { authorization: `Bearer ${key}` },
+          cache: "no-store",
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (res.ok && res.body) return res;
+    } catch {
+      /* try the next extension */
+    }
+  }
+  return null;
+}
+
+export async function GET(req: Request) {
+  const session = await getSession();
+  if (!session) return new Response(null, { status: 401 });
+
+  const id = new URL(req.url).searchParams.get("id") ?? "";
+  if (!ID_RX.test(id)) return new Response(null, { status: 400 });
+
+  // PRIVACY GATE: this must be a message THIS user's WhatsApp received.
+  const rows = await sbSelect<MediaRow>(
+    "whatsapp_messages",
+    `select=wa_message_id,type,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
+      id
+    )}&raw->>receiver=eq.${encodeURIComponent(session.email)}&limit=1`
+  ).catch(() => []);
+  const row = rows[0];
+  if (!row) return new Response(null, { status: 404 });
+
+  const media = row.raw?.media;
+  const ct = contentTypeFor(media?.kind, media?.mime);
+  const headers = { "Content-Type": ct, "Cache-Control": "private, no-store" };
+
+  // 1) Live from WhatsApp - the key is all Evolution needs to find the message.
+  if (media?.key) {
+    const { fetchMediaBase64 } = await import("@/lib/evolution");
+    const live = await fetchMediaBase64(session.email, { key: media.key }).catch(() => null);
+    if (live?.base64) {
+      return new Response(Buffer.from(live.base64, "base64"), {
+        headers: { ...headers, "Content-Type": contentTypeFor(media.kind, live.mime) },
+      });
+    }
+  }
+
+  // 2) Expired upstream - serve the audit copy if the vision worker kept one.
+  const audit = await auditCopy(id);
+  if (audit?.body) {
+    return new Response(audit.body, {
+      headers: { ...headers, "Content-Type": audit.headers.get("Content-Type") ?? ct },
+    });
+  }
+  return new Response(null, { status: 404 });
+}

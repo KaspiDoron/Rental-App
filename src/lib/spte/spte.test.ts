@@ -114,7 +114,15 @@ describe("SPTE policy rails (legal move computation)", () => {
 
   it("a shop asking our delivery location makes pickup-location legal", () => {
     const c = ctx({ verified: { found: false, askedLocation: true } });
+    c.share = { addressText: "Ao Nang Beach Resort, Krabi" };
     expect(legalMovesFor(c)).toContain("pickup-location");
+  });
+
+  it("with NO verified stay, pickup-location is not even legal - we never improvise a location", () => {
+    const c = ctx({ verified: { found: false, askedLocation: true } });
+    expect(legalMovesFor(c)).not.toContain("pickup-location");
+    // The shop still gets an answer; it just cannot contain an address.
+    expect(legalMovesFor(c).length).toBeGreaterThan(0);
   });
 
   it("ANSWER precedes bargain when the shop asked a question (issue: ignored questions)", () => {
@@ -207,6 +215,54 @@ describe("SPTE post-rails (deterministic number + protocol integrity)", () => {
     const r = runPostRails({ ...base, guards: { maxRounds: 4, floorPerDay: 300 } }, a);
     expect(r.ok).toBe(false);
     expect(r.rejected?.rule).toBe("below-floor");
+  });
+
+  // A shop asking "where are you staying?" is answered on the PRIMARY engine
+  // now, and only ever with what the consent gate resolved.
+  describe("location integrity (the one disclosure gate)", () => {
+    const stay = { addressText: "Ao Nang Beach Resort, Krabi" };
+    const share = (message: string, s: TurnContext["share"] = stay) =>
+      runPostRails({ ...base, share: s }, {
+        move: "pickup-location",
+        message,
+        leverageUsed: [],
+        digestPatch: [],
+        read: { intent: "" },
+        think: "",
+      } as TurnArtifact);
+
+    it("passes a draft that carries the verified address verbatim", () => {
+      const r = share("I'm at Ao Nang Beach Resort, Krabi - can you deliver there?");
+      expect(r.ok).toBe(true);
+    });
+
+    it("rejects a paraphrased address (a nearby landmark is not our address)", () => {
+      const r = share("I'm near the beach in Ao Nang - can you deliver?");
+      expect(r.ok).toBe(false);
+      expect(r.rejected?.rule).toBe("location");
+    });
+
+    it("rejects a maps link we did not approve", () => {
+      const r = share("I'm at Ao Nang Beach Resort, Krabi (https://evil.example/x)");
+      expect(r.ok).toBe(false);
+      expect(r.rejected?.rule).toBe("location");
+    });
+
+    it("keeps the approved maps link when consent produced one", () => {
+      const link = "https://maps.google.com/?q=8.032000,98.822000";
+      const r = share(`I'm at Ao Nang Beach Resort, Krabi (${link})`, {
+        ...stay,
+        mapsLink: link,
+      });
+      expect(r.ok).toBe(true);
+      expect(r.finalText).toContain(link);
+    });
+
+    it("rejects raw coordinates - those are never ours to write", () => {
+      const r = share("I'm at Ao Nang Beach Resort, Krabi - 8.032000, 98.822000");
+      expect(r.ok).toBe(false);
+      expect(r.rejected?.rule).toBe("location");
+    });
   });
 
   it("passes a clean bargain and never finalizes a time", () => {

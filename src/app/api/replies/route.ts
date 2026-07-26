@@ -116,6 +116,75 @@ export async function GET(req: Request) {
         (f?.fulfillment === "pickup" || f?.fulfillment === "delivery" || f?.fulfillment === "on-shop")
     );
 
+  // THE SHOP'S MENU, for the card. A reply naming more than one price is a
+  // CHOICE ("some models 200 and some new 250/day"), and showing only the one
+  // number the app happened to pick is how the 200 tier disappeared from the
+  // traveller's screen entirely.
+  //
+  // Derived from the conversation, exactly as the engine derives it
+  // (src/lib/offer-options.ts) - so there is one definition, no column to add,
+  // and nothing that can go stale against the thread it came from. Deliberately
+  // NOT a new select on this route: `rows` above degrades through three column
+  // tiers, and an unknown column silently blanks the whole feed.
+  //
+  // ONE extra query for every inbound body in this session, scoped by the same
+  // `raw->>receiver` predicate /api/thread uses (the privacy keystone), then
+  // grouped per shop in memory.
+  const optionsByVendor = new Map<string, import("@/lib/types").VehicleOption[]>();
+  /** vendorId -> the shop's own words when they asked where the traveller is. */
+  const askedLocationByVendor = new Map<string, string>();
+  try {
+    const { optionsFromThread } = await import("@/lib/offer-options");
+    const numberByVendor = new Map<string, string>();
+    for (const r of rows) if (r.vendor_id) numberByVendor.set(r.vendor_id, "");
+    const inbound = await sbSelect<{ from_number: string; body: string }>(
+      "whatsapp_messages",
+      `select=from_number,body&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+        session.email
+      )}${
+        sinceMs > 0
+          ? `&received_at=gte.${encodeURIComponent(new Date(sinceMs).toISOString())}`
+          : ""
+      }&order=received_at.asc&limit=200`
+    ).catch(() => []);
+    const bodiesByNumber = new Map<string, string[]>();
+    for (const m of inbound) {
+      if (!m.from_number || !m.body) continue;
+      const arr = bodiesByNumber.get(m.from_number) ?? [];
+      arr.push(m.body);
+      bodiesByNumber.set(m.from_number, arr);
+    }
+    // vendor_id -> the digits we actually messaged, via this user's outbound rows.
+    const out = await sbSelect<{ to_number: string; raw: { vendorId?: string } | null }>(
+      "whatsapp_messages",
+      `select=to_number,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        session.email
+      )}&order=received_at.desc&limit=200`
+    ).catch(() => []);
+    for (const o of out) {
+      const vid = o.raw?.vendorId;
+      if (vid && o.to_number && !numberByVendor.get(vid)) numberByVendor.set(vid, o.to_number);
+    }
+    const { shopAskedLocation } = await import("@/lib/wa/detectors");
+    for (const [vendorId, digits] of numberByVendor) {
+      const bodies = digits ? bodiesByNumber.get(digits) : undefined;
+      if (!bodies?.length) continue;
+      const opts = optionsFromThread(bodies, { durationDays: undefined });
+      if (opts.length >= 2) optionsByVendor.set(vendorId, opts);
+      // Did this shop ASK where the traveller is? Same rows, no extra query.
+      // We keep their own wording so the card can say WHY they want it rather
+      // than guessing on the traveller's behalf.
+      for (let i = bodies.length - 1; i >= 0; i--) {
+        if (shopAskedLocation(bodies[i])) {
+          askedLocationByVendor.set(vendorId, bodies[i].slice(0, 180));
+          break;
+        }
+      }
+    }
+  } catch {
+    /* the menu is an enrichment - a failure must never blank the feed */
+  }
+
   return NextResponse.json({
     replies: rows.map((r) => {
       const st = stateByVendor.get(r.vendor_id);
@@ -153,6 +222,12 @@ export async function GET(req: Request) {
       declined: st?.declined === true,
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
+      // Every tier this shop offered, so the card can show the CHOICE instead
+      // of the single price the app picked. Absent for an ordinary quote.
+      options: optionsByVendor.get(r.vendor_id) ?? null,
+      // The shop asked where we are. The card explains why and lets the
+      // traveller choose WHICH place to share - it is never sent automatically.
+      askedLocationQuote: askedLocationByVendor.get(r.vendor_id) ?? null,
       createdAt: r.created_at,
       };
     }),

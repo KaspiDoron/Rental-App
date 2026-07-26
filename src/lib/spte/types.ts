@@ -113,6 +113,11 @@ export interface TurnContext {
   inbound: { text: string; verified: VerifiedExtraction };
   /** The ONLY moves the single pass may choose from (policy rails output). */
   legalMoves: MoveKind[];
+  /** The ONE location disclosure gate (resolveShareableLocation). Composed from
+   *  the server-verified stay only - client-posted coordinates never reach it.
+   *  Absent addressText means we have nothing shareable, so `pickup-location`
+   *  is not a legal move and the UI asks the traveller instead. */
+  share?: { addressText?: string; mapsLink?: string };
   guards: { floorPerDay?: number; maxRounds: number };
   /** Event that triggered this turn - a real inbound, a wakeup, or a swarm poke. */
   event: "shop-message" | "tick" | "rival-improved";

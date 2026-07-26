@@ -14,16 +14,10 @@ import { lockBodyScroll } from "@/lib/scroll-lock";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
+import { MessageBubble, type ThreadMsg } from "./MessageBubble";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 
-interface Msg {
-  id: string;
-  dir: "in" | "out";
-  text: string;
-  english?: string;
-  kind?: string;
-  at: string;
-}
+type Msg = ThreadMsg;
 interface Delivery {
   sent: boolean;
   delivered: boolean;
@@ -337,32 +331,7 @@ export function ThreadDashboard({
             <p className="py-4 text-center text-[12px] text-faint">{t("No messages in this thread yet.")}</p>
           )}
           {messages?.map((m) => (
-            <div key={m.id} className={`flex ${m.dir === "out" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[85%] rounded-2xl px-3 py-2 text-[12px] font-semibold leading-snug ${
-                  m.dir === "out"
-                    ? m.kind === "human-manual"
-                      ? "rounded-br-md bg-savings text-white"
-                      : "rounded-br-md bg-brandblue text-white"
-                    : "rounded-bl-md bg-card text-strong"
-                }`}
-              >
-                {m.kind === "human-manual" && (
-                  <div className="mb-0.5 text-[9px] font-extrabold uppercase tracking-wide opacity-80">
-                    {t("You (from WhatsApp)")}
-                  </div>
-                )}
-                {m.text}
-                {m.english && m.english !== m.text && (
-                  <div className="mt-1 border-t border-white/25 pt-1 text-[10px] font-normal opacity-85">
-                    {m.english}
-                  </div>
-                )}
-                <div className={`mt-0.5 text-[9px] font-bold ${m.dir === "out" ? "text-white/70" : "text-faint"}`}>
-                  {clock(m.at)}
-                </div>
-              </div>
-            </div>
+            <MessageBubble key={m.id} m={m} />
           ))}
           <div ref={endRef} />
         </div>

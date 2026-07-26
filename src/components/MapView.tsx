@@ -15,6 +15,7 @@ import { createPortal } from "react-dom";
 import type { Vendor } from "@/lib/types";
 import { Icon } from "./icons";
 import { stageCaption, StageBadge } from "./Tracker";
+import { ShopAvatar } from "./ShopAvatar";
 import { moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -41,8 +42,13 @@ function pinColor(v: Vendor): string {
 
 function priceIcon(v: Vendor, selected: boolean): L.DivIcon {
   const color = pinColor(v);
+  // A shop offering a CHOICE has no single price. Prefix "from" and use the
+  // cheapest tier rather than asserting a number the traveller has not picked.
+  const opts = v.offer?.options;
   const label = v.offer
-    ? moneyLocal(v.offer.pricePerDay, v.offer.currency)
+    ? opts && opts.length >= 2
+      ? `from ${moneyLocal(Math.min(...opts.map((o) => o.pricePerDay)), v.offer.currency)}`
+      : moneyLocal(v.offer.pricePerDay, v.offer.currency)
     : v.rating
     ? `★${v.rating.toFixed(1)}`
     : "🛵";
@@ -162,11 +168,28 @@ function ShopCard({
       )}
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+            <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
+          </span>
           <span className="shrink-0 text-[14px] font-extrabold text-strong">
-            {v.offer ? `${moneyLocal(v.offer.pricePerDay, v.offer.currency)}/d` : ""}
+            {v.offer
+              ? v.offer.options && v.offer.options.length >= 2
+                ? `from ${moneyLocal(
+                    Math.min(...v.offer.options.map((o) => o.pricePerDay)),
+                    v.offer.currency
+                  )}/d`
+                : `${moneyLocal(v.offer.pricePerDay, v.offer.currency)}/d`
+              : ""}
           </span>
         </div>
+        {/* There is no room for three buttons on a 78vw card - say a choice
+            exists and let "View details" carry them to it. */}
+        {v.offer?.options && v.offer.options.length >= 2 && (
+          <div className="mt-1 inline-block rounded-full bg-brandblue-soft px-2 py-0.5 text-[10px] font-extrabold text-brandblue">
+            🛵 {v.offer.options.length} options
+          </div>
+        )}
         {v.stage && v.stage !== "queued" && (
           <div className="mt-1">
             <StageBadge stage={v.stage} />

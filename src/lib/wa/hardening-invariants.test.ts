@@ -278,3 +278,78 @@ describe("resilience: external fetches are bounded by a hard timeout", () => {
     expect(code).toMatch(/\.unref\?\.\(\)/);
   });
 });
+
+// A shop's price board is one traveller's negotiation intel. The media proxy
+// hands out bytes, so its gates are pinned here for the same reason the SQL
+// filters above are: they are integration-bound and cannot fail as a unit.
+describe("shop media proxy: scoped to your own thread, never cached publicly", () => {
+  const MEDIA = "src/app/api/wa/media/route.ts";
+
+  it("requires a session and refuses another user's message", () => {
+    const code = readCode(MEDIA);
+    expect(code).toMatch(/getSession\(\)/);
+    expect(code).toMatch(/status:\s*401/);
+    // The privacy keystone: inbound rows are scoped by receiver, never by
+    // message id alone - the same id in someone else's thread must 404.
+    expect(code).toMatch(/raw->>receiver=eq\./);
+    expect(code).toMatch(/direction=eq\.inbound/);
+  });
+
+  it("validates the id with a strict regex BEFORE any upstream call", () => {
+    const code = readCode(MEDIA);
+    const idCheck = code.indexOf("ID_RX.test");
+    const firstFetch = code.indexOf("fetchMediaBase64");
+    expect(idCheck).toBeGreaterThan(-1);
+    expect(idCheck).toBeLessThan(firstFetch);
+    expect(code).toMatch(/status:\s*400/);
+  });
+
+  it("is private, no-store - never the public max-age of /api/photo", () => {
+    const code = readCode(MEDIA);
+    expect(code).toMatch(/private,\s*no-store/);
+    expect(code).not.toMatch(/public,\s*max-age/);
+  });
+
+  it("falls back to the Storage audit copy when WhatsApp has expired the media", () => {
+    const code = readCode(MEDIA);
+    expect(code).toMatch(/storage\/v1\/object\/wa-media\//);
+    // Deterministic path: the worker must key the audit copy on the message id
+    // alone, or this fallback can never find it.
+    const worker = readCode("services/workers/src/vision.worker.ts");
+    expect(worker).toMatch(/wa-media\/\$\{waMessageId/);
+  });
+
+  it("bounds the upstream wait, like every other outbound proxy here", () => {
+    expect(readCode(MEDIA)).toMatch(/AbortController/);
+  });
+});
+
+// Not avatars, but the same class of invariant and the same reason it is pinned
+// at the source: page.tsx documents a REAL production leak where a stale device
+// GPS fix was posted from the browser and relayed verbatim to a rental shop.
+describe("location sharing: the browser never posts coordinates", () => {
+  it("the consent request body carries no lat/lng - only a place NAME", () => {
+    const page = readCode("src/app/page.tsx");
+    const call = page.slice(page.indexOf("/api/negotiate/consent"));
+    const body = call.slice(call.indexOf("JSON.stringify("), call.indexOf("});"));
+    expect(body).not.toMatch(/\blat\b|\blng\b|latitude|longitude|coords/i);
+    expect(body).toMatch(/shareQuery/);
+  });
+
+  it("the share sheet never reads geolocation itself", () => {
+    const sheet = readCode("src/components/LocationShareSheet.tsx");
+    expect(sheet).not.toMatch(/getCurrentPosition|watchPosition/);
+  });
+
+  it("the consent route still ignores any lat/lng a tampered client sends", () => {
+    const route = readCode("src/app/api/negotiate/consent/route.ts");
+    expect(route).not.toMatch(/body\.(lat|lng|latitude|longitude)/);
+  });
+
+  it("a one-off share is re-resolved server-side, never trusted as typed", () => {
+    const route = readCode("src/app/api/negotiate/consent/route.ts");
+    // The label handed to the engine comes from Google, not from the request.
+    expect(route).toMatch(/searchPlaces|placeDetails/);
+    expect(route).toMatch(/stayLabelOverride/);
+  });
+});

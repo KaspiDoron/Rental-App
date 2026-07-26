@@ -22,6 +22,7 @@ import { jidMatches } from "./wa/jid";
 import { isLinkedFromStatus } from "./wa/linked-status";
 import { routableOrigin } from "./request-origin";
 import { digitsOnly } from "./phone";
+import { boundedSet } from "./bounded-map";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
@@ -1524,6 +1525,54 @@ export async function fetchMediaBase64(
     /* media fetch is best-effort */
   }
   return null;
+}
+
+// EPHEMERAL SHOP AVATARS.
+//
+// A shop's WhatsApp profile picture makes the negotiation feel like the real
+// conversation it is. It is also personal data belonging to someone who never
+// signed up for this app, so it is NEVER written to a database - it lives in
+// this process cache for a few minutes and in React state for the length of one
+// search, and disappears with both. The route that calls this proves the user
+// actually messaged the number first.
+const AVATAR_TTL_MS = 10 * 60_000;
+const AVATAR_CAP = 2000;
+function avatarStore(): Map<string, { url: string | null; exp: number }> {
+  const g = globalThis as unknown as {
+    __wd_wa_avatars__?: Map<string, { url: string | null; exp: number }>;
+  };
+  if (!g.__wd_wa_avatars__) g.__wd_wa_avatars__ = new Map();
+  return g.__wd_wa_avatars__;
+}
+
+/**
+ * The shop's WhatsApp profile picture URL, or null when it has none / hides it.
+ * Never throws; a miss is simply an initial-letter fallback in the UI.
+ */
+export async function fetchProfilePictureUrl(
+  email: string,
+  digits: string
+): Promise<string | null> {
+  const key = `${email}:${digits}`;
+  const store = avatarStore();
+  const hit = store.get(key);
+  if (hit && hit.exp > Date.now()) return hit.url;
+
+  const instance = instanceNameFor(email);
+  let url: string | null = null;
+  try {
+    const res = await evo(email, `/chat/fetchProfilePictureUrl/${instance}`, {
+      method: "POST",
+      body: JSON.stringify({ number: digits }),
+    });
+    const raw = res.data?.profilePictureUrl ?? res.data?.url ?? null;
+    // Only a real https URL is ever handed to an <img src>.
+    if (typeof raw === "string" && /^https:\/\//i.test(raw)) url = raw;
+  } catch {
+    /* no picture is a normal outcome, not an error */
+  }
+  boundedSet(store, key, { url, exp: Date.now() + AVATAR_TTL_MS }, AVATAR_CAP);
+  return url;
 }
 
 /**

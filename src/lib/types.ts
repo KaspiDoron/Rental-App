@@ -1,5 +1,11 @@
 // Shared domain types for WheelDeal.
 
+// One definition of a shop's price tier, shared by the engine and the UI.
+// Defined in offer-options.ts (pure, unit-tested) and re-exported here so the
+// client imports it from the same place as the rest of the domain.
+export type { VehicleOption, OptionCondition, OptionGap } from "./offer-options";
+import type { VehicleOption } from "./offer-options";
+
 export type VehicleClass = "car" | "motorbike" | "scooter";
 export type Transmission = "automatic" | "manual" | "any";
 export type Fulfillment = "hotel-delivery" | "in-store" | "any";
@@ -94,6 +100,20 @@ export interface Offer {
   // quoted a better weekly/monthly rate (so long rentals do not collapse to a
   // single flat day price).
   effectiveDailyRate?: number;
+  /**
+   * Every tier this shop offered when it gave a CHOICE rather than one price
+   * ("some models 200 and some new 250/day"). `pricePerDay` above stays the
+   * cheapest on-spec tier so every existing surface keeps working; this is what
+   * lets the traveller actually SEE the choice instead of a single number the
+   * app picked for them. Absent for the ordinary one-price reply.
+   */
+  options?: VehicleOption[];
+  /**
+   * The shop's own words when they asked where the traveller is. Present only
+   * while they are still waiting for an answer; drives the card's location
+   * prompt, which explains WHY they asked before offering to share anything.
+   */
+  askedLocationQuote?: string;
 }
 
 export interface Vendor {

@@ -4,6 +4,7 @@ import {
   mergeOptions,
   mileageIn,
   nextGap,
+  offerForOption,
   optionsFromHits,
   signalsVariance,
   type VehicleOption,
@@ -113,6 +114,28 @@ describe("mergeOptions - facts accumulate, never regress", () => {
     const merged = mergeOptions(withPhoto, first.map((o) => ({ ...o, photoRefs: ["a.jpg", "b.jpg"] })));
     expect(merged[0].photoRefs).toEqual(["a.jpg", "b.jpg"]);
     expect(merged[0].gaps).not.toContain("photo");
+  });
+});
+
+// Locking the "older 200" tier must not book the headline "newer 250" price.
+// Every downstream reader (BookingSheet, /api/bookings, the bargain draft) takes
+// the price straight off the offer, so the choice has to be applied there.
+describe("offerForOption - the chosen tier IS the price", () => {
+  const offer = { pricePerDay: 250, currency: "THB", totalPrice: 1250, verified: true };
+  const older = optionsFor("Some models 200 and some new 250/day")[0];
+
+  it("rewrites price and total to the chosen tier", () => {
+    const picked = offerForOption(offer, older, 5);
+    expect(picked.pricePerDay).toBe(200);
+    expect(picked.totalPrice).toBe(1000);
+  });
+
+  it("keeps every other field of the offer intact", () => {
+    expect(offerForOption(offer, older, 5).verified).toBe(true);
+  });
+
+  it("never divides by zero on a missing duration", () => {
+    expect(offerForOption(offer, older, 0).totalPrice).toBe(200);
   });
 });
 

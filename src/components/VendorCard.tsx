@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import type { Vendor, StructuredRFQ } from "@/lib/types";
+import type { Vendor, StructuredRFQ, VehicleOption } from "@/lib/types";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
@@ -12,6 +12,8 @@ import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/
 import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
 import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
+import { OptionList } from "./OptionList";
+import { ShopAvatar } from "./ShopAvatar";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
 // only its real reply produces a price. Everything happens INSIDE the app:
@@ -32,6 +34,7 @@ function VendorCardInner({
   onQueued,
   onCustomMessage,
   onPickupConsent,
+  onLocationRequest,
   whyDecisionId,
   onWhy,
   onOpenThread,
@@ -46,9 +49,12 @@ function VendorCardInner({
   localLang?: boolean;
   region?: string;
   searchEpoch?: number;
-  onBook: (vendor: Vendor) => void;
+  // The chosen tier travels with the action. Without it, locking the "older
+  // 200" tier would book the headline price of the "newer 250" one, because
+  // BookingSheet reads vendor.offer.pricePerDay directly.
+  onBook: (vendor: Vendor, option?: VehicleOption) => void;
   onReviews: (vendor: Vendor) => void;
-  onBargain: (vendor: Vendor) => void;
+  onBargain: (vendor: Vendor, option?: VehicleOption) => void;
   onStage: (vendorId: string, stage: Vendor["stage"]) => void;
   // A send was parked in the outbox - stamp queuedUntil + the guard's real
   // reason instantly so every surface agrees without waiting for a poll.
@@ -59,7 +65,9 @@ function VendorCardInner({
   ) => Promise<{ allowed: boolean; reason?: string; suggestion?: string }>;
   // Pickup consent: the shop offered to pick the traveller up; sending the
   // exact location happens ONLY after the traveller approves it here.
-  onPickupConsent?: (vendor: Vendor) => Promise<{ ok: boolean; reason?: string }>;
+  onPickupConsent?: (vendor: Vendor, sharePlace?: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** Opens the location-share sheet: the shop asked WHERE the traveller is. */
+  onLocationRequest?: (vendor: Vendor) => void;
   // "Why this move?" - the latest director decision for this shop (live data).
   whyDecisionId?: string;
   onWhy?: (decisionId: string) => void;
@@ -302,6 +310,9 @@ function VendorCardInner({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
+              {/* Only resolves for shops we have actually messaged, and only
+                  while this search is open - see ShopAvatar. */}
+              <ShopAvatar name={vendor.name} phone={vendor.whatsapp} />
               <h3 className="truncate text-[16px] font-extrabold text-strong">{vendor.name}</h3>
               {vendor.demo && (
                 <span className="shrink-0 rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
@@ -555,6 +566,28 @@ function VendorCardInner({
               )}
             </div>
 
+            {/* THE SHOP'S MENU. When a shop offers a choice ("some models 200
+                and some new 250/day"), showing only the one price the app
+                picked hides the actual decision from the traveller. Each tier
+                gets its own lock/bargain/ask, so the choice is theirs. */}
+            {offer.options && offer.options.length >= 2 && (
+              <OptionList
+                options={offer.options}
+                currency={offer.currency}
+                durationDays={rfq?.durationDays}
+                onLock={(o) => onBook(vendor, o)}
+                onBargain={(o) => onBargain(vendor, o)}
+                onAsk={(o) => {
+                  // Reuse the composer the card already owns, pre-filled with
+                  // the tier so the traveller edits rather than types.
+                  setChatOpen(true);
+                  setDraft(
+                    `${t("About the")} ${o.model || o.label} ${t("at")} ${o.pricePerDay}/${t("day")} - `
+                  );
+                }}
+              />
+            )}
+
             {/* Deal completeness: the agents keep confirming the deposit and
                 how you get the vehicle before the deal is fully ready. We never
                 hide the price - just flag what is still being confirmed. */}
@@ -572,6 +605,27 @@ function VendorCardInner({
                   💬 {t("Your agent is still confirming the deposit and how you get the vehicle.")}
                 </div>
               )
+            )}
+
+            {/* THE SHOP ASKED WHERE YOU ARE. Distinct from the pickup offer
+                below: this is their question, quoted back, so the traveller
+                knows why anyone wants their location before deciding what to
+                share. Nothing is sent until they choose in the sheet. */}
+            {offer.askedLocationQuote && !offer.pickupConsent && onLocationRequest && (
+              <button
+                onClick={() => onLocationRequest(vendor)}
+                className="mt-2 w-full rounded-xl border-2 border-brandyellow/40 bg-brandyellow-soft p-2.5 text-left"
+              >
+                <div className="text-[12px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                  📍 {t("This shop asked where you are")}
+                </div>
+                <div className="mt-0.5 line-clamp-2 text-[11px] italic text-soft">
+                  &ldquo;{offer.askedLocationQuote}&rdquo;
+                </div>
+                <div className="mt-1 text-[11px] font-bold text-brandblue">
+                  {t("Choose what to share")} →
+                </div>
+              </button>
             )}
 
             {/* Pickup consent: the shop offered to come get you. We share your

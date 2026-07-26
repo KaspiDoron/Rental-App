@@ -404,11 +404,45 @@ export async function processEvolutionWebhook(
               : doc
               ? `[document: ${doc.fileName ?? "file"}]`
               : ""),
-          type: hasImage ? "image" : hasAudio ? "audio" : doc ? "document" : "text",
+          type: hasImage
+            ? "image"
+            : hasAudio
+            ? "audio"
+            : doc
+            ? "document"
+            : pinLoc
+            ? "location"
+            : contact
+            ? "contact"
+            : "text",
           direction: "inbound",
           // receiver = the ONE user whose WhatsApp got this message. Every
           // read surface filters on it - the privacy isolation keystone.
-          raw: { instance, receiver: email, pushName: data.pushName ?? null, channel: "evolution" },
+          raw: {
+            instance,
+            receiver: email,
+            pushName: data.pushName ?? null,
+            channel: "evolution",
+            // What the shop actually SENT, so "Full conversation" can show it
+            // instead of the string "[photo]". Bytes are never stored here -
+            // only the provider KEY, which /api/wa/media redeems on demand.
+            ...(hasImage || hasAudio || doc
+              ? {
+                  media: {
+                    key: data.key ?? null,
+                    kind: hasImage ? "image" : hasAudio ? "audio" : "document",
+                    mime: doc?.mimetype ?? null,
+                    fileName: doc?.fileName ?? null,
+                  },
+                }
+              : {}),
+            // A dropped pin is the shop's own address - it belongs in the
+            // transcript as a map link, not as prose the traveller cannot tap.
+            ...(pinLoc ? { location: { lat: pinLoc.lat, lng: pinLoc.lng, name: pinLoc.name ?? null } } : {}),
+            ...(contact && (contact.name || contact.digits)
+              ? { contact: { name: contact.name ?? null, digits: contact.digits ?? null } }
+              : {}),
+          },
         },
       ]);
       // Response-time analytics: record how fast this shop replied to our RFQ.

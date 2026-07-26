@@ -87,7 +87,11 @@ async function storeMediaAudit(
   if (!base || !key) return undefined;
   try {
     const ext = media.mime.includes("png") ? "png" : media.mime.includes("webp") ? "webp" : "jpg";
-    const path = `wa-media/${new Date().toISOString().slice(0, 10)}/${waMessageId || Date.now()}.${ext}`;
+    // DETERMINISTIC PATH, keyed on the provider message id alone. WhatsApp
+    // expires media after a while; when it does, /api/wa/media needs to find
+    // this copy from the row's wa_message_id and nothing else - so the path
+    // must not depend on when the worker happened to run.
+    const path = `wa-media/${waMessageId || Date.now()}.${ext}`;
     const res = await fetch(`${base}/storage/v1/object/${path}`, {
       method: "POST",
       headers: {

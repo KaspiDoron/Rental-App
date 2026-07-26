@@ -7,15 +7,9 @@ import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Modal";
 import { LoadingDots } from "../LoadingDots";
 import { useI18n } from "@/lib/i18n";
+import { MessageBubble, type ThreadMsg } from "../MessageBubble";
 
-interface Msg {
-  id: string;
-  dir: "in" | "out";
-  text: string;
-  english?: string;
-  kind?: string;
-  at: string;
-}
+type Msg = ThreadMsg;
 
 export function TranscriptSheet({
   vendorId,
@@ -41,20 +35,36 @@ export function TranscriptSheet({
   const [switching, setSwitching] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
+  // POLL, like ThreadDashboard does. Fetching once meant a sheet left open
+  // while a shop was actively replying quietly went stale - the reader had no
+  // way to tell an idle thread from a frozen view.
   useEffect(() => {
-    const q = new URLSearchParams({ vendorId, full: "1" });
-    if (since) q.set("since", String(since));
-    fetch(`/api/thread?${q.toString()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setMessages(Array.isArray(d.messages) ? d.messages : []);
-        setDelivery(d.delivery ?? null);
-      })
-      .catch(() => setMessages([]));
+    let alive = true;
+    const load = () => {
+      const q = new URLSearchParams({ vendorId, full: "1" });
+      if (since) q.set("since", String(since));
+      // Cache-bust: an intermediary caching this GET is what froze the
+      // transcript on its first snapshot before.
+      q.set("t", String(Date.now()));
+      fetch(`/api/thread?${q.toString()}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!alive) return;
+          setMessages(Array.isArray(d.messages) ? d.messages : []);
+          setDelivery(d.delivery ?? null);
+        })
+        .catch(() => alive && setMessages([]));
+    };
+    load();
+    const id = setInterval(() => !document.hidden && load(), 5000);
     fetch(`/api/thread/takeover?vendorId=${encodeURIComponent(vendorId)}`)
       .then((r) => r.json())
-      .then((d) => setTakeover(Boolean(d.takeover)))
+      .then((d) => alive && setTakeover(Boolean(d.takeover)))
       .catch(() => {});
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [vendorId, since]);
 
   async function switchTakeover(mode: "takeover" | "handback") {
@@ -137,32 +147,7 @@ export function TranscriptSheet({
           </p>
         )}
         {messages?.map((m) => (
-          <div key={m.id} className={`flex ${m.dir === "out" ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-[85%] rounded-2xl px-3 py-2 text-[12px] font-semibold leading-snug ${
-                m.dir === "out"
-                  ? m.kind === "human-manual"
-                    ? "rounded-br-md bg-savings text-white"
-                    : "rounded-br-md bg-brandblue text-white"
-                  : "rounded-bl-md bg-card text-strong"
-              }`}
-            >
-              {m.kind === "human-manual" && (
-                <div className="mb-0.5 text-[9px] font-extrabold uppercase tracking-wide opacity-80">
-                  {t("You (from WhatsApp)")}
-                </div>
-              )}
-              {m.text}
-              {m.english && m.english !== m.text && (
-                <div className="mt-1 border-t border-white/25 pt-1 text-[10px] font-normal opacity-85">
-                  {m.english}
-                </div>
-              )}
-              <div className={`mt-0.5 text-[9px] font-bold ${m.dir === "out" ? "text-white/70" : "text-faint"}`}>
-                {new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </div>
-            </div>
-          </div>
+          <MessageBubble key={m.id} m={m} />
         ))}
         <div ref={endRef} />
       </div>

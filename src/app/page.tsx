@@ -3,11 +3,13 @@
 import { useCallbackRef } from "@/components/useCallbackRef";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Vendor, StructuredRFQ, Session, TrackerStage, Offer } from "@/lib/types";
+import type { Vendor, StructuredRFQ, Session, TrackerStage, Offer, VehicleOption } from "@/lib/types";
+import { offerForOption } from "@/lib/offer-options";
 import { vehicleLabel } from "@/lib/labels";
 import { Icon } from "@/components/icons";
 import { Filters, DEFAULT_FILTERS, type FilterState } from "@/components/Filters";
 import { VendorCard } from "@/components/VendorCard";
+import { ShopAvatar, clearShopAvatars } from "@/components/ShopAvatar";
 import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
 import { TabBar } from "@/components/TabBar";
@@ -46,6 +48,7 @@ import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed"
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
 import { ThreadDashboard } from "@/components/ThreadDashboard";
+import { LocationShareSheet } from "@/components/LocationShareSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
 import type { WillContext } from "@/lib/will-commands";
@@ -218,6 +221,9 @@ export default function Home() {
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
+  // The shop asked where the traveller is - the sheet that lets them choose
+  // what to answer. Nothing is shared until they pick.
+  const [locationAskFor, setLocationAskFor] = useState<Vendor | null>(null);
   // Live-poll health. clockSkewRef corrects `since` against the SERVER clock
   // (the filter runs on server timestamps); feedStale surfaces a failing poll
   // instead of freezing the screen on a stale snapshot.
@@ -270,6 +276,17 @@ export default function Home() {
     if (phase === "profiling") setVisibleCount(20);
   }, [phase]);
   const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
+
+  // A shop with a MENU hands the chosen tier along with the vendor. Apply it to
+  // the offer before anything downstream reads a price: the booking sheet, the
+  // server-side total and the bargain draft all take `offer.pricePerDay`
+  // directly, so a tier carried alongside would book the wrong bike.
+  function pickVendorOption(set: (v: Vendor) => void) {
+    return (v: Vendor, option?: VehicleOption) => {
+      if (!option || !v.offer) return set(v);
+      set({ ...v, offer: offerForOption(v.offer, option, rfq?.durationDays ?? 1) });
+    };
+  }
 
   // Jump straight to a shop's card from the status panel: switch to the list,
   // highlight it, and smooth-scroll it into view. The list is WINDOWED
@@ -509,6 +526,9 @@ export default function Home() {
     setPhase("idle");
     setClearConfirm(false);
     appliedReplies.current = new Set();
+    // Shop avatars are ephemeral: a new search must never show the previous
+    // session's shops (they belong to people who never signed up here).
+    clearShopAvatars();
     setQueueItems([]);
     // Future replies belong to a NEW session - anything before now is dead.
     setSearchEpoch(Date.now());
@@ -1315,6 +1335,16 @@ export default function Home() {
                         r.pickupOffered === true || v.offer?.pickupOffered === true || undefined,
                       pickupConsent:
                         r.pickupConsent === true || v.offer?.pickupConsent === true || undefined,
+                      // The shop's price MENU when it offered a choice. Kept on
+                      // the vendor object because VendorCard is memo'd - a
+                      // sibling prop would not re-render the card.
+                      options: r.options ?? v.offer?.options,
+                      // Their own question, so the card can say why they want
+                      // it. Cleared the moment we have shared something.
+                      askedLocationQuote:
+                        r.pickupConsent === true || v.offer?.pickupConsent === true
+                          ? undefined
+                          : r.askedLocationQuote ?? v.offer?.askedLocationQuote,
                     },
                   }
                 : v
@@ -1410,6 +1440,9 @@ export default function Home() {
     const epoch = Date.now();
     setSearchEpoch(epoch);
     appliedReplies.current = new Set();
+    // Shop avatars are ephemeral: a new search must never show the previous
+    // session's shops (they belong to people who never signed up here).
+    clearShopAvatars();
     setQueueItems([]);
     // Close the PREVIOUS session on the server first: purge its queued
     // messages, delete its wakeups and silence its shop threads BEFORE any new
@@ -1500,7 +1533,14 @@ export default function Home() {
   // (typed address; precise pin only with the default-OFF toggle). reason
   // "no-stay" means the user must configure their stay first - the caller
   // opens the location settings.
-  const pickupConsent = useCallbackRef(async (vendor: Vendor): Promise<{ ok: boolean; reason?: string }> => {
+  // `sharePlace` is an optional ONE-OFF place NAME the traveller picked instead
+  // of their saved stay (they are on the way, not at the hotel yet). It is a
+  // name, never coordinates, and the server re-resolves it against Google
+  // before anything reaches a shop.
+  const pickupConsent = useCallbackRef(async (
+    vendor: Vendor,
+    sharePlace?: string
+  ): Promise<{ ok: boolean; reason?: string }> => {
     try {
       const res = await fetch("/api/negotiate/consent", {
         method: "POST",
@@ -1508,10 +1548,14 @@ export default function Home() {
         body: JSON.stringify({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
+          shareQuery: sharePlace || undefined,
         }),
       });
       const d = await res.json();
-      if (d.ok) patchVendor(vendor.id, { offer: { ...vendor.offer!, pickupConsent: true } });
+      if (d.ok)
+        patchVendor(vendor.id, {
+          offer: { ...vendor.offer!, pickupConsent: true, askedLocationQuote: undefined },
+        });
       return { ok: Boolean(d.ok), reason: d.reason };
     } catch {
       return { ok: false, reason: "network" };
@@ -2245,10 +2289,23 @@ export default function Home() {
                             title={t("Jump to this shop")}
                           >
                             <span className="shrink-0 text-brandblue">↧</span>
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
                             <span className="truncate">{v.name}</span>
                           </button>
+                          {/* A shop with a MENU has no single price - showing
+                              one is what hid the cheaper tier. Show the range. */}
                           <span className="shrink-0 font-extrabold text-savings">
-                            {v.offer && moneyLocal(v.offer.pricePerDay, v.offer.currency)}/{t("day")}
+                            {v.offer &&
+                              (v.offer.options && v.offer.options.length >= 2
+                                ? `${moneyLocal(
+                                    Math.min(...v.offer.options.map((o) => o.pricePerDay)),
+                                    v.offer.currency
+                                  )}-${moneyLocal(
+                                    Math.max(...v.offer.options.map((o) => o.pricePerDay)),
+                                    v.offer.currency
+                                  )}`
+                                : moneyLocal(v.offer.pricePerDay, v.offer.currency))}
+                            /{t("day")}
                           </span>
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-bold text-faint">
@@ -2287,6 +2344,7 @@ export default function Home() {
                             title={t("Jump to this shop")}
                           >
                             <span className="shrink-0 text-brandblue">↧</span>
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
                             <span className="truncate">{v.name}</span>
                           </button>
                           <span className="shrink-0 text-faint">
@@ -2621,6 +2679,7 @@ export default function Home() {
             items={activityItems}
             onWhy={(id) => setWhyDecision(id)}
             onJump={(vendorId) => scrollToVendor(vendorId)}
+            phoneOf={(vendorId) => vendors.find((x) => x.id === vendorId)?.whatsapp}
             onTranscript={(id, name) => {
               const v = vendors.find((x) => x.id === id);
               if (v) setDashboardFor(v);
@@ -2660,13 +2719,14 @@ export default function Home() {
                   localLang={localLangActive}
                   region={origin?.label ?? ""}
                   searchEpoch={searchEpoch}
-                  onBook={setBookingVendor}
+                  onBook={pickVendorOption(setBookingVendor)}
                   onReviews={setReviewsVendor}
-                  onBargain={setBargainVendor}
+                  onBargain={pickVendorOption(setBargainVendor)}
                   onStage={handleStage}
                   onQueued={handleQueued}
                   onCustomMessage={customMessage}
                   onPickupConsent={pickupConsent}
+                  onLocationRequest={(vend) => setLocationAskFor(vend)}
                   whyDecisionId={whyByVendor[v.id]}
                   onWhy={openWhy}
                   onOpenThread={(vend) => setDashboardFor(vend)}
@@ -2785,6 +2845,15 @@ export default function Home() {
       {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
       {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
       {whyDecision && <WhyThisSheet decisionId={whyDecision} onClose={() => setWhyDecision(null)} />}
+      {locationAskFor && (
+        <LocationShareSheet
+          shopName={locationAskFor.name}
+          askedQuote={locationAskFor.offer?.askedLocationQuote}
+          onClose={() => setLocationAskFor(null)}
+          onShare={(place) => pickupConsent(locationAskFor, place)}
+        />
+      )}
+
       {dashboardFor && (
         <ThreadDashboard
           vendor={dashboardFor}

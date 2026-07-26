@@ -40,7 +40,10 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // the list a question would go unanswered (the live "agent ignored 'Around
   // what time?'" bug). A question the shop asks is owed a reply before any push.
   const askedQ = v.askedQuestion || v.askedLicense || v.askedLicensePhoto;
-  if (v.askedLocation) moves.push("pickup-location");
+  // Only legal when there is something VERIFIED to share. With no stay on file
+  // the honest move is to answer the question without an address (the UI asks
+  // the traveller for one) - never to improvise a location.
+  if (v.askedLocation && ctx.share?.addressText) moves.push("pickup-location");
   if (askedQ) moves.push("answer");
 
   // RESOLVE THE MENU BEFORE HAGGLING IT. When the shop has offered more than one

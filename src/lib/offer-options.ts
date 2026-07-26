@@ -274,6 +274,36 @@ export function optionsFromThread(
   return acc;
 }
 
+/** The shape every priced surface shares - kept structural so this stays pure. */
+export interface PricedOffer {
+  pricePerDay: number;
+  currency: string;
+  totalPrice: number;
+}
+
+/**
+ * Narrow an offer to the tier the traveller actually chose.
+ *
+ * Every downstream reader takes the price straight off the offer - the booking
+ * sheet, the server-side total, the bargain draft's "current price". Passing a
+ * chosen option around as a SIBLING value would have meant locking the "older
+ * 200" tier while booking the headline "newer 250": the same class of bug as
+ * showing one price for a menu. So the choice is applied to the offer itself.
+ */
+export function offerForOption<O extends PricedOffer>(
+  offer: O,
+  option: VehicleOption,
+  durationDays: number
+): O {
+  const days = durationDays > 0 ? durationDays : 1;
+  return {
+    ...offer,
+    pricePerDay: option.pricePerDay,
+    currency: option.currency || offer.currency,
+    totalPrice: Math.round(option.pricePerDay * days),
+  };
+}
+
 /**
  * Is the menu still unresolved? True while more than one tier is live and any
  * of them is missing something a traveller would need to choose. This is the

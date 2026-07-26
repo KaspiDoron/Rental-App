@@ -11,6 +11,9 @@
 export interface InboundRisk {
   risk: "none" | "caution" | "high";
   reasons: string[];
+  /** Hosts the deterministic allow-list already cleared. The LLM half is told
+   *  about these so it cannot re-flag a link we have positively judged safe. */
+  clearedHosts?: string[];
 }
 
 const SAFE_LINK_HOSTS = [
@@ -23,7 +26,28 @@ const SAFE_LINK_HOSTS = [
   "google.com",
   "facebook.com",
   "instagram.com",
+  // A shop answering "where are you?" with a pin is the single most common link
+  // in these threads. Apple/OSM/Waze pins are the same answer in a different app.
+  "maps.apple.com",
+  "openstreetmap.org",
+  "osm.org",
+  "waze.com",
+  "line.me",
+  "t.me",
+  "youtu.be",
+  "youtube.com",
 ];
+
+/**
+ * A LOCATION link is an answer, not a lure. A shop that sends a map pin is
+ * telling us where it is - flagging that as "don't enter card details on pages a
+ * chat sent you" is noise that trains the traveller to ignore the real warnings.
+ */
+const MAP_LINK_RX =
+  /(?:maps\.app\.goo\.gl|maps\.google\.|goo\.gl\/maps|maps\.apple\.com|openstreetmap\.org|osm\.org|waze\.com|\/maps\/)/i;
+export function isLocationLink(url: string): boolean {
+  return MAP_LINK_RX.test(url || "");
+}
 
 /**
  * Slugs of the shop's own name ("CityGlide Scooter Rental Chiang Mai" ->
@@ -46,6 +70,7 @@ function shopNameSlugs(vendorName?: string): string[] {
 
 export function screenInboundDeterministic(text: string, vendorName?: string): InboundRisk {
   const reasons: string[] = [];
+  const cleared: string[] = [];
   let risk: InboundRisk["risk"] = "none";
   const s = text.toLowerCase();
   if (!s.trim()) return { risk: "none", reasons };
@@ -79,9 +104,12 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
       const host = new URL(link).hostname.replace(/^www\./, "");
       const safe =
         SAFE_LINK_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
+        // A map pin is an ANSWER to "where are you", whoever hosts it.
+        isLocationLink(link) ||
         // The shop's own website (host carries the shop's name).
         ownSlugs.some((slug) => host.replace(/[^a-z0-9]/g, "").includes(slug));
-      if (!safe) {
+      if (safe) cleared.push(host);
+      else {
         bump("caution", `sent a link to ${host} - don't enter card or account details on pages a chat sent you`);
       }
     } catch {
@@ -101,7 +129,7 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
     bump("high", "asked for card details in chat - never share card numbers over WhatsApp");
   }
 
-  return { risk, reasons };
+  return { risk, reasons, clearedHosts: cleared };
 }
 
 /**
@@ -116,6 +144,7 @@ export async function screenInbound(
   if (det.risk === "high" || opts?.llmAllowed === false) return det;
   try {
     const { chat, extractJson } = await import("./ai");
+    const cleared = det.clearedHosts ?? [];
     const out = await chat(
       [
         {
@@ -123,7 +152,12 @@ export async function screenInbound(
           content:
             'You screen a rental shop\'s WhatsApp message for risks TO THE TRAVELLER (scams, document harvesting, off-platform payment pressure, phishing links). Reply ONLY JSON: {"risk":"none"|"caution"|"high","reasons":["short plain-language warning"...]}. Normal haggling, prices, deposits paid in person at pickup are NOT risks. A link to the shop\'s OWN website' +
             (opts?.vendorName ? ` (the shop is "${opts.vendorName}")` : "") +
-            " is NOT a risk.",
+            " is NOT a risk. A MAP LINK (Google/Apple Maps, a location pin) is the shop answering where it is - that is NEVER a risk." +
+            // Telling the model what we already cleared stops it re-raising a
+            // link the allow-list positively judged safe.
+            (cleared.length
+              ? ` These links are already verified safe, do NOT flag them: ${cleared.join(", ")}.`
+              : ""),
         },
         { role: "user", content: text.slice(0, 800) },
       ],
@@ -132,10 +166,22 @@ export async function screenInbound(
     if (out) {
       const j = extractJson<InboundRisk>(out);
       if (j && (j.risk === "high" || j.risk === "caution") && Array.isArray(j.reasons)) {
-        // Merge: keep deterministic findings, add the model's (capped).
-        const reasons = [...det.reasons, ...j.reasons.map(String)].slice(0, 4);
-        const risk = det.risk === "caution" || j.risk === "high" ? j.risk : j.risk;
-        return { risk: risk === "high" ? "high" : "caution", reasons };
+        // Drop any model reason that only re-raises a host we already cleared -
+        // the model does not get to overrule a positive deterministic judgement.
+        const modelReasons = j.reasons
+          .map(String)
+          .filter((r) => !cleared.some((h) => r.toLowerCase().includes(h.toLowerCase())));
+        // NOTHING LEFT means the model's only objection was a cleared link, so
+        // the deterministic verdict stands. The old code here read
+        // `det.risk === "caution" || j.risk === "high" ? j.risk : j.risk` - both
+        // branches were `j.risk`, so ANY model caution overrode a deterministic
+        // "none" and the next line could never return it. That tautology is why
+        // an allow-listed Google Maps pin was flagged as risky in a live thread.
+        if (!modelReasons.length) return det;
+        const reasons = [...det.reasons, ...modelReasons].slice(0, 4);
+        // Escalate only: the model can raise the floor, never lower it.
+        const risk: InboundRisk["risk"] = j.risk === "high" ? "high" : "caution";
+        return { risk, reasons, clearedHosts: cleared };
       }
     }
   } catch {

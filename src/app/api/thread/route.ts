@@ -44,12 +44,24 @@ export async function GET(req: Request) {
           digits
         )}&raw->>sender=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
       ).catch(() => []),
-      sbSelect<{ id: number; body: string; received_at: string; raw: { english?: string } | null }>(
+      sbSelect<{
+        id: number;
+        body: string;
+        received_at: string;
+        type: string | null;
+        wa_message_id: string | null;
+        raw: {
+          english?: string;
+          media?: { kind?: string; fileName?: string | null };
+          location?: { lat: number; lng: number; name?: string | null };
+          contact?: { name?: string | null; digits?: string | null };
+        } | null;
+      }>(
         "whatsapp_messages",
         // PRIVACY: inbound is scoped to the messages THIS user's WhatsApp
         // received (raw.receiver) - digits alone would leak another user's
         // thread with the same number.
-        `select=id,body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+        `select=id,body,received_at,type,wa_message_id,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
           digits
         )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
       ).catch(() => []),
@@ -87,6 +99,18 @@ export async function GET(req: Request) {
         // agent loop) - the traveller always understands the conversation.
         english: m.raw?.english,
         at: m.received_at,
+        // What the shop actually sent. A price board renders as the photo it
+        // is, a dropped pin as a tappable map link - not as "[photo]".
+        media:
+          m.raw?.media && m.wa_message_id
+            ? {
+                id: m.wa_message_id,
+                kind: (m.raw.media.kind ?? m.type ?? "image") as string,
+                fileName: m.raw.media.fileName ?? null,
+              }
+            : undefined,
+        location: m.raw?.location,
+        contact: m.raw?.contact,
       })),
     ]
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))

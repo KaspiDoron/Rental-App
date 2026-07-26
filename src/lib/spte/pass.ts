@@ -136,6 +136,17 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       } - and ask for a photo of each if you have not already. Do NOT bargain yet: haggling a price the traveller has not picked wastes the one discount this shop will give.\n`
     : "";
 
+  // THE ONLY LOCATION THE MODEL MAY WRITE. Everything else - a guessed area, a
+  // coordinate, a maps link we did not build - is a privacy incident, so it is
+  // stated as a verbatim fact rather than left to the model's judgement.
+  const locationBlock = ctx.legalMoves.includes("pickup-location")
+    ? `THE TRAVELLER'S LOCATION (server-verified, the ONLY one you may write): ${ctx.share?.addressText}${
+        ctx.share?.mapsLink
+          ? `\nAPPROVED MAPS LINK - reproduce it EXACTLY, character for character: ${ctx.share.mapsLink}`
+          : `\nThere is NO approved maps link. Never invent one and never write coordinates.`
+      }\n`
+    : "";
+
   const durationLeverage =
     round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
       ? `Duration is your lever this first push: ${days} days is a long rental.\n`
@@ -166,6 +177,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     firmNote +
     questionNote +
     optionPlay +
+    locationBlock +
     durationLeverage +
     rivalLeverage +
     repetitionNote +
@@ -233,6 +245,15 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
           : `Thanks for the price list! Which line is the one for me, for ${days} days? 🙂`;
       }
       return `Could you share your best price per day for the ${days} days? 🙂`;
+    case "pickup-location": {
+      // The address comes from the disclosure gate, never from the shop's
+      // message or the model. No verified stay = not a legal move at all
+      // (policy.ts), so reaching here means we have one.
+      const where = ctx.share?.addressText;
+      if (!where) return undefined;
+      const pin = ctx.share?.mapsLink ? ` (${ctx.share.mapsLink})` : "";
+      return `I'm staying at ${where}${pin} - can you deliver there, and when would suit you?`;
+    }
     case "redirect-close":
       return `No worries, thanks for letting me know - have a great day!`;
     case "close":

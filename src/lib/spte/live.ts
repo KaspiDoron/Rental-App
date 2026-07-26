@@ -230,8 +230,20 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
   const text = input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
     ? input.event.shopMessage ?? ""
     : "";
+  // THE ONE DISCLOSURE GATE (parity with graph/nodes.ts:468). The primary
+  // engine used to have no location facts at all, so `pickup-location` fell
+  // through to `default: undefined` and the shop's "where are you?" went
+  // unanswered. Composed ONLY from the server-verified stay - a client-posted
+  // coordinate never reaches this.
+  const { resolveShareableLocation } = await import("../location");
+  const resolved = resolveShareableLocation(input.ctx.stay ?? null);
+  const share = {
+    addressText: resolved.addressText ?? undefined,
+    mapsLink: resolved.mapsLink,
+  };
   return {
     session,
+    share,
     thread: {
       threadKey: input.event.threadKey,
       vendorId: input.ctx.vendorId ?? "",

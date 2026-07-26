@@ -17,7 +17,12 @@ import { digitsOnly } from "@/lib/phone";
 // No stay configured -> { ok:false, reason:"no-stay" } so the UI opens the
 // LocationConfig sheet instead of silently sending anything.
 //
-// Body: { to?, placeId? }   (lat/lng in the body are IGNORED by design)
+// Body: { to?, placeId?, sharePlaceId? }
+//   lat/lng in the body are IGNORED by design.
+//   sharePlaceId is a ONE-OFF share: the traveller is on their way and picked
+//   a different place from Maps. The browser sends only Google's place id; the
+//   SERVER resolves it to a name here. No coordinates cross the wire, nothing
+//   is persisted, and the saved stay is untouched.
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
@@ -69,10 +74,31 @@ export async function POST(req: Request) {
     await clearCancellation(session.email, digits).catch(() => {});
   }
 
+  // ONE-OFF SHARE. Resolve the place id to a NAME on the server; a label the
+  // client typed is never trusted as a location fact. Failure to resolve falls
+  // through to the saved stay rather than sharing something unverified.
+  let stayLabelOverride: string | undefined;
+  if (body.sharePlaceId) {
+    const d = await placeDetails(String(body.sharePlaceId)).catch(() => null);
+    const addr = (d?.address ?? "").trim();
+    if (addr) stayLabelOverride = addr.slice(0, 160);
+  } else if (body.shareQuery) {
+    // "Where I am now": the browser reverse-geocoded its GPS point through our
+    // own /api/geocode and holds a NAME, not coordinates. Re-resolve that name
+    // against Google here so the address we send a shop is Google's, never a
+    // string the client composed.
+    const { searchPlaces } = await import("@/lib/google");
+    const q = String(body.shareQuery).slice(0, 160);
+    const found = await searchPlaces(q).catch(() => ({ results: [] as Array<{ label: string }> }));
+    const top = found.results?.[0]?.label?.trim();
+    if (top) stayLabelOverride = top.slice(0, 160);
+  }
+
   const result = await runUserAction({
     userEmail: session.email,
     toDigits: digits,
     kind: "user-consent-pickup",
+    stayLabelOverride,
     // Consent flag ONLY - the engine composes from the server-verified stay
     // (ctx.stay), never from anything the client posted.
     payload: { pickupConsent: true },

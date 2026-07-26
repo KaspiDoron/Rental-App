@@ -1896,11 +1896,22 @@ export async function runUserAction(args: {
   kind: "user-consent-pickup" | "user-close-deal";
   payload: Record<string, unknown>;
   shopOpenNow?: boolean;
+  /** A ONE-OFF place to share instead of the saved stay - already resolved
+   *  SERVER-SIDE from a Google place id (the traveller is on their way and not
+   *  at the hotel yet). Label only, never coordinates: with no consented coords
+   *  resolveShareableLocation emits address text and no pin. Not persisted -
+   *  the saved stay is untouched. */
+  stayLabelOverride?: string;
   send: LiveSend;
 }): Promise<GraphTurnResult | null> {
   const threadKey = threadKeyFor(args.userEmail, args.toDigits);
   const input = await buildTurnFromThread(threadKey, args.kind, args.payload);
   if (!input) return null;
+  if (args.stayLabelOverride && input.ctx) {
+    // Drop any consented coords along with the label: they belong to the SAVED
+    // stay, and pinning them to a different address would be a false location.
+    input.ctx.stay = { label: args.stayLabelOverride, shareConsent: false };
+  }
   // User actions send promptly - the traveller is watching the screen.
   input.humanDelay = false;
   input.shopOpenNow = args.shopOpenNow;
