@@ -7,7 +7,15 @@
 // open id) so the panel never fills with stacked bubbles. Mobile-first: the
 // bubble clamps to the viewport width and closes on outside tap or Escape.
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 interface InfoTipCtx {
   openId: string | null;
@@ -62,6 +70,36 @@ export function InfoTip({ id, label, what, drift }: InfoTipProps) {
     else setLocalOpen((v) => !v);
   };
 
+  // EDGE-AWARE OFFSET: the bubble is centered on the "i" button
+  // (left-1/2 -translate-x-1/2), which pushes it off-screen when the button
+  // sits near the left or right edge (e.g. the MOVE MIX tile in a single
+  // column). max-width clamps the WIDTH, never the position - so we measure the
+  // rendered bubble after open and nudge it back inside an 8px margin.
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const [nudge, setNudge] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) {
+      setNudge(0);
+      return;
+    }
+    const measure = () => {
+      const el = bubbleRef.current;
+      if (!el) return;
+      // Reset the correction first so the raw centered rect is measured.
+      el.style.transform = "translateX(-50%)";
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      let dx = 0;
+      if (rect.left < margin) dx = margin - rect.left;
+      else if (rect.right > window.innerWidth - margin)
+        dx = window.innerWidth - margin - rect.right;
+      setNudge(dx);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
+
   return (
     <span className="relative inline-block" data-infotip>
       <button
@@ -78,7 +116,11 @@ export function InfoTip({ id, label, what, drift }: InfoTipProps) {
         i
       </button>
       {open && (
-        <div className="absolute left-1/2 top-full z-30 mt-1 w-56 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl border-2 border-brandblue bg-card p-2.5 text-left text-[11px] shadow-xl">
+        <div
+          ref={bubbleRef}
+          style={{ transform: `translateX(calc(-50% + ${nudge}px))` }}
+          className="absolute left-1/2 top-full z-30 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-xl border-2 border-brandblue bg-card p-2.5 text-left text-[11px] shadow-xl"
+        >
           <div className="font-extrabold text-strong">{label}</div>
           <div className="mt-1 font-normal leading-relaxed text-soft">{what}</div>
           {drift && <div className="mt-1.5 font-bold text-savings">↳ {drift}</div>}

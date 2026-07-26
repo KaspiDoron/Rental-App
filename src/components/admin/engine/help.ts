@@ -56,6 +56,18 @@ export const ENGINE_HELP: Record<string, MetricHelp> = {
     what: "When the socket mirror above was last written. Old stamp = the 'open' count is stale.",
   },
 
+  // ---- Operations (live 6h, from real offers + message timing) --------------
+  opsRealizedMargin: {
+    label: "Realized margin",
+    what: "The average discount the agents actually landed in the last 6 hours - each offer's final price versus the shop's own list price. This is a real, measured cut, not a market estimate.",
+    drift: "A '-' means no offer this window carried a comparable list price yet. A near-zero margin while shops are engaging means the bargaining is not biting - check the move mix.",
+  },
+  opsShopReply: {
+    label: "Shop reply time",
+    what: "The typical (median) minutes a shop took to reply to us over the last 6 hours, paired message-by-message. Tells you how alive the market is right now.",
+    drift: "Very high means shops are slow or asleep (off-hours); it does not indicate an engine problem on its own.",
+  },
+
   // ---- Field KPIs (durable, 30-day) -----------------------------------------
   discountMargin: {
     label: "Discount margin",

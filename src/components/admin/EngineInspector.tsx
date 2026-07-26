@@ -32,6 +32,12 @@ interface Snapshot {
   turns: Turn[];
   stats: { turnsLast6h: number; turnsCapped?: boolean; failoversLast6h: number; unconfirmedSendsLast6h: number };
   session: { lowestByVehicle: { key: string; shop: string; pricePerDay: number; currency: string }[]; activeOffers: number };
+  operations?: {
+    avgBargainMarginPct: number | null;
+    bargainSamples: number;
+    medianShopReplyMins: number | null;
+    replySamples: number;
+  };
   queue: { depth: number; dueNow: number; nextAt: string | null };
   sockets: { live: number; total: number; stampedAt?: string | null };
   webhook: { lastInboundAt: string | null; lastAcceptedAt?: string | null; last403At?: string | null };
@@ -196,6 +202,33 @@ export function EngineInspector() {
               />
               <StatTile helpId="socketsStamped" value={ago(snap.sockets.stampedAt)} />
             </div>
+
+            {/* Operations (live 6h): the realized-outcome + responsiveness row.
+                Derived from real offers + message timing, so it is honest about
+                having no sample yet ('-') rather than showing a fake zero. */}
+            {snap.operations && (
+              <div className="grid grid-cols-2 gap-2">
+                <StatTile
+                  helpId="opsRealizedMargin"
+                  value={
+                    snap.operations.avgBargainMarginPct == null
+                      ? "-"
+                      : `${snap.operations.avgBargainMarginPct}%`
+                  }
+                  tone={
+                    (snap.operations.avgBargainMarginPct ?? 0) > 0 ? "text-savings" : "text-soft"
+                  }
+                />
+                <StatTile
+                  helpId="opsShopReply"
+                  value={
+                    snap.operations.medianShopReplyMins == null
+                      ? "-"
+                      : `${snap.operations.medianShopReplyMins}m`
+                  }
+                />
+              </div>
+            )}
 
             {/* Durable field KPIs (30-day) - the outcome metrics the client used
                 to silently drop. */}

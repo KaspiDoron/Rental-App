@@ -66,3 +66,73 @@ export function latencyStats(turns: StatTurn[]): { p50: number | null; p95: numb
   }
   return { p50: percentile(xs, 50), p95: percentile(xs, 95), samples: xs.length };
 }
+
+// ---------------------------------------------------------------------------
+// Operations tiles (Tier-1): outcome + responsiveness numbers derived from the
+// tables the app already writes. Pure so the route stays thin and the math is
+// unit-tested against the same fixtures.
+// ---------------------------------------------------------------------------
+
+export interface MarginOffer {
+  pricePerDay: number;
+  listPricePerDay?: number | null;
+}
+
+/**
+ * Average realized discount = mean of (list - final) / list over offers that
+ * carry BOTH a list price and a final price no higher than it. This is the true
+ * "how much did the agents shave off" number, not a benchmark estimate. Rounded
+ * to a whole percent; null when no offer has a comparable list price.
+ */
+export function avgBargainMarginPct(offers: MarginOffer[]): { pct: number | null; samples: number } {
+  const margins: number[] = [];
+  for (const o of offers) {
+    const list = o.listPricePerDay;
+    if (typeof list === "number" && list > 0 && o.pricePerDay > 0 && list >= o.pricePerDay) {
+      margins.push(((list - o.pricePerDay) / list) * 100);
+    }
+  }
+  if (!margins.length) return { pct: null, samples: 0 };
+  return {
+    pct: Math.round(margins.reduce((a, b) => a + b, 0) / margins.length),
+    samples: margins.length,
+  };
+}
+
+export interface ReplyEvent {
+  number: string;
+  direction: "inbound" | "outbound";
+  atMs: number;
+}
+
+/**
+ * Median minutes a shop takes to reply: per shop number, pair each inbound with
+ * the most recent UN-consumed prior outbound and take the gap. Gaps are bounded
+ * to [0, 12h] so an overnight silence does not skew the median. Returns the p50
+ * (rounded) and the sample count; null when nothing pairs.
+ */
+export function medianShopReplyMins(rows: ReplyEvent[]): { mins: number | null; samples: number } {
+  const byNum = new Map<string, ReplyEvent[]>();
+  for (const r of rows) {
+    if (!Number.isFinite(r.atMs)) continue;
+    const list = byNum.get(r.number);
+    if (list) list.push(r);
+    else byNum.set(r.number, [r]);
+  }
+  const gaps: number[] = [];
+  for (const list of byNum.values()) {
+    list.sort((a, b) => a.atMs - b.atMs);
+    let lastOut: number | null = null;
+    for (const r of list) {
+      if (r.direction === "outbound") {
+        lastOut = r.atMs;
+      } else if (lastOut != null) {
+        const mins = (r.atMs - lastOut) / 60_000;
+        if (mins >= 0 && mins <= 720) gaps.push(mins);
+        lastOut = null; // consume so several inbounds don't all pair to one send
+      }
+    }
+  }
+  const p = percentile(gaps, 50);
+  return { mins: p == null ? null : Math.round(p), samples: gaps.length };
+}

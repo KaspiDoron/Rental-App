@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
-import { bucketTurnsPerHour, moveMix, providerMix, latencyStats } from "@/lib/admin/engine-stats";
+import {
+  bucketTurnsPerHour,
+  moveMix,
+  providerMix,
+  latencyStats,
+  avgBargainMarginPct,
+  medianShopReplyMins,
+  type ReplyEvent,
+} from "@/lib/admin/engine-stats";
 
 // SESSION BLACKBOARD INSPECTOR (owner-only). A single live snapshot of the
 // ENGINE_V3 (SPTE) runtime: recent single-pass turns with their move + model
@@ -47,12 +55,13 @@ export async function GET() {
   const offers = await sbSelect<{
     vendor_name: string;
     price_per_day: number;
+    list_price_per_day: number | null;
     currency: string;
     vehicle_key: string | null;
     created_at: string;
   }>(
     "offers",
-    `select=vendor_name,price_per_day,currency,vehicle_key,created_at&simulated=eq.false&created_at=gte.${encodeURIComponent(
+    `select=vendor_name,price_per_day,list_price_per_day,currency,vehicle_key,created_at&simulated=eq.false&created_at=gte.${encodeURIComponent(
       sinceIso
     )}&order=price_per_day.asc&limit=40`
   ).catch(() => []);
@@ -141,6 +150,38 @@ export async function GET() {
     sampleCapped: statTurns.length >= CHART_SAMPLE_CAP,
   };
 
+  // ---- Operations tiles (Tier-1): realized outcome + shop responsiveness -----
+  // avgBargainMarginPct reads the offers we already fetched (list vs final);
+  // shop reply time pairs recent inbound/outbound rows. Both are pure + bounded.
+  const bargainMargin = avgBargainMarginPct(
+    offers.map((o) => ({ pricePerDay: o.price_per_day, listPricePerDay: o.list_price_per_day }))
+  );
+  const replyRows = await sbSelect<{
+    direction: string;
+    from_number: string | null;
+    to_number: string | null;
+    received_at: string;
+  }>(
+    "whatsapp_messages",
+    `select=direction,from_number,to_number,received_at&direction=in.(inbound,outbound)&received_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&order=received_at.asc&limit=600`
+  ).catch(() => []);
+  const replyEvents: ReplyEvent[] = replyRows
+    .map((r) => {
+      const number = (r.direction === "inbound" ? r.from_number : r.to_number) ?? "";
+      // "session"/"takeover" markers carry no real shop number - skip them.
+      return number && /\d/.test(number)
+        ? {
+            number,
+            direction: r.direction === "inbound" ? ("inbound" as const) : ("outbound" as const),
+            atMs: Date.parse(r.received_at),
+          }
+        : null;
+    })
+    .filter((x): x is ReplyEvent => x !== null);
+  const shopReply = medianShopReplyMins(replyEvents);
+
   return NextResponse.json({
     engine: "ENGINE_V3 (SPTE - Shared Session Blackboard + Single-Pass)",
     generatedAt: new Date(now).toISOString(),
@@ -154,6 +195,12 @@ export async function GET() {
     session: {
       lowestByVehicle: [...lowestByVehicle.entries()].map(([k, v]) => ({ key: k, ...v })).slice(0, 12),
       activeOffers: offers.length,
+    },
+    operations: {
+      avgBargainMarginPct: bargainMargin.pct,
+      bargainSamples: bargainMargin.samples,
+      medianShopReplyMins: shopReply.mins,
+      replySamples: shopReply.samples,
     },
     queue: { depth: queue.length, dueNow, nextAt },
     sockets: { live: liveSockets, total: sessions.length, stampedAt: socketsStampedAt },

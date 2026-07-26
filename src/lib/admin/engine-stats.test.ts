@@ -5,7 +5,10 @@ import {
   moveMix,
   providerMix,
   latencyStats,
+  avgBargainMarginPct,
+  medianShopReplyMins,
   type StatTurn,
+  type ReplyEvent,
 } from "./engine-stats";
 
 const NOW = Date.parse("2026-07-25T12:00:00.000Z");
@@ -68,6 +71,43 @@ describe("moveMix / providerMix", () => {
     const pm = providerMix(turns);
     expect(pm[0]).toEqual({ key: "groq", count: 2 });
     expect(pm.find((p) => p.key === "mock/local")?.count).toBe(2);
+  });
+});
+
+describe("avgBargainMarginPct", () => {
+  it("averages only offers with a comparable list price", () => {
+    const r = avgBargainMarginPct([
+      { pricePerDay: 80, listPricePerDay: 100 }, // 20%
+      { pricePerDay: 60, listPricePerDay: 100 }, // 40%
+      { pricePerDay: 90, listPricePerDay: null }, // no list -> skipped
+      { pricePerDay: 120, listPricePerDay: 100 }, // final > list -> skipped
+      { pricePerDay: 50, listPricePerDay: 0 }, // list 0 -> skipped
+    ]);
+    expect(r).toEqual({ pct: 30, samples: 2 });
+  });
+  it("is empty-safe", () => {
+    expect(avgBargainMarginPct([])).toEqual({ pct: null, samples: 0 });
+  });
+});
+
+describe("medianShopReplyMins", () => {
+  const t = (minsAgo: number) => NOW - minsAgo * 60_000;
+  it("pairs each inbound with the nearest prior outbound per number", () => {
+    const rows: ReplyEvent[] = [
+      { number: "1", direction: "outbound", atMs: t(60) },
+      { number: "1", direction: "inbound", atMs: t(50) }, // 10m
+      { number: "2", direction: "outbound", atMs: t(120) },
+      { number: "2", direction: "inbound", atMs: t(90) }, // 30m
+    ];
+    expect(medianShopReplyMins(rows)).toEqual({ mins: 10, samples: 2 });
+  });
+  it("drops gaps over 12h and an inbound with no prior outbound", () => {
+    const rows: ReplyEvent[] = [
+      { number: "1", direction: "inbound", atMs: t(10) }, // no prior outbound
+      { number: "2", direction: "outbound", atMs: t(60 * 24) }, // 24h ago
+      { number: "2", direction: "inbound", atMs: t(10) }, // ~23h gap -> dropped
+    ];
+    expect(medianShopReplyMins(rows)).toEqual({ mins: null, samples: 0 });
   });
 });
 
