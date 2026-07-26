@@ -8,6 +8,7 @@ import { AnimatedNumber } from "./SavingsTicker";
 import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { ShopPhoto } from "./ShopPhoto";
+import { friendlySendError } from "@/lib/wa/send-error";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/currency";
 import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
@@ -193,11 +194,14 @@ function VendorCardInner({
         onStage(vendor.id, "no-contact");
       } else if (d.rateLimited) {
         setRfqState("rate-limited");
-        setRfqError(d.error ?? null);
+        // Never render an upstream string: the traveller once read
+        // `instance requires property "text"` - our own request-body bug -
+        // inside their shop card.
+        setRfqError(d.error ? friendlySendError(d.error).text : null);
       } else if (d.reconnecting) {
         // Transient drop (server waking) - no re-link needed, just retry.
         setRfqState("rate-limited");
-        setRfqError(d.error ?? null);
+        setRfqError(d.error ? friendlySendError(d.error).text : null);
       } else if (d.configured === false || d.connect) {
         // The server SAYS WhatsApp is not linked - only then do we ask the user
         // to connect. Never inferred from a generic failure.
@@ -208,8 +212,9 @@ function VendorCardInner({
         // disconnect. Say so honestly and keep WhatsApp shown as connected.
         setRfqState("rate-limited");
         setRfqError(
-          d.error ??
-            t("Not sent - a brief hiccup reaching WhatsApp. It retries on its own; try again in a few seconds.")
+          d.error
+            ? friendlySendError(d.error).text
+            : t("Not sent - a brief hiccup reaching WhatsApp. It retries on its own; try again in a few seconds.")
         );
       }
     } catch {

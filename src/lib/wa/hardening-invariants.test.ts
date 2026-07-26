@@ -285,6 +285,67 @@ describe("resilience: external fetches are bounded by a hard timeout", () => {
   });
 });
 
+// The v1 fallback body fired on ANY definitive send failure. On the pinned v2
+// host that body is invalid, so a first failure of any kind was followed by a
+// request that could only ever answer `instance requires property "text"` - and
+// that schema complaint replaced the real reason and was shown to the traveller.
+describe("WhatsApp send: the legacy retry cannot mask the real failure", () => {
+  it("the v1 body is only tried on a SHAPE rejection", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    expect(evo).toMatch(/looksLikeShapeRejection\(r\)/);
+    // The old unconditional form is gone.
+    expect(evo).not.toMatch(/if \(!r\.ok && r\.status !== 0\) \{\s*r = await evo/);
+  });
+
+  it("a failed legacy attempt reports the FIRST error, not its own", () => {
+    expect(readCode("src/lib/evolution.ts")).toMatch(/legacy\.ok \? legacy : r/);
+  });
+
+  it("shape rejection is judged on status AND message, not status alone", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    const fn = evo.slice(evo.indexOf("export function looksLikeShapeRejection"));
+    expect(fn).toMatch(/status !== 400 && r\.status !== 422/);
+    expect(fn).toMatch(/requires property/);
+  });
+
+  it("the card renders a translated message, never the upstream string", () => {
+    const card = readCode("src/components/VendorCard.tsx");
+    expect(card).toMatch(/friendlySendError\(/);
+    // No bare `d.error` left as the thing a traveller reads.
+    expect(card).not.toMatch(/setRfqError\(d\.error \?\? null\)/);
+  });
+});
+
+describe("shop avatars: a miss is diagnosable, and both id shapes are tried", () => {
+  it("checks res.ok instead of reading a URL off an error body", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    const fn = evo.slice(
+      evo.indexOf("export async function fetchProfilePictureUrl"),
+      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+    );
+    expect(fn).toMatch(/if \(!res\.ok\)/);
+    expect(fn).toMatch(/console\.warn/);
+  });
+
+  it("tries the JID when bare digits find nothing", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    const fn = evo.slice(
+      evo.indexOf("export async function fetchProfilePictureUrl"),
+      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+    );
+    expect(fn).toMatch(/resolveChatJid|s\.whatsapp\.net/);
+  });
+
+  it("still writes nothing to any database", () => {
+    const evo = readCode("src/lib/evolution.ts");
+    const fn = evo.slice(
+      evo.indexOf("export async function fetchProfilePictureUrl"),
+      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+    );
+    expect(fn).not.toMatch(/\bsb(Insert|Update|Upsert|Delete)\s*\(/);
+  });
+});
+
 // The blur-lock accuses the traveller of not having linked WhatsApp. It showed
 // over a CONNECTED account because a single un-retried status fetch failed and
 // the catch handler wrote that failure down as `false`. These pin the shape of

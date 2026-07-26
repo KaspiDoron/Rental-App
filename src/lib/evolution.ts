@@ -1560,17 +1560,51 @@ export async function fetchProfilePictureUrl(
 
   const instance = instanceNameFor(email);
   let url: string | null = null;
+  let lastError = "";
+
+  // WHICH IDENTIFIER? Evolution builds disagree: some accept bare digits on
+  // this endpoint, others insist on the full JID (the same split that made
+  // wa-sync resolve a JID before reading a chat). Every avatar came back empty
+  // in the field, so try both rather than assume - the second shape costs one
+  // request only when the first genuinely found nothing.
+  const candidates: string[] = [digits];
   try {
-    const res = await evo(email, `/chat/fetchProfilePictureUrl/${instance}`, {
-      method: "POST",
-      body: JSON.stringify({ number: digits }),
-    });
-    const raw = res.data?.profilePictureUrl ?? res.data?.url ?? null;
-    // Only a real https URL is ever handed to an <img src>.
-    if (typeof raw === "string" && /^https:\/\//i.test(raw)) url = raw;
+    const jid = await resolveChatJid(email, digits);
+    if (jid && jid !== digits) candidates.push(jid);
   } catch {
-    /* no picture is a normal outcome, not an error */
+    candidates.push(`${digits}@s.whatsapp.net`);
   }
+
+  for (const number of candidates) {
+    try {
+      const res = await evo(email, `/chat/fetchProfilePictureUrl/${instance}`, {
+        method: "POST",
+        body: JSON.stringify({ number }),
+      });
+      // res.ok was never checked: a 4xx returned an error BODY, `profilePictureUrl`
+      // read as undefined, and the miss was indistinguishable from "this shop has
+      // no picture" - so nothing ever pointed at the real cause.
+      if (!res.ok) {
+        lastError = `Evolution ${res.status}${
+          res.data?.message ? `: ${String(res.data.message).slice(0, 160)}` : ""
+        }`;
+        continue;
+      }
+      const raw = res.data?.profilePictureUrl ?? res.data?.url ?? null;
+      // Only a real https URL is ever handed to an <img src>.
+      if (typeof raw === "string" && /^https:\/\//i.test(raw)) {
+        url = raw;
+        break;
+      }
+      // A 200 with no URL is the genuine "no picture / hidden" answer - settled,
+      // so stop asking. Trying the other identifier would only waste a request.
+      break;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : "network error";
+    }
+  }
+  if (!url && lastError) console.warn(`[wa/avatar] ${digits}: ${lastError}`);
+
   boundedSet(store, key, { url, exp: Date.now() + AVATAR_TTL_MS }, AVATAR_CAP);
   return url;
 }
@@ -1681,6 +1715,20 @@ function hasSendReceipt(data: unknown): boolean {
   return Boolean(d.key?.id || d.messageTimestamp || d.messageId);
 }
 
+/**
+ * Did the host reject the BODY SHAPE (as opposed to refusing the send)?
+ *
+ * Only a shape rejection can be rescued by re-posting in the older Evolution v1
+ * format. A 401, an offline instance or an unknown number are all settled
+ * answers that a different body will not change.
+ */
+export function looksLikeShapeRejection(r: { status: number; data?: unknown }): boolean {
+  if (r.status !== 400 && r.status !== 422) return false;
+  const d = r.data as { message?: unknown; response?: { message?: unknown } } | undefined;
+  const msg = JSON.stringify(d?.message ?? d?.response?.message ?? d ?? "").toLowerCase();
+  return /requires property|should have required|is not allowed|must be|invalid body|validation/.test(msg);
+}
+
 export async function sendFromUser(
   email: string,
   to: string,
@@ -1749,21 +1797,31 @@ export async function sendFromUser(
     // re-POSTing it would risk a duplicate message (a velocity/uniformity ban
     // signal). Ambiguous timeouts propagate as {ok:false} and the drain's
     // transient re-queue handles recovery.
-    let r = await evo(email, `/message/sendText/${instance}`, {
+    const r = await evo(email, `/message/sendText/${instance}`, {
       method: "POST",
       body: JSON.stringify({ number, text: message, delay: typingDelayForLength(message.length) }),
     });
-    if (!r.ok && r.status !== 0) {
-      r = await evo(email, `/message/sendText/${instance}`, {
-        method: "POST",
-        body: JSON.stringify({
-          number,
-          options: { delay: typingDelayForLength(message.length), presence: "composing" },
-          textMessage: { text: message },
-        }),
-      });
-    }
-    return r;
+    // ONLY a host that rejected the v2 BODY SHAPE can be helped by the v1 body.
+    //
+    // This used to retry on ANY definitive status, and on a v2 host the v1 body
+    // is invalid - so a first failure of any kind ("instance not connected", a
+    // 401, an unknown number) was followed by a second request that could only
+    // ever come back `instance requires property "text"`. That schema complaint
+    // then REPLACED the real reason and was shown to the traveller verbatim,
+    // under a green "Ask for price" button. Two bugs in one line: a useless
+    // retry, and an error message about the wrong failure.
+    if (r.ok || r.status === 0 || !looksLikeShapeRejection(r)) return r;
+    const legacy = await evo(email, `/message/sendText/${instance}`, {
+      method: "POST",
+      body: JSON.stringify({
+        number,
+        options: { delay: typingDelayForLength(message.length), presence: "composing" },
+        textMessage: { text: message },
+      }),
+    });
+    // If the legacy shape did not help either, report the FIRST failure - it is
+    // the one that explains what actually went wrong.
+    return legacy.ok ? legacy : r;
   };
 
   // One reconnect-and-retry, but ONLY on a definitive HTTP status error (e.g.
