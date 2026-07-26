@@ -22,7 +22,18 @@ import { Icon } from "./icons";
 type Known = boolean; // true = paused, false = active
 type Switch = Known | null; // null = still reading the initial state
 
-export function AgentKillSwitch({ className = "" }: { className?: string }) {
+export function AgentKillSwitch({
+  className = "",
+  serverPaused,
+}: {
+  className?: string;
+  /** Live pause state from the activity poll. This component used to read the
+   * server ONCE on mount, so a session paused afterwards (by Will, by another
+   * tab, by the phone in a pocket) kept showing "Agents active" above a queue
+   * whose every row said "Paused by you". Following the poll makes the two
+   * surfaces structurally incapable of disagreeing. */
+  serverPaused?: boolean;
+}) {
   const { t } = useI18n();
   const [paused, setPaused] = useState<Switch>(null);
   const [busy, setBusy] = useState(false);
@@ -50,6 +61,13 @@ export function AgentKillSwitch({ className = "" }: { className?: string }) {
       }
     })();
   }, []);
+
+  // Follow the live poll - but never while a toggle is in flight, or the
+  // optimistic flip would be yanked back by a payload that predates it.
+  useEffect(() => {
+    if (busy || typeof serverPaused !== "boolean") return;
+    setPaused(serverPaused);
+  }, [serverPaused, busy]);
 
   const toggle = useCallback(async () => {
     if (busy || paused === null) return;

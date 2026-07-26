@@ -82,6 +82,16 @@ describe("ephemeral shop avatars: you can only see a shop you messaged", () => {
     expect(code).toMatch(/url:\s*null/);
   });
 
+  it("a shop you have only QUEUED is still one of your threads", () => {
+    // Requiring a DELIVERED message meant no avatar resolved until the queue
+    // drained - at the start of a search that is every shop on the board, which
+    // is what "none of the shop images load" actually looked like. A queued row
+    // is the user's own action and proves ownership just as well.
+    const code = readCode(ROUTE);
+    expect(code).toMatch(/wa_outbox/);
+    expect(code).toMatch(/sender_key=eq\./);
+  });
+
   it("the response is never shared-cacheable", () => {
     expect(readCode(ROUTE)).toMatch(/private,\s*no-store/);
   });

@@ -496,6 +496,16 @@ export async function GET(req: Request) {
     /* ETA is best-effort - the rows still carry notBefore */
   }
 
+  // The LIVE pause state, on the same poll that carries the queue. The agent
+  // switch used to read this once on mount and never again, so a session that
+  // was paused later kept showing "Agents active" above a queue whose every row
+  // said "Paused by you" - two states on one screen. One source, one truth.
+  let sessionPaused = false;
+  try {
+    const { isSessionPaused } = await import("@/lib/session-flags");
+    sessionPaused = (await isSessionPaused(email)) === true;
+  } catch {}
+
   // Numbers the user explicitly cancelled (removed queued messages) - the UI
   // shows those shops as "paused by you" instead of pretending nothing
   // happened, and the resume CTA is the explicit action that clears it.
@@ -521,6 +531,7 @@ export async function GET(req: Request) {
     countered, // J: vendorIds where the agent countered a shop quote
     queueEtaDoneBy, // W2: honest "all done by" (max etaTo across the queue)
     lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
+    sessionPaused, // live kill-switch state, so the panel cannot contradict the queue
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),
   });

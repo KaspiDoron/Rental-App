@@ -28,13 +28,27 @@ export async function GET(req: Request) {
   if (!digits || digits.length < 6) return NextResponse.json({ url: null });
 
   const { sbSelect } = await import("@/lib/runtime-config");
-  const known = await sbSelect<{ id: number }>(
-    "whatsapp_messages",
-    `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      digits
-    )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
-  ).catch(() => []);
-  if (known.length === 0) {
+  // OWNERSHIP = "this is one of your threads". A message the user has QUEUED to
+  // this shop proves that just as well as one already delivered - and it is the
+  // common case at the start of a search, when the whole batch is still parked
+  // and not one outbound row exists yet. Requiring a sent message meant every
+  // avatar on the board stayed a grey initial until the queue drained, which is
+  // exactly what "none of the shop images load" looked like.
+  const [sent, queued] = await Promise.all([
+    sbSelect<{ id: number }>(
+      "whatsapp_messages",
+      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+        digits
+      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
+    ).catch(() => []),
+    sbSelect<{ id: number }>(
+      "wa_outbox",
+      `select=id&to_number=eq.${encodeURIComponent(
+        digits
+      )}&sender_key=eq.${encodeURIComponent(session.email)}&limit=1`
+    ).catch(() => []),
+  ]);
+  if (sent.length === 0 && queued.length === 0) {
     // Not one of your threads - answer the same way a missing picture answers,
     // so this can never be used to probe which numbers exist.
     return NextResponse.json({ url: null });

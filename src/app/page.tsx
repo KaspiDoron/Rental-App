@@ -812,6 +812,10 @@ export default function Home() {
         if (Number.isFinite(serverNow)) clockSkewRef.current = serverNow - Date.now();
       }
       setFeedStale(false);
+      // The kill switch and the queue rows now read the SAME poll: a session
+      // paused after mount can no longer show "Agents active" over a queue of
+      // "Paused by you" rows.
+      if (typeof d.sessionPaused === "boolean") setPaused(d.sessionPaused);
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
@@ -2245,7 +2249,7 @@ export default function Home() {
             session - the hard stop is enforced server-side. */}
         {vendors.length > 0 &&
           stageCounts.messaged + Math.max(stageCounts.queued, queueItems.length) > 0 && (
-            <AgentKillSwitch className="mt-3" />
+            <AgentKillSwitch className="mt-3" serverPaused={paused} />
           )}
 
         {vendors.length > 0 && (
@@ -2507,7 +2511,14 @@ export default function Home() {
                 ⏱ {t("Sending fell behind while the app was away - catching up now, one message at a time.")}
               </p>
             )}
-            {queueProgress && (
+            {/* A paused session must not predict send times. The queue rows
+                already say "Paused by you"; a "next at ~23:47" above them read
+                as a promise the agents had no intention of keeping. */}
+            {paused ? (
+              <p className="mb-1.5 text-[11px] font-bold text-soft">
+                ⏸ {t("Held while your agents are paused - tap Resume and these go out within minutes.")}
+              </p>
+            ) : queueProgress ? (
               <p className="mb-1.5 text-[11px] text-soft">
                 {queueProgress.sent > 0
                   ? `${queueProgress.sent} ${t("of")} ${queueProgress.total} ${t("sent")} · `
@@ -2533,7 +2544,7 @@ export default function Home() {
                 {" - "}
                 {t("your agent messages shops one at a time, the way a person would")}
               </p>
-            )}
+            ) : null}
             {introBudget && (
               <div className="mb-1.5 rounded-xl bg-card2 px-2.5 py-2">
                 <div className="mb-1 flex items-center justify-between gap-2">

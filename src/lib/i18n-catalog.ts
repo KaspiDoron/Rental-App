@@ -134,6 +134,7 @@ export const I18N_CATALOG: string[] = [
   "Google verified",
   "Hand back to Will",
   "Having trouble? Connect later from Profile",
+  "Held while your agents are paused - tap Resume and these go out within minutes.",
   "Hi, I'm Will 👋 Tell me what you want to ride - I find the shops and do the haggling. Tap me any time.",
   "Hide Will for 20 minutes",
   "Hide Will for a bit",

@@ -1226,8 +1226,15 @@ export async function guardOutbound(opts: {
       paused = null; // unreadable -> fail closed below
     }
     if (paused === true) {
-      // Jittered hold: a batch paused together must not RELEASE together.
-      return await queue(jitteredHold(now, 60, 15), "paused by you");
+      // SHORT hold, jittered so a batch paused together does not RELEASE
+      // together. It used to be 60-75 min, which made the pause the single
+      // slowest thing in the app: a traveller who resumed still watched
+      // "sends in ~64 min" because the parked rows kept their hour. Resume now
+      // releases them outright (wa/resume-queue), and this hold is only the
+      // backstop for a resume that happened somewhere this instance cannot see
+      // - so it re-checks in minutes, not in an hour. A still-paused row simply
+      // re-parks; nothing is sent while the hold is on.
+      return await queue(jitteredHold(now, 6, 4), "paused by you");
     }
     if (paused === null) {
       // UNKNOWN pause state (store unreadable): "hold everything" is absolute,
