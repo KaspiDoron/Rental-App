@@ -7,6 +7,9 @@ import { WaTermsModal } from "./WaTermsModal";
 import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 import { deriveConnectionPhase, isFrozen } from "@/lib/wa/connection-state";
+import { useWillAssistant } from "./will/WillAssistantProvider";
+import { WillGuideOverlay } from "./will/WillGuideOverlay";
+import { WILL_SLOW_AUTH_MS } from "@/lib/will-assistant";
 
 // Once the shown code lapses the user is most likely still typing it, so we do
 // NOT swap it out immediately - we wait this long, and only then quietly ask
@@ -71,6 +74,28 @@ export function WaConnect({
     failed,
   });
   const frozen = isFrozen(phase);
+
+  // Will-as-concierge: while this screen owns the funnel, publish the step so
+  // idle detection + guidance work here too (profile AND signup use this
+  // component). Once connected, Find Deals takes the narration back.
+  const assistant = useWillAssistant();
+  const { setStep: assistantSetStep } = assistant;
+  useEffect(() => {
+    if (wa?.connected) return;
+    assistantSetStep(phase === "AUTHENTICATING" ? "WA_AUTHENTICATING" : "WA_LINK_PENDING");
+  }, [phase, wa?.connected, assistantSetStep]);
+
+  // Slow-auth reassurance: verification usually lands in a couple of seconds;
+  // past WILL_SLOW_AUTH_MS Will steps in so the wait feels held, not stuck.
+  const [slowAuth, setSlowAuth] = useState(false);
+  useEffect(() => {
+    if (phase !== "AUTHENTICATING") {
+      setSlowAuth(false);
+      return;
+    }
+    const id = setTimeout(() => setSlowAuth(true), WILL_SLOW_AUTH_MS);
+    return () => clearTimeout(id);
+  }, [phase]);
 
   useEffect(() => {
     fetch("/api/wa/status", { cache: "no-store" })
@@ -183,6 +208,11 @@ export function WaConnect({
             setErr(null);
             setFailed(false);
             startedAt.current = null;
+            // Tell Find Deals to celebrate the handoff ("Boom, linked!") the
+            // moment the user lands back on the search.
+            try {
+              sessionStorage.setItem("wd_wa_just_linked", "1");
+            } catch {}
             onConnected?.();
           }
         } catch {
@@ -311,6 +341,7 @@ export function WaConnect({
           )}
           <label
             dir="ltr"
+            data-will="wa-consent"
             className="mb-2 flex items-start gap-2 rounded-2xl bg-card2 p-2.5 text-left text-[12px] leading-relaxed text-soft"
           >
             <input
@@ -340,10 +371,11 @@ export function WaConnect({
           <div className="mb-2 flex items-start gap-2 rounded-2xl bg-brandblue-soft p-2.5 text-[11px] font-bold text-brandblue">
             <span className="text-[14px]">⏱</span>
             <span>
-              {t("This takes about 3 minutes. Keep this screen open - your assistant does all the setup, you just enter one code.")}
+              {t("About 30 seconds. Keep this screen open - you enter one code and I do the rest.")}
             </span>
           </div>
           <button
+            data-will="wa-connect-cta"
             onClick={() => void connect()}
             disabled={busy || !consent}
             className="btn w-full rounded-2xl bg-wagreen-deep py-3 text-[14px] font-extrabold text-white shadow-md hover:opacity-90 disabled:opacity-50"
@@ -354,7 +386,7 @@ export function WaConnect({
       )}
 
       {showingCode && (
-        <div className="rounded-2xl bg-card2 p-3">
+        <div data-will="wa-pair" className="rounded-2xl bg-card2 p-3">
           {/* Method switch */}
           <div className="mb-2 flex gap-1.5">
             <button
@@ -500,6 +532,45 @@ export function WaConnect({
           {hostDown ? "🔧 " : ""}
           {err}
         </p>
+      )}
+
+      {/* Will steps in when the user hesitates on the pitch for 8s - pointing
+          at the exact button, with a 1-tap action that starts the link (or, if
+          the terms aren't ticked yet, walks them to the checkbox first). */}
+      {!wa?.connected && !showingCode && !busy && !err && assistant.idle && (
+        <WillGuideOverlay
+          anchor="[data-will='wa-connect-cta']"
+          text={
+            consent
+              ? t("Tap here and I'll set up your private link - about 30 seconds, one code.")
+              : t("Tick the terms box and I'll handle the rest - about 30 seconds, one code.")
+          }
+          actions={[
+            {
+              label: consent ? t("Start the link") : t("Show me the box"),
+              primary: true,
+              onAction: () => {
+                if (consent) {
+                  void connect();
+                } else {
+                  document
+                    .querySelector("[data-will='wa-consent']")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+              },
+            },
+          ]}
+        />
+      )}
+
+      {/* Verification running longer than usual: hold the user's hand instead
+          of letting the wait feel stuck. No actions on purpose - the only right
+          move is to wait, and Will says so. */}
+      {phase === "AUTHENTICATING" && slowAuth && (
+        <WillGuideOverlay
+          anchor="[data-will='wa-pair']"
+          text={t("I'm setting up your private agent link now. A few more seconds and you're in.")}
+        />
       )}
     </div>
   );

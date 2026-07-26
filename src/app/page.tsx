@@ -49,8 +49,10 @@ import { ThreadDashboard } from "@/components/ThreadDashboard";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
 import type { WillContext } from "@/lib/will-commands";
-import { WillGuide, willStageFrom } from "@/components/will/WillGuide";
 import { WillSheet } from "@/components/will/WillSheet";
+import { WillGuideOverlay, type WillAction } from "@/components/will/WillGuideOverlay";
+import { useWillAssistant } from "@/components/will/WillAssistantProvider";
+import { deriveWillStep } from "@/lib/will-assistant";
 import { CompareSheet } from "@/components/will/CompareSheet";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
@@ -60,6 +62,7 @@ import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
 import { WaLockVeil } from "@/components/WaLockVeil";
+import { startNav } from "@/components/NavVeil";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
@@ -1395,6 +1398,8 @@ export default function Home() {
       return;
     }
     setOriginHint(null);
+    // A search starting is the celebration's natural end.
+    clearJustLinked();
     setPhase("profiling");
     setVendors([]);
     setRfq(null);
@@ -1802,11 +1807,14 @@ export default function Home() {
   const waLocked =
     waConnected !== true && restored && phase === "idle" && vendors.length === 0;
 
-  // W7: the current Will guide stage (shared by the inline banner + summon chip).
+  // Will-as-concierge: derive the ONE funnel step from live state and publish
+  // it to the shared assistant context (idle detection lives there). The old
+  // static top banner is gone - guidance now floats anchored to the exact
+  // element the user should touch next.
   const willStageNow = useMemo(
     () =>
-      willStageFrom({
-        waConnected: waConnected === true,
+      deriveWillStep({
+        waConnected,
         phase,
         vendorCount: vendors.length,
         offerCount,
@@ -1814,6 +1822,27 @@ export default function Home() {
       }),
     [waConnected, phase, vendors.length, offerCount, bookingVendor]
   );
+  const assistant = useWillAssistant();
+  const assistantSetStep = assistant.setStep;
+  useEffect(() => {
+    assistantSetStep(willStageNow);
+  }, [willStageNow, assistantSetStep]);
+
+  // "Boom, linked!" - WaConnect stamps this the moment pairing completes, so
+  // when the user lands back here Will celebrates once and hands focus to the
+  // request box. Cleared on dismissal or the first search.
+  const [justLinked, setJustLinked] = useState(false);
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("wd_wa_just_linked") === "1") setJustLinked(true);
+    } catch {}
+  }, [waConnected]);
+  const clearJustLinked = useCallbackRef(() => {
+    setJustLinked(false);
+    try {
+      sessionStorage.removeItem("wd_wa_just_linked");
+    } catch {}
+  });
 
   // A row overdue by >5 min means sending fell behind (typically: the app was
   // closed and no background driver ran) - say so instead of a silent stall.
@@ -1863,17 +1892,10 @@ export default function Home() {
             onExpand={() => setFormOpen(true)}
           />
         )}
-        {/* Will as an INTEGRATED, inline guide (R4): a stage-aware banner that
-            walks the user step-by-step through the lifecycle. Replaces the
-            floating side widget. */}
-        {session && !willOpen && !dismissedStages.has(willStageNow) && (
-          <WillGuide
-            stage={willStageNow}
-            busy={will.busy || phase === "profiling" || phase === "running"}
-            onOpen={() => setWillOpen(true)}
-            onDismiss={() => dismissWillStage(willStageNow)}
-          />
-        )}
+        {/* Will as a CONCIERGE ON THE UI: a floating speech card anchored to the
+            exact element the user should touch next, with 1-tap actions that do
+            the thing. Replaced the static top banner. The overlay renders at the
+            end of the page (fixed position); this comment marks the old site. */}
         <section className={`surface relative mt-4 rounded-blob p-4 ${formCollapsed ? "hidden" : ""}`}>
           {/* Blur-lock (feature 6.1): the search is gated behind WhatsApp
               pairing. The card stays mounted (so the onboarding tour anchors
@@ -2852,10 +2874,117 @@ export default function Home() {
         </Modal>
       )}
 
+      {/* Will's floating concierge callout - anchored to the element the user
+          should touch next, driven by the derived funnel step + idle detection.
+          The celebration ("Boom, linked!") always shows once; the compose nudge
+          only steps in after 8s of hesitation so it guides without nagging. */}
+      {session &&
+        !willOpen &&
+        !bookingVendor &&
+        willStageNow &&
+        !dismissedStages.has(willStageNow) &&
+        (() => {
+          const step = willStageNow;
+          let guidance: {
+            anchor: string;
+            text: string;
+            actions?: WillAction[];
+            tone?: "guide" | "celebrate";
+            onDismiss?: () => void;
+          } | null = null;
+          if (step === "WA_LINK_PENDING") {
+            guidance = {
+              anchor: "[data-will='wa-link']",
+              text: t("Hey! Link your WhatsApp real quick - I bargain as you, a real traveller, so shops answer honestly."),
+              actions: [
+                {
+                  label: t("Link it now"),
+                  primary: true,
+                  onAction: () => {
+                    startNav();
+                    window.location.href = "/profile";
+                  },
+                },
+              ],
+            };
+          } else if (step === "SEARCH_INPUT" && justLinked) {
+            guidance = {
+              anchor: "[data-tour='request']",
+              tone: "celebrate",
+              text: t("Boom, linked! Where are we finding you a ride today?"),
+              actions: [
+                {
+                  label: t("Build it in taps"),
+                  primary: true,
+                  onAction: () => {
+                    clearJustLinked();
+                    setBuilderOpen(true);
+                  },
+                },
+              ],
+              onDismiss: clearJustLinked,
+            };
+          } else if (step === "SEARCH_INPUT" && assistant.idle) {
+            guidance = {
+              anchor: "[data-tour='request']",
+              text: t("Tell me what you want to ride - I'll haggle every shop nearby. Not a typer? Build it in taps."),
+              actions: [
+                {
+                  label: t("Build it in taps"),
+                  primary: true,
+                  onAction: () => setBuilderOpen(true),
+                },
+              ],
+            };
+          } else if (step === "AGENTS_DISPATCHED") {
+            guidance = {
+              anchor: "[data-tour='status']",
+              text: t("I'm reaching out to the shops from your WhatsApp now. You can close the app - I keep working."),
+              actions: [
+                { label: t("Watch live"), onAction: () => setView("activity") },
+              ],
+            };
+          } else if (step === "NEGOTIATING") {
+            guidance = {
+              anchor: "[data-tour='status']",
+              text: t("Shops are reading your request - the second a price lands, I check it against the market floor and push lower."),
+              actions: [
+                { label: t("See it live"), onAction: () => setView("activity") },
+              ],
+            };
+          } else if (step === "RESULTS_READY") {
+            guidance = {
+              anchor: "[data-tour='status']",
+              text: t("Offers are in - tap a shop to compare. Want me to push harder before you book?"),
+              actions: [
+                {
+                  label: t("Push harder"),
+                  primary: true,
+                  onAction: () => setWillOpen(true),
+                },
+              ],
+            };
+          }
+          if (!guidance) return null;
+          return (
+            <WillGuideOverlay
+              anchor={guidance.anchor}
+              text={guidance.text}
+              actions={guidance.actions}
+              tone={guidance.tone}
+              onOpenChat={() => setWillOpen(true)}
+              onDismiss={() => {
+                guidance?.onDismiss?.();
+                dismissWillStage(step);
+              }}
+            />
+          );
+        })()}
+
       {/* W7: summon chip - when the inline guide is dismissed for this stage,
           Will stays one tap away as a small avatar button above the TabBar. No
           drag, no auto-nap; a stage change resurfaces the full banner. */}
-      {session && !willOpen && dismissedStages.has(willStageNow) && (
+      {session && !willOpen && willStageNow && dismissedStages.has(willStageNow) && (
         <button
           onClick={() => setWillOpen(true)}
           aria-label={t("Ask Will")}

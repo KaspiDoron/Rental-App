@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { I18nProvider } from "@/lib/i18n";
+import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
 import { DomTranslator } from "@/components/DomTranslator";
 import { OfflineBanner } from "@/components/OfflineBanner";
@@ -134,11 +135,15 @@ export default function RootLayout({
       </head>
       <body className="app-shell">
         <I18nProvider>
-          {children}
-          <NavVeil />
-          <DomTranslator />
-          <OfflineBanner />
-          <TestModeBanner />
+          {/* Will's concierge brain: funnel step + idle detection, shared across
+              Find Deals / Profile / Login so guidance survives the pairing hop. */}
+          <WillAssistantProvider>
+            {children}
+            <NavVeil />
+            <DomTranslator />
+            <OfflineBanner />
+            <TestModeBanner />
+          </WillAssistantProvider>
         </I18nProvider>
       </body>
     </html>

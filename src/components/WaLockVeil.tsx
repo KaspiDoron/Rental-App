@@ -59,6 +59,7 @@ export function WaLockVeil({ checking = false }: { checking?: boolean }) {
 
       <a
         href="/profile"
+        data-will="wa-link"
         onClick={() => startNav()}
         className="btn cta-sheen relative rounded-2xl bg-gradient-to-r from-[#25D366] to-[#128C7E] px-6 py-3 text-[14px] font-extrabold text-white shadow-lg hover:opacity-95"
       >
