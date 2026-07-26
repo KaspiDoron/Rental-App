@@ -59,6 +59,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
+import { OrbitDots } from "@/components/OrbitDots";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
@@ -150,7 +151,11 @@ export default function Home() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
-  const [waConnected, setWaConnected] = useState(false);
+  // TRI-STATE: null = still checking (first paint), true = linked, false =
+  // confirmed unlinked. Starting at null kills the "NOT CONNECTED / Pair
+  // WhatsApp" flash that showed for a beat on every load before the status
+  // call answered.
+  const [waConnected, setWaConnected] = useState<boolean | null>(null);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
   // The premium beta-quality note shown before a mass bargain runs.
@@ -586,7 +591,9 @@ export default function Home() {
     fetch("/api/wa/status")
       .then((r) => r.json())
       .then((d) => setWaConnected(Boolean(d.connected)))
-      .catch(() => {});
+      // On a failed status read we still resolve OUT of "checking" so the UI is
+      // never wedged on the loader; unlinked is the safe, actionable default.
+      .catch(() => setWaConnected(false));
   }, [session]);
 
   // EVERY traveller defaults to "My location": ask for GPS as soon as the page
@@ -678,7 +685,8 @@ export default function Home() {
           verified: v.offer?.verified,
         })),
         offersIn: vendors.filter((v) => v.offer).length,
-        waConnected,
+        // Will treats "still checking" as not-yet-linked (boolean contract).
+        waConnected: waConnected === true,
         plan: session?.plan ?? "free",
         originLabel: origin?.label,
         paused,
@@ -1772,7 +1780,7 @@ export default function Home() {
   const willStageNow = useMemo(
     () =>
       willStageFrom({
-        waConnected,
+        waConnected: waConnected === true,
         phase,
         vendorCount: vendors.length,
         offerCount,
@@ -1846,7 +1854,19 @@ export default function Home() {
               still exist) but is blurred + non-interactive under a premium veil
               until the number is linked. The server already refuses unpaired
               sends - this makes the gate visible and calm. */}
-          {!waConnected && !restored && phase === "idle" && vendors.length === 0 && (
+          {/* CHECKING: while the status call is still in flight (waConnected ===
+              null) show a calm neutral loader, NOT the pair prompt - the prompt
+              flashing before we know the real state was the "NOT CONNECTED"
+              flicker. Only when confirmed unlinked (=== false) do we prompt. */}
+          {waConnected === null && !restored && phase === "idle" && vendors.length === 0 && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/70 p-5 text-center backdrop-blur-md">
+              <OrbitDots size={34} className="text-brandblue" label={t("Checking WhatsApp")} />
+              <div className="text-[13px] font-extrabold text-soft">
+                {t("Checking your WhatsApp link…")}
+              </div>
+            </div>
+          )}
+          {waConnected === false && !restored && phase === "idle" && vendors.length === 0 && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/70 p-5 text-center backdrop-blur-md">
               <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#25D366] text-white shadow-lg">
                 <Icon name="whatsapp" className="h-7 w-7" />
@@ -1867,7 +1887,7 @@ export default function Home() {
               </a>
             </div>
           )}
-          <div className={!waConnected && !restored && phase === "idle" && vendors.length === 0 ? "pointer-events-none select-none blur-[2px]" : ""}>
+          <div className={waConnected !== true && !restored && phase === "idle" && vendors.length === 0 ? "pointer-events-none select-none blur-[2px]" : ""}>
           <label className="text-[12px] font-extrabold text-soft">
             {t("What do you want to rent?")}
           </label>

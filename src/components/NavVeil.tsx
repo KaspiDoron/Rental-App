@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { OrbitDots } from "./OrbitDots";
 
 // Global navigation veil: instant visual feedback the moment ANY page change
 // or heavy button action starts. Mounted once in the root layout; triggered
@@ -53,10 +54,7 @@ export function NavVeil() {
   if (!on) return null;
   return (
     <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/35 backdrop-blur-[2px]">
-      <span className="relative flex h-12 w-12 items-center justify-center">
-        <span className="absolute inset-0 animate-spin rounded-full border-[3px] border-white/20 border-t-brandblue" />
-        <span className="absolute inset-2 animate-spin rounded-full border-2 border-white/10 border-b-brandyellow [animation-direction:reverse]" />
-      </span>
+      <OrbitDots size={44} light label="Loading" />
     </div>
   );
 }

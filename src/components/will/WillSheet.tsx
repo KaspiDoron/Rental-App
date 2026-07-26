@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Modal";
 import { Icon } from "../icons";
 import { LoadingDots } from "../LoadingDots";
+import { OrbitDots } from "../OrbitDots";
 import { WillMessage } from "./WillMessage";
 import { WillAvatar } from "./WillAvatar";
 import { getRecognizer, type SpeechRecognitionLike } from "@/lib/speech";
@@ -182,10 +183,7 @@ export function WillSheet({
           aria-busy={busy}
         >
           {busy ? (
-            <span
-              className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
-              aria-hidden="true"
-            />
+            <OrbitDots size={16} light label={t("Sending...")} />
           ) : (
             <Icon name="send" className="h-4.5 w-4.5" />
           )}

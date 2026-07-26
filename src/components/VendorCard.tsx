@@ -40,7 +40,9 @@ function VendorCardInner({
   vendor: Vendor;
   rfq: StructuredRFQ | null;
   plan?: string;
-  waConnected: boolean;
+  // null = still checking the link on first paint; treated the same as false
+  // for gating (send disabled) but lets the parent avoid a "not connected" flash.
+  waConnected: boolean | null;
   localLang?: boolean;
   region?: string;
   searchEpoch?: number;

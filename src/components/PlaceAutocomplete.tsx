@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { OrbitDots } from "./OrbitDots";
 
 export interface PlacePick {
   label: string;
@@ -230,11 +231,7 @@ export function PlaceAutocomplete({
           className="w-full bg-transparent py-3 text-[16px] text-strong placeholder:text-faint focus:outline-none"
         />
         {busy && (
-          <span
-            role="status"
-            aria-label="Searching places"
-            className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-line border-t-brandblue"
-          />
+          <OrbitDots size={16} className="shrink-0 text-brandblue" label="Searching places" />
         )}
       </div>
 
@@ -247,7 +244,7 @@ export function PlaceAutocomplete({
               className="btn btn-sm flex w-full items-center gap-2 px-4 py-3 text-left text-[14px] font-bold text-brandblue hover:bg-brandblue-soft disabled:opacity-60"
             >
               {locating ? (
-                <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brandblue/30 border-t-brandblue" />
+                <OrbitDots size={16} className="shrink-0 text-brandblue" label="Finding your location" />
               ) : (
                 <Icon name="spark" className="h-4 w-4" />
               )}
@@ -262,7 +259,7 @@ export function PlaceAutocomplete({
               className="btn btn-sm flex w-full items-start gap-2 border-t border-line px-4 py-3 text-left hover:bg-card2 disabled:opacity-60"
             >
               {resolving && resolving === r.placeId ? (
-                <span className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brandblue/30 border-t-brandblue" />
+                <OrbitDots size={16} className="mt-0.5 shrink-0 text-brandblue" label="Resolving place" />
               ) : (
                 <Icon name="pin" className="mt-0.5 h-4 w-4 shrink-0 text-faint" />
               )}

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@/lib/types";
 import { Icon } from "@/components/icons";
+import { OrbitDots } from "@/components/OrbitDots";
 import { BrandMark } from "@/components/BrandMark";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -729,7 +730,7 @@ export default function ProfilePage() {
                         className="btn btn-ghost rounded-xl p-2 text-brandred disabled:opacity-50"
                       >
                         {bookingDeleting === b.id ? (
-                          <span className="block h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brandred" />
+                          <OrbitDots size={16} className="text-brandred" label={t("Removing")} />
                         ) : (
                           <Icon name="x" className="h-4 w-4" />
                         )}
