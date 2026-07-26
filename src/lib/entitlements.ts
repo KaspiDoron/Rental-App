@@ -15,6 +15,7 @@ export type Feature =
   | "fast-responder-filter"  // filter shops by reply speed
   | "predictive-pricing"     // Will's market price radar on results
   | "judge-insights"         // per-move judge grades in "Why this move?"
+  | "trips-history"          // re-open + re-engage earlier search sessions
   | "vip-concurrency";       // larger share of the hourly send budget
 
 export const ENTITLEMENTS: Record<PlanId, ReadonlySet<Feature>> = {
@@ -25,6 +26,7 @@ export const ENTITLEMENTS: Record<PlanId, ReadonlySet<Feature>> = {
     "future-scheduling",
     "priority-processing",
     "no-ads",
+    "trips-history",
   ]),
   ultra: new Set<Feature>([
     "compare",
@@ -32,6 +34,7 @@ export const ENTITLEMENTS: Record<PlanId, ReadonlySet<Feature>> = {
     "future-scheduling",
     "priority-processing",
     "no-ads",
+    "trips-history",
     "local-language",
     "fast-responder-filter",
     "predictive-pricing",
@@ -98,6 +101,12 @@ export const FEATURE_META: Record<
     blurb: "See how Will's quality judges scored every negotiation move.",
     icon: "star",
     plan: "ultra",
+  },
+  "trips-history": {
+    label: "Trip history",
+    blurb: "Re-open and re-engage any earlier search - free keeps just your latest hunt.",
+    icon: "clock",
+    plan: "pro",
   },
   "vip-concurrency": {
     label: "VIP capacity",

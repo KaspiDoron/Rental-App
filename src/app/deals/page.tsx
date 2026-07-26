@@ -16,7 +16,9 @@ import { TabBar } from "@/components/TabBar";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { startNav } from "@/components/NavVeil";
+import { OrbitDots } from "@/components/OrbitDots";
 import { moneyLocal } from "@/lib/currency";
+import { can } from "@/lib/entitlements";
 import { useI18n } from "@/lib/i18n";
 
 interface SessionOffer {
@@ -115,6 +117,43 @@ export default function DealsPage() {
   const [plan, setPlan] = useState<string>("free");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [restoreErr, setRestoreErr] = useState<string | null>(null);
+
+  const canHistory = can(plan, "trips-history");
+
+  // Re-open a past hunt: pull its shops + RFQ from the server, write the same
+  // sessionStorage payload a live search uses, then navigate home where the
+  // existing rehydrate path renders the full Find-Deals workspace.
+  async function restoreSession(startedAt: string, isLatest: boolean) {
+    if (restoring) return;
+    setRestoreErr(null);
+    setRestoring(startedAt);
+    try {
+      const r = await fetch(`/api/deals/restore?ts=${encodeURIComponent(startedAt)}`, {
+        cache: "no-store",
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 402 || d?.error === "upgrade-required") {
+        setRestoring(null);
+        setUpgradeOpen(true);
+        return;
+      }
+      if (!r.ok || !d?.payload) {
+        setRestoring(null);
+        setRestoreErr(t("Could not re-open that hunt. Try again."));
+        return;
+      }
+      try {
+        sessionStorage.setItem("wd_search", JSON.stringify(d.payload));
+      } catch {}
+      startNav();
+      window.location.href = "/";
+    } catch {
+      setRestoring(null);
+      setRestoreErr(t("Could not re-open that hunt. Try again."));
+    }
+  }
 
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" })
@@ -192,7 +231,9 @@ export default function DealsPage() {
         <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-2xl">
           <div className="flex items-center gap-2">
             <BrandMark size={30} />
-            <h1 className="font-display text-lg font-extrabold text-strong">{t("Your trips")}</h1>
+            <h1 className="font-display text-lg font-extrabold text-strong">
+              {t("Searches & hunts")}
+            </h1>
           </div>
           <div className="flex items-center gap-1.5">
             <LanguageButton />
@@ -493,8 +534,10 @@ export default function DealsPage() {
                       </div>
                     )}
 
-                    {/* Actions */}
-                    <div className="flex gap-2 pt-0.5">
+                    {/* Actions - Open re-opens the hunt's full workspace. The
+                        latest hunt is always free; earlier ones need trip
+                        history (Pro), which surfaces the upgrade sheet. */}
+                    <div className="flex flex-col gap-1.5 pt-0.5">
                       {s.isLatest ? (
                         <a
                           href="/"
@@ -503,14 +546,32 @@ export default function DealsPage() {
                         >
                           {t("Open live workspace")}
                         </a>
-                      ) : (
-                        <a
-                          href="/"
-                          onClick={() => startNav()}
-                          className="btn btn-ghost flex-1 rounded-2xl py-2.5 text-center text-[13px]"
+                      ) : canHistory ? (
+                        <button
+                          onClick={() => restoreSession(s.startedAt, false)}
+                          disabled={restoring === s.startedAt}
+                          className="btn btn-primary flex flex-1 items-center justify-center gap-2 rounded-2xl py-2.5 text-center text-[13px] disabled:opacity-70"
                         >
-                          {t("Search like this again")}
-                        </a>
+                          {restoring === s.startedAt ? (
+                            <>
+                              <OrbitDots size={16} light label={t("Re-opening")} />
+                              {t("Re-opening…")}
+                            </>
+                          ) : (
+                            t("Re-open this hunt")
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setUpgradeOpen(true)}
+                          className="btn btn-ghost flex flex-1 items-center justify-center gap-1.5 rounded-2xl py-2.5 text-center text-[13px]"
+                        >
+                          <Icon name="lock" className="h-3.5 w-3.5" />
+                          {t("Re-open this hunt (Pro)")}
+                        </button>
+                      )}
+                      {restoreErr && restoring === null && (
+                        <p className="text-center text-[10px] font-bold text-brandred">{restoreErr}</p>
                       )}
                     </div>
                   </div>

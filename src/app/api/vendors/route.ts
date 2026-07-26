@@ -12,6 +12,9 @@ interface Body {
   vehicleClass?: VehicleClass | "any";
   fulfillment?: Fulfillment;
   minRating?: number;
+  // Full RFQ, echoed by the client so the search row can snapshot it for Trips
+  // restore. Optional - discovery works without it.
+  rfq?: Record<string, unknown>;
 }
 
 // Vendor discovery. With a Google Maps key this returns REAL rental businesses
@@ -101,18 +104,44 @@ export async function POST(req: Request) {
     vendors = vendors.map((v) => ({ ...v, orders: counts[v.id] ?? 0 }));
   } catch {}
 
-  // Save the search to agent memory (no-op without Supabase).
-  await sbInsert("searches", [
-    {
-      user_email: session?.email ?? null,
-      lat: body.origin.lat,
-      lng: body.origin.lng,
-      radius_km: radius,
-      vehicle_class: vClass,
-      source,
-      results: vendors.length,
-    },
-  ]);
+  // Save the search to agent memory (no-op without Supabase). Snapshot-forward
+  // (issue 8): stamp the RFQ + a COMPACT shop snapshot so this hunt can be
+  // re-opened later from Trips with its full Find-Deals state, not just the
+  // shops that ended up messaged. Kept small (the fields the card needs) so the
+  // jsonb stays light. Retries WITHOUT the new columns for a pre-migration DB.
+  const snapshot = vendors.slice(0, 60).map((v) => ({
+    id: v.id,
+    name: v.name,
+    whatsapp: v.whatsapp ?? "",
+    placeId: v.placeId ?? null,
+    rating: v.rating ?? null,
+    reviews: v.reviews ?? null,
+    distanceKm: v.distanceKm ?? null,
+    lat: v.lat ?? null,
+    lng: v.lng ?? null,
+    address: v.address ?? null,
+    vehicleClasses: v.vehicleClasses,
+    fulfillment: v.fulfillment,
+    partner: v.partner,
+    demo: v.demo,
+    basePricePerDay: v.basePricePerDay,
+    photoUrl: v.photoUrl ?? null,
+  }));
+  const searchRow = {
+    user_email: session?.email ?? null,
+    lat: body.origin.lat,
+    lng: body.origin.lng,
+    radius_km: radius,
+    vehicle_class: vClass,
+    source,
+    results: vendors.length,
+  };
+  const rfqSnap =
+    body.rfq && typeof body.rfq === "object" ? (body.rfq as Record<string, unknown>) : null;
+  const ok = await sbInsert("searches", [{ ...searchRow, rfq: rfqSnap, snapshot }]).catch(
+    () => false
+  );
+  if (ok === false) await sbInsert("searches", [searchRow]).catch(() => {});
 
   return NextResponse.json({ vendors, source, sourceError });
 }

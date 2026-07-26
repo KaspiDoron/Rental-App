@@ -160,8 +160,16 @@ create table if not exists public.searches (
   vehicle_class text,
   source        text,
   results       int,
+  -- Snapshot-forward (Trips restore): the exact RFQ this search ran and a
+  -- compact list of the shops it discovered, so a past hunt can be re-opened
+  -- with its full Find-Deals state instead of only the shops that were messaged.
+  rfq           jsonb,
+  snapshot      jsonb,
   created_at    timestamptz not null default now()
 );
+-- Additive for existing deploys (safe to re-run):
+alter table public.searches add column if not exists rfq jsonb;
+alter table public.searches add column if not exists snapshot jsonb;
 
 -- ---- Offers (real + simulated, flagged) ---------------------------------------
 create table if not exists public.offers (

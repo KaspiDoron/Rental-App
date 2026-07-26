@@ -1442,6 +1442,9 @@ export default function Home() {
         radiusKm,
         vehicleClass: pData.rfq.vehicleClass,
         fulfillment: pData.rfq.fulfillment === "any" ? undefined : pData.rfq.fulfillment,
+        // Snapshot-forward: hand the full RFQ so the search row can store it and
+        // this hunt is restorable later from Trips (issue 8).
+        rfq: pData.rfq,
       }),
     });
     if (!vRes.ok) {
