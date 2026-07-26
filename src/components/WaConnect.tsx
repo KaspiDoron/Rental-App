@@ -6,6 +6,7 @@ import { Icon } from "./icons";
 import { WaTermsModal } from "./WaTermsModal";
 import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
+import { probeWaStatus } from "@/lib/wa-status";
 import { deriveConnectionPhase, isFrozen } from "@/lib/wa/connection-state";
 import { useWillAssistant } from "./will/WillAssistantProvider";
 import { WillGuideOverlay } from "./will/WillGuideOverlay";
@@ -98,10 +99,18 @@ export function WaConnect({
   }, [phase]);
 
   useEffect(() => {
-    fetch("/api/wa/status", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => setWa(d))
-      .catch(() => {});
+    // Shared probe (bounded + retried + never cached) - the same read the
+    // Find-deals gate and the Profile pill use, so the three can never
+    // disagree about whether this number is linked.
+    probeWaStatus().then((s) => {
+      if (s.reachable)
+        setWa({
+          available: s.available ?? true,
+          connected: s.connected,
+          reconnecting: s.reconnecting,
+          state: s.state,
+        });
+    });
     return () => clearInterval(poll.current);
   }, []);
 

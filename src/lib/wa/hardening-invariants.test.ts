@@ -121,7 +121,13 @@ describe("gating: the Find-Deals blur-lock actually renders when unpaired", () =
     // that could not possibly send. Pin the corrected polarity.
     const page = readCode("src/app/page.tsx");
     expect(page).not.toMatch(/!restored\s*&&\s*phase === "idle"/);
-    expect(page).toMatch(/waConnected !== true && restored && phase === "idle"/);
+    // The condition now also requires a REACHABLE server (see the gate suite
+    // below), so pin each conjunct rather than one brittle source string.
+    const decl = page.slice(page.indexOf("const waLocked"), page.indexOf("const waLocked") + 260);
+    expect(decl).toMatch(/waConnected !== true/);
+    expect(decl).toMatch(/\brestored\b/);
+    expect(decl).toMatch(/phase === "idle"/);
+    expect(decl).toMatch(/vendors\.length === 0/);
   });
 
   it("the veil and the blur wrapper share ONE derived flag", () => {
@@ -276,6 +282,55 @@ describe("resilience: external fetches are bounded by a hard timeout", () => {
     const code = readCode("src/lib/runtime-config.ts");
     expect(code).not.toMatch(/clearTimeout/);
     expect(code).toMatch(/\.unref\?\.\(\)/);
+  });
+});
+
+// The blur-lock accuses the traveller of not having linked WhatsApp. It showed
+// over a CONNECTED account because a single un-retried status fetch failed and
+// the catch handler wrote that failure down as `false`. These pin the shape of
+// the fix, which no unit can express: there must be no un-probed status read
+// left, and no path from "the read failed" to "you are not linked".
+describe("WhatsApp gate: a failed status read never reads as 'not linked'", () => {
+  it("every UI surface asks through the shared probe, not a raw fetch", () => {
+    for (const f of [
+      "src/app/page.tsx",
+      "src/app/profile/page.tsx",
+      "src/components/WaConnect.tsx",
+    ]) {
+      const code = readCode(f);
+      expect(code).toMatch(/probeWaStatus\(/);
+    }
+    // The one-shot reads that caused this are gone from the gate itself.
+    expect(readCode("src/app/page.tsx")).not.toMatch(/fetch\(\s*["'`]\/api\/wa\/status/);
+    expect(readCode("src/app/profile/page.tsx")).not.toMatch(/fetch\(\s*["'`]\/api\/wa\/status/);
+  });
+
+  it("the probe distinguishes unreachable from unlinked", () => {
+    const probe = readCode("src/lib/wa-status.ts");
+    expect(probe).toMatch(/reachable:\s*false/);
+    expect(probe).toMatch(/cache:\s*["']no-store["']/);
+    expect(probe).toMatch(/AbortController/);
+  });
+
+  it("the lock requires a reachable server, not merely a non-true flag", () => {
+    const page = readCode("src/app/page.tsx");
+    const decl = page.slice(page.indexOf("const waLocked"), page.indexOf("const waLocked") + 260);
+    expect(decl).toMatch(/waReachable/);
+  });
+
+  it("the gate re-asks when the traveller comes back from linking", () => {
+    const page = readCode("src/app/page.tsx");
+    expect(page).toMatch(/visibilitychange/);
+    expect(page).toMatch(/refreshWaStatus/);
+  });
+
+  it("the status endpoint is never cacheable and cannot be held by a cold host", () => {
+    const route = readCode("src/app/api/wa/status/route.ts");
+    expect(route).toMatch(/private,\s*no-store/);
+    // The durable pairing read must not queue behind the Evolution probe.
+    expect(route).toMatch(/Promise\.all\(/);
+    expect(route).toMatch(/Promise\.race\(/);
+    expect(route).toMatch(/SOCKET_PROBE_MS/);
   });
 });
 

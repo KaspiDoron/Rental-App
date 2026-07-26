@@ -65,6 +65,7 @@ import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
 import { WaLockVeil } from "@/components/WaLockVeil";
+import { probeWaStatus } from "@/lib/wa-status";
 import { startNav } from "@/components/NavVeil";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
@@ -162,6 +163,10 @@ export default function Home() {
   // WhatsApp" flash that showed for a beat on every load before the status
   // call answered.
   const [waConnected, setWaConnected] = useState<boolean | null>(null);
+  // Did the status read ever ACTUALLY answer? Distinct from `waConnected`,
+  // because "we could not reach our own API" and "you are not linked" are
+  // different facts and only the second one may draw the lock.
+  const [waReachable, setWaReachable] = useState(true);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
   // The premium beta-quality note shown before a mass bargain runs.
@@ -609,15 +614,40 @@ export default function Home() {
     };
   }, []);
 
+  // WHATSAPP GATE. Read through the shared probe (bounded, retried, never
+  // cached) and re-read whenever the answer can have changed.
+  //
+  // The bug this replaces: a single un-retried fetch whose failure was recorded
+  // as `false` - a CONFIRMED unlink. When the Evolution host was cold the status
+  // call could take ~25s, the fetch never landed, and a traveller whose
+  // WhatsApp was connected got "Link WhatsApp to unlock the search" over their
+  // search form, with no way back short of a reload. A read we could not
+  // complete is not evidence of anything, so it no longer draws the lock.
+  const refreshWaStatus = useCallbackRef(async () => {
+    if (!session) return;
+    const s = await probeWaStatus();
+    if (!s.reachable) {
+      setWaReachable(false);
+      return;
+    }
+    setWaReachable(true);
+    setWaConnected(s.connected);
+  });
   useEffect(() => {
     if (!session) return;
-    fetch("/api/wa/status")
-      .then((r) => r.json())
-      .then((d) => setWaConnected(Boolean(d.connected)))
-      // On a failed status read we still resolve OUT of "checking" so the UI is
-      // never wedged on the loader; unlinked is the safe, actionable default.
-      .catch(() => setWaConnected(false));
-  }, [session]);
+    void refreshWaStatus();
+    // Linking happens on ANOTHER screen (Profile). Coming back here has to
+    // re-ask, or the gate keeps showing a lock the traveller already cleared.
+    const onWake = () => {
+      if (!document.hidden) void refreshWaStatus();
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [session, refreshWaStatus]);
 
   // EVERY traveller defaults to "My location": ask for GPS as soon as the page
   // is up (covered by the Terms of Use accepted at signup). The point is shown
@@ -1848,8 +1878,19 @@ export default function Home() {
   // over a search that is about to be rehydrated from sessionStorage, and only
   // applies to the entry form - a live or completed search is left alone (its
   // per-shop send buttons are separately gated on waConnected).
+  //
+  // `waReachable` is the third state that had to exist: the lock accuses the
+  // traveller of not having linked, so it may only appear when the server
+  // actually SAID so. If we could not get an answer we show the form - the
+  // send path still refuses on a confirmed unlink, and the server enforces it
+  // regardless, so an unreachable probe costs nothing but a wasted tap while a
+  // wrongly-drawn lock costs the whole session.
   const waLocked =
-    waConnected !== true && restored && phase === "idle" && vendors.length === 0;
+    waConnected !== true &&
+    waReachable &&
+    restored &&
+    phase === "idle" &&
+    vendors.length === 0;
 
   // Will-as-concierge: derive the ONE funnel step from live state and publish
   // it to the shared assistant context (idle detection lives there). The old

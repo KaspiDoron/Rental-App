@@ -11,6 +11,7 @@ import { Skeleton, SkeletonCard } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
+import { probeWaStatus } from "@/lib/wa-status";
 import { AdBanner } from "@/components/AdBanner";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import LocationConfig from "@/components/LocationConfig";
@@ -67,6 +68,9 @@ export default function ProfilePage() {
     connected: boolean;
     state?: string;
   } | null>(null);
+  // The status read never answered (cold Evolution host / offline). Distinct
+  // from "still checking" so this pill cannot sit on CHECKING... forever.
+  const [waUnreachable, setWaUnreachable] = useState(false);
 
   // Owner brand/social
   const [twitter, setTwitter] = useState("");
@@ -98,10 +102,13 @@ export default function ProfilePage() {
       .then((r) => r.json())
       .then((d) => setBookings(d.bookings ?? []))
       .catch(() => {});
-    fetch("/api/wa/status")
-      .then((r) => r.json())
-      .then((d) => setWa(d))
-      .catch(() => {});
+    // Through the shared probe: bounded, retried, never cached. A single
+    // un-retried fetch left this pill reading "CHECKING..." forever whenever the
+    // Evolution host was cold - next to a WaConnect box that said "connected".
+    probeWaStatus().then((s) => {
+      if (s.reachable) setWa({ available: s.available ?? true, connected: s.connected, state: s.state });
+      else setWaUnreachable(true);
+    });
     // Load the saved X handle (owner brand card).
     fetch("/api/admin/config?reveal=1")
       .then((r) => (r.ok ? r.json() : null))
@@ -386,20 +393,26 @@ export default function ProfilePage() {
                 {t("Connect your own number so agents bargain as YOU - shops see a real traveller, and every reply lands in the app automatically.")}
               </p>
             </div>
-            {/* Tri-state: this pill is fetched ONCE on mount, so before the
-                answer lands it must say "checking" rather than assert NOT
-                CONNECTED - and it has to follow WaConnect when the user links,
-                or the two disagree for the rest of the visit. */}
+            {/* FOUR states, because three were not enough: connected, not
+                connected, still checking, and "we could not reach the server to
+                ask". The last one used to masquerade as "checking" forever -
+                this pill read CHECKING... directly above a green "WhatsApp
+                connected" box. It still follows WaConnect when the user links,
+                so the two can never disagree. */}
             <span
               className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
-                wa === null
-                  ? "bg-card2 text-faint"
-                  : wa.connected
-                    ? "bg-savings-soft text-savings"
-                    : "bg-card2 text-faint"
+                wa?.connected ? "bg-savings-soft text-savings" : "bg-card2 text-faint"
               }`}
             >
-              {wa === null ? t("CHECKING...") : wa.connected ? t("CONNECTED") : t("NOT CONNECTED")}
+              {wa
+                ? wa.connected
+                  ? t("CONNECTED")
+                  : t("NOT CONNECTED")
+                : waUnreachable
+                  // Honest: we could not ask. Claiming NOT CONNECTED here is
+                  // what made this pill contradict the green box below it.
+                  ? t("CAN'T CHECK RIGHT NOW")
+                  : t("CHECKING...")}
             </span>
           </div>
 

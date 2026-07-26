@@ -16,12 +16,24 @@ import { deriveConnectionPhase } from "@/lib/wa/connection-state";
 // stays calm and the send path auto-resumes from saved credentials.
 export const dynamic = "force-dynamic";
 
+// How long the live-socket probe may hold the response. Past this we answer
+// from the durable pairing record - which is the only thing the "is it linked?"
+// gate actually needs - and let the probe finish in the background.
+const SOCKET_PROBE_MS = 4_000;
+
+// This answer changes the moment the traveller links or unlinks, and a stale
+// "connected:false" replayed from a cache is indistinguishable from a real
+// disconnection. Never cache it, anywhere.
+const NO_STORE = { "Cache-Control": "private, no-store" } as const;
+
 export async function GET(req: Request) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  if (!session)
+    return NextResponse.json({ error: "Sign in first." }, { status: 401, headers: NO_STORE });
 
   const available = await evolutionConfigured();
-  if (!available) return NextResponse.json({ available: false, connected: false });
+  if (!available)
+    return NextResponse.json({ available: false, connected: false }, { headers: NO_STORE });
 
   // PAIRING HOT PATH: while the connect screen polls every ~2s the user has no
   // outbox to drain, and firing two full drains per poll turned a cheap status
@@ -29,14 +41,37 @@ export async function GET(req: Request) {
   // most. The client sets ?pairing=1 for those polls.
   const pairing = new URL(req.url).searchParams.get("pairing") === "1";
 
-  const state = await connectionState(session.email);
+  // ANSWER FAST, EVEN WHEN EVOLUTION IS ASLEEP.
+  //
+  // connectionState probes the Evolution host TWICE (connectionState, then the
+  // instance list), each bounded at 12s - so a cold Render host could hold this
+  // response ~25s. That is what stranded the UI: the Profile pill sat on
+  // "CHECKING..." and the Find-deals gate recorded the failed read as
+  // "confirmed unlinked" and drew the blur lock over a linked account.
+  //
+  // The two questions have very different costs, so ask them in parallel and
+  // bound the expensive one. `paired` is a Supabase read and answers in
+  // milliseconds; it is also the ONLY input the "is this linked?" gate needs.
+  // The socket probe merely refines live-vs-reconnecting, so when it is slow we
+  // publish the durable answer instead of making the traveller wait for it.
+  const socketProbe = connectionState(session.email).catch(() => null);
+  const [storedPaired, state] = await Promise.all([
+    isLinkedForUi(session.email).catch(() => false),
+    Promise.race([
+      socketProbe,
+      new Promise<null>((r) => setTimeout(() => r(null), SOCKET_PROBE_MS)),
+    ]),
+  ]);
+  // A late socket answer is still worth having: let it settle markOpen in the
+  // background so the NEXT read is exact.
+  void socketProbe;
   // "paired" = the user GENUINELY linked before (durable status "open"), not
   // merely "a session row exists" - a not-yet-linked "connecting" row must NOT
   // read as connected (that made first-time pairing report linked on the first
   // 3s poll and clear the code before the user entered it). isLinkedForUi still
   // fails SAFE on a DB blip, so a transient host outage reports
   // connected+reconnecting, never a hard "disconnected" that re-links a paired user.
-  const paired = state === "open" ? true : await isLinkedForUi(session.email);
+  const paired = state === "open" ? true : storedPaired;
 
   // Persist "open" durably whenever we observe a live socket, so the send path
   // never later mistakes a transient drop for "never connected".
@@ -76,7 +111,7 @@ export async function GET(req: Request) {
     // adding what only it knows: whether a code is on screen and its remaining
     // life. One definition, two levels of detail.
     phase: deriveConnectionPhase({ state, paired }),
-  });
+  }, { headers: NO_STORE });
 }
 
 // maxDuration: lift the request-timeout ceiling for slow upstreams.
