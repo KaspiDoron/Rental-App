@@ -32,13 +32,15 @@ export async function POST() {
   // Wakeups: EXACT owner match on the stamped column only. The old
   // `thread_key=like.<email>:*` sweep was a cross-user hazard - an underscore
   // in this user's email is a single-char SQL wildcard, so it could DELETE a
-  // different registered user's scheduled follow-ups. Any pre-column legacy row
-  // it used to catch is already covered by the session-closed marker in step 3
-  // (a surviving tick sees sessionClosed and stays silent), so dropping the
-  // wildcard sweep loses no correctness.
+  // different registered user's scheduled follow-ups.
+  // Delete EVERY wakeup kind (tick, judge, session-judge), not just tick: a
+  // surviving judge / session-judge wakeup would still fire its drain branch
+  // against the now-closed session (the "agents kept talking after I closed the
+  // search" hole). The hard sessionClosed gate is the backstop, but purging the
+  // wakeups means the engine never even wakes for a dead session.
   await sbDelete(
     "graph_wakeups",
-    `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
+    `user_email=eq.${encodeURIComponent(session.email)}`
   ).catch(() => {});
 
   // 2. Tombstone every shop this session was talking to. CRITICAL: not just the

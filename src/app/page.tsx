@@ -58,6 +58,7 @@ import { BargainDraftModal } from "@/components/BargainDraftModal";
 import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
+import { AgentKillSwitch } from "@/components/AgentKillSwitch";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
@@ -1383,8 +1384,26 @@ export default function Home() {
     appliedReplies.current = new Set();
     setQueueItems([]);
     // Close the PREVIOUS session on the server first: purge its queued
-    // messages and silence its shop threads before any new RFQ goes out.
-    await fetch("/api/session/close", { method: "POST" }).catch(() => {});
+    // messages, delete its wakeups and silence its shop threads BEFORE any new
+    // RFQ goes out. AWAITED with one retry (mirrors clearSearch): a silently
+    // failed close used to leave the old session's sends + wakeups alive, so
+    // the old shops kept getting messaged while the new hunt ran - exactly the
+    // "agents talk after a new search" bug. On double failure we still proceed
+    // (the new epoch scopes the UI) but warn honestly.
+    {
+      const close = () =>
+        fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
+      let closed = await close().catch(() => false);
+      if (!closed) {
+        await new Promise((r) => setTimeout(r, 1200));
+        closed = await close().catch(() => false);
+      }
+      if (!closed) {
+        setMassNote(
+          t("Starting a fresh search - but the server could not confirm stopping the previous session's messages. Check the queue in a moment.")
+        );
+      }
+    }
 
     const pRes = await fetch("/api/profile", {
       method: "POST",
@@ -2085,6 +2104,14 @@ export default function Home() {
             ⏳ {t("Reconnecting - live updates paused for a moment. Your agents keep working.")}
           </p>
         )}
+        {/* Premium kill switch: only while the agents actually have live work
+            (a shop messaged or queued). One tap pauses/resumes the whole
+            session - the hard stop is enforced server-side. */}
+        {vendors.length > 0 &&
+          stageCounts.messaged + Math.max(stageCounts.queued, queueItems.length) > 0 && (
+            <AgentKillSwitch className="mt-3" />
+          )}
+
         {vendors.length > 0 && (
           <div className="mt-3 grid grid-cols-3 gap-2">
             <Stat label={t("Shops found")} value={vendors.length} />

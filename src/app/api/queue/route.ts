@@ -117,9 +117,12 @@ export async function POST(req: Request) {
     for (const digits of digitsSet) {
       const ok = await cancelSends(session.email, digits, "user-removed");
       if (!ok) tombstoneFailed = true;
+      // Every wakeup kind for this thread, not just tick - a judge /
+      // session-judge wakeup left behind would re-open a thread the user just
+      // removed from the queue.
       await sbDelete(
         "graph_wakeups",
-        `kind=eq.tick&thread_key=eq.${encodeURIComponent(`${session.email}:${digits}`)}`
+        `thread_key=eq.${encodeURIComponent(`${session.email}:${digits}`)}`
       ).catch(() => {});
     }
 

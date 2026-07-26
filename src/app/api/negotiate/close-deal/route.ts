@@ -115,9 +115,13 @@ export async function POST(req: Request) {
   // `thread_key=like.<email>:*` sweep was a cross-user hazard (an underscore in
   // the email is a single-char SQL wildcard that could delete another user's
   // wakeups); the deal-closed marker below is the backstop for any pre-column row.
+  // Delete EVERY wakeup kind (tick, judge, session-judge) for this owner - not
+  // just kind=eq.tick. A surviving judge/session-judge wakeup was the "agents
+  // replied overnight after I closed the deal" hole: those drain branches would
+  // still fire a follow-up against a dead session.
   await sbDelete(
     "graph_wakeups",
-    `kind=eq.tick&user_email=eq.${encodeURIComponent(session.email)}`
+    `user_email=eq.${encodeURIComponent(session.email)}`
   ).catch(() => {});
   // Tombstone every recently-messaged shop (not just outbox-pending ones): a
   // mid-negotiation sibling awaiting a reply has no outbox row, but the
@@ -151,7 +155,7 @@ export async function POST(req: Request) {
       body: "(deal locked - session closed)",
       type: "system",
       direction: "outbound",
-      raw: { sender: session.email, kind: "session-closed" },
+      raw: { sender: session.email, kind: "session-closed", reason: "deal-closed" },
     },
   ]).catch(() => {});
 

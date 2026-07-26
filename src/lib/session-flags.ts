@@ -139,3 +139,35 @@ export async function isSessionPaused(email: string): Promise<boolean | null> {
   cache().set(email, { paused, at: Date.now() });
   return paused;
 }
+
+// ---------------------------------------------------------------------------
+// Session status - the single enum the ask requested (ACTIVE / PAUSED /
+// TERMINATED / DEAL_CLOSED), DERIVED from the markers we already stamp rather
+// than a new column. Newest marker wins across the two families:
+//   - to_number "session", kind session-closed  -> terminated / deal-closed
+//     (deal-closed carries raw.reason "deal-closed"; a bare close is user-closed)
+//   - to_number "session", kind session-paused/session-resumed -> paused / active
+// A close ALWAYS outranks a pause at the same instant (a terminated session is
+// not merely paused). No marker at all -> active.
+// ---------------------------------------------------------------------------
+
+export type SessionStatus = "active" | "paused" | "terminated" | "deal-closed";
+
+export async function getSessionStatus(email: string): Promise<SessionStatus> {
+  const res = await sbSelectStrict<{ raw: { kind?: string; reason?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
+      email
+    )}&raw->>kind=in.(session-closed,session-paused,session-resumed)&order=received_at.desc&limit=1`
+  );
+  // Unreadable / demo mode -> report active (the hard inbound gates fail closed
+  // on their own tri-state reads; this enum is for UI + drain hints, not the
+  // safety veto, so it must not wedge the UI into a false "stopped").
+  if ("error" in res) return "active";
+  const row = res.rows[0]?.raw;
+  if (!row) return "active";
+  if (row.kind === "session-closed") {
+    return row.reason === "deal-closed" ? "deal-closed" : "terminated";
+  }
+  return row.kind === "session-paused" ? "paused" : "active";
+}

@@ -755,6 +755,17 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // SESSION TERMINATED GATE (HARD). A closed / deal-closed session must never
+  // keep talking to shops - this was the "agents replied overnight after I
+  // cleared the search" bug. It used to be only a SOFT director fact the LLM
+  // could override; now it is an absolute stop. The reply is already stored
+  // above (data is never lost); the agent simply says nothing more. A new
+  // search re-opens the shop with a fresh RFQ that postdates the marker.
+  if (sessionClosed) {
+    void noteInboundDropped(opts.senderEmail, from, "session-terminated");
+    return;
+  }
+
   // ==== THE DIGRAPH NEGOTIATION ENGINE (v2) ==================================
   // The default path: a true directed graph of specialized agents driven by a
   // chief Negotiation Director (multi-round bargaining, deposit + fulfillment
