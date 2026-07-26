@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { extractRentalDailyPrice } from "./price-extract";
+import {
+  extractQuotedPrices,
+  extractRentalDailyPrice,
+  isListPriceAt,
+  mentionedCurrencies,
+  reconcileCurrency,
+} from "./price-extract";
 
 // The exact Sun House Rental template that broke the parser in production: a
 // business greeting, three port/airport transfer lines priced "/trip", the real
@@ -163,5 +169,102 @@ describe("extractRentalDailyPrice - totals and edge cases", () => {
   it("k-notation ('150k per day' IDR)", () => {
     const hit = extractRentalDailyPrice("150k per day", { localCurrency: "IDR" });
     expect(hit!.pricePerDay).toBe(150000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Krabi incident. A shop agreed 250/day, then wrote "That is a discount
+// already, normally it's 300/day" - and the app showed the traveller "RM
+// 300/day": the wrong price AND the wrong country's money, because "no-RM-ally"
+// matched the ringgit code and the list price was read as a fresh quote.
+// ---------------------------------------------------------------------------
+const KRABI = { vehicleClass: "scooter" as const, durationDays: 5, localCurrency: "THB" };
+
+describe("a currency code buried in an ordinary word is not a currency", () => {
+  it("'normally' is not Malaysian ringgit", () => {
+    // (the amount itself is a list price, so it lands in listPrice - see below)
+    expect(extractQuotedPrices("normally 300/day", KRABI).listPrice!.currency).toBe("THB");
+    expect(extractRentalDailyPrice("ok 300/day", KRABI)!.currency).toBe("THB");
+    expect(mentionedCurrencies("That is a discount already, normally it's 300/day")).toEqual([]);
+  });
+
+  it("neither is 'confirm', 'airport' or 'nomad'", () => {
+    expect(mentionedCurrencies("please confirm 300/day")).toEqual([]);
+    expect(mentionedCurrencies("airport pickup included")).toEqual([]);
+    expect(mentionedCurrencies("nomad rates available")).toEqual([]);
+  });
+
+  it("'try' and 'mad' never name a currency, but a real code still does", () => {
+    expect(mentionedCurrencies("we will try 300")).toEqual([]);
+    expect(mentionedCurrencies("RM 300 per day")).toEqual(["MYR"]);
+    expect(mentionedCurrencies("300 baht per day")).toEqual(["THB"]);
+    expect(mentionedCurrencies("฿300")).toEqual(["THB"]);
+  });
+
+  it("a real ringgit quote is still read as ringgit", () => {
+    const hit = extractRentalDailyPrice("RM 300/day", { ...KRABI, localCurrency: "MYR" });
+    expect(hit!.currency).toBe("MYR");
+  });
+});
+
+describe("a restated LIST price is an anchor, never the offer", () => {
+  it("the exact reply that broke it: 300 is kept as the anchor, no new offer", () => {
+    const q = extractQuotedPrices(
+      "That is a discount already, normally it's 300/day\nWhere are you staying?",
+      KRABI
+    );
+    expect(q.offer).toBeNull(); // the agreed 250 stands untouched
+    expect(q.listPrice!.pricePerDay).toBe(300);
+    expect(q.listPrice!.currency).toBe("THB");
+  });
+
+  it("the opening quote: 300 normal, 250 offered -> the offer is 250", () => {
+    const q = extractQuotedPrices(
+      "Normally we can do fr 300/day\nI can drop it to 250/day for you\nWe can also drop it off at your place",
+      KRABI
+    );
+    expect(q.offer!.pricePerDay).toBe(250);
+    expect(q.listPrice!.pricePerDay).toBe(300);
+  });
+
+  it("both prices on ONE line still separate correctly", () => {
+    const q = extractQuotedPrices("Normally 300/day but for you 250/day", KRABI);
+    expect(q.offer!.pricePerDay).toBe(250);
+    expect(q.listPrice!.pricePerDay).toBe(300);
+  });
+
+  it("'was X now Y' reads Y as the offer", () => {
+    const q = extractQuotedPrices("was 400/day, now 320/day", KRABI);
+    expect(q.offer!.pricePerDay).toBe(320);
+    expect(q.listPrice!.pricePerDay).toBe(400);
+  });
+
+  it("a plain quote is never mistaken for a list price", () => {
+    const q = extractQuotedPrices("300/day for the scooter", KRABI);
+    expect(q.offer!.pricePerDay).toBe(300);
+    expect(q.listPrice).toBeNull();
+  });
+
+  it("the cue only governs a number it actually precedes", () => {
+    expect(isListPriceAt("normally it's 300/day", "normally it's ".length)).toBe(true);
+    expect(isListPriceAt("300/day is normal for us", 0)).toBe(false);
+  });
+});
+
+describe("reconcileCurrency - the shop's own money wins unless they typed otherwise", () => {
+  it("keeps a foreign currency the shop really typed", () => {
+    expect(reconcileCurrency("MYR", "THB", "RM 300 per day")).toBe("MYR");
+    expect(reconcileCurrency("USD", "THB", "$10 per day")).toBe("USD");
+  });
+
+  it("falls back to the region when the currency was never mentioned", () => {
+    expect(reconcileCurrency("MYR", "THB", "normally it's 300/day")).toBe("THB");
+    expect(reconcileCurrency("USD", "THB", "300 per day")).toBe("THB");
+  });
+
+  it("is a no-op when there is nothing to reconcile", () => {
+    expect(reconcileCurrency("THB", "THB", "300")).toBe("THB");
+    expect(reconcileCurrency(undefined, "THB", "300")).toBe("THB");
+    expect(reconcileCurrency("THB", undefined, "300")).toBe("THB");
   });
 });

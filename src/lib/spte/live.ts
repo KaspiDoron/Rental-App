@@ -14,6 +14,7 @@
 
 import type { GraphIO, GraphTurnInput } from "../graph/types";
 import { runTurn } from "./orchestrator";
+import { clampWaitMinutes } from "./wait";
 import { emptyDigest } from "./digest";
 import { deriveThreadFacts } from "./thread-facts";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
@@ -265,13 +266,24 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   }
 
   // Strategic wait (deliberate patience) -> a wakeup re-enters this thread later.
-  if (outcome.waitMinutes && outcome.waitMinutes > 0) {
+  // Clamped AGAIN here: this is the last gate before a durable not_before, and a
+  // wait measured in hours is never a tactic, only a bug (the "until 08:28 AM"
+  // incident on a thread the shop was actively typing in).
+  const waitMinutes = clampWaitMinutes(outcome.waitMinutes);
+  if (waitMinutes) {
     await io
       .insertWakeup({
         kind: "tick",
         threadKey: input.event.threadKey,
-        notBefore: new Date(io.now() + outcome.waitMinutes * 60_000).toISOString(),
-        payload: { userEmail: input.ctx.sender, vendorId: input.ctx.vendorId, engine: "v3" },
+        notBefore: new Date(io.now() + waitMinutes * 60_000).toISOString(),
+        payload: {
+          userEmail: input.ctx.sender,
+          vendorId: input.ctx.vendorId,
+          engine: "v3",
+          // The feed reads this instead of inventing generic copy.
+          reason: `giving the shop ~${waitMinutes} min before the next nudge`,
+          vendorName: input.ctx.vendorName,
+        },
       })
       .catch(() => {});
   }

@@ -58,6 +58,19 @@ interface TraceRow {
   created_at: string;
 }
 
+/**
+ * How to phrase a pending wait. Minutes for anything short (the only kind a
+ * negotiation tactic ever is), a clock time only once it is genuinely far off.
+ */
+function waitEta(notBefore: string, nowMs: number): string {
+  const at = Date.parse(notBefore);
+  if (!Number.isFinite(at)) return "in a moment";
+  const mins = Math.round((at - nowMs) / 60_000);
+  if (mins <= 1) return "about a minute";
+  if (mins < 60) return `about ${mins} min`;
+  return `until ${new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
 export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
@@ -351,10 +364,14 @@ export async function GET(req: Request) {
       kind: "wait",
       vendorName: w.payload?.vendorName,
       title: "Will is waiting on purpose",
+      // A deliberate pause is minutes, so say MINUTES. The old absolute clock
+      // time turned a two-minute pause into "until 08:28 AM" - which read as
+      // "the agents are asleep until tomorrow" on a thread that had just
+      // replied. A clock time is only meaningful when the wait is genuinely
+      // long, and by then it is a queue hold, not a tactic.
       detail:
-        (w.payload?.reason ??
-          "waiting a moment so the shop takes the offer seriously") +
-        ` (until ${new Date(w.not_before).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+        (w.payload?.reason ?? "waiting a moment so the shop takes the offer seriously") +
+        ` (${waitEta(w.not_before, now)})`,
     });
   }
   for (const e of events) {

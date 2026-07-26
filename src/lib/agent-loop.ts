@@ -427,8 +427,16 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // CURRENCY TRUTH. A currency other than the shop's own is honoured only when
+  // the shop actually typed it - a photo-only reply or a mis-read token can
+  // never turn a Thai quote into ringgit ("RM 300/day" on a Krabi thread).
+  const { reconcileCurrency } = await import("./wa/price-extract");
   const cur =
-    extraction.currency || currencyForRegion(ctx.region || undefined) || "USD";
+    reconcileCurrency(
+      extraction.currency,
+      currencyForRegion(ctx.region || undefined),
+      extractText || ""
+    ) || "USD";
 
   // TOTAL vs PER-DAY sanity net. Shops constantly quote the WHOLE rental
   // ("3 day 900 B" = 900 TOTAL = 300/day) and a mis-read here made the agent

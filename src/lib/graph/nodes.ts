@@ -341,7 +341,14 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
       return {
         message: pick(variants),
         kind: "auto-close",
-        reasoning: saidYes ? "warm close - shop cooperative" : "polite close - shop declined",
+        // "shop declined" was a lie whenever the shop simply had not said yes
+        // YET - it appeared on screen one line under "shop is warm and
+        // responsive". Only report a decline the shop actually made.
+        reasoning: saidYes
+          ? "warm close - shop cooperative"
+          : f.declined
+          ? "polite close - shop walked away"
+          : "polite close - no price agreed yet",
         nextRound: (input.ctx.round ?? 0) + 1,
       };
     }

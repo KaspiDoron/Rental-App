@@ -14,7 +14,7 @@ import type {
 } from "./types";
 import { getTactics, recordOutcome } from "./memory";
 import { parseDeposit } from "./deposit";
-import { extractRentalDailyPrice } from "./wa/price-extract";
+import { extractQuotedPrices, extractRentalDailyPrice } from "./wa/price-extract";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -1001,6 +1001,10 @@ export function sentimentFor(vendor: Vendor, round: number): number {
 export interface ExtractedOffer {
   found: boolean;
   pricePerDay?: number;
+  // The shop's REGULAR/list price when it restated one ("normally it's
+  // 300/day"). An anchor for the negotiator - never the traveller's price, and
+  // never written to the offers table.
+  listPricePerDay?: number;
   currency?: string;
   vehicleDescription?: string;
   matchesSpec: boolean;
@@ -1194,6 +1198,15 @@ export async function extractOffer(
     '"shopTone": "warm"|"neutral"|"annoyed"|null, ' +
     '"mileageKm": number|null, "conditionNotes": string|null, "imageSummary": string|null, ' +
     '"tags": string[] }. ' +
+    // The Krabi failure: after agreeing 250/day the shop wrote "that is a
+    // discount already, normally it's 300/day" and the app replaced the live
+    // 250 with 300. A defended discount is not a price rise.
+    "REGULAR vs OFFERED price: a price the shop calls normal / regular / usual / " +
+    "standard / original / list, or a 'was X now Y' pair, is the REGULAR price - " +
+    "an anchor, not what they are charging. pricePerDay is ALWAYS what the shop " +
+    "is offering the traveller right now. If THIS reply only restates the regular " +
+    "price to defend a discount it already gave, set found=false and quote no " +
+    "price - the discounted price we already have still stands. " +
     "pickupOffered: true ONLY if the shop offered to come pick the TRAVELLER up " +
     "(by car or motorbike) and bring them to the shop - this is different from " +
     "delivering the vehicle; null when not mentioned. " +
@@ -1429,6 +1442,35 @@ export async function extractOffer(
 
   function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
     let conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+    // LIST PRICE IS NOT AN OFFER. When a shop defends a discount it already gave
+    // ("that is a discount already, normally it's 300/day"), the only number in
+    // the message is the REGULAR price. Reading it as a fresh quote replaced a
+    // live 250/day with a worse 300 in the app while the negotiator, reading the
+    // sentence properly, carried on from 250. The deterministic reader knows the
+    // difference, so it overrules the model here.
+    if (e.found && typeof e.pricePerDay === "number" && images.length === 0) {
+      const quoted = extractQuotedPrices(text, {
+        vehicleClass: rfq.vehicleClass,
+        durationDays: rfq.durationDays,
+        localCurrency: localCur || undefined,
+      });
+      const isListEcho =
+        !quoted.offer &&
+        quoted.listPrice != null &&
+        Math.abs(quoted.listPrice.pricePerDay - e.pricePerDay) <= 1;
+      if (isListEcho) {
+        return {
+          ...e,
+          found: false,
+          pricePerDay: undefined,
+          confidence: "low",
+          listPricePerDay: quoted.listPrice!.pricePerDay,
+          currency: quoted.listPrice!.currency || localCur || e.currency,
+          clarifyMessage: undefined,
+          ...readNegotiationSignals(text),
+        };
+      }
+    }
     // VERIFIED-GATE: a "high confidence" price that appears NOWHERE in the
     // shop's actual reply (no photo carried it either) is at best an
     // inference from the thread - and in the worst observed case it was OUR

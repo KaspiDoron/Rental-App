@@ -11,6 +11,7 @@ import { chat, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
 import { coerceToLegal } from "./policy";
 import { isRepetitive } from "../wa/similarity";
+import { clampWaitMinutes } from "./wait";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -247,7 +248,9 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
           typeof parsed.counterPricePerDay === "number" ? parsed.counterPricePerDay : undefined,
         leverageUsed: Array.isArray(parsed.leverageUsed) ? (parsed.leverageUsed as TurnArtifact["leverageUsed"]) : [],
         digestPatch: Array.isArray(parsed.digestPatch) ? parsed.digestPatch.slice(0, 3).map(String) : [],
-        waitMinutes: typeof parsed.waitMinutes === "number" ? parsed.waitMinutes : undefined,
+        // NEVER trust a raw wait either: an unclamped waitMinutes once parked a
+        // live thread until 08:28 the next morning. See spte/wait.ts.
+        waitMinutes: clampWaitMinutes(parsed.waitMinutes),
       };
       // NEVER trust an out-of-set move (the B7 lesson, generalized).
       artifact.move = coerceToLegal(artifact, ctx.legalMoves);
