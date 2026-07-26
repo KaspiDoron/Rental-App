@@ -1549,64 +1549,122 @@ function avatarStore(): Map<string, { url: string | null; exp: number }> {
  * The shop's WhatsApp profile picture URL, or null when it has none / hides it.
  * Never throws; a miss is simply an initial-letter fallback in the UI.
  */
+/**
+ * The shop's WhatsApp profile picture, with the REASON when there is none.
+ *
+ * Every avatar on the board came back empty in the field while the same shops
+ * plainly had pictures in WhatsApp. There was no way to tell "this shop hides
+ * its photo" from "this build's endpoint answered 404", so the first fix added
+ * the JID fallback and a log line. It was still one endpoint's opinion.
+ *
+ * Evolution builds disagree about which route serves a profile picture and
+ * about which identifier it takes, so this asks in order and stops at the first
+ * real https URL:
+ *
+ *   1. /chat/fetchProfilePictureUrl  with bare digits   (the documented one)
+ *   2. the same route with the canonical JID            (some builds insist)
+ *   3. /chat/fetchProfile                                (returns `picture`)
+ *   4. /chat/findContacts                                (`profilePicUrl`)
+ *
+ * The reason for a miss is returned rather than swallowed, so the WhatsApp
+ * doctor in Admin can show the owner exactly what their host said - from a
+ * phone, with no terminal.
+ */
+export interface ProfilePicture {
+  url: string | null;
+  /** Only set when we genuinely failed, never for "this shop has no photo". */
+  error?: string;
+}
+
+function httpsUrlIn(data: unknown): string | null {
+  const d = data as Record<string, unknown> | null;
+  if (!d) return null;
+  const direct = [d.profilePictureUrl, d.profilePicUrl, d.picture, d.url, d.profilePicture];
+  for (const c of direct) {
+    if (typeof c === "string" && /^https:\/\//i.test(c)) return c;
+  }
+  // findContacts answers with an array (or {contacts:[...]}) of contact rows.
+  const rows = Array.isArray(d) ? d : Array.isArray(d.contacts) ? d.contacts : null;
+  if (rows) {
+    for (const r of rows as Record<string, unknown>[]) {
+      const hit = httpsUrlIn(r);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+export async function fetchProfilePicture(
+  email: string,
+  digits: string
+): Promise<ProfilePicture> {
+  const key = `${email}:${digits}`;
+  const store = avatarStore();
+  const hit = store.get(key);
+  if (hit && hit.exp > Date.now()) return { url: hit.url };
+
+  const instance = instanceNameFor(email);
+  let jid: string | null = null;
+  try {
+    jid = await resolveChatJid(email, digits);
+  } catch {
+    jid = `${digits}@s.whatsapp.net`;
+  }
+
+  const attempts: Array<{ path: string; body: Record<string, unknown> }> = [
+    { path: `/chat/fetchProfilePictureUrl/${instance}`, body: { number: digits } },
+  ];
+  if (jid && jid !== digits) {
+    attempts.push({ path: `/chat/fetchProfilePictureUrl/${instance}`, body: { number: jid } });
+  }
+  attempts.push({ path: `/chat/fetchProfile/${instance}`, body: { number: jid || digits } });
+  attempts.push({
+    path: `/chat/findContacts/${instance}`,
+    body: { where: { id: jid || `${digits}@s.whatsapp.net` } },
+  });
+
+  let url: string | null = null;
+  let lastError = "";
+  let settled = false; // a clean 200 that simply had no picture
+  for (const attempt of attempts) {
+    try {
+      const res = await evo(email, attempt.path, {
+        method: "POST",
+        body: JSON.stringify(attempt.body),
+      });
+      if (!res.ok) {
+        lastError = `${attempt.path.split("/")[1]} -> ${res.status}${
+          res.data?.message ? `: ${String(res.data.message).slice(0, 120)}` : ""
+        }`;
+        continue;
+      }
+      const found = httpsUrlIn(res.data);
+      if (found) {
+        url = found;
+        break;
+      }
+      settled = true; // answered fine, just no picture on this route
+    } catch (e) {
+      lastError = `${attempt.path.split("/")[1]} -> ${
+        e instanceof Error ? e.message : "network error"
+      }`;
+    }
+  }
+
+  const error = url || settled ? undefined : lastError || "no route returned a picture";
+  if (error) console.warn(`[wa/avatar] ${digits}: ${error}`);
+  // A genuine "no picture" is cached like any other answer; a FAILURE is not -
+  // caching an outage for ten minutes would freeze every avatar on the board.
+  if (!error) boundedSet(store, key, { url, exp: Date.now() + AVATAR_TTL_MS }, AVATAR_CAP);
+  return { url, error };
+}
+
+/** Back-compat thin wrapper: the URL only, errors swallowed. */
 export async function fetchProfilePictureUrl(
   email: string,
   digits: string
 ): Promise<string | null> {
-  const key = `${email}:${digits}`;
-  const store = avatarStore();
-  const hit = store.get(key);
-  if (hit && hit.exp > Date.now()) return hit.url;
-
-  const instance = instanceNameFor(email);
-  let url: string | null = null;
-  let lastError = "";
-
-  // WHICH IDENTIFIER? Evolution builds disagree: some accept bare digits on
-  // this endpoint, others insist on the full JID (the same split that made
-  // wa-sync resolve a JID before reading a chat). Every avatar came back empty
-  // in the field, so try both rather than assume - the second shape costs one
-  // request only when the first genuinely found nothing.
-  const candidates: string[] = [digits];
-  try {
-    const jid = await resolveChatJid(email, digits);
-    if (jid && jid !== digits) candidates.push(jid);
-  } catch {
-    candidates.push(`${digits}@s.whatsapp.net`);
-  }
-
-  for (const number of candidates) {
-    try {
-      const res = await evo(email, `/chat/fetchProfilePictureUrl/${instance}`, {
-        method: "POST",
-        body: JSON.stringify({ number }),
-      });
-      // res.ok was never checked: a 4xx returned an error BODY, `profilePictureUrl`
-      // read as undefined, and the miss was indistinguishable from "this shop has
-      // no picture" - so nothing ever pointed at the real cause.
-      if (!res.ok) {
-        lastError = `Evolution ${res.status}${
-          res.data?.message ? `: ${String(res.data.message).slice(0, 160)}` : ""
-        }`;
-        continue;
-      }
-      const raw = res.data?.profilePictureUrl ?? res.data?.url ?? null;
-      // Only a real https URL is ever handed to an <img src>.
-      if (typeof raw === "string" && /^https:\/\//i.test(raw)) {
-        url = raw;
-        break;
-      }
-      // A 200 with no URL is the genuine "no picture / hidden" answer - settled,
-      // so stop asking. Trying the other identifier would only waste a request.
-      break;
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : "network error";
-    }
-  }
-  if (!url && lastError) console.warn(`[wa/avatar] ${digits}: ${lastError}`);
-
-  boundedSet(store, key, { url, exp: Date.now() + AVATAR_TTL_MS }, AVATAR_CAP);
-  return url;
+  return (await fetchProfilePicture(email, digits)).url;
 }
 
 /**

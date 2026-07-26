@@ -1283,6 +1283,18 @@ export async function extractOffer(
     "exists (e.g. asked: automatic 125cc; sheet has Yamaha Fino 125 at 280, " +
     "Click 125 LED at 300, Click 125 New Model at 350 -> return 280, and name " +
     "the cheaper alternatives in imageSummary). " +
+    "DURATION LADDERS ARE NOT A MENU. Many boards price ONE vehicle by LENGTH " +
+    "OF STAY: '1-2 days 650 / 3-7 days 600 / 8-14 days 550 / 15-29 days 500 / " +
+    "Monthly 450'. Those rows are not options to pick between - each is the rate " +
+    "you get by staying that long. Return the row whose range CONTAINS the " +
+    "traveller's rental length, never the cheapest row: for a 5-day rental on " +
+    "that board the answer is 600, NOT 500 and NOT 450. The 'cheapest matching " +
+    "row' rule above is about different MODELS, never about duration tiers. " +
+    "A BOARD'S HEADING BINDS ITS ROWS: if the board is titled '155 CC' or 'Honda " +
+    "Click - V2 125 CC', every row underneath is that vehicle. When the heading " +
+    "names a vehicle the traveller did NOT ask for, that whole board is the " +
+    "wrong vehicle - set vehicleVerdict='mismatch' and do not quote from it, " +
+    "even if the rows themselves mention no engine size. " +
     "TRANSMISSION MATTERS: a 'semi automatic'/'semi-auto' model is NOT an " +
     "automatic scooter - exclude semi-automatic rows when the traveller asked " +
     "automatic (and vice versa); 'automatic'/CVT scooters (Click, Fino, Scoopy, " +

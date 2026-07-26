@@ -21,6 +21,8 @@
 // daily rate. Pure + fully unit-tested; used as the deterministic fallback AND
 // as a backstop that rescues a price the LLM missed.
 
+import { parseRateLadder, tierForDays } from "./rate-ladder";
+
 export type VehicleClassHint = "car" | "motorbike" | "scooter" | undefined;
 
 export interface RentalPriceHit {
@@ -36,6 +38,16 @@ export interface RentalPriceHit {
   listPrice?: boolean;
   /** Where the amount sits in `line` - lets callers read the words around it. */
   index?: number;
+  /**
+   * When this price came off a DURATION LADDER ("3-7 days - 600"), the stretch
+   * of days it applies to. Absent for an ordinary quote. Carrying it is what
+   * lets a card say "600/day for 3-7 days" instead of pretending the board's
+   * cheapest row is available to a 5-day traveller.
+   */
+  minDays?: number;
+  maxDays?: number;
+  /** The shop's own words for the range ("3-7 days", "Monthly"). */
+  tierLabel?: string;
 }
 
 // Currency CODES/symbols AND the spoken WORDS shops actually type ("400 baht
@@ -368,6 +380,39 @@ export function extractQuotedPrices(
     .filter(Boolean);
 
   const hits: RentalPriceHit[] = [];
+
+  // A DURATION LADDER wins outright. When the shop sent a board - "1-2 days
+  // 650 / 3-7 days 600 / 8-14 days 550 / Monthly 450" - the generic patterns
+  // below read "3-7 days ... 600" as a whole-rental total (86/day) and the
+  // vision half simply picked a number it liked (500/day, quoted to a traveller
+  // staying five days). Neither was reading the structure that is actually
+  // there. rate-ladder does, so it goes first and the rest never sees the board.
+  const ladder = parseRateLadder(text, { localCurrency: opts.localCurrency });
+  if (ladder.length >= 2) {
+    const chosen = tierForDays(ladder, days);
+    const rows: RentalPriceHit[] = ladder.map((tier) => ({
+      pricePerDay: tier.pricePerDay,
+      currency: tier.currency ?? opts.localCurrency,
+      line: tier.line,
+      classMatch: lineClass(tier.line) ? lineClass(tier.line) === wantClass : undefined,
+      minDays: tier.minDays,
+      maxDays: tier.maxDays,
+      tierLabel: tier.label,
+    }));
+    // The offer is the row that COVERS this stay - never the cheapest row on
+    // the board. A five-day traveller cannot have the 15-29 day rate, and
+    // handing the whole board to `pickCheapestOnSpec` is precisely how they
+    // came to be quoted one.
+    const offer = rows.find((r) => r.minDays === chosen?.minDays && r.maxDays === chosen?.maxDays);
+    return {
+      offer: offer ?? null,
+      listPrice: null,
+      // Every tier still reaches the caller so the card can show the real
+      // ladder ("stay 8 days and it drops to 550") with each row's own range.
+      allOffers: rows.slice().sort((a, b) => a.minDays! - b.minDays!),
+    };
+  }
+
   for (const rawLine of lines) {
     if (SERVICE_LINE.test(rawLine)) continue; // transfer / tour / shuttle - skip
     const line = expandK(rawLine);

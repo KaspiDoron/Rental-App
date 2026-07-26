@@ -54,8 +54,53 @@ export async function GET(req: Request) {
     return NextResponse.json({ url: null });
   }
 
-  const { fetchProfilePictureUrl } = await import("@/lib/evolution");
-  const url = await fetchProfilePictureUrl(session.email, digits).catch(() => null);
-  // private: this URL is scoped to one traveller's session, never a shared cache.
-  return NextResponse.json({ url }, { headers: { "Cache-Control": "private, no-store" } });
+  const { fetchProfilePicture } = await import("@/lib/evolution");
+  const pic = await fetchProfilePicture(session.email, digits).catch(() => ({
+    url: null as string | null,
+    error: "lookup failed",
+  }));
+
+  // IMAGE MODE: stream the bytes ourselves.
+  //
+  // WhatsApp serves avatars from pps.whatsapp.net behind signed, short-lived
+  // URLs. Handing one to an <img src> works only until the CDN decides it does
+  // not like the request - and when it refuses there is nothing to see and no
+  // way to tell that apart from a shop with no photo. Proxying makes the render
+  // depend on OUR fetch, and it keeps the shop's CDN URL server-side, which is
+  // also the right answer for a photo that is not ours to hand around.
+  const wantsImage = new URL(req.url).searchParams.get("img") === "1";
+  if (wantsImage) {
+    if (!pic.url) return new NextResponse(null, { status: 404, headers: NO_STORE });
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8_000);
+      const res = await fetch(pic.url, { signal: ctrl.signal, cache: "no-store" });
+      clearTimeout(timer);
+      const type = res.headers.get("content-type") ?? "";
+      if (!res.ok || !type.startsWith("image/")) {
+        return new NextResponse(null, { status: 404, headers: NO_STORE });
+      }
+      return new NextResponse(res.body, {
+        status: 200,
+        headers: { ...NO_STORE, "Content-Type": type },
+      });
+    } catch {
+      return new NextResponse(null, { status: 404, headers: NO_STORE });
+    }
+  }
+
+  // JSON mode: the client gets OUR url, never WhatsApp's.
+  return NextResponse.json(
+    {
+      url: pic.url
+        ? `/api/wa/avatar?img=1&number=${encodeURIComponent(digits)}`
+        : null,
+      // Present only on a genuine failure - a shop with no photo reports none.
+      error: pic.error,
+    },
+    { headers: NO_STORE }
+  );
 }
+
+// private: an avatar is scoped to one traveller's session, never shared-cached.
+const NO_STORE = { "Cache-Control": "private, no-store" };

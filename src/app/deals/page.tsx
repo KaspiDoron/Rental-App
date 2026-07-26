@@ -119,6 +119,48 @@ export default function DealsPage() {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [restoreErr, setRestoreErr] = useState<string | null>(null);
+  // "Is that price still good?" - one tap re-asks every shop from a past hunt.
+  const [rechecking, setRechecking] = useState<string | null>(null);
+  const [recheckNote, setRecheckNote] = useState<Record<string, string>>({});
+
+  async function recheckPrices(startedAt: string) {
+    if (rechecking) return;
+    setRechecking(startedAt);
+    setRecheckNote((n) => ({ ...n, [startedAt]: "" }));
+    try {
+      const r = await fetch("/api/deals/recheck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ts: startedAt }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setRecheckNote((n) => ({
+          ...n,
+          [startedAt]: d?.error || t("Could not reach your shops just now. Try again."),
+        }));
+        return;
+      }
+      const asked = Number(d?.asked ?? 0);
+      const skipped = Number(d?.skipped ?? 0);
+      setRecheckNote((n) => ({
+        ...n,
+        [startedAt]:
+          asked > 0
+            ? `${t("Asking")} ${asked} ${asked === 1 ? t("shop") : t("shops")} - ${t("their answers land in this hunt.")}`
+            : skipped > 0
+              ? t("Already asked these shops today - give them a chance to answer.")
+              : t("No shops from this hunt can be messaged right now."),
+      }));
+    } catch {
+      setRecheckNote((n) => ({
+        ...n,
+        [startedAt]: t("Could not reach your shops just now. Try again."),
+      }));
+    } finally {
+      setRechecking(null);
+    }
+  }
 
   const canHistory = can(plan, "trips-history");
 
@@ -572,6 +614,37 @@ export default function DealsPage() {
                       )}
                       {restoreErr && restoring === null && (
                         <p className="text-center text-[10px] font-bold text-brandred">{restoreErr}</p>
+                      )}
+
+                      {/* THE QUESTION A PAST TRIP IS ACTUALLY FOR.
+                          Re-opening an old hunt showed prices frozen at
+                          whatever the shop said last time - useful only if you
+                          then message ten shops by hand to find out whether any
+                          of it still stands. One tap asks all of them, with
+                          each shop's own quote read back to them. */}
+                      {s.contacted > 0 && (
+                        <button
+                          onClick={() => recheckPrices(s.startedAt)}
+                          disabled={rechecking === s.startedAt}
+                          className="btn btn-ghost flex items-center justify-center gap-1.5 rounded-2xl border-2 border-savings/50 py-2.5 text-[12.5px] font-extrabold text-savings disabled:opacity-70"
+                        >
+                          {rechecking === s.startedAt ? (
+                            <>
+                              <OrbitDots size={15} label={t("Asking")} />
+                              {t("Asking your shops…")}
+                            </>
+                          ) : (
+                            <>
+                              <Icon name="whatsapp" className="h-3.5 w-3.5" />
+                              {t("Ask if these prices still stand")}
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {recheckNote[s.startedAt] && (
+                        <p className="text-center text-[10.5px] font-bold text-soft">
+                          {recheckNote[s.startedAt]}
+                        </p>
                       )}
                     </div>
                   </div>

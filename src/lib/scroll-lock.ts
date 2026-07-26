@@ -44,7 +44,12 @@ export function lockBodyScroll(): () => void {
       left: body.style.left,
       right: body.style.right,
     };
-    body.style.overflow = "hidden";
+    // NOTE the missing `overflow: hidden`. Pinning the body with
+    // `position: fixed` already makes the document unscrollable, and toggling
+    // `overflow` on a scrolled page is the exact WebKit trigger this file was
+    // written to avoid - it came back as "the nav bar jumped into the middle of
+    // the screen". The overflow value is still saved/restored below so an
+    // older inline style set by anything else survives a lock cycle.
     body.style.position = "fixed";
     body.style.top = `-${savedScrollY}px`;
     body.style.left = "0";

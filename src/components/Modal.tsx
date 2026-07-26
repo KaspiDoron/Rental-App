@@ -22,6 +22,16 @@ export function Modal({
 }) {
   const [mounted, setMounted] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // onClose through a ref so the focus/Escape effect can run ONCE.
+  //
+  // It used to depend on `onClose`, and every caller passes an inline arrow -
+  // so the effect re-ran on every parent render. Its cleanup restores focus to
+  // whatever was focused before the dialog opened and its setup then focuses
+  // the dialog's FIRST control. On Find Deals the activity poll re-renders the
+  // page every few seconds, so typing to Will meant: type a letter, poll fires,
+  // focus is yanked off the input onto the ✕ button, iOS closes the keyboard.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     setMounted(true);
@@ -37,7 +47,7 @@ export function Modal({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        closeRef.current();
         return;
       }
       // Trap Tab focus inside the dialog.
@@ -60,15 +70,18 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", onKey);
       unlock();
-      prevFocus?.focus?.();
+      // Only take focus back if it is still inside this dialog - otherwise a
+      // close would steal it from wherever the user has since moved.
+      if (panelRef.current?.contains(document.activeElement)) prevFocus?.focus?.();
     };
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!mounted) return null;
 
   return createPortal(
     <div
-      onClick={onClose}
+      onClick={() => closeRef.current()}
       className={`fixed inset-0 z-[1200] flex justify-center bg-black/45 backdrop-blur-sm ${
         center ? "items-center px-4" : "items-end sm:items-center sm:px-4"
       }`}

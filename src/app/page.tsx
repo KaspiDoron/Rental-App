@@ -64,6 +64,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
+import { AlertsChip } from "@/components/AlertsChip";
 import { WaLockVeil } from "@/components/WaLockVeil";
 import { probeWaStatus } from "@/lib/wa-status";
 import { startNav } from "@/components/NavVeil";
@@ -119,21 +120,6 @@ function pickExamples(plan?: string): string[] {
     plan === "free" ? ALL_EXAMPLES.filter((e) => !FUTURE_HINT.test(e)) : ALL_EXAMPLES;
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
   return shuffled.slice(0, 3 + Math.floor(Math.random() * 2)); // 3-4 chips
-}
-
-// Every traveller starts from "My location" - GPS is requested on load and the
-// point is reverse-geocoded into a REAL place (which drives local currency +
-// language). There is NO silent city fallback: without coordinates the search
-// nudges the traveller to allow location or type their hotel.
-
-// VAPID public keys are base64url; the browser's pushManager needs a Uint8Array.
-function urlBase64ToUint8Array(base64: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
-  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
 }
 
 export default function Home() {
@@ -208,16 +194,6 @@ export default function Home() {
   const autoOpenedRef = useRef(false);
   // Play-while-you-wait mini-game + closed-app reply alerts (Web Push).
   const [showGame, setShowGame] = useState(false);
-  // B6: distinct states so the toggle gives real feedback. 'pending' shows a
-  // spinner mid-flow; failure modes are no longer collapsed into a look-alike
-  // 'off' (which rendered identically to the untouched 'idle').
-  const [pushState, setPushState] = useState<
-    "idle" | "pending" | "on" | "denied" | "unsupported" | "ios-install" | "error"
-  >("idle");
-  const [pushNote, setPushNote] = useState<string | null>(null);
-  // null = unknown (pre-flight not run); false = server has no VAPID keys, so we
-  // HIDE the Notify button rather than lead the user to a dead end.
-  const [pushConfigured, setPushConfigured] = useState<boolean | null>(null);
   // Living workspace: the cross-shop activity feed + honest WA safety state,
   // all from ONE /api/activity poll (which also replaced the queue poll).
   const [activityItems, setActivityItems] = useState<FeedItem[]>([]);
@@ -316,78 +292,25 @@ export default function Home() {
     );
   }
 
-  // Opt in to browser push so a shop reply reaches the traveller with the app
-  // closed. No-op (button hidden) when the server has no VAPID keys configured.
-  async function enablePush() {
-    setPushNote(null);
-    // iOS Safari only exposes Web Push when the app is installed to the Home
-    // Screen - detect that explicitly so we give real guidance, not a dead
-    // look-alike 'off' (B6).
-    const standalone =
-      typeof window !== "undefined" &&
-      ((window.navigator as unknown as { standalone?: boolean }).standalone === true ||
-        window.matchMedia?.("(display-mode: standalone)").matches === true);
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-      const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-      if (iOS && !standalone) {
-        setPushState("ios-install");
-        setPushNote(t("Add WheelDeal to your Home Screen first (Share -> Add to Home Screen), then enable alerts."));
-      } else {
-        setPushState("unsupported");
-        setPushNote(t("This browser can't do push alerts. Try Chrome, or install the app."));
-      }
-      return;
-    }
-    setPushState("pending");
-    try {
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") {
-        setPushState("denied");
-        return;
-      }
-      const vapid = await (await fetch("/api/push/vapid")).json();
-      const key = vapid?.key;
-      if (!key) {
-        setPushConfigured(false);
-        setPushState("error");
-        setPushNote(
-          vapid?.reason === "signin"
-            ? t("Sign in to turn on reply alerts.")
-            : t("Alerts are being switched on for everyone - check back soon. Nothing you did wrong.")
-        );
-        return;
-      }
-      setPushConfigured(true);
-      const reg = await navigator.serviceWorker.register("/sw.js");
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
-      });
-      // B6: actually CHECK the server accepted the subscription - the old code
-      // set 'on' without reading the response, so a 401 or a save failure still
-      // showed "Alerts on".
-      const res = await fetch("/api/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subscription: sub }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok || body?.ok === false) {
-        setPushState("error");
-        setPushNote(t("Couldn't save your alert subscription - try again in a moment."));
-        return;
-      }
-      setPushState("on");
-      try {
-        localStorage.setItem("wd_push_on", "1");
-      } catch {
-        /* private mode - the in-memory state still reflects success this session */
-      }
-    } catch {
-      setPushState("error");
-      setPushNote(t("Something interrupted turning on alerts - try again."));
-    }
+  /**
+   * Take the traveller TO a section, not to the top of the page.
+   *
+   * "See the full live activity feed →" used to switch the view and then call
+   * `window.scrollTo({top: 0})`, which threw them back to the search box - the
+   * feed they had just asked for was hundreds of pixels below. Everything that
+   * moves between sections now goes through here: flip the view, wait for the
+   * commit, and scroll the section itself into view under the sticky header.
+   */
+  function goToSection(selector: string, nextView?: "list" | "map" | "activity") {
+    if (nextView) setView(nextView);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = document.querySelector(selector);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      })
+    );
   }
+
   const [queueItems, setQueueItems] = useState<
     { id: number; vendorId: string | null; vendorName: string | null; toNumber: string; notBefore: string; due: boolean; reason: string; etaFrom?: string; etaTo?: string }[]
   >([]);
@@ -825,6 +748,10 @@ export default function Home() {
       // never stays stuck in the "queued message" visual (split-brain fix).
       const vendorStates: Record<string, "messaged" | "active" | "offer"> =
         d.vendorStates && typeof d.vendorStates === "object" ? d.vendorStates : {};
+      const lastByVendor: Record<
+        string,
+        { lastInboundText?: string; lastInboundAt?: string }
+      > = d.lastByVendor && typeof d.lastByVendor === "object" ? d.lastByVendor : {};
       // Forward-only stage ranking - the DB state can only ADVANCE a card, never
       // rewind it, and never overrides a terminal decline / no-contact.
       const STAGE_ORDER: Record<string, number> = {
@@ -979,6 +906,17 @@ export default function Home() {
           if (dbState) {
             const target = stageForState(dbState);
             if (canAdvance(base.stage, target)) base = { ...base, stage: target };
+          }
+          // THE SHOP'S OWN LAST WORDS. /api/activity has always returned this
+          // and nothing consumed it, which is why the panel could file a shop
+          // that had already answered under "Awaiting reply".
+          const last = lastByVendor[base.id];
+          if (last?.lastInboundAt && last.lastInboundAt !== base.lastInboundAt) {
+            base = {
+              ...base,
+              lastInboundText: last.lastInboundText,
+              lastInboundAt: last.lastInboundAt,
+            };
           }
           // Seed the offer from the activity feed so OFFERS IN advances fast
           // (only when the card has no richer offer yet - never overwrite the
@@ -1173,44 +1111,11 @@ export default function Home() {
     };
   }, []);
 
-  // B6: seed the alert state on mount so a returning, already-subscribed user
-  // sees "Alerts on" instead of a plain button (component state resets each
-  // reload). Reconcile against the real browser permission - if the user
-  // revoked it, drop the stale local flag.
-  useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    const perm = Notification.permission;
-    if (perm === "denied") {
-      setPushState("denied");
-      return;
-    }
-    let flagged = false;
-    try {
-      flagged = localStorage.getItem("wd_push_on") === "1";
-    } catch {
-      /* private mode */
-    }
-    if (perm === "granted" && flagged) setPushState("on");
-  }, []);
-
-  // Pre-flight: learn whether the server has push configured BEFORE offering the
-  // button, so an unconfigured server hides the opt-in instead of leading the
-  // user to grant OS permission only to hit a dead end.
-  useEffect(() => {
-    if (!session) return;
-    let alive = true;
-    (async () => {
-      try {
-        const d = await (await fetch("/api/push/vapid")).json();
-        if (alive) setPushConfigured(Boolean(d?.key));
-      } catch {
-        /* leave unknown - the button still works, enable() re-checks */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [session]);
+  // Alerts (browser push) are owned end-to-end by AlertsChip / usePushAlerts,
+  // whose truth is the push_subscriptions row on the server. This page used to
+  // carry a second, parallel implementation seeded from localStorage - which is
+  // how the funnel could show "Alerts on" as a dead label while Profile's real
+  // toggle disagreed, with no way to turn them off from here at all.
 
   // Poll the consolidated activity endpoint while there are vendors on
   // screen (cheap, user-scoped). Pauses in hidden tabs - no wasted requests.
@@ -1747,6 +1652,21 @@ export default function Home() {
   );
 
   const offersIn = vendors.filter((v) => v.offer).length;
+  // How many shops have CONFIRMED each verified term. Drives the disabled state
+  // of the "✓ Verified" chips: a term nobody has stated is not something the
+  // traveller can filter on, and offering it anyway made the list look randomly
+  // reshuffled (the tag predicate is OR'd with "is this shop live?", so it
+  // could never remove an active shop and the tap appeared to do nothing).
+  const tagCounts = useMemo(() => {
+    const out: Partial<Record<FilterState["tag"], number>> = {};
+    for (const v of vendors) {
+      for (const tag of v.verifiedTags ?? []) {
+        const key = tag as FilterState["tag"];
+        out[key] = (out[key] ?? 0) + 1;
+      }
+    }
+    return out;
+  }, [vendors]);
   // CURRENCY SAFETY: offers can legitimately arrive in different currencies
   // (one shop quotes USD, another THB). Raw numbers must never be compared or
   // summed across currencies - all aggregates work within the DOMINANT one.
@@ -1832,10 +1752,18 @@ export default function Home() {
   //   offers   = a price is in
   const statusGroups = useMemo(() => {
     const messaged: Vendor[] = [];
+    // Shops that HAVE answered but not with a price yet ("which bike would you
+    // like?", "we have Click 125 available"). They used to sit under "Awaiting
+    // reply" next to shops that had said nothing at all - the panel's single
+    // biggest lie, and the one the owner caught on 26 Jul with the shop's reply
+    // visible in the feed directly underneath.
+    const replied: Vendor[] = [];
     const queued: Vendor[] = [];
     const deals: Vendor[] = [];
     for (const v of vendors) {
       if (v.offer) deals.push(v);
+      else if (v.lastInboundAt || v.stage === "negotiating" || v.stage === "counter-offer")
+        replied.push(v);
       // A shop the agents already REACHED (a reply is pending / negotiation
       // is live) stays "messaged" even while a follow-up sits in the outbox -
       // otherwise the counters flicker right after a send. A shop whose FIRST
@@ -1845,10 +1773,11 @@ export default function Home() {
       else if (v.queuedUntil) queued.push(v);
       else if (v.stage === "rfq-sent") messaged.push(v);
     }
-    return { messaged, queued, deals };
+    return { messaged, replied, queued, deals };
   }, [vendors]);
   const stageCounts = {
     messaged: statusGroups.messaged.length,
+    replied: statusGroups.replied.length,
     queued: statusGroups.queued.length,
     offers: statusGroups.deals.length,
   };
@@ -2248,7 +2177,7 @@ export default function Home() {
             (a shop messaged or queued). One tap pauses/resumes the whole
             session - the hard stop is enforced server-side. */}
         {vendors.length > 0 &&
-          stageCounts.messaged + Math.max(stageCounts.queued, queueItems.length) > 0 && (
+          stageCounts.messaged + stageCounts.replied + Math.max(stageCounts.queued, queueItems.length) > 0 && (
             <AgentKillSwitch className="mt-3" serverPaused={paused} />
           )}
 
@@ -2256,17 +2185,41 @@ export default function Home() {
           <div className="mt-3 grid grid-cols-3 gap-2">
             <Stat label={t("Shops found")} value={vendors.length} />
             <Stat label={t("Offers in")} value={offersIn} accent />
-            <div className="surface rounded-blob px-2 py-4 text-center">
+            {/* BEST PRICE, not "Bargained".
+                A savings total is a number about US: it reads 0 for the whole
+                first stretch of every hunt, and once offers land it answers a
+                question nobody asked ("how much did the list price move?").
+                What the traveller is actually here for is the cheapest real,
+                on-spec, bookable rate - so that is the headline, with the
+                saving demoted to the line underneath where it belongs. */}
+            <button
+              onClick={() => cheapest && scrollToVendor(cheapest.id)}
+              disabled={!cheapest}
+              className="surface rounded-blob px-2 py-4 text-center disabled:cursor-default"
+            >
               <div className="text-[11px] font-extrabold uppercase tracking-wide text-savings">
-                {t("Bargained")}
+                {t("Best price")}
               </div>
-              <div className="mt-0.5 text-[28px] leading-none font-extrabold text-savings">
-                {/* Savings in the shops' LOCAL currency - no symbol before any
-                    offer exists (a "$0" would presume the wrong currency) */}
-                {offersIn > 0 ? savingsSymbol : ""}
-                <AnimatedNumber value={Math.round(totalSavings)} />
+              <div className="mt-0.5 text-[24px] leading-none font-extrabold text-savings">
+                {cheapest?.offer ? (
+                  <>
+                    {savingsSymbol}
+                    <AnimatedNumber value={Math.round(cheapest.offer.pricePerDay)} />
+                  </>
+                ) : (
+                  <span className="text-faint">-</span>
+                )}
               </div>
-            </div>
+              <div className="mt-1 truncate text-[9.5px] font-bold text-faint">
+                {cheapest?.offer
+                  ? Math.round(totalSavings) > 0
+                    ? `${t("saved")} ${savingsSymbol}${Math.round(totalSavings)} ${t("so far")}`
+                    : `${t("per day")} · ${cheapest.name}`
+                  : offersIn > 0
+                    ? t("confirming details")
+                    : t("agents are asking")}
+              </div>
+            </button>
           </div>
         )}
 
@@ -2280,28 +2233,28 @@ export default function Home() {
               className="flex w-full items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] font-bold text-soft"
             >
               {stageCounts.messaged > 0 && <span>📤 {stageCounts.messaged} {t("messaged")}</span>}
+              {stageCounts.replied > 0 && (
+                <span className="text-brandblue">💬 {stageCounts.replied} {t("replied")}</span>
+              )}
               {Math.max(stageCounts.queued, queueItems.length) > 0 && (
                 <span>
                   🕘 {Math.max(stageCounts.queued, queueItems.length)} {t("queued")}
                 </span>
               )}
               {stageCounts.offers > 0 && <span className="text-savings">💰 {stageCounts.offers} {t("offers")}</span>}
-              {stageCounts.messaged + stageCounts.queued + stageCounts.offers === 0 && (
+              {stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers === 0 && (
                 <span>{t("Tap 'Ask for price' on a shop to start")}</span>
               )}
-              {stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0 && (
+              {stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers > 0 && (
                 <span className="ml-auto text-[10px] text-faint">{statusOpen ? "▲" : "▼"}</span>
               )}
             </button>
 
-            {statusOpen && (stageCounts.messaged + stageCounts.queued + stageCounts.offers > 0) && (
+            {statusOpen && (stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers > 0) && (
               <div className="space-y-2 border-t border-line px-3 py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => {
-                      setView("activity");
-                      window.scrollTo({ top: 0, behavior: "smooth" });
-                    }}
+                    onClick={() => goToSection("[data-tour='views']", "activity")}
                     className="chip flex items-center gap-1 text-[11px] font-extrabold text-brandblue"
                   >
                     <Icon name="sparkles" className="h-3 w-3" /> {t("See the full live activity feed")} →
@@ -2380,7 +2333,44 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* SECTION 2 - Awaiting reply: contacted, with time elapsed. */}
+                {/* SECTION 2 - REPLIED, no price yet. The shop is talking to
+                    us: show their actual last words so the panel and the feed
+                    tell the same story. */}
+                {statusGroups.replied.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-brandblue">
+                      💬 {t("Replied - your agent is on it")} ({statusGroups.replied.length})
+                    </div>
+                    {statusGroups.replied.map((v) => (
+                      <div key={v.id} className="mb-1.5 rounded-xl bg-card p-2 text-[11px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => scrollToVendor(v.id)}
+                            className="flex min-w-0 items-center gap-1 text-left font-extrabold text-strong hover:text-brandblue"
+                            title={t("Jump to this shop")}
+                          >
+                            <span className="shrink-0 text-brandblue">↧</span>
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+                            <span className="truncate">{v.name}</span>
+                          </button>
+                          <span className="shrink-0 text-[10px] font-bold text-brandblue">
+                            {v.lastInboundAt ? formatClock(v.lastInboundAt) : t("replied")}
+                          </span>
+                        </div>
+                        {v.lastInboundText && (
+                          <div className="mt-1 line-clamp-2 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            💬 {v.lastInboundText}
+                          </div>
+                        )}
+                        <div className="mt-1 text-[10px] font-bold text-faint">
+                          {t("No price yet - your agent is asking for one.")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* SECTION 3 - Awaiting reply: contacted, nothing back yet. */}
                 {statusGroups.messaged.length > 0 && (
                   <div>
                     <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">
@@ -2412,7 +2402,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* SECTION 3 - Contacting: intros still queued (auto-sends). A
+                {/* SECTION 4 - Contacting: intros still queued (auto-sends). A
                     shop here is NEVER simultaneously above - the buckets are
                     mutually exclusive by construction. */}
                 {statusGroups.queued.length > 0 && (
@@ -2433,7 +2423,8 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* How many shops are still to respond, honestly counted. */}
+                {/* How many shops are still SILENT - a shop that has written
+                    back is not "still to respond", it is being worked. */}
                 {stageCounts.messaged > 0 && (
                   <div className="rounded-lg bg-card px-2 py-1 text-[11px] font-bold text-soft">
                     ⏳ {stageCounts.messaged} {t("shop(s) still to respond")}
@@ -2451,40 +2442,8 @@ export default function Home() {
                     >
                       🎮 {t("Play while you wait")}
                     </button>
-                    {pushState === "on" ? (
-                      <span className="rounded-xl bg-savings-soft px-2.5 py-1 text-[11px] font-extrabold text-savings">
-                        ✅ {t("Alerts on")}
-                      </span>
-                    ) : pushConfigured === false ? null : (
-                      <button
-                        onClick={enablePush}
-                        disabled={pushState === "pending"}
-                        className="btn btn-sm rounded-xl border-2 border-brandblue px-2.5 py-1 text-[11px] font-extrabold text-brandblue disabled:opacity-60"
-                      >
-                        {pushState === "pending" ? (
-                          <LoadingDots label={t("Turning on")} />
-                        ) : (
-                          `🔔 ${t("Notify me")}`
-                        )}
-                      </button>
-                    )}
+                    <AlertsChip t={t} />
                   </div>
-                  {/* B6: every state now says something distinct - no more silent
-                      look-alike 'off'. */}
-                  {pushState === "denied" && (
-                    <p className="mt-1 text-[10px] font-bold text-brandred">
-                      {t("Notifications are blocked - enable them in your browser settings.")}
-                    </p>
-                  )}
-                  {pushNote && pushState !== "denied" && (
-                    <p
-                      className={`mt-1 text-[10px] font-bold ${
-                        pushState === "error" ? "text-brandred" : "text-brandblue/80"
-                      }`}
-                    >
-                      {pushNote}
-                    </p>
-                  )}
                 </div>
 
                 {/* Queued messages have their own always-visible card below the
@@ -2708,7 +2667,10 @@ export default function Home() {
 
         {vendors.length > 0 && (
           <>
-            <div className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1">
+            <div
+              data-tour="views"
+              className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1"
+            >
               <ToggleBtn active={view === "list"} onClick={() => setView("list")}>
                 <Icon name="list" className="h-4 w-4" /> {t("List")}
               </ToggleBtn>
@@ -2727,6 +2689,7 @@ export default function Home() {
                 availableClasses={availableClasses}
                 isUltra={session?.plan === "ultra"}
                 onUpgrade={() => setUpgradeOpen(true)}
+                tagCounts={tagCounts}
               />
             </div>
           </>
@@ -3064,11 +3027,23 @@ export default function Home() {
               ],
             };
           } else if (step === "AGENTS_DISPATCHED") {
+            // Every action here MOVES the traveller somewhere real. These used
+            // to flip a view flag with no scroll (so nothing visibly happened)
+            // or simply open the chat - the report was "Will's buttons only
+            // ever open the chat instead of guiding me around the app".
             guidance = {
               anchor: "[data-tour='status']",
               text: t("I'm reaching out to the shops from your WhatsApp now. You can close the app - I keep working."),
               actions: [
-                { label: t("Watch live"), onAction: () => setView("activity") },
+                {
+                  label: t("Watch live"),
+                  primary: true,
+                  onAction: () => goToSection("[data-tour='views']", "activity"),
+                },
+                {
+                  label: t("See the queue"),
+                  onAction: () => goToSection("[data-tour='queue']"),
+                },
               ],
             };
           } else if (step === "NEGOTIATING") {
@@ -3076,19 +3051,40 @@ export default function Home() {
               anchor: "[data-tour='status']",
               text: t("Shops are reading your request - the second a price lands, I check it against the market floor and push lower."),
               actions: [
-                { label: t("See it live"), onAction: () => setView("activity") },
+                {
+                  label: t("See it live"),
+                  primary: true,
+                  onAction: () => goToSection("[data-tour='views']", "activity"),
+                },
+                {
+                  label: t("Show the shops"),
+                  onAction: () => goToSection("[data-tour='vendors']", "list"),
+                },
               ],
             };
           } else if (step === "RESULTS_READY") {
+            const best = vendors.find((v) => v.offer);
             guidance = {
               anchor: "[data-tour='status']",
               text: t("Offers are in - tap a shop to compare. Want me to push harder before you book?"),
               actions: [
                 {
-                  label: t("Push harder"),
+                  label: t("Take me to the offers"),
                   primary: true,
-                  onAction: () => setWillOpen(true),
+                  onAction: () =>
+                    best ? scrollToVendor(best.id) : goToSection("[data-tour='vendors']", "list"),
                 },
+                {
+                  label: t("Compare the top 3"),
+                  onAction: () =>
+                    setCompareIds(
+                      vendors
+                        .filter((v) => v.offer)
+                        .slice(0, 3)
+                        .map((v) => v.id)
+                    ),
+                },
+                { label: t("Push harder"), onAction: () => setWillOpen(true) },
               ],
             };
           }
@@ -3236,7 +3232,13 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
   if (f.fulfillment === "in-store") soft((v) => v.fulfillment.includes("in-store"));
   if (f.openNowOnly) soft((v) => v.openNow !== false);
   if (f.fastOnly) soft((v) => v.fastResponder === true);
-  if (f.tag && f.tag !== "any") soft((v) => (v.verifiedTags ?? []).includes(f.tag));
+  // A VERIFIED TERM IS A HARD FILTER. Routed through soft() it was OR'd with
+  // "is this shop live?", so tapping "🛵 Delivers" kept every messaged shop on
+  // screen and the list just looked randomly reshuffled - the chip did nothing
+  // and said nothing. The chip is now only tappable once at least one shop has
+  // actually confirmed the term (Filters.tagCounts), which makes filtering on
+  // it an informed choice about real data rather than a shot in the dark.
+  if (f.tag && f.tag !== "any") list = list.filter((v) => (v.verifiedTags ?? []).includes(f.tag));
   if (f.minRating > 0) soft((v) => v.rating >= f.minRating);
   // Budget is a HARD filter, not a soft one (B9). Routing it through soft()/
   // isActiveVendor made it a TAUTOLOGY - a priced offer is always "active", so

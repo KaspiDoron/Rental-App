@@ -36,7 +36,7 @@ export function FeatureGrid() {
           <div key={s.title} className="surface rounded-blob p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brandblue text-white">
-                <Icon name={s.icon} className="h-4.5 w-4.5" />
+                <Icon name={s.icon} className="h-5 w-5" />
               </span>
               <span className="text-[11px] font-extrabold uppercase tracking-wide text-faint">
                 Step {i + 1}

@@ -427,6 +427,28 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // DURATION-LADDER OVERRIDE. A price board is not a list of numbers to choose
+  // from - each row is the rate you earn by staying that long. The vision half
+  // has no way to know that, and on 26 Jul it quoted a five-day traveller the
+  // 15-29 day rate off a board it had also read the wrong vehicle from. The
+  // ladder is fully determined by the text, so code decides it, not the model:
+  // whichever row COVERS the traveller's dates is the price, full stop.
+  if (extractText) {
+    const { ladderRateFor } = await import("./wa/rate-ladder");
+    const board = ladderRateFor(extractText, rfq.durationDays, {
+      localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+    });
+    if (board && board.pricePerDay > 0) {
+      usablePrice = board.pricePerDay;
+      extraction.found = true;
+      extraction.pricePerDay = board.pricePerDay;
+      if (board.tier.currency) extraction.currency = board.tier.currency;
+      // The board states its own terms - reading a row off it is a fact, not a
+      // guess, so it may confirm but never downgrade a verified read.
+      if (extraction.confidence !== "high") extraction.confidence = "medium";
+    }
+  }
+
   // CURRENCY TRUTH. A currency other than the shop's own is honoured only when
   // the shop actually typed it - a photo-only reply or a mis-read token can
   // never turn a Thai quote into ringgit ("RM 300/day" on a Krabi thread).
@@ -445,7 +467,7 @@ export async function processVendorReply(opts: {
   // produced the price, then merged with anything the model itself listed.
   {
     const { extractQuotedPrices } = await import("./wa/price-extract");
-    const { optionsFromHits, mergeOptions } = await import("./offer-options");
+    const { optionsFromHits, mergeOptions, sectionHeaders } = await import("./offer-options");
     const quoted = extractQuotedPrices(extractText || "", {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
@@ -454,6 +476,15 @@ export async function processVendorReply(opts: {
     const derived = optionsFromHits(quoted.allOffers, {
       depositNote: extraction.deposit || undefined,
       source: images.length > 0 ? "photo" : "text",
+      // The traveller's declared vehicle scopes the menu, and a board's heading
+      // is where its vehicle is written - without both, a 155cc board's rows
+      // all read as offers to someone who asked for 125cc.
+      spec: {
+        vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+        engineSizeCc: rfq.engineSizeCc,
+        transmission: rfq.transmission,
+      },
+      headers: sectionHeaders(extractText || ""),
     });
     const fromModel = Array.isArray(extraction.options) ? extraction.options : [];
     const options = mergeOptions(fromModel, derived);

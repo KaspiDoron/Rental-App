@@ -43,6 +43,16 @@ export interface VehicleOption {
   photoRefs: string[];
   source: "text" | "photo";
   gaps: OptionGap[];
+  /**
+   * When this tier came off a DURATION LADDER, the stay it applies to. A board
+   * row is not a choice the traveller can make - it is a rate they qualify for
+   * by staying that long - so the UI must say which, and the negotiator must
+   * never quote a row the traveller's dates do not reach.
+   */
+  minDays?: number;
+  maxDays?: number;
+  /** The shop's own words for the range ("3-7 days", "Monthly"). */
+  tierLabel?: string;
 }
 
 const MODEL_NAMES =
@@ -124,6 +134,39 @@ const MOTORBIKE_LINE =
   /\b(motor\s?bike|motorcycle|manual|semi\s?auto|sportbike|dirt\s?bike|scrambler|cafe\s?racer|enduro|trail|xr|klx|crf|ttr|raider|sniper)\b/i;
 const CAR_LINE = /\b(car|sedan|suv|hatchback|van|mpv|pickup|4x4|jeep|multicab)\b/i;
 const MANUAL_RX = /\b(manual|semi\s?auto|clutch|geared?|scrambler|dirt\s?bike|enduro|xr|klx|crf|ttr)\b/i;
+
+/** Does this line name a vehicle at all (a class, a model, or a displacement)? */
+export function namesVehicle(line: string): boolean {
+  return Boolean(classOfLine(line) || modelIn(line) || ccIn(line));
+}
+
+/**
+ * A PRICE BOARD HAS HEADINGS, AND THEY BIND THE ROWS UNDER THEM.
+ *
+ * The live failure: the shop's board was headed "155 CC" and its rows read
+ * "1-2 days - 650", "3-7 days - 600"... Not one row named a vehicle, so every
+ * spec check passed and a traveller who asked for 125cc was quoted off the
+ * 155cc board. The heading is the only place the vehicle is written, and it
+ * governs everything below it until the next heading.
+ *
+ * Returns, for each line of the message, the nearest heading above it.
+ */
+export function sectionHeaders(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let current = "";
+  for (const raw of (text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // A heading names a vehicle and is NOT itself a priced row - a row like
+    // "Click 125 - 400/day" describes itself and must not govern its siblings.
+    if (namesVehicle(line) && !/\d{1,3}\s*days?\b/i.test(line)) {
+      current = line;
+      continue;
+    }
+    if (current) out.set(line, current);
+  }
+  return out;
+}
 
 function classOfLine(line: string): VehicleClassHint {
   // Two-wheel words win over car words, mirroring price-extract's lineClass:
@@ -248,7 +291,13 @@ function gapsFor(o: Omit<VehicleOption, "gaps">): OptionGap[] {
  */
 export function optionsFromHits(
   hits: RentalPriceHit[],
-  opts: { depositNote?: string; source?: "text" | "photo"; spec?: VehicleSpec } = {}
+  opts: {
+    depositNote?: string;
+    source?: "text" | "photo";
+    spec?: VehicleSpec;
+    /** Line -> the board heading above it, from `sectionHeaders`. */
+    headers?: Map<string, string>;
+  } = {}
 ): VehicleOption[] {
   if (hits.length < 2) return [];
   const source = opts.source ?? "text";
@@ -271,7 +320,12 @@ export function optionsFromHits(
     // LOCALITY. "new one 250/day, old one 200/day" is one line describing two
     // different bikes - reading the whole line would label both "new". Each
     // amount is described by the words around IT.
-    const line = describingWindow(h.line ?? "", h.index, siblingsByLine.get(h.line ?? "") ?? []);
+    const own = describingWindow(h.line ?? "", h.index, siblingsByLine.get(h.line ?? "") ?? []);
+    // A board row names no vehicle of its own - its heading does. Fall back to
+    // the heading ONLY when the row itself is silent, so a row that names its
+    // own bike still speaks for itself.
+    const heading = opts.headers?.get((h.line ?? "").trim());
+    const line = namesVehicle(own) || !heading ? own : `${heading} ${own}`;
     // ONLY THE VEHICLE THEY ASKED FOR. Judged on the shop's own words beside
     // this amount, so one row of a price board can be kept while its
     // neighbours - a 200cc trail bike, a 110cc Beat - are dropped. The
@@ -290,6 +344,9 @@ export function optionsFromHits(
       depositNote: opts.depositNote,
       photoRefs: [] as string[],
       source,
+      minDays: h.minDays,
+      maxDays: h.maxDays,
+      tierLabel: h.tierLabel,
     };
     if (used.has(base.key)) continue;
     used.add(base.key);
@@ -335,6 +392,9 @@ export function mergeOptions(prev: VehicleOption[], next: VehicleOption[]): Vehi
       depositNote: old.depositNote ?? n.depositNote,
       photoRefs: [...new Set([...old.photoRefs, ...n.photoRefs])],
       source: old.source,
+      minDays: old.minDays ?? n.minDays,
+      maxDays: old.maxDays ?? n.maxDays,
+      tierLabel: old.tierLabel ?? n.tierLabel,
     };
     byKey.set(n.key, { ...merged, gaps: gapsFor(merged) });
   }
@@ -376,7 +436,13 @@ export function optionsFromThread(
     });
     acc = mergeOptions(
       acc,
-      optionsFromHits(quoted.allOffers, { depositNote: opts.depositNote, spec })
+      optionsFromHits(quoted.allOffers, {
+        depositNote: opts.depositNote,
+        spec,
+        // A board's heading is the only place its vehicle is written; without
+        // it every row of a 155cc board passes a 125cc traveller's spec check.
+        headers: sectionHeaders(msg),
+      })
     );
   }
   return acc;

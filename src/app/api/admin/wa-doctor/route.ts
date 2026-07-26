@@ -114,8 +114,17 @@ export async function GET(req: Request) {
     // stale trace from another shop reads as a live failure here.
     const lastDrop = dropTrace.find((d) => (d.detail ?? "").includes(number)) ?? null;
 
+    // The shop's profile picture, and - when there is none - WHY. Every avatar
+    // on the board came back blank in the field while the shops plainly had
+    // photos in WhatsApp; without the upstream reason there was nothing to act
+    // on from a phone. `error` absent means "this shop simply has no picture".
+    const avatar = await import("@/lib/evolution")
+      .then((m) => m.fetchProfilePicture(email, number))
+      .catch((e) => ({ url: null, error: e instanceof Error ? e.message : "failed" }));
+
     report.thread = {
       digits: number,
+      avatar: { found: Boolean(avatar.url), error: avatar.error ?? null },
       anchors: outbound.map((o) => ({
         at: o.received_at,
         kind: o.raw?.kind ?? null,

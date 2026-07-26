@@ -3,6 +3,7 @@
 import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 import { startNav } from "./NavVeil";
+import { FixedLayer } from "./FixedLayer";
 
 type Tab = "home" | "deals" | "profile" | "feedback";
 type NavTab = Exclude<Tab, "feedback">;
@@ -35,7 +36,10 @@ export function TabBar({
   ];
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50">
+    // Portalled to <body> and given its own compositing layer - see FixedLayer.
+    // As a plain fixed child of <main> this bar rendered halfway up the screen
+    // on iOS after an overlay had toggled the body's overflow.
+    <FixedLayer className="fixed inset-x-0 bottom-0 z-50">
       {showUpgrade && (
         <div className="pointer-events-none mb-2 flex justify-center px-4">
           <button
@@ -89,6 +93,6 @@ export function TabBar({
           })}
         </div>
       </nav>
-    </div>
+    </FixedLayer>
   );
 }

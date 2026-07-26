@@ -42,18 +42,27 @@ function Chip({
   active,
   onClick,
   children,
+  disabled = false,
+  title,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={title}
+      aria-disabled={disabled}
       className={`chip whitespace-nowrap rounded-full border-2 px-3 py-1.5 text-[12px] font-bold transition ${
-        active
-          ? "border-brandblue bg-brandblue text-white"
-          : "border-line bg-card text-soft hover:border-brandblue/40 hover:text-strong"
+        disabled
+          ? "cursor-not-allowed border-line/60 bg-card text-faint opacity-55"
+          : active
+            ? "border-brandblue bg-brandblue text-white"
+            : "border-line bg-card text-soft hover:border-brandblue/40 hover:text-strong"
       }`}
     >
       {children}
@@ -67,12 +76,22 @@ export function Filters({
   availableClasses,
   isUltra = false,
   onUpgrade,
+  tagCounts = {},
 }: {
   filters: FilterState;
   onChange: (f: FilterState) => void;
   availableClasses: VehicleClass[];
   isUltra?: boolean;
   onUpgrade?: () => void;
+  /**
+   * How many shops on screen have actually CONFIRMED each term. A verified tag
+   * only exists once a shop stated it in its own replies, so at the start of a
+   * hunt every count is zero - and a chip that filters on data nobody has yet
+   * can only mislead. Tapping "Delivers" with no delivery data used to leave
+   * the list looking randomly shuffled; now the chip simply is not live until
+   * a shop has said the words.
+   */
+  tagCounts?: Partial<Record<FilterState["tag"], number>>;
 }) {
   const set = (patch: Partial<FilterState>) => onChange({ ...filters, ...patch });
   const classes: (VehicleClass | "any")[] =
@@ -191,15 +210,25 @@ export function Filters({
             ["helmets-included", "🪖 Helmets"],
             ["insurance-included", "🛡 Insurance"],
           ] as const
-        ).map(([id, label]) => (
-          <Chip
-            key={id}
-            active={filters.tag === id}
-            onClick={() => set({ tag: filters.tag === id ? "any" : id })}
-          >
-            {label}
-          </Chip>
-        ))}
+        ).map(([id, label]) => {
+          const n = tagCounts[id] ?? 0;
+          return (
+            <Chip
+              key={id}
+              active={filters.tag === id}
+              disabled={n === 0}
+              title={
+                n === 0
+                  ? "No shop has confirmed this yet - your agents are still asking"
+                  : `${n} shop${n === 1 ? "" : "s"} confirmed this`
+              }
+              onClick={() => set({ tag: filters.tag === id ? "any" : id })}
+            >
+              {label}
+              {n > 0 && <span className="ml-1 opacity-70">{n}</span>}
+            </Chip>
+          );
+        })}
       </div>
     </div>
   );

@@ -185,7 +185,7 @@ export function WillSheet({
           {busy ? (
             <OrbitDots size={16} light label={t("Sending...")} />
           ) : (
-            <Icon name="send" className="h-4.5 w-4.5" />
+            <Icon name="send" className="h-5 w-5" />
           )}
         </button>
       </div>

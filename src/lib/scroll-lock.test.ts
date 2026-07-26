@@ -48,7 +48,17 @@ describe("lockBodyScroll (B5)", () => {
     const style = (globalThis as any).document.body.style;
     expect(style.position).toBe("fixed");
     expect(style.top).toBe("-240px");
-    expect(style.overflow).toBe("hidden");
+    unlock();
+  });
+
+  it("does NOT toggle overflow - that is the WebKit trigger this file exists for", async () => {
+    // A fixed body already cannot scroll. Toggling `overflow` on a scrolled
+    // page is what makes iOS re-composite fixed elements against a stale
+    // offset, which is how the bottom nav ended up halfway up the screen.
+    (globalThis as any).window.scrollY = 300;
+    const lockBodyScroll = await load();
+    const unlock = lockBodyScroll();
+    expect((globalThis as any).document.body.style.overflow).toBe("");
     unlock();
   });
 

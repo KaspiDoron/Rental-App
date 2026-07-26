@@ -320,27 +320,31 @@ describe("shop avatars: a miss is diagnosable, and both id shapes are tried", ()
   it("checks res.ok instead of reading a URL off an error body", () => {
     const evo = readCode("src/lib/evolution.ts");
     const fn = evo.slice(
-      evo.indexOf("export async function fetchProfilePictureUrl"),
-      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+      evo.indexOf("export async function fetchProfilePicture("),
+      evo.indexOf("export async function fetchProfilePicture(") + 3000
     );
     expect(fn).toMatch(/if \(!res\.ok\)/);
     expect(fn).toMatch(/console\.warn/);
   });
 
-  it("tries the JID when bare digits find nothing", () => {
+  it("tries every identifier AND every route a build might serve it from", () => {
     const evo = readCode("src/lib/evolution.ts");
     const fn = evo.slice(
-      evo.indexOf("export async function fetchProfilePictureUrl"),
-      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+      evo.indexOf("export async function fetchProfilePicture("),
+      evo.indexOf("export async function fetchProfilePicture(") + 3000
     );
     expect(fn).toMatch(/resolveChatJid|s\.whatsapp\.net/);
+    // One endpoint's opinion is not an answer: builds disagree about which
+    // route serves a picture, so a miss must have been asked for four ways.
+    expect(fn).toMatch(/fetchProfile\//);
+    expect(fn).toMatch(/findContacts\//);
   });
 
   it("still writes nothing to any database", () => {
     const evo = readCode("src/lib/evolution.ts");
     const fn = evo.slice(
-      evo.indexOf("export async function fetchProfilePictureUrl"),
-      evo.indexOf("export async function fetchProfilePictureUrl") + 2200
+      evo.indexOf("export async function fetchProfilePicture("),
+      evo.indexOf("export async function fetchProfilePicture(") + 3000
     );
     expect(fn).not.toMatch(/\bsb(Insert|Update|Upsert|Delete)\s*\(/);
   });

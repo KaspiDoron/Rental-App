@@ -801,7 +801,9 @@ function VendorCardInner({
           >
             <span className="inline-flex items-center gap-1">
               <Icon name="send" className="h-3.5 w-3.5" />{" "}
-              {waConnected ? t("Ask something custom") : `🔒 ${t("Ask something custom")}`}
+              {waConnected
+                ? t("Message this shop yourself")
+                : `🔒 ${t("Message this shop yourself")}`}
             </span>
           </button>
         </div>
@@ -815,19 +817,46 @@ function VendorCardInner({
         )}
 
         {chatOpen && (
-          <div className="mt-2 rounded-2xl border-2 border-line bg-card p-3">
-            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold text-soft">
-              <Icon name="shield" className="h-3.5 w-3.5 text-savings" />
-              {t("Screened by the safety agent, then sent from the app.")}
+          <div className="mt-2 rounded-2xl border-2 border-brandblue/40 bg-card p-3">
+            {/* THIS IS NOT A NOTE TO YOUR AGENT.
+                What the traveller types here goes to the shop word for word,
+                on WhatsApp, from their own number - and they were not told.
+                One typed "Ask if he can give me 2 helmets" expecting Will to
+                relay it, and the shop received exactly that sentence. So say
+                it plainly, show the words as the shop will see them, and put
+                the shop's name on the send button. */}
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold text-strong">
+              <Icon name="whatsapp" className="h-3.5 w-3.5 text-[#25D366]" />
+              {t("Your words go straight to the shop")}
             </div>
+            <p className="mb-2 text-[10.5px] font-semibold leading-snug text-soft">
+              {t(
+                "Type it the way you want them to read it - we send this exact text to the shop on WhatsApp, from your number. To tell your agent what to do instead, use Ask Will."
+              )}
+            </p>
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={2}
               maxLength={600}
-              placeholder={t("Ask this shop something specific...")}
+              placeholder={t("e.g. Can you include 2 helmets at that price?")}
               className="w-full resize-none rounded-xl border-2 border-line bg-card2 p-2 text-sm text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
             />
+            {/* Exactly what will land in their chat - no surprises. */}
+            {draft.trim() && (
+              <div className="mt-1.5 rounded-xl bg-[#25D366]/10 p-2">
+                <div className="text-[9.5px] font-extrabold uppercase tracking-wide text-savings">
+                  {t("The shop will receive")}
+                </div>
+                <div className="mt-0.5 whitespace-pre-wrap break-words text-[11.5px] font-semibold text-strong">
+                  {draft.trim()}
+                </div>
+              </div>
+            )}
+            <div className="mt-1.5 flex items-center gap-1.5 text-[10px] font-bold text-soft">
+              <Icon name="shield" className="h-3 w-3 text-savings" />
+              {t("Checked for anything unsafe first - nothing else is changed.")}
+            </div>
             {chatState.status === "blocked" && (
               <div className="mt-1 rounded-xl bg-brandred-soft p-2 text-[12px] font-semibold text-brandred">
                 {chatState.reason ?? t("Message blocked.")}
@@ -854,7 +883,7 @@ function VendorCardInner({
               {chatState.status === "checking" ? (
                 <LoadingDots light label={t("Screening")} />
               ) : (
-                t("Screen & send")
+                `${t("Send to")} ${vendor.name}`
               )}
             </button>
           </div>

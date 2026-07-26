@@ -152,6 +152,15 @@ export interface Vendor {
   // closed - the ISO time the queued message will auto-send.
   sentText?: string;
   sentGloss?: string;
+  /**
+   * The last thing THE SHOP said, and when. The status panel used to file every
+   * contacted shop under "Awaiting reply" - including shops that had already
+   * answered - because it only knew the stage, never whether words had come
+   * back. A traveller watching the feed fill up with replies while the panel
+   * said "awaiting reply" is being told something that is plainly untrue.
+   */
+  lastInboundText?: string;
+  lastInboundAt?: string;
   lastEventAt?: number;
   queuedUntil?: string;
   // The anti-ban guard's RAW hold reason ("human pacing gap", "shop is closed

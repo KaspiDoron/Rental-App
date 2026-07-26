@@ -29,7 +29,7 @@ export function SearchSummaryBar({
       aria-label={t("Edit your search")}
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brandblue-soft text-brandblue">
-        <Icon name="bolt" className="h-4.5 w-4.5" />
+        <Icon name="bolt" className="h-5 w-5" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-extrabold text-strong">

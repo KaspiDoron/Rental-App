@@ -26,11 +26,11 @@ const readCode = (p: string) =>
 const ROUTE = "src/app/api/wa/avatar/route.ts";
 const CLIENT = "src/components/ShopAvatar.tsx";
 
-/** The `fetchProfilePictureUrl` function body, isolated from the rest of the file. */
+/** The `fetchProfilePicture` function body, isolated from the rest of the file. */
 function avatarFetcherSource(): string {
   const src = readCode("src/lib/evolution.ts");
-  const start = src.indexOf("export async function fetchProfilePictureUrl");
-  expect(start, "fetchProfilePictureUrl must exist in evolution.ts").toBeGreaterThan(-1);
+  const start = src.indexOf("export async function fetchProfilePicture(");
+  expect(start, "fetchProfilePicture must exist in evolution.ts").toBeGreaterThan(-1);
   // Top-level function bodies close with a `}` in column 0.
   const end = src.indexOf("\n}\n", start);
   return src.slice(start, end === -1 ? undefined : end);
@@ -45,7 +45,7 @@ describe("ephemeral shop avatars: nothing is ever persisted", () => {
     expect(code).not.toMatch(WRITE_CALL);
   });
 
-  it("fetchProfilePictureUrl performs no Supabase call at all - in-memory only", () => {
+  it("fetchProfilePicture performs no Supabase call at all - in-memory only", () => {
     const fn = avatarFetcherSource();
     expect(fn).not.toMatch(WRITE_CALL);
     expect(fn).not.toMatch(/\bsbSelect\s*\(/);
@@ -98,6 +98,16 @@ describe("ephemeral shop avatars: you can only see a shop you messaged", () => {
 
   it("only an https URL is ever handed to an <img src>", () => {
     // Read raw here: comment-stripping would mangle the regex literal itself.
-    expect(read("src/lib/evolution.ts")).toContain('/^https:\\/\\//i.test(raw)');
+    // Every candidate field from every Evolution route goes through this one
+    // test, so a build that answers with an http:// or data: URL is dropped.
+    expect(read("src/lib/evolution.ts")).toContain('/^https:\\/\\//i.test(c)');
+  });
+
+  it("the browser is handed OUR proxy path, never WhatsApp's CDN url", () => {
+    // A signed pps.whatsapp.net URL can be refused by the CDN, and it is not
+    // ours to hand around; the route streams the bytes instead.
+    const code = readCode(ROUTE);
+    expect(code).toMatch(/img=1&number=/);
+    expect(code).toMatch(/startsWith\("image\/"\)/);
   });
 });

@@ -212,6 +212,90 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Nothing to restore from that hunt." }, { status: 404 });
   }
 
+  // WHERE THEY LEFT OFF, not a blank board.
+  //
+  // Every restored shop used to come back stamped `stage: "queued"`, so
+  // re-opening a hunt showed a list that looked like it had never run - the
+  // conversations, the prices and the whole point of coming back were gone
+  // until several polls had caught up, and for a hunt whose window has closed
+  // they never came back at all. The state is right here in the same rows the
+  // window is defined by, so it is restored WITH the shops.
+  {
+    const [msgRows, offerRows] = await Promise.all([
+      sbSelect<{
+        to_number: string;
+        direction: string;
+        received_at: string;
+        raw: { vendorId?: string; sender?: string } | null;
+      }>(
+        "whatsapp_messages",
+        `select=to_number,direction,received_at,raw&or=(raw->>sender.eq.${enc},raw->>receiver.eq.${enc})&order=received_at.desc&limit=250`
+      ).catch(() => []),
+      sbSelect<{
+        vendor_id: string | null;
+        price_per_day: number | null;
+        list_price_per_day: number | null;
+        currency: string | null;
+        round: number | null;
+        verified: boolean | null;
+        created_at: string;
+      }>(
+        "offers",
+        `select=vendor_id,price_per_day,list_price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&order=created_at.desc&limit=200`
+      ).catch(() => []),
+    ]);
+
+    const messaged = new Set<string>();
+    const replied = new Set<string>();
+    for (const m of msgRows) {
+      if (!inWindow(m.received_at)) continue;
+      const id = m.raw?.vendorId;
+      if (!id) continue;
+      if (m.direction === "outbound") messaged.add(id);
+      else replied.add(id);
+    }
+    const bestByVendor = new Map<string, (typeof offerRows)[number]>();
+    for (const o of offerRows) {
+      if (!o.vendor_id || !inWindow(o.created_at) || bestByVendor.has(o.vendor_id)) continue;
+      if (o.price_per_day && o.price_per_day > 0) bestByVendor.set(o.vendor_id, o);
+    }
+
+    const durationDays =
+      typeof (rfq as { durationDays?: unknown }).durationDays === "number"
+        ? ((rfq as { durationDays: number }).durationDays as number)
+        : 1;
+
+    vendors = (vendors as Record<string, unknown>[]).map((v) => {
+      const id = String(v.id ?? "");
+      const priced = bestByVendor.get(id);
+      if (priced) {
+        const perDay = priced.price_per_day as number;
+        return {
+          ...v,
+          stage: "offer-received",
+          offer: {
+            pricePerDay: perDay,
+            listPricePerDay: priced.list_price_per_day ?? perDay,
+            currency: priced.currency ?? "USD",
+            totalPrice: Math.round(perDay * durationDays),
+            includesInsurance: false,
+            includesDelivery: false,
+            message: "",
+            round: priced.round ?? 0,
+            verified: Boolean(priced.verified),
+            simulated: false,
+            // The live polls fill in deposit + fulfillment; until then the card
+            // says "confirming details" rather than offering a premature lock.
+            presentable: false,
+          },
+        };
+      }
+      if (replied.has(id)) return { ...v, stage: "negotiating" };
+      if (messaged.has(id)) return { ...v, stage: "awaiting-response" };
+      return v;
+    });
+  }
+
   const payload = {
     vendors,
     rfq,

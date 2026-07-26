@@ -57,23 +57,51 @@ export function OptionList({
   const [openKey, setOpenKey] = useState<string | null>(null);
   if (!options || options.length < 2) return null;
 
+  // A DURATION LADDER IS NOT A MENU.
+  //
+  // "1-2 days 650 / 3-7 days 600 / 15-29 days 500" are not options to pick
+  // between - they are the rates you earn by staying that long. Rendering them
+  // as a choice would put a "Lock this one" button on the 15-29 day rate for
+  // someone staying five days, which is exactly the confusion that had the
+  // agent quoting that row back to the shop in the first place. So a ladder is
+  // shown as a ladder: one row applies to their dates, the rest are context.
+  const isLadder = options.some((o) => typeof o.minDays === "number");
+  const stay = durationDays && durationDays > 0 ? durationDays : null;
+  const appliesTo = (o: VehicleOption) =>
+    !isLadder ||
+    stay === null ||
+    (stay >= (o.minDays ?? 0) && stay <= (o.maxDays ?? Infinity));
+  // Longest stay last reads the way the board is printed.
+  const rows = isLadder
+    ? [...options].sort((a, b) => (a.minDays ?? 0) - (b.minDays ?? 0))
+    : options;
+
   return (
     <div className="mt-2 rounded-xl border-2 border-brandblue/30 bg-brandblue-soft p-2.5">
       <div className="text-[12px] font-bold text-brandblue">
-        🛵 {t("This shop offers a choice - pick the one you want")}
+        {isLadder
+          ? `📅 ${t("This shop's rate depends on how long you stay")}`
+          : `🛵 ${t("This shop offers a choice - pick the one you want")}`}
       </div>
 
       <div className="mt-2 space-y-1.5">
-        {options.map((o) => {
-          const open = openKey === o.key;
+        {rows.map((o) => {
+          const mine = appliesTo(o);
+          const open = openKey === o.key && mine;
           const chip = conditionChip(o);
           const photo = o.photoRefs[0] && photoUrlFor ? photoUrlFor(o.photoRefs[0]) : null;
           return (
-            <div key={o.key} className="rounded-xl bg-card p-2">
+            <div
+              key={o.key}
+              className={`rounded-xl p-2 ${
+                mine ? "bg-card" : "bg-card/50 opacity-70"
+              } ${isLadder && mine ? "ring-2 ring-savings/60" : ""}`}
+            >
               <button
-                onClick={() => setOpenKey(open ? null : o.key)}
+                onClick={() => mine && setOpenKey(open ? null : o.key)}
                 aria-expanded={open}
-                className="flex w-full items-center gap-2 text-left"
+                disabled={!mine}
+                className="flex w-full items-center gap-2 text-left disabled:cursor-default"
               >
                 {photo ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -90,8 +118,13 @@ export function OptionList({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span className="truncate text-[12px] font-extrabold text-strong">
-                      {o.model || o.label}
+                      {isLadder ? o.tierLabel || o.label : o.model || o.label}
                     </span>
+                    {isLadder && mine && (
+                      <span className="shrink-0 rounded-full bg-savings px-2 py-0.5 text-[9px] font-extrabold text-white">
+                        {t("your stay")}
+                      </span>
+                    )}
                     {chip && (
                       <span
                         className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold ${chip.cls}`}
@@ -101,7 +134,13 @@ export function OptionList({
                     )}
                   </span>
                   <span className="mt-0.5 block text-[10px] font-bold text-faint">
-                    {o.mileageKm
+                    {isLadder
+                      ? mine
+                        ? t("this is your rate")
+                        : `${t("needs")} ${o.minDays}${
+                            Number.isFinite(o.maxDays ?? Infinity) ? `-${o.maxDays}` : "+"
+                          } ${t("days")}`
+                      : o.mileageKm
                       ? `${o.mileageKm.toLocaleString()} km`
                       : o.gaps.length
                         ? `${t("still asking")}: ${o.gaps.map((g) => t(GAP_LABEL[g] ?? g)).join(", ")}`

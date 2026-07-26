@@ -254,3 +254,63 @@ describe("spec matching is judged on the shop's words, never the price", () => {
     expect(matchesSpec("125cc Honda Click, Fazzio", SCOOTER125)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A PRICE BOARD IS A LADDER UNDER A HEADING (Siargao, 26 Jul).
+//
+// The shop sent two photo boards. The agent quoted the 155cc board's 15-29 day
+// rate to a traveller staying five days who had asked for a 125cc scooter.
+// ---------------------------------------------------------------------------
+
+const BOARD_155 = `155 CC
+1-2 days - P 650
+3-7 days - P 600
+8-14 days - P 550
+15-29 days - P 500
+Monthly - P 450`;
+
+const BOARD_CLICK = `Honda Click - V2 125 CC
+1 day - P 450
+2-10 days - P 400
+11-20 days - P 350
+21-29 days - P 300
+Monthly - P 250`;
+
+describe("a board is scoped by its heading and by the traveller's dates", () => {
+  it("drops a 155cc board entirely for a 125cc traveller", () => {
+    const opts = optionsFromThread([BOARD_155], {
+      vehicleClass: "scooter",
+      engineSizeCc: 125,
+      durationDays: 5,
+    });
+    expect(opts).toHaveLength(0);
+  });
+
+  it("keeps the 125cc board and labels each row with its own stay", () => {
+    const opts = optionsFromThread([BOARD_CLICK], {
+      vehicleClass: "scooter",
+      engineSizeCc: 125,
+      durationDays: 5,
+    });
+    expect(opts.map((o) => o.pricePerDay)).toEqual([250, 300, 350, 400, 450]);
+    const five = opts.find((o) => o.pricePerDay === 400);
+    expect(five?.minDays).toBe(2);
+    expect(five?.maxDays).toBe(10);
+    expect(five?.tierLabel).toMatch(/2-10\s*days/i);
+  });
+
+  it("never turns a board row into an 86-a-day whole-rental total", () => {
+    const opts = optionsFromThread([BOARD_CLICK], { engineSizeCc: 125, durationDays: 5 });
+    expect(opts.every((o) => o.pricePerDay >= 250)).toBe(true);
+  });
+
+  it("a heading that names its own row does not govern the rest", () => {
+    // "Click 125 - 400/day" describes itself; the 200cc line below must not
+    // inherit it and sneak past the spec gate.
+    const opts = optionsFromThread(["Click 125 - 400/day\nXR 200cc - 900/day"], {
+      vehicleClass: "scooter",
+      engineSizeCc: 125,
+    });
+    expect(opts.map((o) => o.pricePerDay)).not.toContain(900);
+  });
+});
