@@ -12,6 +12,7 @@ import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
 import { coerceToLegal } from "./policy";
 import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
+import { nextGap } from "../offer-options";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -106,6 +107,35 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         .join("\n")}\n`
     : "";
 
+  // THE MENU. When the shop has offered a choice, the turn's job is to make the
+  // tiers comparable - what separates them and a photo of each - and the gaps
+  // below say exactly what is still unknown, so we never re-ask what they told
+  // us. Stated as the situation, not as a script: the model writes the question.
+  const options = dg.options ?? [];
+  const menuBlock = options.length
+    ? `THIS SHOP'S OPTIONS (they offered a CHOICE - do NOT collapse it to one price):\n` +
+      options
+        .map(
+          (o) =>
+            `- ${o.label}: ${o.pricePerDay} ${o.currency ?? s.currency}/day` +
+            (o.mileageKm ? `, ${o.mileageKm} km` : "") +
+            (o.gaps.length ? ` [still unknown: ${o.gaps.join(", ")}]` : " [fully known]")
+        )
+        .join("\n") +
+      `\n`
+    : "";
+  const optionPlay = ctx.legalMoves.includes("option-probe")
+    ? `YOUR JOB THIS TURN: the traveller cannot choose between these yet. In ONE short message, ask what actually separates them - ${
+        nextGap(options) === "mileage"
+          ? "how old each one is and roughly how many km"
+          : nextGap(options) === "photo"
+            ? "for a quick photo of each"
+            : nextGap(options) === "condition"
+              ? "which is the newer one"
+              : "the deposit for each"
+      } - and ask for a photo of each if you have not already. Do NOT bargain yet: haggling a price the traveller has not picked wastes the one discount this shop will give.\n`
+    : "";
+
   const durationLeverage =
     round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
       ? `Duration is your lever this first push: ${days} days is a long rental.\n`
@@ -113,9 +143,15 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
 
   // Rival leverage is a HARD rule when a verified cheaper rival exists (ported
   // from composeBargain) - "you MAY cite" let the model ignore Shop A's 300.
+  // Only a GENUINELY cheaper rival is leverage. The old `?? rivals[0]` fallback
+  // meant that with no cheaper rival we still ordered the model to name a MORE
+  // expensive shop and "ask this shop to match or beat it" - handing the shop an
+  // argument for its own price.
+  const quoteNow = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
   const cheaperRival =
-    s.rivals.find((r) => typeof ctx.inbound.verified.pricePerDay === "number" && r.pricePerDay < (ctx.inbound.verified.pricePerDay as number)) ??
-    (s.rivals.length ? s.rivals[0] : null);
+    typeof quoteNow === "number"
+      ? s.rivals.find((r) => r.pricePerDay < quoteNow) ?? null
+      : s.rivals[0] ?? null;
   const rivalLeverage =
     cheaperRival && ctx.legalMoves.includes("bargain")
       ? `HARD LEVERAGE: another real shop THIS SEARCH quoted ${cheaperRival.pricePerDay} ${cheaperRival.currency}/day (${cheaperRival.shop}). If you bargain, you MUST name this ${cheaperRival.pricePerDay}/day and ask this shop to match or beat it - do not omit or soften it.\n`
@@ -125,9 +161,11 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     `VEHICLE WANTED: ${vehicleLine(ctx)} for ${s.rfq.durationDays} days.\n` +
     `${bench}\n${prior}\n` +
     `RIVAL OFFERS (other shops, this search):\n${rivalLines}\n\n` +
+    menuBlock +
     roundPlay +
     firmNote +
     questionNote +
+    optionPlay +
     durationLeverage +
     rivalLeverage +
     repetitionNote +
@@ -163,8 +201,38 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       return v.pricePerDay
         ? `Thanks! Any chance you can do a bit better for ${days} days?`
         : `Could you share your best price for ${days} days?`;
+    case "option-probe": {
+      // Names the tiers we already read, so even the LLM-down path proves we
+      // were listening and asks the ONE thing still missing.
+      const opts = ctx.thread.digest.options ?? [];
+      const gap = nextGap(opts);
+      const list = opts
+        .slice(0, 3)
+        .map((o) => `${o.pricePerDay}`)
+        .join(" and ");
+      const ask =
+        gap === "photo"
+          ? "could you send a quick photo of each"
+          : gap === "mileage"
+            ? "how old are they and roughly how many km"
+            : gap === "deposit"
+              ? "what's the deposit for each"
+              : "which one is the newer one";
+      return list
+        ? `Thanks! You mentioned ${list} - ${ask}? Want to make sure I pick the right one 🙂`
+        : `Thanks! Which options do you have, and what's the difference between them?`;
+    }
     case "clarify":
-      return `Could you send the price per day as text? 🙂`;
+      // NEVER ask a shop to retype a board we can read. If a photo came in, say
+      // what we got from it and ask a yes/no - that answer is what verifies the
+      // read. Asking "send it as text" after four price boards is what made the
+      // app look like it had not looked at them at all.
+      if (v.hadImage) {
+        return v.pricePerDay
+          ? `Thanks for the price list! I read ${v.pricePerDay}${v.currency ? " " + v.currency : ""}/day for the ${days} days - is that right for me? 🙂`
+          : `Thanks for the price list! Which line is the one for me, for ${days} days? 🙂`;
+      }
+      return `Could you share your best price per day for the ${days} days? 🙂`;
     case "redirect-close":
       return `No worries, thanks for letting me know - have a great day!`;
     case "close":

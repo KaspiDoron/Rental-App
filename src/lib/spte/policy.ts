@@ -5,6 +5,7 @@
 // to say - only what is FORBIDDEN.
 
 import type { MoveKind, TurnContext, TurnArtifact } from "./types";
+import { menuUnresolved } from "../offer-options";
 
 /**
  * Compute the legal move set for this turn from verified facts. Ordered by the
@@ -24,9 +25,12 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     moves.push("silent");
     return dedupe(moves);
   }
-  if (v.wrongVehicle || v.outOfStock) {
-    // Not the vehicle we want / not in stock -> thank + close (never silence on
-    // first contact; that was the frozen-thread bug).
+  // TERMINAL ONLY ON A REAL MISMATCH. This branch returns early and erases every
+  // other move, so it must fire only when the shop POSITIVELY named a different
+  // vehicle class. It used to fire on "unclear" too, which is how a shop
+  // answering "Normal scooters? Some models 200 and some new 250/day" got a
+  // goodbye instead of a question.
+  if (v.wrongVehicle) {
     moves.push(hasClosed(ctx) ? "silent" : "redirect-close");
     return dedupe(moves);
   }
@@ -38,6 +42,16 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   const askedQ = v.askedQuestion || v.askedLicense || v.askedLicensePhoto;
   if (v.askedLocation) moves.push("pickup-location");
   if (askedQ) moves.push("answer");
+
+  // RESOLVE THE MENU BEFORE HAGGLING IT. When the shop has offered more than one
+  // tier and we still cannot tell them apart, the next useful move is to ask
+  // what separates them - not to bargain a number the traveller has not chosen.
+  // Ordered ahead of `bargain` because coerceToLegal and the LLM-down fallback
+  // both take legal[0]. This is a fact about the DATA (menuUnresolved), never a
+  // rule about the shop's wording.
+  const options = d.options ?? [];
+  const menuOpen = menuUnresolved(options) || (Boolean(v.variance) && !v.found);
+  if (menuOpen && !dealComplete(ctx)) moves.push("option-probe");
 
   // FIRM LADDER (graph parity, the two-firms-stop rule). The shop said "last
   // price" firmCount times:

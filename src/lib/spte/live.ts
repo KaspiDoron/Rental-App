@@ -15,6 +15,7 @@
 import type { GraphIO, GraphTurnInput } from "../graph/types";
 import { runTurn } from "./orchestrator";
 import { clampWaitMinutes } from "./wait";
+import { optionsFromThread, signalsVariance } from "../offer-options";
 import { emptyDigest } from "./digest";
 import { deriveThreadFacts } from "./thread-facts";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
@@ -44,8 +45,17 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     pricePerDay: input.usablePrice,
     currency: input.currency,
     declined: Boolean(ex?.shopDeclined),
-    wrongVehicle: ex?.matchesSpec === false,
-    outOfStock: Boolean((ex as { outOfStock?: boolean } | null)?.outOfStock),
+    // ONLY a positively-named different class ends a thread. "unclear" (a bare
+    // price, a menu, a question back) used to land here as wrongVehicle and made
+    // `redirect-close` the single legal move - a goodbye to a shop that was
+    // still talking to us.
+    wrongVehicle: ex?.vehicleVerdict === "mismatch" || (!ex?.vehicleVerdict && ex?.matchesSpec === false),
+    vehicleUnclear: ex?.vehicleVerdict === "unclear",
+    // The shop offered a CHOICE. Without these two the primary engine could not
+    // tell "I have two bikes at different prices" from "here is my price", and
+    // read the ambiguity as "wrong vehicle" - closing a live negotiation.
+    options: Array.isArray(ex?.options) ? ex.options : undefined,
+    variance: text ? signalsVariance(text) : false,
     askedLocation: text ? shopAskedLocation(text) : false,
     askedQuestion: text ? shopAskedQuestion(text) : false,
     askedLicense: text ? shopAskedLicense(text) : false,
@@ -53,6 +63,16 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     // The shop refused to lower ("last price") - the deterministic extractor
     // read it (agents.ts FIRM_RX) and it USED to be dropped on the floor here.
     firm: Boolean((ex as { shopFirm?: boolean } | null)?.shopFirm),
+    // WHAT THE SHOP SENT. These all existed on ExtractedOffer and none of them
+    // reached the primary engine, so a shop that answered with four price boards
+    // looked identical to one that said nothing - and got asked to type it out.
+    hadImage: input.event.kind === "inbound-image" || Boolean(ex?.imageKind),
+    imageKind: ex?.imageKind,
+    imageSummary: ex?.imageSummary || undefined,
+    sheetPricePerDay:
+      ex?.imageKind === "price_sheet" && typeof input.usablePrice === "number"
+        ? input.usablePrice
+        : undefined,
   };
 }
 
@@ -88,6 +108,15 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
   // text regex misses; ensure at least 1 when it did.
   const curFirm = Boolean((input.extraction as { shopFirm?: boolean } | null)?.shopFirm);
   const firmCount = curFirm ? Math.max(facts.firmCount, 1) : facts.firmCount;
+  // THE SHOP'S MENU, read across the WHOLE thread - a tier named three messages
+  // ago is still on the table. Derived, never stored, for the same reason the
+  // facts above are: the conversation is the state.
+  const options = optionsFromThread([...inbound, curInbound], {
+    vehicleClass: input.rfq.vehicleClass === "car" ? "car" : input.rfq.vehicleClass,
+    durationDays: input.rfq.durationDays,
+    localCurrency: input.currency,
+    depositNote: (input.extraction as { deposit?: string } | null)?.deposit || undefined,
+  });
   return {
     ...base,
     round: facts.bargainRounds,
@@ -97,6 +126,7 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
     depositKnown: facts.depositKnown,
     fulfillmentKnown: facts.fulfillmentKnown,
     lastOutbound: facts.lastOutbound,
+    options: options.length >= 2 ? options : undefined,
   };
 }
 
@@ -111,9 +141,21 @@ async function buildSession(input: GraphTurnInput, io: GraphIO): Promise<Session
   let lowest: SessionSnapshot["lowest"] = null;
   if (email) {
     const rows = await io.sessionTable(email, thisVendor).catch(() => []);
+    // WHICH CURRENCY IS THIS SESSION IN? Comparing across currencies without FX
+    // would invent leverage, so the filter below is strict equality - but when
+    // THIS thread is the odd one out (a single mis-stamped currency, exactly
+    // what the "RM 300 in Krabi" bug produced), strict equality silently threw
+    // away every rival and the shop quoting 300 never heard about the 250.
+    // Trust the session's own majority over one thread's stamp.
+    const priced = rows.filter((r) => typeof r.pricePerDay === "number" && r.currency);
+    const tally = new Map<string, number>();
+    for (const r of priced) tally.set(r.currency!, (tally.get(r.currency!) ?? 0) + 1);
+    const dominant = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const compareCur =
+      dominant && !tally.has(input.currency) && tally.get(dominant)! >= 2 ? dominant : input.currency;
     for (const r of rows) {
       if (typeof r.pricePerDay !== "number" || !r.currency) continue;
-      if (r.currency !== input.currency) continue;
+      if (r.currency !== compareCur) continue;
       if (!lowest || r.pricePerDay < lowest.pricePerDay) {
         lowest = { vendorId: r.vendorId, shop: r.vendorName, pricePerDay: r.pricePerDay };
       }
@@ -172,6 +214,7 @@ function metaKindFor(move: MoveKind): string {
     case "deposit-probe":
     case "fulfillment-probe":
     case "pickup-location":
+    case "option-probe":
       return "auto-answer";
     case "close":
     case "closing-message":
@@ -295,12 +338,15 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
       kind: "engine-v3-turn",
       vendorId: input.ctx.vendorId,
       vendorName: input.ctx.vendorName,
+      // FIELD ORDER IS LOAD-BEARING. The blob is hard-capped below, so every
+      // short analytical field comes first and the two long free-text fields
+      // (`think`, `text`) come last - truncation can then only ever eat the tail
+      // of a scratchpad, never a metric.
       detail: JSON.stringify({
         move: outcome.move,
         tier: outcome.route.tier,
         provider: outcome.route.provider ?? null,
         reason: outcome.route.reason,
-        think: outcome.artifact.think?.slice(0, 200),
         legalMoves: tc.legalMoves,
         floor: input.floorPrice ?? null,
         lowest: tc.session.lowest?.pricePerDay ?? null,
@@ -311,9 +357,20 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         // Response latency (ms) for this turn - feeds the p50/p95 KPI. Only a
         // real reply that actually went out is a meaningful latency sample.
         latencyMs: delivered === "sent" ? Date.now() - startedAt : null,
-        text: send?.slice(0, 200) ?? null,
         vehicleKey: vehicleKeyFor(input.rfq),
-      }).slice(0, 1400),
+        // WHICH LEVERAGE ACTUALLY GOT PLAYED. `leverageUsed` was written by the
+        // model every turn and read by nobody, so "the agents never use the
+        // other shop's price" could not be measured, only noticed.
+        leverage: outcome.artifact.leverageUsed ?? [],
+        citedRival: Boolean(outcome.artifact.leverageUsed?.includes("rival")),
+        // The shop's menu + what it sent, so the option and vision KPIs have a
+        // source that is not a guess.
+        options: tc.thread.digest.options?.length ?? 0,
+        hadImage: Boolean(tc.inbound.verified.hadImage),
+        imageKind: tc.inbound.verified.imageKind ?? null,
+        think: outcome.artifact.think?.slice(0, 180),
+        text: send?.slice(0, 180) ?? null,
+      }).slice(0, 1600),
     })
     .catch(() => {});
 

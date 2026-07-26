@@ -438,6 +438,28 @@ export async function processVendorReply(opts: {
       extractText || ""
     ) || "USD";
 
+  // THE SHOP'S MENU. A reply naming more than one price is a CHOICE, not a
+  // quote: "some models 200 and some new 250/day". Collapsing that to one number
+  // is what hid the 200 tier from the traveller and left the agent haggling a
+  // price nobody had picked. Derived deterministically from the same reader that
+  // produced the price, then merged with anything the model itself listed.
+  {
+    const { extractQuotedPrices } = await import("./wa/price-extract");
+    const { optionsFromHits, mergeOptions } = await import("./offer-options");
+    const quoted = extractQuotedPrices(extractText || "", {
+      vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+      durationDays: rfq.durationDays,
+      localCurrency: cur,
+    });
+    const derived = optionsFromHits(quoted.allOffers, {
+      depositNote: extraction.deposit || undefined,
+      source: images.length > 0 ? "photo" : "text",
+    });
+    const fromModel = Array.isArray(extraction.options) ? extraction.options : [];
+    const options = mergeOptions(fromModel, derived);
+    if (options.length >= 2) extraction.options = options;
+  }
+
   // TOTAL vs PER-DAY sanity net. Shops constantly quote the WHOLE rental
   // ("3 day 900 B" = 900 TOTAL = 300/day) and a mis-read here made the agent
   // "bargain" for MORE than the shop's real daily price - the worst possible
@@ -473,6 +495,51 @@ export async function processVendorReply(opts: {
       floorSameCur = { ...floorSameCur, floor: credible.floor };
     }
   }
+  // DID WE READ THEIR PRICE BOARD RIGHT? Most shops answer with a photo, and
+  // until now nothing ever checked the OCR - so the agent asked shops to retype
+  // boards it had already read, and a misread number could be bargained from
+  // for the rest of the thread. When a TYPED price lands on a thread where we
+  // previously read a price off a photo, the two get compared and the verdict
+  // is recorded. This is the source for the visionAccuracy KPI.
+  if (images.length === 0 && usablePrice && ctx.vendorId && ctx.sender) {
+    try {
+      const prior = await sbSelect<{ price_per_day: number | null }>(
+        "vendor_replies",
+        `select=price_per_day&user_email=eq.${encodeURIComponent(
+          ctx.sender
+        )}&vendor_id=eq.${encodeURIComponent(
+          ctx.vendorId
+        )}&image_count=gt.0&price_per_day=not.is.null&order=created_at.desc&limit=1`
+      );
+      const sheet = prior[0]?.price_per_day ?? undefined;
+      if (typeof sheet === "number" && sheet > 0) {
+        const { reconcileVisionPrice } = await import("./vision-reconcile");
+        const verdict = reconcileVisionPrice({
+          sheetPricePerDay: sheet,
+          textPricePerDay: usablePrice,
+          durationDays: rfq.durationDays,
+        });
+        await sbInsert("agent_events", [
+          {
+            kind: "vision-check",
+            vendor_id: ctx.vendorId,
+            vendor_name: ctx.vendorName ?? "",
+            user_email: ctx.sender,
+            detail: JSON.stringify({
+              agreement: verdict.agreement,
+              sheet,
+              text: usablePrice,
+              deltaPct: verdict.deltaPct ?? null,
+              note: verdict.detail,
+            }).slice(0, 500),
+          },
+        ]).catch(() => {});
+      }
+    } catch {
+      /* the reconciliation is telemetry - it must never break a turn */
+    }
+  }
+
   const replyBase = {
     user_email: ctx.sender ?? null,
     vendor_id: ctx.vendorId ?? "",
@@ -544,7 +611,17 @@ export async function processVendorReply(opts: {
       vendor_id: ctx.vendorId ?? "",
       vendor_name: ctx.vendorName ?? "",
       price_per_day: usablePrice,
-      list_price_per_day: usablePrice,
+      // The shop's OWN starting price, so the discount we won is measurable.
+      // This was set to usablePrice, which made list === paid on every row and
+      // pinned the bargain-margin KPI at 0% no matter how well the agent did.
+      // The real list price is the restated regular price when the shop gave
+      // one, else the priciest tier it offered, else the current price.
+      list_price_per_day:
+        extraction.listPricePerDay ??
+        (extraction.options?.length
+          ? Math.max(...extraction.options.map((o) => o.pricePerDay))
+          : undefined) ??
+        usablePrice,
       currency: cur,
       round,
       simulated: false,

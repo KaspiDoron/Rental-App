@@ -58,6 +58,60 @@ describe("SPTE policy rails (legal move computation)", () => {
     expect(legal).not.toContain("silent");
   });
 
+  // The live Marlin Krabi failure: "Hi! Normal scooters? Some models 200 and
+  // some new 250/day" was scored wrong-vehicle, which made redirect-close the
+  // ONLY legal move and ended a negotiation the shop was happy to have.
+  describe("an UNCLEAR vehicle is not a wrong vehicle", () => {
+    it("never terminates the thread", () => {
+      const legal = legalMovesFor(
+        ctx({ verified: { found: true, pricePerDay: 250, vehicleUnclear: true } })
+      );
+      expect(legal).not.toContain("redirect-close");
+      expect(legal).toContain("bargain");
+    });
+
+    it("still terminates on a REAL mismatch", () => {
+      const legal = legalMovesFor(
+        ctx({ verified: { found: true, pricePerDay: 250, wrongVehicle: true } })
+      );
+      expect(legal).toEqual(["redirect-close"]);
+    });
+  });
+
+  describe("a menu is resolved before it is haggled", () => {
+    const menu = [
+      { key: "tier-200", label: "Cheaper option", pricePerDay: 200, condition: "unknown" as const, photoRefs: [], source: "text" as const, gaps: ["condition" as const, "mileage" as const, "photo" as const] },
+      { key: "tier-250", label: "Newer model", pricePerDay: 250, condition: "new" as const, photoRefs: [], source: "text" as const, gaps: ["mileage" as const, "photo" as const] },
+    ];
+
+    it("option-probe outranks bargain while the tiers are indistinguishable", () => {
+      const legal = legalMovesFor(
+        ctx({
+          verified: { found: true, pricePerDay: 250 },
+          thread: { threadKey: "u:63", vendorId: "v1", shop: "Shop A", digest: { ...emptyDigest(), options: menu } },
+        })
+      );
+      expect(legal.indexOf("option-probe")).toBeLessThan(legal.indexOf("bargain"));
+    });
+
+    it("a shop that says the price depends on a choice gets probed, not clarified at", () => {
+      const legal = legalMovesFor(ctx({ verified: { found: false, variance: true } }));
+      expect(legal[0]).toBe("option-probe");
+    });
+
+    it("once every tier is fully known the menu stops blocking the bargain", () => {
+      const known = menu.map((o) => ({ ...o, gaps: [] }));
+      const legal = legalMovesFor(
+        ctx({
+          verified: { found: true, pricePerDay: 250 },
+          thread: { threadKey: "u:63", vendorId: "v1", shop: "Shop A", digest: { ...emptyDigest(), options: known } },
+        })
+      );
+      expect(legal).not.toContain("option-probe");
+      expect(legal[0]).toBe("bargain");
+    });
+  });
+
   it("a shop asking our delivery location makes pickup-location legal", () => {
     const c = ctx({ verified: { found: false, askedLocation: true } });
     expect(legalMovesFor(c)).toContain("pickup-location");
@@ -160,6 +214,50 @@ describe("SPTE post-rails (deterministic number + protocol integrity)", () => {
     const r = runPostRails({ ...base, guards: { maxRounds: 4, floorPerDay: 300 } }, a);
     expect(r.ok).toBe(true);
     expect(r.finalText).toContain("400");
+  });
+
+  // The live failure: two offers existed (250 and 300) and the 300 shop was
+  // never told about the 250. The rail only ever backed rivals[0], so a draft
+  // citing any OTHER real rival was thrown away for a rival-free template.
+  it("backs EVERY real rival the prompt showed, not just the cheapest", () => {
+    const withRivals = {
+      ...base,
+      session: {
+        ...base.session,
+        rivals: [
+          { vendorId: "v2", shop: "Marlin", pricePerDay: 250, currency: "PHP" },
+          { vendorId: "v3", shop: "Sak", pricePerDay: 280, currency: "PHP" },
+        ],
+      },
+      guards: { maxRounds: 4, floorPerDay: 200 },
+    };
+    const a = { move: "bargain", message: "Another shop quoted me 280 - can you beat it?", leverageUsed: [], digestPatch: [], read: { intent: "" }, think: "" } as TurnArtifact;
+    expect(runPostRails(withRivals, a).ok).toBe(true);
+  });
+
+  it("still rejects a rival number that matches NO real offer", () => {
+    const withRivals = {
+      ...base,
+      session: {
+        ...base.session,
+        rivals: [{ vendorId: "v2", shop: "Marlin", pricePerDay: 250, currency: "PHP" }],
+      },
+      guards: { maxRounds: 4, floorPerDay: 200 },
+    };
+    const a = { move: "bargain", message: "Another shop quoted me 210 - can you beat it?", leverageUsed: [], digestPatch: [], read: { intent: "" }, think: "" } as TurnArtifact;
+    expect(runPostRails(withRivals, a).ok).toBe(false);
+  });
+
+  // "Your board says 300, can you do 250?" is a legitimate ask, not an inverted
+  // one - the shop posted the 300 itself.
+  it("lets the shop's own posted board price be quoted back", () => {
+    const withSheet = {
+      ...base,
+      inbound: { text: "", verified: { found: true, pricePerDay: 250, currency: "PHP", sheetPricePerDay: 300 } },
+      guards: { maxRounds: 4, floorPerDay: 200 },
+    };
+    const a = { move: "bargain", message: "Your list says 300 - any chance of 240 for 4 days?", leverageUsed: [], digestPatch: [], read: { intent: "" }, think: "" } as TurnArtifact;
+    expect(runPostRails(withSheet, a).ok).toBe(true);
   });
 
   it("strips a concrete time commitment and appends the defer line", () => {

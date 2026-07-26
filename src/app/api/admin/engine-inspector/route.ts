@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { visionAccuracy } from "@/lib/vision-reconcile";
 import {
   bucketTurnsPerHour,
   moveMix,
   providerMix,
   latencyStats,
   avgBargainMarginPct,
+  leverageUsePct,
   medianShopReplyMins,
   type ReplyEvent,
 } from "@/lib/admin/engine-stats";
@@ -182,6 +184,29 @@ export async function GET() {
     .filter((x): x is ReplyEvent => x !== null);
   const shopReply = medianShopReplyMins(replyEvents);
 
+  // ---- Did the agents READ the photos right, and did they USE their leverage?
+  // Both are answers to live complaints ("the app is not reading photos well",
+  // "the 300 shop was never told about the 250") that were previously
+  // unmeasurable. vision-check rows are written by agent-loop when a typed price
+  // lands on a thread whose price originally came off a photo.
+  const visionRows = await sbSelect<{ detail: string | null }>(
+    "agent_events",
+    `select=detail&kind=eq.vision-check&created_at=gte.${encodeURIComponent(
+      sinceIso
+    )}&order=created_at.desc&limit=200`
+  ).catch(() => []);
+  const vision = visionAccuracy(
+    visionRows.map((r) => {
+      try {
+        const d = JSON.parse(r.detail ?? "{}") as { agreement?: string };
+        return { hadImage: true, agreement: (d.agreement ?? null) as never };
+      } catch {
+        return { hadImage: true, agreement: null };
+      }
+    })
+  );
+  const leverage = leverageUsePct(statTurns as Array<{ move?: string; rivals?: number; citedRival?: boolean }>);
+
   return NextResponse.json({
     engine: "ENGINE_V3 (SPTE - Shared Session Blackboard + Single-Pass)",
     generatedAt: new Date(now).toISOString(),
@@ -201,6 +226,12 @@ export async function GET() {
       bargainSamples: bargainMargin.samples,
       medianShopReplyMins: shopReply.mins,
       replySamples: shopReply.samples,
+      visionAccuracyPct: vision.accuracyPct,
+      visionVerifiedPct: vision.verifiedPct,
+      visionPhotoTurns: vision.photoTurns,
+      visionConflicts: vision.conflict,
+      leverageUsePct: leverage.pct,
+      leverageOpportunities: leverage.opportunities,
     },
     queue: { depth: queue.length, dueNow, nextAt },
     sockets: { live: liveSockets, total: sessions.length, stampedAt: socketsStampedAt },

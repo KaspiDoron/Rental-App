@@ -67,6 +67,21 @@ export function latencyStats(turns: StatTurn[]): { p50: number | null; p95: numb
   return { p50: percentile(xs, 50), p95: percentile(xs, 95), samples: xs.length };
 }
 
+/**
+ * How often the agents used a REAL competing offer as leverage, out of the
+ * bargains where one was available. The owner's complaint - "we had 250 and 300
+ * and the 300 shop was never told" - was invisible because `leverageUsed` was
+ * written every turn and read by nobody.
+ */
+export function leverageUsePct(
+  turns: Array<{ move?: string; rivals?: number; citedRival?: boolean }>
+): { pct: number | null; opportunities: number } {
+  const chances = turns.filter((t) => t.move === "bargain" && (t.rivals ?? 0) > 0);
+  if (!chances.length) return { pct: null, opportunities: 0 };
+  const used = chances.filter((t) => t.citedRival).length;
+  return { pct: Math.round((used / chances.length) * 100), opportunities: chances.length };
+}
+
 // ---------------------------------------------------------------------------
 // Operations tiles (Tier-1): outcome + responsiveness numbers derived from the
 // tables the app already writes. Pure so the route stays thin and the math is

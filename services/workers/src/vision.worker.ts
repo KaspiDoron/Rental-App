@@ -148,8 +148,15 @@ export function startVisionWorker(): Worker<VisionExtractJob, VisionChildResult>
         return { ok: false, reason: "media-fetch-failed" };
       }
 
-      // 3) Best-effort audit copy of the FIRST frame (never blocks/fails).
-      const mediaRef = await storeMediaAudit(waMessageId, media[0]);
+      // 3) Best-effort audit copies. Storing only frame 0 lost most of a price
+      // board: shops send the model grid, the deposit terms and the delivery
+      // area as SEPARATE photos, and all of them are the same price list. Every
+      // frame is kept (never blocks/fails); `mediaRef` stays the first for
+      // backward compatibility.
+      const mediaRefs = (
+        await Promise.all(media.map((m, i) => storeMediaAudit(`${waMessageId}-${i}`, m)))
+      ).filter((r): r is string => Boolean(r));
+      const mediaRef = mediaRefs[0];
 
       // 4) The multi-provider OCR chain over ALL frames. extractOffer +
       // chatVision are already multi-image native (they map every image into
@@ -176,7 +183,12 @@ export function startVisionWorker(): Worker<VisionExtractJob, VisionChildResult>
         "vision extract done"
       );
       // 5) Small structured result only - bytes stay out of Redis.
-      return { ok: true, mediaRef, extraction: extraction as unknown as Record<string, unknown> };
+      return {
+        ok: true,
+        mediaRef,
+        mediaRefs,
+        extraction: extraction as unknown as Record<string, unknown>,
+      };
     },
     {
       connection: bullConnection(),

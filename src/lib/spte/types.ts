@@ -8,6 +8,7 @@
 // picks freely among LEGAL moves and writes the message).
 
 import type { StructuredRFQ } from "../types";
+import type { VehicleOption } from "../offer-options";
 
 /** The closed move vocabulary. Every deterministic guard keys on these (the
  *  D-F1 invariant), which is why strategy is free but the vocabulary is not. */
@@ -20,6 +21,10 @@ export type MoveKind =
   | "deposit-probe"
   | "fulfillment-probe"
   | "pickup-location"
+  // The shop offered a CHOICE ("some models 200, some new 250"). Resolve the
+  // menu - what separates the tiers, and a photo of each - before haggling a
+  // price the traveller has not picked yet.
+  | "option-probe"
   | "redirect-close" // NEW (B7): wrong-vehicle / not-offering -> thank + close
   | "momentum"
   | "closing-message"
@@ -58,6 +63,8 @@ export interface ThreadDigest {
   depositKnown?: boolean; // the shop already told us its deposit terms
   fulfillmentKnown?: boolean; // the shop already told us delivery-vs-pickup
   lastOutbound?: string[]; // our last 5 messages - the anti-repetition memory
+  /** Every tier this shop has offered, accumulated across the whole thread. */
+  options?: VehicleOption[];
 }
 
 export interface VerifiedExtraction {
@@ -65,8 +72,10 @@ export interface VerifiedExtraction {
   pricePerDay?: number;
   currency?: string;
   declined?: boolean;
+  /** The shop positively named a DIFFERENT vehicle class. Terminal. */
   wrongVehicle?: boolean;
-  outOfStock?: boolean;
+  /** The shop has not said which vehicle yet. NOT terminal - we ask. */
+  vehicleUnclear?: boolean;
   askedLocation?: boolean;
   askedQuestion?: boolean;
   /** The shop asked whether the traveller HAS a (international) license. */
@@ -75,6 +84,21 @@ export interface VerifiedExtraction {
   askedLicensePhoto?: boolean;
   /** The shop refused to lower a price it already gave ("last price"). */
   firm?: boolean;
+  /** The tiers this reply offered, when the shop gave a CHOICE rather than a
+   *  single price. Empty/absent for an ordinary one-price reply. */
+  options?: VehicleOption[];
+  /** The shop said the price depends on a choice, even if only one number
+   *  parsed ("it depends what you choose"). */
+  variance?: boolean;
+  // ---- what the shop SENT, not just what it said ---------------------------
+  /** This turn carried a photo. The primary engine was blind to this. */
+  hadImage?: boolean;
+  /** What the photo was: a price board, the vehicle itself, a document. */
+  imageKind?: "vehicle" | "price_sheet" | "document" | "other";
+  /** Everything the vision pass could read off the photo, in plain words. */
+  imageSummary?: string;
+  /** A price that came from a PHOTO rather than typed text. */
+  sheetPricePerDay?: number;
 }
 
 export interface TurnContext {

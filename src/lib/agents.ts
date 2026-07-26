@@ -1005,9 +1005,28 @@ export interface ExtractedOffer {
   // 300/day"). An anchor for the negotiator - never the traveller's price, and
   // never written to the offers table.
   listPricePerDay?: number;
+  /**
+   * Every tier the shop named when it offered a CHOICE ("some models 200 and
+   * some new 250/day"). Empty for the ordinary one-price reply. `pricePerDay`
+   * stays the cheapest on-spec tier so every existing caller keeps working.
+   */
+  options?: import("./offer-options").VehicleOption[];
   currency?: string;
   vehicleDescription?: string;
+  /**
+   * Does this price refer to the vehicle the traveller asked for?
+   *
+   * DERIVED from `vehicleVerdict` and kept because every existing surface reads
+   * it. It is false ONLY for a real mismatch - an "unclear" reply is not a
+   * wrong vehicle, and treating it as one used to close live negotiations.
+   */
   matchesSpec: boolean;
+  /**
+   * The three-way truth behind `matchesSpec`. "unclear" means the shop has not
+   * said yet (a bare price, a menu, a question back) - the negotiation carries
+   * on and we ask. Absent on legacy/deterministic paths.
+   */
+  vehicleVerdict?: "match" | "mismatch" | "unclear";
   confidence: "high" | "medium" | "low";
   clarifyMessage?: string;
   // ONLY set when the shop explicitly confirmed them - never guessed.
@@ -1180,15 +1199,31 @@ export async function extractOffer(
     "bicycle (has PEDALS); (d) electric kick-scooter (stand-on, tiny wheels); " +
     "(e) car / van; (f) other. A request for a petrol scooter/motorbike with a cc " +
     "figure is NOT matched by an electric bicycle, an e-bike, a kick-scooter, a " +
-    "pedal bike or a car - for ANY of those set matchesSpec=false, imageKind " +
-    "'other' (or 'vehicle' if it is clearly a vehicle photo), and write a short " +
-    "clarifyMessage asking whether they have the actual vehicle class requested " +
-    "(mention the specific class, e.g. 'a 125cc automatic scooter'). If the class " +
-    "is genuinely unclear from the reply/photo, set matchesSpec=false with " +
-    "confidence 'low' and clarify - NEVER guess a match. When the requested and " +
-    "offered class DO match, judge cc/transmission as described below. " +
+    "pedal bike or a car - for ANY of those set vehicleVerdict='mismatch', " +
+    "imageKind 'other' (or 'vehicle' if it is clearly a vehicle photo), and write " +
+    "a short clarifyMessage asking whether they have the actual vehicle class " +
+    "requested (mention the specific class, e.g. 'a 125cc automatic scooter'). " +
+    // THREE-WAY, deliberately. Collapsing "I cannot tell" into "wrong vehicle"
+    // ended a live negotiation: a shop answering "Normal scooters? Some models
+    // 200 and some new 250/day" was recorded as not stocking the vehicle and
+    // got a goodbye. Not-yet-known is not a mismatch.
+    "vehicleVerdict is a THREE-WAY judgement and 'mismatch' is a STRONG claim: " +
+    "use it ONLY when the shop positively named a DIFFERENT class. If the reply " +
+    "simply does not say which vehicle it is about - a bare price, a menu of " +
+    "options, a question back to you - that is 'unclear', NOT 'mismatch'. Use " +
+    "'match' when the class lines up. NEVER guess 'match', and never punish a " +
+    "shop for not repeating the cc. When the classes DO match, judge " +
+    "cc/transmission as described below. " +
+    // The menu the model must stop flattening.
+    "OPTIONS: when the shop names MORE THAN ONE price for different vehicles or " +
+    "conditions ('some models 200 and some new 250/day', 'old one 150, new one " +
+    "250', '1000 or 1250 total'), that is a MENU. Return every tier in options[] " +
+    "with the shop's own wording as label, and set pricePerDay to the CHEAPEST " +
+    "tier that matches the request. Never drop a tier. " +
     "Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
-    '"currency": string, "vehicleDescription": string, "matchesSpec": boolean, ' +
+    '"currency": string, "vehicleDescription": string, ' +
+    '"vehicleVerdict": "match"|"mismatch"|"unclear", ' +
+    '"options": [{"label": string, "pricePerDay": number, "condition": "new"|"older"|"unknown", "mileageKm": number|null, "model": string|null}], ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
     '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
     '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
@@ -1240,7 +1275,7 @@ export async function extractOffer(
     "PRICE-SHEET PHOTOS: rental shops post boards listing MANY models, each with " +
     "its own per-day price (e.g. Honda Click 125cc 300, Yamaha NMAX 155cc 500). " +
     "Pick the model row that MATCHES the traveller's request above (same class " +
-    "and closest cc) and return THAT price with found=true, matchesSpec=true and " +
+    "and closest cc) and return THAT price with found=true, vehicleVerdict='match' and " +
     "the model name in vehicleDescription. " +
     "WHEN SEVERAL ROWS MATCH the requested class and cc, ALWAYS return the " +
     "CHEAPEST matching row - the traveller wants the lowest price that fits, " +
@@ -1271,16 +1306,15 @@ export async function extractOffer(
     "PHP/trip, Port 350 PHP/trip, Scooter: 350 PHP/day, Island tour available' " +
     "for a scooter request -> found=true, pricePerDay=350 (the '/day' scooter " +
     "line), NEVER the 250 or 350 '/trip' transfer numbers. " +
-    // Relax matchesSpec so a plain class word matches even without cc/transmission
+    // Relax the verdict so a plain class word matches even without cc/transmission
     // restated: a shop that just writes 'Scooter: 350/day' for a scooter request
-    // DOES match (same class) - matchesSpec=true. Only a DIFFERENT class (a car
-    // line for a scooter request, an e-bike, a pedal bicycle) is matchesSpec=false.
+    // DOES match (same class). Only a DIFFERENT class (a car line for a scooter
+    // request, an e-bike, a pedal bicycle) is a mismatch.
     "A bare class word that MATCHES the requested class ('Scooter', 'Motorbike', " +
     "'Car') is a MATCH even if cc/transmission are not restated - do NOT demand " +
-    "the shop repeat the cc to set matchesSpec=true; only a genuinely DIFFERENT " +
-    "class is matchesSpec=false. " +
-    "matchesSpec is true ONLY if the price clearly refers to the requested " +
-    "vehicle CLASS. Combine the reply with the conversation history for CONTEXT, but " +
+    "the shop repeat the cc to set 'match'; only a genuinely DIFFERENT class is " +
+    "'mismatch', and anything you simply cannot tell is 'unclear'. " +
+    "Combine the reply with the conversation history for CONTEXT, but " +
     "NEVER attribute a number to the shop that appears only in OUR (traveller) " +
     "messages - our own asks and counter-offers are NOT the shop's price. " +
     "pricePerDay must come from the SHOP's own words or photo; the ONE " +
@@ -1442,6 +1476,17 @@ export async function extractOffer(
 
   function normalizeExtraction(e: ExtractedOffer, specStr: string): ExtractedOffer {
     let conf = ["high", "medium", "low"].includes(e.confidence) ? e.confidence : "low";
+    // THREE-WAY VEHICLE VERDICT -> the boolean every surface still reads.
+    // "unclear" resolves to matchesSpec TRUE: not-yet-known must never present
+    // as "this shop has the wrong vehicle" (that reading ended a live thread).
+    // A model that only returned the old boolean still works.
+    const verdict: NonNullable<ExtractedOffer["vehicleVerdict"]> =
+      e.vehicleVerdict === "match" || e.vehicleVerdict === "mismatch" || e.vehicleVerdict === "unclear"
+        ? e.vehicleVerdict
+        : e.matchesSpec === false
+        ? "mismatch"
+        : "match";
+    e = { ...e, vehicleVerdict: verdict, matchesSpec: verdict !== "mismatch" };
     // LIST PRICE IS NOT AN OFFER. When a shop defends a discount it already gave
     // ("that is a discount already, normally it's 300/day"), the only number in
     // the message is the REGULAR price. Reading it as a fresh quote replaced a

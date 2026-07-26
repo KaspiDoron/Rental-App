@@ -34,6 +34,8 @@ export interface RentalPriceHit {
   // true when the number is a RESTATED list/regular price ("normally it's
   // 300/day"), not what the shop is offering right now. Never an offer.
   listPrice?: boolean;
+  /** Where the amount sits in `line` - lets callers read the words around it. */
+  index?: number;
 }
 
 // Currency CODES/symbols AND the spoken WORDS shops actually type ("400 baht
@@ -83,6 +85,14 @@ const PRICE_TOTAL_REV = new RegExp(
   `\\b(\\d{1,2})\\s*days?\\b[^\\d]{0,10}(?:${CUR_LEAD})?\\s*${NUM}`,
   "i"
 );
+// A whole-rental total stated WITHOUT the day count ("1000 or 1250 total",
+// "2500 altogether") - the shop already knows how many days we asked for, so it
+// quotes the trip. Divided by the RFQ duration. Requires the explicit total word
+// so a bare number is never mistaken for a trip price.
+const PRICE_TOTAL_WORD = new RegExp(
+  `(?:${CUR_LEAD})?\\s*${NUM}\\s*(?:${CUR_TRAIL})?\\s*(?:in\\s+)?(?:total|altogether|all together|all in|in all|for everything|for the whole|for all)\\b`,
+  "i"
+);
 // A MONTHLY quote ("4000 per month", "4000/month", "monthly 4000") - the format
 // long-rental shops actually use, which the day-only patterns silently dropped
 // (the live "3 of 4 offers vanished" failure on a 30-day search).
@@ -128,8 +138,18 @@ const CAR_WORDS = /\b(car|sedan|suv|hatchback|van|mpv|pickup|4x4|jeep|multicab)\
 // The cue must sit just before the number, and any "but / for you / now" style
 // pivot BETWEEN the cue and the number cancels it - that is exactly the shape of
 // "Normally 300 but for you 250", where 300 is the list and 250 is the offer.
-const LIST_CUE =
-  /\b(?:normal(?:ly)?|regular(?:ly)?|usual(?:ly)?|standard|list\s+price|rack\s+rate|original(?:ly)?|full\s+price|before\s+discount|without\s+discount|was)\b/i;
+// The cue must genuinely be about a PRICE. An adverb ("normally it's 300")
+// always is; a bare adjective only counts when it modifies price/rate/cost -
+// otherwise "Hi! Normal scooters? Some models 200 and some new 250/day" reads
+// its own vehicle question as a list price and the whole menu disappears.
+const LIST_CUE = new RegExp(
+  "\\b(?:" +
+    "normally|regularly|usually|originally|" +
+    "(?:normal|regular|usual|standard|original|full|list|rack|sticker)\\s+(?:price|rate|cost|charge)s?|" +
+    "list\\s+price|rack\\s+rate|before\\s+discount|without\\s+discount|was" +
+    ")\\b",
+  "i"
+);
 const OFFER_PIVOT =
   /\b(?:but|however|for\s+you|special|instead|now|today|i\s+can\s+(?:do|give|offer)|drop(?:ped)?\s+(?:it\s+)?to|discounted\s+to|final|make\s+it)\b/i;
 /** How far back from the number the cue may sit and still govern it. */
@@ -217,6 +237,56 @@ export function reconcileCurrency(
   return mentionedCurrencies(text).includes(extracted) ? extracted : regionCurrency;
 }
 
+// SHARED-UNIT ALTERNATIVES.
+//
+// "Some models 200 and some new 250/day" carries ONE "/day" that governs BOTH
+// numbers. Reading only the marked amount is how the live app lost the 200 tier
+// entirely and showed the traveller a bare "250/day" for a shop that had two
+// bikes. The unit is shared across an explicit alternation, so we walk left from
+// a priced amount and adopt any number joined to it by "and / or / , / - / to",
+// optionally through the words a shop puts between them.
+//
+// Deliberately tight: only an ALTERNATION token qualifies. "Click 125 at
+// 250/day" has no such token before 250, so the 125 stays a model number and
+// never becomes a price.
+const ALT_TAIL = new RegExp(
+  `${NUM}\\s*(?:${CUR_TRAIL})?\\s*(?:,|-|~|\\/|\\bor\\b|\\band\\b|\\bto\\b)\\s*` +
+    `(?:(?:some|a|an|the|for|new|newer|old|older|used|second|hand|basic|normal|standard|models?|ones?|bikes?|scooters?|cars?|motorbikes?)\\s+){0,4}$`,
+  "i"
+);
+const ALT_WINDOW = 70;
+const MAX_ALTERNATES = 3;
+// A number sitting right after a model or brand word is a MODEL, not a price -
+// "a Click 125, 250/day" must not turn 125 into a second tier. Same for an
+// explicit cc figure.
+const MODEL_TAIL =
+  /\b(?:click|scoopy|fino|filano|nmax|pcx|aerox|vario|beat|mio|vespa|forza|adv|xmax|wave|dream|raider|sniper|crf|klx|xr|honda|yamaha|suzuki|kawasaki|model|no\.?)\s*-?\s*$/i;
+const CC_HEAD = /^\s*(?:cc\b|ccs\b)/i;
+
+/**
+ * Amounts to the LEFT of `idx` that share its unit through an alternation.
+ * Returns them with their own index in `line` so callers keep locality.
+ */
+function alternatesBefore(line: string, idx: number): Array<{ amount: number; index: number }> {
+  const out: Array<{ amount: number; index: number }> = [];
+  let cursor = idx;
+  for (let i = 0; i < MAX_ALTERNATES; i++) {
+    const from = Math.max(0, cursor - ALT_WINDOW);
+    const before = line.slice(from, cursor);
+    const m = before.match(ALT_TAIL);
+    if (!m || m.index === undefined) break;
+    const amount = parseAmount(m[1]);
+    const at = from + m.index + m[0].indexOf(m[1]);
+    if (!(amount > 0)) break;
+    // A model/brand number or a cc figure is not a price tier.
+    if (MODEL_TAIL.test(line.slice(Math.max(0, at - 20), at))) break;
+    if (CC_HEAD.test(line.slice(at + String(m[1]).length))) break;
+    out.push({ amount, index: at });
+    cursor = at;
+  }
+  return out;
+}
+
 /** Where in `line` the amount captured by `m` starts. */
 function amountIndex(line: string, m: RegExpMatchArray, group: number): number {
   const at = m.index ?? 0;
@@ -229,6 +299,14 @@ export interface QuotedPrices {
   offer: RentalPriceHit | null;
   /** A restated regular/list price - an anchor for the negotiator, never an offer. */
   listPrice: RentalPriceHit | null;
+  /**
+   * EVERY live per-day amount the message named, cheapest-first. `offer` is just
+   * the one this function would pick; a shop saying "some models 200 and some
+   * new 250/day" is offering a MENU, and collapsing that to a single number is
+   * what made the app hide the 200 tier and the agent haggle a price the
+   * traveller had not chosen yet. List prices are excluded - they are anchors.
+   */
+  allOffers: RentalPriceHit[];
 }
 
 /**
@@ -254,7 +332,7 @@ export function extractQuotedPrices(
   text: string,
   opts: { vehicleClass?: VehicleClassHint; durationDays?: number; localCurrency?: string } = {}
 ): QuotedPrices {
-  const none: QuotedPrices = { offer: null, listPrice: null };
+  const none: QuotedPrices = { offer: null, listPrice: null, allOffers: [] };
   if (!text || !text.trim()) return none;
   const wantClass = opts.vehicleClass;
   const days = opts.durationDays && opts.durationDays > 0 ? opts.durationDays : 1;
@@ -277,16 +355,55 @@ export function extractQuotedPrices(
     for (const perDay of line.matchAll(PRICE_DAY_G)) {
       const amt = parseAmount(perDay[1]);
       if (!(amt > 0) || amt === days) continue;
+      const at = amountIndex(line, perDay, 1);
       hits.push({
         pricePerDay: amt,
         currency: currencyIn(line) ?? opts.localCurrency,
         line: rawLine,
         classMatch: cls ? cls === wantClass : undefined,
-        listPrice: isListPriceAt(line, amountIndex(line, perDay, 1)),
+        listPrice: isListPriceAt(line, at),
+        index: at,
       });
+      // Numbers joined to this one by "and / or / ," share its per-day unit.
+      for (const alt of alternatesBefore(line, at)) {
+        if (alt.amount === days) continue;
+        hits.push({
+          pricePerDay: alt.amount,
+          currency: currencyIn(line) ?? opts.localCurrency,
+          line: rawLine,
+          classMatch: cls ? cls === wantClass : undefined,
+          listPrice: isListPriceAt(line, alt.index),
+          index: alt.index,
+        });
+      }
       tookDaily = true;
     }
     if (tookDaily) continue;
+    // A trip total with no day count ("1000 or 1250 total") -> per-day over the
+    // duration we actually asked for. Alternates share the unit here too, which
+    // is what turns "1000 or 1250 total" into a real two-tier menu.
+    const totalWord = days > 1 ? line.match(PRICE_TOTAL_WORD) : null;
+    if (totalWord) {
+      const at = amountIndex(line, totalWord, 1);
+      const amounts = [
+        { amount: parseAmount(totalWord[1]), index: at },
+        ...alternatesBefore(line, at),
+      ];
+      let took = false;
+      for (const a of amounts) {
+        if (!(a.amount > days)) continue;
+        hits.push({
+          pricePerDay: Math.round(a.amount / days),
+          currency: currencyIn(line) ?? opts.localCurrency,
+          line: rawLine,
+          classMatch: cls ? cls === wantClass : undefined,
+          listPrice: isListPriceAt(line, a.index),
+          index: a.index,
+        });
+        took = true;
+      }
+      if (took) continue;
+    }
     // A whole-rental total on this line ("1750 in 5 days", or reversed
     // "3 days 900") -> per-day. Try total-first phrasing, then day-count-first.
     const total = line.match(PRICE_TOTAL) ?? line.match(PRICE_TOTAL_REV);
@@ -381,7 +498,24 @@ export function extractQuotedPrices(
   // whole point: "normally it's 300/day" leaves an agreed 250 standing.
   const listOnly = hits.filter((h) => h.listPrice === true);
   const live = hits.filter((h) => h.listPrice !== true);
-  return { offer: pickCheapestOnSpec(live), listPrice: pickCheapestOnSpec(listOnly) };
+  return {
+    offer: pickCheapestOnSpec(live),
+    listPrice: pickCheapestOnSpec(listOnly),
+    allOffers: dedupeByPrice(live).sort((a, b) => a.pricePerDay - b.pricePerDay),
+  };
+}
+
+/** One entry per distinct price - the same amount restated is not a second tier. */
+function dedupeByPrice(hits: RentalPriceHit[]): RentalPriceHit[] {
+  const seen = new Map<number, RentalPriceHit>();
+  for (const h of hits) {
+    const prev = seen.get(h.pricePerDay);
+    // Prefer the richer hit: one that names a class beats a bare number.
+    if (!prev || (prev.classMatch === undefined && h.classMatch !== undefined)) {
+      seen.set(h.pricePerDay, h);
+    }
+  }
+  return [...seen.values()];
 }
 
 /**

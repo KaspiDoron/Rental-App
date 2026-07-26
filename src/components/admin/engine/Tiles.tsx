@@ -12,11 +12,15 @@ export function StatTile({
   label,
   value,
   tone,
+  sub,
 }: {
   helpId: keyof typeof ENGINE_HELP | string;
   label?: string;
   value: string | number;
   tone?: string;
+  /** Sample size / caveat under the number, so a percentage is never read as
+   *  confident when it rests on two data points. */
+  sub?: string;
 }) {
   const h = ENGINE_HELP[helpId as string];
   return (
@@ -26,6 +30,7 @@ export function StatTile({
         {h && <InfoTip id={`tip-${helpId}`} label={h.label} what={h.what} drift={h.drift} />}
       </div>
       <div className={`mt-0.5 text-lg font-extrabold ${tone ?? "text-strong"}`}>{value}</div>
+      {sub && <div className="mt-0.5 text-[10px] font-bold text-faint">{sub}</div>}
     </div>
   );
 }

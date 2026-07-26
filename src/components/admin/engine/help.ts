@@ -67,6 +67,16 @@ export const ENGINE_HELP: Record<string, MetricHelp> = {
     what: "The typical (median) minutes a shop took to reply to us over the last 6 hours, paired message-by-message. Tells you how alive the market is right now.",
     drift: "Very high means shops are slow or asleep (off-hours); it does not indicate an engine problem on its own.",
   },
+  opsVisionAccuracy: {
+    label: "Photo price accuracy",
+    what: "How often the price we read off a shop's photo matched the price that shop later typed. Most shops answer with a picture of their board, so this is how much of the app's pricing you can actually trust. Only turns where BOTH a photo reading and a typed price exist are scored.",
+    drift: "A '-' means no photo reading has been confirmed in text yet. Falling accuracy means the vision chain is misreading boards - check the conflicts, they name both numbers.",
+  },
+  opsLeverageUse: {
+    label: "Leverage used",
+    what: "Of the bargains where a real cheaper offer from another shop was available, how often the agent actually named it. This is the single strongest lever we have.",
+    drift: "A low number with plenty of opportunities means the rival price is reaching the prompt but not the message - check the post-rails rejections.",
+  },
 
   // ---- Field KPIs (durable, 30-day) -----------------------------------------
   discountMargin: {

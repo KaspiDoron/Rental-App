@@ -33,8 +33,13 @@ export function mergeDigest(
     add(`quoted ${verified.pricePerDay}${verified.currency ? " " + verified.currency : ""}/day`);
   }
   if (verified.declined) add("shop declined / walked away");
+  // Only a REAL mismatch. `hasClosed()` scans these facts, so writing this on a
+  // merely-ambiguous reply permanently muted the thread.
   if (verified.wrongVehicle) add("shop does not offer the requested vehicle");
-  if (verified.outOfStock) add("shop is out of stock");
+  if (verified.vehicleUnclear) add("which vehicle this price is for is not confirmed yet");
+  for (const o of verified.options ?? []) {
+    add(`option: ${o.label} at ${o.pricePerDay}${o.currency ? " " + o.currency : ""}/day`);
+  }
 
   // The model's durable notes (deposit terms, condition, tone cues).
   for (const f of artifact.digestPatch) add(f);

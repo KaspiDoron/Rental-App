@@ -37,6 +37,13 @@ interface Snapshot {
     bargainSamples: number;
     medianShopReplyMins: number | null;
     replySamples: number;
+    // Photo-price accuracy + how often a real rival price actually got named.
+    visionAccuracyPct?: number | null;
+    visionVerifiedPct?: number | null;
+    visionPhotoTurns?: number;
+    visionConflicts?: number;
+    leverageUsePct?: number | null;
+    leverageOpportunities?: number;
   };
   queue: { depth: number; dueNow: number; nextAt: string | null };
   sockets: { live: number; total: number; stampedAt?: string | null };
@@ -225,6 +232,52 @@ export function EngineInspector() {
                     snap.operations.medianShopReplyMins == null
                       ? "-"
                       : `${snap.operations.medianShopReplyMins}m`
+                  }
+                />
+                {/* Photo pricing + leverage: the two things the owner could see
+                    going wrong in live threads but could not measure. */}
+                <StatTile
+                  helpId="opsVisionAccuracy"
+                  value={
+                    snap.operations.visionAccuracyPct == null
+                      ? "-"
+                      : `${snap.operations.visionAccuracyPct}%`
+                  }
+                  sub={
+                    snap.operations.visionPhotoTurns
+                      ? `${snap.operations.visionPhotoTurns} photo turns${
+                          snap.operations.visionConflicts
+                            ? ` · ${snap.operations.visionConflicts} conflict`
+                            : ""
+                        }`
+                      : "no photos yet"
+                  }
+                  tone={
+                    snap.operations.visionAccuracyPct == null
+                      ? "text-soft"
+                      : snap.operations.visionAccuracyPct >= 90
+                        ? "text-savings"
+                        : "text-brandyellow"
+                  }
+                />
+                <StatTile
+                  helpId="opsLeverageUse"
+                  value={
+                    snap.operations.leverageUsePct == null
+                      ? "-"
+                      : `${snap.operations.leverageUsePct}%`
+                  }
+                  sub={
+                    snap.operations.leverageOpportunities
+                      ? `${snap.operations.leverageOpportunities} chances`
+                      : "no rival yet"
+                  }
+                  tone={
+                    snap.operations.leverageUsePct == null
+                      ? "text-soft"
+                      : snap.operations.leverageUsePct >= 70
+                        ? "text-savings"
+                        : "text-brandred"
                   }
                 />
               </div>

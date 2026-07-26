@@ -42,6 +42,17 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
     ceiling,
     floor: ctx.guards.floorPerDay,
     rivalPrice: rival,
+    // The prompt shows the model every rival in the session; the rail must back
+    // every one of them, or citing rival #2 gets the whole draft rejected and
+    // replaced by a template that names no rival at all.
+    rivalPrices: ctx.session.rivals.map((r) => r.pricePerDay),
+    // A price the shop itself posted on a board is a legitimate number to quote
+    // back even when it sits above the current quote ("your list says 300, can
+    // you do 250?") - without this it reads as an inverted ask and is rejected.
+    allowAbove: [
+      ctx.inbound.verified.sheetPricePerDay,
+      ...(ctx.thread.digest.options ?? []).map((o) => o.pricePerDay),
+    ].filter((n): n is number => typeof n === "number" && n > 0),
     excludeExact: [ctx.session.rfq.durationDays, ctx.session.rfq.engineSizeCc ?? 0].filter(Boolean),
     checkAskBounds: artifact.move === "bargain" || artifact.move === "momentum",
   });

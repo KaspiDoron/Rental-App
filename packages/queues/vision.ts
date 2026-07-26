@@ -56,6 +56,9 @@ export interface VisionChildResult {
   reason?: string;
   /** Optional audit pointer to the stored blob in Supabase Storage. */
   mediaRef?: string;
+  /** Every stored frame. A price board routinely arrives as several photos
+   *  (model grid, deposit terms, delivery area) and they are ONE price list. */
+  mediaRefs?: string[];
   extraction?: Record<string, unknown>;
 }
 
