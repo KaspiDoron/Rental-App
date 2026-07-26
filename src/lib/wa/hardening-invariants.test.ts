@@ -78,6 +78,32 @@ describe("pairing: a live handshake is never destroyed by a code refresh", () =>
   });
 });
 
+describe("gating: the Find-Deals blur-lock actually renders when unpaired", () => {
+  it("waits FOR hydration (`restored`), never `!restored`", () => {
+    // `restored` is a hydration-DONE flag - setRestored(true) runs
+    // unconditionally on mount. The lock condition was written `!restored`, so
+    // it was false within a tick of mount and the veil never appeared: an
+    // unpaired user got the full search form and a live "Find my deal" button
+    // that could not possibly send. Pin the corrected polarity.
+    const page = readCode("src/app/page.tsx");
+    expect(page).not.toMatch(/!restored\s*&&\s*phase === "idle"/);
+    expect(page).toMatch(/waConnected !== true && restored && phase === "idle"/);
+  });
+
+  it("the veil and the blur wrapper share ONE derived flag", () => {
+    const page = readCode("src/app/page.tsx");
+    expect(page).toMatch(/const waLocked =/);
+    expect(page).toMatch(/\{waLocked && <WaLockVeil/);
+    expect(page).toMatch(/waLocked \? "pointer-events-none/);
+  });
+
+  it("startSearch refuses a confirmed-unpaired search (Will bypasses the veil)", () => {
+    const page = readCode("src/app/page.tsx");
+    // Must gate on the CONFIRMED false, not on a pending null read.
+    expect(page).toMatch(/if \(waConnected === false\) \{/);
+  });
+});
+
 describe("anti-ban: pairing-layer client fingerprint (the ban happened AT pairing)", () => {
   it("presents a standard Chrome-on-macOS fingerprint, never the flagged default", () => {
     const evo = read("src/lib/evolution.ts");

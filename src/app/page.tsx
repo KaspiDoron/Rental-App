@@ -59,7 +59,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
-import { OrbitDots } from "@/components/OrbitDots";
+import { WaLockVeil } from "@/components/WaLockVeil";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
@@ -1373,6 +1373,19 @@ export default function Home() {
     // The tap-to-build panel (F2) supplies fully-structured fields instead of
     // free text - no requestText needed in that path.
     if (!structuredFields && !requestText.trim()) return;
+    // PAIRING GATE, enforced not just painted. The blur-lock makes the form
+    // inert, but Will can call startSearch directly - and a search whose agents
+    // can never message anyone is a dead end. Only block on a CONFIRMED unlink
+    // (false), never while the status read is still pending (null).
+    if (waConnected === false) {
+      setMassNote(
+        t("Link your WhatsApp first - your agents bargain from your own number.")
+      );
+      document
+        .querySelector("[data-tour='request']")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     // No coordinates, no search - there is no silent default city anymore.
     if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
       setOriginHint("Set your location first - allow GPS or type your hotel / area.");
@@ -1779,6 +1792,16 @@ export default function Home() {
     return max ? new Date(max).toISOString() : null;
   }, [queueItems]);
 
+  // Is the search card gated behind WhatsApp pairing right now?
+  //
+  // ONE definition, used by both the veil and the blur wrapper so they can never
+  // disagree. Requires `restored` (hydration finished) so the lock never flashes
+  // over a search that is about to be rehydrated from sessionStorage, and only
+  // applies to the entry form - a live or completed search is left alone (its
+  // per-shop send buttons are separately gated on waConnected).
+  const waLocked =
+    waConnected !== true && restored && phase === "idle" && vendors.length === 0;
+
   // W7: the current Will guide stage (shared by the inline banner + summon chip).
   const willStageNow = useMemo(
     () =>
@@ -1857,40 +1880,15 @@ export default function Home() {
               still exist) but is blurred + non-interactive under a premium veil
               until the number is linked. The server already refuses unpaired
               sends - this makes the gate visible and calm. */}
-          {/* CHECKING: while the status call is still in flight (waConnected ===
-              null) show a calm neutral loader, NOT the pair prompt - the prompt
-              flashing before we know the real state was the "NOT CONNECTED"
-              flicker. Only when confirmed unlinked (=== false) do we prompt. */}
-          {waConnected === null && !restored && phase === "idle" && vendors.length === 0 && (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/70 p-5 text-center backdrop-blur-md">
-              <OrbitDots size={34} className="text-brandblue" label={t("Checking WhatsApp")} />
-              <div className="text-[13px] font-extrabold text-soft">
-                {t("Checking your WhatsApp link…")}
-              </div>
-            </div>
-          )}
-          {waConnected === false && !restored && phase === "idle" && vendors.length === 0 && (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/70 p-5 text-center backdrop-blur-md">
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#25D366] text-white shadow-lg">
-                <Icon name="whatsapp" className="h-7 w-7" />
-              </span>
-              <div>
-                <div className="text-[15px] font-extrabold text-strong">
-                  {t("Pair WhatsApp to start finding deals")}
-                </div>
-                <p className="mx-auto mt-1 max-w-[16rem] text-[12px] font-bold text-soft">
-                  {t("Your agents bargain from your own number, so shops talk to a real traveller. One 30-second link.")}
-                </p>
-              </div>
-              <a
-                href="/profile"
-                className="btn rounded-2xl bg-wagreen-deep px-5 py-2.5 text-[13px] font-extrabold text-white shadow-md hover:opacity-90"
-              >
-                💬 {t("Pair my WhatsApp")}
-              </a>
-            </div>
-          )}
-          <div className={waConnected !== true && !restored && phase === "idle" && vendors.length === 0 ? "pointer-events-none select-none blur-[2px]" : ""}>
+          {/* `restored` is the HYDRATION-DONE flag, not "a search was restored".
+              This condition had it inverted since the blur-lock was written
+              (d875d3c): setRestored(true) runs unconditionally on mount, so
+              `!restored` was false within a tick and the lock never rendered -
+              an unpaired user got the full search form and a live "Find my
+              deal" button that could not possibly send. We wait FOR hydration
+              (so no flash), then lock whenever there is no active search. */}
+          {waLocked && <WaLockVeil checking={waConnected === null} />}
+          <div className={waLocked ? "pointer-events-none select-none blur-[3px]" : ""}>
           <label className="text-[12px] font-extrabold text-soft">
             {t("What do you want to rent?")}
           </label>
