@@ -1291,7 +1291,13 @@ export default function Home() {
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.
-        const res = await fetch(`/api/replies?since=${searchEpoch}&t=${Date.now()}`, {
+        // The declared spec travels with the poll so the shop's menu is scoped
+        // to the vehicle they actually asked for (and hold a licence for).
+        const spec = new URLSearchParams({ since: String(searchEpoch), t: String(Date.now()) });
+        if (rfq?.engineSizeCc) spec.set("cc", String(rfq.engineSizeCc));
+        if (rfq?.vehicleClass) spec.set("vclass", rfq.vehicleClass);
+        if (rfq?.transmission && rfq.transmission !== "any") spec.set("tx", rfq.transmission);
+        const res = await fetch(`/api/replies?${spec.toString()}`, {
           cache: "no-store",
         });
         const d = await res.json();

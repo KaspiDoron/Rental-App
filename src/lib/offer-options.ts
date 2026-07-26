@@ -45,6 +45,96 @@ export interface VehicleOption {
   gaps: OptionGap[];
 }
 
+const MODEL_NAMES =
+  "\\b(?:click|scoopy|fino|filano|nmax|pcx|aerox|vario|beat|mio|vespa|forza|adv|xmax|wave|dream|raider|sniper|crf|klx|xr)";
+
+/**
+ * THE SPEC THE TRAVELLER DECLARED. Every option must match it.
+ *
+ * The live failure (Cee Moto Siargao, 26 Jul): the traveller asked for a 125cc
+ * automatic scooter; the shop replied with its entire price board - 110cc Beat,
+ * 125cc Click, 150cc, 200cc XR, 250cc Scrambler, at eight prices, twice over
+ * (standard and 8-day rates). The card offered all seventeen as things to pick.
+ *
+ * That is wrong on two counts, and the second one matters more:
+ *   - It is not what they asked for. A menu is only useful when every row is a
+ *     candidate; a board of everything the shop owns is just the board again.
+ *   - THEY ARE NOT LICENSED FOR IT. The traveller declared an IDP for the class
+ *     they searched. Presenting a 200cc trail bike as "pick the one you want",
+ *     and letting an agent bargain for it, invites them to ride something their
+ *     licence and their insurance do not cover.
+ *
+ * So the filter is not a display nicety - it is the same gate as the licence
+ * disclaimer, applied to the data.
+ */
+export interface VehicleSpec {
+  vehicleClass?: VehicleClassHint;
+  /** What the traveller asked for, e.g. 125. */
+  engineSizeCc?: number;
+  transmission?: "automatic" | "manual" | "any";
+}
+
+/** A displacement the shop typed: "110cc", "125 cc", "Click 150", "XR 200cc". */
+const CC_RX = /\b(\d{2,4})\s*(?:cc|ccm)\b/i;
+/** A model name followed by a bare displacement ("Honda Click 150", "XR 200"). */
+const MODEL_CC_RX = new RegExp(`${MODEL_NAMES}\\s*-?\\s*(\\d{2,4})\\b`, "i");
+
+export function ccIn(line: string): number | undefined {
+  const m = (line || "").match(CC_RX) ?? (line || "").match(MODEL_CC_RX);
+  const n = m ? parseInt(m[m.length - 1], 10) : NaN;
+  // Real scooters/bikes sit in 50..1300cc; anything else is a price or a year.
+  return Number.isFinite(n) && n >= 50 && n <= 1300 ? n : undefined;
+}
+
+/**
+ * Same displacement, allowing only the badge rounding manufacturers actually
+ * use (a "125" is sold as 124.8cc; a 150 is a different bike and often a
+ * different licence). Deliberately tight: the owner's rule is the declared
+ * vehicle, not "something like it".
+ */
+export function ccMatches(want: number, got: number): boolean {
+  return Math.abs(want - got) <= Math.max(5, want * 0.06);
+}
+
+/**
+ * Does this option line describe the vehicle the traveller declared?
+ *
+ * Judged on what the shop WROTE next to the price - never on the price itself.
+ * A line that names nothing (a bare "350/day") stays: it is most likely the
+ * answer to the question we asked, and dropping it would lose real offers.
+ */
+export function matchesSpec(line: string, spec: VehicleSpec): boolean {
+  if (!spec || (!spec.engineSizeCc && !spec.vehicleClass)) return true;
+  // 1) A named class that is not ours ends it: a 200cc trail bike is not a
+  //    scooter no matter what it costs.
+  const cls = classOfLine(line);
+  if (cls && spec.vehicleClass && cls !== spec.vehicleClass) return false;
+  // 2) A named displacement must be the one they asked for.
+  const cc = ccIn(line);
+  if (cc !== undefined && spec.engineSizeCc && !ccMatches(spec.engineSizeCc, cc)) return false;
+  // 3) A manual bike fails an automatic request even without a displacement.
+  if (spec.transmission === "automatic" && MANUAL_RX.test(line)) return false;
+  return true;
+}
+
+/** Scooter vs motorbike vs car, from the words on the line. */
+const SCOOTER_LINE =
+  /\b(scooter|scoopy|click|fino|filano|nmax|pcx|vespa|beat|mio|aerox|vario|moped|automatic|fazzio|matic)\b/i;
+const MOTORBIKE_LINE =
+  /\b(motor\s?bike|motorcycle|manual|semi\s?auto|sportbike|dirt\s?bike|scrambler|cafe\s?racer|enduro|trail|xr|klx|crf|ttr|raider|sniper)\b/i;
+const CAR_LINE = /\b(car|sedan|suv|hatchback|van|mpv|pickup|4x4|jeep|multicab)\b/i;
+const MANUAL_RX = /\b(manual|semi\s?auto|clutch|geared?|scrambler|dirt\s?bike|enduro|xr|klx|crf|ttr)\b/i;
+
+function classOfLine(line: string): VehicleClassHint {
+  // Two-wheel words win over car words, mirroring price-extract's lineClass:
+  // a "car & scooter rental" header must not misclassify the scooter row.
+  if (MOTORBIKE_LINE.test(line) && !SCOOTER_LINE.test(line)) return "motorbike";
+  if (SCOOTER_LINE.test(line)) return "scooter";
+  if (MOTORBIKE_LINE.test(line)) return "motorbike";
+  if (CAR_LINE.test(line)) return "car";
+  return undefined;
+}
+
 /** Words a shop uses for the newer/older end of its fleet. */
 const NEW_RX = /\b(new|newer|latest|brand[\s-]?new|20(?:2[3-9]|3\d))\b/i;
 const OLDER_RX = /\b(old|older|used|second[\s-]?hand|basic|standard|cheap(?:er)?|normal)\b/i;
@@ -158,10 +248,11 @@ function gapsFor(o: Omit<VehicleOption, "gaps">): OptionGap[] {
  */
 export function optionsFromHits(
   hits: RentalPriceHit[],
-  opts: { depositNote?: string; source?: "text" | "photo" } = {}
+  opts: { depositNote?: string; source?: "text" | "photo"; spec?: VehicleSpec } = {}
 ): VehicleOption[] {
   if (hits.length < 2) return [];
   const source = opts.source ?? "text";
+  const spec = opts.spec ?? {};
   const out: VehicleOption[] = [];
   const used = new Set<string>();
   // Amounts that share a line are neighbours; each one's clause ends where the
@@ -181,6 +272,12 @@ export function optionsFromHits(
     // different bikes - reading the whole line would label both "new". Each
     // amount is described by the words around IT.
     const line = describingWindow(h.line ?? "", h.index, siblingsByLine.get(h.line ?? "") ?? []);
+    // ONLY THE VEHICLE THEY ASKED FOR. Judged on the shop's own words beside
+    // this amount, so one row of a price board can be kept while its
+    // neighbours - a 200cc trail bike, a 110cc Beat - are dropped. The
+    // traveller's licence declaration covers the class they searched, and
+    // nothing else may be offered as a choice or bargained for.
+    if (!matchesSpec(line, spec)) continue;
     const condition = conditionOf(line);
     const base = {
       key: keyFor(h.pricePerDay),
@@ -256,11 +353,19 @@ export function optionsFromThread(
   shopMessages: string[],
   opts: {
     vehicleClass?: VehicleClassHint;
+    /** The displacement the traveller declared - the menu is scoped to it. */
+    engineSizeCc?: number;
+    transmission?: "automatic" | "manual" | "any";
     durationDays?: number;
     localCurrency?: string;
     depositNote?: string;
   } = {}
 ): VehicleOption[] {
+  const spec: VehicleSpec = {
+    vehicleClass: opts.vehicleClass,
+    engineSizeCc: opts.engineSizeCc,
+    transmission: opts.transmission,
+  };
   let acc: VehicleOption[] = [];
   for (const msg of shopMessages) {
     if (!msg || !msg.trim()) continue;
@@ -269,7 +374,10 @@ export function optionsFromThread(
       durationDays: opts.durationDays,
       localCurrency: opts.localCurrency,
     });
-    acc = mergeOptions(acc, optionsFromHits(quoted.allOffers, { depositNote: opts.depositNote }));
+    acc = mergeOptions(
+      acc,
+      optionsFromHits(quoted.allOffers, { depositNote: opts.depositNote, spec })
+    );
   }
   return acc;
 }

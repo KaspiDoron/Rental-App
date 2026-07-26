@@ -113,6 +113,11 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
   // facts above are: the conversation is the state.
   const options = optionsFromThread([...inbound, curInbound], {
     vehicleClass: input.rfq.vehicleClass === "car" ? "car" : input.rfq.vehicleClass,
+    // The declared spec scopes the menu: a shop's full price board must never
+    // become a list of things to pick, and the traveller's licence declaration
+    // covers only what they searched for.
+    engineSizeCc: input.rfq.engineSizeCc,
+    transmission: input.rfq.transmission,
     durationDays: input.rfq.durationDays,
     localCurrency: input.currency,
     depositNote: (input.extraction as { deposit?: string } | null)?.deposit || undefined,

@@ -16,7 +16,16 @@ export async function GET(req: Request) {
   // ATOMIC SESSION: the client passes the epoch its current search started at;
   // only replies created since then belong to this session. This is what stops
   // a previous search's offers/threads from resurfacing on a new search.
-  const sinceMs = Number(new URL(req.url).searchParams.get("since") ?? 0);
+  const params = new URL(req.url).searchParams;
+  const sinceMs = Number(params.get("since") ?? 0);
+  // THE DECLARED SPEC scopes the option menu. The traveller asked for one
+  // vehicle and declared a licence for that class; a shop's full price board
+  // must never become a list of things to pick. Narrowing-only, and the engine
+  // re-derives the same scope server-side from the real RFQ for anything it
+  // actually negotiates, so a tampered value can only show the sender more rows.
+  const specCc = Number(params.get("cc") ?? 0);
+  const specClass = params.get("vclass");
+  const specTx = params.get("tx");
   const sinceFilter =
     sinceMs > 0
       ? `&created_at=gte.${encodeURIComponent(new Date(sinceMs).toISOString())}`
@@ -169,7 +178,14 @@ export async function GET(req: Request) {
     for (const [vendorId, digits] of numberByVendor) {
       const bodies = digits ? bodiesByNumber.get(digits) : undefined;
       if (!bodies?.length) continue;
-      const opts = optionsFromThread(bodies, { durationDays: undefined });
+      const opts = optionsFromThread(bodies, {
+        vehicleClass:
+          specClass === "car" || specClass === "scooter" || specClass === "motorbike"
+            ? specClass
+            : undefined,
+        engineSizeCc: specCc > 0 ? specCc : undefined,
+        transmission: specTx === "automatic" || specTx === "manual" ? specTx : undefined,
+      });
       if (opts.length >= 2) optionsByVendor.set(vendorId, opts);
       // Did this shop ASK where the traveller is? Same rows, no extra query.
       // We keep their own wording so the card can say WHY they want it rather

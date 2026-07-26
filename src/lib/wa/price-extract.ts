@@ -118,12 +118,36 @@ function expandK(line: string): string {
   return line.replace(/(\d+(?:\.\d+)?)\s*k\b/gi, (_, n) => String(Math.round(parseFloat(n) * 1000)));
 }
 
+// A URL NEVER contains a rate. Shops paste Maps/Waze links constantly, and the
+// per-day pattern happily matched inside one: "maps.app.goo.gl/FRqAc4day2rY4mF49"
+// read as "4/day" and put a 4-peso scooter on the traveller's card. Stripped
+// before any scanning, so neither the price nor the label can come from a link.
+const URL_RX = /\b(?:https?:\/\/|www\.)\S+/gi;
+
+// A QUALIFYING DURATION is not a rate. "Discounted Rates for Rentals of 8 Days
+// or More" is a condition on the prices that follow, and it was being read as an
+// 8-per-day offer. The tell is the words around the day token, never the amount.
+const DURATION_BEFORE = /\b(?:rentals?\s+of|minimum|min\.?|at\s+least|more\s+than|over|from)\s*$/i;
+const DURATION_AFTER = /^\s*(?:or\s+(?:more|longer|above|up)|\+|and\s+(?:up|above|over)|plus)\b/i;
+
+/**
+ * Is the amount at `index` part of a duration CONDITION rather than a price?
+ * Pure so the judgement is unit-tested instead of inferred from a transcript.
+ */
+export function isDurationConditionAt(line: string, index: number, matched: string): boolean {
+  const before = line.slice(Math.max(0, index - 24), index);
+  if (DURATION_BEFORE.test(before)) return true;
+  const after = line.slice(index + matched.length, index + matched.length + 24);
+  return DURATION_AFTER.test(after);
+}
+
 // A line that is a transfer / tour / other service, NOT a vehicle rental.
 const SERVICE_LINE =
   /\b(trip|transfer|shuttle|airport|port|pier|ferry|terminal|tour|drop\s?off service|pick\s?up service|boat|van service|habal)\b|↔|⇄|<->|<=>|<\s*-\s*>/i;
 
 const SCOOTER_WORDS = /\b(scooter|scoopy|click|fino|filano|nmax|pcx|vespa|beat|mio|aerox|vario|moped|automatic)\b/i;
-const MOTORBIKE_WORDS = /\b(motor\s?bike|motorcycle|manual|semi\s?auto|sportbike|dirt\s?bike|xr|klx|crf|raider|sniper)\b/i;
+const MOTORBIKE_WORDS =
+  /\b(motor\s?bike|motorcycle|manual|semi\s?auto|sportbike|dirt\s?bike|scrambler|cafe\s?racer|enduro|trail|xr|klx|crf|ttr|wr|raider|sniper)\b/i;
 const CAR_WORDS = /\b(car|sedan|suv|hatchback|van|mpv|pickup|4x4|jeep|multicab)\b/i;
 
 // ---------------------------------------------------------------------------
@@ -337,6 +361,8 @@ export function extractQuotedPrices(
   const wantClass = opts.vehicleClass;
   const days = opts.durationDays && opts.durationDays > 0 ? opts.durationDays : 1;
   const lines = text
+    // Links out first - a rate never lives inside a URL.
+    .replace(URL_RX, " ")
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -356,6 +382,8 @@ export function extractQuotedPrices(
       const amt = parseAmount(perDay[1]);
       if (!(amt > 0) || amt === days) continue;
       const at = amountIndex(line, perDay, 1);
+      // "...for Rentals of 8 Days or More:" states WHEN the rates below apply.
+      if (isDurationConditionAt(line, at, perDay[0])) continue;
       hits.push({
         pricePerDay: amt,
         currency: currencyIn(line) ?? opts.localCurrency,

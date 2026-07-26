@@ -1,14 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  menuUnresolved,
-  mergeOptions,
-  mileageIn,
-  nextGap,
-  offerForOption,
-  optionsFromHits,
-  signalsVariance,
-  type VehicleOption,
-} from "./offer-options";
+import { ccIn, ccMatches, matchesSpec, menuUnresolved, mergeOptions, mileageIn, nextGap, offerForOption, optionsFromHits, optionsFromThread, signalsVariance, type VehicleOption } from "./offer-options";
 import { extractQuotedPrices } from "./wa/price-extract";
 
 // The exact Marlin Krabi thread that closed a live negotiation by mistake.
@@ -159,5 +150,107 @@ describe("menuUnresolved - the predicate the policy rails key on", () => {
 
   it("a single option is never an unresolved menu", () => {
     expect(menuUnresolved([])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CEE MOTO SIARGAO, 26 Jul - the shop answered a 125cc scooter request with its
+// ENTIRE price board, and the card offered all seventeen rows as things to pick,
+// including a 4-peso "option" read out of a Google Maps link.
+// ---------------------------------------------------------------------------
+const CEE_MOTO = `Thank you for contacting Ceemoto Rentals Siargao! Please let us know how we can help you.
+Waze & GoogleMap: https://maps.app.goo.gl/FRqAc4day2rY4mF49?g_st=ic
+Please make a reservation before visiting our shop, as units sell out quickly.
+
+Standard Rates:
+>>P350/day - 110cc Honda Beat, Mio Gear, Mio i
+>>P500/day - 125cc Honda Click, Fazzio
+>>P450/day- 110cc Bike with Surf Rack
+>>P600/day - Honda Click 150cc
+>>P900/day - Scrambler/Classic build
+>>P1,200/day - Honda XR 200cc
+>>P1,300/day - Scrambler/Classic build 250cc
+
+Discounted Rates for Rentals of 8 Days or More:
+>>P330/day - 110cc Honda Beat, Mio Gear, Mio i
+>>P400/day- 110cc Bike with Surf Rack
+>>P450/day - 125cc Honda Click , Fazzio
+>>P550/day - Honda 150cc(Keyless)
+>>P800/day - Scrambler/Classic build
+>>P1,100/day - Honda XR 200cc
+>>P1,200/day - Scrambler/Classic build 250cc
+
+We offer Pickup or Delivery for 50pesos service fee around General Luna.`;
+
+describe("a price board is scoped to the vehicle the traveller declared", () => {
+  const SPEC = { vehicleClass: "scooter" as const, engineSizeCc: 125, transmission: "automatic" as const };
+
+  it("keeps ONLY the 125cc rows - not the whole board", () => {
+    const opts = optionsFromThread([CEE_MOTO], { ...SPEC, durationDays: 5 });
+    const prices = opts.map((o) => o.pricePerDay).sort((a, b) => a - b);
+    // P450 (8+ days) and P500 (standard) are the two 125cc Click/Fazzio rates.
+    expect(prices).toEqual([450, 500]);
+  });
+
+  it("drops every off-spec class - the traveller is not licensed for them", () => {
+    const opts = optionsFromThread([CEE_MOTO], { ...SPEC, durationDays: 5 });
+    const all = opts.map((o) => o.pricePerDay);
+    for (const off of [350, 330, 450 /* surf rack is 110cc */, 600, 550, 900, 800, 1200, 1100, 1300]) {
+      if (off === 450) continue; // 450 is legitimately the 125cc 8-day rate
+      expect(all).not.toContain(off);
+    }
+    // The 200cc XR and the 250cc Scrambler are the ones that matter most.
+    expect(all).not.toContain(1200);
+    expect(all).not.toContain(1300);
+  });
+
+  it("never reads a price out of a URL (the 4-peso scooter)", () => {
+    const opts = optionsFromThread([CEE_MOTO], { ...SPEC, durationDays: 5 });
+    expect(opts.map((o) => o.pricePerDay)).not.toContain(4);
+  });
+
+  it("never reads a qualifying duration as a rate (the 8-peso scooter)", () => {
+    const opts = optionsFromThread([CEE_MOTO], { ...SPEC, durationDays: 5 });
+    expect(opts.map((o) => o.pricePerDay)).not.toContain(8);
+  });
+
+  it("with NO declared spec the behaviour is unchanged - nothing is dropped blindly", () => {
+    const opts = optionsFromThread([CEE_MOTO], { durationDays: 5 });
+    expect(opts.length).toBeGreaterThan(2);
+  });
+});
+
+describe("spec matching is judged on the shop's words, never the price", () => {
+  const SCOOTER125 = { vehicleClass: "scooter" as const, engineSizeCc: 125 };
+
+  it("reads a displacement in every form a shop types it", () => {
+    expect(ccIn("125cc Honda Click")).toBe(125);
+    expect(ccIn("Honda Click 150cc")).toBe(150);
+    expect(ccIn("Honda XR 200")).toBe(200);
+    expect(ccIn(">>P350/day - 110cc Honda Beat")).toBe(110);
+    // A price is not a displacement.
+    expect(ccIn("350 per day")).toBeUndefined();
+  });
+
+  it("a 125 badge tolerates manufacturer rounding but not the next size up", () => {
+    expect(ccMatches(125, 125)).toBe(true);
+    expect(ccMatches(125, 124)).toBe(true);
+    expect(ccMatches(125, 110)).toBe(false);
+    expect(ccMatches(125, 150)).toBe(false);
+  });
+
+  it("keeps a line that names nothing - most likely the answer we asked for", () => {
+    expect(matchesSpec("400 per day", SCOOTER125)).toBe(true);
+    expect(matchesSpec("best price 380/day for you", SCOOTER125)).toBe(true);
+  });
+
+  it("drops a manual bike on an automatic request even with no displacement", () => {
+    expect(
+      matchesSpec("Scrambler/Classic build", { ...SCOOTER125, transmission: "automatic" })
+    ).toBe(false);
+  });
+
+  it("keeps the right scooter", () => {
+    expect(matchesSpec("125cc Honda Click, Fazzio", SCOOTER125)).toBe(true);
   });
 });
