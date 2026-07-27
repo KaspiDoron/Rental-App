@@ -32,33 +32,12 @@ import { sbInsert, sbDelete, sbSelect } from "../runtime-config";
  */
 const PENDING_AUTO = "meta->>kind=not.in.(rfq,custom,human-manual)";
 
-/**
- * Re-insert a wa_outbox row that the drain ALREADY CLAIMED (delete-returning) and
- * then failed to send. Because the source row is gone, a discarded failed insert
- * = permanent loss with no trace (audit DEFECT 2). This retries once for a
- * transient write blip and, if still failing, logs a visible `wa-requeue-failed`
- * event so the loss is never silent. Used by the drain's transient/recipient
- * re-queue paths.
- */
-export async function robustRequeue(
-  record: Record<string, unknown>,
-  tag: string
-): Promise<void> {
-  let ok = await sbInsert("wa_outbox", [record]).catch(() => false);
-  if (!ok) {
-    await new Promise((r) => setTimeout(r, 250));
-    ok = await sbInsert("wa_outbox", [record]).catch(() => false);
-  }
-  if (!ok) {
-    await sbInsert("agent_events", [
-      {
-        kind: "wa-requeue-failed",
-        vendor_name: String(record.to_number ?? ""),
-        detail: `Re-queue of a claimed send failed twice (${tag}) - the row could not be persisted.`,
-      },
-    ]).catch(() => {});
-  }
-}
+// `robustRequeue` used to live here: the drain claimed a row by DELETING it, so
+// a failed re-insert after a failed send meant permanent, silent loss, and the
+// re-insert needed a retry-and-log dance of its own. The outbound lifecycle
+// (wa/outbox-lifecycle) removed the problem rather than hardening the workaround
+// - a claimed row is leased, never deleted, so a re-queue is a patch on a row
+// that already exists and there is no insert left to lose.
 
 export async function parkOutboxOnce(row: {
   senderKey: string;

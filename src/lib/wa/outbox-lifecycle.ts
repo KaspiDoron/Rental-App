@@ -1,0 +1,156 @@
+// THE OUTBOUND LIFECYCLE: queued -> sending -> sent, with exactly one row.
+//
+// The failure this exists for: a shop disappeared from the queue AND from the
+// status panel while its message was going out, then reappeared. It was not a
+// rendering bug. Claiming a due message DELETED its outbox row, and the "sent"
+// row in whatsapp_messages was only written after the network call returned.
+// Between those two moments - a guard re-check, a cancellation re-check, a
+// pacing claim and a live HTTP round trip, so seconds, not milliseconds - the
+// shop existed in NEITHER table. Every surface derives its state from those two
+// tables, so the shop had no state at all: `stage` fell through to "found",
+// which matches no status bucket, and the card simply vanished.
+//
+// The missing capability was a LIFECYCLE. A message in flight is a real state
+// the system had no way to represent, so it was represented as absence.
+//
+// Worse than the flicker: the delete had no lease. If the process died mid-send
+// - a Cloud Run instance recycled, a timeout - the row was gone and the message
+// was lost forever, with nothing to recover from.
+//
+// This claims by LEASE instead: an atomic conditional update that pushes
+// `not_before` beyond now and stamps the claim into `meta`. Postgres serializes
+// the two writers on the row lock, so exactly one drainer wins - the same
+// exactly-once guarantee the delete gave - while the row stays visible the whole
+// time. A crashed drainer's lease simply expires and the row becomes due again.
+//
+// MIGRATION-FREE by construction: `not_before` is the lease and `meta` is
+// existing JSONB. No column, no schema change, nothing for the owner to run.
+
+import "server-only";
+import { sbSelect, sbUpdate, sbDelete } from "../runtime-config";
+
+/**
+ * How long a drainer may hold a claimed row. Long enough to cover a guard
+ * re-check plus a slow WhatsApp round trip (the transport's own hard timeout is
+ * 12s), short enough that a crashed drainer's message goes out on the next
+ * drain rather than sitting for an hour.
+ */
+export const CLAIM_LEASE_MS = 3 * 60_000;
+
+/** How many times a row may be blocked by a live idempotency claim before we
+ * stop retrying it and say so. Bounded, because "another invocation is
+ * delivering it" can also mean "an invocation died holding the slot". */
+export const MAX_DUP_HOLDS = 5;
+
+export interface OutboxMeta {
+  reason?: string;
+  vendorId?: string;
+  vendorName?: string;
+  kind?: string;
+  /** Epoch ms of the claim that currently owns this row. */
+  claimedAt?: number;
+  /** Consecutive drains blocked by a live idempotency claim. */
+  dupHolds?: number;
+  [k: string]: unknown;
+}
+
+export interface OutboxRow {
+  id: number;
+  sender_key: string;
+  to_number: string;
+  body: string;
+  not_before: string;
+  meta: OutboxMeta | null;
+}
+
+export type OutboxState = "due" | "waiting" | "sending";
+
+/**
+ * What a row is doing RIGHT NOW, purely from its own fields. This is the single
+ * definition every surface reads - the queue viewer, the activity feed and the
+ * status panel - so they cannot disagree about a message in flight.
+ *
+ * `sending` is claimed and inside its lease. Once the lease lapses the row is
+ * honestly `due` again: whoever held it is gone.
+ */
+export function outboxState(
+  notBefore: string | null | undefined,
+  meta: OutboxMeta | null | undefined,
+  nowMs: number
+): OutboxState {
+  const claimedAt = Number(meta?.claimedAt);
+  if (Number.isFinite(claimedAt) && nowMs - claimedAt < CLAIM_LEASE_MS) return "sending";
+  const at = Date.parse(String(notBefore ?? ""));
+  if (!Number.isFinite(at)) return "due";
+  return at <= nowMs ? "due" : "waiting";
+}
+
+/** The ISO instant a claim taken now expires at. */
+export function leaseUntil(nowMs: number): string {
+  return new Date(nowMs + CLAIM_LEASE_MS).toISOString();
+}
+
+/**
+ * ATOMIC CLAIM. Returns the row only to the caller that actually won it.
+ *
+ * `not_before=lte.<now>` in the filter is the lock: two concurrent drainers
+ * serialize on the row, and the loser re-evaluates the predicate against the
+ * winner's committed row - where `not_before` is now the lease - so it matches
+ * nothing and gets []. Exactly the guarantee delete-with-return provided, minus
+ * the window where the row does not exist.
+ */
+export async function claimOutboxRow(
+  id: number,
+  meta: OutboxMeta | null,
+  nowMs: number
+): Promise<boolean> {
+  const { sbUpdateReturning } = await import("../runtime-config");
+  const rows = await sbUpdateReturning<{ id: number }>(
+    "wa_outbox",
+    `id=eq.${id}&not_before=lte.${encodeURIComponent(new Date(nowMs).toISOString())}`,
+    { not_before: leaseUntil(nowMs), meta: { ...(meta ?? {}), claimedAt: nowMs } }
+  ).catch(() => [] as { id: number }[]);
+  return rows.length > 0;
+}
+
+/**
+ * Hand a claimed row back to the queue: it is queued again, at a new time, with
+ * an honest reason. The row never left, so there is nothing to re-insert and
+ * nothing that can be lost by a failed insert - which is what made the old
+ * re-queue paths need a retry-and-log dance of their own.
+ */
+export async function releaseOutboxRow(
+  id: number,
+  notBefore: string,
+  meta: OutboxMeta | null
+): Promise<boolean> {
+  const next: OutboxMeta = { ...(meta ?? {}) };
+  delete next.claimedAt;
+  return await sbUpdate("wa_outbox", `id=eq.${id}`, { not_before: notBefore, meta: next }).catch(
+    () => false
+  );
+}
+
+/** The message left (or was deliberately dropped): retire its row. */
+export async function completeOutboxRow(id: number): Promise<void> {
+  await sbDelete("wa_outbox", `id=eq.${id}`).catch(() => {});
+}
+
+/**
+ * Rows whose claim has lapsed without completing - a drainer died mid-send.
+ * Nothing calls this to "fix" them: the lease IS the fix, because a lapsed row
+ * is due again by definition. This exists so the WhatsApp doctor can SHOW the
+ * owner that a send was interrupted rather than leaving it as folklore.
+ */
+export async function lapsedClaims(senderKey: string, nowMs: number): Promise<OutboxRow[]> {
+  const rows = await sbSelect<OutboxRow>(
+    "wa_outbox",
+    `select=id,sender_key,to_number,body,not_before,meta&sender_key=eq.${encodeURIComponent(
+      senderKey
+    )}&meta->>claimedAt=not.is.null&limit=50`
+  ).catch(() => [] as OutboxRow[]);
+  return rows.filter((r) => {
+    const at = Number(r.meta?.claimedAt);
+    return Number.isFinite(at) && nowMs - at >= CLAIM_LEASE_MS;
+  });
+}

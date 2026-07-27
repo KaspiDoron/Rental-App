@@ -380,6 +380,40 @@ export async function sbDeleteReturning<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * Patch rows matching a PostgREST filter and return the ones actually updated.
+ *
+ * This is what makes a CONDITIONAL UPDATE usable as an atomic claim: two callers
+ * patching the same row with a predicate in the filter serialize on the row
+ * lock, and the loser re-evaluates the predicate against the winner's committed
+ * row - so exactly one of them gets a row back. Used by the outbound lifecycle
+ * to claim a queued message without deleting it (see wa/outbox-lifecycle).
+ */
+export async function sbUpdateReturning<T = Record<string, unknown>>(
+  table: string,
+  filter: string,
+  values: Record<string, unknown>
+): Promise<T[]> {
+  const conn = supabase();
+  if (!conn) return [];
+  try {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?${filter}`, {
+      method: "PATCH",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(values),
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as T[];
+  } catch {
+    return [];
+  }
+}
+
 /** Patch rows matching a PostgREST filter with the given values. */
 export async function sbUpdate(
   table: string,

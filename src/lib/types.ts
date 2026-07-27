@@ -47,6 +47,12 @@ export type TrackerStage =
   | "locating-contact"
   | "found" // discovered + ready to ask (the honest resting state)
   | "no-contact" // no WhatsApp number could be found - cannot be messaged
+  // The message is being delivered RIGHT NOW (its outbox row is claimed and
+  // inside its lease - see src/lib/wa/outbox-lifecycle). Without this state the
+  // send was an unrepresentable moment: the row was deleted to claim it and the
+  // sent row did not exist yet, so the shop fell back to "found" - which matched
+  // no status-panel bucket - and visibly disappeared mid-send.
+  | "sending"
   | "rfq-sent"
   | "awaiting-response"
   | "negotiating"

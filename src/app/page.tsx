@@ -759,6 +759,9 @@ export default function Home() {
         "locating-contact": 1,
         found: 2,
         "no-response": 2,
+        // In flight: past "found", not yet delivered. Ranked so the DB rollup
+        // can advance it once the send lands but can never rewind it to "found".
+        sending: 2,
         "rfq-sent": 3,
         "awaiting-response": 4,
         negotiating: 5,
@@ -804,6 +807,8 @@ export default function Home() {
         id: number;
         vendorId: string | null;
         notBefore: string;
+        /** The row is claimed by a drainer and being delivered right now. */
+        sending?: boolean;
         rawReason?: string | null;
       }[] = Array.isArray(d.queue) ? d.queue : [];
       const items = rawItems.filter((i) => !tombstoned(i));
@@ -852,9 +857,17 @@ export default function Home() {
       //   sent event exists  -> the message left: the shop is now contacted
       //   no sent evidence   -> it was removed: the shop goes back to "found"
       //                         (never a phantom "messaged")
-      const byVendor = new Map<string, { until: string; reason?: string | null }>();
+      const byVendor = new Map<
+        string,
+        { until: string; reason?: string | null; sending?: boolean }
+      >();
       for (const i of items)
-        if (i.vendorId) byVendor.set(i.vendorId, { until: i.notBefore, reason: i.rawReason });
+        if (i.vendorId)
+          byVendor.set(i.vendorId, {
+            until: i.notBefore,
+            reason: i.rawReason,
+            sending: Boolean(i.sending),
+          });
       const sentVendors = new Set<string>(
         (Array.isArray(d.items) ? d.items : [])
           .filter((it: { kind?: string; vendorId?: string }) => it.kind === "sent" && it.vendorId)
@@ -973,15 +986,29 @@ export default function Home() {
             return finalizeStage(base); // an offer supersedes any queue badge
           }
           const held = byVendor.get(base.id);
-          if (
-            held &&
-            (base.queuedUntil !== held.until || base.queuedReason !== (held.reason ?? undefined))
-          ) {
-            return finalizeStage({
-              ...base,
-              queuedUntil: held.until,
-              queuedReason: held.reason ?? undefined,
-            });
+          if (held) {
+            // A message being DELIVERED right now is its own stage. It used to
+            // be no state at all - the row was deleted to claim it and the sent
+            // row did not exist yet - so the card fell to "found" and dropped
+            // out of every status bucket mid-send.
+            const stage: Vendor["stage"] =
+              held.sending && (base.stage === "found" || base.stage === "rfq-sent" || !base.stage)
+                ? "sending"
+                : !held.sending && base.stage === "sending"
+                  ? "rfq-sent"
+                  : base.stage;
+            if (
+              base.queuedUntil !== held.until ||
+              base.queuedReason !== (held.reason ?? undefined) ||
+              stage !== base.stage
+            ) {
+              return finalizeStage({
+                ...base,
+                stage,
+                queuedUntil: held.until,
+                queuedReason: held.reason ?? undefined,
+              });
+            }
           }
           if (!held && base.queuedUntil) {
             const delivered = sentVendors.has(base.id);
@@ -1174,7 +1201,7 @@ export default function Home() {
   const waiting =
     vendors.some(
       (v) =>
-        ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "") ||
+        ["sending", "rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "") ||
         (v.stage === "offer-received" && v.offer && v.offer.presentable !== true)
     ) ||
     // Keep the reply loop (which also drives inbound recovery + the outbox drain)
@@ -1774,8 +1801,16 @@ export default function Home() {
       // message is still held (stage rfq-sent + queuedUntil) is honestly
       // "queued": nothing has been delivered yet.
       else if (["awaiting-response", "negotiating"].includes(v.stage ?? "")) messaged.push(v);
-      else if (v.queuedUntil) queued.push(v);
+      // In flight RIGHT NOW: an honest "queued" until it lands (its row still
+      // exists, leased by the drainer - see wa/outbox-lifecycle).
+      else if (v.stage === "sending" || v.queuedUntil) queued.push(v);
       else if (v.stage === "rfq-sent") messaged.push(v);
+      // THE PARTITION IS TOTAL. A shop that reaches a state no branch above
+      // names used to fall out of the panel entirely and simply disappear -
+      // which is exactly what a mid-send shop did. A shop we have contacted
+      // belongs somewhere; anything else is genuinely still just a search
+      // result and is intentionally not counted.
+      else if (v.sentText || v.lastEventAt) messaged.push(v);
     }
     return { messaged, replied, queued, deals };
   }, [vendors]);
@@ -3214,7 +3249,7 @@ function isActiveVendor(v: Vendor): boolean {
   return (
     !!v.offer ||
     !!v.queuedUntil ||
-    ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
+    ["sending", "rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
   );
 }
 
@@ -3257,7 +3292,7 @@ function applyFilters(vendors: Vendor[], f: FilterState, days: number): Vendor[]
     // "Negotiating now" = every shop the agent is actively working: message
     // sent, awaiting the reply, or mid-bargain.
     list = list.filter((v) =>
-      ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
+      ["sending", "rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
     );
   else if (f.agentStatus === "offer") list = list.filter((v) => v.offer);
   else if (f.agentStatus === "dropped")

@@ -14,14 +14,7 @@ import { digitsOnly } from "@/lib/phone";
 // queue to REVIEW messages must never be the event that SENDS them - the
 // webhook, the activity/replies polls and the ping cron all drain already.
 
-interface OutboxRow {
-  id: number;
-  sender_key: string;
-  to_number: string;
-  body: string;
-  not_before: string;
-  meta: { reason?: string; vendorName?: string; vendorId?: string; kind?: string } | null;
-}
+import { outboxState, type OutboxRow } from "@/lib/wa/outbox-lifecycle";
 
 export async function GET() {
   const session = await getSession();
@@ -36,17 +29,27 @@ export async function GET() {
 
   const now = Date.now();
   const items = rows.map((r) => {
-    const at = Date.parse(r.not_before);
+    // ONE definition of what a queued row is doing, shared with the activity
+    // feed and the status panel (wa/outbox-lifecycle). A row being delivered
+    // right now is `sending` - a real state, visible for its whole duration,
+    // instead of the row briefly ceasing to exist and the shop with it.
+    const state = outboxState(r.not_before, r.meta, now);
+    const sending = state === "sending";
     return {
       id: r.id,
       vendorId: r.meta?.vendorId ?? null,
       vendorName: r.meta?.vendorName ?? null,
       toNumber: r.to_number,
       notBefore: r.not_before,
-      due: at <= now,
+      due: state !== "waiting",
+      sending,
       kind: r.meta?.kind ?? null,
       // The guard's REAL stored reason, translated honestly.
-      reason: at <= now ? "Sending shortly" : queueReasonLabel(r.meta?.reason),
+      reason: sending
+        ? "Sending now"
+        : state === "due"
+          ? "Sending shortly"
+          : queueReasonLabel(r.meta?.reason),
       rawReason: r.meta?.reason ?? null,
     };
   });

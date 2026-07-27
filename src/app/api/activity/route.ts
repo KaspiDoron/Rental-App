@@ -409,6 +409,7 @@ export async function GET(req: Request) {
   // the conversation thread, not the intro queue.
   const { queueReasonLabel } = await import("@/lib/queue-reason");
   const { cleanShopName } = await import("@/lib/text");
+  const { outboxState } = await import("@/lib/wa/outbox-lifecycle");
   const INTRO_KINDS = new Set(["rfq", "custom", "human-manual"]);
   const queue = outbox
     .filter((r) => {
@@ -416,17 +417,25 @@ export async function GET(req: Request) {
       return !kind || INTRO_KINDS.has(kind);
     })
     .map((r) => {
-      const at = Date.parse(r.not_before);
       const meta = r.meta as { vendorId?: string; vendorName?: string; reason?: string; kind?: string } | null;
+      // Same lifecycle definition the queue viewer uses - the two surfaces can
+      // no longer disagree about a message that is going out right now.
+      const state = outboxState(r.not_before, meta, now);
+      const sending = state === "sending";
       return {
         id: r.id,
         vendorId: meta?.vendorId ?? null,
         vendorName: meta?.vendorName ? cleanShopName(meta.vendorName) : null,
         toNumber: r.to_number,
         notBefore: r.not_before,
-        due: at <= now,
+        due: state !== "waiting",
+        sending,
         kind: meta?.kind ?? null,
-        reason: at <= now ? "Sending shortly" : queueReasonLabel(meta?.reason),
+        reason: sending
+          ? "Sending now"
+          : state === "due"
+            ? "Sending shortly"
+            : queueReasonLabel(meta?.reason),
         rawReason: meta?.reason ?? null,
       };
     });

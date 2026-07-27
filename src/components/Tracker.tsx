@@ -27,6 +27,9 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     "locating-contact": { text: "Locating", cls: "bg-brandblue-soft text-brandblue" },
     found: { text: "Ready", cls: "bg-card2 text-soft" },
     "no-contact": { text: "No WhatsApp", cls: "bg-card2 text-faint" },
+    // Delivering right now. Its own badge, because "in flight" is a real state
+    // the shop is in for several seconds - not a gap to fall through.
+    sending: { text: "Sending", cls: "bg-brandblue-soft text-brandblue" },
     "rfq-sent": { text: "RFQ sent", cls: "bg-brandblue-soft text-brandblue" },
     "awaiting-response": {
       text: "Awaiting reply",

@@ -26,6 +26,14 @@ import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runti
 import { jitteredHold } from "./wa/pacing";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits } from "./wa/phone-key";
+import {
+  claimOutboxRow,
+  releaseOutboxRow,
+  completeOutboxRow,
+  MAX_DUP_HOLDS,
+  type OutboxMeta,
+  type OutboxRow,
+} from "./wa/outbox-lifecycle";
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
 import { stripWaFormatting } from "./text";
@@ -990,6 +998,12 @@ export async function guardOutbound(rawOpts: {
   // and lets two concurrent drainers both send. When true, only the idempotent
   // stripWaFormatting runs; the stored text is delivered verbatim.
   alreadyHumanized?: boolean;
+  /**
+   * The wa_outbox row this send IS. Set by the drain, which now claims a row by
+   * LEASE rather than deleting it, so the row still exists: a re-queue must
+   * re-time THAT row, not insert a second pending message for the same shop.
+   */
+  outboxRowId?: number;
 }): Promise<GuardVerdict> {
   // ONE canonical routing key for this whole call. Callers hand us whatever
   // spelling they hold - a JID with a device suffix, a "+63 966 …" from Google,
@@ -1047,6 +1061,19 @@ export async function guardOutbound(rawOpts: {
 
   const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
     if (opts.queueIfBlocked !== false) {
+      // ALREADY A ROW: this send came off the queue and is only being re-timed.
+      // Patching it keeps one row per message, so the shop stays continuously
+      // visible and no insert can fail in a way that loses the message.
+      if (opts.outboxRowId) {
+        const { releaseOutboxRow } = await import("./wa/outbox-lifecycle");
+        const held = await releaseOutboxRow(opts.outboxRowId, notBefore, {
+          ...(opts.meta ?? {}),
+          reason,
+        });
+        return held
+          ? { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text }
+          : { allow: false, reason, text };
+      }
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: opts.senderKey,
@@ -1564,14 +1591,9 @@ export async function afterSend(senderKey: string, toNumber?: string): Promise<v
 // Outbox drain - serverless-friendly queue (no cron needed)
 // ---------------------------------------------------------------------------
 
-interface OutboxRow {
-  id: number;
-  sender_key: string;
-  to_number: string;
-  body: string;
-  not_before: string;
-  meta: Record<string, unknown> | null;
-}
+// The row shape lives with the lifecycle that owns it (wa/outbox-lifecycle) -
+// one definition, so a surface reading a row and the drain writing one cannot
+// drift apart on what a queued message is.
 
 /**
  * Send every due queued message. Called opportunistically from the inbound
@@ -1599,7 +1621,6 @@ export async function drainOutbox(
   const candidates = [...dueRows]
     .sort((a, b) => priOf(a) - priOf(b) || a.not_before.localeCompare(b.not_before))
     .slice(0, 30);
-  const { sbDeleteReturning } = await import("./runtime-config");
   const { claimSendSlots, releaseMessageClaim, gcSendClaims } = await import("./wa/pacing");
   const p = await getPolicies();
   let sent = 0;
@@ -1633,13 +1654,27 @@ export async function drainOutbox(
       }).catch(() => {});
       continue;
     }
-    // ATOMIC CLAIM: delete-with-return. Only the caller that actually deletes
-    // this row gets it back; a concurrent drainer (webhook + poll + cron all
-    // fire this) gets [] and skips - so a queued message is sent exactly once,
-    // never duplicated (a duplicate blast is a ban signal).
-    const claimed = await sbDeleteReturning<OutboxRow>("wa_outbox", `id=eq.${cand.id}`);
-    if (claimed.length === 0) continue; // another drainer won this row
-    const row = claimed[0];
+    // ATOMIC CLAIM BY LEASE. This used to be a delete-with-return, which won
+    // the race correctly but made the row - and therefore the shop - cease to
+    // exist for the whole send. Every surface derives shop state from the outbox
+    // and the sent-messages table, so during that window the shop had no state
+    // at all and disappeared from the queue and the status panel.
+    //
+    // A conditional update wins the race exactly as well (the loser
+    // re-evaluates `not_before<=now` against the winner's committed row and
+    // matches nothing) while leaving the row in place, marked `sending`. It also
+    // gives a crashed drainer's message a way back: the lease lapses and the row
+    // is simply due again, which the delete made impossible.
+    const claimedAt = Date.now();
+    if (!(await claimOutboxRow(cand.id, cand.meta as OutboxMeta | null, claimedAt))) continue;
+    const row: OutboxRow = { ...cand, meta: { ...(cand.meta ?? {}), claimedAt } };
+    /** Hand this row back to the queue at a new time, with an honest reason. */
+    const release = (delayMs: number, patch: Record<string, unknown>) =>
+      releaseOutboxRow(
+        row.id,
+        new Date(Date.now() + Math.max(0, delayMs)).toISOString(),
+        { ...(cand.meta ?? {}), ...patch } as OutboxMeta
+      );
     // Re-check the gate (caps/hours may have changed while queued). Preserve the
     // row's ORIGINAL auto-ness: a user-typed `custom` message that the caps
     // parked is NOT an agent send, so it must not be re-evaluated as auto and
@@ -1653,28 +1688,24 @@ export async function drainOutbox(
       auto: rowKind !== "custom",
       queueIfBlocked: true,
       meta: row.meta ?? undefined,
+      // The row still EXISTS (claimed by lease, not deleted), so the guard must
+      // re-time THIS row rather than insert a second one for the same shop.
+      outboxRowId: row.id,
       // B4: row.body was humanized once when it was parked - do NOT re-vary it.
       alreadyHumanized: true,
     });
     if (!verdict.allow) {
-      // The gate either RE-QUEUED the row (verdict.queuedUntil set) or
-      // DELIBERATELY dropped it (verdict.terminal - cancelled / duplicate /
-      // rfq-dedup / takeover, where re-sending would be wrong). If it did
-      // NEITHER, the row was already CLAIMED (deleted) above but never re-parked
-      // - re-insert it so a non-terminal reject can NEVER silently lose a queued
-      // message. This is the belt behind the branch-level queue() fixes: any
-      // future guard branch that forgets to queue still cannot drop a real send.
+      // The gate either RE-QUEUED the row (verdict.queuedUntil set - it patched
+      // this row in place) or DELIBERATELY dropped it (verdict.terminal -
+      // cancelled / duplicate / rfq-dedup / takeover, where re-sending would be
+      // wrong). If it did NEITHER, release the claim so a non-terminal reject
+      // can never strand a real send inside a lease.
       const { needsRepark } = await import("./wa/outbox-policy");
-      if (needsRepark(verdict)) {
-        await sbInsert("wa_outbox", [
-          {
-            sender_key: row.sender_key,
-            to_number: row.to_number,
-            body: row.body,
-            not_before: jitteredHold(Date.now(), 5, 5),
-            meta: { ...(row.meta ?? {}), reason: "sync-retry" },
-          },
-        ]).catch(() => {});
+      if (verdict.terminal) await completeOutboxRow(row.id);
+      else if (needsRepark(verdict)) {
+        await release(Date.parse(jitteredHold(Date.now(), 5, 5)) - Date.now(), {
+          reason: "sync-retry",
+        });
       }
       continue;
     }
@@ -1682,9 +1713,14 @@ export async function drainOutbox(
     // between the guard verdict and this send).
     try {
       const { isCancelled } = await import("./wa/cancellations");
-      if ((await isCancelled(row.sender_key, row.to_number)) === true) continue;
+      if ((await isCancelled(row.sender_key, row.to_number)) === true) {
+        await completeOutboxRow(row.id); // the user removed it - it is gone for good
+        continue;
+      }
     } catch {
       /* the guard already enforced the readable cases */
+      await release(60_000, { reason: "sync-retry" });
+      continue;
     }
     // ATOMIC SEND SLOTS: the guard's time-based checks are read-then-act and
     // N concurrent drainers all pass them together. The claim row is the
@@ -1707,20 +1743,34 @@ export async function drainOutbox(
       fleetGapSeconds: isReplyRow ? replyFleetGapSeconds(p) : undefined,
     });
     if (!claim.ok) {
-      if (claim.kind === "duplicate") continue; // another invocation is delivering it
+      if (claim.kind === "duplicate") {
+        // Another invocation holds this message's idempotency slot. Usually it
+        // is mid-delivery and will retire the row itself - but it may also have
+        // DIED holding the slot, so waiting forever is not an option. Hold this
+        // row briefly and count the holds; a bounded number of them, then an
+        // honest give-up rather than a row that retries until the heat death.
+        const holds = Number((cand.meta as OutboxMeta | null)?.dupHolds ?? 0) + 1;
+        if (holds >= MAX_DUP_HOLDS) {
+          await completeOutboxRow(row.id);
+          await sbInsert("agent_events", [
+            {
+              kind: "wa-send-dropped",
+              vendor_id: String((row.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+              vendor_name: String(
+                (row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number
+              ),
+              detail: `Stopped retrying +${row.to_number} (sender ${row.sender_key}) - an identical message held the send slot ${MAX_DUP_HOLDS} times, so it has almost certainly already gone out.`,
+            },
+          ]).catch(() => {});
+        } else {
+          await release(120_000, { dupHolds: holds, reason: "human pacing gap" });
+        }
+        continue;
+      }
       // pacing loss / unknown -> back into the queue beyond the gap window.
-      await sbInsert("wa_outbox", [
-        {
-          sender_key: row.sender_key,
-          to_number: row.to_number,
-          body: row.body,
-          not_before: jitteredHold(Date.now(), 1, 2),
-          meta: {
-            ...(row.meta ?? {}),
-            reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
-          },
-        },
-      ]).catch(() => {});
+      await release(Date.parse(jitteredHold(Date.now(), 1, 2)) - Date.now(), {
+        reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
+      });
       await sbInsert("agent_events", [
         { kind: "claim-lost", detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}` },
       ]).catch(() => {});
@@ -1772,6 +1822,11 @@ export async function drainOutbox(
           },
         },
       ]);
+      // ORDER MATTERS, and it is the whole point of this lifecycle: the SENT row
+      // is written FIRST, and only then is the queued row retired. The shop is
+      // briefly in both tables (every surface prefers "sent"), and never in
+      // neither - which is what made it disappear mid-send.
+      await completeOutboxRow(row.id);
       if (r.unconfirmed) {
         await sbInsert("agent_events", [
           {
@@ -1819,53 +1874,35 @@ export async function drainOutbox(
           Math.random(),
         );
         if (decision.drop) {
+          await completeOutboxRow(row.id);
           await dropEvent(
             `Gave up reaching +${row.to_number} - the WhatsApp host was unreachable for over 24h (sender ${row.sender_key}).`,
           );
         } else {
-          const { robustRequeue } = await import("./wa/park");
-          await robustRequeue(
-            {
-              sender_key: row.sender_key,
-              to_number: row.to_number,
-              body: row.body,
-              not_before: new Date(Date.now() + decision.delayMs).toISOString(),
-              meta: {
-                ...(row.meta ?? {}),
-                firstQueuedAt,
-                transientAttempts: decision.attempts,
-                reason: "reconnecting - resumes automatically",
-              },
-            },
-            "transient"
-          );
+          // The row never left the table, so there is no insert that can fail
+          // and silently lose the message - releasing it IS the re-queue.
+          await release(decision.delayMs, {
+            firstQueuedAt,
+            transientAttempts: decision.attempts,
+            reason: "reconnecting - resumes automatically",
+          });
         }
       } else {
         const decision = recipientRetryDecision(
           Number((row.meta as { attempts?: number } | null)?.attempts ?? 0),
         );
         if (decision.drop) {
+          await completeOutboxRow(row.id);
           await dropEvent(
             `Could not reach +${row.to_number} after 5 attempts (sender ${row.sender_key}) - the shop's number may be unreachable on WhatsApp.`,
           );
         } else {
-          const { robustRequeue } = await import("./wa/park");
-          await robustRequeue(
-            {
-              sender_key: row.sender_key,
-              to_number: row.to_number,
-              body: row.body,
-              // Recipient-level retry backoff, capped so it never creeps past
-              // ~20 min even at the last attempt.
-              not_before: new Date(Date.now() + decision.delayMs).toISOString(),
-              meta: {
-                ...(row.meta ?? {}),
-                attempts: decision.attempts,
-                reason: `couldn't reach this shop - retry ${decision.attempts}/5`,
-              },
-            },
-            "recipient"
-          );
+          // Recipient-level retry backoff, capped so it never creeps past
+          // ~20 min even at the last attempt.
+          await release(decision.delayMs, {
+            attempts: decision.attempts,
+            reason: `couldn't reach this shop - retry ${decision.attempts}/5`,
+          });
         }
       }
     }
