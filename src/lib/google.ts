@@ -36,7 +36,18 @@ declare global {
 // await res.json()/res.text()); the timer is unref'd so it never holds the
 // runtime, and an abort after completion is a harmless no-op. On abort fetch
 // throws, which every call site's existing catch maps to the API fallback.
-async function timedFetch(url: string, init: RequestInit = {}, ms = 12_000): Promise<Response> {
+// A SHOP SEARCH HAS A BUDGET.
+//
+// This was 12 seconds per call, and the discovery chain makes more than one -
+// a modern text search, then a legacy nearby search when that fails. Two
+// timeouts in a row is 24 seconds of a traveller staring at a spinner, before
+// the surrounding Supabase reads. Shops are supposed to be on screen in under
+// ten. Seven seconds is far longer than a healthy Places call (they answer in
+// a few hundred milliseconds); anything slower is not coming back in a useful
+// time, and failing over quickly beats waiting politely.
+const CALL_BUDGET_MS = 7_000;
+
+async function timedFetch(url: string, init: RequestInit = {}, ms = CALL_BUDGET_MS): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   (timer as { unref?: () => void }).unref?.();

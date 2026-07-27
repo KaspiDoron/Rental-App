@@ -501,6 +501,7 @@ export const I18N_CATALOG: string[] = [
   "This price is for a different vehicle than you asked for - your agent is checking whether they have the one you want.",
   "Your agent is confirming exactly which model this price is for.",
   "CHECKING MODEL",
+  "Finding shops near you",
   "- everything is unlocked.",
   "You're on",
   "See Pro & Ultra",

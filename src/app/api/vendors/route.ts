@@ -15,6 +15,8 @@ interface Body {
   // Full RFQ, echoed by the client so the search row can snapshot it for Trips
   // restore. Optional - discovery works without it.
   rfq?: Record<string, unknown>;
+  /** Panel-built fields, sent when discovery starts BEFORE the RFQ exists. */
+  fields?: Record<string, unknown>;
 }
 
 // Vendor discovery. With a Google Maps key this returns REAL rental businesses
@@ -57,6 +59,19 @@ export async function POST(req: Request) {
   const radius = Math.min(50, Math.max(1, body.radiusKm || 8));
   const vClass: VehicleClass =
     body.vehicleClass && body.vehicleClass !== "any" ? body.vehicleClass : "car";
+
+  // THE FAST PATH'S SNAPSHOT. Discovery now starts in the same tick as the
+  // profiler (see startSearch), so on the panel path it arrives before the RFQ
+  // exists. The fields are handed over instead and the snapshot is derived here
+  // with the SAME pure function the profiler uses - no second opinion, no LLM.
+  if (!body.rfq && body.fields && typeof body.fields === "object") {
+    const { deterministicRFQ } = await import("@/lib/agents");
+    try {
+      body.rfq = { ...deterministicRFQ(body.fields) } as Record<string, unknown>;
+    } catch {
+      /* a malformed panel payload must not cost the traveller their search */
+    }
+  }
 
   const real = await findRealVendors(body.origin, radius, vClass);
   let vendors: Vendor[];

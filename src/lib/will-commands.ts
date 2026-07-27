@@ -37,7 +37,8 @@ export interface WillVendorSnapshot {
 
 /** Compact client snapshot sent with every message - Will's eyes. */
 export interface WillContext {
-  phase: "idle" | "profiling" | "running" | "done";
+  /** "discovering" is the shop lookup - a separate wait from structuring. */
+  phase: "idle" | "profiling" | "discovering" | "running" | "done";
   radiusKm: number;
   vehicleClass?: string;
   maxPricePerDay?: number | null;

@@ -138,7 +138,12 @@ export default function Home() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [source, setSource] = useState<"google" | "demo" | "google-error" | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"idle" | "profiling" | "running" | "done">("idle");
+  // "profiling" and "discovering" are separate because they ARE separate waits.
+  // One label covered both, so a slow shop lookup was reported as "Structuring
+  // your request" for a minute - the app describing the wrong stage of itself.
+  const [phase, setPhase] = useState<
+    "idle" | "profiling" | "discovering" | "running" | "done"
+  >("idle");
   const [view, setView] = useState<"list" | "map" | "activity">("list");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -176,15 +181,15 @@ export default function Home() {
   const [builderFields, setBuilderFields] = useState<Partial<StructuredRFQ> | null>(null);
   // IDP disclaimer (owner directive): search stays disabled until the traveller
   // declares they hold a valid International Driving Permit for the category.
-  // Persisted so a returning user is not re-asked every visit.
+  //
+  // NEVER PERSISTED, AND RESET AFTER EVERY SEARCH. It used to be remembered in
+  // localStorage, so one tick months ago silently spoke for every search since -
+  // including searches for a DIFFERENT vehicle category, which is precisely the
+  // thing the declaration is about. A declaration is an act, not a preference:
+  // it has to be made about the request actually being sent, by the person
+  // sending it, at the moment they send it. Anything else is us asserting
+  // something on their behalf.
   const [idpConsent, setIdpConsent] = useState(false);
-  useEffect(() => {
-    try {
-      if (localStorage.getItem("wd_idp_consent") === "yes") setIdpConsent(true);
-    } catch {
-      /* private mode - the checkbox simply starts unchecked */
-    }
-  }, []);
   const structuredMode = builderOpen && Boolean(builderFields?.vehicleClass);
   // Card windowing: render the first batch and reveal more on demand - keeps
   // long result lists cheap on low-end phones.
@@ -263,7 +268,7 @@ export default function Home() {
   // transition re-collapses it, a tap on the summary row re-opens it.
   useEffect(() => {
     if (phase === "running" || phase === "done") setFormOpen(false);
-    if (phase === "profiling") setVisibleCount(20);
+    if (phase === "profiling" || phase === "discovering") setVisibleCount(20);
   }, [phase]);
   const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
 
@@ -1462,29 +1467,35 @@ export default function Home() {
     // session's shops (they belong to people who never signed up here).
     clearShopAvatars();
     setQueueItems([]);
-    // Close the PREVIOUS session on the server first: purge its queued
-    // messages, delete its wakeups and silence its shop threads BEFORE any new
-    // RFQ goes out. AWAITED with one retry (mirrors clearSearch): a silently
-    // failed close used to leave the old session's sends + wakeups alive, so
-    // the old shops kept getting messaged while the new hunt ran - exactly the
-    // "agents talk after a new search" bug. On double failure we still proceed
-    // (the new epoch scopes the UI) but warn honestly.
-    {
-      const close = () =>
-        fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
+    // THREE CALLS THAT DID NOT NEED TO QUEUE BEHIND EACH OTHER.
+    //
+    // This was strictly serial - close the old session, then structure the
+    // request, then find the shops - and every stage waits out the one before
+    // it. Each is a network round trip, discovery talks to Google with its own
+    // retry chain, and the traveller watched "Structuring your request" for
+    // over a minute while nothing on screen said what was actually happening.
+    //
+    // The dependencies are narrower than the order suggested:
+    //
+    //   - Closing the previous session must precede SENDING, not searching. It
+    //     stops old threads being messaged; nothing about finding shops depends
+    //     on it. So it starts now and is awaited just before the funnel runs.
+    //   - Discovery needs an origin, a radius and a vehicle CLASS. When the
+    //     request panel built the request we already hold the class, so
+    //     discovery starts in the same tick as the profiler instead of after
+    //     it. On the free-text path the class genuinely is the profiler's
+    //     answer, and only that path still waits.
+    const closing = (async () => {
+      const close = () => fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
       let closed = await close().catch(() => false);
       if (!closed) {
         await new Promise((r) => setTimeout(r, 1200));
         closed = await close().catch(() => false);
       }
-      if (!closed) {
-        setMassNote(
-          t("Starting a fresh search - but the server could not confirm stopping the previous session's messages. Check the queue in a moment.")
-        );
-      }
-    }
+      return closed;
+    })();
 
-    const pRes = await fetch("/api/profile", {
+    const profileP = fetch("/api/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
@@ -1493,6 +1504,32 @@ export default function Home() {
           : { text: requestText }
       ),
     });
+
+    const discover = (vehicleClass: string, rfqSnap?: StructuredRFQ) =>
+      fetch("/api/vendors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin: { lat: origin.lat, lng: origin.lng },
+          radiusKm,
+          vehicleClass,
+          fulfillment: rfqSnap?.fulfillment === "any" ? undefined : rfqSnap?.fulfillment,
+          // Snapshot-forward: hand the full RFQ so the search row can store it
+          // and this hunt is restorable later from Trips (issue 8). On the fast
+          // path the fields are handed over instead and the route derives the
+          // same snapshot with the same pure function - no LLM either way.
+          rfq: rfqSnap,
+          fields: rfqSnap ? undefined : structuredFields,
+        }),
+      });
+
+    // The fast path: shops are already being looked up while the request is
+    // still being structured.
+    const earlyVendorsP = structuredFields?.vehicleClass
+      ? discover(structuredFields.vehicleClass)
+      : null;
+
+    const pRes = await profileP;
     const pData = await pRes.json();
     if (!pRes.ok) {
       setPhase("idle");
@@ -1502,20 +1539,9 @@ export default function Home() {
     setRfq(pData.rfq);
     // The active filter always follows the requested vehicle class.
     setFilters({ ...DEFAULT_FILTERS, vehicleClass: pData.rfq.vehicleClass });
+    setPhase("discovering");
 
-    const vRes = await fetch("/api/vendors", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        origin: { lat: origin.lat, lng: origin.lng },
-        radiusKm,
-        vehicleClass: pData.rfq.vehicleClass,
-        fulfillment: pData.rfq.fulfillment === "any" ? undefined : pData.rfq.fulfillment,
-        // Snapshot-forward: hand the full RFQ so the search row can store it and
-        // this hunt is restorable later from Trips (issue 8).
-        rfq: pData.rfq,
-      }),
-    });
+    const vRes = await (earlyVendorsP ?? discover(pData.rfq.vehicleClass, pData.rfq));
     if (!vRes.ok) {
       // A failed discovery call must NEVER masquerade as "no shops found
       // near your stay" - that sends users widening the radius for nothing.
@@ -1534,6 +1560,18 @@ export default function Home() {
     setSource(vData.source ?? "demo");
     setSourceError(vData.sourceError ?? null);
     setVendors(list);
+
+    // NOW the close matters: nothing may be SENT until the previous session's
+    // queue and wakeups are gone. By this point it has had the whole discovery
+    // round trip to finish, so it almost never costs anything.
+    if (!(await closing)) {
+      setMassNote(
+        t("Starting a fresh search - but the server could not confirm stopping the previous session's messages. Check the queue in a moment.")
+      );
+    }
+
+    // A declaration is made about THIS request. The next search asks again.
+    setIdpConsent(false);
     setPhase("running");
     runFunnel(list, pData.rfq);
   }
@@ -2259,14 +2297,7 @@ export default function Home() {
             <input
               type="checkbox"
               checked={idpConsent}
-              onChange={(e) => {
-                setIdpConsent(e.target.checked);
-                try {
-                  localStorage.setItem("wd_idp_consent", e.target.checked ? "yes" : "no");
-                } catch {
-                  /* private mode - session-only consent */
-                }
-              }}
+              onChange={(e) => setIdpConsent(e.target.checked)}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--blue)]"
             />
             <span className="text-[11px] font-bold leading-snug text-soft">
@@ -2283,11 +2314,18 @@ export default function Home() {
                 ? startSearch(undefined, builderFields)
                 : startSearch()
             }
-            disabled={phase === "profiling" || phase === "running" || !idpConsent}
+            disabled={phase === "profiling" || phase === "discovering" || phase === "running" || !idpConsent}
             className="btn btn-primary cta-sheen mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] disabled:opacity-70"
           >
-            {phase === "profiling" ? (
-              <LoadingDots light label={t("Structuring your request")} />
+            {phase === "profiling" || phase === "discovering" ? (
+              <LoadingDots
+                light
+                label={
+                  phase === "discovering"
+                    ? t("Finding shops near you")
+                    : t("Structuring your request")
+                }
+              />
             ) : phase === "running" ? (
               <LoadingDots light label={t("Agents contacting shops")} />
             ) : (
