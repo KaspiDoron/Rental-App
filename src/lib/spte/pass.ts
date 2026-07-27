@@ -107,6 +107,28 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         .join("\n")}\n`
     : "";
 
+  // THE LEDGER, in the model's own words. The legal move set already makes a
+  // repeated fact-question impossible (spte/policy), but a move that IS legal
+  // can still carry a redundant question inside its text - "and what's the
+  // deposit?" tacked onto a bargain the shop already answered. Stating what is
+  // established and what is still outstanding removes the reason to ask.
+  const ledger = dg.ledger;
+  const ledgerBlock = ledger
+    ? [
+        ledger.known.length
+          ? `ALREADY ESTABLISHED by this shop (never ask again): ${ledger.known.join(", ")}.`
+          : "",
+        ledger.outstanding.length
+          ? `ALREADY ASKED and still unanswered (do NOT repeat the question): ${ledger.outstanding.join(", ")}.`
+          : "",
+        ledger.owed.length
+          ? `STILL OWED to the traveller before this thread can close: ${ledger.owed.join(", ")}.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n") + "\n"
+    : "";
+
   // THE MENU. When the shop has offered a choice, the turn's job is to make the
   // tiers comparable - what separates them and a photo of each - and the gaps
   // below say exactly what is still unknown, so we never re-ask what they told
@@ -191,6 +213,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     durationLeverage +
     rivalLeverage +
     repetitionNote +
+    ledgerBlock +
     `THIS SHOP so far:\n${digest}\n\n` +
     `RECENT MESSAGES:\n${tail || "(none yet)"}\n\n` +
     `SHOP JUST SAID: ${ctx.inbound.text || "(nothing - a scheduled follow-up)"}\n` +

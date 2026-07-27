@@ -8,6 +8,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { sbSelect, sbInsert } from "./runtime-config";
+import { claimsIn } from "./thread/claims";
 import type { ExtractedOffer } from "./agents";
 
 // The full vocabulary. Anything outside it is dropped - the AI can never
@@ -41,13 +42,28 @@ export function tagsFromExtraction(extraction: ExtractedOffer, replyText: string
   }
   if (extraction.delivers === true) tags.add("delivery");
   if (extraction.delivers === false) tags.add("pickup-only");
-  const dep = (extraction.deposit ?? "").toLowerCase();
-  if (dep) {
-    if (/\bno deposit|without deposit|deposit[- ]free|none\b/.test(dep)) tags.add("no-deposit");
-    else {
-      if (/passport|id card|driver'?s? licen[cs]e/.test(dep)) tags.add("passport-deposit");
-      if (/\d/.test(dep)) tags.add("cash-deposit");
+
+  // DEPOSIT TERMS COME FROM A TYPED CLAIM, WITH POLARITY.
+  //
+  // This used to be a cue match with an `else`: if the text did not literally
+  // contain "no deposit", any mention of "passport" fell through to
+  // `passport-deposit`. So "we don't take a deposit, just your passport at
+  // pickup" - the friendliest terms in the thread - was badged as REQUIRING a
+  // passport deposit. The opposite of what the shop said.
+  //
+  // A claim carries whether it was affirmed or denied, and the negation is
+  // scoped to its clause, so the denial attaches to the deposit and the passport
+  // stands on its own instead of being swallowed by an else.
+  const depositText = [extraction.deposit ?? "", replyText].filter(Boolean).join(". ");
+  const depositClaims = claimsIn(depositText, "shop", 0).filter((c) => c.subject === "deposit");
+  const denied = depositClaims.some((c) => c.polarity === "denied");
+  const affirmed = depositClaims.filter((c) => c.polarity === "affirmed");
+  if (denied && affirmed.length === 0) tags.add("no-deposit");
+  for (const c of affirmed) {
+    if (c.detail === "passport" || c.detail === "id" || c.detail === "licence") {
+      tags.add("passport-deposit");
     }
+    if (c.detail === "cash") tags.add("cash-deposit");
   }
   // English-only safety net for the most common freebie mentions.
   if (/\b(helmets? (are |is )?(free|included)|free helmets?|includes? helmets?|2 helmets)\b/i.test(replyText)) {

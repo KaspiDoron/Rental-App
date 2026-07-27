@@ -8,6 +8,8 @@
 // (No "server-only" pin: the deterministic core is pure and unit-tested; the
 // LLM half loads ./ai dynamically inside the server-called function.)
 
+import { claimsIn } from "./thread/claims";
+
 export interface InboundRisk {
   risk: "none" | "caution" | "high";
   reasons: string[];
@@ -68,6 +70,27 @@ function shopNameSlugs(vendorName?: string): string[] {
   return [...out].filter((s) => s.length >= 5);
 }
 
+/**
+ * Is this message the shop stating its DEPOSIT or HANDOVER terms, rather than
+ * asking the traveller for anything? Read as typed claims (lib/thread/claims),
+ * so "we don't take a deposit, just your passport at pickup" is what it plainly
+ * is: two claims about terms, one of them a denial - and not a document ask.
+ *
+ * A message that also demands a scan is NOT excused: the caller still requires
+ * its own scan-and-document evidence, and a request verb next to a document
+ * word overrides this. This only stops TERMS from reading as a demand.
+ */
+function describesTerms(text: string): boolean {
+  const claims = claimsIn(text, "shop", 0);
+  const termClaim = claims.some((c) => c.subject === "deposit" || c.subject === "handover");
+  if (!termClaim) return false;
+  // An explicit ask ("send me your passport") is a demand no matter what else
+  // the message says.
+  return !/\b(send|share|forward|upload|give me)\b[^.!?]{0,30}\b(passports?|id cards?|licen[cs]es?)\b/i.test(
+    text
+  );
+}
+
 export function screenInboundDeterministic(text: string, vendorName?: string): InboundRisk {
   const reasons: string[] = [];
   const cleared: string[] = [];
@@ -83,8 +106,24 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
   };
 
   // 1. Documents up front: passport/ID photos before any rental exists.
-  if (/(send|photo|picture|pic|copy|scan)[^.!?]{0,40}(passport|id card|identity|license|licence)/.test(s) ||
-      /(passport|id card)[^.!?]{0,30}(photo|picture|pic|copy|scan|send)/.test(s)) {
+  //
+  // WORD BOUNDARIES ARE LOAD-BEARING HERE. Unanchored, `pic` matched inside
+  // "pickup", so "no deposit, just your passport at pickup" - the best terms in
+  // the whole thread - was flagged HIGH RISK for document harvesting. Being
+  // handed the vehicle IS the pickup; it is the opposite of a demand for a
+  // scan over chat.
+  const DOC = /\b(passports?|id cards?|identity|licen[cs]es?)\b/;
+  const SCAN = /\b(send|sends|photo|photos|picture|pictures|pics?|copy|scan)\b/;
+  if (
+    (SCAN.test(s) && DOC.test(s) &&
+      (/\b(send|photo|picture|pics?|copy|scan)\b[^.!?]{0,40}\b(passports?|id cards?|identity|licen[cs]es?)\b/.test(s) ||
+        /\b(passports?|id cards?)\b[^.!?]{0,30}\b(photo|picture|pics?|copy|scan|send)\b/.test(s))) &&
+    // ...and it must not be the shop DESCRIBING its terms. A typed claim about
+    // the deposit or the handover is terms, not a demand for documents - the
+    // structural half of the same fix, so a phrasing the boundaries miss still
+    // cannot turn friendly terms into a red banner.
+    !describesTerms(text)
+  ) {
     bump("high", "asked for a photo/copy of your passport or ID over chat - never send documents before you see the vehicle and the shop");
   }
 

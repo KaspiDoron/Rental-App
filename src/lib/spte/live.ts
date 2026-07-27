@@ -18,6 +18,7 @@ import { clampWaitMinutes } from "./wait";
 import { optionsFromThread, signalsVariance } from "../offer-options";
 import { emptyDigest } from "./digest";
 import { deriveThreadFacts } from "./thread-facts";
+import { buildLedger } from "../thread/ledger";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
@@ -126,16 +127,24 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
     localCurrency: input.currency,
     depositNote: (input.extraction as { deposit?: string } | null)?.deposit || undefined,
   });
+  // THE LEDGER: typed claims with POLARITY, the questions we have already put,
+  // and the facts this thread still owes the traveller. Derived from the same
+  // rows as everything else above, for the same reason.
+  const ledger = buildLedger({ inbound, outbound, currentInbound: curInbound });
   return {
     ...base,
     round: facts.bargainRounds,
     quotedPricePerDay: input.usablePrice,
     tone,
     firmCount,
-    depositKnown: facts.depositKnown,
-    fulfillmentKnown: facts.fulfillmentKnown,
+    // "No deposit" settles the deposit question exactly as firmly as "3000
+    // baht". The old boolean only counted the second kind, so the friendliest
+    // possible terms read as "unknown" and got asked about forever.
+    depositKnown: facts.depositKnown || ledger.known.includes("deposit"),
+    fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
     lastOutbound: facts.lastOutbound,
     options: options.length >= 2 ? options : undefined,
+    ledger,
   };
 }
 

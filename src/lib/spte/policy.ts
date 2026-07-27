@@ -6,6 +6,8 @@
 
 import type { MoveKind, TurnContext, TurnArtifact } from "./types";
 import { menuUnresolved } from "../offer-options";
+import { alreadyAsked, unaskedObligations, type ThreadLedger } from "../thread/ledger";
+import type { ClaimSubject } from "../thread/claims";
 
 /**
  * Compute the legal move set for this turn from verified facts. Ordered by the
@@ -106,9 +108,47 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // A complete, priced deal -> present it to the traveller.
   if (dealComplete(ctx)) moves.push("present");
 
+  // DO NOT ASK WHAT WE HAVE ALREADY ASKED. A fact-question whose answer is still
+  // outstanding is not a legal move - not discouraged in a prompt, ABSENT. This
+  // is what stops "could you share your best price per day for the 4 days?" from
+  // going out twice; the honest alternative is to wait, which is what falls out
+  // below when nothing else is legal. Only FACT questions are gated: a bargain
+  // is a push, not a question, and pushing twice is a strategy the model owns.
+  const gated = withoutRepeatedAsks(ctx, moves);
+
+  // NEVER GO QUIET OWING SOMETHING. A thread that has not established the
+  // deposit or how the traveller collects the vehicle is not finished, and
+  // silence used to be legal there simply because nothing was owed. An
+  // obligation we have not even asked about outranks falling silent.
+  if (gated.length === 0) {
+    for (const subject of unaskedObligations(ctx.thread.digest.ledger ?? EMPTY_LEDGER)) {
+      if (subject === "deposit") gated.push("deposit-probe");
+      if (subject === "handover") gated.push("fulfillment-probe");
+    }
+  }
+
   // Nothing owed -> silence is the most human move (the graph's default).
-  if (moves.length === 0) moves.push("silent");
-  return dedupe(moves);
+  if (gated.length === 0) gated.push("silent");
+  return dedupe(gated);
+}
+
+/** Fact-questions, and the subject each one asks about. A move not in here is
+ *  not a question and is never gated by the ledger. */
+const QUESTION_SUBJECT: Partial<Record<MoveKind, ClaimSubject>> = {
+  clarify: "price",
+  "deposit-probe": "deposit",
+  "fulfillment-probe": "handover",
+};
+
+const EMPTY_LEDGER: ThreadLedger = { claims: [], known: [], outstanding: [], owed: [] };
+
+function withoutRepeatedAsks(ctx: TurnContext, moves: MoveKind[]): MoveKind[] {
+  const ledger = ctx.thread.digest.ledger;
+  if (!ledger) return moves;
+  return moves.filter((m) => {
+    const subject = QUESTION_SUBJECT[m];
+    return !subject || !alreadyAsked(ledger, subject);
+  });
 }
 
 /** Human vehicle word for the license answer ("this vehicle category"). */

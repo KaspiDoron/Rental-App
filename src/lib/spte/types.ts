@@ -70,6 +70,13 @@ export interface ThreadDigest {
   lastOutbound?: string[]; // our last 5 messages - the anti-repetition memory
   /** Every tier this shop has offered, accumulated across the whole thread. */
   options?: VehicleOption[];
+  /**
+   * WHAT IS KNOWN, WHAT WE ASKED, WHAT IS STILL OWED (src/lib/thread/ledger).
+   * Derived every turn like everything else here. This is what makes "we already
+   * asked that" and "this thread owes the traveller a deposit answer" facts the
+   * legal-move set can act on, instead of hopes expressed in a prompt.
+   */
+  ledger?: import("../thread/ledger").ThreadLedger;
 }
 
 export interface VerifiedExtraction {
