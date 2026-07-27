@@ -26,6 +26,7 @@ import {
   settled,
   type Claim,
   type ClaimSubject,
+  type ForceHint,
 } from "./claims";
 
 /** Subjects a thread must not close without. The traveller cannot collect a
@@ -66,6 +67,17 @@ export interface ThreadLedger {
   outstanding: ClaimSubject[];
   /** Required subjects still missing - the thread owes these before it closes. */
   owed: ClaimSubject[];
+  /**
+   * Subjects the SHOP asked US about. A question is an obligation on us, and it
+   * used to be filed as an answer: "do you want delivery or pickup?" marked
+   * handover KNOWN, so the engine believed the shop had explained the handover
+   * when it had in fact asked us to explain it.
+   *
+   * OPTIONAL only so an in-tree literal (spte/policy.ts's empty ledger) keeps
+   * compiling through the migration. `buildLedger` always sets it; make it
+   * required once every hand-built ThreadLedger carries it.
+   */
+  shopAsked?: ClaimSubject[];
 }
 
 export interface LedgerInput {
@@ -75,6 +87,12 @@ export interface LedgerInput {
   outbound: string[];
   /** The message that just arrived (deduped against `inbound`). */
   currentInbound?: string;
+  /**
+   * A better-informed verdict on whether each inbound clause tells or asks -
+   * the inbound act classifier knows a rhetorical "how can we help you?" from a
+   * real question. Omitted, the claim layer decides from the clause itself.
+   */
+  force?: ForceHint;
 }
 
 /**
@@ -97,18 +115,23 @@ export function buildLedger(input: LedgerInput): ThreadLedger {
   const cur = (input.currentInbound ?? "").trim();
   if (cur && inbound[inbound.length - 1]?.trim() !== cur) inbound.push(cur);
 
-  const shopClaims = claimsAcross(inbound, "shop");
+  const shopClaims = claimsAcross(inbound, "shop", { force: input.force });
   const ourClaims = claimsAcross(input.outbound, "us");
   const claims = [...shopClaims, ...ourClaims];
 
-  const known = [...new Set(shopClaims.map((c) => c.subject))];
+  // TOLD and ASKED are different ledgers. Only what the shop ASSERTED can make a
+  // subject known; what it ASKED goes on the other side of the book, where it
+  // reads as an obligation on us instead of a fact about the deal.
+  const shopTold = shopClaims.filter((c) => c.force !== "ask");
+  const known = [...new Set(shopTold.map((c) => c.subject))];
+  const shopAsked = [...new Set(shopClaims.filter((c) => c.force === "ask").map((c) => c.subject))];
 
   // OUTSTANDING = we asked about it AFTER the shop's last word on it. Comparing
   // positions across the two lists is not exact interleaving, but it is the
   // right question in the common shape: our newest ask versus the shop's newest
   // answer. An ask with no answer at all is outstanding by definition.
   const lastShopAt = new Map<ClaimSubject, number>();
-  for (const c of shopClaims) {
+  for (const c of shopTold) {
     const prev = lastShopAt.get(c.subject);
     if (prev === undefined || c.at > prev) lastShopAt.set(c.subject, c.at);
   }
@@ -133,7 +156,7 @@ export function buildLedger(input: LedgerInput): ThreadLedger {
     return !after || settled(shopClaims, after);
   });
 
-  return { claims, known, outstanding, owed };
+  return { claims, known, outstanding, owed, shopAsked };
 }
 
 /** Would asking about this subject repeat a question already outstanding? */

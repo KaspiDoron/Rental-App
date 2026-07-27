@@ -5,6 +5,27 @@ import { getUser, registerUser, isBlocked, touchUser } from "@/lib/access";
 
 const PHONE_RX = /^\+?[\d\s\-()]{7,17}$/;
 
+// Google's tokeninfo call is the one outbound request on this path, and it was
+// the only unbounded fetch left in the app: every other integration
+// (runtime-config, google.ts, whatsapp.ts, ai.ts) already carries an
+// AbortController. Without one, a Google endpoint that accepts the connection
+// and then stalls pins this handler until Cloud Run's request ceiling while the
+// browser sits on a spinner with nothing to show - the server half of the
+// "OAuth hangs with no feedback" report. 12s matches src/lib/google.ts.
+const TOKENINFO_TIMEOUT_MS = 12_000;
+
+async function fetchTokenInfo(credential: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TOKENINFO_TIMEOUT_MS);
+  // Deliberately not cleared at the header boundary: the `res.json()` below
+  // shares this signal, so clearing early would leave the body read unbounded.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`,
+    { cache: "no-store", signal: ctrl.signal }
+  );
+}
+
 // Google OAuth sign in (Google Identity Services credential flow).
 // The client posts the ID token; we verify it against Google's tokeninfo
 // endpoint server-side, then apply the same signup rules as email login.
@@ -26,29 +47,51 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing Google credential." }, { status: 400 });
   }
 
+  // Brute-force throttle. /api/auth/login has had one since it was written; this
+  // route had none, so a forged credential could be replayed without limit and
+  // each attempt cost us a live round trip to Google. The counter is keyed on the
+  // CALLER, not on an email, for two reasons: the email is only knowable after a
+  // token verifies (so there is nothing else to key on), and an email-keyed
+  // counter here would turn a 429 into an account-existence oracle.
+  const { authLockLeft, noteAuthFailure, clearAuthFailures } = await import("@/lib/cooldown");
+  const callerKey = `ip:${
+    (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown"
+  }`;
+  const callerLock = await authLockLeft(callerKey, "google");
+  if (callerLock > 0) {
+    return NextResponse.json(
+      { error: `Too many attempts - try again in ${callerLock} min or sign in with email.` },
+      { status: 429 }
+    );
+  }
+
   // Verify the ID token with Google.
   let email = "";
   let name = "";
   try {
-    const res = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`,
-      { cache: "no-store" }
-    );
+    const res = await fetchTokenInfo(credential);
     const info = await res.json();
     if (!res.ok || !info.email || info.email_verified !== "true") {
+      await noteAuthFailure(callerKey, "google");
       return NextResponse.json({ error: "Google sign-in could not be verified." }, { status: 401 });
     }
     // Same resilient resolve as the client button, so token verification and
     // button rendering agree on the client ID across every host/vault state.
     const expectedAud = await getGoogleClientId();
     if (expectedAud && info.aud !== expectedAud) {
+      await noteAuthFailure(callerKey, "google");
       return NextResponse.json({ error: "Google credential audience mismatch." }, { status: 401 });
     }
     email = String(info.email).toLowerCase();
     name = String(info.name ?? "");
   } catch {
+    // An AbortError from the 12s deadline lands here too and reads correctly:
+    // from the user's side an unanswered Google is an unreachable Google.
     return NextResponse.json({ error: "Could not reach Google to verify." }, { status: 502 });
   }
+  clearAuthFailures(callerKey, "google");
 
   if (await isBlocked(email)) {
     return NextResponse.json(

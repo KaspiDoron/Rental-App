@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { AgenticSummary } from "./AgenticSummary";
 import { useI18n } from "@/lib/i18n";
+import { orientationAttrValue } from "@/lib/media/orientation";
 
 export interface ThreadMsg {
   id: string;
@@ -21,8 +22,20 @@ export interface ThreadMsg {
   english?: string;
   kind?: string;
   at: string;
-  /** Present when the shop sent a photo / voice note / document. */
-  media?: { id: string; kind: string; fileName?: string | null };
+  /**
+   * Present when the shop sent a photo / voice note / document.
+   *
+   * `orientation` is the EXIF tag the ingest measured (lib/media/orientation).
+   * Optional because the transcript API does not carry it yet - a missing value
+   * means "not measured", and the CSS floor in globals.css still corrects the
+   * common case. Wiring it through /api/thread is the remaining migration.
+   */
+  media?: {
+    id: string;
+    kind: string;
+    fileName?: string | null;
+    orientation?: import("@/lib/media/orientation").OrientationInfo;
+  };
   /** What the agents read out of that media - the proof panel's data. */
   reading?: import("@/lib/media/reading").MediaReading;
   /** A dropped WhatsApp pin. */
@@ -69,6 +82,13 @@ function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
       </div>
     );
   }
+  // A price board is the offer. Two things used to hide half of it:
+  //   - object-cover CENTER-CROPS a portrait board against a max height, so the
+  //     top and bottom rows of the exact price list the traveller is asked to
+  //     trust were cut off. object-contain on a neutral box shows all of it.
+  //   - orientation was left entirely to the browser's unpinned default. The
+  //     property is pinned here and floored in globals.css, and the parsed EXIF
+  //     value drives the @supports fallback for engines that ignore it.
   return (
     <a href={src} target="_blank" rel="noreferrer" className="mt-1 block">
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -78,7 +98,9 @@ function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
         loading="lazy"
         decoding="async"
         onError={() => setBroken(true)}
-        className="max-h-56 w-full rounded-xl object-cover"
+        data-exif-orientation={orientationAttrValue(media.orientation)}
+        style={{ imageOrientation: "from-image" }}
+        className="max-h-72 w-full rounded-xl bg-black/5 object-contain"
       />
     </a>
   );

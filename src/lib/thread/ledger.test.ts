@@ -1,6 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// vendor-tags is server-pinned and talks to Supabase for the VERIFIED half; the
+// derivation under test here (one reply -> tags) is pure, so the pins are
+// stubbed rather than the logic reimplemented.
+vi.mock("server-only", () => ({}));
+vi.mock("../runtime-config", () => ({
+  sbSelect: async () => [],
+  sbInsert: async () => true,
+}));
+
 import { claimsIn, latestClaim, settled } from "./claims";
 import { buildLedger, alreadyAsked, unaskedObligations } from "./ledger";
+import { screenInbound, screenInboundDeterministic } from "../inbound-risk";
+import { tagsFromExtraction } from "../vendor-tags";
+import type { ExtractedOffer } from "../agents";
+
+const NO_EXTRACTION = { found: false, matchesSpec: true } as ExtractedOffer;
 
 // The live reply that broke three things at once. The shop is offering the best
 // terms in the thread and the app read it as a scam AND as a passport deposit.
@@ -99,6 +114,44 @@ describe("owed: a thread cannot go quiet owing the traveller a fact", () => {
   });
 });
 
+describe("told and asked are different ledgers", () => {
+  it("a shop QUESTION does not make its subject known", () => {
+    // "Do you want delivery or pickup?" used to register as the shop having
+    // TOLD us how handover works, so the engine stopped asking and the thread
+    // could close on a fact nobody ever stated.
+    const l = buildLedger({ inbound: ["250 baht per day", "Do you want delivery or pickup?"], outbound: [] });
+    expect(l.known).not.toContain("handover");
+    expect(l.shopAsked).toContain("handover");
+    expect(l.owed).toContain("handover");
+  });
+
+  it("the same subject STATED does make it known", () => {
+    const l = buildLedger({ inbound: ["250 baht per day", "We deliver to your hotel"], outbound: [] });
+    expect(l.known).toContain("handover");
+    expect(l.owed).not.toContain("handover");
+    expect(l.shopAsked).not.toContain("handover");
+  });
+
+  it("a counter-question does not answer OUR question", () => {
+    const l = buildLedger({
+      inbound: ["Hello sir", "How many days do you want the bike for?"],
+      outbound: ["Could you share your best price per day?"],
+    });
+    expect(alreadyAsked(l, "price")).toBe(true);
+  });
+
+  it("a caller that classified the burst properly can overrule the reading", () => {
+    // The inbound act layer knows a rhetorical "any questions?" from a real
+    // one; this is the seam it hands its verdict down through.
+    const l = buildLedger({
+      inbound: ["250 per day", "Do you want delivery or pickup?"],
+      outbound: [],
+      force: "assert",
+    });
+    expect(l.known).toContain("handover");
+  });
+});
+
 describe("the ledger is total and never throws", () => {
   it("handles an empty thread", () => {
     const l = buildLedger({ inbound: [], outbound: [] });
@@ -163,14 +216,6 @@ describe("the ledger reaches the decisions it exists for", () => {
     );
   });
 
-  it("the deposit chip is derived from a claim's POLARITY, not an else branch", () => {
-    const tags = readCode("src/lib/vendor-tags.ts");
-    expect(tags).toMatch(/claimsIn\(/);
-    expect(tags).toMatch(/polarity === "denied"/);
-    // The else that turned "no deposit ... passport" into a passport deposit.
-    expect(tags).not.toMatch(/\/passport\|id card\|driver'\?s\? licen\[cs\]e\//);
-  });
-
   it("the model is TOLD what is established, asked and owed", () => {
     // The move set already makes a repeated fact-question impossible; this stops
     // a legal move from carrying a redundant question inside its text.
@@ -180,11 +225,92 @@ describe("the ledger reaches the decisions it exists for", () => {
     expect(pass).toMatch(/STILL OWED/);
     expect(pass).toMatch(/ledgerBlock \+/);
   });
+});
 
-  it("shop TERMS are not screened as a document demand", () => {
-    const risk = readCode("src/lib/inbound-risk.ts");
-    expect(risk).toMatch(/describesTerms\(text\)/);
-    // `pic` unanchored matched inside "pickup" - that is the false flag.
-    expect(risk).toMatch(/\\b\(send\|photo\|picture\|pics\?\|copy\|scan\)\\b/);
+// ---------------------------------------------------------------------------
+// THE CHIP AND THE BANNER - the two surfaces that read the same sentence and
+// used to disagree about it.
+//
+// These were assertions about the SOURCE of vendor-tags.ts and inbound-risk.ts:
+// that one file contained `polarity === "denied"` and the other contained a
+// literal regex. Source text is not behaviour - a correct redesign of either
+// module fails a grep for the wrong reason, and the grep passes happily while
+// the module misjudges every message. What we actually care about is the
+// verdict, so that is what is asserted here.
+// ---------------------------------------------------------------------------
+
+describe("the deposit chip reads polarity, not the word 'passport'", () => {
+  const tags = (reply: string) => tagsFromExtraction(NO_EXTRACTION, reply);
+
+  it("the friendliest terms in the thread are NOT a passport deposit", () => {
+    // The `else` this pins: no literal "no deposit" -> any "passport" became a
+    // passport deposit, so the best terms on offer were badged as the worst.
+    expect(tags(NO_DEPOSIT)).toContain("no-deposit");
+    expect(tags(NO_DEPOSIT)).not.toContain("passport-deposit");
+  });
+
+  it("a real passport deposit still earns the chip", () => {
+    expect(tags("We keep your passport as deposit")).toContain("passport-deposit");
+  });
+
+  it("a COMPOSITE deposit earns both chips, not whichever matched first", () => {
+    // "Cash deposit" used to mean "you may pay instead of handing over your
+    // passport" to a traveller filtering on it - and a shop wanting both was
+    // shown under exactly that filter.
+    const t = tags("Deposit is 3000 baht cash and a copy of your passport");
+    expect(t).toContain("cash-deposit");
+    expect(t).toContain("passport-deposit");
+  });
+
+  it("a shop QUESTION about the deposit is not a badge", () => {
+    expect(tags("How much deposit can you leave?")).not.toContain("cash-deposit");
+    expect(tags("How much deposit can you leave?")).not.toContain("passport-deposit");
+  });
+});
+
+describe("the safety screen reads TERMS, not tokens", () => {
+  // The register these shops actually write in: articles dropped, "passport
+  // copy" as a bare noun phrase. Every one of these is a shop stating its
+  // standard counter procedure, and a red scam banner on it teaches the
+  // traveller to ignore the banner that matters.
+  const TERMS = [
+    "come to shop with passport copy",
+    "we take passport photo at shop",
+    "deposit 3000 baht or passport",
+    "no deposit just passport at pickup",
+    "You can bring passport copy when you come to shop",
+    "Sir we take passport photo at shop when you rent",
+    "passport copy needed, you give at shop",
+    "Deposit 3000 baht cash when you pick up",
+  ];
+
+  it("standard counter terms are never HIGH risk", () => {
+    for (const text of TERMS) {
+      expect([text, screenInboundDeterministic(text).risk]).toEqual([text, "none"]);
+    }
+  });
+
+  it("the async screen agrees with the deterministic one, with no LLM", () => {
+    return Promise.all(
+      TERMS.map(async (text) => {
+        const r = await screenInbound(text, { llmAllowed: false });
+        expect([text, r.risk]).toEqual([text, "none"]);
+      })
+    );
+  });
+
+  it("a genuine document demand is still HIGH", () => {
+    for (const text of [
+      "send me your passport photo now before I reserve",
+      "forward a scan of your passport and ID card first",
+      "Ok but first send photo of your passport to confirm booking",
+    ]) {
+      expect([text, screenInboundDeterministic(text).risk]).toEqual([text, "high"]);
+    }
+  });
+
+  it("the reason names what the shop asked for, so the banner can quote it", () => {
+    const r = screenInboundDeterministic("send me your passport photo now before I reserve");
+    expect(r.reasons.join(" ")).toMatch(/passport/i);
   });
 });

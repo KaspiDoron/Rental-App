@@ -16,6 +16,8 @@ import { processVendorReply } from "@/lib/agent-loop";
 import { numberFilter } from "@/lib/wa/phone-key";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { digitsOnly } from "@/lib/phone";
+import { readOrientation } from "@/lib/media/orientation";
+import type { InboundImage } from "@/lib/media/orientation";
 
 // Verify Meta's X-Hub-Signature-256 over the RAW request body. Returns true
 // when no app secret is configured (demo/dev) so the endpoint still works,
@@ -70,9 +72,13 @@ interface WaValue {
 // flow: media-id -> temporary URL -> bytes). Best-effort; returns null on any
 // failure so a photo never breaks the webhook. Enables photo understanding on
 // the official channel too, not just Evolution.
-async function fetchCloudMedia(
-  mediaId: string
-): Promise<{ mime: string; base64: string } | null> {
+//
+// This is the SECOND ingest boundary (Evolution's fetchMediaBase64 is the
+// other), so it measures EXIF orientation too - otherwise the official channel
+// would be a blind spot where the same sideways price board reaches the vision
+// model with nothing declared about it. Cheaper here than there: the raw Buffer
+// is already in hand, so no base64 round trip is needed to read the tag.
+async function fetchCloudMedia(mediaId: string): Promise<InboundImage | null> {
   const token = await getConfig("WHATSAPP_ACCESS_TOKEN");
   if (!token) return null;
   // Both Graph fetches are awaited INLINE in the webhook before it returns 200
@@ -105,7 +111,11 @@ async function fetchCloudMedia(
     const ab = await binRes.arrayBuffer();
     if (ab.byteLength > MAX_MEDIA_BYTES) return null; // cap post-read too
     const buf = Buffer.from(ab);
-    return { mime: meta.mime_type || "image/jpeg", base64: buf.toString("base64") };
+    return {
+      mime: meta.mime_type || "image/jpeg",
+      base64: buf.toString("base64"),
+      orientation: readOrientation(buf),
+    };
   } catch {
     return null;
   }

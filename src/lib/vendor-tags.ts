@@ -60,16 +60,29 @@ export function tagsFromExtraction(extraction: ExtractedOffer, replyText: string
   // A claim carries whether it was affirmed or denied, and the negation is
   // scoped to its clause, so the denial attaches to the deposit and the passport
   // stands on its own instead of being swallowed by an else.
+  //
+  // A DEPOSIT CAN HAVE MORE THAN ONE COMPONENT. "3,000 baht cash and a copy of
+  // your passport" is two requirements, and reading only the first one badged
+  // the shop as cash-only - so a traveller filtering for "cash deposit"
+  // (meaning "I would rather pay than hand over my passport") was shown shops
+  // that want both. Every component the claim carries earns its own tag.
+  //
+  // A shop QUESTION is not terms: "how much deposit can you leave?" states
+  // nothing and must never become a badge.
   const depositText = [extraction.deposit ?? "", replyText].filter(Boolean).join(". ");
-  const depositClaims = claimsIn(depositText, "shop", 0).filter((c) => c.subject === "deposit");
+  const depositClaims = claimsIn(depositText, "shop", 0).filter(
+    (c) => c.subject === "deposit" && c.force !== "ask"
+  );
   const denied = depositClaims.some((c) => c.polarity === "denied");
   const affirmed = depositClaims.filter((c) => c.polarity === "affirmed");
   if (denied && affirmed.length === 0) tags.add("no-deposit");
   for (const c of affirmed) {
-    if (c.detail === "passport" || c.detail === "id" || c.detail === "licence") {
-      tags.add("passport-deposit");
+    for (const detail of c.details) {
+      if (detail === "passport" || detail === "id" || detail === "licence") {
+        tags.add("passport-deposit");
+      }
+      if (detail === "cash") tags.add("cash-deposit");
     }
-    if (c.detail === "cash") tags.add("cash-deposit");
   }
   // DOES THIS SHOP ACTUALLY RENT CARS? Evidence from the shop's own words: it
   // named a car or a car nameplate in a reply. Like every other tag here it

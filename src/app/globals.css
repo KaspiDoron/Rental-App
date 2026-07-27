@@ -73,6 +73,53 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* WHICH WAY IS UP - the system-wide floor for image orientation.
+ *
+ * A phone held vertically writes a LANDSCAPE JPEG plus an EXIF tag saying "turn
+ * me 90 degrees". Modern engines honour that tag by default, which is why the
+ * shop photos in this app were upright BY ACCIDENT: nothing anywhere declared
+ * the property, so we inherited an initial value we never chose. `from-image` is
+ * that same default, stated out loud, so no future reset or WebView quirk can
+ * silently flip it.
+ *
+ * The transforms below are the fallback for engines that do not implement the
+ * property at all (old Android WebViews, and WebP whose orientation lives in a
+ * RIFF EXIF chunk). They are gated behind @supports NOT, because applying both
+ * corrections rotates the board twice - which is worse than not correcting it.
+ * The value comes from the EXIF parse (orientationAttrValue in
+ * lib/media/orientation.ts); the bytes themselves are never rewritten.
+ *
+ * CSS applies transform functions right to left, so `scaleX(-1) rotate(90deg)`
+ * means "rotate, then flip" - the order the EXIF mirrored cases (5 and 7) need.
+ */
+img {
+  image-orientation: from-image;
+}
+
+@supports not (image-orientation: from-image) {
+  [data-exif-orientation="2"] {
+    transform: scaleX(-1);
+  }
+  [data-exif-orientation="3"] {
+    transform: rotate(180deg);
+  }
+  [data-exif-orientation="4"] {
+    transform: scaleX(-1) rotate(180deg);
+  }
+  [data-exif-orientation="5"] {
+    transform: scaleX(-1) rotate(90deg);
+  }
+  [data-exif-orientation="6"] {
+    transform: rotate(90deg);
+  }
+  [data-exif-orientation="7"] {
+    transform: scaleX(-1) rotate(270deg);
+  }
+  [data-exif-orientation="8"] {
+    transform: rotate(270deg);
+  }
+}
+
 /* CLIPPING BELONGS TO THE CANVAS, NEVER THE ROOT.
  *
  * `html, body { overflow-x: hidden }` is the usual way to honour "no horizontal
