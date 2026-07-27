@@ -48,29 +48,37 @@ export async function POST(req: Request) {
   // Free-tier pickup rule: only TODAY pickups are allowed. A free user who is
   // already in a cooldown (from a prior bypass attempt) is blocked entirely;
   // a fresh attempt to arrange a next-day pickup triggers a 6-hour cooldown.
-  if (session.plan === "free") {
-    const { cooldownLeft, setCooldown, requestsFuturePickup } = await import("@/lib/cooldown");
-    const left = await cooldownLeft(session.email, "pickup-bypass");
-    if (left > 0) {
+  // PLATFORM INTEGRITY, GRADUATED (lib/integrity).
+  //
+  // This used to be one regex over ONE message and an instant six-hour block:
+  // a single phrase - "maybe next week", "my flight is tomorrow" - and the
+  // traveller lost the product for the rest of their day, with no warning and
+  // nobody to appeal to. One phrase is a signal, not a verdict.
+  //
+  // Now signals accumulate WITH their evidence and decay on their own, and the
+  // response climbs: a nudge that explains the plan rule and blocks nothing, a
+  // short explained pause, a feature limit while the agents keep negotiating,
+  // and only then a block PROPOSAL queued for the owner with the evidence
+  // attached. Nothing bans an account by itself.
+  {
+    const { noteAndAssess } = await import("@/lib/integrity/store");
+    const { requiresOwnerApproval } = await import("@/lib/integrity/signals");
+    const verdict = await noteAndAssess({
+      email: session.email,
+      plan: session.plan,
+      text: message,
+    });
+    // A nudge is information, not a refusal - the message still goes.
+    if (verdict.step !== "clear" && verdict.step !== "nudge") {
       return NextResponse.json({
         allowed: false,
         blocked: true,
-        cooldownMinutes: left,
-        reason: `Free plan is today-pickup only. Sending is paused for ${Math.ceil(
-          left / 60
-        )}h after trying to arrange a future-day pickup. Upgrade to schedule future pickups.`,
-        upgrade: true,
-      });
-    }
-    if (requestsFuturePickup(message)) {
-      await setCooldown(session.email, "pickup-bypass", 360, "free-tier future pickup attempt");
-      return NextResponse.json({
-        allowed: false,
-        blocked: true,
-        cooldownMinutes: 360,
-        reason:
-          "The free plan can only arrange same-day (today) pickups. Scheduling a future pickup needs Pro/Ultra - sending is paused for 6 hours.",
-        upgrade: true,
+        cooldownMinutes: verdict.pauseMinutes ?? 0,
+        reason: verdict.message,
+        // The top rung is a proposal a human decides on; say so rather than
+        // implying a consequence that has not happened.
+        underReview: requiresOwnerApproval(verdict.step),
+        upgrade: session.plan === "free",
       });
     }
   }

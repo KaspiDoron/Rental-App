@@ -53,11 +53,30 @@ export async function POST(req: Request) {
   if (scheduledAt && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(scheduledAt)) {
     return NextResponse.json({ error: "Invalid pickup date/time." }, { status: 400 });
   }
+  // THE RENTAL WINDOW IS DECIDED HERE, BY PLAN.
+  //
+  // This route had no plan check at all: "free is same-day only" was enforced
+  // in the outreach composer and nowhere else, so a client posting a future
+  // pickup date simply got one. A rule enforced at one surface out of four is
+  // not a rule. lib/rental-window is the single authority every surface calls,
+  // including the client - which now only DISPLAYS what the server decided.
   if (scheduledAt) {
-    const dayPart = scheduledAt.slice(0, 10);
-    const todayLocal = new Date().toISOString().slice(0, 10);
-    if (dayPart < todayLocal) {
-      return NextResponse.json({ error: "Pickup date cannot be in the past." }, { status: 400 });
+    const { resolveWindow } = await import("@/lib/rental-window");
+    const decision = resolveWindow({
+      plan: session.plan,
+      requested: scheduledAt.slice(0, 10),
+      nowMs: Date.now(),
+      timeZone: typeof b.timeZone === "string" ? b.timeZone : undefined,
+    });
+    if (decision.adjusted) {
+      return NextResponse.json(
+        {
+          error: decision.reason,
+          window: { startDate: decision.startDate, maxStartDate: decision.maxStartDate },
+          upgrade: decision.daysAhead === 0,
+        },
+        { status: 400 }
+      );
     }
   }
   // Return date, if given, must be after the pickup date.

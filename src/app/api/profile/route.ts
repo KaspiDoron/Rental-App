@@ -3,6 +3,25 @@ import { runProfiler, deterministicRFQ } from "@/lib/agents";
 import { aiEnabled } from "@/lib/ai";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
+import { clampRfqWindow } from "@/lib/rental-window";
+import type { StructuredRFQ } from "@/lib/types";
+
+// THE SAME AUTHORITY, AT THE START OF THE FUNNEL. Without this the opener asked
+// twenty shops about a start date the traveller's plan cannot arrange - twenty
+// real conversations built on a promise the app would refuse at the close.
+// Adjusting up front is kinder than refusing at the end, and it is the same
+// decision function every other surface calls (lib/rental-window).
+function applyWindow(
+  rfq: StructuredRFQ,
+  plan: string | null | undefined,
+  timeZone: unknown
+): StructuredRFQ {
+  return clampRfqWindow(rfq, {
+    plan,
+    nowMs: Date.now(),
+    timeZone: typeof timeZone === "string" ? timeZone : undefined,
+  }).rfq;
+}
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({ text: "" }));
@@ -12,7 +31,7 @@ export async function POST(req: Request) {
   // entirely - the panel already knows every field. Zero tokens, instant.
   if (structured === true && fields && typeof fields === "object") {
     const session = await getSession();
-    const rfq = deterministicRFQ(fields);
+    const rfq = applyWindow(deterministicRFQ(fields), session?.plan, body?.timeZone);
     await sbInsert("searches", [
       {
         user_email: session?.email ?? null,
@@ -38,7 +57,11 @@ export async function POST(req: Request) {
   // The session identity powers the stable per-user voice persona, so this
   // user's first message always sounds like the same distinct human.
   const session = await getSession();
-  const rfq = await runProfiler(text, durationDays, session?.email);
+  const rfq = applyWindow(
+    await runProfiler(text, durationDays, session?.email),
+    session?.plan,
+    body?.timeZone
+  );
   await sbInsert("searches", [
     {
       user_email: session?.email ?? null,
