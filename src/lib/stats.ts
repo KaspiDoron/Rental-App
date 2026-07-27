@@ -5,6 +5,7 @@
 import "server-only";
 import { sbSelect, sbInsert, supabaseConfigured } from "./runtime-config";
 import { digitsOnly } from "./phone";
+import { numberFilter } from "./wa/phone-key";
 
 
 /**
@@ -26,9 +27,10 @@ export async function recordResponseTime(phoneRaw: string): Promise<void> {
   // Our first outbound message to this shop = the RFQ that started the clock.
   const out = await sbSelect<{ received_at: string }>(
     "whatsapp_messages",
-    `select=received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+    `select=received_at&direction=eq.outbound&order=received_at.asc&limit=1${numberFilter(
+      "to_number",
       phone
-    )}&order=received_at.asc&limit=1`
+    )}`
   );
   const started = out[0]?.received_at ? Date.parse(out[0].received_at) : NaN;
   if (!Number.isFinite(started)) return;

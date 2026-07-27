@@ -14,6 +14,8 @@ import { fetchMessagesRaw, fetchMediaBase64, sendFromUser, resolveChatJid } from
 import { processVendorReply } from "./agent-loop";
 import { noteInboundDropped } from "./wa/webhook-trace";
 import { digitsOnly } from "./phone";
+import { numberFilter, sameNumber, lidKey } from "./wa/phone-key";
+import { rememberAlias } from "./wa/lid-alias";
 import { boundedSet } from "./bounded-map";
 
 const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
@@ -94,6 +96,11 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // what made the server-side filter fall through to an UNSCOPED whole-inbox
       // read - the root of personal chats being stapled onto shop threads.
       const jid = (await resolveChatJid(email, digits)) ?? `${digits}@s.whatsapp.net`;
+      // A chat we reached from OUR outbound rows teaches the alias: this @lid
+      // and this line are the same shop. The webhook path can then resolve a
+      // future @lid frame instantly instead of dropping it.
+      const chatLid = lidKey(jid);
+      if (chatLid) rememberAlias(email, chatLid, digits);
       const msgs = await fetchMessagesRaw(email, jid, 10);
       const inbound = msgs.filter(
         (m) =>
@@ -104,7 +111,7 @@ export async function syncInboundReplies(email: string): Promise<number> {
           // a personal chat's message is dropped here - never stapled onto the
           // shop thread. @lid JIDs match only by exact equality (their numeric
           // part is not the phone number).
-          (m.remoteJid === jid || digitsOnly(m.remoteJid) === digits) &&
+          (m.remoteJid === jid || sameNumber(m.remoteJid, digits)) &&
           // ignore ancient history - only the active window matters
           m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
           // RACE GUARD: give the webhook a 10s head start on brand-new
@@ -134,11 +141,11 @@ export async function syncInboundReplies(email: string): Promise<number> {
       const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
       const ours = await sbSelect<{ body: string; wa_message_id: string | null }>(
         "whatsapp_messages",
-        `select=body,wa_message_id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-          digits
-        )}&raw->>sender=eq.${encodeURIComponent(email)}&received_at=gte.${encodeURIComponent(
+        `select=body,wa_message_id&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+          email
+        )}&received_at=gte.${encodeURIComponent(
           new Date(Date.now() - 24 * 3600_000).toISOString()
-        )}&order=received_at.desc&limit=30`
+        )}&order=received_at.desc&limit=30${numberFilter("to_number", digits)}`
       ).catch(() => []);
       const ourBodies = new Set(ours.map((o) => norm(o.body || "")).filter(Boolean));
       const ourIds = new Set(ours.map((o) => o.wa_message_id).filter(Boolean));
@@ -170,7 +177,13 @@ export async function syncInboundReplies(email: string): Promise<number> {
         }
         await processVendorReply({
           fromDigits: digits,
-          remoteJid: m.remoteJid, // verified above to belong to this chat
+          // The PHONE form of this chat. We arrived here from THIS user's own
+          // outbound rows, so `digits` is the proven line; `m.remoteJid` may be
+          // the privacy @lid address of the same chat, which the attribution
+          // assertion downstream (rightly) refuses to trust on its own. Passing
+          // the resolved line is what keeps an @lid-addressed shop from going
+          // silent on the recovery path.
+          remoteJid: `${digits}@s.whatsapp.net`,
           text: m.text,
           images,
           waMessageId: m.id,

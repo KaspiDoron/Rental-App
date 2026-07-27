@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { digitsOnly } from "@/lib/phone";
+import { numberFilter, waDigits } from "@/lib/wa/phone-key";
 
 // EPHEMERAL SHOP AVATAR.
 //
@@ -24,7 +24,7 @@ export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
-  const digits = digitsOnly(new URL(req.url).searchParams.get("number") ?? "");
+  const digits = waDigits(new URL(req.url).searchParams.get("number") ?? "");
   if (!digits || digits.length < 6) return NextResponse.json({ url: null });
 
   const { sbSelect } = await import("@/lib/runtime-config");
@@ -34,18 +34,26 @@ export async function GET(req: Request) {
   // and not one outbound row exists yet. Requiring a sent message meant every
   // avatar on the board stayed a grey initial until the queue drained, which is
   // exactly what "none of the shop images load" looked like.
+  //
+  // NUMBER MATCHING IS TOLERANT (numberFilter). This check used to be an exact
+  // `to_number=eq.` against the number the CLIENT holds, while the queue row was
+  // written from whatever spelling discovery produced. When the two differed -
+  // Google hands out national numbers, WhatsApp international ones - ownership
+  // could not be proved for ANY shop, so every avatar on the board answered
+  // `null` and the whole board stayed grey initials. That is the entire bug.
   const [sent, queued] = await Promise.all([
     sbSelect<{ id: number }>(
       "whatsapp_messages",
-      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        digits
-      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
+      `select=id&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        session.email
+      )}&limit=1${numberFilter("to_number", digits)}`
     ).catch(() => []),
     sbSelect<{ id: number }>(
       "wa_outbox",
-      `select=id&to_number=eq.${encodeURIComponent(
+      `select=id&sender_key=eq.${encodeURIComponent(session.email)}&limit=1${numberFilter(
+        "to_number",
         digits
-      )}&sender_key=eq.${encodeURIComponent(session.email)}&limit=1`
+      )}`
     ).catch(() => []),
   ]);
   if (sent.length === 0 && queued.length === 0) {

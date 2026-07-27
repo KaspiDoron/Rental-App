@@ -46,25 +46,25 @@ export async function POST(req: Request) {
     to = details?.phone ?? "";
   }
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
-  const digits = digitsOnly(to);
+  let digits = digitsOnly(to);
 
   // EXACT-LOCATION SAFETY: the destination must be a shop THIS USER's agent
   // already messaged - a tampered client must never point precise GPS at an
   // arbitrary number. (placeId-resolved numbers are Google's, already safe.)
+  //
+  // RESOLVE, don't merely check: what comes back is the number WE stored, so
+  // the share can only ever reach a line we genuinely negotiated with, and a
+  // legitimate shop stored under another spelling stops failing its own guard.
   if (body.to) {
-    const { sbSelect } = await import("@/lib/runtime-config");
-    const known = await sbSelect<{ id: number }>(
-      "whatsapp_messages",
-      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        digits
-      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
-    ).catch(() => []);
-    if (known.length === 0) {
+    const { resolveKnownThreadNumber } = await import("@/lib/wa/known-thread");
+    const stored = await resolveKnownThreadNumber(session.email, digits);
+    if (!stored) {
       return NextResponse.json(
         { sent: false, reason: "unknown-destination", error: "This number is not one of your negotiation threads." },
         { status: 400 }
       );
     }
+    digits = stored;
   }
 
   // Sharing pickup location is an explicit user action toward this shop -

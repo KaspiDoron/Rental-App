@@ -101,13 +101,20 @@ describe("inbound: a live thread can never die of a missing RFQ anchor", () => {
     expect(doc).not.toMatch(/\?\? dropTrace\[0\]/);
   });
 
-  it("number matching is tolerant on EVERY read path (engine, doctor, echo)", () => {
+  it("number matching is tolerant on EVERY read path (engine, doctor, echo, gate)", () => {
+    // `threadNumberOr` builds the or() value; `numberFilter` is the complete
+    // query fragment built on top of it. Either proves the path is tolerant -
+    // an exact `=eq.<digits>` is what made a real shop's reply invisible.
     for (const f of [
       "src/lib/wa/thread-context.ts",
       "src/app/api/admin/wa-doctor/route.ts",
       "src/lib/wa/ingest.ts",
+      "src/lib/drill.ts",
+      "src/lib/wa-guard.ts",
+      "src/app/api/thread/route.ts",
+      "src/app/api/wa/avatar/route.ts",
     ]) {
-      expect(readCode(f)).toMatch(/threadNumberOr\(/);
+      expect(readCode(f)).toMatch(/threadNumberOr\(|numberFilter\(/);
     }
   });
 });

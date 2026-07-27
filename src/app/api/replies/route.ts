@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { identityKey } from "@/lib/wa/phone-key";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -156,12 +157,18 @@ export async function GET(req: Request) {
           : ""
       }&order=received_at.asc&limit=200`
     ).catch(() => []);
+    // Keyed by IDENTITY, not by the raw string. Inbound rows carry WhatsApp's
+    // spelling and outbound rows carry discovery's; joining the two on the raw
+    // text silently matched nothing, so a shop's option menu and its
+    // "where are you staying?" never reached the card.
     const bodiesByNumber = new Map<string, string[]>();
     for (const m of inbound) {
       if (!m.from_number || !m.body) continue;
-      const arr = bodiesByNumber.get(m.from_number) ?? [];
+      const key = identityKey(m.from_number);
+      if (!key) continue;
+      const arr = bodiesByNumber.get(key) ?? [];
       arr.push(m.body);
-      bodiesByNumber.set(m.from_number, arr);
+      bodiesByNumber.set(key, arr);
     }
     // vendor_id -> the digits we actually messaged, via this user's outbound rows.
     const out = await sbSelect<{ to_number: string; raw: { vendorId?: string } | null }>(
@@ -176,7 +183,7 @@ export async function GET(req: Request) {
     }
     const { shopAskedLocation } = await import("@/lib/wa/detectors");
     for (const [vendorId, digits] of numberByVendor) {
-      const bodies = digits ? bodiesByNumber.get(digits) : undefined;
+      const bodies = digits ? bodiesByNumber.get(identityKey(digits)) : undefined;
       if (!bodies?.length) continue;
       const opts = optionsFromThread(bodies, {
         vehicleClass:

@@ -24,25 +24,24 @@ export async function POST(req: Request) {
     to = details?.phone ?? "";
   }
   if (!to) return NextResponse.json({ sent: false, reason: "no-phone" });
-  const digits = digitsOnly(to);
+  let digits = digitsOnly(to);
 
   // KNOWN-THREAD GUARD (same pattern as the pickup-consent route): a closing
   // message may only go to a number THIS user's agent actually negotiated
   // with. Without this, a spoofed `to` would message a stranger AND the
   // session-close side effects below would nuke the user's real negotiations.
+  // Resolving (rather than checking) also means the close reaches the number we
+  // hold, so a shop stored under another spelling can still be closed.
   {
-    const known = await sbSelect<{ id: number }>(
-      "whatsapp_messages",
-      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        digits
-      )}&raw->>sender=eq.${encodeURIComponent(session.email)}&limit=1`
-    ).catch(() => []);
-    if (known.length === 0) {
+    const { resolveKnownThreadNumber } = await import("@/lib/wa/known-thread");
+    const stored = await resolveKnownThreadNumber(session.email, digits);
+    if (!stored) {
       return NextResponse.json(
         { sent: false, reason: "unknown-destination" },
         { status: 400 }
       );
     }
+    digits = stored;
   }
 
   // COMMITMENT LOCK: one confirmed deal at a time. If a DIFFERENT shop was

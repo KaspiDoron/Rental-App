@@ -1,6 +1,7 @@
 import "server-only";
 import { sbSelect } from "./runtime-config";
 import { classifyIngest, DRILL_INGEST_WINDOW_MS, REAL_THREAD_INGEST_WINDOW_MS, type GateRaw } from "./wa/thread-gate";
+import { numberFilter } from "./wa/phone-key";
 
 export { DRILL_INGEST_WINDOW_MS, REAL_THREAD_INGEST_WINDOW_MS };
 
@@ -30,11 +31,19 @@ export async function isVendorThread(fromDigits: string, ownerEmail: string): Pr
   // the single newest row: a human-manual reply could be newest while the
   // thread's real RFQ anchor is a few messages back). The pure gate logic lives
   // in wa/thread-gate.ts (unit-tested).
+  //
+  // NUMBER MATCHING IS TOLERANT (numberFilter), and that is load-bearing. This
+  // predicate used to be an exact `to_number=eq.<digits>` while every other
+  // layer matched through phone-key - so a thread whose outbound anchor was
+  // written from a Google NATIONAL number ("09661952196") was invisible to the
+  // inbound INTERNATIONAL one ("639661952196"). The gate answered "not a shop
+  // thread" and the shop's reply was dropped before it was ever stored: the
+  // agent went quiet, the traveller saw a ghosting shop, and no offer existed.
   const rows = await sbSelect<{ received_at: string; raw: GateRaw | null }>(
     "whatsapp_messages",
-    `select=received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      fromDigits
-    )}&raw->>sender=eq.${encodeURIComponent(ownerEmail)}&order=received_at.desc&limit=10`
+    `select=received_at,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      ownerEmail
+    )}&order=received_at.desc&limit=10${numberFilter("to_number", fromDigits)}`
   );
   return classifyIngest(rows, Date.now());
 }

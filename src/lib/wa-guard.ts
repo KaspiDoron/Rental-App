@@ -25,6 +25,7 @@ import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runtime-config";
 import { jitteredHold } from "./wa/pacing";
 import { digitsOnly } from "./phone";
+import { numberFilter, waDigits } from "./wa/phone-key";
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
 import { stripWaFormatting } from "./text";
@@ -973,7 +974,7 @@ export interface GuardVerdict {
  * `auto` marks agent-generated messages (strictest rules); user-typed custom
  * messages skip the engagement halt but still respect volume caps.
  */
-export async function guardOutbound(opts: {
+export async function guardOutbound(rawOpts: {
   senderKey: string; // user email (one connected WA number per user)
   toDigits: string;
   text: string;
@@ -990,6 +991,13 @@ export async function guardOutbound(opts: {
   // stripWaFormatting runs; the stored text is delivered verbatim.
   alreadyHumanized?: boolean;
 }): Promise<GuardVerdict> {
+  // ONE canonical routing key for this whole call. Callers hand us whatever
+  // spelling they hold - a JID with a device suffix, a "+63 966 …" from Google,
+  // bare digits - and every row this function writes (the outbox row, the
+  // recipient state, the sent message) becomes the anchor a later inbound reply
+  // is matched against. Normalising HERE means one shop is one key everywhere
+  // downstream, instead of three spellings that never meet.
+  const opts = { ...rawOpts, toDigits: waDigits(rawOpts.toDigits) || rawOpts.toDigits };
   const region = opts.region ?? (typeof opts.meta?.region === "string" ? (opts.meta.region as string) : undefined);
   const plan = opts.plan ?? (typeof opts.meta?.plan === "string" ? (opts.meta.plan as string) : undefined);
   const p = await getPolicies();
@@ -1156,11 +1164,11 @@ export async function guardOutbound(opts: {
     const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
     const recentOut = await sbSelect<{ body: string | null }>(
       "whatsapp_messages",
-      `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        opts.toDigits
-      )}&raw->>sender=eq.${encodeURIComponent(opts.senderKey)}&received_at=gte.${encodeURIComponent(
+      `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        opts.senderKey
+      )}&received_at=gte.${encodeURIComponent(
         new Date(now - 6 * 3600_000).toISOString()
-      )}&order=received_at.desc&limit=8`
+      )}&order=received_at.desc&limit=8${numberFilter("to_number", opts.toDigits)}`
     );
     const isDup = recentOut.some(
       (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
@@ -1179,13 +1187,11 @@ export async function guardOutbound(opts: {
   if (opts.auto && opts.meta?.kind === "rfq") {
     const priorRfq = await sbSelect<{ id: number }>(
       "whatsapp_messages",
-      `select=id&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        opts.toDigits
-      )}&raw->>sender=eq.${encodeURIComponent(
+      `select=id&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
         opts.senderKey
       )}&raw->>kind=eq.rfq&received_at=gte.${encodeURIComponent(
         new Date(now - 24 * 3600_000).toISOString()
-      )}&limit=1`
+      )}&limit=1${numberFilter("to_number", opts.toDigits)}`
     );
     if (priorRfq.length > 0) {
       return {
@@ -1252,9 +1258,9 @@ export async function guardOutbound(opts: {
     // never trip (or clear) this user's engagement halt.
     const lastOut = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
-      `select=received_at&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-        opts.toDigits
-      )}&raw->>sender=eq.${encodeURIComponent(opts.senderKey)}&order=received_at.desc&limit=1`
+      `select=received_at&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        opts.senderKey
+      )}&order=received_at.desc&limit=1${numberFilter("to_number", opts.toDigits)}`
     );
     if (lastOut[0]) {
       const inboundSince = await sbSelect<{ id: number }>(
@@ -1263,11 +1269,15 @@ export async function guardOutbound(opts: {
         // count as engagement (another user's thread with the same shop must
         // never clear this user's halt). Legacy unstamped rows fall back to
         // the durable wa_recipient_state check below.
-        `select=id&direction=eq.inbound&from_number=eq.${encodeURIComponent(
-          opts.toDigits
-        )}&raw->>receiver=eq.${encodeURIComponent(
+        // Number matching is TOLERANT here or the halt reads a real reply as
+        // silence: the shop's inbound row carries WhatsApp's spelling while
+        // `toDigits` carries discovery's, and an exact match between them made
+        // an engaged shop look ignored - which TERMINALLY dropped our answer.
+        `select=id&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
           opts.senderKey
-        )}&received_at=gte.${encodeURIComponent(lastOut[0].received_at)}&limit=1`
+        )}&received_at=gte.${encodeURIComponent(
+          lastOut[0].received_at
+        )}&limit=1${numberFilter("from_number", opts.toDigits)}`
       );
       const state = await sbSelect<{ read: boolean; last_reply_at: string | null }>(
         "wa_recipient_state",

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { numberFilter } from "@/lib/wa/phone-key";
 
 // A live transcript poll: it must never be statically cached or the ThreadDashboard
 // freezes on its first snapshot (the "app out of sync with WhatsApp" report).
@@ -40,9 +41,13 @@ export async function GET(req: Request) {
     const [outs, ins, recip] = await Promise.all([
       sbSelect<{ id: number; body: string; received_at: string; raw: { englishGloss?: string; kind?: string } | null }>(
         "whatsapp_messages",
-        `select=id,body,received_at,raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-          digits
-        )}&raw->>sender=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
+        // Number matching is TOLERANT on every side of the transcript: outbound
+        // rows carry the spelling discovery produced, inbound rows the one
+        // WhatsApp delivered, and an exact match between the two silently
+        // emptied half of the conversation.
+        `select=id,body,received_at,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+          session.email
+        )}${since}&order=received_at.asc&limit=60${numberFilter("to_number", digits)}`
       ).catch(() => []),
       sbSelect<{
         id: number;
@@ -61,9 +66,9 @@ export async function GET(req: Request) {
         // PRIVACY: inbound is scoped to the messages THIS user's WhatsApp
         // received (raw.receiver) - digits alone would leak another user's
         // thread with the same number.
-        `select=id,body,received_at,type,wa_message_id,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
-          digits
-        )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.asc&limit=60`
+        `select=id,body,received_at,type,wa_message_id,raw&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+          session.email
+        )}${since}&order=received_at.asc&limit=60${numberFilter("from_number", digits)}`
       ).catch(() => []),
       // Delivery status for THIS user's number -> this shop (WhatsApp ticks:
       // sent -> delivered (double grey) -> read (blue) -> replied). Scoped by
@@ -79,7 +84,7 @@ export async function GET(req: Request) {
         "wa_recipient_state",
         `select=delivered,read,blocked,last_read_at,last_reply_at,last_sent_at&sender_key=eq.${encodeURIComponent(
           session.email
-        )}&to_number=eq.${encodeURIComponent(digits)}&limit=1`
+        )}&limit=1${numberFilter("to_number", digits)}`
       ).catch(() => []),
     ]);
     const messages = [
@@ -149,9 +154,9 @@ export async function GET(req: Request) {
     }>(
       "whatsapp_messages",
       // PRIVACY: receiver-scoped - see the full-transcript query above.
-      `select=body,received_at,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
-        sent.to_number
-      )}&raw->>receiver=eq.${encodeURIComponent(session.email)}${since}&order=received_at.desc&limit=1`
+      `select=body,received_at,raw&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+        session.email
+      )}${since}&order=received_at.desc&limit=1${numberFilter("from_number", sent.to_number)}`
     );
     received = inbound[0] ?? null;
   }

@@ -27,7 +27,8 @@ import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 // second copy is how the drill window got skipped on the recovery path).
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
-import { waDigits, threadNumberOr } from "@/lib/wa/phone-key";
+import { waDigits, numberFilter, waIdKind, lidKey } from "@/lib/wa/phone-key";
+import { resolveChatIdentity } from "@/lib/wa/lid-alias";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
@@ -37,9 +38,9 @@ import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa
 async function regionForThread(fromDigits: string, ownerEmail: string): Promise<string | undefined> {
   const rows = await sbSelect<{ raw: { region?: string } | null }>(
     "whatsapp_messages",
-    `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-      fromDigits
-    )}&raw->>sender=eq.${encodeURIComponent(ownerEmail)}&order=received_at.desc&limit=1`
+    `select=raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      ownerEmail
+    )}&order=received_at.desc&limit=1${numberFilter("to_number", fromDigits)}`
   ).catch(() => []);
   const r = rows[0]?.raw?.region;
   return typeof r === "string" && r ? r : undefined;
@@ -228,29 +229,47 @@ export async function processEvolutionWebhook(
       try {
       if (!data?.key) continue;
       const remoteJid = String(data.key.remoteJid ?? "");
-      if (!remoteJid.endsWith("@s.whatsapp.net")) continue; // skip groups/status
-      // waDigits, NOT a raw split: a multi-device JID carries a device suffix
-      // ("6391...:12@s.whatsapp.net"). Splitting on "@" alone kept the ":12",
-      // producing a routing key that matched NO outbound anchor - the reply was
-      // stored against a number the thread lookup could never find.
-      const from = waDigits(remoteJid);
-      if (!from) continue;
+      const jidKind = waIdKind(remoteJid);
+      // Groups, status broadcasts and anything unnameable are never a shop.
+      if (jidKind !== "phone" && jidKind !== "lid") continue;
 
       // Resolve the RECEIVING user FIRST - every store/read below is scoped to
-      // them. An unresolvable instance is never ingested (a receiver-less row
-      // would be unscopeable forever).
+      // them, and a privacy-JID alias is only evidence inside ONE inbox. An
+      // unresolvable instance is never ingested (a receiver-less row would be
+      // unscopeable forever).
       const email = await emailForInstance(instance);
       if (!email) {
         await sbInsert("agent_events", [
           {
             kind: "webhook-orphan",
             vendor_id: "",
-            vendor_name: from,
-            detail: `Inbound from +${from} on unknown Evolution instance "${instance}" - dropped (privacy: cannot attribute a receiver).`,
+            vendor_name: waDigits(remoteJid) || remoteJid,
+            detail: `Inbound from ${remoteJid} on unknown Evolution instance "${instance}" - dropped (privacy: cannot attribute a receiver).`,
           },
         ]).catch(() => {});
         continue;
       }
+
+      // ONE identity for this chat. A phone JID resolves to its digits (waDigits,
+      // NOT a raw split: a multi-device JID carries a device suffix "…:12", and
+      // splitting on "@" alone kept it, producing a routing key that matched NO
+      // outbound anchor). A privacy @lid chat carries no phone of its own and is
+      // resolved only from evidence - see wa/lid-alias. No evidence => dropped,
+      // never guessed.
+      const identity = await resolveChatIdentity(email, remoteJid, data).catch(() => null);
+      const from = identity?.phone ?? "";
+      if (!from) {
+        void noteInboundDropped(email, lidKey(remoteJid) || remoteJid, "unresolved-identity", {
+          via: "webhook",
+          jid: remoteJid.slice(0, 48),
+        });
+        continue;
+      }
+      const chatLid = identity?.lid ?? "";
+      // Downstream asserts the origin chat against the number we attribute to.
+      // For a resolved @lid chat that assertion is satisfied by the RESOLVED
+      // line, with the privacy id carried alongside for the trace.
+      const originJid = jidKind === "phone" ? remoteJid : `${from}@s.whatsapp.net`;
 
       // Not a rental-shop thread THIS user opened? Drop it - never stored,
       // never read. (Applies to fromMe too: private chats stay sacred, and a
@@ -281,8 +300,7 @@ export async function processEvolutionWebhook(
           // matched, so our OWN send echoed back was misread as a human
           // takeover: the agent stood down permanently and wrote an rfq-less
           // row on top of the thread. Same variants the resolver uses.
-          const echoOr = threadNumberOr("to_number", from);
-          const numFilter = echoOr ? `&or=${echoOr}` : `&to_number=eq.${encodeURIComponent(from)}`;
+          const numFilter = numberFilter("to_number", from);
           const byId = msgId
             ? await sbSelect(
                 "whatsapp_messages",
@@ -315,7 +333,12 @@ export async function processEvolutionWebhook(
               body: text,
               type: "text",
               direction: "outbound",
-              raw: { sender: email, kind: "human-manual", channel: "evolution" },
+              raw: {
+                sender: email,
+                kind: "human-manual",
+                channel: "evolution",
+                ...(chatLid ? { lid: chatLid } : {}),
+              },
             },
           ]);
           const { setThreadTakeover } = await import("@/lib/session-flags");
@@ -329,7 +352,7 @@ export async function processEvolutionWebhook(
             const { sbDelete } = await import("@/lib/runtime-config");
             await sbDelete(
               "wa_outbox",
-              `sender_key=eq.${encodeURIComponent(email)}&to_number=eq.${encodeURIComponent(from)}`
+              `sender_key=eq.${encodeURIComponent(email)}${numberFilter("to_number", from)}`
             ).catch(() => {});
             await sbDelete(
               "graph_wakeups",
@@ -423,6 +446,11 @@ export async function processEvolutionWebhook(
             receiver: email,
             pushName: data.pushName ?? null,
             channel: "evolution",
+            // The privacy identifier this chat is addressed by, when it is one.
+            // Persisting it here (existing JSONB, no migration) is what lets a
+            // later @lid frame with no phone field resolve to the same shop
+            // after a process restart.
+            ...(chatLid ? { lid: chatLid } : {}),
             // What the shop actually SENT, so "Full conversation" can show it
             // instead of the string "[photo]". Bytes are never stored here -
             // only the provider KEY, which /api/wa/media redeems on demand.
@@ -495,7 +523,7 @@ export async function processEvolutionWebhook(
         await opts.enqueueVisionFlow({
           waMessageId: msgId,
           fromDigits: from,
-          remoteJid,
+          remoteJid: originJid,
           senderEmail: email,
           caption: syntheticText,
           raw: data,
@@ -555,7 +583,10 @@ export async function processEvolutionWebhook(
 
       await processVendorReply({
         fromDigits: from,
-        remoteJid, // true origin chat - asserted against `from` before attributing
+        // The RESOLVED origin chat - asserted against `from` before attributing.
+        // For a privacy @lid chat this is the line the alias resolved to, which
+        // is the only identity we are willing to attribute a reply to.
+        remoteJid: originJid,
         text: syntheticText,
         images,
         transcript,

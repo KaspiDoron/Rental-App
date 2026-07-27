@@ -43,7 +43,7 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
 import { floorPriceFor, credibleFloor } from "./market";
 import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
 import { noteInboundDropped } from "./wa/webhook-trace";
-import { waDigits } from "./wa/phone-key";
+import { waDigits, numberFilter } from "./wa/phone-key";
 import { resolveThreadContext } from "./wa/thread-context";
 import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
@@ -296,16 +296,21 @@ export async function processVendorReply(opts: {
   // safe history, so we use none rather than the unfiltered set.
   let mine: ThreadMsg[] = [];
   if (opts.senderEmail) {
-    const enc = encodeURIComponent(from);
     const encMe = encodeURIComponent(opts.senderEmail);
     const [outRows, inRows] = await Promise.all([
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.outbound&to_number=eq.${enc}&raw->>sender=eq.${encMe}&order=received_at.desc&limit=12`
+        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+          "to_number",
+          from
+        )}`
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&from_number=eq.${enc}&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=12`
+        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+          "from_number",
+          from
+        )}`
       ),
     ]);
     mine = [...outRows, ...inRows].sort(
@@ -333,9 +338,10 @@ export async function processVendorReply(opts: {
   const pendingOutbox = ctx.sender
     ? await sbSelect<{ meta: { kind?: string } | null }>(
         "wa_outbox",
-        `select=meta&sender_key=eq.${encodeURIComponent(
-          ctx.sender
-        )}&to_number=eq.${encodeURIComponent(from)}&limit=20`
+        `select=meta&sender_key=eq.${encodeURIComponent(ctx.sender)}&limit=20${numberFilter(
+          "to_number",
+          from
+        )}`
       ).catch(() => [])
     : [];
   const pendingKind = (k: string) =>
@@ -835,9 +841,10 @@ export async function processVendorReply(opts: {
             ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
                 opts.waMessageId
               )}&limit=1`
-            : `select=id,raw&direction=eq.inbound&from_number=eq.${encodeURIComponent(
+            : `select=id,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
+                "from_number",
                 from
-              )}${receiverScope}&order=received_at.desc&limit=1`
+              )}`
         );
         const row = rows[0];
         if (row) {
@@ -865,13 +872,11 @@ export async function processVendorReply(opts: {
         const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
         const ours = await sbSelect<{ body: string }>(
           "whatsapp_messages",
-          `select=body&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-            from
-          )}&raw->>sender=eq.${encodeURIComponent(
+          `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
             ctx.sender!
           )}&received_at=gte.${encodeURIComponent(
             new Date(Date.now() - 24 * 3600_000).toISOString()
-          )}&order=received_at.desc&limit=30`
+          )}&order=received_at.desc&limit=30${numberFilter("to_number", from)}`
         ).catch(() => [] as { body: string }[]);
         if (ours.some((o) => norm(o.body || "") === norm(text))) return;
         const { screenInbound } = await import("./inbound-risk");

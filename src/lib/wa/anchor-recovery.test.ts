@@ -73,7 +73,12 @@ describe("phone normalization is consistent across the inbound/outbound paths", 
 
   it("the or() filter matches every spelling and stays valid PostgREST", () => {
     const or = threadNumberOr("to_number", "66635236849");
-    expect(or).toBe("(to_number.eq.66635236849,to_number.eq.635236849,to_number.eq.0635236849)");
+    // Every derivable spelling, plus the subscriber TAIL - the clause that makes
+    // matching symmetric when only a national number is in hand and there is no
+    // country code to expand it with (see phone-key.nationalTail).
+    expect(or).toBe(
+      "(to_number.eq.66635236849,to_number.eq.635236849,to_number.eq.0635236849,to_number.like.*635236849)"
+    );
   });
 
   it("device suffixes and JID hosts never create a second identity", () => {

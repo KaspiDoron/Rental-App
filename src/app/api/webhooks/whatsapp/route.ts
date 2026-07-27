@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getConfig, sbInsert, sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
+import { numberFilter } from "@/lib/wa/phone-key";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { digitsOnly } from "@/lib/phone";
 
@@ -145,11 +146,9 @@ export async function POST(req: Request) {
     const resolveReceiver = async (fromDigits: string): Promise<string | null | typeof DB_ERR> => {
       const res = await sbSelectStrict<{ raw: { sender?: string } | null }>(
         "whatsapp_messages",
-        `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
-          fromDigits
-        )}&received_at=gte.${encodeURIComponent(
+        `select=raw&direction=eq.outbound&received_at=gte.${encodeURIComponent(
           new Date(Date.now() - 14 * 86_400_000).toISOString()
-        )}&order=received_at.desc&limit=20`
+        )}&order=received_at.desc&limit=20${numberFilter("to_number", fromDigits)}`
       );
       // Genuine DB outage -> retry. A missing table (pre-migration) behaves as
       // before (no attribution possible -> null), never a false retry storm.
