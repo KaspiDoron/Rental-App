@@ -8,6 +8,7 @@
 
 import { sbInsert, sbSelectStrict } from "./runtime-config";
 import { boundedSet } from "./bounded-map";
+import { cacheIsStale, UNKNOWN_VERSION } from "./versioned";
 
 // These caches live for the whole PROCESS lifetime in the workers (which import
 // all of src/lib), so an unbounded Map grows one entry per user - and the
@@ -18,6 +19,13 @@ const CACHE_CAP = 5000;
 interface CacheEntry {
   paused: boolean;
   at: number;
+  /**
+   * The monotonic version of the marker this value came from (epoch ms of the
+   * marker row). This is what lets a client tell a stale answer from a fresh
+   * one: an instance whose 30s cache predates the write necessarily reports an
+   * OLDER version, with no coordination between instances. See lib/versioned.
+   */
+  version?: number;
 }
 
 declare global {
@@ -33,8 +41,12 @@ function cache(): Map<string, CacheEntry> {
 const TTL_MS = 30_000;
 
 /** Stamp a pause or resume marker for this user's whole search session. */
-export async function setSessionPaused(email: string, paused: boolean): Promise<boolean> {
+export async function setSessionPaused(
+  email: string,
+  paused: boolean
+): Promise<{ ok: boolean; version: number }> {
   const kind = paused ? "session-paused" : "session-resumed";
+  const now = Date.now();
   const ok = await sbInsert("whatsapp_messages", [
     {
       from_number: "system",
@@ -44,8 +56,11 @@ export async function setSessionPaused(email: string, paused: boolean): Promise<
       raw: { sender: email, kind },
     },
   ]);
-  boundedSet(cache(), email, { paused, at: Date.now() }, CACHE_CAP);
-  return ok;
+  // The write's own instant is the version. Any instance still serving a cached
+  // pre-write value reports a strictly smaller one, so the client can recognise
+  // it as stale instead of applying it and flipping the switch back.
+  boundedSet(cache(), email, { paused, at: now, version: now }, CACHE_CAP);
+  return { ok, version: now };
 }
 
 // ---------------------------------------------------------------------------
@@ -128,8 +143,26 @@ export async function isThreadTakenOver(
  * never cached, automated sends fail closed.
  */
 export async function isSessionPaused(email: string): Promise<boolean | null> {
+  return (await sessionPauseState(email)).paused;
+}
+
+/**
+ * The pause state WITH its monotonic version - the shape every user-facing
+ * surface should read, so a stale answer is recognisable as stale.
+ *
+ * `knownVersion` is what the caller has already seen. A cached entry older than
+ * that is refused and re-read: this is the cross-instance half of the rule, and
+ * it is what stops a second instance's 30s cache from answering a poll with the
+ * pre-resume value and flipping the switch back under the user's finger.
+ */
+export async function sessionPauseState(
+  email: string,
+  knownVersion?: number
+): Promise<{ paused: boolean | null; version: number }> {
   const hit = cache().get(email);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.paused;
+  if (hit && Date.now() - hit.at < TTL_MS && !cacheIsStale(hit.version, knownVersion)) {
+    return { paused: hit.paused, version: hit.version ?? hit.at };
+  }
   const res = await sbSelectStrict<{ raw: { kind?: string } | null; received_at: string }>(
     "whatsapp_messages",
     `select=raw,received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
@@ -140,11 +173,18 @@ export async function isSessionPaused(email: string): Promise<boolean | null> {
     // Same fail-closed-direction rule as isThreadTakenOver: a stale `true`
     // (still paused) is honored, a stale `false` is never returned - null so
     // automated sends hold rather than slip through during a store blip.
-    return res.error === "missing" ? false : hit?.paused === true ? true : null;
+    const paused = res.error === "missing" ? false : hit?.paused === true ? true : null;
+    // An unreadable store carries NO version: it must never outrank a real one.
+    return { paused, version: UNKNOWN_VERSION };
   }
-  const paused = res.rows[0]?.raw?.kind === "session-paused";
-  boundedSet(cache(), email, { paused, at: Date.now() }, CACHE_CAP);
-  return paused;
+  const row = res.rows[0];
+  const paused = row?.raw?.kind === "session-paused";
+  // The marker row's own timestamp is the version - durable, monotonic, and
+  // identical on every instance that reads it.
+  const stamped = Date.parse(row?.received_at ?? "");
+  const version = Number.isFinite(stamped) ? stamped : UNKNOWN_VERSION;
+  boundedSet(cache(), email, { paused, at: Date.now(), version }, CACHE_CAP);
+  return { paused, version };
 }
 
 // ---------------------------------------------------------------------------

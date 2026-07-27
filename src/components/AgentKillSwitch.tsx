@@ -15,16 +15,15 @@
 // disables itself mid-switch. On a failed toggle it reverts and says so - it
 // must never claim "stopped" when the server did not confirm the hold.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useI18n } from "@/lib/i18n";
+import { useVersionedToggle } from "@/lib/client/versioned-toggle";
 import { Icon } from "./icons";
-
-type Known = boolean; // true = paused, false = active
-type Switch = Known | null; // null = still reading the initial state
 
 export function AgentKillSwitch({
   className = "",
   serverPaused,
+  serverPausedVersion,
 }: {
   className?: string;
   /** Live pause state from the activity poll. This component used to read the
@@ -33,77 +32,53 @@ export function AgentKillSwitch({
    * whose every row said "Paused by you". Following the poll makes the two
    * surfaces structurally incapable of disagreeing. */
   serverPaused?: boolean;
+  /** The VERSION of that value. Pause state is cached 30s per server instance,
+   * so right after a resume a different instance can answer the poll with the
+   * pre-resume value - not wrong, just OLD. Without a version the switch applied
+   * it and flipped back to "paused" on its own. */
+  serverPausedVersion?: number;
 }) {
   const { t } = useI18n();
-  const [paused, setPaused] = useState<Switch>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const mounted = useRef(true);
 
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
+  const read = useCallback(async (known: number) => {
+    const r = await fetch(`/api/session/pause?known=${known}`, { cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    return { value: Boolean(d?.paused), version: Number(d?.version) || 0 };
   }, []);
 
-  // Read the current session pause state once on mount (never cached).
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch("/api/session/pause", { cache: "no-store" });
-        const d = await r.json().catch(() => ({}));
-        if (mounted.current) setPaused(Boolean(d?.paused));
-      } catch {
-        // Unknown -> assume active (the honest default: the safety gates fail
-        // closed server-side regardless of what this button shows).
-        if (mounted.current) setPaused(false);
-      }
-    })();
+  const write = useCallback(async (next: boolean) => {
+    const r = await fetch("/api/session/pause", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: next ? "pause" : "resume" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d?.ok === false) return null; // the hold was NOT saved
+    return { value: Boolean(d?.paused), version: Number(d?.version) || Date.now() };
   }, []);
 
-  // Follow the live poll - but never while a toggle is in flight, or the
-  // optimistic flip would be yanked back by a payload that predates it.
-  useEffect(() => {
-    if (busy || typeof serverPaused !== "boolean") return;
-    setPaused(serverPaused);
-  }, [serverPaused, busy]);
+  const incoming = useMemo(
+    () =>
+      typeof serverPaused === "boolean" && typeof serverPausedVersion === "number"
+        ? { value: serverPaused, version: serverPausedVersion }
+        : null,
+    [serverPaused, serverPausedVersion]
+  );
 
-  const toggle = useCallback(async () => {
-    if (busy || paused === null) return;
-    const next = !paused;
-    setBusy(true);
-    setError(null);
-    // Optimistic flip - reverted below if the server does not confirm.
-    setPaused(next);
-    try {
-      const r = await fetch("/api/session/pause", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: next ? "pause" : "resume" }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d?.ok === false) {
-        if (mounted.current) {
-          setPaused(!next); // revert - the hold was NOT saved
-          setError(
-            next
-              ? t("Could not pause - the agents may still be sending. Try again.")
-              : t("Could not resume. Try again.")
-          );
-        }
-      } else if (mounted.current) {
-        setPaused(Boolean(d?.paused));
-      }
-    } catch {
-      if (mounted.current) {
-        setPaused(!next);
-        setError(t("Network hiccup - nothing changed. Try again."));
-      }
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  }, [busy, paused, t]);
+  const errorFor = useCallback(
+    (next: boolean) =>
+      next
+        ? t("Could not pause - the agents may still be sending. Try again.")
+        : t("Could not resume. Try again."),
+    [t]
+  );
+
+  const { value: paused, busy, error, toggle } = useVersionedToggle({
+    read,
+    write,
+    incoming,
+    errorFor,
+  });
 
   const isPaused = paused === true;
   const loading = paused === null;

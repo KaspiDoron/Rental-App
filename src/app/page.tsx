@@ -235,6 +235,11 @@ export default function Home() {
     });
   });
   const [paused, setPaused] = useState(false);
+  // The VERSION of `paused`. Pause state is cached per server instance, so a
+  // poll answered by a different instance right after a resume carries the
+  // pre-resume value - old, not wrong. The version is what lets the switch tell
+  // the difference instead of flipping itself back (see lib/versioned).
+  const [pausedVersion, setPausedVersion] = useState(0);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   // Poll cadence from the server (SCALE_MODE stretches these under load). Fast
   // by default so a shop's WhatsApp reply surfaces in the app within seconds
@@ -738,7 +743,15 @@ export default function Home() {
       // The kill switch and the queue rows now read the SAME poll: a session
       // paused after mount can no longer show "Agents active" over a queue of
       // "Paused by you" rows.
-      if (typeof d.sessionPaused === "boolean") setPaused(d.sessionPaused);
+      if (typeof d.sessionPaused === "boolean") {
+        // Move forward only: an older answer is dropped, never applied.
+        const v = Number(d.sessionPausedVersion) || 0;
+        setPausedVersion((prev) => {
+          if (v && v <= prev) return prev;
+          setPaused(d.sessionPaused);
+          return v || prev;
+        });
+      }
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
@@ -2217,7 +2230,11 @@ export default function Home() {
             session - the hard stop is enforced server-side. */}
         {vendors.length > 0 &&
           stageCounts.messaged + stageCounts.replied + Math.max(stageCounts.queued, queueItems.length) > 0 && (
-            <AgentKillSwitch className="mt-3" serverPaused={paused} />
+            <AgentKillSwitch
+              className="mt-3"
+              serverPaused={paused}
+              serverPausedVersion={pausedVersion}
+            />
           )}
 
         {vendors.length > 0 && (

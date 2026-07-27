@@ -509,10 +509,22 @@ export async function GET(req: Request) {
   // switch used to read this once on mount and never again, so a session that
   // was paused later kept showing "Agents active" above a queue whose every row
   // said "Paused by you" - two states on one screen. One source, one truth.
+  //
+  // It carries its VERSION too. This poll is answered by whichever Cloud Run
+  // instance picks it up, and each caches pause state for 30s - so right after a
+  // resume, an instance that has not seen the write answers with the old value.
+  // That answer is not wrong, it is OLD, and without a version the client could
+  // not tell: it applied it and the switch flipped back to "paused" on its own.
+  // `known` is what the client has already applied; a cached value older than
+  // that is refused and re-read.
   let sessionPaused = false;
+  let sessionPausedVersion = 0;
   try {
-    const { isSessionPaused } = await import("@/lib/session-flags");
-    sessionPaused = (await isSessionPaused(email)) === true;
+    const { sessionPauseState } = await import("@/lib/session-flags");
+    const knownVersion = Number(url.searchParams.get("pauseVersion") ?? 0);
+    const state = await sessionPauseState(email, Number.isFinite(knownVersion) ? knownVersion : 0);
+    sessionPaused = state.paused === true;
+    sessionPausedVersion = state.version;
   } catch {}
 
   // Numbers the user explicitly cancelled (removed queued messages) - the UI
@@ -541,6 +553,7 @@ export async function GET(req: Request) {
     queueEtaDoneBy, // W2: honest "all done by" (max etaTo across the queue)
     lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
     sessionPaused, // live kill-switch state, so the panel cannot contradict the queue
+    sessionPausedVersion, // monotonic: the client only ever moves this forward
     cancelledNumbers: cancelled,
     now: new Date().toISOString(),
   });
