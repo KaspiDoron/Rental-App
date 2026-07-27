@@ -264,12 +264,20 @@ input, textarea, select, button {
   animation-delay: calc(var(--i, 0) * 60ms);
 }
 
-/* Cards lift on hover/press for a tactile feel */
+/* Cards lift on hover/press for a tactile feel.
+   NO blanket `will-change`. It was set on every card, and `will-change:
+   transform` promotes each one to its own compositor layer for as long as the
+   rule applies - twenty always-on layers on a phone, whether or not anything
+   was animating, which is exactly the memory and raster cost that made a long
+   list scroll badly. The hint belongs on the element that is ABOUT to move, so
+   it is scoped to the moment of interaction. */
 .lift {
   transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 0.18s ease;
-  will-change: transform;
 }
+.lift:hover,
+.lift:focus-within,
+.lift:active { will-change: transform; }
 .lift:hover { transform: translateY(-3px); box-shadow: 0 16px 40px -20px rgba(33,40,55,0.4); }
 .lift:active { transform: translateY(0) scale(0.99); }
 

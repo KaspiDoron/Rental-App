@@ -25,6 +25,7 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
 import { checkAction } from "@/lib/actions/registry";
+import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
 
@@ -268,6 +269,12 @@ export default function Home() {
   // the offer before anything downstream reads a price: the booking sheet, the
   // server-side total and the bargain draft all take `offer.pricePerDay`
   // directly, so a tier carried alongside would book the wrong bike.
+  // STABLE HANDLER IDENTITY. This used to be called inline in the render -
+  // `onBook={pickVendorOption(setBookingVendor)}` - which built a brand-new
+  // function on every render and handed it to a memo'd VendorCard. The memo
+  // could therefore never hold: one changed field on one shop re-rendered every
+  // card on the board, twice per poll cycle, which is what made the list feel
+  // like scrolling through treacle. The closure has to be created once.
   function pickVendorOption(set: (v: Vendor) => void) {
     return (v: Vendor, option?: VehicleOption) => {
       if (!option || !v.offer) return set(v);
@@ -623,8 +630,14 @@ export default function Home() {
     };
   }, [restored]);
 
+  // RECONCILE, don't rebuild. `vs.map(v => ({...v, ...patch}))` allocated a new
+  // object for every shop on every tick whether or not anything about it
+  // changed - and `memo(VendorCard)` compares by reference, so a new object is
+  // a new prop and every card re-rendered, twenty at a time, twice per poll
+  // cycle. mergeIfChanged returns the SAME reference when a patch changes
+  // nothing, which is what lets React skip a card that did not move.
   const patchVendor = useCallbackRef((id: string, patch: Partial<Vendor>) => {
-    setVendors((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+    setVendors((vs) => reconcileList(vs, (v) => (v.id === id ? patch : null)));
   });
   // Stable identity so the memoised VendorCard doesn't re-render on every
   // parent state change.
@@ -1556,6 +1569,16 @@ export default function Home() {
       return { ok: false, reason: "network" };
     }
   });
+
+  // Created ONCE. Passing `pickVendorOption(setBookingVendor)` inline meant a
+  // fresh function on every render, so `memo(VendorCard)` compared a new prop
+  // every time and re-rendered all of them - the whole list, twice per poll.
+  const onBookVendor = useCallbackRef((v: Vendor, option?: VehicleOption) =>
+    pickVendorOption(setBookingVendor)(v, option)
+  );
+  const onBargainVendor = useCallbackRef((v: Vendor, option?: VehicleOption) =>
+    pickVendorOption(setBargainVendor)(v, option)
+  );
 
   const customMessage = useCallbackRef(async (vendorId: string, message: string) => {
     const vendor = vendors.find((v) => v.id === vendorId);
@@ -2859,7 +2882,12 @@ export default function Home() {
                 className={`rise-in scroll-mt-24 rounded-blob transition-shadow ${
                   selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
                 }`}
-                style={{ ["--i" as string]: i }}
+                // The stagger was uncapped, so the twentieth card started
+                // animating 1.14s after the first and the last finished at
+                // 2.34s - two and a half seconds of compositing while the
+                // traveller was already scrolling. It is a flourish for the
+                // first few rows; past that it is just work.
+                style={{ ["--i" as string]: staggerIndex(i) }}
               >
                 <VendorCard
                   vendor={v}
@@ -2869,9 +2897,9 @@ export default function Home() {
                   localLang={localLangActive}
                   region={origin?.label ?? ""}
                   searchEpoch={searchEpoch}
-                  onBook={pickVendorOption(setBookingVendor)}
+                  onBook={onBookVendor}
                   onReviews={setReviewsVendor}
-                  onBargain={pickVendorOption(setBargainVendor)}
+                  onBargain={onBargainVendor}
                   onStage={handleStage}
                   onQueued={handleQueued}
                   onCustomMessage={customMessage}
