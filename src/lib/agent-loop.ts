@@ -838,21 +838,45 @@ export async function processVendorReply(opts: {
   // they can leave the app and come back. Fire-and-forget; no-op without VAPID.
   // COLLAPSED per shop (the duplicate-notification fix): a 3-message burst from
   // one shop = ONE push. A price landing is important and bypasses the collapse.
+  //
+  // ...AND ONLY WHEN IT IS WORTH THE INTERRUPTION. The collapse window answers
+  // "how often"; it cannot answer "whether", and a hunt contacts a dozen shops
+  // that mostly answer with an opening-hours auto-reply. Fifteen different
+  // shops are fifteen different collapse keys, so the traveller got fifteen
+  // buzzes carrying nothing they could act on. lib/notify/significance judges
+  // what an event CHANGES for them - a first price, a new best price, the
+  // moment the hunt comes alive - and everything else stays in the app, where
+  // it is still perfectly visible.
   if (ctx.sender) {
-    const shop = ctx.vendorName || "A rental shop";
-    const body = usablePrice
-      ? `${shop} offered ${usablePrice} ${cur}/day - tap to see the deal.`
-      : `${shop} just replied - tap to open WheelDeal.`;
-    import("./push")
-      .then((m) =>
-        m.sendPushCollapsed(
+    void (async () => {
+      try {
+        const { classifyReply, worthAnInterruption } = await import("./notify/significance");
+        const { notifyState, markPushSent } = await import("./notify/state");
+        const state = await notifyState(ctx.sender!);
+        const event = classifyReply({
+          pricePerDay: usablePrice,
+          currency: cur,
+          anyReplyYet: state.anyReplyYet,
+        });
+        const verdict = worthAnInterruption(event, state);
+        if (!verdict.notify) return;
+
+        const shop = ctx.vendorName || "A rental shop";
+        const body = usablePrice
+          ? `${shop} offered ${usablePrice} ${cur}/day - tap to see the deal.`
+          : `${shop} answered - your hunt is live.`;
+        const m = await import("./push");
+        await m.sendPushCollapsed(
           ctx.sender!,
           `reply:${ctx.vendorId || from}`,
-          { title: "New reply 🛵", body, url: "/" },
+          { title: usablePrice ? "New price 💰" : "Your hunt is live 🛵", body, url: "/" },
           { windowSec: 180, important: Boolean(usablePrice) }
-        )
-      )
-      .catch(() => {});
+        );
+        await markPushSent(ctx.sender!, `${event.kind}: ${verdict.reason}`);
+      } catch {
+        /* a notification is never worth breaking the reply loop for */
+      }
+    })();
   }
 
   // INBOUND GLOSS (fire-and-forget): translate a local-language shop reply to

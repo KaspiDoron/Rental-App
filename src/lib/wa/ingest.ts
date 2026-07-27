@@ -486,13 +486,11 @@ export async function processEvolutionWebhook(
       // A PDF (or any non-image document) can't go through the vision agent -
       // tell the user honestly instead of dropping it on the floor.
       const docIsImage = Boolean(doc?.mimetype && /^image\//i.test(doc.mimetype));
+      // NOT A PUSH. A document we cannot read is real and worth showing, and it
+      // is not worth a buzz: the traveller has nothing to decide and the app
+      // says so the moment they look. See lib/notify/significance - the whole
+      // reason alerts felt like spam was events like this one earning one.
       if (doc && !docIsImage && email) {
-        const { sendPushToUser } = await import("@/lib/push");
-        sendPushToUser(email, {
-          title: "A shop sent a document 📄",
-          body: `${doc.fileName ?? "A file"} arrived on WhatsApp - open the chat there to view it.`,
-          url: "/",
-        }).catch(() => {});
         await sbInsert("agent_events", [
           {
             kind: "media-unreadable",
@@ -540,13 +538,9 @@ export async function processEvolutionWebhook(
         if (media) images.push(media);
         else {
           mediaFetchFailed = true;
-          // Be honest with the USER (push + ops event)...
-          const { sendPushToUser } = await import("@/lib/push");
-          sendPushToUser(email, {
-            title: "A photo didn't come through 📷",
-            body: "A shop sent a photo we couldn't download - check the chat in WhatsApp.",
-            url: "/",
-          }).catch(() => {});
+          // Honest, and in the app rather than on the lock screen - a photo we
+          // could not download is not something the traveller can act on.
+          // (lib/notify/significance.)
           await sbInsert("agent_events", [
             {
               kind: "media-fetch-failed",
