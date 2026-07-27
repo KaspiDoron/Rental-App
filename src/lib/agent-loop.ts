@@ -483,6 +483,7 @@ export async function processVendorReply(opts: {
     const { assessPrice } = await import("./vehicle/resolution");
     const { pickOurPrice } = await import("./vehicle/resolution");
     const { extractQuotedPrices } = await import("./wa/price-extract");
+    const { amountIndexIn } = await import("./wa/rate-expr");
 
     // Every amount the shop wrote, each with WHERE it sits - the position is
     // what lets one sentence carrying two vehicles be read as two offers.
@@ -494,14 +495,14 @@ export async function processVendorReply(opts: {
     const candidates = quoted.allOffers.map((h) => ({
       pricePerDay: h.pricePerDay,
       currency: h.currency,
-      index: extractText.indexOf(String(Math.round(h.pricePerDay))),
+      index: amountIndexIn(extractText, h.pricePerDay),
     }));
     // The price the model chose is a candidate like any other, judged the same.
     if (!candidates.some((c) => c.pricePerDay === usablePrice)) {
       candidates.push({
         pricePerDay: usablePrice,
         currency: extraction.currency ?? undefined,
-        index: extractText.indexOf(String(Math.round(usablePrice))),
+        index: amountIndexIn(extractText, usablePrice),
       });
     }
 
@@ -517,7 +518,7 @@ export async function processVendorReply(opts: {
     const assessment = assessPrice(extractText, declared, {
       pricePerDay: usablePrice,
       currency: extraction.currency ?? undefined,
-      index: extractText.indexOf(String(Math.round(usablePrice))),
+      index: amountIndexIn(extractText, usablePrice),
     });
     extraction.vehicleAssessment = {
       status: assessment.status,
@@ -594,6 +595,41 @@ export async function processVendorReply(opts: {
     const perDayIfTotal = Math.round(usablePrice / rfq.durationDays);
     if (usablePrice >= typical * 2 && perDayIfTotal >= floorSameCur.floor * 0.55) {
       usablePrice = perDayIfTotal;
+    }
+  }
+  // ...AND THE SAME NET ON THE OTHER SIDE. A number far BELOW the regional
+  // floor is not a bargain, it is a misread - "Click 125cc 6 days discount
+  // 250/1day" reached a traveller's card as ฿1/day. wa/rate-expr stops that
+  // phrasing at the source; this stops the CLASS, because the next phrasing
+  // will be different. A misread almost always sits beside the real number, so
+  // the recovery is the cheapest believable amount from the SAME message, and
+  // failing that, no price at all - which makes the agent ask instead of
+  // bargaining up from something the shop never said.
+  if (usablePrice && floorSameCur) {
+    const { sanePrice } = await import("./wa/price-sanity");
+    const { extractQuotedPrices } = await import("./wa/price-extract");
+    const others = extractQuotedPrices(extractText || "", {
+      vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+      durationDays: rfq.durationDays,
+      localCurrency: cur,
+    }).allOffers.map((h) => h.pricePerDay);
+    const verdict = sanePrice(usablePrice, others, floorSameCur);
+    if (verdict.corrected) {
+      await sbInsert("agent_events", [
+        {
+          kind: "price-implausible",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          user_email: ctx.sender ?? "",
+          detail: `${verdict.reason ?? ""} (${cur}, ${ctx.region ?? "?"})`.slice(0, 500),
+        },
+      ]).catch(() => {});
+      usablePrice = verdict.pricePerDay ?? undefined;
+      extraction.pricePerDay = verdict.pricePerDay ?? undefined;
+      if (!verdict.pricePerDay) {
+        extraction.found = false;
+        extraction.confidence = "low";
+      }
     }
   }
   // CREDIBILITY CLAMP (the Bargained-0 kill): a "floor" at/above the shop's

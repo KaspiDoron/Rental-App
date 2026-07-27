@@ -16,6 +16,7 @@ import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
 import { OptionList } from "./OptionList";
 import { ShopAvatar } from "./ShopAvatar";
+import { vehicleStance } from "@/lib/offer-presentation";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
 // only its real reply produces a price. Everything happens INSIDE the app:
@@ -127,6 +128,11 @@ function VendorCardInner({
   const [pickupState, setPickupState] = useState<"idle" | "sending" | "shared" | "failed">("idle");
 
   const offer = vendor.offer;
+  // ONE reading of the vehicle question for the whole card. Three separate
+  // branches used to test `matchesSpec === false` independently, and that single
+  // bit cannot tell "wrong bike" from "not established yet" - so a shop quoting
+  // the exact 125cc asked for was told it had quoted something else.
+  const stance = vehicleStance(offer);
   // The offer's own currency symbol - prices display in the shop's money.
   const curSymbol = offer ? currencySymbol(offer.currency) : "$";
   // Traveller's own currency (item #6) - set after mount so SSR markup stays
@@ -470,9 +476,13 @@ function VendorCardInner({
                       genuine offers look fake. VERIFIED is the premium state
                       (exact vehicle match + high-confidence read); DIFFERENT
                       VEHICLE flags a mismatched quote. */}
-                  {offer.matchesSpec === false ? (
+                  {stance === "mismatch" ? (
                     <span className="rounded bg-brandred-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandred">
                       {t("DIFFERENT VEHICLE")}
+                    </span>
+                  ) : stance === "confirming" ? (
+                    <span className="rounded bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
+                      {t("CHECKING MODEL")}
                     </span>
                   ) : offer.verified ? (
                     <span className="rounded bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
@@ -619,9 +629,13 @@ function VendorCardInner({
               <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
                 🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
-            ) : offer.matchesSpec === false ? (
+            ) : stance === "mismatch" ? (
               <div className="mt-2 rounded-xl bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
                 ⚠️ {t("This price is for a different vehicle than you asked for - your agent is checking whether they have the one you want.")}
+              </div>
+            ) : stance === "confirming" ? (
+              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                🔎 {offer.vehicleNote || t("Your agent is confirming exactly which model this price is for.")}
               </div>
             ) : (
               offer.presentable === false && (
@@ -700,12 +714,12 @@ function VendorCardInner({
               {/* You can never LOCK a price that is for the wrong vehicle. Until
                   the shop confirms the vehicle you asked for, the only action is
                   to keep pressing them (the agent is already clarifying). */}
-              {offer.matchesSpec === false ? (
+              {stance !== "ok" ? (
                 <button
                   onClick={() => onBargain(vendor)}
                   className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
                 >
-                  🔎 {t("Ask for the right vehicle")}
+                  🔎 {stance === "mismatch" ? t("Ask for the right vehicle") : t("Confirm the model")}
                 </button>
               ) : (
                 <>

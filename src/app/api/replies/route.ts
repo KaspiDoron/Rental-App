@@ -227,13 +227,14 @@ export async function GET(req: Request) {
       specTx === "automatic" || specTx === "manual" ? (specTx as "automatic" | "manual") : undefined,
   };
   const { assessPrice } = await import("@/lib/vehicle/resolution");
+  const { amountIndexIn } = await import("@/lib/wa/rate-expr");
   const gateFor = (text: string | null, price: number | null) => {
     if (!text || !price || price <= 0) return null;
     if (!declaredSpec.class && !declaredSpec.displacementCc && !declaredSpec.transmission) return null;
     try {
       const a = assessPrice(text, declaredSpec, {
         pricePerDay: price,
-        index: text.indexOf(String(Math.round(price))),
+        index: amountIndexIn(text, price),
       });
       return { status: a.status, note: a.travellerNote };
     } catch {

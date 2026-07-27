@@ -22,6 +22,7 @@
 // as a backstop that rescues a price the LLM missed.
 
 import { parseRateLadder, tierForDays } from "./rate-ladder";
+import { scanRates } from "./rate-expr";
 
 export type VehicleClassHint = "car" | "motorbike" | "scooter" | undefined;
 
@@ -80,13 +81,10 @@ const AMBIGUOUS_CUR = new Set(["try", "mad", "a"]);
 // matched the grouped form, so a bare "1750" was truncated to "175".
 const NUM = "(\\d{1,3}(?:[.,\\s]\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)";
 
-// A currency token in EITHER position around the number, and a per-day marker.
-const PRICE_DAY = new RegExp(
-  `(?:${CUR_LEAD})?\\s*${NUM}\\s*(?:${CUR_TRAIL})?\\s*(?:[-/]|per\\s*|a\\s+)?\\s*(?:day|d\\b|24\\s*h(?:rs?|ours?)?|/\\s*24)`,
-  "i"
-);
-/** Global twin of PRICE_DAY - one line can carry several per-day amounts. */
-const PRICE_DAY_G = new RegExp(PRICE_DAY.source, "gi");
+// PER-DAY rates are read by `scanRates` (wa/rate-expr), which models the whole
+// expression - amount, separator, QUANTITY, unit - instead of "a number, then
+// the word day". The flat pattern that used to live here could not see a
+// denominator, so "250/1day" handed it the 1.
 // A total for the whole rental ("1750 in 5 days", "900 for 3 days") - divided.
 const PRICE_TOTAL = new RegExp(
   `(?:${CUR_LEAD})?\\s*${NUM}\\s*(?:${CUR_TRAIL})?\\s*(?:for|in|=|:)?\\s*(\\d{1,2})\\s*days?\\b`,
@@ -423,12 +421,18 @@ export function extractQuotedPrices(
     // the anchor and the offer in one breath ("Normally 300/day but for you
     // 250/day"), and reading only the first left the traveller with the anchor.
     let tookDaily = false;
-    for (const perDay of line.matchAll(PRICE_DAY_G)) {
-      const amt = parseAmount(perDay[1]);
+    // THE RATE READER (see wa/rate-expr). A rate is amount / (quantity x unit),
+    // and reading only `amount ... "day"` is how "250/1day" became a 1-baht
+    // offer: the ONE is the denominator, not the money. Week/month expressions
+    // are left to the dedicated patterns below, whose per-day divisor follows
+    // the traveller's real stay.
+    for (const rate of scanRates(line)) {
+      if (rate.unit !== "day") continue;
+      const amt = rate.perDay;
       if (!(amt > 0) || amt === days) continue;
-      const at = amountIndex(line, perDay, 1);
+      const at = rate.index;
       // "...for Rentals of 8 Days or More:" states WHEN the rates below apply.
-      if (isDurationConditionAt(line, at, perDay[0])) continue;
+      if (isDurationConditionAt(line, at, rate.matched)) continue;
       hits.push({
         pricePerDay: amt,
         currency: currencyIn(line) ?? opts.localCurrency,
@@ -536,15 +540,16 @@ export function extractQuotedPrices(
     // transfer template.
     if (!SERVICE_LINE.test(text)) {
       const whole = expandK(text);
-      for (const m of whole.matchAll(PRICE_DAY_G)) {
-        const amt = parseAmount(m[1]);
+      for (const rate of scanRates(whole)) {
+        if (rate.unit !== "day") continue;
+        const amt = rate.perDay;
         if (!(amt > 0) || amt === days) continue;
         hits.push({
           pricePerDay: amt,
           currency: currencyIn(whole) ?? opts.localCurrency,
           line: text.slice(0, 120),
           classMatch: undefined,
-          listPrice: isListPriceAt(whole, amountIndex(whole, m, 1)),
+          listPrice: isListPriceAt(whole, rate.index),
         });
       }
       // BARE-NUMBER answer to our price question ("400", "400 baht", "PHP 350
