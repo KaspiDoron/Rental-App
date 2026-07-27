@@ -182,3 +182,80 @@ export function describeActions(specs: ActionSpec[]): string {
     )
     .join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// AN ACTION HAS AN OUTCOME, AND THE TRAVELLER ALWAYS HEARS IT.
+//
+// C9 gave the assistant real bodies for its actions, and they ran. What it did
+// not give them was a VOICE: `runAction` returned a typed result and the UI
+// threw it away. So a refused action, a succeeded action and a genuinely dead
+// button were indistinguishable on screen - which is exactly what "Push harder
+// and Compare 3 do nothing" describes. "Compare the top 3" was the purest case:
+// it set the comparison to a single shop, the sheet only renders with two, and
+// nothing anywhere said so.
+//
+// The fix is not a message per call site - that is how call sites drift. It is
+// one function that turns any result into a line, so being silent stops being
+// something a caller can do by accident.
+
+export interface ActionOutcome {
+  tone: "ok" | "info" | "bad";
+  text: string;
+}
+
+/**
+ * What to tell the traveller about what just happened.
+ *
+ * `note` lets an executor add the one fact only it knows - how many shops were
+ * actually compared, which shop was pushed - without inventing its own phrasing
+ * for the refusals, which are the part that must never drift.
+ */
+export function outcomeFor(
+  id: string,
+  result: { ok: boolean; reason?: string; missing?: string[]; requires?: string },
+  note?: string
+): ActionOutcome {
+  const spec = (ACTIONS as Record<string, ActionSpec | undefined>)[id];
+  const name = spec?.label ?? "That";
+
+  if (result.ok) return { tone: "ok", text: note ?? `${name} - done.` };
+
+  switch (result.reason) {
+    case "not-entitled":
+      return {
+        tone: "info",
+        text: `${name} is a Pro feature - upgrade and I'll do it right away.`,
+      };
+    case "needs-confirm":
+      return { tone: "info", text: spec?.effect ? `${spec.effect} - confirm and I'll go.` : `Confirm and I'll go.` };
+    case "missing-args":
+      return {
+        tone: "info",
+        text: `I need ${(result.missing ?? []).join(" and ")} before I can do that.`,
+      };
+    case "unknown-action":
+      return { tone: "bad", text: "I do not know how to do that yet." };
+    default:
+      return { tone: "bad", text: note ?? `${name} did not go through - try again in a moment.` };
+  }
+}
+
+/**
+ * How many shops a comparison actually has to work with.
+ *
+ * Comparing needs two things to compare. Saying so is the whole point: the
+ * button used to set a one-shop comparison, the sheet requires two, and the
+ * traveller was left tapping a control that looked broken.
+ */
+export const MIN_COMPARE = 2;
+
+export function compareOutcome(quoted: number): ActionOutcome | null {
+  if (quoted >= MIN_COMPARE) return null;
+  return {
+    tone: "info",
+    text:
+      quoted === 1
+        ? "Only one shop has quoted so far - I'll line them up the moment a second price lands."
+        : "No prices have landed yet - as soon as two shops quote, I'll compare them for you.",
+  };
+}

@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { ACTIONS, checkAction, availableActions, describeActions } from "./registry";
+import {
+  ACTIONS,
+  checkAction,
+  availableActions,
+  describeActions,
+  outcomeFor,
+  compareOutcome,
+  MIN_COMPARE,
+} from "./registry";
 import { can } from "../entitlements";
 
 const check = (o: Parameters<typeof checkAction>[0]) => checkAction({ can, ...o });
@@ -125,5 +133,51 @@ describe("Will and the buttons share ONE vocabulary", () => {
 
   it("the assistant gets the same entry point, not a private one", () => {
     expect(page).toMatch(/runAction: \(id: string/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AN ACTION HAS AN OUTCOME. Silence is what made the buttons read as dead.
+// ---------------------------------------------------------------------------
+
+describe("every action result becomes something the traveller can read", () => {
+  it("a success says what happened", () => {
+    expect(outcomeFor("push-harder", { ok: true }).tone).toBe("ok");
+    expect(outcomeFor("push-harder", { ok: true }, "Pushing Ann's Rental.").text).toBe(
+      "Pushing Ann's Rental."
+    );
+  });
+
+  it("every refusal has words - none of them can be silent", () => {
+    for (const reason of ["not-entitled", "needs-confirm", "missing-args", "unknown-action"]) {
+      const o = outcomeFor("counter-at", { ok: false, reason, missing: ["pricePerDay"] });
+      expect(o.text.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("an unrecognised failure still says something rather than nothing", () => {
+    expect(outcomeFor("push-harder", { ok: false }).text).toMatch(/did not go through/i);
+  });
+
+  it("a locked action points at the upgrade instead of going quiet", () => {
+    expect(outcomeFor("mass-bargain", { ok: false, reason: "not-entitled" }).text).toMatch(/Pro/);
+  });
+
+  it("comparing needs two shops, and says so when it has one", () => {
+    expect(compareOutcome(2)).toBeNull();
+    expect(compareOutcome(3)).toBeNull();
+    expect(compareOutcome(1)?.text).toMatch(/only one shop/i);
+    expect(compareOutcome(0)?.text).toMatch(/no prices/i);
+    expect(MIN_COMPARE).toBe(2);
+  });
+
+  it("the page reports EVERY outcome, and compare goes through the registry", () => {
+    const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
+    expect(page).toMatch(/setActionNote\(outcomeFor\(id, check\)\)/);
+    expect(page).toMatch(/compareOutcome\(ids\.length\)/);
+    expect(page).toMatch(/runAction\("compare", \{/);
+    // The old shape: the overlay set the comparison itself and the sheet, which
+    // needs two shops, simply never opened.
+    expect(page).not.toMatch(/label: t\("Compare the top 3"\),\s*onAction: \(\) =>\s*setCompareIds\(/);
   });
 });

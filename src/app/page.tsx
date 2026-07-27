@@ -24,7 +24,8 @@ import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
-import { checkAction } from "@/lib/actions/registry";
+import { checkAction, outcomeFor, compareOutcome, type ActionOutcome } from "@/lib/actions/registry";
+import { FixedLayer } from "@/components/FixedLayer";
 import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
@@ -1610,6 +1611,14 @@ export default function Home() {
   // every outbound one goes through `customMessage` - the same /api/outreach
   // path, the same guard, the same anti-ban pacing and cancellation vetoes an
   // agent message passes. Nothing an assistant does gets a shortcut around it.
+  // What the last action did. One place, one renderer - see outcomeFor.
+  const [actionNote, setActionNote] = useState<ActionOutcome | null>(null);
+  useEffect(() => {
+    if (!actionNote) return;
+    const id = setTimeout(() => setActionNote(null), 6000);
+    return () => clearTimeout(id);
+  }, [actionNote]);
+
   const runAction = useCallbackRef(
     async (id: string, rawArgs?: Record<string, unknown>, wasConfirmed?: boolean) => {
       const args = rawArgs ?? {};
@@ -1622,6 +1631,10 @@ export default function Home() {
       });
       if (!check.ok) {
         if (check.reason === "not-entitled") setUpgradeOpen(true);
+        // NEVER SILENT. A refusal the traveller cannot see is identical, on
+        // screen, to a dead button - which is exactly how "Push harder does
+        // nothing" was reported.
+        setActionNote(outcomeFor(id, check));
         return check;
       }
       const vendorId = String(args.vendorId ?? "");
@@ -1633,11 +1646,22 @@ export default function Home() {
             ? "motorbike"
             : "scooter";
       switch (check.spec.id) {
-        case "push-harder":
-          return await customMessage(
+        case "push-harder": {
+          const r = await customMessage(
             vendorId,
             `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
           );
+          setActionNote(
+            outcomeFor(
+              "push-harder",
+              { ok: r?.ok !== false },
+              r?.ok !== false
+                ? `Pushing ${vendor?.name ?? "the shop"} for a better rate - I'll tell you the moment they answer.`
+                : undefined
+            )
+          );
+          return r;
+        }
         case "ask-deposit":
           return await customMessage(vendorId, `One more thing - what deposit do you need?`);
         case "request-photo":
@@ -1653,9 +1677,17 @@ export default function Home() {
         case "mass-bargain":
           await runMassBargain();
           return { ok: true };
-        case "compare":
-          setCompareIds((args.vendorIds as string[]) ?? []);
+        case "compare": {
+          const ids = (args.vendorIds as string[]) ?? [];
+          const blocked = compareOutcome(ids.length);
+          if (blocked) {
+            setActionNote(blocked);
+            return { ok: false as const, reason: "too-few" as const };
+          }
+          setCompareIds(ids);
+          setActionNote(outcomeFor("compare", { ok: true }, `Comparing ${ids.length} shops.`));
           return { ok: true };
+        }
         case "filter-rents-cars":
           setFilters((f) => ({ ...f, tag: "rents-cars" }));
           return { ok: true };
@@ -3232,14 +3264,17 @@ export default function Home() {
                     best ? scrollToVendor(best.id) : goToSection("[data-tour='vendors']", "list"),
                 },
                 {
+                  // Through the registry, like every other action - so a
+                  // comparison that cannot happen SAYS so instead of looking
+                  // like a dead button (the sheet needs two shops).
                   label: t("Compare the top 3"),
                   onAction: () =>
-                    setCompareIds(
-                      vendors
+                    void runAction("compare", {
+                      vendorIds: vendors
                         .filter((v) => v.offer)
                         .slice(0, 3)
-                        .map((v) => v.id)
-                    ),
+                        .map((v) => v.id),
+                    }),
                 },
                 {
                   // A REAL ACTION now, not a panel. It goes through the same
@@ -3305,6 +3340,26 @@ export default function Home() {
           }}
           onClose={() => setCompareIds([])}
         />
+      )}
+
+      {/* WHAT JUST HAPPENED. Every action reports through one renderer, so a
+          refusal, a success and a genuinely impossible request all reach the
+          traveller - and none of them can look like a dead button. */}
+      {actionNote && (
+        <FixedLayer className="pointer-events-none fixed inset-x-0 bottom-[104px] z-[60] px-4">
+          <div
+            role="status"
+            className={`surface mx-auto max-w-md rounded-blob px-3.5 py-2.5 text-[12px] font-extrabold shadow-lg ${
+              actionNote.tone === "ok"
+                ? "text-savings"
+                : actionNote.tone === "bad"
+                  ? "text-brandred"
+                  : "text-strong"
+            }`}
+          >
+            {actionNote.text}
+          </div>
+        </FixedLayer>
       )}
 
       <TabBar
