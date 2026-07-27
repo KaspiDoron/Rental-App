@@ -26,6 +26,7 @@ import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
 import { checkAction, outcomeFor, compareOutcome, type ActionOutcome } from "@/lib/actions/registry";
 import { FixedLayer } from "@/components/FixedLayer";
+import { saveSearch } from "@/lib/client/search-persist";
 import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
@@ -438,21 +439,29 @@ export default function Home() {
     if (!restored) return;
     try {
       if (vendors.length) {
-        sessionStorage.setItem(
-          "wd_search",
-          JSON.stringify({
-            vendors,
-            rfq,
-            source,
-            sourceError,
-            rawText,
-            origin,
-            radiusKm,
-            filters,
-            searchEpoch,
-            appliedReplyIds: [...appliedReplies.current].slice(-200),
-          })
-        );
+        // A BUDGET, NOT A HOPE. The full blob crosses the sessionStorage quota
+        // in the middle of a busy hunt, and `setItem` throws rather than
+        // failing quietly - which this `catch` used to turn into a silently
+        // lost session. saveSearch sheds galleries, then message bodies, until
+        // the write lands; identity, stage and offer always survive.
+        const res = saveSearch(sessionStorage, "wd_search", {
+          vendors,
+          rfq,
+          source,
+          sourceError,
+          rawText,
+          origin,
+          radiusKm,
+          filters,
+          searchEpoch,
+          appliedReplyIds: [...appliedReplies.current].slice(-200),
+        });
+        if (!res.ok) {
+          setActionNote({
+            tone: "info",
+            text: t("This hunt is too big to hold on this device - keep the app open to stay live."),
+          });
+        }
       } else {
         sessionStorage.removeItem("wd_search");
       }
@@ -1932,10 +1941,20 @@ export default function Home() {
     const replied: Vendor[] = [];
     const queued: Vendor[] = [];
     const deals: Vendor[] = [];
+    // REMOVAL IS A STATE. The traveller pulled these out of the queue before
+    // anything was delivered, and the partition had no branch for them - so
+    // they fell through to the catch-all and reappeared under "Awaiting reply",
+    // with the messaged counter reading 7 for 3 real sends. A shop we never
+    // spoke to is not a shop we are waiting on.
+    const removed: Vendor[] = [];
     for (const v of vendors) {
       if (v.offer) deals.push(v);
       else if (v.lastInboundAt || v.stage === "negotiating" || v.stage === "counter-offer")
         replied.push(v);
+      // Cancelled with nothing ever sent: terminal, and counted nowhere else.
+      // `sentText` is the test rather than the stage, because it is the only
+      // field that records that words actually reached a shop.
+      else if (v.cancelled && !v.sentText && !v.queuedUntil) removed.push(v);
       // A shop the agents already REACHED (a reply is pending / negotiation
       // is live) stays "messaged" even while a follow-up sits in the outbox -
       // otherwise the counters flicker right after a send. A shop whose FIRST
@@ -1953,7 +1972,7 @@ export default function Home() {
       // result and is intentionally not counted.
       else if (v.sentText || v.lastEventAt) messaged.push(v);
     }
-    return { messaged, replied, queued, deals };
+    return { messaged, replied, queued, deals, removed };
   }, [vendors]);
   const stageCounts = {
     messaged: statusGroups.messaged.length,
@@ -2551,6 +2570,22 @@ export default function Home() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* SECTION 2.5 - Removed by you. Shown, not hidden: these
+                    shops used to reappear under "Awaiting reply", which is how
+                    the panel claimed 7 messaged for 3 real sends. Nothing was
+                    sent to them, so they are counted nowhere else. */}
+                {statusGroups.removed.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">
+                      🚫 {t("Removed by you")} ({statusGroups.removed.length})
+                    </div>
+                    <p className="text-[11px] text-soft">
+                      {statusGroups.removed.map((v) => v.name).join(", ")} -{" "}
+                      {t("nothing was sent to these shops.")}
+                    </p>
                   </div>
                 )}
 
