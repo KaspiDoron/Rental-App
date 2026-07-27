@@ -412,7 +412,17 @@ export interface GraphIO {
     vehicleKey: string;
     belowPrice: number;
   }): Promise<number | undefined>;
-  sessionTable(userEmail: string, thisVendorId?: string): Promise<SessionShopRow[]>;
+  /**
+   * `vehicleKey` scopes the session's other quotes to the SAME vehicle. Without
+   * it a "rival" could be a different machine entirely - a price for a 150cc
+   * quoted in another search inside the same window, cited at a shop that
+   * quoted a 125cc. Leverage has to compare like with like or it is fiction.
+   */
+  sessionTable(
+    userEmail: string,
+    thisVendorId?: string,
+    vehicleKey?: string | null
+  ): Promise<SessionShopRow[]>;
   insertWakeup(row: WakeupRow): Promise<void>;
   clearWakeups(threadKey: string, kind?: string): Promise<void>;
   // Park a composed message with a not_before delay (human pacing / hold).

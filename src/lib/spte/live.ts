@@ -162,7 +162,11 @@ async function buildSession(
   let rivals: SessionSnapshot["rivals"] = [];
   let lowest: SessionSnapshot["lowest"] = null;
   if (email) {
-    const rows = await io.sessionTable(email, thisVendor).catch(() => []);
+    // SAME VEHICLE. A quote for a different machine is not a rival, and citing
+    // one at a shop is an argument we made up.
+    const rows = await io
+      .sessionTable(email, thisVendor, vehicleKeyFor(input.rfq))
+      .catch(() => []);
     // WHICH CURRENCY IS THIS SESSION IN? Comparing across currencies without FX
     // would invent leverage, so the filter below is strict equality - but when
     // THIS thread is the odd one out (a single mis-stamped currency, exactly

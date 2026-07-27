@@ -7,6 +7,7 @@
 // plus the never-finalize-a-time protocol rule (Step 5).
 
 import { checkOutboundNumbers, correctDuration } from "../graph/guardrails";
+import { rivalIdentityTokens, namesRival } from "../negotiation/leverage";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
 
 // A drafted message must never AGREE a concrete pickup/delivery time - the
@@ -65,6 +66,33 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
         detail: `cannot ${artifact.move} a price whose vehicle is ${gate}`,
       },
     };
+  }
+
+  // 0.5) DISCLOSURE: never tell a shop WHICH shop undercut it.
+  //
+  // Cross-shop leverage is the traveller's strongest card, and its value is the
+  // price, not the name. The prompt used to interpolate the rival's shop name
+  // and instruct the model "you MUST name this" - so the cheaper shop's identity
+  // was sent to its direct competitor, from the traveller's own number and in
+  // their own voice. Nothing inspected the draft for it.
+  //
+  // A rail rather than a prompt line, for the same reason as every other rail
+  // here: a prompt is advice, a rail is a guarantee. The name is simply not in
+  // the prompt any more either (negotiation/leverage builds the card), so this
+  // is the belt behind that - including for a model that recognises a shop name
+  // from the rival list it can see.
+  {
+    const tokens = rivalIdentityTokens(ctx.session.rivals.map((r) => r.shop));
+    const leaked = tokens.length ? namesRival(text, tokens) : null;
+    if (leaked) {
+      return {
+        ok: false,
+        rejected: {
+          rule: "rival-disclosure",
+          detail: `draft named a rival shop ("${leaked}") - leverage is the price and the vehicle, never the name`,
+        },
+      };
+    }
   }
 
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.

@@ -13,6 +13,7 @@ import { coerceToLegal } from "./policy";
 import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
+import { planLeverage, leadCard } from "../negotiation/leverage";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -29,8 +30,12 @@ export function pickRoute(ctx: TurnContext): ModelRoute {
 
 function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   const s = ctx.session;
+  // RIVAL QUOTES WITHOUT RIVAL NAMES. The model never needs to know WHICH shop
+  // quoted what - only that a real, live, cheaper quote exists in this search.
+  // Handing it the names is how a name ends up in a message to a competitor;
+  // not handing them over is the structural half of the disclosure rule.
   const rivalLines = s.rivals.length
-    ? s.rivals.map((r) => `- ${r.shop}: ${r.pricePerDay} ${r.currency}/day`).join("\n")
+    ? s.rivals.map((r) => `- another shop this search: ${r.pricePerDay} ${r.currency}/day`).join("\n")
     : "(no other shop has quoted yet)";
   const bench = s.benchmark
     ? `Grounded market rate: ${s.benchmark.pricePerDay} ${s.benchmark.currency}/day (verified from a real listing).`
@@ -178,25 +183,43 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       }\n`
     : "";
 
-  const durationLeverage =
-    round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
-      ? `Duration is your lever this first push: ${days} days is a long rental.\n`
-      : "";
-
-  // Rival leverage is a HARD rule when a verified cheaper rival exists (ported
-  // from composeBargain) - "you MAY cite" let the model ignore Shop A's 300.
-  // Only a GENUINELY cheaper rival is leverage. The old `?? rivals[0]` fallback
-  // meant that with no cheaper rival we still ordered the model to name a MORE
-  // expensive shop and "ask this shop to match or beat it" - handing the shop an
-  // argument for its own price.
+  // THE LEVERAGE PLAN, RANKED BY EVIDENCE (lib/negotiation/leverage).
+  //
+  // The round directive above still shapes the ANGLE, but it no longer decides
+  // WHICH card to play. It used to: "use the N-day rental as your reason" was
+  // hard-coded onto the first push, so the strongest card in the negotiation -
+  // another real shop in this same search quoting less for the same vehicle -
+  // was played late or never, because many threads never got a later push.
+  // Duration is the weakest lever we have; a live competing quote is the
+  // strongest. Now the engine computes the order from the evidence and the model
+  // leads with whatever actually is strongest.
+  //
+  // AND IT CARRIES NO SHOP NAME. The line this replaces interpolated
+  // `${cheaperRival.shop}` and ordered the model to name it, which sent the
+  // cheaper shop's identity to its direct competitor from the traveller's own
+  // number. The price and the vehicle are the leverage; the name is not ours to
+  // give away. spte/rails enforces it on the finished draft as well.
   const quoteNow = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
-  const cheaperRival =
-    typeof quoteNow === "number"
-      ? s.rivals.find((r) => r.pricePerDay < quoteNow) ?? null
-      : s.rivals[0] ?? null;
-  const rivalLeverage =
-    cheaperRival && ctx.legalMoves.includes("bargain")
-      ? `HARD LEVERAGE: another real shop THIS SEARCH quoted ${cheaperRival.pricePerDay} ${cheaperRival.currency}/day (${cheaperRival.shop}). If you bargain, you MUST name this ${cheaperRival.pricePerDay}/day and ask this shop to match or beat it - do not omit or soften it.\n`
+  const plan = ctx.legalMoves.includes("bargain")
+    ? planLeverage({
+        rivals: s.rivals,
+        quotePerDay: quoteNow,
+        currency: s.currency,
+        durationDays: days,
+        round,
+        vehicleLabel: vehicleLine(ctx),
+      })
+    : [];
+  const lead = leadCard(plan);
+  const rivalLeverage = lead
+    ? `LEVERAGE, STRONGEST FIRST - lead with the first one:\n` +
+      plan.map((c, i) => `  ${i + 1}. ${c.line}`).join("\n") +
+      `\nNEVER write the name of another rental shop in a message. Not the one that quoted less, not any other - say "a better offer" and give the price and the vehicle.\n`
+    : "";
+  // Kept as its own line only when there is nothing stronger to lead with.
+  const durationLeverage =
+    !lead && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
+      ? `Duration is your lever this first push: ${days} days is a long rental.\n`
       : "";
 
   const user =

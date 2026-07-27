@@ -1369,9 +1369,16 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       const { cheapestRivalFor } = await import("../search-session");
       return cheapestRivalFor(userEmail, { vendorId, currency, vehicleKey, belowPrice });
     },
-    async sessionTable(userEmail, thisVendorId) {
+    async sessionTable(userEmail, thisVendorId, vehicleKey) {
       const { sessionSinceIso } = await import("../search-session");
       const since = await sessionSinceIso(userEmail);
+      // SAME VEHICLE OR IT IS NOT A RIVAL. Without this predicate a quote for a
+      // different machine - another search inside the same window - could be
+      // cited at a shop as a competing price for THIS one. Leverage has to
+      // compare like with like; a cross-vehicle "rival" is an invented argument.
+      const sameVehicle = vehicleKey
+        ? `&vehicle_key=eq.${encodeURIComponent(vehicleKey)}`
+        : "";
       const offers = await sbSelect<{
         vendor_id: string;
         vendor_name: string;
@@ -1383,7 +1390,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           userEmail
         )}&simulated=eq.false&created_at=gte.${encodeURIComponent(
           since
-        )}&order=created_at.desc&limit=16`
+        )}${sameVehicle}&order=created_at.desc&limit=16`
       ).catch(() => []);
       const threads = await sbSelect<{
         vendor_id: string | null;
