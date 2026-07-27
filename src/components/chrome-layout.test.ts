@@ -35,7 +35,8 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("the canvas actually wraps the pages", () => {
-    expect(read("src/app/layout.tsx")).toMatch(/className="app-canvas"/);
+    // `fluid-in` rides along on the same element - the arrival animation.
+    expect(read("src/app/layout.tsx")).toMatch(/className="app-canvas[^"]*"/);
   });
 
   it("chrome that must stay on screen still portals out of the canvas", () => {

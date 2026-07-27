@@ -1,6 +1,11 @@
 // Shimmering placeholder blocks shown while a section's data is still loading,
 // so the user always sees the page taking shape instead of a blank gap or a
-// bare "loading..." line. Uses the .skeleton shimmer defined in globals.css.
+// bare "loading..." line.
+//
+// The card wears the same glass the real cards wear, so a loading screen is the
+// finished screen with its contents still arriving - not a different, greyer
+// screen that swaps out. That is what makes the settle feel like one continuous
+// surface rather than a flash.
 
 export function Skeleton({
   className = "",
@@ -15,7 +20,7 @@ export function Skeleton({
 /** A card-shaped placeholder that mirrors the app's surface cards. */
 export function SkeletonCard({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="surface rounded-blob p-4" aria-hidden="true">
+    <div className="glass glass-rim fluid-in rounded-blob p-4" aria-hidden="true">
       <Skeleton className="mb-2 h-4 w-1/3" />
       <Skeleton className="mb-3 h-3 w-2/3" />
       <div className="space-y-2">

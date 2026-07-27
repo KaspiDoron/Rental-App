@@ -141,7 +141,7 @@ export default function RootLayout({
             {/* The page canvas owns horizontal clipping so the ROOT does not -
                 see .app-canvas in globals.css. Everything glued to the viewport
                 (TabBar, Will) portals to <body>, outside this box. */}
-            <div className="app-canvas">{children}</div>
+            <div className="app-canvas fluid-in">{children}</div>
             <NavVeil />
             <DomTranslator />
             <OfflineBanner />

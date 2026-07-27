@@ -11,6 +11,7 @@
 // here, and anything unrecognised still falls back to its text.
 
 import { useState } from "react";
+import { AgenticSummary } from "./AgenticSummary";
 import { useI18n } from "@/lib/i18n";
 
 export interface ThreadMsg {
@@ -22,6 +23,8 @@ export interface ThreadMsg {
   at: string;
   /** Present when the shop sent a photo / voice note / document. */
   media?: { id: string; kind: string; fileName?: string | null };
+  /** What the agents read out of that media - the proof panel's data. */
+  reading?: import("@/lib/media/reading").MediaReading;
   /** A dropped WhatsApp pin. */
   location?: { lat: number; lng: number; name?: string | null };
   /** A shared contact card. */
@@ -111,6 +114,10 @@ export function MessageBubble({ m }: { m: ThreadMsg }) {
           </div>
         )}
         {m.media && <MediaPart media={m.media} />}
+        {/* THE RECEIPT. Collapsed by default so it never competes with the
+            conversation; one tap proves what was understood in this exact
+            image, and what it changed. */}
+        {m.media && m.reading && <AgenticSummary reading={m.reading} />}
         {mapHref && (
           <a
             href={mapHref}

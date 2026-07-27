@@ -919,6 +919,52 @@ export async function processVendorReply(opts: {
     })();
   }
 
+  // THE READING, STORED BESIDE THE PICTURE IT CAME FROM.
+  //
+  // The vision agent already read this board; until now that reading became an
+  // offer and then evaporated, so the image and the understanding of the image
+  // lived in two different places and only one was ever shown. A traveller
+  // looking at a price under a photo had no way to tell whether we read the
+  // board or guessed - and when we get one wrong there was nothing to point at.
+  //
+  // Stamped onto the message's own `raw` (JSON - no column, no migration), so
+  // the transcript can render exactly what was understood, per photo.
+  if (images.length > 0 && ctx.sender) {
+    void (async () => {
+      try {
+        const { readingFrom } = await import("./media/reading");
+        const reading = readingFrom(extraction as never, {
+          usedPricePerDay: usablePrice,
+          notUsedReason: usablePrice
+            ? undefined
+            : extraction.found === false
+              ? "No usable price in this image."
+              : undefined,
+        });
+        const receiverScope = `&raw->>receiver=eq.${encodeURIComponent(ctx.sender!)}`;
+        const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+          "whatsapp_messages",
+          opts.waMessageId
+            ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
+                opts.waMessageId
+              )}&limit=1`
+            : `select=id,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
+                "from_number",
+                from
+              )}`
+        );
+        const row = rows[0];
+        if (row) {
+          await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
+            raw: { ...(row.raw ?? {}), reading },
+          });
+        }
+      } catch {
+        /* the summary is a proof surface - never blocks the reply */
+      }
+    })();
+  }
+
   // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
   // photos, off-platform transfers, shady links - for the USER. Never touches
   // what the engine replies.

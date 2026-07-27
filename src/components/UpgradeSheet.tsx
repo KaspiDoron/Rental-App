@@ -5,6 +5,12 @@ import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
+import {
+  PayPalProvider,
+  PayPalSubscriptionButton,
+  usePaypalConfig,
+} from "@/components/billing/PayPalSubscriptionButton";
+import { isPaidPlan } from "@/lib/paypal-plans";
 
 export interface PlanView {
   id: string;
@@ -200,6 +206,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [myPlan, setMyPlan] = useState<string>("free");
+  const { config: paypal } = usePaypalConfig();
 
   useEffect(() => {
     fetch("/api/billing/checkout")
@@ -234,6 +241,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal onClose={onClose}>
+      <PayPalProvider config={paypal ?? { clientId: null, planIds: { pro: null, ultra: null }, env: "live" }}>
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-extrabold text-strong">{t("Go Pro or Ultra")}</h2>
@@ -254,18 +262,42 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
         {plans
           .filter((p) => p.amount > 0)
           .map((p) => (
-            <PlanCard
-              key={p.id}
-              plan={p}
-              onSubscribe={subscribe}
-              busy={busy}
-              current={myPlan === p.id}
-            />
+            <div key={p.id} className="space-y-2">
+              <PlanCard
+                plan={p}
+                onSubscribe={subscribe}
+                busy={busy}
+                current={myPlan === p.id}
+              />
+              {/* THE SUBSCRIBE BUTTON ITSELF. PayPal's own control, in its own
+                  iframe - the traveller stays in the app, and we never touch a
+                  card number. Nothing here grants a plan: the approval is
+                  posted to the server, which asks PayPal what it really was.
+                  Rendered only for a tier they are not already on. */}
+              {isPaidPlan(p.id) && myPlan !== p.id && (
+                <PayPalSubscriptionButton
+                  plan={p.id}
+                  onActivated={(applied) => {
+                    setMyPlan(applied);
+                    setMsg(
+                      `${t("You're on")} ${applied === "ultra" ? "Ultra" : "Pro Traveller"} ${t("- everything is unlocked.")}`
+                    );
+                    // Session state, refreshed in place. No hard reload.
+                    fetch("/api/auth/me", { cache: "no-store" })
+                      .then((r) => r.json())
+                      .then((d) => setMyPlan(d.session?.plan ?? applied))
+                      .catch(() => {});
+                  }}
+                  onError={(m) => setMsg(m)}
+                />
+              )}
+            </div>
           ))}
       </div>
       <p className="mt-3 text-center text-[10px] text-faint">
         {t("Switch plans any time - a new subscription replaces the old one. To cancel or downgrade, use the manage link in your payment receipt email.")}
       </p>
+      </PayPalProvider>
     </Modal>
   );
 }

@@ -21,6 +21,7 @@
     "workers": "tsx --tsconfig services/workers/tsconfig.json services/workers/src/index.ts"
   },
   "dependencies": {
+    "@paypal/react-paypal-js": "^10.1.2",
     "bullmq": "^5.80.9",
     "express": "^5.2.1",
     "ioredis": "^5.11.1",

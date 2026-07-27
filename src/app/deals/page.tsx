@@ -5,7 +5,7 @@
 // best price on the table, honest savings, what Will plans next and what
 // needs the traveller. Think Linear dashboard, not an e-commerce list.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Icon } from "@/components/icons";
 import { WillAvatar } from "@/components/will/WillAvatar";
@@ -244,6 +244,46 @@ export default function DealsPage() {
           ? t("Scooter")
           : t("Vehicle");
 
+  // Only what the traveller can SEE is counted. A free plan showing a lifetime
+  // total that includes trips it is hiding would be quietly using locked data to
+  // sell the unlock - the honest version says how many trips the figure covers.
+  const heroStats = useMemo(() => {
+    const visible = sessions.filter((s) => canHistory || s.isLatest);
+    let saved = 0;
+    let currency = "";
+    let counted = 0;
+    let contacted = 0;
+    let booked = 0;
+    for (const s of visible) {
+      contacted += s.contacted || 0;
+      if (s.booking) booked += 1;
+      const tr = s.trip;
+      if (tr?.saved && tr.saved > 0) {
+        // Mixed currencies cannot be added. The dominant one wins and the rest
+        // are left out rather than silently summed into a wrong number.
+        if (!currency) currency = tr.currency;
+        if (tr.currency === currency) {
+          saved += tr.saved;
+          counted += 1;
+        }
+      }
+    }
+    return { saved, currency, counted, contacted, booked, visible: visible.length };
+  }, [sessions, canHistory]);
+
+  const savingsHeadline = useMemo(() => {
+    if (heroStats.saved > 0 && heroStats.currency) {
+      return {
+        amount: moneyLocal(heroStats.saved, heroStats.currency),
+        note:
+          heroStats.counted === 1
+            ? t("saved on your last trip")
+            : `${t("saved across")} ${heroStats.counted} ${t("trips")}`,
+      };
+    }
+    return { amount: "-", note: t("your first saving lands here") };
+  }, [heroStats, t]);
+
   const statusPill = (s: SessionSummary) => {
     if (s.status === "booked")
       return (
@@ -300,6 +340,51 @@ export default function DealsPage() {
       </div>
 
       <div className="space-y-4 px-4 pt-4">
+        {/* THE HERO - what all of this was FOR.
+            A list of hunts is a log; the number at the top is the product. It
+            is computed from the trips the traveller can actually see, so a free
+            plan's figure is honest about being partial rather than quietly
+            counting trips it is hiding behind a lock. */}
+        {!loading && (sessions.length > 0 || bookings.length > 0) && (
+          <section className="glass glass-rim fluid-in relative overflow-hidden rounded-blob p-5">
+            <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-brandblue-soft opacity-60 blur-2xl" />
+            <div className="pointer-events-none absolute -bottom-16 -left-8 h-36 w-36 rounded-full bg-savings-soft opacity-50 blur-2xl" />
+            <p className="relative text-[10px] font-extrabold uppercase tracking-[0.14em] text-faint">
+              {t("Your travel savings")}
+            </p>
+            <div className="relative mt-1 flex items-end gap-2">
+              <span className="font-display text-[38px] font-extrabold leading-none text-savings">
+                {savingsHeadline.amount}
+              </span>
+              <span className="mb-1.5 text-[12px] font-extrabold text-soft">
+                {savingsHeadline.note}
+              </span>
+            </div>
+            <div className="relative mt-3 grid grid-cols-3 gap-2">
+              {[
+                { k: t("Hunts"), v: String(sessions.length) },
+                { k: t("Shops reached"), v: String(heroStats.contacted) },
+                { k: t("Booked"), v: String(heroStats.booked) },
+              ].map((c) => (
+                <div key={c.k} className="rounded-2xl bg-card2/70 px-2.5 py-2 text-center">
+                  <div className="text-[16px] font-extrabold text-strong">{c.v}</div>
+                  <div className="text-[9px] font-extrabold uppercase tracking-wide text-faint">
+                    {c.k}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!canHistory && sessions.length > 1 && (
+              <button
+                onClick={() => setUpgradeOpen(true)}
+                className="btn btn-primary cta-sheen fluid-press relative mt-3.5 w-full rounded-2xl px-4 py-3 text-[13px]"
+              >
+                ✨ {t("Unlock every past trip")}
+              </button>
+            )}
+          </section>
+        )}
+
         {loading && (
           <>
             <SkeletonCard lines={4} />
@@ -308,7 +393,7 @@ export default function DealsPage() {
         )}
 
         {!loading && sessions.length === 0 && bookings.length === 0 && (
-          <div className="surface rounded-blob p-6 text-center rise-in">
+          <div className="glass glass-rim rounded-blob p-6 text-center fluid-in">
             <div className="mx-auto mb-3 w-fit float-soft">
               <WillAvatar size={64} />
             </div>
@@ -340,7 +425,7 @@ export default function DealsPage() {
             const locked = !canHistory && !s.isLatest;
             const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
             return (
-              <section key={s.id} className="surface overflow-hidden rounded-blob rise-in">
+              <section key={s.id} className="glass glass-rim overflow-hidden rounded-blob fluid-in">
                 {/* Header - always visible, tap to expand */}
                 <button
                   onClick={() => setExpanded((e) => ({ ...e, [s.id]: !open }))}
@@ -389,6 +474,42 @@ export default function DealsPage() {
                       />
                     </div>
                   </div>
+
+                  {/* THE LOCK, AS A PANE OF FROSTED GLASS.
+                      A chip saying "Pro" tells a traveller they are missing
+                      something. A frosted panel with the real shape of their
+                      own trip behind it shows them WHAT - which is the only
+                      version of a paywall that is honest and the only one that
+                      converts. The numbers underneath are already redacted
+                      server-side by previewTrip; this is not a CSS blur over
+                      real data. */}
+                  {locked && (
+                    <div className="relative mx-3 mb-3 overflow-hidden rounded-2xl">
+                      <div className="grid grid-cols-3 gap-2 p-3 opacity-45 blur-[3px]" aria-hidden>
+                        {[t("Best price"), t("You saved"), t("Shops")].map((k) => (
+                          <div key={k} className="rounded-xl bg-card2 px-2 py-2 text-center">
+                            <div className="text-[15px] font-extrabold text-strong">&#8226;&#8226;&#8226;</div>
+                            <div className="text-[9px] font-extrabold uppercase text-faint">{k}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="glass-strong absolute inset-0 flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 text-center">
+                        <Icon name="lock" className="h-4 w-4 text-brandblue" />
+                        <p className="text-[11.5px] font-extrabold text-strong">
+                          {t("Your full trip history is a Pro feature")}
+                        </p>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUpgradeOpen(true);
+                          }}
+                          className="btn btn-sm btn-primary fluid-press rounded-xl px-3.5 py-1.5 text-[11px]"
+                        >
+                          {t("See Pro & Ultra")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Progress - the one line users actually care about */}
                   <div className="mt-3">
@@ -701,13 +822,13 @@ export default function DealsPage() {
             const rest = bookings.filter((b) => !shown.has(b.created_at));
             if (rest.length === 0) return null;
             return (
-              <section className="rise-in">
+              <section className="fluid-in">
                 <div className="mb-2 flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
                   <Icon name="check" className="h-4 w-4 text-savings" /> {t("Booked earlier")}
                 </div>
                 <div className="space-y-2.5">
                   {rest.map((b, i) => (
-                    <div key={b.id ?? i} className="surface rounded-blob p-3.5">
+                    <div key={b.id ?? i} className="glass glass-rim rounded-blob p-3.5">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="truncate text-[14px] font-extrabold text-strong">

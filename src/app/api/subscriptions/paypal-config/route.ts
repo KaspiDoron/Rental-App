@@ -1,0 +1,41 @@
+import { NextResponse } from "next/server";
+import { getSession } from "@/lib/session";
+import { PAYPAL_PLANS, type PaypalPublicConfig } from "@/lib/paypal-plans";
+
+// What the browser needs to render a PayPal subscribe button, and nothing else.
+//
+// The client id is public by construction - it ships inside the PayPal SDK URL
+// in every integration. The SECRET never appears here, never appears in any
+// NEXT_PUBLIC_ variable, and is read only by server routes that talk to PayPal
+// directly.
+//
+// Served from the runtime config rather than a build-time env so the owner can
+// paste a client id or swap a billing plan in Admin -> Keys and have it apply
+// without a redeploy - the same rule every other integration in this app
+// follows. `NEXT_PUBLIC_PAYPAL_CLIENT_ID` is honoured as the fallback for a
+// deployment that prefers to bake it in.
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  // Signed in only: this is a purchase surface, not a public config dump.
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+
+  const { getConfig } = await import("@/lib/runtime-config");
+  const [clientId, env, proPlan, ultraPlan] = await Promise.all([
+    getConfig("PAYPAL_CLIENT_ID"),
+    getConfig("PAYPAL_ENV"),
+    getConfig(PAYPAL_PLANS.pro.configKey),
+    getConfig(PAYPAL_PLANS.ultra.configKey),
+  ]);
+
+  const body: PaypalPublicConfig = {
+    clientId: (clientId || process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "").trim() || null,
+    planIds: {
+      pro: (proPlan || PAYPAL_PLANS.pro.fallbackPlanId).trim() || null,
+      ultra: (ultraPlan || PAYPAL_PLANS.ultra.fallbackPlanId).trim() || null,
+    },
+    env: (env || "live").trim().toLowerCase(),
+  };
+  return NextResponse.json(body, { headers: { "Cache-Control": "private, no-store" } });
+}

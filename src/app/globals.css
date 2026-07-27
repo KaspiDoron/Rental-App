@@ -209,6 +209,112 @@ html.dark .tabbar {
   .tabbar { background: var(--card); }
 }
 
+/* =============================================================================
+   WATER ON GLASS - the app's material.
+   =============================================================================
+
+   One material, described once, so every surface in the app refracts the same
+   way instead of each screen inventing its own blur. Three things make a pane
+   read as glass rather than as a grey box, and all three are here:
+
+     1. REFRACTION - a heavy blur with saturation pushed past 1, so whatever is
+        behind it bends and brightens rather than turning to mud.
+     2. AN EDGE - a bright inset hairline along the top and a dim one along the
+        bottom. This is the single biggest tell; without it a blurred rectangle
+        just looks translucent.
+     3. LIFT - a soft, wide shadow, so the pane sits ABOVE the page instead of
+        being cut into it.
+
+   `.glass` is the everyday pane, `.glass-strong` is for things that float over
+   content and must stay readable, `.glass-rim` adds the specular sweep across
+   the top third. They compose. */
+.glass,
+.glass-strong {
+  position: relative;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  backdrop-filter: blur(24px) saturate(1.7);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow:
+    0 12px 32px -16px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+}
+.glass-strong {
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  backdrop-filter: blur(34px) saturate(1.9);
+  -webkit-backdrop-filter: blur(34px) saturate(1.9);
+  box-shadow:
+    0 22px 60px -22px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.46),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .glass,
+:root[data-theme="dark"] .glass-strong {
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 14px 40px -16px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.13),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.03);
+}
+/* The specular sweep. `pointer-events: none` - it lies over the content. */
+.glass-rim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.15) 0%,
+    rgba(255, 255, 255, 0.04) 32%,
+    transparent 60%
+  );
+}
+/* No blur support anywhere = an opaque pane. Never translucent-with-no-blur,
+   which is the one state where text runs illegibly over text. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass, .glass-strong { background: var(--card); }
+}
+
+/* ---- Fluid motion -------------------------------------------------------
+   Water, not a slide projector. Everything uses the same spring-ish curve and
+   the same short duration, so a tab change, a page change and a panel opening
+   all feel like one substance moving. */
+:root {
+  --fluid: cubic-bezier(0.32, 0.72, 0, 1);
+  --fluid-ms: 420ms;
+}
+
+/* A whole screen arriving: it rises, settles and comes into focus, rather than
+   appearing. The tiny blur at the start is what makes it read as liquid. */
+@keyframes fluid-in {
+  0% { opacity: 0; transform: translate3d(0, 14px, 0) scale(0.985); filter: blur(6px); }
+  60% { filter: blur(0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+.fluid-in { animation: fluid-in var(--fluid-ms) var(--fluid) both; }
+
+/* Content swapping WITHIN a screen (a tab, a panel): shorter, sideways, no
+   scale - so it reads as the same surface showing something else. */
+@keyframes fluid-swap {
+  0% { opacity: 0; transform: translate3d(0, 8px, 0); }
+  100% { opacity: 1; transform: none; }
+}
+.fluid-swap { animation: fluid-swap 260ms var(--fluid) both; }
+
+/* Staggered list entry, capped - see staggerIndex in lib/client/reconcile. */
+.fluid-stagger > * { animation: fluid-swap 300ms var(--fluid) both; }
+
+/* A glass control being pressed: it gives, like a surface with liquid under it. */
+.fluid-press { transition: transform 160ms var(--fluid), box-shadow 160ms var(--fluid); }
+.fluid-press:active { transform: scale(0.965); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fluid-in, .fluid-swap, .fluid-stagger > * { animation: none; }
+  .fluid-press { transition: none; }
+}
+
 /* ---- Buttons: visible, pressable, hoverable ---------------------------- */
 .btn {
   transition: transform 0.12s ease, background-color 0.15s ease,

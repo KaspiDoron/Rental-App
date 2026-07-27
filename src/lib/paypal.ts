@@ -179,3 +179,85 @@ export async function verifyPaypalWebhook(
     return false;
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// SUBSCRIPTION VERIFICATION
+//
+// The browser hands back a subscription id after PayPal's own approval flow.
+// That id is a CLAIM, not a fact: it arrives over a channel the traveller
+// controls, and granting a paid tier on it directly would let anyone type one
+// in. So the only thing the client's id is used for is to ASK PayPal - with the
+// secret, server-side - what that subscription actually is: whose plan, what
+// state, and which tier it corresponds to.
+//
+// Everything below this line runs on the server only. The secret never leaves it.
+// ---------------------------------------------------------------------------
+
+export interface PaypalSubscription {
+  id: string;
+  status: string;
+  planId: string | null;
+  subscriberEmail: string | null;
+  nextBillingAt: string | null;
+}
+
+/** States in which a subscription genuinely entitles someone to their tier. */
+const ENTITLING = new Set(["ACTIVE", "APPROVED"]);
+
+export function subscriptionEntitles(status: string | null | undefined): boolean {
+  return ENTITLING.has(String(status ?? "").toUpperCase());
+}
+
+/**
+ * Read a subscription straight from PayPal. Returns null when PayPal is
+ * unconfigured or the id is not one of ours - never a partially trusted object.
+ */
+export async function fetchPaypalSubscription(
+  subscriptionId: string
+): Promise<PaypalSubscription | null> {
+  const id = String(subscriptionId ?? "").trim();
+  if (!id || id.length > 64 || !/^[A-Za-z0-9_-]+$/.test(id)) return null;
+  const token = await paypalToken();
+  if (!token) return null;
+  const base = await paypalBase();
+  const res = await fetch(`${base}/v1/billing/subscriptions/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const d = (await res.json().catch(() => null)) as {
+    id?: string;
+    status?: string;
+    plan_id?: string;
+    subscriber?: { email_address?: string };
+    billing_info?: { next_billing_time?: string };
+  } | null;
+  if (!d?.id) return null;
+  return {
+    id: d.id,
+    status: String(d.status ?? ""),
+    planId: d.plan_id ?? null,
+    subscriberEmail: d.subscriber?.email_address ?? null,
+    nextBillingAt: d.billing_info?.next_billing_time ?? null,
+  };
+}
+
+/**
+ * Which WheelDeal tier a PayPal plan id corresponds to.
+ *
+ * Resolved from the CONFIGURED plan ids rather than from anything the client
+ * said, so a valid subscription to the Pro plan can never be redeemed as Ultra.
+ */
+export async function tierForPaypalPlan(planId: string | null): Promise<"pro" | "ultra" | null> {
+  if (!planId) return null;
+  const { PAYPAL_PLANS } = await import("./paypal-plans");
+  const [pro, ultra] = await Promise.all([
+    getConfig(PAYPAL_PLANS.pro.configKey),
+    getConfig(PAYPAL_PLANS.ultra.configKey),
+  ]);
+  const norm = (v: string | undefined | null) => (v ?? "").trim();
+  if (planId === norm(pro) || planId === PAYPAL_PLANS.pro.fallbackPlanId) return "pro";
+  if (planId === norm(ultra) || planId === PAYPAL_PLANS.ultra.fallbackPlanId) return "ultra";
+  return null;
+}

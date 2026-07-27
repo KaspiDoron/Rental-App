@@ -46,13 +46,13 @@ export function TabBar({
         <div className="pointer-events-none mb-2 flex justify-center px-4">
           <button
             onClick={onUpgrade}
-            className="btn btn-sm chip cta-sheen pointer-events-auto flex items-center gap-1.5 rounded-full bg-brandblue px-4 py-2 text-[12px] font-extrabold text-white shadow-lg"
+            className="btn btn-sm chip cta-sheen fluid-press pointer-events-auto flex items-center gap-1.5 rounded-full bg-brandblue px-4 py-2 text-[12px] font-extrabold text-white shadow-lg"
           >
             <Icon name="sparkles" className="h-3.5 w-3.5" /> {t("See Pro features")}
           </button>
         </div>
       )}
-      <nav className="tabbar">
+      <nav className="tabbar glass-rim">
         <div className="mx-auto grid max-w-md grid-cols-4 px-2 py-1.5">
           {items.map((it) => {
             const on = active === it.id;
@@ -72,7 +72,7 @@ export function TabBar({
                   if (it.id !== active) startNav();
                   onSelect(it.id as NavTab);
                 }}
-                className="btn btn-sm flex flex-col items-center justify-center gap-1 rounded-2xl py-1.5"
+                className="btn btn-sm fluid-press flex flex-col items-center justify-center gap-1 rounded-2xl py-1.5"
               >
                 <span
                   className={`flex h-8 w-14 items-center justify-center rounded-full transition-all duration-200 ${

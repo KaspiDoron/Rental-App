@@ -59,6 +59,7 @@ export async function GET(req: Request) {
           english?: string;
           media?: { kind?: string; fileName?: string | null };
           location?: { lat: number; lng: number; name?: string | null };
+          reading?: import("@/lib/media/reading").MediaReading;
           contact?: { name?: string | null; digits?: string | null };
         } | null;
       }>(
@@ -116,6 +117,10 @@ export async function GET(req: Request) {
             : undefined,
         location: m.raw?.location,
         contact: m.raw?.contact,
+        // WHAT THE AGENTS READ IN IT. Stamped by the reply loop onto the very
+        // message the media arrived on (lib/media/reading), so the transcript
+        // can prove the understanding instead of asserting it.
+        reading: m.raw?.reading,
       })),
     ]
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
