@@ -12,6 +12,10 @@ import { WillAvatar } from "@/components/will/WillAvatar";
 import { LanguageButton } from "@/components/LanguageButton";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SkeletonCard } from "@/components/Skeleton";
+import { useReadiness } from "@/lib/client/readiness";
+
+/** Everything Trips waits on before it stops looking like it is loading. */
+const TRIPS_SOURCES = ["session", "trips"] as const;
 import { TabBar } from "@/components/TabBar";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
@@ -112,7 +116,12 @@ const TIMELINE_ICON: Record<TimelineEvent["kind"], string> = {
 
 export default function DealsPage() {
   const { t } = useI18n();
-  const [loading, setLoading] = useState(true);
+  // READY MEANS EVERY SOURCE HAS ANSWERED. `loading` used to belong to the
+  // trips fetch alone, so whichever of the two requests finished first took the
+  // placeholder down - and the page looked finished and empty while the rest
+  // was still in flight. See lib/client/readiness.
+  const { ready, settle } = useReadiness(TRIPS_SOURCES);
+  const loading = !ready;
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -211,7 +220,8 @@ export default function DealsPage() {
         setEmail(d.session.email);
         setPlan(d.session.plan ?? "free");
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => settle("session"));
     fetch("/api/deals", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
@@ -222,8 +232,8 @@ export default function DealsPage() {
         if (s[0]) setExpanded({ [s[0].id]: true });
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => settle("trips"));
+  }, [settle]);
 
   const vehicleLabel = (v: string | null) =>
     v === "car"
