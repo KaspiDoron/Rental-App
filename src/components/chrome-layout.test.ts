@@ -35,8 +35,54 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("the canvas actually wraps the pages", () => {
-    // `fluid-in` rides along on the same element - the arrival animation.
     expect(read("src/app/layout.tsx")).toMatch(/className="app-canvas[^"]*"/);
+  });
+
+  it("NOTHING on the canvas may create a containing block", () => {
+    // The third regression, and a different cause from the first two: an
+    // `animation: ... both` whose last keyframe sets `transform` and `filter`
+    // retains BOTH forever, and either one makes every `position: fixed`
+    // descendant pin to the document. That is what sent the bar into the middle
+    // of the page and Will off the edge of the screen.
+    //
+    // Checked as a list of PROPERTIES rather than "don't use fluid-in", because
+    // the next trap will have a different class name and the same effect.
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    const blocks = [...src.matchAll(/\.app-canvas[^{]*\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(blocks.length).toBeGreaterThan(0);
+    const FORBIDDEN =
+      /(^|[\s;])(transform|filter|backdrop-filter|perspective|contain|will-change|animation)\s*:/;
+    for (const b of blocks) expect(b).not.toMatch(FORBIDDEN);
+  });
+
+  it("...and the classes it wears are only the two safe ones", () => {
+    const el = read("src/app/layout.tsx").match(/className="(app-canvas[^"]*)"/);
+    expect(el).toBeTruthy();
+    expect(el![1].trim().split(/\s+/).sort()).toEqual(["app-canvas", "page-fade"]);
+  });
+
+  it("the page arrival animates OPACITY only - opacity creates no containing block", () => {
+    const src = css();
+    const kf = src.slice(src.indexOf("@keyframes page-fade"));
+    const body = kf.slice(0, kf.indexOf("}", kf.indexOf("to {")) + 2);
+    expect(body).toMatch(/opacity/);
+    expect(body).not.toMatch(/transform|filter|scale|translate/);
+  });
+
+  it("the liquid rise stays on CONTENT, which never holds fixed chrome", () => {
+    // `fluid-in` genuinely does set a transform and a blur - that is what makes
+    // it read as liquid. It is fine on cards and rows; it is a trap on a wrapper.
+    expect(read("src/app/layout.tsx")).not.toMatch(/app-canvas[^"]*fluid-in/);
+  });
+
+  it("Will is portalled too, on a host that carries no transform of its own", () => {
+    // His card is `position: fixed` at viewport coordinates from
+    // getBoundingClientRect. Rendered inline he was measured against the
+    // viewport and painted against a glass card - so he left the screen.
+    const w = read("src/components/will/WillGuideOverlay.tsx");
+    expect(w).toMatch(/<FixedLayer hostIsFixed=\{false\}>/);
+    const f = read("src/components/FixedLayer.tsx");
+    expect(f).toMatch(/hostIsFixed \? \{ transform: "translateZ\(0\)", \.\.\.style \} : style/);
   });
 
   it("chrome that must stay on screen still portals out of the canvas", () => {

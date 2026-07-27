@@ -31,10 +31,21 @@ export function FixedLayer({
   children,
   className = "",
   style,
+  hostIsFixed = true,
 }: {
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  /**
+   * TRUE  - this layer IS the fixed element (the tab bar). It gets the
+   *         compositing transform, which is safe: an element's own transform
+   *         does not affect its own fixed positioning.
+   * FALSE - the fixed elements are the CHILDREN (Will's ring and card). The
+   *         host must then carry no transform at all, or it becomes their
+   *         containing block and re-creates the exact bug this component
+   *         exists to prevent.
+   */
+  hostIsFixed?: boolean;
 }) {
   const [mounted, setMounted] = useState(false);
   // Bumped on every viewport change; changing the key forces WebKit to
@@ -70,7 +81,7 @@ export function FixedLayer({
       // nothing else.
       data-beat={beat}
       className={className}
-      style={{ transform: "translateZ(0)", ...style }}
+      style={hostIsFixed ? { transform: "translateZ(0)", ...style } : style}
     >
       {children}
     </div>,

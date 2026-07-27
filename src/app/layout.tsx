@@ -139,9 +139,13 @@ export default function RootLayout({
               Find Deals / Profile / Login so guidance survives the pairing hop. */}
           <WillAssistantProvider>
             {/* The page canvas owns horizontal clipping so the ROOT does not -
-                see .app-canvas in globals.css. Everything glued to the viewport
-                (TabBar, Will) portals to <body>, outside this box. */}
-            <div className="app-canvas fluid-in">{children}</div>
+                see .app-canvas in globals.css.
+                
+                It must NEVER carry a transform, a filter or an animation that
+                leaves one behind: both would make it the containing block for
+                every `position: fixed` element inside it. `page-fade` is
+                opacity-only for exactly that reason. */}
+            <div className="app-canvas page-fade">{children}</div>
             <NavVeil />
             <DomTranslator />
             <OfflineBanner />

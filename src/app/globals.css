@@ -286,14 +286,32 @@ html.dark .tabbar {
   --fluid-ms: 420ms;
 }
 
-/* A whole screen arriving: it rises, settles and comes into focus, rather than
-   appearing. The tiny blur at the start is what makes it read as liquid. */
+/* CONTENT arriving: it rises, settles and comes into focus rather than
+   appearing. The tiny blur at the start is what makes it read as liquid.
+   
+   NEVER PUT THIS ON A PAGE WRAPPER. `animation-fill-mode: both` retains the
+   100% keyframe forever, so the element keeps `transform: translate3d(0,0,0)`
+   and `filter: blur(0)` - and a transform OR a filter on an ancestor makes
+   every `position: fixed` descendant pin to the DOCUMENT instead of the
+   viewport. Putting this on `.app-canvas` is what sent the bottom navigation
+   scrolling into the middle of the page and Will off the edge of the screen.
+   Use it on cards, panels and rows - things that never contain fixed chrome. */
 @keyframes fluid-in {
   0% { opacity: 0; transform: translate3d(0, 14px, 0) scale(0.985); filter: blur(6px); }
   60% { filter: blur(0); }
   100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
 }
 .fluid-in { animation: fluid-in var(--fluid-ms) var(--fluid) both; }
+
+/* A whole PAGE arriving. Opacity only, deliberately: opacity creates no
+   containing block, so a page wrapper wearing this can never capture the
+   fixed chrome that lives inside it. The sense of the page settling comes
+   from the content underneath, which rises on its own. */
+@keyframes page-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.page-fade { animation: page-fade 300ms var(--fluid) both; }
 
 /* Content swapping WITHIN a screen (a tab, a panel): shorter, sideways, no
    scale - so it reads as the same surface showing something else. */
@@ -311,7 +329,7 @@ html.dark .tabbar {
 .fluid-press:active { transform: scale(0.965); }
 
 @media (prefers-reduced-motion: reduce) {
-  .fluid-in, .fluid-swap, .fluid-stagger > * { animation: none; }
+  .fluid-in, .fluid-swap, .fluid-stagger > *, .page-fade { animation: none; }
   .fluid-press { transition: none; }
 }
 

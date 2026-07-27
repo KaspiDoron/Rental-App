@@ -17,6 +17,7 @@
 // animation library; everything must degrade gracefully.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FixedLayer } from "../FixedLayer";
 import { WillAvatar } from "./WillAvatar";
 import { placeBubble, type BubblePlacement, type Rect } from "@/lib/will-assistant";
 import { useI18n } from "@/lib/i18n";
@@ -100,7 +101,17 @@ export function WillGuideOverlay({
   const celebrate = tone === "celebrate";
 
   return (
-    <>
+    // PORTALLED, NOT INLINE.
+    //
+    // Both children are `position: fixed` positioned from viewport coordinates
+    // (getBoundingClientRect). That only means the viewport while no ancestor
+    // creates a containing block - and `transform`, `filter`, `backdrop-filter`
+    // and `contain` all do. Rendered inline, Will sat inside the page canvas
+    // and inside glass cards, so the moment either grew a filter his card was
+    // measured against the viewport and PAINTED against something else: off the
+    // edge of the screen. FixedLayer puts him on <body>, where the coordinates
+    // he is given are the coordinates he is drawn at.
+    <FixedLayer hostIsFixed={false}>
       {/* Breathing spotlight ring around the target element. */}
       <div
         aria-hidden
@@ -190,6 +201,6 @@ export function WillGuideOverlay({
           </div>
         )}
       </div>
-    </>
+    </FixedLayer>
   );
 }
