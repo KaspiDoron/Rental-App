@@ -88,9 +88,16 @@ export async function GET(req: Request) {
       if (!res.ok || !type.startsWith("image/")) {
         return new NextResponse(null, { status: 404, headers: NO_STORE });
       }
+      // CACHEABLE, PRIVATELY. `no-store` meant a card scrolled out and back
+      // re-fetched the shop's CDN photo every time - fifteen shops, every
+      // scroll, and an avatar that was still arriving when the traveller had
+      // moved on. `private` keeps it out of every shared cache, so this is the
+      // traveller's own browser holding it for a few minutes, which is exactly
+      // as long as the in-process cache already holds the URL. Nothing is
+      // written to a database by this path, then or now.
       return new NextResponse(res.body, {
         status: 200,
-        headers: { ...NO_STORE, "Content-Type": type },
+        headers: { ...AVATAR_CACHE, "Content-Type": type },
       });
     } catch {
       return new NextResponse(null, { status: 404, headers: NO_STORE });
@@ -112,3 +119,6 @@ export async function GET(req: Request) {
 
 // private: an avatar is scoped to one traveller's session, never shared-cached.
 const NO_STORE = { "Cache-Control": "private, no-store" };
+// Long enough that scrolling the board is free, short enough that the picture
+// is never the app's to keep. Never shared - this is one traveller's session.
+const AVATAR_CACHE = { "Cache-Control": "private, max-age=600" };

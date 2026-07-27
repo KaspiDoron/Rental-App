@@ -111,3 +111,37 @@ describe("ephemeral shop avatars: you can only see a shop you messaged", () => {
     expect(code).toMatch(/startsWith\("image\/"\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ...AND IT HAS TO ACTUALLY ARRIVE. The lookup was never failing; it was a
+// two-phase negotiation - fetch JSON for a URL, then fetch the URL - started
+// only after React mounted, answered `no-store`, and repeated on every scroll.
+// ---------------------------------------------------------------------------
+
+describe("the avatar is one request, started at render", () => {
+  const avatar = () =>
+    readFileSync(join(process.cwd(), "src/components/ShopAvatar.tsx"), "utf8");
+
+  it("points straight at the proxy - no JSON hop, no effect, no waiting", () => {
+    const src = avatar();
+    expect(src).toMatch(/src=\{`\/api\/wa\/avatar\?img=1&number=/);
+    expect(src).not.toMatch(/fetch\(/);
+    expect(src).not.toMatch(/useEffect/);
+  });
+
+  it("the initial is the box itself, so nothing flashes or shifts", () => {
+    const src = avatar();
+    expect(src).toMatch(/bg-brandblue-soft/);
+    expect(src).toMatch(/absolute inset-0/);
+  });
+
+  it("a shop with no picture stops being asked", () => {
+    expect(avatar()).toMatch(/missing\.add\(digits\)/);
+  });
+
+  it("the bytes are privately cacheable, and still never shared", () => {
+    const route = readFileSync(join(process.cwd(), "src/app/api/wa/avatar/route.ts"), "utf8");
+    expect(route).toMatch(/AVATAR_CACHE = \{ "Cache-Control": "private, max-age=\d+" \}/);
+    expect(route).not.toMatch(/"Cache-Control": "public/);
+  });
+});
