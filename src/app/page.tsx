@@ -24,6 +24,7 @@ import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
 import { can } from "@/lib/entitlements";
+import { checkAction } from "@/lib/actions/registry";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
 
@@ -696,6 +697,11 @@ export default function Home() {
         }).catch(() => {});
       },
       massBargain: () => runMassBargain(),
+      // Will and the buttons now share ONE vocabulary of what this app can do.
+      // A capability the traveller has and the assistant does not is a
+      // capability that drifts - and one of the two ends up wrong.
+      runAction: (id: string, args?: Record<string, unknown>, confirmed?: boolean) =>
+        runAction(id, args ?? {}, Boolean(confirmed)),
       openVendor: (id: string) => scrollToVendor(id),
       compare: (ids: string[]) => setCompareIds(ids),
       openFeedback: () => setFeedbackOpen(true),
@@ -1570,6 +1576,73 @@ export default function Home() {
     });
     return res.json();
   });
+
+  // THE ACTION REGISTRY, MOUNTED (lib/actions/registry).
+  //
+  // Will's "Push harder" used to resolve to `setWillOpen(true)` - it opened a
+  // panel. That was not a prompt problem: the bridge he had exposed view-state
+  // setters only, so the only thing an assistant could do was move the
+  // traveller's eyes, and every offer to help ended in the traveller doing the
+  // work. These executors give the registry's named actions real bodies, and
+  // every outbound one goes through `customMessage` - the same /api/outreach
+  // path, the same guard, the same anti-ban pacing and cancellation vetoes an
+  // agent message passes. Nothing an assistant does gets a shortcut around it.
+  const runAction = useCallbackRef(
+    async (id: string, rawArgs?: Record<string, unknown>, wasConfirmed?: boolean) => {
+      const args = rawArgs ?? {};
+      const check = checkAction({
+        id,
+        args,
+        plan: session?.plan,
+        confirmed: wasConfirmed === true,
+        can: (p, f) => can(p as never, f),
+      });
+      if (!check.ok) {
+        if (check.reason === "not-entitled") setUpgradeOpen(true);
+        return check;
+      }
+      const vendorId = String(args.vendorId ?? "");
+      const vendor = vendors.find((v) => v.id === vendorId);
+      const vehicle =
+        rfq?.vehicleClass === "car"
+          ? "car"
+          : rfq?.vehicleClass === "motorbike"
+            ? "motorbike"
+            : "scooter";
+      switch (check.spec.id) {
+        case "push-harder":
+          return await customMessage(
+            vendorId,
+            `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
+          );
+        case "ask-deposit":
+          return await customMessage(vendorId, `One more thing - what deposit do you need?`);
+        case "request-photo":
+          return await customMessage(
+            vendorId,
+            `Could you send a photo of the actual ${vehicle} please?`
+          );
+        case "counter-at":
+          return await customMessage(
+            vendorId,
+            `Could you do ${Number(args.pricePerDay)} per day? I can book right away 🙏`
+          );
+        case "mass-bargain":
+          await runMassBargain();
+          return { ok: true };
+        case "compare":
+          setCompareIds((args.vendorIds as string[]) ?? []);
+          return { ok: true };
+        case "filter-rents-cars":
+          setFilters((f) => ({ ...f, tag: "rents-cars" }));
+          return { ok: true };
+        default:
+          // `vendor` is read above so an unknown id cannot silently no-op with
+          // a stale reference; every real branch returns before here.
+          return { ok: false as const, reason: "unknown-action" as const, vendor: vendor?.id };
+      }
+    }
+  );
 
   // Mass bargain: named + stable so the button AND (later) Will's command
   // bridge share the exact same path. Entitlement-gated through can().
@@ -3140,7 +3213,16 @@ export default function Home() {
                         .map((v) => v.id)
                     ),
                 },
-                { label: t("Push harder"), onAction: () => setWillOpen(true) },
+                {
+                  // A REAL ACTION now, not a panel. It goes through the same
+                  // guarded outbound path an agent message does, and it is
+                  // confirmed because it reaches a shop (lib/actions/registry).
+                  label: t("Push harder"),
+                  onAction: () => {
+                    if (best?.id) void runAction("push-harder", { vendorId: best.id }, true);
+                    else setWillOpen(true);
+                  },
+                },
               ],
             };
           }
