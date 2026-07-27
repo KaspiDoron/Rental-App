@@ -39,7 +39,9 @@ export function TabBar({
     // Portalled to <body> and given its own compositing layer - see FixedLayer.
     // As a plain fixed child of <main> this bar rendered halfway up the screen
     // on iOS after an overlay had toggled the body's overflow.
-    <FixedLayer className="fixed inset-x-0 bottom-0 z-50">
+    // The safe-area gap sits OUTSIDE the capsule so the glass floats above the
+    // home indicator instead of swallowing it in padding.
+    <FixedLayer className="fixed inset-x-0 bottom-0 z-50 pb-safe">
       {showUpgrade && (
         <div className="pointer-events-none mb-2 flex justify-center px-4">
           <button
@@ -50,8 +52,8 @@ export function TabBar({
           </button>
         </div>
       )}
-      <nav className="tabbar pb-safe">
-        <div className="mx-auto grid max-w-md grid-cols-4 px-2 pt-1.5">
+      <nav className="tabbar">
+        <div className="mx-auto grid max-w-md grid-cols-4 px-2 py-1.5">
           {items.map((it) => {
             const on = active === it.id;
             const isFeedback = it.id === "feedback";

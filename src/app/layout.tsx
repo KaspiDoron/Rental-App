@@ -138,7 +138,10 @@ export default function RootLayout({
           {/* Will's concierge brain: funnel step + idle detection, shared across
               Find Deals / Profile / Login so guidance survives the pairing hop. */}
           <WillAssistantProvider>
-            {children}
+            {/* The page canvas owns horizontal clipping so the ROOT does not -
+                see .app-canvas in globals.css. Everything glued to the viewport
+                (TabBar, Will) portals to <body>, outside this box. */}
+            <div className="app-canvas">{children}</div>
             <NavVeil />
             <DomTranslator />
             <OfflineBanner />
