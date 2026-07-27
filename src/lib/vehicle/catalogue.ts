@@ -416,6 +416,93 @@ export const VEHICLE_CATALOGUE: VehicleModel[] = [
     seats: 4,
     note: "a small 4x4 - only 4 seats",
   },
+  // The rest of what a rental fleet in these markets actually holds. A car
+  // nameplate the catalogue does not know cannot settle its own class, so the
+  // gate asks instead of confirming - correct, but it asks about the most
+  // ordinary rental cars there are, which reads as an agent that knows nothing
+  // about cars. These are the common ones.
+  {
+    name: "Toyota Yaris",
+    make: "Toyota",
+    aliases: ["yaris", "toyota yaris"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1200, 1500],
+    seats: 5,
+  },
+  {
+    name: "Honda City",
+    make: "Honda",
+    aliases: ["honda city"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1500],
+    seats: 5,
+  },
+  {
+    name: "Honda Jazz",
+    make: "Honda",
+    aliases: ["jazz", "honda jazz", "honda fit"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1500],
+    seats: 5,
+  },
+  {
+    name: "Nissan Almera",
+    make: "Nissan",
+    aliases: ["almera", "nissan almera"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1000, 1200],
+    seats: 5,
+  },
+  {
+    name: "Mitsubishi Mirage",
+    make: "Mitsubishi",
+    aliases: ["mirage", "mitsubishi mirage", "attrage"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1200],
+    seats: 5,
+  },
+  {
+    name: "Suzuki Swift",
+    make: "Suzuki",
+    aliases: ["swift", "suzuki swift"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1200, 1400],
+    seats: 5,
+  },
+  {
+    name: "Kia Picanto",
+    make: "Kia",
+    aliases: ["picanto", "kia picanto"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1000, 1200],
+    seats: 5,
+  },
+  {
+    name: "Hyundai Accent",
+    make: "Hyundai",
+    aliases: ["accent", "hyundai accent"],
+    class: "car",
+    transmission: "automatic",
+    displacementsCc: [1400, 1600],
+    seats: 5,
+  },
+  {
+    name: "Toyota Hiace",
+    make: "Toyota",
+    aliases: ["hiace", "toyota hiace", "commuter van"],
+    class: "car",
+    transmission: "manual",
+    displacementsCc: [2500, 2800],
+    seats: 12,
+    note: "a passenger van",
+  },
 ];
 
 const ALIAS_INDEX: Array<{ alias: string; model: VehicleModel; rx: RegExp }> = VEHICLE_CATALOGUE

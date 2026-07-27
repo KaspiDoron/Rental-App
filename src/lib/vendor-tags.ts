@@ -9,6 +9,7 @@ import "server-only";
 import { createHash } from "crypto";
 import { sbSelect, sbInsert } from "./runtime-config";
 import { claimsIn } from "./thread/claims";
+import { CLASS_PROFILES, mentionsClass } from "./vehicle/class-profile";
 import type { ExtractedOffer } from "./agents";
 
 // The full vocabulary. Anything outside it is dropped - the AI can never
@@ -24,6 +25,11 @@ export const VENDOR_TAG_VOCAB = [
   "insurance-included",
   "cards-accepted",
   "flexible-dates",
+  // "This place definitely rents cars." Earned from what the shop actually
+  // says - a car quoted, a car named, a car board - never from the fact that we
+  // ran a car search. Discovery stamps `vehicleClasses` from the QUERY, so a
+  // filter built on that would just re-show every result.
+  "rents-cars",
 ] as const;
 export type VendorTag = (typeof VENDOR_TAG_VOCAB)[number];
 
@@ -65,6 +71,15 @@ export function tagsFromExtraction(extraction: ExtractedOffer, replyText: string
     }
     if (c.detail === "cash") tags.add("cash-deposit");
   }
+  // DOES THIS SHOP ACTUALLY RENT CARS? Evidence from the shop's own words: it
+  // named a car or a car nameplate in a reply. Like every other tag here it
+  // needs two distinct replies before it is shown, so one ambiguous "car" does
+  // not earn a badge.
+  const carEvidence = [replyText, String(extraction.vehicleDescription ?? "")].some((t) =>
+    mentionsClass(t, CLASS_PROFILES.car)
+  );
+  if (carEvidence) tags.add("rents-cars");
+
   // English-only safety net for the most common freebie mentions.
   if (/\b(helmets? (are |is )?(free|included)|free helmets?|includes? helmets?|2 helmets)\b/i.test(replyText)) {
     tags.add("helmets-included");

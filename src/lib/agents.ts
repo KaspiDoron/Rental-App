@@ -116,7 +116,14 @@ function normalizeRFQ(
     // motorbikes default to 110cc; cars to a regular 4-seat economy car. The
     // agents then ask shops for a CONCRETE vehicle, never a vague "a bike".
     engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc ?? 110,
-    seats: rfq.vehicleClass === "car" ? rfq.seats ?? 4 : undefined,
+    // NO SEAT DEFAULT. `seats` is a DISQUALIFYING attribute in the vehicle
+    // identity gate (src/lib/vehicle/spec) - only attributes the traveller
+    // actually declared may block a quote. Defaulting it to 4 meant every car
+    // search silently demanded a seat count the traveller never gave, so a shop
+    // quoting a car whose seat count it did not state could not be confirmed,
+    // and the quote never reached the board. An undeclared seat count is not a
+    // requirement; it is simply not a constraint.
+    seats: rfq.vehicleClass === "car" ? rfq.seats : undefined,
     carType:
       rfq.vehicleClass === "car"
         ? rfq.carType && rfq.carType !== "any"

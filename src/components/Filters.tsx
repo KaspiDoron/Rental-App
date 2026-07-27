@@ -22,7 +22,10 @@ export interface FilterState {
     | "passport-deposit"
     | "cash-deposit"
     | "helmets-included"
-    | "insurance-included";
+    | "insurance-included"
+    // Shops that have actually shown they rent cars (a car quoted or named in
+    // their own replies) - not merely shops a car search returned.
+    | "rents-cars";
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -203,6 +206,7 @@ export function Filters({
         </span>
         {(
           [
+            ["rents-cars", "🚗 Rents cars"],
             ["delivery", "🛵 Delivers"],
             ["no-deposit", "🎉 No deposit"],
             ["passport-deposit", "🛂 Passport deposit"],

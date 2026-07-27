@@ -138,6 +138,14 @@ export interface Vendor {
   rating: number;
   reviews: number;
   vehicleClasses: VehicleClass[];
+  /**
+   * The shop's own listing NAMES the searched class (its name, its Google type,
+   * its primary type). `vehicleClasses` above only records which search this
+   * result came back for - a fact about our query, not about the shop - so it
+   * can never answer "does this place definitely rent cars?". This can.
+   * Strengthened later by what the shop actually quotes (vendor tags).
+   */
+  classEvidence?: boolean;
   fulfillment: Fulfillment[];
   whatsapp: string; // E.164, opted-in partner vendor ("" when unknown yet)
   basePricePerDay: number; // internal seed used by the demo simulator only

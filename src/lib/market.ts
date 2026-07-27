@@ -208,13 +208,16 @@ const COUNTRY_SCOOTER_FLOOR: Record<string, { cur: string; perDay: number }> = {
 // for the market-domain callers (agent-loop).
 export { credibleFloor } from "./graph/math";
 
-// How each vehicle bucket prices relative to a 125cc scooter (=1.0). Rough but
-// consistent worldwide - real area rows from the AI refresh override these.
-const VEHICLE_RATIO: Record<string, number> = {
-  "scooter-110": 0.8, "scooter-125": 1, "scooter-160": 1.4,
-  "motorbike-150": 1.2, "motorbike-300": 2.4, "motorbike-500": 4, "motorbike-big": 6,
-  "car-economy": 3.6, "car-sedan": 5, "car-suv": 6.4, "car-van": 7.6, "car-luxury": 12,
-};
+// How each TWO-WHEELER bucket prices relative to a 125cc scooter (=1.0). Rough
+// but consistent worldwide - real area rows from the AI refresh override these.
+//
+// CARS DELIBERATELY ARE NOT IN HERE. They used to be, as the local scooter
+// floor times a constant, and that is not a car price in any market: in
+// Thailand it produced ~540 THB/day for an economy car against a real walk-in
+// floor closer to 800. A car is a different market with different fixed costs,
+// not a big scooter. Cars anchor on their own baseline below. Lives in
+// vehicle/class-profile so the classes stay one table rather than five.
+import { SCOOTER_RELATIVE, scalesFromScooter } from "./vehicle/class-profile";
 
 // Conservative built-in floors (per day, LOCAL currency) so the agent is sane
 // even before the AI has researched an area. Deliberately on the low-but-real
@@ -223,25 +226,38 @@ function defaultFloor(
   region: string | undefined,
   vkey: string
 ): { floor: number; typical: number | null; currency: string } | null {
-  const ratio = VEHICLE_RATIO[vkey];
-  if (!ratio) return null;
-  // Country-researched seed first - the most accurate zero-AI answer we have.
+  // Country-researched seed first - the most accurate zero-AI answer we have,
+  // but ONLY for the buckets it can honestly scale to. A car is not a big
+  // scooter, so a car bucket falls through to its own baseline below rather
+  // than to the local scooter floor times a constant.
+  const ratio = SCOOTER_RELATIVE[vkey];
   const country = regionKeysFor(region).pop();
   const seed = country ? COUNTRY_SCOOTER_FLOOR[country] : undefined;
-  if (seed) {
+  if (seed && scalesFromScooter(vkey) && ratio) {
     const floor = Math.round(seed.perDay * ratio);
     return { floor, typical: Math.round(floor * 1.6), currency: seed.cur };
   }
   const cur = currencyForRegion(region) ?? "USD";
   // Fallback: USD baseline converted by rough purchasing-power multipliers.
+  // Lowest realistic walk-in day rate, in USD, per bucket. The CAR rows are
+  // researched car prices rather than a multiple of a scooter: an economy car
+  // does not rent for three and a half scooters anywhere, and the old ratio put
+  // the Thai economy-car floor around 540 THB against a real floor closer to
+  // 900. A floor below the real market is not harmless - it is the number the
+  // agent negotiates toward and the number the app calls "market rate".
   const usd: Record<string, number> = {
     "scooter-110": 4, "scooter-125": 5, "scooter-160": 7,
     "motorbike-150": 6, "motorbike-300": 12, "motorbike-500": 20, "motorbike-big": 30,
-    "car-economy": 18, "car-sedan": 25, "car-suv": 32, "car-van": 38, "car-luxury": 60,
+    "car-economy": 25, "car-sedan": 32, "car-suv": 42, "car-van": 50, "car-luxury": 90,
   };
+  // Every currency the country seed table can produce needs a rate here, or a
+  // car search in that country gets NO floor at all now that cars no longer
+  // borrow the scooter seed.
   const fx: Record<string, number> = {
     USD: 1, EUR: 0.95, GBP: 0.8, THB: 36, IDR: 16000, VND: 25000, INR: 84,
     JPY: 150, PHP: 58, MYR: 4.6, TRY: 34, MXN: 18, ILS: 3.7,
+    LKR: 300, NPR: 135, TWD: 32, KRW: 1350, SGD: 1.35, BRL: 5.5,
+    MAD: 10, EGP: 48, ZAR: 18, AUD: 1.5, NZD: 1.65, AED: 3.67, CNY: 7.2,
   };
   const base = usd[vkey];
   if (!base || !fx[cur]) return null;

@@ -23,6 +23,7 @@ import { haversineKm } from "./geo";
 import { cacheGet, cacheSet, recordApi } from "./usage";
 import type { Vendor, VehicleClass, VendorReview } from "./types";
 import { digitsOnly } from "./phone";
+import { mentionsClass, profileFor } from "./vehicle/class-profile";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -459,6 +460,15 @@ function newPlaceToVendor(
     rating: p.rating ?? 0,
     reviews: p.userRatingCount ?? 0,
     vehicleClasses: [vehicleClass],
+    // EVIDENCE, not a restatement of the search. `vehicleClasses` above says
+    // "this came back for a car search", which is a fact about our query, not
+    // about the shop - so a "definitely rents cars" filter built on it would be
+    // decoration. This says the shop's own listing NAMES the class, which is
+    // something we actually observed.
+    classEvidence: mentionsClass(
+      `${p.displayName?.text ?? ""} ${(p.types ?? []).join(" ")} ${p.primaryTypeDisplayName?.text ?? ""}`,
+      profileFor(vehicleClass)
+    ),
     fulfillment: ["in-store", "hotel-delivery"],
     whatsapp: (p.internationalPhoneNumber ?? "").trim(),
     basePricePerDay: 0,

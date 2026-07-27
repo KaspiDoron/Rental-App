@@ -82,7 +82,13 @@ export function defaultGraphNodes(): NodeSpec[] {
     }),
     n("comparator", "comparator", "Market & Rival Comparator", "⚖️", {
       instructions:
-        "Anchor on the REAL local ground-floor for this exact vehicle (e.g. 150/day for a 125cc here) and push toward it. If another shop in THIS search already gave a lower real price, that is honest leverage ('I have an offer for 170 for the same bike') - use it, but NEVER invent a rival number.",
+        // NO WORKED EXAMPLE, because the only one this ever had was a scooter -
+        // "150/day for a 125cc", "170 for the same bike" - and it was coached
+        // into every turn of every class, including car threads where those
+        // numbers and that noun are simply wrong. The live floor and the live
+        // rival are already in the turn's own context; the coach states the
+        // PRINCIPLE and lets the class-specific facts speak.
+        "Anchor on the REAL local ground-floor for this exact vehicle - the one in this turn's context, never a remembered number - and push toward it. If another shop in THIS search already gave a lower real price for the SAME vehicle, that is honest leverage: cite the price and the vehicle, never the other shop's name, and never invent a rival number.",
     }),
     // ---- chief ----
     n("director", "director", "Negotiation Director", "🧠", {
@@ -102,7 +108,10 @@ export function defaultGraphNodes(): NodeSpec[] {
     }),
     n("bargain", "bargain", "Bargainer", "🥊", {
       instructions:
-        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors at the floor; later rounds keep closing the remaining gap proportionally. Use a lower rival offer as honest leverage ('I have offer 170 for same bike, can you do better?'). For 7+ day rentals ask about the weekly/monthly rate. When they show an old/scratched bike or high mileage, use that too ('I see scratches, too old'). If they resist the number, pivot to package value at THEIR price: free helmet(s), free delivery to the hotel, or a full tank. One 'last price' with real room left (far above floor, or a cheaper rival) earns ONE more gentle move; a second firm signal or any annoyance ends the push immediately.",
+        // Same reason: the worked examples here were all scooters, and they
+        // were coached into car threads verbatim. The lever is described, the
+        // wording and the vehicle noun come from this turn's real context.
+        "One friendly ask per round toward the ground-floor, easy to say yes to, warm and human with a 'my friend' tone and one emoji. Round 1 anchors at the floor; later rounds keep closing the remaining gap proportionally. Use a lower rival offer for the SAME vehicle as honest leverage - the price and the vehicle, never the other shop's name. For 7+ day rentals ask about the weekly/monthly rate. When they show an old or damaged vehicle, or high mileage, use that too. If they resist the number, pivot to package value at THEIR price: an included helmet, free delivery to the hotel, a full tank, or the insurance thrown in. One 'last price' with real room left (far above floor, or a cheaper rival) earns ONE more gentle move; a second firm signal or any annoyance ends the push immediately.",
     }),
     n("deposit-probe", "deposit-probe", "Deposit Negotiator", "🛂", {
       maxRunsPerThread: 3,
