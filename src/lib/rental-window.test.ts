@@ -183,7 +183,9 @@ describe("every surface that decides a date calls the same authority", () => {
 
   it("a block proposal is queued for the owner WITH its evidence", () => {
     const s = readCode("src/lib/integrity/store.ts");
-    expect(s).toMatch(/integrity-review/);
+    // The event name is a shared constant now, so the producer and the owner's
+    // queue can never drift apart (its value is pinned in adjudication.test).
+    expect(s).toMatch(/kind: PROPOSAL_EVENT/);
     expect(s).toMatch(/evidence: verdict\.evidence/);
     expect(s).toMatch(/no action taken automatically/i);
     // Rides the existing soft, expiring, reasoned table - no migration.

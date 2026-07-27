@@ -11,6 +11,7 @@ import { LoadingDots } from "../LoadingDots";
 import { ConversationPanel } from "./ConversationPanel";
 import { PolicyPanel } from "./PolicyPanel";
 import { AnalyticsPanel } from "./AnalyticsPanel";
+import { IntegrityPanel } from "./IntegrityPanel";
 
 interface ThreadCard {
   threadKey: string;
@@ -47,7 +48,9 @@ interface InboxRow {
 }
 
 export function OpsCenter() {
-  const [tab, setTab] = useState<"inbox" | "threads" | "analytics" | "policy">("inbox");
+  const [tab, setTab] = useState<"inbox" | "threads" | "analytics" | "policy" | "integrity">(
+    "inbox"
+  );
   const [open, setOpen] = useState<{ threadKey: string; vendorName: string } | null>(null);
   const [detected, setDetected] = useState<number | null>(null);
 
@@ -92,6 +95,7 @@ export function OpsCenter() {
                 ["threads", "💬 All conversations"],
                 ["analytics", "📊 Analytics"],
                 ["policy", "🗂️ Policy & versions"],
+                ["integrity", "🛡️ Block approvals"],
               ] as const
             ).map(([t, label]) => (
               <button
@@ -111,6 +115,7 @@ export function OpsCenter() {
           )}
           {tab === "analytics" && <AnalyticsPanel />}
           {tab === "policy" && <PolicyPanel />}
+          {tab === "integrity" && <IntegrityPanel />}
         </>
       )}
     </div>

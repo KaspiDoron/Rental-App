@@ -63,12 +63,21 @@ export interface IntegrityVerdict {
  *  short enough that a bad day does not follow someone around. */
 export const SIGNAL_TTL_MS = 48 * 3600_000;
 
-/** Rungs. Deliberately gentle at the bottom and human-approved at the top. */
+/**
+ * Rungs. Deliberately gentle at the bottom and human-approved at the top.
+ *
+ * `pauseMinutes` is the ONLY thing that makes a rung restrictive, and callers
+ * gate on it rather than on the step name - so "which rungs block?" is answered
+ * by this table and nowhere else. The top rung carries the same two-hour pause
+ * as the one below it because a proposal is not a punishment: the traveller
+ * waits out a pause while the owner reads the evidence, and only an approved
+ * decision (lib/integrity/adjudication) can restrict them for longer.
+ */
 export const LADDER: Array<{ atScore: number; step: IntegrityStep; pauseMinutes?: number }> = [
   { atScore: 1, step: "nudge" },
   { atScore: 3, step: "cooldown", pauseMinutes: 30 },
   { atScore: 5, step: "limit", pauseMinutes: 120 },
-  { atScore: 7, step: "propose-block" },
+  { atScore: 7, step: "propose-block", pauseMinutes: 120 },
 ];
 
 // ---- detection -------------------------------------------------------------

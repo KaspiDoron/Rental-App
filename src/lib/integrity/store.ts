@@ -15,6 +15,7 @@ import {
   type IntegritySignal,
   type IntegrityVerdict,
 } from "./signals";
+import { PROPOSAL_EVENT } from "./adjudication";
 
 const KIND = "integrity";
 
@@ -76,21 +77,60 @@ export async function noteAndAssess(opts: {
   nowMs?: number;
 }): Promise<IntegrityVerdict> {
   const now = opts.nowMs ?? Date.now();
-  const prior = await loadSignals(opts.email, now);
-  const fresh = signalsIn(opts.text, now);
-  const all = [...prior, ...fresh];
-  if (fresh.length) await saveSignals(opts.email, all);
+  return note(opts.email, opts.plan, signalsIn(opts.text, now), now);
+}
 
-  const verdict = assessIntegrity(all, now, opts.plan);
+/**
+ * Record a signal the system OBSERVED rather than read.
+ *
+ * Not every piece of evidence is prose. A free plan posting a future pickup
+ * date straight at `/api/bookings` is the clearest bypass attempt there is, and
+ * until this existed it reached the ladder not at all - the server refused the
+ * booking and forgot it, so the same traveller could try every hour and never
+ * climb a rung. Structural detections are first-class signals, which is what
+ * keeps the ladder from depending on regexes over sentences.
+ */
+export async function recordSignal(opts: {
+  email: string;
+  plan: string | null | undefined;
+  kind: IntegritySignal["kind"];
+  evidence: string;
+  nowMs?: number;
+}): Promise<IntegrityVerdict> {
+  const now = opts.nowMs ?? Date.now();
+  return note(
+    opts.email,
+    opts.plan,
+    [{ kind: opts.kind, at: now, evidence: String(opts.evidence ?? "").trim().slice(0, 180) }],
+    now
+  );
+}
+
+async function note(
+  email: string,
+  plan: string | null | undefined,
+  fresh: IntegritySignal[],
+  now: number
+): Promise<IntegrityVerdict> {
+  const prior = await loadSignals(email, now);
+  const all = [...prior, ...fresh];
+  if (fresh.length) await saveSignals(email, all);
+
+  const verdict = assessIntegrity(all, now, plan);
 
   if (requiresOwnerApproval(verdict.step)) {
     // A PROPOSAL, not an action. The owner sees it in Ops with the evidence and
     // decides; the traveller keeps their deals in the meantime.
+    //
+    // This row is the AUDIT TRAIL, not the queue. The queue is derived from the
+    // signals themselves (lib/integrity/queue), because this insert is
+    // fire-and-forget - and a queue built on it would drop a person entirely
+    // every time Supabase hiccuped.
     const { sbInsert } = await import("../runtime-config");
     await sbInsert("agent_events", [
       {
-        kind: "integrity-review",
-        user_email: opts.email,
+        kind: PROPOSAL_EVENT,
+        user_email: email,
         vendor_id: "",
         vendor_name: "",
         detail: JSON.stringify({

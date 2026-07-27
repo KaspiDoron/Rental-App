@@ -60,7 +60,31 @@ export async function POST(req: Request) {
   // short explained pause, a feature limit while the agents keep negotiating,
   // and only then a block PROPOSAL queued for the owner with the evidence
   // attached. Nothing bans an account by itself.
+  //
+  // TWO AUTHORITIES, AND ONLY TWO. A rung of the ladder pauses sending iff it
+  // carries `pauseMinutes` (that table, and nothing here, decides which rungs
+  // are restrictive). Anything longer than a rung's pause exists only because
+  // the OWNER approved it in Admin -> Ops, and lands as an `integrity-block`
+  // cooldown. The gate below used to conflate the two: reaching the top rung
+  // refused every send for as long as the evidence stayed live, so the
+  // "proposal" was already the punishment and no owner was ever in the loop.
+  let notice: string | null = null;
   {
+    const { cooldownLeft } = await import("@/lib/cooldown");
+    const { BLOCK_KIND } = await import("@/lib/integrity/adjudication");
+    const restricted = await cooldownLeft(session.email, BLOCK_KIND);
+    if (restricted > 0) {
+      return NextResponse.json({
+        allowed: false,
+        blocked: true,
+        cooldownMinutes: restricted,
+        reason:
+          "Sending from this account is paused after a review. Your deals are intact and replies still arrive - get in touch and we will sort it out.",
+        underReview: false,
+        upgrade: false,
+      });
+    }
+
     const { noteAndAssess } = await import("@/lib/integrity/store");
     const { requiresOwnerApproval } = await import("@/lib/integrity/signals");
     const verdict = await noteAndAssess({
@@ -68,12 +92,11 @@ export async function POST(req: Request) {
       plan: session.plan,
       text: message,
     });
-    // A nudge is information, not a refusal - the message still goes.
-    if (verdict.step !== "clear" && verdict.step !== "nudge") {
+    if (verdict.pauseMinutes) {
       return NextResponse.json({
         allowed: false,
         blocked: true,
-        cooldownMinutes: verdict.pauseMinutes ?? 0,
+        cooldownMinutes: verdict.pauseMinutes,
         reason: verdict.message,
         // The top rung is a proposal a human decides on; say so rather than
         // implying a consequence that has not happened.
@@ -81,6 +104,11 @@ export async function POST(req: Request) {
         upgrade: session.plan === "free",
       });
     }
+    // A nudge is information, not a refusal - the message still goes, and the
+    // explanation goes WITH it. It used to be computed and thrown away, so the
+    // gentlest rung of the ladder was silent and the traveller's first hint
+    // that a rule existed was the pause two rungs later.
+    notice = verdict.message ?? null;
   }
 
   // Resolve the destination number server-side. ANTI-SPOOF: when the vendor
@@ -481,6 +509,9 @@ export async function POST(req: Request) {
     channel: configured ? result.channel : "unconfigured",
     error: result.error,
     phone: to,
+    // Present only on a nudge: the plan rule, explained, on a message that was
+    // sent anyway.
+    notice,
   });
 }
 

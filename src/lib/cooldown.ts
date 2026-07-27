@@ -64,14 +64,27 @@ export async function cooldownLeft(email: string, kind: string): Promise<number>
   return Math.ceil((until - Date.now()) / 60_000);
 }
 
-// Language that indicates arranging a pickup on a FUTURE day (not today).
-const FUTURE_PICKUP =
-  /\b(tomorrow|next day|day after|the following day|in \d+ days?|next week|on (mon|tues|wednes|thurs|fri|satur|sun)day|pick ?up (on|next|tomorrow)|deliver (tomorrow|next)|book for (tomorrow|the \d))\b/i;
-
-/** True if the text tries to arrange a pickup/delivery on a day other than today. */
-export function requestsFuturePickup(text: string): boolean {
-  return FUTURE_PICKUP.test(text);
+/**
+ * End a cooldown NOW, before its own expiry.
+ *
+ * Every restriction the integrity ladder can impose has to be reversible by the
+ * owner in one click, so this is the other half of `setCooldown` rather than a
+ * detail of the Ops panel.
+ */
+export async function clearCooldown(email: string, kind: string): Promise<void> {
+  const key = `${email.toLowerCase()}:${kind}`;
+  mem().delete(key);
+  mem().delete(`${email}:${kind}`);
+  await sbDelete(
+    "user_cooldowns",
+    `email=eq.${encodeURIComponent(email.toLowerCase())}&kind=eq.${encodeURIComponent(kind)}`
+  ).catch(() => {});
 }
+
+// The one-strike `requestsFuturePickup` regex that used to live here is gone.
+// It was the whole enforcement of the free-tier rule - one phrase, one six-hour
+// block - and it is now `future-pickup`, ONE weighted signal among several in
+// lib/integrity/signals, where a single phrase can never decide anything.
 
 // ---- Brute-force throttle (login + verify-code) ------------------------------
 // Per-key failed-attempt counter with a rolling window. Backed by the same

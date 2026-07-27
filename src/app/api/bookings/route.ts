@@ -69,6 +69,19 @@ export async function POST(req: Request) {
       timeZone: typeof b.timeZone === "string" ? b.timeZone : undefined,
     });
     if (decision.adjusted) {
+      // ...and it also COUNTS. A free plan posting a future pickup date
+      // straight at this endpoint is the least ambiguous bypass evidence the
+      // system can observe, and it used to reach the ladder not at all: the
+      // server refused the booking and forgot it, so the same traveller could
+      // try every hour and never climb a rung. One signal, weighted like any
+      // other, decaying like any other - never a verdict on its own.
+      const { recordSignal } = await import("@/lib/integrity/store");
+      await recordSignal({
+        email: session.email,
+        plan: session.plan,
+        kind: "future-pickup",
+        evidence: `booking posted for ${scheduledAt.slice(0, 10)}; plan allows from ${decision.startDate}`,
+      }).catch(() => {});
       return NextResponse.json(
         {
           error: decision.reason,
