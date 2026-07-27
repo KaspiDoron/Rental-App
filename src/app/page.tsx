@@ -2926,7 +2926,7 @@ export default function Home() {
           <>
             <div
               data-tour="views"
-              className="surface-strong sticky top-16 z-20 mt-4 flex items-center gap-1 rounded-2xl p-1"
+              className="surface-strong substick mt-4 flex items-center gap-1 rounded-2xl p-1"
             >
               <ToggleBtn active={view === "list"} onClick={() => setView("list")}>
                 <Icon name="list" className="h-4 w-4" /> {t("List")}

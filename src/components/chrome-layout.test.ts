@@ -98,6 +98,100 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 });
 
+// THE TOP BAR IS THE TOP.
+//
+// Two separate complaints with one cause: the bar was a translucent plate with
+// `backdrop-filter`, and it was `position: sticky`. Translucent means the page
+// stays readable through it - that is the "I can see behind it". Sticky +
+// backdrop-filter means the browser re-samples and re-blurs whatever is behind
+// the bar on EVERY frame of EVERY scroll, for the whole length of the list -
+// that is the lag. Glass is a chrome material you pay for once or twice on a
+// screen; it is not a material for anything that scrolls or repeats.
+describe("the top bar is the top", () => {
+  const block = (sel: string) => {
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    const i = src.indexOf(sel + " {");
+    expect(i, `${sel} block not found`).toBeGreaterThan(-1);
+    return src.slice(i, src.indexOf("}", i) + 1);
+  };
+
+  it("is opaque - the page does not read through it", () => {
+    const b = block(".topbar");
+    expect(b).toMatch(/background:\s*var\(--bg\)\s*;/);
+    // `color-mix(... transparent)` is exactly how it went see-through before.
+    expect(b).not.toMatch(/transparent/);
+  });
+
+  it("samples nothing per frame, which is where the scroll lag came from", () => {
+    expect(block(".topbar")).not.toMatch(/backdrop-filter/);
+  });
+
+  it("...and still reads as premium, from things that cost nothing to paint", () => {
+    const b = block(".topbar");
+    expect(b).toMatch(/border-bottom:/);
+    expect(b).toMatch(/box-shadow:/);
+  });
+
+  it("its layer is a shared token, so nothing sits above it by accident", () => {
+    const src = css();
+    expect(src).toMatch(/--topbar-z:\s*\d+/);
+    expect(block(".topbar")).toMatch(/z-index:\s*var\(--topbar-z\)/);
+  });
+
+  it("anything that sticks below is strictly one layer down, by construction", () => {
+    const b = block(".substick");
+    expect(b).toMatch(/z-index:\s*calc\(var\(--topbar-z\) - 1\)/);
+    // Opaque too: a translucent second sticky row was the other half of it.
+    expect(b).toMatch(/background:\s*var\(--card\)/);
+  });
+
+  it("...and lands on the bar's MEASURED height, not a guessed offset", () => {
+    // `top-16` was a 64px guess. Too small hides the row under the bar; too
+    // large leaves a strip of the scrolling page showing between them.
+    expect(block(".substick")).toMatch(/top:\s*var\(--topbar-h\)/);
+    const probe = read("src/components/TopbarMetrics.tsx");
+    expect(probe).toMatch(/ResizeObserver/);
+    expect(probe).toMatch(/setProperty\("--topbar-h"/);
+    expect(read("src/app/layout.tsx")).toMatch(/<TopbarMetrics \/>/);
+    expect(read("src/app/page.tsx")).not.toMatch(/substick top-\d/);
+  });
+
+  it("the sub-row no longer carries its own z-index or sticky class", () => {
+    // Both are the class's job now - a per-call-site number is what drifts.
+    const p = read("src/app/page.tsx");
+    const m = p.match(/className="[^"]*\bsubstick\b[^"]*"/g) ?? [];
+    expect(m.length).toBeGreaterThan(0);
+    for (const c of m) {
+      expect(c).not.toMatch(/\bz-\d/);
+      expect(c).not.toMatch(/\bsticky\b/);
+    }
+  });
+});
+
+describe("glass is chrome, not content", () => {
+  it("there is a solid twin with the same edge and no per-frame sampling", () => {
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    const i = src.indexOf(".glass-solid {");
+    expect(i).toBeGreaterThan(-1);
+    const b = src.slice(i, src.indexOf("}", i) + 1);
+    expect(b).not.toMatch(/backdrop-filter/);
+    expect(b).toMatch(/background:\s*var\(--card\)/);
+    // The look survives: the inset highlight is what reads as an edge of glass.
+    expect(b).toMatch(/inset 0 1px 0 0/);
+  });
+
+  it("surfaces that REPEAT or SCROLL use the solid twin", () => {
+    // A list pays the blur once per card per frame for a refraction nobody can
+    // see behind an opaque card anyway.
+    for (const p of ["src/app/deals/page.tsx", "src/components/Skeleton.tsx"]) {
+      expect(read(p)).toMatch(/glass-solid/);
+    }
+    // Bare `glass` only - `glass-solid` and `glass-rim` are the wanted ones.
+    const sk = read("src/components/Skeleton.tsx").replace(/\/\/.*$/gm, "");
+    expect(sk).not.toMatch(/\bglass(?![-\w])/);
+  });
+});
+
 describe("the bar looks like glass, and degrades to something solid", () => {
   it("is a floating capsule, not a full-bleed cap", () => {
     const src = css();

@@ -20,7 +20,7 @@ export function Skeleton({
 /** A card-shaped placeholder that mirrors the app's surface cards. */
 export function SkeletonCard({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="glass glass-rim fluid-in rounded-blob p-4" aria-hidden="true">
+    <div className="glass-solid glass-rim fluid-in rounded-blob p-4" aria-hidden="true">
       <Skeleton className="mb-2 h-4 w-1/3" />
       <Skeleton className="mb-3 h-3 w-2/3" />
       <div className="space-y-2">

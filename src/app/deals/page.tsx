@@ -346,7 +346,7 @@ export default function DealsPage() {
             plan's figure is honest about being partial rather than quietly
             counting trips it is hiding behind a lock. */}
         {!loading && (sessions.length > 0 || bookings.length > 0) && (
-          <section className="glass glass-rim fluid-in relative overflow-hidden rounded-blob p-5">
+          <section className="glass-solid glass-rim fluid-in relative overflow-hidden rounded-blob p-5">
             <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-brandblue-soft opacity-60 blur-2xl" />
             <div className="pointer-events-none absolute -bottom-16 -left-8 h-36 w-36 rounded-full bg-savings-soft opacity-50 blur-2xl" />
             <p className="relative text-[10px] font-extrabold uppercase tracking-[0.14em] text-faint">
@@ -393,7 +393,7 @@ export default function DealsPage() {
         )}
 
         {!loading && sessions.length === 0 && bookings.length === 0 && (
-          <div className="glass glass-rim rounded-blob p-6 text-center fluid-in">
+          <div className="glass-solid glass-rim rounded-blob p-6 text-center fluid-in">
             <div className="mx-auto mb-3 w-fit float-soft">
               <WillAvatar size={64} />
             </div>
@@ -425,7 +425,7 @@ export default function DealsPage() {
             const locked = !canHistory && !s.isLatest;
             const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
             return (
-              <section key={s.id} className="glass glass-rim overflow-hidden rounded-blob fluid-in">
+              <section key={s.id} className="glass-solid glass-rim overflow-hidden rounded-blob fluid-in">
                 {/* Header - always visible, tap to expand */}
                 <button
                   onClick={() => setExpanded((e) => ({ ...e, [s.id]: !open }))}
@@ -828,7 +828,7 @@ export default function DealsPage() {
                 </div>
                 <div className="space-y-2.5">
                   {rest.map((b, i) => (
-                    <div key={b.id ?? i} className="glass glass-rim rounded-blob p-3.5">
+                    <div key={b.id ?? i} className="glass-solid glass-rim rounded-blob p-3.5">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="truncate text-[14px] font-extrabold text-strong">

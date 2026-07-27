@@ -146,16 +146,53 @@ input, textarea, select, button {
   box-shadow: 0 20px 60px -24px rgba(0, 0, 0, 0.35);
 }
 
-/* Sticky section top bar (respects the notch / status bar) */
+/* THE TOP BAR IS THE TOP. Nothing above it, nothing through it.
+ *
+ * It used to be translucent with a backdrop blur, and that cost twice over.
+ * Visually, the page scrolled UNDER it and stayed readable through it, so the
+ * status-bar strip and the tops of cards bled into the brand row. And on a
+ * phone it is the single most expensive thing on the screen: a STICKY element
+ * with `backdrop-filter` has its backdrop re-sampled and re-blurred on every
+ * frame of every scroll, for the whole length of the list. That is the scroll
+ * jank, and it gets worse the longer the page is.
+ *
+ * Opaque costs nothing per frame and is what the owner actually asked for. The
+ * premium look comes from the edge and the lift, which are free: a hairline
+ * bottom border and a soft shadow under it, so the bar reads as a plate resting
+ * ON the page rather than a window cut into it.
+ *
+ * `--topbar-z` is shared so anything else that sticks can sit strictly below it
+ * by construction instead of by a guessed number. */
+:root {
+  --topbar-z: 60;
+  /* Overwritten with the bar's real measured height by <TopbarMetrics>. This
+     value is only the pre-hydration guess, and it is deliberately derived from
+     the bar's own padding rather than being a round number. */
+  --topbar-h: calc(var(--safe-top) + 3.4375rem);
+}
+
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 30;
+  z-index: var(--topbar-z);
   padding-top: calc(var(--safe-top) + 6px);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(14px) saturate(1.15);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="dark"] .topbar {
+  box-shadow: 0 8px 22px -12px rgba(0, 0, 0, 0.85);
+}
+
+/* Anything that sticks BELOW the top bar. Opaque for the same reason; always
+   exactly one layer down; and parked at the bar's MEASURED height, so there is
+   never a strip of scrolling page visible between the two. All three are
+   properties of the class, not of each call site. */
+.substick {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: calc(var(--topbar-z) - 1);
+  background: var(--card);
 }
 
 /* Bottom global navigation - a floating glass capsule.
@@ -271,6 +308,34 @@ html.dark .tabbar {
     transparent 60%
   );
 }
+/* GLASS IS A CHROME MATERIAL, NOT A CONTENT MATERIAL.
+ *
+ * `backdrop-filter` is measured per element per frame. On a bar or a floating
+ * card - one or two on screen, above everything - that is a fair price for the
+ * refraction. On rows of a scrolling list it is paid N times a frame for an
+ * effect nobody can see behind an opaque card anyway, and the phone drops
+ * frames for it.
+ *
+ * `.glass-solid` is the same material with the sampling removed: the same edge
+ * highlights, the same lift, an opaque plate. Use it for anything that repeats
+ * or scrolls; keep `.glass` for the handful of surfaces that genuinely float. */
+.glass-solid {
+  position: relative;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow:
+    0 12px 32px -16px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .glass-solid {
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 14px 40px -16px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.13),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.03);
+}
+
 /* No blur support anywhere = an opaque pane. Never translucent-with-no-blur,
    which is the one state where text runs illegibly over text. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
