@@ -24,6 +24,7 @@ import { cacheGet, cacheSet, recordApi } from "./usage";
 import type { Vendor, VehicleClass, VendorReview } from "./types";
 import { digitsOnly } from "./phone";
 import { mentionsClass, profileFor } from "./vehicle/class-profile";
+import { resolveSiteHost } from "./site";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -234,12 +235,7 @@ const MAX_SUGGESTIONS = 10;
 // aggressively (their policy requires identifying the app). Include the deploy
 // origin when we know it - the admin-set APP_DOMAIN wins over build-time env.
 async function nominatimUA(): Promise<string> {
-  const site =
-    (await getConfig("APP_DOMAIN").catch(() => null)) ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.APP_DOMAIN ||
-    "wheeldeal.app";
-  return `WheelDeal/1.0 (vehicle-rental app; ${site.replace(/^https?:\/\//, "")})`;
+  return `WheelDeal/1.0 (vehicle-rental app; ${await resolveSiteHost()})`;
 }
 
 export async function searchPlaces(

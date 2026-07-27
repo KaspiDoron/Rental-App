@@ -228,8 +228,11 @@ Always use freshly rotated keys - never ones that were shared in plain text.
   real requests and print the exact error + fix.
 - Feedback: readable with zero setup in Admin -> Feedback (Supabase-backed).
   Resend email delivery stays optional.
-- AdSense: set ADSENSE_CLIENT (ca-pub-...); free-tier pages show labelled ad
-  slots (placeholder until Google approves the site). Paid plans are ad-free.
+- AdSense: wired out of the box (site tag, account meta tag and a static
+  `ads.txt`, all unconditional so Google's anonymous reviewer sees them).
+  Free-tier pages show labelled ad slots (placeholder until Google approves the
+  site); paid plans are ad-free. Set ADSENSE_CLIENT only to point the app at a
+  DIFFERENT AdSense account. Approval steps: `LAUNCH-wheeldeal.pro.md`.
 
 ## v10: Multi-host WhatsApp pool - Oracle Always Free, no user left behind
 
@@ -459,7 +462,12 @@ legal entity name in `OPERATOR_NAME` (`src/lib/legal.ts`) when you have one.
 
 ## Setting your domain (one key, everywhere)
 
-When you buy a real domain (e.g. `https://wheeldeal.app`):
+The live domain is **`wheeldeal.pro`**, and the code default already matches it
+(`SITE_DOMAIN` in `src/lib/site.ts` - the single owner of the site's identity).
+Full launch checklist, including PayPal webhook events and the AdSense review:
+see `LAUNCH-wheeldeal.pro.md`.
+
+To move to a different domain later:
 
 1. Point the domain at your Cloud Run web service (map a custom domain).
 2. In the app: **Admin -> Keys -> "Public app domain"** (`APP_DOMAIN`) - paste

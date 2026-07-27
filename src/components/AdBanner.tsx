@@ -33,17 +33,13 @@ export function AdBanner({
       .catch(() => {});
   }, [free]);
 
+  // The SDK is loaded ONCE, site-wide, by the root layout - it has to be, since
+  // Google's reviewer fetches pages anonymously and looks for the tag. This
+  // component used to inject a second copy of the same script; loading the
+  // AdSense SDK twice is a policy violation and makes slots fail to fill. All
+  // that is left here is claiming the slot.
   useEffect(() => {
     if (!client || pushed.current) return;
-    const id = "adsbygoogle-js";
-    if (!document.getElementById(id)) {
-      const s = document.createElement("script");
-      s.id = id;
-      s.async = true;
-      s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${client}`;
-      s.crossOrigin = "anonymous";
-      document.head.appendChild(s);
-    }
     try {
       (window.adsbygoogle = window.adsbygoogle || []).push({});
       pushed.current = true;

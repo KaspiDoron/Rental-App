@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getConfig, getGoogleClientId } from "@/lib/runtime-config";
+import { ADSENSE_PUBLISHER } from "@/lib/site";
 
 // Must resolve at request time so Key-Vault values apply without a redeploy.
 export const dynamic = "force-dynamic";
@@ -24,7 +25,10 @@ export async function GET() {
   return NextResponse.json({
     googleClientId: clientId ?? null,
     mapsEnabled: Boolean(mapsKey),
-    adsenseClient: adsense ?? null,
+    // The Key Vault can point the app at a DIFFERENT publisher without a
+    // redeploy; with nothing set it falls back to the site's own account
+    // rather than to null, so ad slots are live from the first deploy.
+    adsenseClient: adsense || ADSENSE_PUBLISHER,
     testMode: on(testMode),
     // Client polling cadence: SCALE_MODE stretches intervals to cut function
     // invocations under load (a single instance has no workers to add).

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { verifyPaypalWebhook } from "@/lib/paypal";
+import { verifyPaypalWebhook, tierForPaypalPlan } from "@/lib/paypal";
+import { subscriberFor } from "@/lib/billing/subscription-link";
 import { setPlan } from "@/lib/access";
 import { getConfig, sbInsert } from "@/lib/runtime-config";
 
@@ -30,11 +31,13 @@ export async function POST(req: Request) {
 
   const event = String(body?.event_type ?? "");
   const resource = body?.resource ?? {};
-  // custom_id (subscription events) / custom (sale events) carries "email|plan".
+  // custom_id (subscription events) / custom (sale events) MAY carry
+  // "email|plan" - a checkout created elsewhere can set it. Subscriptions
+  // created by our own button do not, so it is a hint, not the answer.
   const customId = String(resource.custom_id ?? resource.custom ?? "");
   const [emailRaw, planRaw] = customId.split("|");
-  const email = String(emailRaw ?? "").toLowerCase();
-  const plan = String(planRaw ?? "");
+  const hintEmail = String(emailRaw ?? "").toLowerCase();
+  const hintPlan = String(planRaw ?? "");
 
   // Capture the funding source when PayPal reports it (V2-6 wallet adoption):
   // card / apple_pay / google_pay / paypal_balance. Best-effort - the field
@@ -65,9 +68,36 @@ export async function POST(req: Request) {
     "BILLING.SUBSCRIPTION.SUSPENDED",
   ].includes(event);
 
+  // WHO does this subscription belong to? The hint if PayPal carried one,
+  // otherwise our own verified activation record - which is the only path that
+  // exists for a subscription created by the in-app subscribe button. Without
+  // this a cancellation could not be attributed to anyone, so a traveller who
+  // cancelled kept their tier indefinitely.
+  const subscriptionId = String(
+    resource.id ?? resource.billing_agreement_id ?? ""
+  ).trim();
+  const email = hintEmail || (subscriptionId ? await subscriberFor(subscriptionId) : null) || "";
+
+  // WHICH tier? PayPal's plan id is the authority, matched against the plan ids
+  // the owner configured. The custom_id hint is only a fallback for a checkout
+  // that predates the subscription buttons.
+  const planId = String(resource.plan_id ?? "");
+  let tier =
+    (planId ? await tierForPaypalPlan(planId) : null) ??
+    (hintPlan === "pro" || hintPlan === "ultra" ? hintPlan : null);
+
+  // A renewal (PAYMENT.SALE.COMPLETED) names the subscription but not the plan,
+  // so ask PayPal directly rather than letting a paying traveller's renewal be
+  // a no-op if their tier had been cleared.
+  if (!tier && activates && subscriptionId) {
+    const { fetchPaypalSubscription } = await import("@/lib/paypal");
+    const sub = await fetchPaypalSubscription(subscriptionId).catch(() => null);
+    if (sub?.planId) tier = await tierForPaypalPlan(sub.planId);
+  }
+
   // Only grant from a VERIFIED event (the sole trusted grant path).
-  if (verified && email && activates && (plan === "pro" || plan === "ultra")) {
-    await setPlan(email, plan).catch(() => {});
+  if (verified && email && activates && tier) {
+    await setPlan(email, tier).catch(() => {});
   } else if (verified && email && deactivates) {
     await setPlan(email, "free").catch(() => {});
   }

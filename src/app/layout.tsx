@@ -5,33 +5,21 @@ import { NavVeil } from "@/components/NavVeil";
 import { DomTranslator } from "@/components/DomTranslator";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { TopbarMetrics } from "@/components/TopbarMetrics";
+import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
 import "./globals.css";
 
-// Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
-// (og:image) work. Priority: admin-set APP_DOMAIN (Key Vault, no redeploy) ->
-// explicit NEXT_PUBLIC_SITE_URL -> APP_DOMAIN from the host env (GCP Secret
-// Manager) -> neutral fallback. GCP-only: no platform-injected deploy URL.
-function envSiteUrl(): string {
-  const appDomain = process.env.APP_DOMAIN;
-  return (
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    (appDomain ? (appDomain.startsWith("http") ? appDomain : `https://${appDomain}`) : "https://wheeldeal.app")
-  );
-}
 const title = "WheelDeal - cheapest local rides, negotiated for you";
 const description =
   "AI agents find and negotiate the cheapest car, manual motorcycle & automatic scooter rentals near your hotel. Live bargaining, map + list, biggest savings first.";
 
+// Correct absolute URLs are what make the WhatsApp/Telegram/X share preview
+// (og:image) work. The resolution order - owner-set APP_DOMAIN in the Key Vault
+// (so a domain move needs no redeploy), then the build env, then the brand
+// default - lives in `@/lib/site` and is shared with push identity, the
+// geocoder User-Agent, robots and the sitemap.
 export async function generateMetadata(): Promise<Metadata> {
-  let siteUrl = envSiteUrl();
-  try {
-    const { getConfig } = await import("@/lib/runtime-config");
-    const domain = await getConfig("APP_DOMAIN");
-    if (domain) siteUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  } catch {
-    /* build-time / keyless: env chain above is the answer */
-  }
+  const siteUrl = await resolveSiteOrigin();
   return {
     metadataBase: new URL(siteUrl),
     title: { default: title, template: "%s · WheelDeal" },
@@ -81,6 +69,10 @@ export async function generateMetadata(): Promise<Metadata> {
     other: {
       "msapplication-TileColor": "#2f6fed",
       "apple-mobile-web-app-title": "WheelDeal",
+      // Google AdSense account verification. Google looks for this tag (or the
+      // ads.txt file, or the script) when reviewing site ownership, and it must
+      // be present on EVERY page - hence the root layout rather than a page.
+      "google-adsense-account": ADSENSE_PUBLISHER,
     },
   };
 }
@@ -124,15 +116,20 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap"
           rel="stylesheet"
         />
-        {/* Google AdSense (site-level tag so Google can review the site).
-            Individual slots render only on the free tier via <AdBanner>. */}
-        {process.env.ADSENSE_CLIENT && (
-          <script
-            async
-            src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${process.env.ADSENSE_CLIENT}`}
-            crossOrigin="anonymous"
-          />
-        )}
+        {/* Google AdSense site-level tag. UNCONDITIONAL: Google's reviewer
+            fetches the page anonymously and fails the site if the tag is not
+            already there, so it cannot wait on an env var being set. The
+            publisher id is public by design (it ships in ads.txt and in every
+            ad request), so it is a constant, not a secret.
+
+            Individual slots still render only on the free tier via <AdBanner>;
+            paid plans stay 100% ad-free. This tag loads the SDK, it does not
+            place an ad. */}
+        <script
+          async
+          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_PUBLISHER}`}
+          crossOrigin="anonymous"
+        />
       </head>
       <body className="app-shell">
         <I18nProvider>

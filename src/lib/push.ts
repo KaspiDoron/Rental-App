@@ -12,6 +12,7 @@ import webpush from "web-push";
 import { createHash } from "crypto";
 import { getConfig, setConfig, sbInsert, sbSelect, sbDelete } from "./runtime-config";
 import { generateVapidPair, vapidPairMatches } from "./push-keys";
+import { resolveSiteHost } from "./site";
 
 interface PushSub {
   endpoint: string;
@@ -32,13 +33,9 @@ async function ensureVapid(): Promise<string | null> {
   if (configured !== fingerprint) {
     const admins = (await getConfig("ADMIN_EMAILS")) || "";
     const subject = admins.split(",")[0]?.trim();
-    // Fallback subject derives from the admin-set APP_DOMAIN so push identity
-    // follows the brand domain without a redeploy.
-    let host = "wheeldeal.app";
-    try {
-      const domain = await getConfig("APP_DOMAIN");
-      if (domain) host = new URL(domain.startsWith("http") ? domain : `https://${domain}`).hostname;
-    } catch {}
+    // Fallback subject derives from the canonical site identity, so push
+    // sender identity follows the brand domain without a redeploy.
+    const host = await resolveSiteHost();
     webpush.setVapidDetails(subject ? `mailto:${subject}` : `mailto:hello@${host}`, pub, priv);
     configured = fingerprint;
   }
