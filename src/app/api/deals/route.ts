@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { toTrip } from "@/lib/trips";
 
 export const dynamic = "force-dynamic";
 
@@ -448,6 +449,35 @@ export async function GET() {
       timeline: timeline.slice(0, 6),
       progress,
       progressLabel: label,
+      // THE TRIP: what became of this hunt, what it cost, what it saved.
+      // A session could only ever describe what is happening right now, so a
+      // finished hunt looked exactly like an abandoned one and a traveller who
+      // actually rented something had nothing to look back at (lib/trips).
+      trip: toTrip(
+        {
+          id: String(group[0].id),
+          startedAt: group[0].created_at,
+          query,
+          vehicleClass,
+          contacted: Math.max(contacted, humanSent.length ? 1 : 0),
+          replied,
+          best: best
+            ? { pricePerDay: best.current, ask: best.ask, currency: best.currency }
+            : null,
+          booking: booking
+            ? {
+                vendorName: booking.vendor_name ?? "Rental shop",
+                perDay: booking.price_per_day != null ? Number(booking.price_per_day) : null,
+                total: booking.total_price != null ? Number(booking.total_price) : null,
+                currency: booking.currency ?? "USD",
+                scheduledAt: booking.scheduled_at,
+              }
+            : null,
+          isLatest,
+          lastEventAt,
+        },
+        now
+      ),
     };
   });
 

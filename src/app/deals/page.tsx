@@ -19,6 +19,7 @@ import { startNav } from "@/components/NavVeil";
 import { OrbitDots } from "@/components/OrbitDots";
 import { moneyLocal } from "@/lib/currency";
 import { can } from "@/lib/entitlements";
+import { previewTrip } from "@/lib/trips";
 import { useI18n } from "@/lib/i18n";
 
 interface SessionOffer {
@@ -70,6 +71,8 @@ interface SessionSummary {
   timeline: TimelineEvent[];
   progress: number;
   progressLabel: string;
+  /** What became of this hunt - outcome, cost, saving (lib/trips). */
+  trip?: import("@/lib/trips").Trip;
 }
 
 interface Booking {
@@ -319,6 +322,13 @@ export default function DealsPage() {
         {!loading &&
           sessions.map((s) => {
             const open = Boolean(expanded[s.id]);
+            // LOCKED PREVIEW, not a hidden row. A past trip stays visible with
+            // its real headline and shape; the numbers a paid plan unlocks are
+            // held back. An empty tab teaches a traveller the feature does not
+            // exist - a visible trip they cannot fully open teaches them what
+            // they would get, which is the honest version of the same gate.
+            const locked = !canHistory && !s.isLatest;
+            const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
             return (
               <section key={s.id} className="surface overflow-hidden rounded-blob rise-in">
                 {/* Header - always visible, tap to expand */}
@@ -336,6 +346,25 @@ export default function DealsPage() {
                           {vehicleLabel(s.vehicleClass)} {t("hunt")}
                           {s.radiusKm ? ` · ${s.radiusKm}km` : ""}
                         </div>
+                        {/* WHAT BECAME OF THIS TRIP - the line a traveller
+                            recognises their own hunt by. A session could only
+                            say what was happening right now, so a finished trip
+                            looked exactly like an abandoned one. */}
+                        {trip && (
+                          <div className="truncate text-[11.5px] font-bold text-soft">
+                            {trip.headline}
+                            {trip.perDay != null
+                              ? ` · ${moneyLocal(trip.perDay, trip.currency)}/${t("day")}`
+                              : ""}
+                            {trip.savedPct != null ? ` · ${t("saved")} ${trip.savedPct}%` : ""}
+                            {locked && (
+                              <span className="ml-1 inline-flex items-center gap-1 align-middle text-[10px] font-extrabold text-brandblue">
+                                <Icon name="lock" className="h-3 w-3" />
+                                {t("Pro")}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div className="mt-0.5 truncate text-[11px] text-faint">
                           {s.query ? `"${s.query}"` : `${s.shopsFound} ${t("shops found")}`} ·{" "}
                           {timeAgo(s.startedAt, t)}
