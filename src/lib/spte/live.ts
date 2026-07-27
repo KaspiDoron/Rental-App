@@ -51,6 +51,10 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     // still talking to us.
     wrongVehicle: ex?.vehicleVerdict === "mismatch" || (!ex?.vehicleVerdict && ex?.matchesSpec === false),
     vehicleUnclear: ex?.vehicleVerdict === "unclear",
+    // The identity gate's own verdict, which outranks the extractor's opinion:
+    // it is computed from what the shop stated plus what the catalogue knows.
+    vehicleStatus: ex?.vehicleAssessment?.status,
+    vehicleQuestion: ex?.vehicleAssessment?.question,
     // The shop offered a CHOICE. Without these two the primary engine could not
     // tell "I have two bikes at different prices" from "here is my price", and
     // read the ambiguity as "wrong vehicle" - closing a live negotiation.

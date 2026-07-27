@@ -15,6 +15,7 @@ import type {
 import { getTactics, recordOutcome } from "./memory";
 import { parseDeposit } from "./deposit";
 import { extractQuotedPrices, extractRentalDailyPrice } from "./wa/price-extract";
+import { catalogueFactsFor } from "./vehicle/catalogue";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -1027,6 +1028,21 @@ export interface ExtractedOffer {
    * on and we ask. Absent on legacy/deterministic paths.
    */
   vehicleVerdict?: "match" | "mismatch" | "unclear";
+  /**
+   * The vehicle-identity gate's verdict for THIS price (src/lib/vehicle).
+   * Present whenever a price was read. `status` is the only thing any surface
+   * should trust when deciding whether a number is a deal: `confirmed` means
+   * every disqualifying attribute the traveller declared has been resolved and
+   * matches; anything else carries the question that has to be answered first.
+   */
+  vehicleAssessment?: {
+    status: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+    reason: string;
+    question: string;
+    travellerNote: string;
+    missing: string[];
+    model?: string;
+  };
   confidence: "high" | "medium" | "low";
   clarifyMessage?: string;
   // ONLY set when the shop explicitly confirmed them - never guessed.
@@ -1367,7 +1383,25 @@ export async function extractOffer(
       : "If the reply gives a bare number with no symbol, return the shop's local currency, not USD.") +
     (history
       ? "\nConversation so far (oldest first):\n" + history
-      : "");
+      : "") +
+    // GROUND TRUTH ABOUT THE NAMEPLATES THIS REPLY MENTIONS.
+    //
+    // A model that has to infer what a "Honda BeAT" is will sometimes infer it
+    // is the traveller's 125 - which is exactly what happened, twice. The same
+    // catalogue the code checks against is rendered here, for only the models
+    // this reply actually names, so the extractor and the gate reason from one
+    // set of facts instead of two.
+    (() => {
+      const facts = catalogueFactsFor(`${text}\n${history ?? ""}`);
+      return facts
+        ? "\nKNOWN FACTS about the models named above - treat these as authoritative, " +
+          "they are not guesses:\n" +
+          facts +
+          "\nIf one of these does NOT match the traveller's declared vehicle, that " +
+          "vehicle's price is NOT their price. A reply may name several vehicles: " +
+          "return the price of THEIR vehicle, never the cheapest number."
+        : "";
+    })();
 
   // Vision path (handles price-list photos) when Gemini is available.
   // NOTHING below may throw: a provider error must NEVER abort processVendorReply

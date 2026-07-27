@@ -449,6 +449,89 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // ===== VEHICLE IDENTITY GATE ============================================
+  //
+  // The single choke point where "is this price even for their vehicle?" is
+  // decided, for both engines and for every surface downstream.
+  //
+  // Two live threads reached the traveller's screen as "BEST PRICE ₱400" for a
+  // 110cc when they had declared a 125:
+  //
+  //   "for the Honda beat sir 400 pesos sir for the honda click 125 500 pesos"
+  //   "I already gave 500 for you. If you want 110cc 400 per day"
+  //
+  // Neither was a parsing failure. There was no concept of a price BELONGING to
+  // a vehicle, so the cheapest number won and an unnamed vehicle defaulted to
+  // "must be theirs". src/lib/vehicle owns that concept now: it pairs every
+  // quote with the vehicle beside it, resolves that vehicle's attributes from
+  // what the shop stated and what the catalogue knows, and returns one of three
+  // states. Only `confirmed` may become an offer - `needs-confirmation` becomes
+  // a question the agent has to ask first, and it cannot be skipped.
+  const declared = {
+    class: rfq.vehicleClass === "car" ? ("car" as const) : (rfq.vehicleClass as "scooter" | "motorbike"),
+    displacementCc: rfq.engineSizeCc,
+    transmission: rfq.transmission === "any" ? undefined : rfq.transmission,
+    seats: rfq.seats,
+  };
+  if (extractText && usablePrice) {
+    const { assessPrice } = await import("./vehicle/resolution");
+    const { pickOurPrice } = await import("./vehicle/resolution");
+    const { extractQuotedPrices } = await import("./wa/price-extract");
+
+    // Every amount the shop wrote, each with WHERE it sits - the position is
+    // what lets one sentence carrying two vehicles be read as two offers.
+    const quoted = extractQuotedPrices(extractText, {
+      vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+      durationDays: rfq.durationDays,
+      localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+    });
+    const candidates = quoted.allOffers.map((h) => ({
+      pricePerDay: h.pricePerDay,
+      currency: h.currency,
+      index: extractText.indexOf(String(Math.round(h.pricePerDay))),
+    }));
+    // The price the model chose is a candidate like any other, judged the same.
+    if (!candidates.some((c) => c.pricePerDay === usablePrice)) {
+      candidates.push({
+        pricePerDay: usablePrice,
+        currency: extraction.currency ?? undefined,
+        index: extractText.indexOf(String(Math.round(usablePrice))),
+      });
+    }
+
+    const ours = candidates.length > 1 ? pickOurPrice(extractText, declared, candidates) : null;
+    if (ours && ours.price !== usablePrice) {
+      // A different amount in the same reply is the one that belongs to the
+      // traveller's vehicle. This is the Joh's Matics correction: 500, not 400.
+      usablePrice = ours.price;
+      extraction.pricePerDay = ours.price;
+      if (ours.currency) extraction.currency = ours.currency;
+    }
+
+    const assessment = assessPrice(extractText, declared, {
+      pricePerDay: usablePrice,
+      currency: extraction.currency ?? undefined,
+      index: extractText.indexOf(String(Math.round(usablePrice))),
+    });
+    extraction.vehicleAssessment = {
+      status: assessment.status,
+      reason: assessment.judgement.reason,
+      question: assessment.question,
+      travellerNote: assessment.travellerNote,
+      missing: assessment.missing,
+      model: assessment.judgement.identity.model?.name,
+    };
+    // THE OVERRIDE. The catalogue outranks the model's opinion about what a
+    // nameplate is: a BeAT is 110cc whether or not the extractor noticed.
+    if (assessment.status === "wrong-vehicle") {
+      extraction.vehicleVerdict = "mismatch";
+      extraction.matchesSpec = false;
+    } else if (assessment.status === "needs-confirmation") {
+      extraction.vehicleVerdict = "unclear";
+      extraction.matchesSpec = false; // unresolved is NOT a match - see below
+    }
+  }
+
   // CURRENCY TRUTH. A currency other than the shop's own is honoured only when
   // the shop actually typed it - a photo-only reply or a mis-read token can
   // never turn a Thai quote into ringgit ("RM 300/day" on a Krabi thread).

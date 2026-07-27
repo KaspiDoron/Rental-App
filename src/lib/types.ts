@@ -74,6 +74,14 @@ export interface Offer {
   // shown as the best/lockable offer; it is only a signal for the agent to
   // clarify. undefined = legacy/unknown (pre this field) -> treated as matching.
   matchesSpec?: boolean;
+  /**
+   * The vehicle-identity gate's verdict for THIS price (src/lib/vehicle).
+   * `confirmed` is the only state that may be presented as a deal; the others
+   * carry `vehicleNote`, which says plainly what is still being established.
+   */
+  vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+  /** One line for the card: why this price is not (yet) being called a deal. */
+  vehicleNote?: string;
   simulated: boolean;
   // Shop-confirmed conditions (shown as tags ONLY when explicitly stated).
   deposit?: string; // human label, e.g. "Passport only", "3,000 THB cash"

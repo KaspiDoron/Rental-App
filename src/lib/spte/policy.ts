@@ -52,6 +52,16 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // Ordered ahead of `bargain` because coerceToLegal and the LLM-down fallback
   // both take legal[0]. This is a fact about the DATA (menuUnresolved), never a
   // rule about the shop's wording.
+  // SETTLE THE VEHICLE BEFORE THE PRICE. The strongest ordering rule in the
+  // ladder, because everything downstream is worthless if the number belongs to
+  // a bike the traveller cannot legally ride. This is a fact about the DATA -
+  // the identity gate's status - never a rule about the shop's wording, and it
+  // sits ahead of every price move because coerceToLegal and the LLM-down
+  // fallback both take legal[0].
+  if (v.vehicleStatus === "needs-confirmation" && !dealComplete(ctx)) {
+    moves.push("confirm-vehicle");
+  }
+
   const options = d.options ?? [];
   const menuOpen = menuUnresolved(options) || (Boolean(v.variance) && !v.found);
   if (menuOpen && !dealComplete(ctx)) moves.push("option-probe");

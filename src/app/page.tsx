@@ -1267,6 +1267,10 @@ export default function Home() {
                       // flags it and it is excluded from the best-price picker.
                       // undefined (legacy) is treated as matching.
                       matchesSpec: r.matchesSpec ?? true,
+                      // The vehicle-identity gate. Only "confirmed" may ever be
+                      // presented as a deal (see offer-presentation).
+                      vehicleStatus: r.vehicleStatus ?? undefined,
+                      vehicleNote: r.vehicleNote ?? undefined,
                       simulated: false,
                       deposit: r.deposit ?? v.offer?.deposit,
                       depositType: r.depositType ?? v.offer?.depositType,

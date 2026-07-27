@@ -29,6 +29,44 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   let text = artifact.message.trim();
   if (!text) return { ok: true, finalText: undefined };
 
+  // 0) VEHICLE IDENTITY - before any number is even looked at.
+  //
+  // The gate in src/lib/vehicle decides whether the price on the table belongs
+  // to the vehicle the traveller declared. While it says otherwise, a bargain
+  // or a close is a message about someone else's bike: it pushes for a discount
+  // on a 110cc, or agrees a deal for one, in the traveller's own voice and from
+  // their own number. Both live failures ended exactly there.
+  //
+  // This is a rail rather than a prompt instruction because a prompt is advice
+  // and a rail is a guarantee. The turn is rewritten into the gate's own
+  // question, which is the move the policy made legal anyway.
+  const gate = ctx.inbound.verified.vehicleStatus;
+  const priceMove =
+    artifact.move === "bargain" ||
+    artifact.move === "close" ||
+    artifact.move === "present" ||
+    artifact.move === "momentum";
+  if (priceMove && gate && gate !== "confirmed") {
+    const question = ctx.inbound.verified.vehicleQuestion;
+    if (question) {
+      return {
+        ok: true,
+        finalText: question,
+        rejected: {
+          rule: "vehicle-identity",
+          detail: `${artifact.move} replaced with the identity question (${gate})`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      rejected: {
+        rule: "vehicle-identity",
+        detail: `cannot ${artifact.move} a price whose vehicle is ${gate}`,
+      },
+    };
+  }
+
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.
   text = correctDuration(text, ctx.session.rfq.durationDays).text;
 

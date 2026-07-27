@@ -124,6 +124,15 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         .join("\n") +
       `\n`
     : "";
+  // THE VEHICLE GATE'S FINDING, handed to the model as a fact rather than left
+  // for it to re-derive. Two live threads ended with a 110cc on the traveller's
+  // screen as BEST PRICE because the model was asked to infer what a nameplate
+  // is; here it is simply told what is unresolved and what to ask.
+  const vehiclePlay = ctx.legalMoves.includes("confirm-vehicle")
+    ? `YOUR JOB THIS TURN: the price on the table cannot be tied to the vehicle the traveller declared - ${
+        ctx.inbound.verified.vehicleQuestion || "confirm exactly which vehicle it is"
+      } Ask that, warmly, in ONE short message. Do NOT bargain, do NOT confirm a deal and do NOT repeat the price as if it were theirs: a number for the wrong vehicle is worse than no number, because the traveller's licence covers only what they searched for.\n`
+    : "";
   const optionPlay = ctx.legalMoves.includes("option-probe")
     ? `YOUR JOB THIS TURN: the traveller cannot choose between these yet. In ONE short message, ask what actually separates them - ${
         nextGap(options) === "mileage"
@@ -176,6 +185,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     roundPlay +
     firmNote +
     questionNote +
+    vehiclePlay +
     optionPlay +
     locationBlock +
     durationLeverage +
@@ -213,6 +223,15 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       return v.pricePerDay
         ? `Thanks! Any chance you can do a bit better for ${days} days?`
         : `Could you share your best price for ${days} days?`;
+    case "confirm-vehicle":
+      // The gate already phrased the question from the traveller's own declared
+      // spec; the fallback simply sends it. Never invents a price.
+      return (
+        ctx.inbound.verified.vehicleQuestion ||
+        `Quick check - is that for the exact ${
+          ctx.session.rfq.engineSizeCc ? `${ctx.session.rfq.engineSizeCc}cc ` : ""
+        }${ctx.session.rfq.vehicleClass} I asked about? Want to be sure before we go further 🙂`
+      );
     case "option-probe": {
       // Names the tiers we already read, so even the LLM-down path proves we
       // were listening and asks the ONE thing still missing.

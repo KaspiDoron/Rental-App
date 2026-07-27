@@ -25,6 +25,11 @@ export type MoveKind =
   // menu - what separates the tiers, and a photo of each - before haggling a
   // price the traveller has not picked yet.
   | "option-probe"
+  // The price on the table cannot be tied to the vehicle the traveller
+  // declared - a 110cc BeAT quoted to someone who asked for a 125, or a
+  // nameplate that comes in several sizes and nobody said which. Settle the
+  // vehicle before anything is haggled, presented or booked.
+  | "confirm-vehicle"
   | "redirect-close" // NEW (B7): wrong-vehicle / not-offering -> thank + close
   | "momentum"
   | "closing-message"
@@ -74,6 +79,14 @@ export interface VerifiedExtraction {
   declined?: boolean;
   /** The shop positively named a DIFFERENT vehicle class. Terminal. */
   wrongVehicle?: boolean;
+  /**
+   * The vehicle-identity gate (src/lib/vehicle). `needs-confirmation` means a
+   * disqualifying attribute the traveller declared is still unresolved for the
+   * price on the table - the engine may not bargain or present until it is.
+   */
+  vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+  /** The exact question to put to the shop, already phrased by the gate. */
+  vehicleQuestion?: string;
   /** The shop has not said which vehicle yet. NOT terminal - we ask. */
   vehicleUnclear?: boolean;
   askedLocation?: boolean;
@@ -135,6 +148,14 @@ export interface TurnArtifact {
     priceMentioned?: number;
     declined?: boolean;
     wrongVehicle?: boolean;
+  /**
+   * The vehicle-identity gate (src/lib/vehicle). `needs-confirmation` means a
+   * disqualifying attribute the traveller declared is still unresolved for the
+   * price on the table - the engine may not bargain or present until it is.
+   */
+  vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+  /** The exact question to put to the shop, already phrased by the gate. */
+  vehicleQuestion?: string;
     askedLocation?: boolean;
   };
   think: string; // <=80 tok scratchpad - logged, never sent

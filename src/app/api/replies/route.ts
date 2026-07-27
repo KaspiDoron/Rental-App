@@ -201,6 +201,39 @@ export async function GET(req: Request) {
     /* the menu is an enrichment - a failure must never blank the feed */
   }
 
+  // THE VEHICLE-IDENTITY GATE, derived per reply rather than stored.
+  //
+  // Two live threads reached the card as "BEST PRICE ₱400" for a 110cc when the
+  // traveller had declared a 125. `matches_spec` could not catch it: nothing
+  // had ever paired the price with the vehicle beside it, and an unnamed
+  // vehicle defaulted to "must be theirs". src/lib/vehicle pairs them, and its
+  // verdict travels to the client so no surface can present an unconfirmed
+  // price as a deal. Derived from the reply text the row already holds, so
+  // there is no column to add and nothing to migrate or keep in sync.
+  const declaredSpec = {
+    class:
+      specClass === "car" || specClass === "scooter" || specClass === "motorbike"
+        ? (specClass as "car" | "scooter" | "motorbike")
+        : undefined,
+    displacementCc: specCc > 0 ? specCc : undefined,
+    transmission:
+      specTx === "automatic" || specTx === "manual" ? (specTx as "automatic" | "manual") : undefined,
+  };
+  const { assessPrice } = await import("@/lib/vehicle/resolution");
+  const gateFor = (text: string | null, price: number | null) => {
+    if (!text || !price || price <= 0) return null;
+    if (!declaredSpec.class && !declaredSpec.displacementCc && !declaredSpec.transmission) return null;
+    try {
+      const a = assessPrice(text, declaredSpec, {
+        pricePerDay: price,
+        index: text.indexOf(String(Math.round(price))),
+      });
+      return { status: a.status, note: a.travellerNote };
+    } catch {
+      return null;
+    }
+  };
+
   return NextResponse.json({
     replies: rows.map((r) => {
       const st = stateByVendor.get(r.vendor_id);
@@ -221,6 +254,9 @@ export async function GET(req: Request) {
       // Raw spec match: false = the shop quoted a DIFFERENT vehicle. The client
       // must never present such a price as the best/lockable offer.
       matchesSpec: r.matches_spec,
+      // Only "confirmed" may ever be shown as a deal - see offer-presentation.
+      vehicleStatus: gateFor(r.reply_text, r.price_per_day)?.status ?? null,
+      vehicleNote: gateFor(r.reply_text, r.price_per_day)?.note ?? null,
       auto: r.auto,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,

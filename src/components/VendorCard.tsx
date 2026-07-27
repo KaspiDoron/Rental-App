@@ -571,6 +571,25 @@ function VendorCardInner({
               )}
             </div>
 
+            {/* THE VEHICLE, BEFORE THE PRICE.
+                A quote whose vehicle is not settled is shown - hiding it would
+                be its own kind of lie - but it is never called a deal, and the
+                card says exactly what is still being established. Both live
+                failures ended with a 110cc on screen as BEST PRICE; the gate
+                that produces this note is what makes that unreachable. */}
+            {offer.vehicleStatus && offer.vehicleStatus !== "confirmed" && offer.vehicleNote && (
+              <div
+                className={`mt-2 rounded-xl p-2 text-[11px] font-bold ${
+                  offer.vehicleStatus === "wrong-vehicle"
+                    ? "bg-brandred-soft text-brandred"
+                    : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                }`}
+              >
+                {offer.vehicleStatus === "wrong-vehicle" ? "🚫 " : "🔎 "}
+                {t(offer.vehicleNote)}
+              </div>
+            )}
+
             {/* THE SHOP'S MENU. When a shop offers a choice ("some models 200
                 and some new 250/day"), showing only the one price the app
                 picked hides the actual decision from the traveller. Each tier
