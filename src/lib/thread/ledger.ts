@@ -33,6 +33,30 @@ import {
  *  named. */
 export const REQUIRED_SUBJECTS: ClaimSubject[] = ["deposit", "handover"];
 
+/**
+ * AN OBLIGATION IS NOT DUE UNTIL ITS PREREQUISITE IS SETTLED.
+ *
+ * Obligations were unordered, and that produced this on a live Chiang Mai
+ * thread, before the shop had named any price at all:
+ *
+ *   "thanks! We're finalizing our pick between a few shops today - could you
+ *    let me know your deposit? Cash amount or passport?"
+ *
+ * Nothing was wrong with the ledger: deposit was genuinely owed and genuinely
+ * unasked. What was missing is that a deposit is a term OF a price. Asking for
+ * it first spends the thread's one cheap question on the wrong thing, tells the
+ * shop we are further along than we are, and throws away the only real leverage
+ * we have - that we have not committed yet.
+ *
+ * So each required subject names what must be settled before it comes due. This
+ * is a fact about what the words MEAN, not a rule about shop wording, and it
+ * keeps the ordering in one place instead of scattered across move guards.
+ */
+export const OBLIGATION_AFTER: Partial<Record<ClaimSubject, ClaimSubject>> = {
+  deposit: "price",
+  handover: "price",
+};
+
 export interface ThreadLedger {
   /** Every claim either side made, chronological within each side. */
   claims: Claim[];
@@ -100,7 +124,14 @@ export function buildLedger(input: LedgerInput): ThreadLedger {
     outstanding.push(subject);
   }
 
-  const owed = REQUIRED_SUBJECTS.filter((s) => !settled(shopClaims, s));
+  // Owed = required, still unsettled, AND whose prerequisite the shop has
+  // already settled. A deposit is a term of a price; until there is a price it
+  // is not yet this thread's turn to ask.
+  const owed = REQUIRED_SUBJECTS.filter((s) => {
+    if (settled(shopClaims, s)) return false;
+    const after = OBLIGATION_AFTER[s];
+    return !after || settled(shopClaims, after);
+  });
 
   return { claims, known, outstanding, owed };
 }

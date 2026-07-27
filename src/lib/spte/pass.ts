@@ -14,6 +14,7 @@ import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
 import { planLeverage, leadCard } from "../negotiation/leverage";
+import { disclosureBlock } from "../negotiation/traveller-disclosure";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -117,6 +118,16 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // can still carry a redundant question inside its text - "and what's the
   // deposit?" tacked onto a bargain the shop already answered. Stating what is
   // established and what is still outstanding removes the reason to ask.
+  // WHAT WE MAY SAY ABOUT THE TRAVELLER. Empty on an ordinary price turn; it
+  // appears only when the shop asked something personal, which is exactly when
+  // an agent writing in someone else's voice is most likely to invent a fact.
+  const aboutYouBlock = (() => {
+    // The town is the only place fact we may state, and only when the
+    // traveller has already consented to sharing it.
+    const b = disclosureBlock({ rfq: s.rfq, town: ctx.share?.addressText }, ctx.inbound.text || "");
+    return b ? `${b}\n\n` : "";
+  })();
+
   const ledger = dg.ledger;
   const ledgerBlock = ledger
     ? [
@@ -237,6 +248,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     rivalLeverage +
     repetitionNote +
     ledgerBlock +
+    aboutYouBlock +
     `THIS SHOP so far:\n${digest}\n\n` +
     `RECENT MESSAGES:\n${tail || "(none yet)"}\n\n` +
     `SHOP JUST SAID: ${ctx.inbound.text || "(nothing - a scheduled follow-up)"}\n` +

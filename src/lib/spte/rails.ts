@@ -8,6 +8,7 @@
 
 import { checkOutboundNumbers, correctDuration } from "../graph/guardrails";
 import { rivalIdentityTokens, namesRival } from "../negotiation/leverage";
+import { inventsADate } from "../negotiation/traveller-disclosure";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
 
 // A drafted message must never AGREE a concrete pickup/delivery time - the
@@ -93,6 +94,28 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
         },
       };
     }
+  }
+
+  // 0.7) DISCLOSURE, the other direction: never invent a fact about the
+  // TRAVELLER.
+  //
+  // The agent writes in their voice, from their number, and they are not in the
+  // room. A shop asking "when would you like to start renting?" is owed an
+  // honest answer, and on a search with no dates chosen the honest answer is not
+  // a day - it is "still comparing prices, I'll fix the dates once I pick".
+  // A stated weekday is the one invented fact that costs the traveller
+  // something real: the shop holds a bike, chases for confirmation, and reads a
+  // later "no" as a cancellation.
+  //
+  // A rail rather than a prompt line, for the same reason as every rail here.
+  if (inventsADate(text, ctx.session.rfq)) {
+    return {
+      ok: false,
+      rejected: {
+        rule: "traveller-disclosure",
+        detail: "the draft states a rental date the traveller has not chosen",
+      },
+    };
   }
 
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.

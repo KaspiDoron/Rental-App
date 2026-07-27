@@ -104,7 +104,19 @@ describe("the ledger is total and never throws", () => {
     const l = buildLedger({ inbound: [], outbound: [] });
     expect(l.claims).toEqual([]);
     expect(l.outstanding).toEqual([]);
-    expect(l.owed.length).toBeGreaterThan(0);
+    // ...and owes NOTHING yet. A deposit is a term of a price, so before the
+    // shop has quoted anything it is not this thread's turn to ask - which is
+    // the live "could you let me know your deposit?" that went to a shop whose
+    // only message was an opening-hours auto-reply.
+    expect(l.owed).toEqual([]);
+  });
+
+  it("an obligation comes due only once its prerequisite is settled", () => {
+    const before = buildLedger({ inbound: ["Thanks for messaging us!"], outbound: [] });
+    expect(before.owed).toEqual([]);
+    const after = buildLedger({ inbound: ["250 baht per day"], outbound: [] });
+    expect(after.owed).toContain("deposit");
+    expect(after.owed).toContain("handover");
   });
 
   it("does not double-count the just-arrived message", () => {

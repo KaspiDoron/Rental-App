@@ -120,7 +120,15 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // deposit or how the traveller collects the vehicle is not finished, and
   // silence used to be legal there simply because nothing was owed. An
   // obligation we have not even asked about outranks falling silent.
-  if (gated.length === 0) {
+  //
+  // ...BUT AN OBLIGATION IS NOT DUE BEFORE ITS PREREQUISITE. The ledger already
+  // orders these (a deposit is a term OF a price), and `priceKnown` is the same
+  // rule stated against the facts the ENGINE holds rather than the words in the
+  // thread - a price read off a photo never appears as a text claim, and a
+  // deposit question is just as premature either way. This is the fix for the
+  // live "could you let me know your deposit?" that went out to a shop which had
+  // sent nothing but an opening-hours auto-reply.
+  if (gated.length === 0 && priceKnown) {
     for (const subject of unaskedObligations(ctx.thread.digest.ledger ?? EMPTY_LEDGER)) {
       if (subject === "deposit") gated.push("deposit-probe");
       if (subject === "handover") gated.push("fulfillment-probe");
