@@ -982,40 +982,74 @@ export async function processVendorReply(opts: {
   //
   // Stamped onto the message's own `raw` (JSON - no column, no migration), so
   // the transcript can render exactly what was understood, per photo.
-  if (images.length > 0 && ctx.sender) {
-    void (async () => {
-      try {
-        const { readingFrom } = await import("./media/reading");
-        const reading = readingFrom(extraction as never, {
-          usedPricePerDay: usablePrice,
-          notUsedReason: usablePrice
-            ? undefined
-            : extraction.found === false
-              ? "No usable price in this image."
-              : undefined,
+  //
+  // The reading is computed HERE (it is pure) and kept in scope, so the turn
+  // that follows can stamp what it actually DID about the photo onto the same
+  // artefact - see `recordMediaFollowUp` below. Writing the whole object again
+  // rather than patching it also makes the two writes order-independent.
+  let mediaReading: import("./media/reading").MediaReading | null = null;
+  const stampMediaReading = async (reading: import("./media/reading").MediaReading) => {
+    try {
+      const receiverScope = `&raw->>receiver=eq.${encodeURIComponent(ctx.sender!)}`;
+      const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+        "whatsapp_messages",
+        opts.waMessageId
+          ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
+              opts.waMessageId
+            )}&limit=1`
+          : `select=id,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
+              "from_number",
+              from
+            )}`
+      );
+      const row = rows[0];
+      if (row) {
+        await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
+          raw: { ...(row.raw ?? {}), reading },
         });
-        const receiverScope = `&raw->>receiver=eq.${encodeURIComponent(ctx.sender!)}`;
-        const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
-          "whatsapp_messages",
-          opts.waMessageId
-            ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
-                opts.waMessageId
-              )}&limit=1`
-            : `select=id,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
-                "from_number",
-                from
-              )}`
-        );
-        const row = rows[0];
-        if (row) {
-          await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
-            raw: { ...(row.raw ?? {}), reading },
-          });
-        }
-      } catch {
-        /* the summary is a proof surface - never blocks the reply */
       }
-    })();
+    } catch {
+      /* the summary is a proof surface - never blocks the reply */
+    }
+  };
+  /** Record the move this turn took on the media, so the panel can stop guessing. */
+  const recordMediaFollowUp = (
+    move: string,
+    delivered: import("./media/reading").ReadingFollowUp["delivered"]
+  ) => {
+    if (!mediaReading) return;
+    mediaReading = { ...mediaReading, followUp: { move, delivered, at: new Date().toISOString() } };
+    void stampMediaReading(mediaReading);
+  };
+
+  if (images.length > 0 && ctx.sender) {
+    const { readingFrom } = await import("./media/reading");
+    mediaReading = readingFrom(extraction as never, {
+      usedPricePerDay: usablePrice,
+      notUsedReason: usablePrice
+        ? undefined
+        : extraction.found === false
+          ? "No usable price in this image."
+          : undefined,
+    });
+    void stampMediaReading(mediaReading);
+
+    // AN OUTAGE IS AN EVENT, NOT A READING. When no provider ever looked at the
+    // photo the Ops feed gets told so by name - previously the only trace was a
+    // per-instance diagnostics array nobody read, and the traveller was shown a
+    // confident "nothing readable in this one" about an image nobody had seen.
+    if (extraction.imageRead?.seen === false) {
+      void sbInsert("agent_events", [
+        {
+          kind: "vision-unavailable",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: `${extraction.imageRead.failure ?? "unknown"}${
+            extraction.imageRead.retryable ? " (retryable)" : ""
+          }: ${extraction.imageRead.detail ?? ""}`.slice(0, 500),
+        },
+      ]).catch(() => {});
+    }
   }
 
   // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
@@ -1203,7 +1237,10 @@ export async function processVendorReply(opts: {
   if (await engineV3Enabled()) {
     try {
       const { runSpteLiveTurn } = await import("./spte/live");
-      await runSpteLiveTurn(turnInput, io);
+      const spte = await runSpteLiveTurn(turnInput, io);
+      // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
+      // proof panel renders this; with nothing recorded it now claims nothing.
+      recordMediaFollowUp(spte.move, spte.delivered);
       // The turn reached an engine and produced its own outcome (sent, held or
       // deliberately silent). The message is CONSUMED either way - keeping the
       // claim is what stops an endless redelivery loop; releasing it is only

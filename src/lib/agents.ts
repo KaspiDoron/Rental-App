@@ -1090,6 +1090,21 @@ export interface ExtractedOffer {
   conditionNotes?: string | null;
   // 1-3 sentences listing EVERYTHING informative seen in the photo.
   imageSummary?: string | null;
+  /**
+   * DID WE ACTUALLY LOOK AT THE PHOTO?
+   *
+   * Present on every extraction that had images. `seen:false` means the vision
+   * providers failed - a rejected key, a quota, a timeout, a safety block - so
+   * this extraction's `found:false` is an ABSENCE OF A READ, not a reading that
+   * found nothing. Without this the two were byte-identical, and an outage was
+   * shown to the traveller as a confident "nothing readable in this one".
+   */
+  imageRead?: {
+    seen: boolean;
+    failure?: import("./ai").VisionFailure;
+    detail?: string;
+    retryable?: boolean;
+  };
 }
 
 // Deterministic negotiation-signal readers - the no-LLM fallback AND the
@@ -1168,7 +1183,7 @@ export async function extractOffer(
   history?: string,
   region?: string
 ): Promise<ExtractedOffer> {
-  const { chatVision } = await import("./ai");
+  const { readImages } = await import("./ai");
   // Full spec INCLUDING car details - "car" alone can never be verified
   // against "automatic 5-seat SUV", so extraction was blind for car rentals.
   const spec =
@@ -1416,27 +1431,47 @@ export async function extractOffer(
   // for minutes (the exact Sun House failure). A thrown call degrades to the
   // deterministic heuristic instead.
   if (images.length > 0) {
-    let out: string | null = null;
+    let read: import("./ai").VisionRead;
     try {
-      out = await chatVision(system, text || "See attached price list.", images);
-    } catch {
-      out = null;
+      read = await readImages(system, text || "See attached price list.", images);
+    } catch (e) {
+      read = {
+        ok: false,
+        failure: "network",
+        retryable: true,
+        detail: e instanceof Error ? e.message : "vision call threw",
+        attempts: [],
+      };
     }
-    if (out) {
-      const parsed = extractJson<ExtractedOffer>(out);
-      if (parsed && typeof parsed.found === "boolean") return normalizeExtraction(parsed, spec);
+    // THE PROVENANCE TRAVELS WITH THE RESULT. Everything downstream - the proof
+    // panel, the ops feed, the decision about whether to ask the shop to type it
+    // out - needs to know whether the picture was looked at, and until now the
+    // only signal was a `null` that a good read of a blank board also returns.
+    const imageRead: ExtractedOffer["imageRead"] = read.ok
+      ? { seen: true }
+      : { seen: false, failure: read.failure, detail: read.detail.slice(0, 300), retryable: read.retryable };
+    if (read.ok) {
+      const parsed = extractJson<ExtractedOffer>(read.text);
+      if (parsed && typeof parsed.found === "boolean") {
+        return { ...normalizeExtraction(parsed, spec), imageRead };
+      }
     }
     // A photo with NO usable model output: still try the caption text with the
     // deterministic extractor before giving up (many captions carry the price).
     const capHit = deterministicPriceHit();
-    if (capHit) return capHit;
+    if (capHit) return { ...capHit, imageRead };
     return {
       found: false,
       // "unknown" must never read as "wrong vehicle": matchesSpec=false is the
       // WRONG-vehicle signal and freezes every director move downstream.
       matchesSpec: true,
       confidence: "low",
+      // The negotiation still has to move, so we still ask - a shop cannot fix
+      // our outage and a stalled thread helps nobody. What changes is that we
+      // no longer TELL THE TRAVELLER we read their photo and found it wanting:
+      // `imageRead.seen` carries the truth to every surface that reports.
       clarifyMessage: `Thanks for the photo! Could you confirm in text the daily price for the ${spec}? Just want to be sure we quote the right vehicle.`,
+      imageRead,
       ...heuristicDepositFields(text, localCur),
       ...readNegotiationSignals(text),
     };

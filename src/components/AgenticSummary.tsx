@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
+  readingEmptyLine,
   readingHeadline,
   readingIsEmpty,
   type MediaReading,
@@ -56,9 +57,14 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
       {open && (
         <div className="glass glass-rim fluid-swap mt-1.5 space-y-2 rounded-2xl p-2.5">
           {empty ? (
-            <p className="text-[11px] text-soft">
-              {t("We could not read anything usable from this one - your agent is asking the shop to type it instead.")}
-            </p>
+            // WHAT THE TURN RECORDED, NOT WHAT THE PANEL HOPES.
+            //
+            // This used to be one hardcoded sentence promising the agent was
+            // "asking the shop to type it instead" - a dispatch nothing had
+            // performed and nothing had observed. readingEmptyLine reads the
+            // outcome and the follow-up the turn actually stamped, and says
+            // nothing at all when there is nothing recorded to say.
+            <p className="text-[11px] text-soft">{t(readingEmptyLine(reading))}</p>
           ) : (
             <>
               {reading.prices.length > 0 && (

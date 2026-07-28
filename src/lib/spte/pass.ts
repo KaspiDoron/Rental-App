@@ -280,6 +280,14 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     (ctx.inbound.verified.imageSummary
       ? `FROM THEIR PHOTO we read: ${ctx.inbound.verified.imageSummary}\n`
       : "") +
+    // OUR READER FAILED, THEIR PHOTO IS FINE. Without this the model has an
+    // image it was never shown and no way to know it, so it composes as though
+    // it had looked - "which line is mine?" at a board nobody read.
+    (ctx.inbound.verified.imageUnread
+      ? "THEIR PHOTO COULD NOT BE OPENED on our side - we have NOT seen it. Never " +
+        "imply you read it, never describe it, never ask which line is yours. " +
+        "Thank them and ask for the number in plain text.\n"
+      : "") +
     (ctx.inbound.verified.found && ctx.inbound.verified.pricePerDay
       ? `VERIFIED: the shop's live quote is ${ctx.inbound.verified.pricePerDay} ${ctx.inbound.verified.currency ?? s.currency}/day.\n`
       : "") +
@@ -350,6 +358,12 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       // what we got from it and ask a yes/no - that answer is what verifies the
       // read. Asking "send it as text" after four price boards is what made the
       // app look like it had not looked at them at all.
+      // ...UNLESS WE NEVER OPENED IT. "Which line is the one for me?" claims a
+      // read that did not happen, and the shop cannot act on it. This is the one
+      // case where asking for text IS the honest move.
+      if (v.hadImage && v.imageUnread) {
+        return `Thanks for sending that! It didn't open properly on my phone - could you type the price per day for ${days} days? 🙂`;
+      }
       if (v.hadImage) {
         return v.pricePerDay
           ? `Thanks for the price list! I read ${v.pricePerDay}${v.currency ? " " + v.currency : ""}/day for the ${days} days - is that right for me? 🙂`

@@ -526,13 +526,20 @@ export async function chatDetailed(
 
 // ---- vision ------------------------------------------------------------------
 
-export interface VisionAttempt {
-  provider: "gemini" | "groq";
-  model: string;
-  ok: boolean;
-  /** Exact upstream error (status + body excerpt) when the attempt failed. */
-  error?: string;
-}
+// The vocabulary that lets a caller tell an outage from a blank picture lives in
+// lib/vision-read (pure, so the classification rules are unit-testable without a
+// provider). This module owns the CALLS; that one owns the MEANING.
+export type { VisionAttempt, VisionFailure, VisionRead } from "./vision-read";
+import {
+  RETRYABLE_VISION,
+  summariseVisionFailure,
+  visionFailureDetail,
+  visionFailureFromStatus,
+  visionFailureFromThrown,
+  type VisionAttempt,
+  type VisionFailure,
+  type VisionRead,
+} from "./vision-read";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -564,128 +571,273 @@ const GEMINI_VISION_MODELS = [
   "gemini-2.0-flash",
 ];
 
+// A VISION CALL IS NOT A TEXT COMPLETION.
+//
+// It ships megabytes of base64 and the model spends real time looking at it, so
+// the shared 14s text budget was aborting perfectly good reads - and, before the
+// contract below existed, that abort was indistinguishable from "the board was
+// blank". Vision gets its own per-call budget, and the whole ladder gets a total
+// budget so a 2-provider failover chain still fits inside the route's 60s.
+const VISION_CALL_TIMEOUT_MS = 22_000;
+const VISION_TOTAL_BUDGET_MS = 45_000;
+/** Backoff before the single bounded retry of a transient failure. */
+const VISION_RETRY_DELAY_MS = 1_200;
+
+/** One (provider, model) attempt: either the text, or a classified failure. */
+type VisionAttemptOutcome = { text: string; tokens: number } | { failure: VisionFailure; error: string };
+
+async function geminiVisionAttempt(
+  key: string,
+  model: string,
+  system: string,
+  userText: string,
+  images: { mime: string; base64: string }[],
+  timeoutMs: number
+): Promise<VisionAttemptOutcome> {
+  try {
+    const res = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: userText },
+                ...images.map((img) => ({
+                  inline_data: { mime_type: img.mime, data: img.base64 },
+                })),
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+        }),
+      },
+      timeoutMs
+    );
+    if (!res.ok) {
+      return { failure: visionFailureFromStatus(res.status), error: await errorDetail(res, "gemini") };
+    }
+    const data = await res.json();
+    const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (out) return { text: out, tokens: data.usageMetadata?.totalTokenCount ?? 0 };
+    // A 200 carrying no candidate text is the provider REFUSING - a safety
+    // filter, or a truncated generation. It is not a reading of the picture.
+    return { failure: "blocked", error: "empty reply (possibly safety-blocked)" };
+  } catch (e) {
+    return {
+      failure: visionFailureFromThrown(e),
+      error: e instanceof Error ? e.message : "network error",
+    };
+  }
+}
+
+async function groqVisionAttempt(
+  key: string,
+  model: string,
+  system: string,
+  userText: string,
+  images: { mime: string; base64: string }[],
+  timeoutMs: number
+): Promise<VisionAttemptOutcome> {
+  try {
+    const res = await fetchWithTimeout(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          max_tokens: 700,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `${system}\n\n${userText}` },
+                ...images.map((img) => ({
+                  type: "image_url",
+                  image_url: { url: `data:${img.mime || "image/jpeg"};base64,${img.base64}` },
+                })),
+              ],
+            },
+          ],
+        }),
+      },
+      timeoutMs
+    );
+    if (!res.ok) {
+      return { failure: visionFailureFromStatus(res.status), error: await errorDetail(res, "groq") };
+    }
+    const data = await res.json();
+    const out = data.choices?.[0]?.message?.content?.trim();
+    if (out) return { text: out, tokens: data.usage?.total_tokens ?? 0 };
+    return { failure: "blocked", error: "empty reply" };
+  } catch (e) {
+    return {
+      failure: visionFailureFromThrown(e),
+      error: e instanceof Error ? e.message : "network error",
+    };
+  }
+}
+
 /**
- * Vision chat: text + images (raw base64+mime). Tries every Gemini vision
- * model, then every Groq Llama-4 vision model - NO silent failures: each
- * attempt's exact upstream error is recorded (see lastVisionDiagnostics).
- * Returns null only when every configured provider genuinely failed.
+ * READ IMAGES, AND SAY WHETHER WE ACTUALLY SAW THEM.
+ *
+ * Tries every Gemini vision model, then every Groq Llama-4 vision model, then -
+ * ONCE, with backoff - retries the preferred model if (and only if) its failure
+ * was transient. Every attempt's exact upstream error is recorded (see
+ * lastVisionDiagnostics), and the return value carries the provenance the
+ * caller needs to tell an outage from a blank picture.
+ */
+export async function readImages(
+  system: string,
+  userText: string,
+  images: { mime: string; base64: string }[]
+): Promise<VisionRead> {
+  const attempts: VisionAttempt[] = [];
+  globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
+  const deadline = Date.now() + VISION_TOTAL_BUDGET_MS;
+
+  const [gemini, groq] = await Promise.all([getConfig("GEMINI_TOKEN"), getConfig("GROQ_TOKEN")]);
+  if (!gemini)
+    attempts.push({
+      provider: "gemini",
+      model: "(all)",
+      ok: false,
+      failure: "unconfigured",
+      error: "GEMINI_TOKEN is not configured",
+    });
+  if (!groq)
+    attempts.push({
+      provider: "groq",
+      model: "(all)",
+      ok: false,
+      failure: "unconfigured",
+      error: "GROQ_TOKEN is not configured",
+    });
+
+  // Groq vision (Llama-4 is multimodal): image reading must never depend on
+  // Gemini alone - most deployments have a GROQ_TOKEN. Only image parts are
+  // sent (audio has its own Groq-Whisper path in graph/transcribe.ts).
+  const groqImages = images.filter((i) => (i.mime || "").startsWith("image/"));
+
+  const ladder: Array<{
+    provider: "gemini" | "groq";
+    model: string;
+    run: (timeoutMs: number) => Promise<VisionAttemptOutcome>;
+  }> = [];
+  if (gemini) {
+    for (const model of GEMINI_VISION_MODELS) {
+      ladder.push({
+        provider: "gemini",
+        model,
+        run: (ms) => geminiVisionAttempt(gemini, model, system, userText, images, ms),
+      });
+    }
+  }
+  if (groq && groqImages.length > 0) {
+    for (const model of GROQ_VISION_MODELS) {
+      ladder.push({
+        provider: "groq",
+        model,
+        run: (ms) => groqVisionAttempt(groq, model, system, userText, groqImages, ms),
+      });
+    }
+  } else if (groq && images.length > 0 && groqImages.length === 0) {
+    attempts.push({
+      provider: "groq",
+      model: "(vision)",
+      ok: false,
+      failure: "unconfigured",
+      error: "no image parts (audio-only input)",
+    });
+  }
+
+  const perCall = () => Math.max(2_000, Math.min(VISION_CALL_TIMEOUT_MS, deadline - Date.now()));
+  const attempt = async (
+    step: (typeof ladder)[number],
+    label: string
+  ): Promise<string | null> => {
+    const r = await step.run(perCall());
+    if ("text" in r) {
+      attempts.push({ provider: step.provider, model: label, ok: true });
+      await recordUsage(step.provider, r.tokens);
+      return r.text;
+    }
+    attempts.push({
+      provider: step.provider,
+      model: label,
+      ok: false,
+      failure: r.failure,
+      error: r.error,
+    });
+    return null;
+  };
+
+  for (const step of ladder) {
+    if (Date.now() > deadline) {
+      attempts.push({
+        provider: step.provider,
+        model: step.model,
+        ok: false,
+        failure: "timeout",
+        error: "vision time budget exhausted before this model was tried",
+      });
+      break;
+    }
+    const text = await attempt(step, step.model);
+    if (text) return { ok: true, text, provider: step.provider, model: step.model, attempts };
+  }
+
+  // ONE BOUNDED RETRY, ON TRANSIENTS ONLY. A 429 or a timeout is a statement
+  // about this minute, not about the photo; retrying the preferred model once
+  // recovers the read that would otherwise be reported as an unreadable image.
+  // A rejected key or a safety block is never retried - it cannot succeed.
+  const first = ladder[0];
+  const firstFailure = attempts.find(
+    (a) => !a.ok && first && a.provider === first.provider && a.model === first.model
+  )?.failure;
+  if (
+    first &&
+    firstFailure &&
+    RETRYABLE_VISION.has(firstFailure) &&
+    deadline - Date.now() > VISION_RETRY_DELAY_MS + 4_000
+  ) {
+    await new Promise((r) => setTimeout(r, VISION_RETRY_DELAY_MS));
+    const text = await attempt(first, `${first.model} (retry)`);
+    if (text) return { ok: true, text, provider: first.provider, model: first.model, attempts };
+  }
+
+  const failure = summariseVisionFailure(attempts);
+  return {
+    ok: false,
+    failure,
+    retryable: RETRYABLE_VISION.has(failure),
+    detail: visionFailureDetail(attempts),
+    attempts,
+  };
+}
+
+/**
+ * Vision chat, LOSSY. Kept for callers that genuinely only want the text
+ * (transcription, the admin training bench): `null` here means "no text", with
+ * the reason discarded. Anything that reports to a traveller, or decides what
+ * to do about a photo, must use `readImages` and read the provenance.
  */
 export async function chatVision(
   system: string,
   userText: string,
   images: { mime: string; base64: string }[]
 ): Promise<string | null> {
-  const attempts: VisionAttempt[] = [];
-  globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
-
-  const [gemini, groq] = await Promise.all([getConfig("GEMINI_TOKEN"), getConfig("GROQ_TOKEN")]);
-  if (!gemini) attempts.push({ provider: "gemini", model: "(all)", ok: false, error: "GEMINI_TOKEN is not configured" });
-  if (!groq) attempts.push({ provider: "groq", model: "(all)", ok: false, error: "GROQ_TOKEN is not configured" });
-
-  if (gemini) {
-    for (const model of GEMINI_VISION_MODELS) {
-      try {
-        const res = await fetchWithTimeout(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemini}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: system }] },
-              contents: [
-                {
-                  role: "user",
-                  parts: [
-                    { text: userText },
-                    ...images.map((img) => ({
-                      inline_data: { mime_type: img.mime, data: img.base64 },
-                    })),
-                  ],
-                },
-              ],
-              generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
-            }),
-          }
-        );
-        if (!res.ok) {
-          attempts.push({ provider: "gemini", model, ok: false, error: await errorDetail(res, "gemini") });
-          continue;
-        }
-        const data = await res.json();
-        const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (out) {
-          attempts.push({ provider: "gemini", model, ok: true });
-          await recordUsage("gemini", data.usageMetadata?.totalTokenCount ?? 0);
-          return out;
-        }
-        attempts.push({ provider: "gemini", model, ok: false, error: "empty reply (possibly safety-blocked)" });
-      } catch (e) {
-        attempts.push({
-          provider: "gemini",
-          model,
-          ok: false,
-          error: e instanceof Error ? e.message : "network error",
-        });
-      }
-    }
-  }
-
-  // Groq vision (Llama-4 is multimodal): image reading must never depend on
-  // Gemini alone - most deployments have a GROQ_TOKEN. Only image parts are
-  // sent (audio has its own Groq-Whisper path in graph/transcribe.ts).
-  const groqImages = images.filter((i) => (i.mime || "").startsWith("image/"));
-  if (groq && groqImages.length > 0) {
-    for (const model of GROQ_VISION_MODELS) {
-      try {
-        const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${groq}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            temperature: 0.2,
-            max_tokens: 700,
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: `${system}\n\n${userText}` },
-                  ...groqImages.map((img) => ({
-                    type: "image_url",
-                    image_url: { url: `data:${img.mime || "image/jpeg"};base64,${img.base64}` },
-                  })),
-                ],
-              },
-            ],
-          }),
-        });
-        if (!res.ok) {
-          attempts.push({ provider: "groq", model, ok: false, error: await errorDetail(res, "groq") });
-          continue;
-        }
-        const data = await res.json();
-        const out = data.choices?.[0]?.message?.content?.trim();
-        if (out) {
-          attempts.push({ provider: "groq", model, ok: true });
-          await recordUsage("groq", data.usage?.total_tokens ?? 0);
-          return out;
-        }
-        attempts.push({ provider: "groq", model, ok: false, error: "empty reply" });
-      } catch (e) {
-        attempts.push({
-          provider: "groq",
-          model,
-          ok: false,
-          error: e instanceof Error ? e.message : "network error",
-        });
-      }
-    }
-  } else if (groq && images.length > 0 && groqImages.length === 0) {
-    attempts.push({ provider: "groq", model: "(vision)", ok: false, error: "no image parts (audio-only input)" });
-  }
-  return null;
+  const read = await readImages(system, userText, images);
+  return read.ok ? read.text : null;
 }
 
 /**

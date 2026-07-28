@@ -123,6 +123,14 @@ export interface VerifiedExtraction {
   imageKind?: "vehicle" | "price_sheet" | "document" | "other";
   /** Everything the vision pass could read off the photo, in plain words. */
   imageSummary?: string;
+  /**
+   * THE PHOTO ARRIVED AND NOBODY LOOKED AT IT. Every vision provider failed - a
+   * rejected key, a quota, a timeout, a safety block - so this turn has an image
+   * it has never seen. Distinct from a photo that was read and carried nothing:
+   * that one is answered with "which line is mine?", this one cannot be, and
+   * pretending otherwise is how the app claimed to have read a board it had not.
+   */
+  imageUnread?: boolean;
   /** A price that came from a PHOTO rather than typed text. */
   sheetPricePerDay?: number;
 }

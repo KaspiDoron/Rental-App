@@ -98,6 +98,10 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     hadImage: input.event.kind === "inbound-image" || Boolean(ex?.imageKind),
     imageKind: ex?.imageKind,
     imageSummary: ex?.imageSummary || undefined,
+    // Our own read's provenance, not the shop's. `seen:false` means the vision
+    // providers failed, so the engine must not act as though it had looked.
+    imageUnread:
+      (ex as { imageRead?: { seen?: boolean } } | null)?.imageRead?.seen === false || undefined,
     sheetPricePerDay:
       ex?.imageKind === "price_sheet" && typeof input.usablePrice === "number"
         ? input.usablePrice
