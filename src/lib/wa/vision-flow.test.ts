@@ -20,17 +20,35 @@ import {
 } from "../../../packages/queues/vision";
 
 describe("photoClarifyExtraction - the never-silent fallback (Module 3)", () => {
-  it("asks warmly for the price in text", () => {
+  // THE CONTRACT, NOT THE WORDING. This used to assert the exact sentence
+  // ("couldn't read that photo", "type the daily price"), which pins one
+  // string rather than the guarantee - and the guarantee is what matters: when
+  // the media pipeline fails, a REPLY still exists, it claims no price, it does
+  // not accuse the shop of sending the wrong vehicle, and it asks for the one
+  // thing we need in text. Fields may be added to it (the vision pipeline needs
+  // to carry what kind of image it was); the guarantee may not be removed.
+  it("always produces a reply - the shop is never met with silence", () => {
+    const e = photoClarifyExtraction();
+    expect(e).toBeTruthy();
+    expect(String(e.clarifyMessage ?? "").trim().length).toBeGreaterThan(0);
+  });
+
+  it("claims no price of its own and asks for one in text", () => {
     const e = photoClarifyExtraction();
     expect(e.found).toBe(false);
-    expect(e.clarifyMessage).toMatch(/couldn't read that photo/i);
-    expect(e.clarifyMessage).toMatch(/type the daily price/i);
+    expect(e.pricePerDay).toBeUndefined();
+    expect(e.clarifyMessage).toMatch(/price|rate|cost/i);
   });
+
   it("matchesSpec stays TRUE - unreadable must never read as wrong-vehicle", () => {
     // matchesSpec=false freezes bargain/probe/present across the whole engine;
     // a broken photo must degrade to a clarify, not a frozen negotiation.
     expect(photoClarifyExtraction().matchesSpec).toBe(true);
     expect(photoClarifyExtraction().confidence).toBe("low");
+  });
+
+  it("is pure - the same fallback every time, with no hidden state", () => {
+    expect(photoClarifyExtraction()).toEqual(photoClarifyExtraction());
   });
 });
 

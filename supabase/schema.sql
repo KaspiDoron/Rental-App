@@ -394,21 +394,54 @@ create index if not exists wa_outbox_due_idx on public.wa_outbox (not_before asc
 create index if not exists wa_outbox_sender_idx on public.wa_outbox (sender_key);
 alter table public.wa_outbox enable row level security;
 
--- B4 SEND-INTEGRITY: enforce at most ONE pending automated row per (sender,shop)
--- at the DATABASE level - the only guarantee that survives the 7 concurrent
--- drain/enqueue trigger points (app-level SELECT-then-INSERT checks all race).
--- Scoped to automated kinds; user-typed ('custom','human-manual') may coexist,
--- mirroring parkOutboxOnce's own exception list. Run the de-dup cleanup FIRST
--- (a plain CREATE UNIQUE INDEX fails if duplicates already exist).
+-- B4 SEND-INTEGRITY: enforce at most ONE pending automated row per
+-- (sender, shop, kind) at the DATABASE level - the only guarantee that survives
+-- the 7 concurrent drain/enqueue trigger points (app-level SELECT-then-INSERT
+-- checks all race). Scoped to automated kinds; user-typed ('custom',
+-- 'human-manual') may coexist, mirroring parkOutboxOnce's own exception list.
+--
+-- The key list is deliberately wider than the original (sender_key, to_number).
+-- Two independent defects shared this one index, so they are corrected together
+-- rather than in two passes that would each redefine it:
+--   * to_number is matched as an EXACT string, but one shop is legitimately
+--     stored as both "639661952196" and "09661952196" (which is why every READ
+--     path uses the tolerant numberFilter). Two spellings therefore satisfied
+--     the index as two pending rows for one shop, and a single drain sent both
+--     inside the same wall-clock second. `to_key` carries the canonical form
+--     (nationalTail || waDigits) so one shop is one key whatever the spelling.
+--   * the index was kind-BLIND while parkOutboxOnce deliberately spares a
+--     pending 'rfq' row, so a shop replying while its RFQ was still queued
+--     collided on insert and the reply was never sent. Keying on the kind lets
+--     an rfq and a reply coexist as separate pending rows, which is exactly
+--     what the park code already intends.
+-- coalesce(to_key, to_number) keeps rows written before the app learned to
+-- stamp to_key under today's exact-string semantics, so this DDL is correct
+-- whether it runs before or after the deploy that starts writing the column.
+--
+-- Run the de-dup cleanup FIRST (a plain CREATE UNIQUE INDEX fails if duplicates
+-- already exist) - and note it now requires the kinds to MATCH, because the new
+-- index permits the cross-kind pair the old one collapsed. The DROP is the one
+-- destructive statement in this file and is unavoidable: an index cannot be
+-- redefined in place, and CREATE INDEX IF NOT EXISTS would silently keep the
+-- stale, too-narrow key list on every already-migrated project. It destroys no
+-- row - only the derived structure rebuilt on the next line.
+alter table public.wa_outbox add column if not exists to_key text;
 delete from public.wa_outbox a using public.wa_outbox b
   where a.id > b.id
     and a.sender_key = b.sender_key
-    and a.to_number = b.to_number
+    and coalesce(a.to_key, a.to_number) = coalesce(b.to_key, b.to_number)
+    and coalesce(a.meta->>'kind','') = coalesce(b.meta->>'kind','')
     and coalesce(a.meta->>'kind','') not in ('custom','human-manual')
     and coalesce(b.meta->>'kind','') not in ('custom','human-manual');
+drop index if exists public.wa_outbox_pending_auto_uidx;
 create unique index if not exists wa_outbox_pending_auto_uidx
-  on public.wa_outbox (sender_key, to_number)
+  on public.wa_outbox (sender_key, coalesce(to_key, to_number), coalesce(meta->>'kind',''))
   where coalesce(meta->>'kind','') not in ('custom','human-manual');
+-- parkOutboxOnce's delete-then-insert scope moves off to_number=eq. and onto
+-- to_key, so give that lookup its own plain index - the unique index above is
+-- an EXPRESSION index and cannot serve a to_key=eq. filter.
+create index if not exists wa_outbox_to_key_idx
+  on public.wa_outbox (sender_key, to_key);
 
 -- ---- WA idle pause (session quiets down while the app is not in use) ----------
 alter table public.wa_sessions add column if not exists last_active timestamptz;
@@ -974,3 +1007,175 @@ alter table public.offers    enable row level security;
 alter table public.searches  enable row level security;
 alter table public.bookings  enable row level security;
 alter table public.app_users enable row level security;
+
+-- ================================================================================
+-- TURN INTEGRITY, THREAD LOCKING, SESSION FACTS AND COMPOSITE DEPOSITS
+-- ================================================================================
+-- EVERY TABLE, COLUMN AND INDEX BELOW IS OPTIONAL TO THE APPLICATION. Each one
+-- is consumed by code that PROBES for it and degrades to today's exact
+-- behaviour when it is absent - the pattern claimSendSlots already uses: read
+-- through sbSelectStrict, treat error === 'missing' as degraded-but-allowed,
+-- and only treat a genuine outage as an outage. That is deliberate rather than
+-- defensive: the app deploys continuously while this file is re-run by hand, so
+-- the code always ships FIRST and has to be correct against a database that has
+-- never seen this block. No consumer may ever hard-require one of these
+-- objects, and no read path may treat a missing table as an empty result.
+-- Additive and idempotent: safe to re-run, and nothing here drops or rewrites a
+-- row. The legacy columns these sit beside are all retained and still written.
+-- ================================================================================
+
+-- ---- Composite deposit (offers + vendor_replies) --------------------------------
+-- The flat (deposit_type, deposit_amount, deposit_currency) triple above can
+-- hold exactly ONE component, so a shop that says "5000 baht AND your passport"
+-- loses half its own terms the moment it is stored - and which half survived
+-- depended on parse order, which is why the same reply could show a friendly
+-- deposit tag on one surface and a scam warning on another. deposit_json holds
+-- the full Deposit value object (components[], combinator, stated, raw) so a
+-- composite survives the round trip intact; deposit_variant is the denormalized
+-- discriminator the card/filter surfaces read without parsing the blob.
+-- The scalar triple stays populated by toLegacy() for the whole migration
+-- window: /api/replies degrades through three progressively narrower selects,
+-- and an unknown column in the richest one silently blanks the entire feed.
+alter table public.offers         add column if not exists deposit_json    jsonb;
+alter table public.offers         add column if not exists deposit_variant text;
+alter table public.vendor_replies add column if not exists deposit_json    jsonb;
+alter table public.vendor_replies add column if not exists deposit_variant text;
+-- Deposit is a first-class filter on the offers board (travellers screen out
+-- document-surrender shops), so the discriminator needs its own index.
+create index if not exists offers_deposit_variant_idx
+  on public.offers (deposit_variant);
+
+-- ---- Immutable session facts ----------------------------------------------------
+-- search_sessions and negotiation_threads.session_id were designed above and
+-- never written to: not one TypeScript reference. With no durable anchor the
+-- de-facto session identity became the newest outbound row's blob, which every
+-- turn rewrites - so the outbound fact-check guard was validating each message
+-- against a target that drifted with it, amplifying drift instead of catching
+-- it. digest is the sha256 of the frozen request scalars (duration, class, cc,
+-- transmission, seats), which makes a silent mutation of a live session cheap
+-- to detect rather than something only a human reading the transcript notices.
+alter table public.search_sessions add column if not exists digest text;
+
+-- A thread's facts are WRITE-ONCE. bindThread already filters on
+-- `session_id is null` so a second, different binding simply matches no row and
+-- reports a conflict - but that is an app-level convention, and the entire
+-- class of bug being fixed here is an anchor that some other code path was free
+-- to move. The trigger makes re-pointing a bound thread at a different session
+-- unrepresentable at the storage layer, so no future writer can reintroduce it.
+-- Two transitions stay legal on purpose: null -> a session (the bind), and a
+-- session -> null (the unbind /api/session/close performs so that a re-contact
+-- after the search is closed opens a FRESH session instead of resuming the old
+-- one's price, round and firmness state).
+create or replace function public.negotiation_threads_session_write_once()
+returns trigger language plpgsql as $$
+begin
+  if old.session_id is not null
+     and new.session_id is not null
+     and new.session_id <> old.session_id then
+    raise exception
+      'negotiation_threads.session_id is write-once: thread % is already bound to session %',
+      old.thread_key, old.session_id
+      using errcode = 'integrity_constraint_violation';
+  end if;
+  return new;
+end;
+$$;
+-- Guarded creation rather than CREATE OR REPLACE TRIGGER: the replace form
+-- needs PG 14+, and an existence probe drops nothing on a re-run. The rule
+-- itself lives in the function body above, which IS replaced every run, so the
+-- behaviour stays current even though the binding is only ever created once.
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'negotiation_threads_session_write_once_trg'
+      and tgrelid = 'public.negotiation_threads'::regclass
+  ) then
+    create trigger negotiation_threads_session_write_once_trg
+      before update of session_id on public.negotiation_threads
+      for each row execute function public.negotiation_threads_session_write_once();
+  end if;
+end $$;
+
+-- ---- Turn ledger (wa_turns) -----------------------------------------------------
+-- wa_processed claims an inbound message id at the TOP of the turn and nothing
+-- anywhere deletes the row, so every early return or throw after the claim -
+-- including one caused by a slow Supabase read collapsing to "no thread" - burns
+-- that provider message id permanently. The reply is stored, claimed,
+-- unanswered and structurally unrecoverable, because the recovery sweep dedupes
+-- on the message EXISTING rather than on whether anyone answered it.
+-- A ledger row records the whole turn instead of just its start: `state` +
+-- `lease_until` mean an abandoned turn is a re-acquirable orphan rather than a
+-- tombstone, and `outcome` records WHY a turn ended so deliberate silence is
+-- distinguishable from infrastructure failure. wa_processed and wa_inbound_seen
+-- stay for now - both are still load-bearing for concurrent-delivery dedupe.
+create table if not exists public.wa_turns (
+  wa_message_id  text primary key,
+  user_email     text not null,
+  from_number    text not null,
+  trace_id       text not null,          -- correlation id, gateway -> send
+  state          text not null,          -- 'claimed' | 'terminal'
+  outcome        text,                   -- replied | deliberate-silence | vetoed
+                                         -- | gate-dropped | infra-failed; null
+                                         -- while still claimed
+  outcome_detail text,
+  attempts       int  not null default 0,
+  lease_until    timestamptz not null,   -- expired + state='claimed' = orphan
+  first_seen_at  timestamptz not null default now(),
+  closed_at      timestamptz
+);
+-- The reconciler's only query: claimed turns whose lease lapsed, oldest first.
+-- Partial so it stays small no matter how many turns have completed.
+create index if not exists wa_turns_orphan_idx
+  on public.wa_turns (lease_until) where state = 'claimed';
+-- Owner-facing per-user turn history (the "did this shop ever get an answer"
+-- question the doctor and the sweep both ask).
+create index if not exists wa_turns_user_idx
+  on public.wa_turns (user_email, first_seen_at desc);
+alter table public.wa_turns enable row level security;
+
+-- ---- Per-thread mutual exclusion (wa_thread_locks) ------------------------------
+-- Nine claim mechanisms already exist and every one is keyed on something other
+-- than the thread: the message id, the exact message text, a pacing bucket, a
+-- tick window, an outbox row id. So two deliveries for one shop, or a wakeup
+-- racing an inbound turn, both pass every existing gate and two messages go out
+-- to the same shop seconds apart. This is the missing key.
+-- `holder` is a per-acquire uuid and `fence` a monotonic token, so a stale
+-- holder can neither release nor renew the current lease. Stealing requires
+-- BOTH expires_at < now AND fence < now, which makes a backwards-skewed clock
+-- fail to steal rather than issue a non-monotonic token - fail-closed by
+-- construction. Postgres is the sole authority; Redis is only ever an advisory
+-- negative cache, so the Cloud Run web tier (no REDIS_URL) still contends
+-- correctly with the VM workers.
+create table if not exists public.wa_thread_locks (
+  thread_key  text primary key,          -- user_email:nationalTail (coarser than
+                                         -- graph thread_key on purpose)
+  holder      text not null,             -- randomUUID() per acquire
+  fence       bigint not null,           -- epoch ms of acquire, monotonic
+  acquired_at timestamptz not null default now(),
+  expires_at  timestamptz not null,
+  reason      text
+);
+-- Sweeping expired leases is the only scan this table ever takes.
+create index if not exists wa_thread_locks_exp_idx
+  on public.wa_thread_locks (expires_at);
+alter table public.wa_thread_locks enable row level security;
+
+-- ---- Cause-keyed outbound dedupe (whatsapp_messages.dedupe_key) -----------------
+-- whatsapp_messages has no unique constraint of any kind, and the outbound row
+-- is written only AFTER the network send - so the guard's own dedup preflight
+-- reads a table the concurrent writer has not written yet, and a duplicate
+-- outbound row is physically legal. dedupe_key closes that gap by identifying
+-- the CAUSE of a message rather than its text: "out:<threadLockKey>:<turnId>",
+-- where turnId is the inbound message id, the wakeup id, the decision id, the
+-- outbox row id or the RFQ batch+vendor. Keying on the cause is what makes it
+-- correct - two humanized re-varations of one turn collide (they are the same
+-- message), while two genuinely different causes never do (which content
+-- hashing gets exactly backwards).
+-- The row is inserted BEFORE the send with raw.state='sending'; a 409 here means
+-- another turn already owns this cause and this one must abort without sending.
+alter table public.whatsapp_messages add column if not exists dedupe_key text;
+-- Partial so every historical row - and every row written by a send path not
+-- yet migrated - stays legal with a null key.
+create unique index if not exists whatsapp_messages_dedupe_uidx
+  on public.whatsapp_messages (dedupe_key) where dedupe_key is not null;

@@ -23,6 +23,8 @@ import { isLinkedFromStatus } from "./wa/linked-status";
 import { routableOrigin } from "./request-origin";
 import { digitsOnly } from "./phone";
 import { boundedSet } from "./bounded-map";
+import { readOrientationFromBase64 } from "./media/orientation";
+import type { InboundImage } from "./media/orientation";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
 const MIN_GAP_MS = 20_000; // never two messages within 20s per user
@@ -1504,12 +1506,21 @@ export async function fetchMessagesRaw(
 /**
  * Download an inbound media message (a price-list photo) as base64 so the
  * vision agent can read the prices off it. Evolution v2 exposes
- * getBase64FromMediaMessage; returns { base64, mime } or null.
+ * getBase64FromMediaMessage; returns an InboundImage or null.
+ *
+ * THIS IS THE ORIENTATION CHOKEPOINT. Every WhatsApp image byte in the system
+ * passes through here - the vision worker, wa/ingest, wa-sync and the media
+ * proxy all call this one function - so measuring EXIF orientation once, here,
+ * is what stops four independent consumers each guessing differently about a
+ * price board photographed with a phone held upright. The bytes themselves are
+ * returned UNCHANGED (see lib/media/orientation.ts for why we declare rather
+ * than rotate); `orientation` is a description of them, not a modification.
+ * The parse is bounded and cannot throw, so a hostile image still yields a reply.
  */
 export async function fetchMediaBase64(
   email: string,
   message: unknown
-): Promise<{ base64: string; mime: string } | null> {
+): Promise<InboundImage | null> {
   const instance = instanceNameFor(email);
   try {
     const res = await evo(email, `/chat/getBase64FromMediaMessage/${instance}`, {
@@ -1519,7 +1530,8 @@ export async function fetchMediaBase64(
     const base64 = res.data?.base64 ?? res.data?.media ?? res.data?.buffer;
     const mime = res.data?.mimetype ?? res.data?.mimeType ?? "image/jpeg";
     if (typeof base64 === "string" && base64.length > 100) {
-      return { base64: base64.replace(/^data:[^,]+,/, ""), mime };
+      const clean = base64.replace(/^data:[^,]+,/, "");
+      return { base64: clean, mime, orientation: readOrientationFromBase64(clean) };
     }
   } catch {
     /* media fetch is best-effort */

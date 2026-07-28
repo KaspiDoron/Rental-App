@@ -7,6 +7,7 @@ import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal } from "@/lib/currency";
+import { normalizeImageFile } from "@/lib/client/normalize-image";
 
 // Manual FALLBACK for adding a shop's reply (text or a photo of a price list).
 // With WhatsApp connected, replies flow in automatically via the webhook and
@@ -43,16 +44,22 @@ export function PasteReplyModal({
     vehicleDescription?: string;
   } | null>(null);
 
-  function addFiles(files: FileList | null) {
+  // A traveller standing in front of a shop, photographing a price board with a
+  // phone held vertically, is the highest-EXIF-risk input in the whole app: that
+  // file is Orientation=6 nine times out of ten. It used to be posted RAW - full
+  // camera resolution, sideways, with only a cap on the COUNT of files - so the
+  // vision model read the board's columns as rows. normalizeImageFile turns each
+  // one upright before it leaves the phone and gives this path the byte budget it
+  // never had (three images share one JSON body).
+  async function addFiles(files: FileList | null) {
     if (!files) return;
-    Array.from(files)
-      .slice(0, 3 - images.length)
-      .forEach((f) => {
-        const reader = new FileReader();
-        reader.onload = () =>
-          setImages((prev) => [...prev, String(reader.result)].slice(0, 3));
-        reader.readAsDataURL(f);
-      });
+    const room = 3 - images.length;
+    if (room <= 0) return;
+    for (const f of Array.from(files).slice(0, room)) {
+      const shot = await normalizeImageFile(f, { maxDim: 1280, quality: 0.8, maxBytes: 1_200_000 });
+      if (!shot.dataUrl) continue;
+      setImages((prev) => [...prev, shot.dataUrl].slice(0, 3));
+    }
   }
 
   async function analyze() {

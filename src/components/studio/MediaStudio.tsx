@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PlaceAutocomplete } from "../PlaceAutocomplete";
 import { LoadingDots } from "../LoadingDots";
+import { normalizeImageFile } from "@/lib/client/normalize-image";
 
 interface MediaResult {
   kind: string;
@@ -36,10 +37,19 @@ export function MediaStudio() {
     setResult(null);
     setFileName(file.name);
     if (kind === "image") {
-      // Downscale to <= 1280px JPEG so the base64 stays under the body limit.
-      const dataUrl = await downscaleImage(file, 1280);
-      setMime("image/jpeg");
-      setB64(dataUrl.split(",")[1] ?? "");
+      // Downscale to <= 1280px JPEG so the base64 stays under the body limit,
+      // and turn the pixels upright first. The Lab is where the owner decides
+      // "can the agent really read this board?", so judging it on the same
+      // sideways bytes a phone actually produces would answer the wrong
+      // question - and the local canvas helper this replaces stripped the EXIF
+      // tag that was the only remaining record of the rotation.
+      const shot = await normalizeImageFile(file, { maxDim: 1280, quality: 0.82 });
+      if (!shot.dataUrl) {
+        setErr("Could not read that image - try a JPEG or PNG.");
+        return;
+      }
+      setMime(shot.mime);
+      setB64(shot.dataUrl.split(",")[1] ?? "");
     } else {
       if (file.size > 3.5 * 1024 * 1024) {
         setErr("Audio too large - keep voice notes under ~3.5MB.");
@@ -228,28 +238,6 @@ export function MediaStudio() {
       )}
     </div>
   );
-}
-
-async function downscaleImage(file: File, maxDim: number): Promise<string> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const im = new Image();
-      im.onload = () => resolve(im);
-      im.onerror = reject;
-      im.src = url;
-    });
-    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-    const w = Math.round(img.width * scale);
-    const h = Math.round(img.height * scale);
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    canvas.getContext("2d")?.drawImage(img, 0, 0, w, h);
-    return canvas.toDataURL("image/jpeg", 0.82);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
 }
 
 function bufferToBase64(buf: ArrayBuffer): string {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
+import { normalizeImageFile } from "@/lib/client/normalize-image";
 
 const CATEGORIES = [
   { id: "bug", label: "Bug" },
@@ -43,30 +44,14 @@ interface Report {
   replies: Reply[];
 }
 
-/** Downscale + compress an image file to a small JPEG data URL. */
-function compress(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const max = 1100;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject();
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
-      };
-      img.onerror = reject;
-      img.src = reader.result as string;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+// A bug report's screenshot is usually a photo of the phone's own screen, taken
+// with another phone - which is exactly the EXIF-tagged case. The local
+// new Image() + drawImage + toDataURL helper that used to live here destroyed
+// that tag irreversibly (canvas writes no metadata) while trusting the engine to
+// have applied it during decode; where it had not, the triage team received a
+// sideways screenshot and no way to recover. normalizeImageFile is the shared,
+// spec-guaranteed version - same budget as before, upright by construction.
+const SHOT = { maxDim: 1100, quality: 0.7, maxBytes: 900_000 } as const;
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -197,11 +182,9 @@ function ComposeTab({
     const chosen = Array.from(files).slice(0, room);
     const next: { filename: string; dataUrl: string }[] = [];
     for (const f of chosen) {
-      try {
-        next.push({ filename: f.name, dataUrl: await compress(f) });
-      } catch {
-        /* ignore unreadable file */
-      }
+      const shot = await normalizeImageFile(f, SHOT);
+      // An unreadable file yields an empty data URL rather than a throw.
+      if (shot.dataUrl) next.push({ filename: f.name, dataUrl: shot.dataUrl });
     }
     setImages((prev) => [...prev, ...next].slice(0, MAX_IMAGES));
   }

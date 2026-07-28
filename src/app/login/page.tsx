@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { TermsModal } from "@/components/TermsModal";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
@@ -15,12 +15,11 @@ import { Icon } from "@/components/icons";
 import { TrustPanel } from "@/components/landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 import { digitsOnly } from "@/lib/phone";
-
-declare global {
-  interface Window {
-    google?: any;
-  }
-}
+import { fetchJson } from "@/lib/client/fetch-json";
+import { AuthMethodList } from "@/components/auth/AuthMethodList";
+import { useAuthMethods } from "@/components/auth/useAuthMethods";
+import { useAuthHandshake } from "@/components/auth/useAuthHandshake";
+import { AuthHandshakeError, type HandshakeRun } from "@/components/auth/handshake";
 
 type Mode = "login" | "signup";
 
@@ -55,83 +54,16 @@ export default function LoginPage() {
   useEffect(() => setCurrencyChoice(savedCurrency()), []);
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [subBusy, setSubBusy] = useState(false);
-  const googleDiv = useRef<HTMLDivElement>(null);
-  // Why the Google button is missing, when it is - shown as a small honest note
-  // instead of silent empty space (the "button not loading" mystery on a fresh
-  // domain was undebuggable without a console).
-  const [googleIssue, setGoogleIssue] = useState<string | null>(null);
-  // A DIVIDER HAS TO HAVE SOMETHING TO DIVIDE.
-  //
-  // The "OR" rule and the empty button slot rendered unconditionally, so on a
-  // deployment where Google sign-in is not configured - or where the button
-  // silently fails to paint - the login screen showed a horizontal rule
-  // floating above nothing at all. The divider now follows the button's real
-  // state instead of assuming one will arrive.
-  const [googleState, setGoogleState] = useState<"loading" | "ready" | "unavailable">("loading");
-  // The credential exchange is a network round trip; without this the button
-  // just went dead for a second or two with no sign anything was happening.
-  const [googleSubmitting, setGoogleSubmitting] = useState(false);
 
-  // Google OAuth button (renders when a client id is configured).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/config/public");
-        const { googleClientId } = await res.json();
-        if (cancelled) return;
-        if (!googleClientId) {
-          // Config unreadable on this deployment (vault key not resolving) -
-          // email login still works; say so instead of a blank gap.
-          setGoogleIssue("Google sign-in is not configured on this server yet - use email below.");
-          setGoogleState("unavailable");
-          return;
-        }
-        await new Promise<void>((resolve, reject) => {
-          if (window.google?.accounts) return resolve();
-          const s = document.createElement("script");
-          s.src = "https://accounts.google.com/gsi/client";
-          s.onload = () => resolve();
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-        if (cancelled || !googleDiv.current) return;
-        window.google.accounts.id.initialize({
-          client_id: googleClientId,
-          callback: (resp: { credential: string }) => submitGoogle(resp.credential),
-        });
-        window.google.accounts.id.renderButton(googleDiv.current, {
-          theme: "outline",
-          size: "large",
-          width: 320,
-          shape: "pill",
-          text: "continue_with",
-        });
-        if (!cancelled) setGoogleState("ready");
-        // GSI fails SILENTLY when this page's origin is not in the OAuth
-        // client's "Authorized JavaScript origins" (the classic new-domain
-        // miss): initialize/renderButton log to console but paint nothing.
-        // Detect the empty div and say what's wrong in plain words.
-        setTimeout(() => {
-          if (!cancelled && googleDiv.current && googleDiv.current.childElementCount === 0) {
-            setGoogleIssue(
-              "Google sign-in isn't enabled for this domain yet (the site owner must authorize it in Google Cloud Console). Email login below works."
-            );
-            setGoogleState("unavailable");
-          }
-        }, 2500);
-      } catch {
-        if (!cancelled) {
-          setGoogleIssue("Google sign-in couldn't load - use email below.");
-          setGoogleState("unavailable");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // WHICH sign-in methods exist is now a server-resolved list, not four
+  // disconnected facts. The list is what renders, so the "OR" divider follows
+  // from it (see components/auth/AuthMethodList) and this page can no longer
+  // paint a separator above a button that will never arrive.
+  const probe = useAuthMethods();
+  // Provider round trips get their own bounded pending/failed state instead of
+  // borrowing the email form's `status`, which never changed when the Google
+  // button was pressed.
+  const handshake = useAuthHandshake();
 
   function enterApp(session: any, opts?: { welcome?: boolean; changePw?: boolean }) {
     startNav(); // instant feedback while the next page loads
@@ -143,40 +75,46 @@ export default function LoginPage() {
     window.location.href = opts?.welcome ? `${base}?welcome=1` : base;
   }
 
-  async function afterAuth(data: any, isNew: boolean) {
+  // `ctl` is present only when this leg is running inside a handshake; it lets
+  // the post-auth hop declare itself as `entering` so the provider button keeps
+  // its pending state right up to the navigation instead of snapping back to
+  // "pressable" while the next page loads.
+  async function afterAuth(data: any, isNew: boolean, ctl?: HandshakeRun) {
     // Lock in the (auto-detected or corrected) currency for this traveller.
     if (isNew) setSavedCurrency(currencyChoice);
     if (data.mustChangePassword) {
+      ctl?.phase("entering");
       enterApp(data.session, { changePw: true });
       return;
     }
     if (isNew && data.session?.role === "user") {
       // WhatsApp is part of signing up: without it the agents cannot bargain.
-      try {
-        const wa = await (await fetch("/api/wa/status")).json();
-        if (wa.available && !wa.connected) {
-          setStep("whatsapp");
-          return;
-        }
-      } catch {}
+      // Bounded: an unanswered status probe must not park a brand-new account on
+      // a frozen screen - falling through to plans is the safe default.
+      const wa = await fetchJson<{ available?: boolean; connected?: boolean }>(
+        "/api/wa/status",
+        { timeoutMs: 8000 }
+      );
+      if (wa.ok && wa.data?.available && !wa.data.connected) {
+        setStep("whatsapp");
+        return;
+      }
       await goPlans();
       return;
     }
+    ctl?.phase("entering");
     enterApp(data.session, { welcome: isNew });
   }
 
   async function goPlans() {
-    {
-      try {
-        const res = await fetch("/api/billing/checkout");
-        const d = await res.json();
-        const paid = (d.plans ?? []).filter((p: PlanView) => p.amount > 0);
-        if (paid.length) {
-          setPlans(paid);
-          setStep("plans");
-          return;
-        }
-      } catch {}
+    const res = await fetchJson<{ plans?: PlanView[] }>("/api/billing/checkout", {
+      timeoutMs: 8000,
+    });
+    const paid = (res.data?.plans ?? []).filter((p: PlanView) => p.amount > 0);
+    if (res.ok && paid.length) {
+      setPlans(paid);
+      setStep("plans");
+      return;
     }
     startNav();
     window.location.href = "/?welcome=1";
@@ -187,109 +125,106 @@ export default function LoginPage() {
     // Google-verified signups finish through the Google endpoint - they have
     // no password (Google IS the credential). This was the loop bug.
     if (googleCredential) {
-      await submitGoogle(googleCredential, true);
+      await runGoogle(googleCredential, true);
       return;
     }
     setStatus("loading");
     setError("");
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          email,
-          password,
-          phone,
-          acceptTerms,
-          acceptWaRisk,
-          acceptAiResp,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setStatus("error");
-        setError(data.error ?? t("Something went wrong."));
-        if (data.needsSignup) setMode("signup");
-        return;
-      }
-      // Email must be verified before the account is created.
-      if (data.needsVerification) {
-        setVerifyFor(data.email);
-        setCode("");
-        setStatus("idle");
-        setNotice(t("We emailed you a 6-digit code. Enter it below to finish."));
-        return;
-      }
-      await afterAuth(data, mode === "signup");
-    } catch {
+    const res = await fetchJson<any>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      timeoutMs: 15000,
+      body: JSON.stringify({
+        mode,
+        email,
+        password,
+        phone,
+        acceptTerms,
+        acceptWaRisk,
+        acceptAiResp,
+      }),
+    });
+    const data = res.data ?? {};
+    if (!res.ok) {
       setStatus("error");
-      setError(t("Network error - please try again."));
+      setError(data.error ?? res.error ?? t("Something went wrong."));
+      if (data.needsSignup) setMode("signup");
+      return;
     }
+    // Email must be verified before the account is created.
+    if (data.needsVerification) {
+      setVerifyFor(data.email);
+      setCode("");
+      setStatus("idle");
+      setNotice(t("We emailed you a 6-digit code. Enter it below to finish."));
+      return;
+    }
+    await afterAuth(data, mode === "signup");
   }
 
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
     setStatus("loading");
     setError("");
-    try {
-      const res = await fetch("/api/auth/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: verifyFor, code }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setStatus("error");
-        setError(data.error ?? t("Wrong code."));
-        return;
-      }
-      setVerifyFor("");
-      await afterAuth(data, true);
-    } catch {
+    const res = await fetchJson<any>("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      timeoutMs: 15000,
+      body: JSON.stringify({ email: verifyFor, code }),
+    });
+    const data = res.data ?? {};
+    if (!res.ok) {
       setStatus("error");
-      setError(t("Network error - please try again."));
+      setError(data.error ?? res.error ?? t("Wrong code."));
+      return;
     }
+    setVerifyFor("");
+    await afterAuth(data, true);
   }
 
-  async function submitGoogle(credential: string, withProfile = false) {
-    setStatus("loading");
-    setGoogleSubmitting(true);
-    setError("");
-    try {
-      const res = await fetch("/api/auth/google", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          withProfile
-            ? { credential, phone, acceptTerms, acceptWaRisk, acceptAiResp }
-            : { credential }
-        ),
-      });
-      const data = await res.json();
-      if (data.needsSignup) {
-        setGoogleCredential(credential);
-        setGoogleName(data.name ?? "");
-        setEmail(data.email ?? "");
-        setMode("signup");
-        setStatus("idle");
-        setNotice(
-          t("Almost there - add your phone and accept the terms. No password needed: you'll always sign in with Google.")
-        );
-        return;
-      }
-      if (!res.ok) {
-        setStatus("error");
-        setError(data.error ?? t("Google sign-in failed."));
-        return;
-      }
-      await afterAuth(data, Boolean(data.isNew));
-    } catch {
-      setStatus("error");
-      setError(t("Network error - please try again."));
-    } finally {
-      setGoogleSubmitting(false);
+  /**
+   * The Google credential exchange. It reports failure by THROWING
+   * AuthHandshakeError rather than by setting page state, because the handshake
+   * owns the provider leg's pending/error surface - that is what gives the
+   * Google button its own spinner instead of borrowing the email submit
+   * button's, which was the "OAuth hangs with no feedback" symptom.
+   */
+  async function submitGoogle(credential: string, withProfile: boolean, ctl: HandshakeRun) {
+    ctl.phase("exchanging");
+    const res = await fetchJson<any>("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ctl.signal,
+      timeoutMs: 15000,
+      body: JSON.stringify(
+        withProfile
+          ? { credential, phone, acceptTerms, acceptWaRisk, acceptAiResp }
+          : { credential }
+      ),
+    });
+    const data = res.data ?? {};
+    if (data.needsSignup) {
+      setGoogleCredential(credential);
+      setGoogleName(data.name ?? "");
+      setEmail(data.email ?? "");
+      setMode("signup");
+      setStatus("idle");
+      setNotice(
+        t("Almost there - add your phone and accept the terms. No password needed: you'll always sign in with Google.")
+      );
+      return;
     }
+    if (!res.ok) {
+      throw new AuthHandshakeError(data.error ?? res.error ?? t("Google sign-in failed."));
+    }
+    await afterAuth(data, Boolean(data.isNew), ctl);
+  }
+
+  /** Single entry point for the Google leg, so it can never run twice at once. */
+  function runGoogle(credential: string, withProfile = false) {
+    setError("");
+    setStatus("idle");
+    return handshake.run("google", (ctl) => submitGoogle(credential, withProfile, ctl));
   }
 
   async function forgot() {
@@ -302,22 +237,20 @@ export default function LoginPage() {
     setError("");
     setNotice("");
     try {
-      const res = await fetch("/api/auth/forgot", {
+      const res = await fetchJson<any>("/api/auth/forgot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: 15000,
         body: JSON.stringify({ email }),
       });
-      const data = await res.json();
+      const data = res.data ?? {};
       if (!res.ok) {
         setStatus("error");
-        setError(data.error ?? t("Could not send the email."));
+        setError(data.error ?? res.error ?? t("Could not send the email."));
       } else {
         setStatus("idle");
         setNotice(data.message);
       }
-    } catch {
-      setStatus("error");
-      setError(t("Network error - please try again."));
     } finally {
       setForgotBusy(false);
     }
@@ -370,14 +303,13 @@ export default function LoginPage() {
               onSubscribe={async (id) => {
                 setSubBusy(true);
                 try {
-                  const res = await fetch("/api/billing/checkout", {
+                  const res = await fetchJson<{ url?: string }>("/api/billing/checkout", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
+                    timeoutMs: 15000,
                     body: JSON.stringify({ planId: id }),
                   });
-                  const d = await res.json();
-                  if (d.url) window.location.href = d.url;
-                  else window.location.href = "/?welcome=1";
+                  window.location.href = res.data?.url || "/?welcome=1";
                 } finally {
                   setSubBusy(false);
                 }
@@ -639,14 +571,20 @@ export default function LoginPage() {
             {notice}
           </p>
         )}
-        {status === "error" && (
-          <p className="mt-2 text-[12px] font-bold text-brandred">{error}</p>
+        {/* The Google-profile-completion form submits through the handshake, so
+            its failure copy has to appear here rather than under a divider that
+            is not rendered in that state. */}
+        {(status === "error" || (googleCredential && handshake.error)) && (
+          <p className="mt-2 text-[12px] font-bold text-brandred">
+            {error || handshake.error}
+          </p>
         )}
 
         <button
           type="submit"
           disabled={
             status === "loading" ||
+            handshake.busy ||
             // Signup (including Google-profile completion) requires all three
             // mandatory consents. Login never shows them.
             ((mode === "signup" || googleCredential !== null) &&
@@ -654,7 +592,7 @@ export default function LoginPage() {
           }
           className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
         >
-          {status === "loading" ? (
+          {status === "loading" || (googleCredential && handshake.busy) ? (
             <LoadingDots light label={t("One moment")} />
           ) : googleCredential ? (
             t("Create my account")
@@ -665,34 +603,23 @@ export default function LoginPage() {
           )}
         </button>
 
+        {/* The alternate sign-in methods AND their divider. This page renders
+            neither directly: an "OR" above nothing was possible precisely
+            because the separator used to be a literal here, disconnected from
+            whether any method would ever appear beneath it. */}
         {!googleCredential && (
-          <>
-            {/* The rule appears only when there is a second option below it. */}
-            {googleState !== "unavailable" && (
-              <div className="my-3 flex items-center gap-3 text-[11px] font-bold text-faint">
-                <span className="h-px flex-1 bg-line" /> {t("OR")}{" "}
-                <span className="h-px flex-1 bg-line" />
-              </div>
-            )}
-            <div className={googleState === "unavailable" ? "hidden" : "flex justify-center"}>
-              <div ref={googleDiv} />
-            </div>
-            {googleState === "loading" && (
-              <div className="flex justify-center py-1">
-                <LoadingDots label={t("Loading Google sign-in")} />
-              </div>
-            )}
-            {googleSubmitting && (
-              <div className="mt-2 flex justify-center">
-                <LoadingDots label={t("Signing you in with Google")} />
-              </div>
-            )}
-            {googleIssue && (
-              <p className="mt-1 text-center text-[11px] font-bold text-faint">
-                {t(googleIssue)}
-              </p>
-            )}
-          </>
+          <AuthMethodList
+            methods={probe.methods}
+            state={probe.state}
+            probeError={probe.error}
+            error={handshake.error}
+            busyMethodId={handshake.busy ? handshake.methodId : null}
+            disabled={status === "loading" || handshake.busy}
+            onCredential={(_id, credential) => {
+              void runGoogle(credential);
+            }}
+            onMethodError={(message) => handshake.fail(message)}
+          />
         )}
 
         <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-faint">
