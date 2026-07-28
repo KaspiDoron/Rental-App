@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { AgenticSummary } from "./AgenticSummary";
 import { useI18n } from "@/lib/i18n";
+import { WaText } from "./WaText";
 
 export interface ThreadMsg {
   id: string;
@@ -134,10 +135,14 @@ export function MessageBubble({ m }: { m: ThreadMsg }) {
             {m.contact.digits ? ` · +${m.contact.digits}` : ""}
           </div>
         )}
-        {showText ? <div className={m.media ? "mt-1" : ""}>{m.text}</div> : null}
+        {showText ? (
+          <div className={m.media ? "mt-1" : ""}>
+            <WaText text={m.text} />
+          </div>
+        ) : null}
         {m.english && m.english !== m.text && (
           <div className="mt-1 border-t border-white/25 pt-1 text-[10px] font-normal opacity-85">
-            {m.english}
+            <WaText text={m.english} />
           </div>
         )}
         <div className={`mt-0.5 text-[9px] font-bold ${out ? "text-white/70" : "text-faint"}`}>

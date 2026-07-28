@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { WaText } from "./WaText";
+import { waPlain } from "@/lib/wa/format";
 
 // The card's conversation peek: TWO individually collapsible sections in one
 // component - the last message we sent the shop and the last message the shop
@@ -42,12 +44,17 @@ function Row({
   return (
     <details className="rounded-xl border-2 border-line p-2 text-[11px]">
       <summary className={`cursor-pointer font-extrabold ${accent}`}>
-        {emoji} {label}: &ldquo;{summarize(msg.text)}&rdquo;
+        {/* The one-line preview is plain text - formatting marks would be
+            noise inside a quoted summary, but the asterisks must not show
+            either. */}
+        {emoji} {label}: &ldquo;{summarize(waPlain(msg.text))}&rdquo;
       </summary>
-      <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">{msg.text}</p>
+      <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">
+        <WaText text={msg.text} />
+      </p>
       {msg.english && msg.english.trim() !== msg.text.trim() && (
         <p className="mt-1 whitespace-pre-wrap rounded-lg bg-brandblue-soft p-1.5 text-[10px] font-bold leading-relaxed text-brandblue">
-          🌐 {inEnglishLabel}: {msg.english}
+          🌐 {inEnglishLabel}: <WaText text={msg.english} />
         </p>
       )}
     </details>

@@ -60,6 +60,17 @@ export default function LoginPage() {
   // instead of silent empty space (the "button not loading" mystery on a fresh
   // domain was undebuggable without a console).
   const [googleIssue, setGoogleIssue] = useState<string | null>(null);
+  // A DIVIDER HAS TO HAVE SOMETHING TO DIVIDE.
+  //
+  // The "OR" rule and the empty button slot rendered unconditionally, so on a
+  // deployment where Google sign-in is not configured - or where the button
+  // silently fails to paint - the login screen showed a horizontal rule
+  // floating above nothing at all. The divider now follows the button's real
+  // state instead of assuming one will arrive.
+  const [googleState, setGoogleState] = useState<"loading" | "ready" | "unavailable">("loading");
+  // The credential exchange is a network round trip; without this the button
+  // just went dead for a second or two with no sign anything was happening.
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
 
   // Google OAuth button (renders when a client id is configured).
   useEffect(() => {
@@ -73,6 +84,7 @@ export default function LoginPage() {
           // Config unreadable on this deployment (vault key not resolving) -
           // email login still works; say so instead of a blank gap.
           setGoogleIssue("Google sign-in is not configured on this server yet - use email below.");
+          setGoogleState("unavailable");
           return;
         }
         await new Promise<void>((resolve, reject) => {
@@ -95,6 +107,7 @@ export default function LoginPage() {
           shape: "pill",
           text: "continue_with",
         });
+        if (!cancelled) setGoogleState("ready");
         // GSI fails SILENTLY when this page's origin is not in the OAuth
         // client's "Authorized JavaScript origins" (the classic new-domain
         // miss): initialize/renderButton log to console but paint nothing.
@@ -104,11 +117,13 @@ export default function LoginPage() {
             setGoogleIssue(
               "Google sign-in isn't enabled for this domain yet (the site owner must authorize it in Google Cloud Console). Email login below works."
             );
+            setGoogleState("unavailable");
           }
         }, 2500);
       } catch {
         if (!cancelled) {
           setGoogleIssue("Google sign-in couldn't load - use email below.");
+          setGoogleState("unavailable");
         }
       }
     })();
@@ -239,6 +254,7 @@ export default function LoginPage() {
 
   async function submitGoogle(credential: string, withProfile = false) {
     setStatus("loading");
+    setGoogleSubmitting(true);
     setError("");
     try {
       const res = await fetch("/api/auth/google", {
@@ -271,6 +287,8 @@ export default function LoginPage() {
     } catch {
       setStatus("error");
       setError(t("Network error - please try again."));
+    } finally {
+      setGoogleSubmitting(false);
     }
   }
 
@@ -649,11 +667,26 @@ export default function LoginPage() {
 
         {!googleCredential && (
           <>
-            <div className="my-3 flex items-center gap-3 text-[11px] font-bold text-faint">
-              <span className="h-px flex-1 bg-line" /> {t("OR")}{" "}
-              <span className="h-px flex-1 bg-line" />
+            {/* The rule appears only when there is a second option below it. */}
+            {googleState !== "unavailable" && (
+              <div className="my-3 flex items-center gap-3 text-[11px] font-bold text-faint">
+                <span className="h-px flex-1 bg-line" /> {t("OR")}{" "}
+                <span className="h-px flex-1 bg-line" />
+              </div>
+            )}
+            <div className={googleState === "unavailable" ? "hidden" : "flex justify-center"}>
+              <div ref={googleDiv} />
             </div>
-            <div ref={googleDiv} className="flex justify-center" />
+            {googleState === "loading" && (
+              <div className="flex justify-center py-1">
+                <LoadingDots label={t("Loading Google sign-in")} />
+              </div>
+            )}
+            {googleSubmitting && (
+              <div className="mt-2 flex justify-center">
+                <LoadingDots label={t("Signing you in with Google")} />
+              </div>
+            )}
             {googleIssue && (
               <p className="mt-1 text-center text-[11px] font-bold text-faint">
                 {t(googleIssue)}
