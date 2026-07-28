@@ -229,3 +229,46 @@ export interface Session {
   plan: PlanId;
   issuedAt: number;
 }
+
+/**
+ * WHAT `POST /api/outreach` CAN ANSWER WITH - one declared shape, shared by
+ * every caller.
+ *
+ * Note what is NOT here: `ok`. The route has never returned it, but the callers
+ * read `res.json()` as `any` and tested `r?.ok !== false`, which is
+ * `undefined !== false` - permanently true. Every send reported success,
+ * including the refused ones. Naming the shape is what made that visible.
+ *
+ * `error` is always user-safe prose (see lib/http/json-route): the shop card
+ * renders it directly, so a raw exception message must never land in it.
+ */
+export interface OutreachReply {
+  allowed?: boolean;
+  /** The message left for the shop. */
+  sent?: boolean;
+  /** Parked by the anti-ban pacer - NOTHING was delivered. */
+  queued?: boolean;
+  queuedUntil?: string;
+  queuedReason?: string | null;
+  /** This exact ask is already on its way (idempotency claim). */
+  duplicate?: boolean;
+  /** Already asked and awaiting the reply - the agent keeps the thread going. */
+  halted?: boolean;
+  reason?: string;
+  rateLimited?: boolean;
+  reconnecting?: boolean;
+  /** The server SAYS WhatsApp is linked. Never inferred from a failure. */
+  configured?: boolean;
+  connect?: boolean;
+  channel?: string;
+  phone?: string;
+  /** false when the send landed but our record of it did not. */
+  logged?: boolean;
+  notice?: string | null;
+  blocked?: boolean;
+  cooldownMinutes?: number;
+  underReview?: boolean;
+  upgrade?: boolean;
+  suggestion?: string;
+  error?: string;
+}

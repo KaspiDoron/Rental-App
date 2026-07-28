@@ -4,7 +4,15 @@ import { useCallbackRef } from "@/components/useCallbackRef";
 import { useHeaderCollapse } from "@/components/useHeaderCollapse";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Vendor, StructuredRFQ, Session, TrackerStage, Offer, VehicleOption } from "@/lib/types";
+import type {
+  Vendor,
+  StructuredRFQ,
+  Session,
+  TrackerStage,
+  Offer,
+  VehicleOption,
+  OutreachReply,
+} from "@/lib/types";
 import { offerForOption } from "@/lib/offer-options";
 import { vehicleLabel } from "@/lib/labels";
 import { Icon } from "@/components/icons";
@@ -28,6 +36,7 @@ import { can } from "@/lib/entitlements";
 import { checkAction, outcomeFor, compareOutcome, type ActionOutcome } from "@/lib/actions/registry";
 import { FixedLayer } from "@/components/FixedLayer";
 import { saveSearch } from "@/lib/client/search-persist";
+import { fetchJson } from "@/lib/client/fetch-json";
 import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
@@ -1629,11 +1638,19 @@ export default function Home() {
     pickVendorOption(setBargainVendor)(v, option)
   );
 
-  const customMessage = useCallbackRef(async (vendorId: string, message: string) => {
+  const customMessage = useCallbackRef(async (
+    vendorId: string,
+    message: string
+  ): Promise<OutreachReply> => {
     const vendor = vendors.find((v) => v.id === vendorId);
-    const res = await fetch("/api/outreach", {
+    // `res.json()` threw here on any non-JSON response - an HTML 500, a gateway
+    // 504 - and the rejection surfaced to Will and to the composer as an
+    // unhandled failure. `fetchJson` always settles, never throws, keeps the
+    // server's JSON body even on a non-2xx, and bounds the wait.
+    const r = await fetchJson<OutreachReply>("/api/outreach", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeoutMs: 50_000,
       body: JSON.stringify({
         to: vendor?.whatsapp || undefined,
         placeId: vendor?.placeId,
@@ -1646,7 +1663,11 @@ export default function Home() {
         openNow: vendor?.openNow,
       }),
     });
-    return res.json();
+    if (r.data) return r.data;
+    // No body at all - a timeout, a dead connection, or a non-JSON answer. The
+    // shape every caller already branches on, with a readable reason instead of
+    // a thrown promise.
+    return { allowed: true, sent: false, error: r.error ?? "The send did not go through." };
   });
 
   // THE ACTION REGISTRY, MOUNTED (lib/actions/registry).
@@ -1721,13 +1742,20 @@ export default function Home() {
             drafted ||
               `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
           );
+          // THE OUTREACH ROUTE HAS NEVER RETURNED `ok`. This read
+          // `r?.ok !== false` against an untyped `res.json()`, so it was
+          // `undefined !== false` - permanently true - and "Push harder"
+          // reported success even when the message was refused, queued behind a
+          // pacing hold or lost to a server fault. Judge it on the fields the
+          // route actually sets.
+          const accepted = Boolean(r?.sent || r?.queued || r?.duplicate || r?.halted);
           setActionNote(
             outcomeFor(
               "push-harder",
-              { ok: r?.ok !== false },
-              r?.ok !== false
+              { ok: accepted },
+              accepted
                 ? `Pushing ${vendor?.name ?? "the shop"} for a better rate - I'll tell you the moment they answer.`
-                : undefined
+                : r?.error || undefined
             )
           );
           return r;
@@ -2144,15 +2172,17 @@ export default function Home() {
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-3xl">
       <div className="topbar">
-        {/* THE BAR'S HEIGHT MUST BE STRUCTURALLY CONSTANT.
+        {/* THE BAR'S HEIGHT IS DECLARED IN CSS (--topbar-row-h), AND THIS ROW
+            HAS TO HONOUR IT.
             The tagline could wrap to a second line, so the bar grew whenever
             anything on the row changed width - the plan pill arriving after the
             session loaded, the language button flipping between its wide
             "Translate" hint and a narrow flag, the DOM translator swapping in a
-            longer string. Each of those republished --topbar-h, which moves the
-            sticky List/Map/Activity row: the visible JUMP. `min-w-0` + `truncate`
-            makes the text shrink instead of wrapping, and `shrink-0` stops the
-            controls being squeezed into a second line. */}
+            longer string. `min-w-0` + `truncate` makes the text shrink instead
+            of wrapping, and `shrink-0` stops the controls being squeezed into a
+            second line, which is what makes the declared height true. Nothing
+            measures the bar any more, so a row that broke this contract would
+            overflow rather than move the sticky List/Map/Activity row. */}
         <div className="mx-auto flex max-w-md items-center justify-between gap-2 px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
           <div className="flex min-w-0 items-center gap-2">
             <BrandMark size={34} />

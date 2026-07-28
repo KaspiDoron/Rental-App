@@ -222,16 +222,36 @@ input, textarea, select, button {
   --z-overlay: 1200; /* modals, sheets, onboarding: they own the screen */
   --z-veil: 1400; /* route-change veil - covers a dialog mid-navigation */
   --z-alert: 2000; /* offline / test-mode banners - always legible */
-  /* Overwritten with the bar's real measured height by <TopbarMetrics>. This
-     value is only the pre-hydration guess, and it is deliberately derived from
-     the bar's own padding rather than being a round number. */
-  --topbar-h: calc(var(--safe-top) + 3.4375rem);
+  /* THE BAR'S HEIGHT IS A CONTRACT, NOT AN OBSERVATION.
+   *
+   * This used to be a pre-hydration guess that a mounted <TopbarMetrics>
+   * overwrote with a ResizeObserver measurement. Three things were wrong with
+   * that, and together they are the "springy, jumpy" scroll:
+   *
+   *   1. A custom property on documentElement INHERITS, so every republish
+   *      invalidated style for the entire document - hundreds of vendor cards.
+   *   2. `.substick` parks at this value, so every republish MOVED the pinned
+   *      List/Map/Activity row by the delta, mid-scroll. That is the jump.
+   *   3. On a phone, `resize` fires continuously while the browser's URL bar
+   *      collapses and expands DURING a scroll gesture - which is exactly when
+   *      the user reported it - and each one forced a synchronous layout read.
+   *
+   * The bar's contents are already pinned to one line (`truncate`, `shrink-0`,
+   * `min-w-0`), so its height is structural. Declaring it removes the observer,
+   * the writes, the invalidation and the jump in one move. `--topbar-row-h` is
+   * the content box: 6px top padding + a 34px brand mark + 10px bottom padding
+   * + a 1px border, with a little slack. */
+  --topbar-row-h: 3.25rem;
+  --topbar-h: calc(var(--safe-top) + var(--topbar-row-h));
 }
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: var(--topbar-z);
+  /* Declared, not measured - see --topbar-row-h above. `border-box` (Tailwind
+     preflight) means this includes the padding and the border. */
+  height: var(--topbar-h);
   padding-top: calc(var(--safe-top) + 6px);
   background: var(--bg);
   border-bottom: 1px solid var(--line);
@@ -250,33 +270,51 @@ input, textarea, select, button {
 .layer-veil { z-index: var(--z-veil); }
 .layer-alert { z-index: var(--z-alert); }
 
-/* COLLAPSE ON SCROLL - transform only, so the bar's laid-out height never
-   changes and TopbarMetrics has nothing new to measure. The element keeps its
-   box, so nothing below it shifts (CLS stays zero); it is simply drawn higher.
-   Only `transform` is animated, which the compositor handles without layout or
-   paint. See src/components/useHeaderCollapse.ts for why every other approach
-   was rejected. */
-.topbar {
+/* COLLAPSE ON SCROLL - transform only, so the laid-out height never changes.
+   The element keeps its box, so nothing below it shifts (CLS stays zero); it is
+   simply drawn higher. Only `transform` is animated, which the compositor
+   handles without layout or paint. See src/components/useHeaderCollapse.ts for
+   why every other approach was rejected.
+
+   THE TWO BARS MOVE AS ONE PLATE. The sub-nav used to stay exactly where it
+   was while the brand row slid away above it, which opened a ~55px window of
+   scrolling page above the pinned List/Map/Activity row - content sliding
+   through a gap that had no business existing. That is the "springy" half of
+   the report. Identical transform, identical duration, identical easing, and
+   the hook only marks the sub-nav collapsed once it is actually pinned, so it
+   can never jump while it is still scrolling in flow. */
+.topbar,
+.substick {
   transition: transform 260ms var(--fluid, cubic-bezier(0.32, 0.72, 0, 1));
 }
-.topbar[data-collapsed="true"] {
-  /* Up by its own height plus the shadow, so no sliver is left behind. */
-  transform: translate3d(0, calc(-1 * var(--topbar-h, 100%)), 0);
+.topbar[data-collapsed="true"],
+.substick[data-collapsed="true"] {
+  /* Up by the bar's own height, so no sliver is left behind and the sub-nav
+     lands flush against the top edge. */
+  transform: translate3d(0, calc(-1 * var(--topbar-h)), 0);
 }
 @media (prefers-reduced-motion: reduce) {
-  .topbar { transition: none; }
-  .topbar[data-collapsed="true"] { transform: none; }
+  .topbar,
+  .substick { transition: none; }
+  .topbar[data-collapsed="true"],
+  .substick[data-collapsed="true"] { transform: none; }
 }
 
 /* Anything that sticks BELOW the top bar. Opaque for the same reason; always
-   exactly one layer down; and parked at the bar's MEASURED height, so there is
-   never a strip of scrolling page visible between the two. All three are
-   properties of the class, not of each call site. */
+   exactly one layer down; and parked at the bar's DECLARED height, so there is
+   never a strip of scrolling page visible between the two and never a value
+   that changes underneath a pinned element. All of it is a property of the
+   class, not of each call site. */
 .substick {
   position: sticky;
   top: var(--topbar-h);
   z-index: calc(var(--topbar-z) - 1);
   background: var(--card);
+  /* A sticky element is repainted for the whole length of the list; a
+     backdrop-filter arriving from a utility class would be re-sampled every
+     frame of every scroll. Chrome material, not content material. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Bottom global navigation - a floating glass capsule.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 // WHY THIS FILE EXISTS
@@ -114,6 +114,14 @@ describe("the top bar is the top", () => {
     expect(i, `${sel} block not found`).toBeGreaterThan(-1);
     return src.slice(i, src.indexOf("}", i) + 1);
   };
+  /** The `.substick` rule that positions it - not the shared transition rule
+   *  it now co-signs with `.topbar`. */
+  const stickyBlock = () => {
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    const m = src.match(/\.substick\s*\{[^}]*position:\s*sticky[^}]*\}/);
+    expect(m, ".substick positioning block not found").toBeTruthy();
+    return m![0];
+  };
 
   it("is opaque - the page does not read through it", () => {
     const b = block(".topbar");
@@ -139,21 +147,37 @@ describe("the top bar is the top", () => {
   });
 
   it("anything that sticks below is strictly one layer down, by construction", () => {
-    const b = block(".substick");
+    const b = stickyBlock();
     expect(b).toMatch(/z-index:\s*calc\(var\(--topbar-z\) - 1\)/);
     // Opaque too: a translucent second sticky row was the other half of it.
     expect(b).toMatch(/background:\s*var\(--card\)/);
+    // ...and a utility class must not smuggle a per-frame blur back in. A
+    // STICKY element with a backdrop-filter re-samples its backdrop on every
+    // frame of every scroll - the exact cost the top bar was made opaque to
+    // remove, and the sub-nav sits over the same scrolling list.
+    expect(b).toMatch(/backdrop-filter:\s*none/);
   });
 
-  it("...and lands on the bar's MEASURED height, not a guessed offset", () => {
+  it("...and lands on the bar's DECLARED height, which nothing measures", () => {
     // `top-16` was a 64px guess. Too small hides the row under the bar; too
     // large leaves a strip of the scrolling page showing between them.
-    expect(block(".substick")).toMatch(/top:\s*var\(--topbar-h\)/);
-    const probe = read("src/components/TopbarMetrics.tsx");
-    expect(probe).toMatch(/ResizeObserver/);
-    expect(probe).toMatch(/setProperty\("--topbar-h"/);
-    expect(read("src/app/layout.tsx")).toMatch(/<TopbarMetrics \/>/);
+    expect(stickyBlock()).toMatch(/top:\s*var\(--topbar-h\)/);
     expect(read("src/app/page.tsx")).not.toMatch(/substick top-\d/);
+
+    // THE HEIGHT IS A CONTRACT NOW, NOT AN OBSERVATION. It used to be measured
+    // by a mounted <TopbarMetrics> with a ResizeObserver, written to
+    // documentElement as a custom property. Custom properties INHERIT, so every
+    // write invalidated style for the whole document; worse, `.substick` parks
+    // at that value, so a write moved the pinned sub-nav mid-scroll - and on a
+    // phone `resize` fires continuously while the URL bar collapses DURING a
+    // scroll. That loop is the reported jump, and it is gone by construction.
+    const src = css();
+    expect(src).toMatch(/--topbar-row-h:\s*[\d.]+rem/);
+    expect(src).toMatch(/--topbar-h:\s*calc\(var\(--safe-top\) \+ var\(--topbar-row-h\)\)/);
+    expect(block(".topbar")).toMatch(/height:\s*var\(--topbar-h\)/);
+    expect(src).not.toMatch(/setProperty\("--topbar-h"/);
+    expect(read("src/app/layout.tsx")).not.toMatch(/TopbarMetrics/);
+    expect(existsSync(join(process.cwd(), "src/components/TopbarMetrics.tsx"))).toBe(false);
   });
 
   it("the sub-row no longer carries its own z-index or sticky class", () => {

@@ -11,6 +11,7 @@ import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
+import { jsonRoute } from "@/lib/http/json-route";
 
 // In-app outreach: the ONLY way messages leave the app. The user never jumps
 // to WhatsApp - we screen the message through the safety agent, resolve the
@@ -19,7 +20,17 @@ import { resolveOutreachIdentity } from "@/lib/wa/identity";
 // the shop's reply back to this conversation automatically.
 //
 // Body: { to?, placeId?, vendorId?, vendorName?, message, kind?, rfq?, round? }
-export async function POST(req: Request) {
+//
+// EVERY EXIT IS JSON, including the ones nobody wrote. This handler awaits an
+// LLM safety screen, Google Place Details, Supabase, the integrity ladder, the
+// anti-ban guard and the WhatsApp host - any of which can throw or hang, and
+// each of which used to end the request as an HTML 500 or a gateway 504. The
+// browser's `res.json()` then threw, and the shop card told the traveller their
+// connection was down. `jsonRoute` makes the failure modes part of the contract
+// (see lib/http/json-route).
+export const POST = jsonRoute("Sending your message", handlePost);
+
+async function handlePost(req: Request) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Sign in to message vendors." }, { status: 401 });
@@ -454,9 +465,17 @@ export async function POST(req: Request) {
   // treats as "a message reached this shop". A FAILED send must therefore
   // never write one - it used to (raw.ok:false), which made the UI count
   // shops as contacted when nothing was delivered.
+  let logged = true;
   if (result.ok) {
     // Log the outbound message WITH thread context (vendor + rfq), so the
     // webhook can match the inbound reply and keep the loop fully in-app.
+    //
+    // BOOKKEEPING MUST NEVER FAIL A DELIVERED SEND. This await had no catch, so
+    // a Supabase hiccup AFTER the message had left WhatsApp threw out of the
+    // handler - the traveller was told the server could not be reached about a
+    // message the shop had already received, and tapping again was the natural
+    // response. The row is important, but it is not the send: record the loss
+    // and answer honestly instead.
     await sbInsert("whatsapp_messages", [
       {
         // Provider id -> the webhook echo-check matches by id, never by body.
@@ -485,7 +504,21 @@ export async function POST(req: Request) {
           ...(englishGloss ? { englishGloss } : {}),
         },
       },
-    ]);
+    ]).catch(async (e) => {
+      logged = false;
+      await sbInsert("agent_events", [
+        {
+          kind: "outbound-log-failed",
+          vendor_id: vendorId,
+          vendor_name: vendorName,
+          detail: JSON.stringify({
+            email: session.email,
+            channel: result.channel,
+            error: e instanceof Error ? e.message : String(e),
+          }).slice(0, 800),
+        },
+      ]).catch(() => {});
+    });
   } else {
     // Keep the failure observable without polluting the "sent" record.
     await sbInsert("agent_events", [
@@ -509,6 +542,9 @@ export async function POST(req: Request) {
     channel: configured ? result.channel : "unconfigured",
     error: result.error,
     phone: to,
+    // false when the message reached the shop but our record of it did not
+    // reach the database - the transcript may be a message short.
+    logged,
     // Present only on a nudge: the plan rule, explained, on a message that was
     // sent anyway.
     notice,

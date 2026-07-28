@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import type { Vendor, StructuredRFQ, VehicleOption } from "@/lib/types";
+import type { Vendor, StructuredRFQ, VehicleOption, OutreachReply } from "@/lib/types";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { Icon } from "./icons";
 import { AnimatedNumber } from "./SavingsTicker";
@@ -9,6 +9,7 @@ import { LoadingDots } from "./LoadingDots";
 import { PhotoGallery } from "./PhotoGallery";
 import { ShopPhoto } from "./ShopPhoto";
 import { friendlySendError } from "@/lib/wa/send-error";
+import { fetchJson } from "@/lib/client/fetch-json";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/currency";
 import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
@@ -63,10 +64,11 @@ function VendorCardInner({
   // A send was parked in the outbox - stamp queuedUntil + the guard's real
   // reason instantly so every surface agrees without waiting for a poll.
   onQueued?: (vendorId: string, queuedUntil?: string, queuedReason?: string) => void;
-  onCustomMessage: (
-    vendorId: string,
-    message: string
-  ) => Promise<{ allowed: boolean; reason?: string; suggestion?: string }>;
+  // ONE declared reply shape for every send in the app (lib/types). The prop
+  // used to narrow it to three fields and the body then cast it back out with
+  // `as`, which is how `ok` - a field the route has never returned - survived
+  // as a success test for years.
+  onCustomMessage: (vendorId: string, message: string) => Promise<OutreachReply>;
   // Pickup consent: the shop offered to pick the traveller up; sending the
   // exact location happens ONLY after the traveller approves it here.
   onPickupConsent?: (vendor: Vendor, sharePlace?: string) => Promise<{ ok: boolean; reason?: string }>;
@@ -155,9 +157,25 @@ function VendorCardInner({
     rfqInFlight.current = true;
     setRfqState("sending");
     try {
-      const res = await fetch("/api/outreach", {
+      // THE APP ALREADY HAD A TRANSPORT THAT CANNOT HANG AND CANNOT THROW.
+      //
+      // `lib/client/fetch-json` was written for exactly this and the send path
+      // never used it: this was a bare `fetch` + `await res.json()`, so an HTML
+      // 500, a gateway 504 and a phone with no signal all landed in the same
+      // catch arm - the one that says "Couldn't reach the server just now" -
+      // and a request that stalled never landed anywhere at all, leaving the
+      // button spinning. fetchJson keeps the three apart, always settles, and
+      // returns the server's JSON body even on a non-2xx (which several
+      // branches below rely on).
+      //
+      // The 50s deadline is deliberate: a send legitimately runs an LLM safety
+      // screen, localization and the WhatsApp host, and the route's own 45s
+      // budget answers first with a body we can explain. The default 10s would
+      // abort perfectly healthy sends.
+      const r = await fetchJson<OutreachReply>("/api/outreach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: 50_000,
         body: JSON.stringify({
           to: vendor.whatsapp || undefined,
           placeId: vendor.placeId,
@@ -172,7 +190,20 @@ function VendorCardInner({
           localLang: Boolean(localLang),
         }),
       });
-      const d = await res.json();
+      const d = r.data;
+      if (!d) {
+        // No body at all: a timeout, a dead connection, or an answer that was
+        // not JSON. None of those is proof WhatsApp is unlinked, and none of
+        // them is automatically the user's connection either - fetchJson has
+        // already picked the honest line for whichever it was.
+        setRfqState("rate-limited");
+        setRfqError(
+          r.timedOut
+            ? t("That took too long - your message may still be on its way. Give it a few seconds before trying again.")
+            : t(r.error ?? "Couldn't reach the server just now - it retries automatically. Try again in a moment.")
+        );
+        return;
+      }
       if (d.duplicate) {
         // B3: the server recognised this exact ask is already on its way. This
         // is NOT a failure - the old code fell through to the generic "brief
@@ -190,7 +221,7 @@ function VendorCardInner({
         // "RFQ sent" - the queued badge is the whole truth. Stamp queuedUntil
         // + the real reason immediately so strip and card agree NOW.
         setRfqState("queued");
-        onQueued?.(vendor.id, d.queuedUntil, d.queuedReason);
+        onQueued?.(vendor.id, d.queuedUntil, d.queuedReason ?? undefined);
       } else if (d.halted) {
         // Already asked and awaiting the reply (server-side truth).
         setRfqState("sent");
@@ -225,8 +256,9 @@ function VendorCardInner({
         );
       }
     } catch {
-      // A thrown/timed-out request means WE couldn't reach OUR server - that is
-      // never proof the user's WhatsApp is unlinked. Transient hiccup.
+      // postJson does not throw, so reaching here means something in OUR
+      // branching did. Keep the safety net - it must never leave the button
+      // spinning - but it is no longer the route every server fault takes.
       setRfqState("rate-limited");
       setRfqError(t("Couldn't reach the server just now - it retries automatically. Try again in a moment."));
     } finally {
@@ -237,17 +269,10 @@ function VendorCardInner({
   async function sendCustom() {
     if (!draft.trim()) return;
     setChatState({ status: "checking" });
-    const verdict = (await onCustomMessage(vendor.id, draft.trim())) as {
-      allowed: boolean;
-      sent?: boolean;
-      configured?: boolean;
-      queued?: boolean;
-      reconnecting?: boolean;
-      rateLimited?: boolean;
-      error?: string;
-      reason?: string;
-      suggestion?: string;
-    };
+    // No `as` cast: the prop is typed with the shared OutreachReply now, so a
+    // field the route does not return is a compile error rather than a
+    // permanently-true condition.
+    const verdict = await onCustomMessage(vendor.id, draft.trim());
     if (verdict.allowed && !verdict.sent) {
       if (verdict.queued) {
         // Anti-ban queue (shop closed / pacing): NOTHING was delivered yet -

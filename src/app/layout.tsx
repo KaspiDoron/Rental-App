@@ -4,7 +4,6 @@ import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
 import { DomTranslator } from "@/components/DomTranslator";
 import { OfflineBanner } from "@/components/OfflineBanner";
-import { TopbarMetrics } from "@/components/TopbarMetrics";
 import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
 import "./globals.css";
@@ -144,7 +143,6 @@ export default function RootLayout({
                 every `position: fixed` element inside it. `page-fade` is
                 opacity-only for exactly that reason. */}
             <div className="app-canvas page-fade">{children}</div>
-            <TopbarMetrics />
             <NavVeil />
             <DomTranslator />
             <OfflineBanner />

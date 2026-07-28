@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
@@ -76,18 +76,25 @@ describe("the bar's height cannot change, so nothing below it jumps", () => {
     expect(row).toMatch(/shrink-0/);
   });
 
-  it("the published height is de-duped, because the property inherits", () => {
-    const t = readCode("src/components/TopbarMetrics.tsx");
-    expect(t).toMatch(/h === last/);
-    expect(t).toMatch(/last = h/);
-  });
-
-  it("the metrics observer does not watch the whole document", () => {
-    // DomTranslator mutates the body on a timer; a subtree observation made
-    // this run a document-wide querySelector continuously.
-    const t = readCode("src/components/TopbarMetrics.tsx");
-    expect(t).toMatch(/mo\.observe\(document\.body, \{ childList: true \}\)/);
-    expect(t).not.toMatch(/subtree: true/);
+  it("NOTHING measures the bar at all any more", () => {
+    // De-duping the republished height was not enough. `--topbar-h` lives on
+    // documentElement and custom properties INHERIT, so any write invalidates
+    // style for the whole document - and `.substick` parks at that value, so a
+    // write MOVES the pinned sub-nav. On a phone `resize` fires continuously
+    // while the URL bar collapses DURING a scroll gesture, which is exactly
+    // when the jump was reported. The height is declared in CSS now, and the
+    // measuring component is gone rather than tuned.
+    expect(existsSync(join(process.cwd(), "src/components/TopbarMetrics.tsx"))).toBe(false);
+    const all = [
+      "src/app/layout.tsx",
+      "src/app/page.tsx",
+      "src/components/useHeaderCollapse.ts",
+    ].map(readCode);
+    for (const src of all) {
+      expect(src).not.toMatch(/setProperty\("--topbar-h"/);
+      expect(src).not.toMatch(/new ResizeObserver/);
+    }
+    expect(css()).toMatch(/--topbar-h:\s*calc\(var\(--safe-top\) \+ var\(--topbar-row-h\)\)/);
   });
 
   it("no infinite PAINT animation runs inside the sticky bar", () => {
@@ -118,11 +125,36 @@ describe("the collapse is transform-only", () => {
     expect(body).not.toMatch(/height|padding|margin|top:/);
   });
 
-  it("does no layout read and no React state per scroll", () => {
+  it("does no layout read and no React state PER FRAME", () => {
     const h = readCode("src/components/useHeaderCollapse.ts");
     expect(h).toMatch(/window\.scrollY/);
-    expect(h).not.toMatch(/getBoundingClientRect/);
     expect(h).not.toMatch(/useState/);
+    // The per-frame path is `read()`. It may touch scrollY and nothing that
+    // forces layout; the one rect read lives in `apply()`, which runs on a
+    // state FLIP - a couple of times per gesture, not sixty times a second.
+    const perFrame = h.slice(h.indexOf("const read ="), h.indexOf("const onScroll ="));
+    expect(perFrame.length).toBeGreaterThan(20);
+    expect(perFrame).not.toMatch(/getBoundingClientRect|offsetHeight|offsetTop|getComputedStyle/);
+  });
+
+  it("the sub-nav travels with the bar, so no gap opens above it", () => {
+    // Collapsing only the brand row left the pinned List/Map/Activity row
+    // where it was, with ~55px of scrolling page visible above it. That window
+    // of moving content under a stationary toggle is the "springy" report.
+    const c = css();
+    const rule = c.slice(c.indexOf('.topbar[data-collapsed="true"]'));
+    const head = rule.slice(0, rule.indexOf("{"));
+    expect(head).toMatch(/\.substick\[data-collapsed="true"\]/);
+    const h = readCode("src/components/useHeaderCollapse.ts");
+    expect(h).toMatch(/querySelectorAll<HTMLElement>\("\.topbar, \.substick"\)/);
+  });
+
+  it("...but never while it is still scrolling in flow", () => {
+    // Translating an unpinned sub-nav would move it its whole offset in one
+    // frame - the very jump this is meant to remove. The flip checks first.
+    const h = readCode("src/components/useHeaderCollapse.ts");
+    expect(h).toMatch(/const pinned =/);
+    expect(h).toMatch(/if \(next && !pinned\)/);
   });
 
   it("promotes only while moving, never permanently", () => {
@@ -135,7 +167,9 @@ describe("the collapse is transform-only", () => {
     expect(readCode("src/components/useHeaderCollapse.ts")).toMatch(
       /prefers-reduced-motion: reduce/
     );
-    expect(css()).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}\.topbar \{ transition: none/);
+    expect(css()).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}\.substick \{ transition: none/
+    );
   });
 
   it("has hysteresis, so momentum and rubber-band do not flap it", () => {

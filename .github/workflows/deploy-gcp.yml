@@ -30,9 +30,19 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+# TWO SCOPES, BECAUSE THEY WANT OPPOSITE THINGS.
+#
+# CI is disposable: a superseded pull-request run is pure waste and should be
+# cancelled. A deploy is not: cancelling a run mid-`gcloud run deploy` kills the
+# process between its read of the service and its write, which is one of the
+# ways the resource-version conflict below gets created in the first place.
+#
+# So the workflow-level group is per-ref and only cancels PR runs (which never
+# reach the deploy job at all - see the `if` on it), and the deploy JOB has its
+# own global, never-cancelled lane further down.
 concurrency:
-  group: deploy-cloud-run
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGION: asia-southeast1            # Singapore - closest to the SE-Asia market
@@ -78,6 +88,15 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # ONE DEPLOY LANE FOR THE WHOLE REPOSITORY, AND IT IS NEVER INTERRUPTED.
+    # A literal group (not keyed by ref) means a push to master and a manual
+    # dispatch queue behind each other instead of both issuing a
+    # read-modify-write against the same Cloud Run service. `cancel-in-progress:
+    # false` is deliberate and is the opposite of what it looks like: killing an
+    # in-flight deploy is what leaves the service half-updated.
+    concurrency:
+      group: deploy-cloud-run-wheeldeal
+      cancel-in-progress: false
 
     steps:
       - name: Checkout
@@ -126,39 +145,99 @@ jobs:
           docker push "$IMAGE:latest"
 
       - name: Deploy to Cloud Run
+        # SECRETS ARRIVE AS ENVIRONMENT VARIABLES, NOT AS TEXT PASTED INTO A
+        # SHELL SCRIPT. `${{ secrets.X }}` is substituted before bash ever sees
+        # the line, so a value containing a quote, a `$`, a backtick or a
+        # newline used to rewrite the script around it. It also broke the
+        # optional-secret guards: with an unset secret, `[ -n "" ]` was written
+        # as `[ -n ]`, which bash evaluates as "is the string '-n' non-empty" -
+        # true - so every optional key was appended EMPTY, overwriting a good
+        # value already on the service. Referenced as `$VAR` none of that is
+        # possible and the guards mean what they say.
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          IMAGE_TAG: ${{ github.sha }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+          EVOLUTION_API_URL: ${{ secrets.EVOLUTION_API_URL }}
+          EVOLUTION_API_KEY: ${{ secrets.EVOLUTION_API_KEY }}
+          EVOLUTION_HOSTS: ${{ secrets.EVOLUTION_HOSTS }}
+          APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
         run: |
-          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
+          set -euo pipefail
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE"
           # ^##^ makes gcloud split on ## instead of "," so secret values may
           # safely contain commas (e.g. ADMIN_EMAILS, EVOLUTION_HOSTS).
-          ENV_VARS="SUPABASE_URL=${{ secrets.SUPABASE_URL }}"
-          ENV_VARS="$ENV_VARS##SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
-          ENV_VARS="$ENV_VARS##NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
-          ENV_VARS="$ENV_VARS##SESSION_SECRET=${{ secrets.SESSION_SECRET }}"
-          ENV_VARS="$ENV_VARS##ADMIN_EMAILS=${{ secrets.ADMIN_EMAILS }}"
-          if [ -n "${{ secrets.EVOLUTION_API_URL }}" ]; then
-            ENV_VARS="$ENV_VARS##EVOLUTION_API_URL=${{ secrets.EVOLUTION_API_URL }}"
-          fi
-          if [ -n "${{ secrets.EVOLUTION_API_KEY }}" ]; then
-            ENV_VARS="$ENV_VARS##EVOLUTION_API_KEY=${{ secrets.EVOLUTION_API_KEY }}"
-          fi
-          if [ -n "${{ secrets.EVOLUTION_HOSTS }}" ]; then
-            ENV_VARS="$ENV_VARS##EVOLUTION_HOSTS=${{ secrets.EVOLUTION_HOSTS }}"
-          fi
-          if [ -n "${{ secrets.APP_DOMAIN }}" ]; then
-            ENV_VARS="$ENV_VARS##APP_DOMAIN=${{ secrets.APP_DOMAIN }}"
-          fi
-          gcloud run deploy "$SERVICE" \
-            --image "$IMAGE:${{ github.sha }}" \
-            --region "$REGION" \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8080 \
-            --memory 1Gi \
-            --cpu 1 \
-            --min-instances 0 \
-            --max-instances 10 \
-            --timeout 300 \
-            --set-env-vars "^##^$ENV_VARS"
+          ENV_VARS="SUPABASE_URL=$SUPABASE_URL"
+          ENV_VARS="$ENV_VARS##SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+          ENV_VARS="$ENV_VARS##NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          ENV_VARS="$ENV_VARS##SESSION_SECRET=$SESSION_SECRET"
+          ENV_VARS="$ENV_VARS##ADMIN_EMAILS=$ADMIN_EMAILS"
+          for OPTIONAL in EVOLUTION_API_URL EVOLUTION_API_KEY EVOLUTION_HOSTS APP_DOMAIN; do
+            VALUE="${!OPTIONAL:-}"
+            if [ -n "$VALUE" ]; then
+              ENV_VARS="$ENV_VARS##$OPTIONAL=$VALUE"
+            fi
+          done
+
+          # ABORTED IS A RACE, NOT A BAD DEPLOY.
+          #
+          #   ERROR: (gcloud.run.deploy) ABORTED: Conflict for resource
+          #   'wheeldeal': version '...656665' was specified but current version
+          #   is '...401735'.
+          #
+          # `gcloud run deploy` reads the service, applies the change and writes
+          # it back with the version it read. Anything that touches the service
+          # in between makes that write stale - and it is NOT only a second
+          # pipeline: Cloud Run's own reconciliation bumps the version as the
+          # previous revision finishes rolling out and traffic migrates, which
+          # can land after the previous deploy command has already returned. The
+          # concurrency lane above stops us racing ourselves; this stops us
+          # racing the platform. The command is declarative, so re-running it is
+          # idempotent - the retry re-reads the fresh version and re-applies the
+          # SAME image and env.
+          ATTEMPTS=5
+          DELAY=10
+          for i in $(seq 1 "$ATTEMPTS"); do
+            set +e
+            OUT="$(gcloud run deploy "$SERVICE" \
+              --image "$IMAGE:$IMAGE_TAG" \
+              --region "$REGION" \
+              --platform managed \
+              --allow-unauthenticated \
+              --quiet \
+              --port 8080 \
+              --memory 1Gi \
+              --cpu 1 \
+              --min-instances 0 \
+              --max-instances 10 \
+              --timeout 300 \
+              --set-env-vars "^##^$ENV_VARS" 2>&1)"
+            CODE=$?
+            set -e
+            echo "$OUT"
+            if [ "$CODE" -eq 0 ]; then
+              echo "Deployed on attempt $i."
+              exit 0
+            fi
+            # Only a version conflict is retried. A bad image, a missing
+            # permission or an invalid flag must fail immediately and loudly -
+            # retrying those just hides the real error five times over.
+            if ! echo "$OUT" | grep -qiE 'ABORTED|Conflict for resource|version .* was specified'; then
+              echo "Deploy failed for a reason that will not fix itself - not retrying."
+              exit "$CODE"
+            fi
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              echo "Resource version moved under us; re-reading and retrying in ${DELAY}s (attempt $i of $ATTEMPTS)."
+              sleep "$DELAY"
+              DELAY=$((DELAY * 2))
+            fi
+          done
+          echo "Still conflicting after $ATTEMPTS attempts - something else is writing to this service."
+          exit 1
 
       - name: Show service URL
         run: |
