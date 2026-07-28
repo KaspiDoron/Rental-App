@@ -58,12 +58,17 @@ export function FixedLayer({
     const vv = typeof window !== "undefined" ? window.visualViewport : undefined;
     const opts = { passive: true } as AddEventListenerOptions;
     vv?.addEventListener("resize", nudge, opts);
-    vv?.addEventListener("scroll", nudge, opts);
+    // NOT "scroll". The stale-composited-layer artifact this beat exists for is
+    // a viewport RESIZE effect - the keyboard opening, the URL bar collapsing,
+    // an orientation change - and every one of those still fires here. Bumping
+    // it on scroll instead re-rendered this portal, and therefore the whole
+    // backdrop-filtered tab bar and Will's card, on EVERY scroll frame, then
+    // rewrote a DOM attribute to deliberately force a style recalculation. That
+    // was the single most expensive thing happening during a scroll.
     window.addEventListener("orientationchange", nudge, opts);
     window.addEventListener("pageshow", nudge, opts);
     return () => {
       vv?.removeEventListener("resize", nudge);
-      vv?.removeEventListener("scroll", nudge);
       window.removeEventListener("orientationchange", nudge);
       window.removeEventListener("pageshow", nudge);
     };

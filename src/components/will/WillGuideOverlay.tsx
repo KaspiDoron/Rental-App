@@ -48,6 +48,9 @@ export function WillGuideOverlay({
   const { t } = useI18n();
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [anchorRect, setAnchorRect] = useState<Rect | null>(null);
+  // The last rect we COMMITTED, so a scroll that did not actually move the
+  // anchor costs nothing at all.
+  const lastRect = useRef<Rect | null>(null);
   const [pos, setPos] = useState<BubblePlacement | null>(null);
 
   // Track the anchor's viewport rect: events + a slow heartbeat for async
@@ -64,19 +67,46 @@ export function WillGuideOverlay({
       const r = (el as HTMLElement).getBoundingClientRect();
       const offscreen =
         r.bottom < 0 || r.top > window.innerHeight || r.width === 0 || r.height === 0;
-      setAnchorRect(
-        offscreen ? null : { top: r.top, left: r.left, width: r.width, height: r.height }
-      );
+      // BAIL ON AN UNCHANGED RECT. This used to allocate a fresh object on every
+      // scroll event, so React could never bail out of the re-render - a new
+      // object is never === the old one, however identical its numbers.
+      const next = offscreen
+        ? null
+        : { top: r.top, left: r.left, width: r.width, height: r.height };
+      const prev = lastRect.current;
+      const same =
+        (next === null && prev === null) ||
+        (next !== null &&
+          prev !== null &&
+          Math.abs(next.top - prev.top) < 0.5 &&
+          Math.abs(next.left - prev.left) < 0.5 &&
+          Math.abs(next.width - prev.width) < 0.5 &&
+          Math.abs(next.height - prev.height) < 0.5);
+      if (same) return;
+      lastRect.current = next;
+      setAnchorRect(next);
     };
     measure();
+    // ONE MEASURE PER FRAME. Unthrottled, this read layout on every scroll
+    // event and the placement effect then read it again after React had written
+    // top/left - a read-after-write forced synchronous reflow, twice per event.
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        measure();
+      });
+    };
     const opts = { passive: true } as AddEventListenerOptions;
-    window.addEventListener("scroll", measure, opts);
-    window.addEventListener("resize", measure, opts);
-    const beat = setInterval(measure, 600);
+    window.addEventListener("scroll", onScroll, opts);
+    window.addEventListener("resize", onScroll, opts);
+    const beat = setInterval(measure, 2000);
     return () => {
       alive = false;
-      window.removeEventListener("scroll", measure);
-      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
       clearInterval(beat);
     };
   }, [anchor]);

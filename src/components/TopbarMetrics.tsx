@@ -21,12 +21,21 @@ export function TopbarMetrics() {
     let bar: HTMLElement | null = null;
     let ro: ResizeObserver | null = null;
 
+    // DE-DUPED. A custom property on documentElement INHERITS, so writing it
+    // invalidates style for the entire document subtree - which on the results
+    // screen is hundreds of vendor cards. Writing the same value again is pure
+    // waste, and this had no guard beyond `h > 0`, so every observer tick,
+    // resize and orientation change paid for a full-document invalidation
+    // whether or not anything had moved.
+    let last = -1;
     const publish = () => {
       if (!bar) return;
       const h = Math.round(bar.getBoundingClientRect().height);
       // Ignore a zero - the element exists but has not been laid out yet, and
       // publishing 0 would flash the sub-row up under the brand line.
-      if (h > 0) root.style.setProperty("--topbar-h", `${h}px`);
+      if (h <= 0 || h === last) return;
+      last = h;
+      root.style.setProperty("--topbar-h", `${h}px`);
     };
 
     // The bar belongs to the PAGE, not the layout, so it arrives (and is
@@ -43,8 +52,14 @@ export function TopbarMetrics() {
     };
 
     attach();
+    // The bar belongs to the page, so it is replaced on a ROUTE change - not on
+    // every DOM mutation. Observing the whole body ran a document-wide
+    // querySelector on every mutation batch, and DomTranslator mutates the body
+    // on a timer, so this fired continuously instead of on navigation. One
+    // shallow observation of the body's own child list is enough to notice a
+    // page swap, and costs nothing while a list re-renders deeper in the tree.
     const mo = new MutationObserver(attach);
-    mo.observe(document.body, { childList: true, subtree: true });
+    mo.observe(document.body, { childList: true });
     window.addEventListener("resize", publish);
     window.addEventListener("orientationchange", publish);
 

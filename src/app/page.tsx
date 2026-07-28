@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallbackRef } from "@/components/useCallbackRef";
+import { useHeaderCollapse } from "@/components/useHeaderCollapse";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Vendor, StructuredRFQ, Session, TrackerStage, Offer, VehicleOption } from "@/lib/types";
@@ -2136,26 +2137,44 @@ export default function Home() {
 
   const paidPlan = session ? session.plan !== "free" : false;
 
+  // Give the listing back the ~100px the brand row costs while the traveller is
+  // reading down the results, and return it the moment they scroll up.
+  useHeaderCollapse();
+
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-3xl">
       <div className="topbar">
-        <div className="mx-auto flex max-w-md items-center justify-between px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
-          <div className="flex items-center gap-2">
+        {/* THE BAR'S HEIGHT MUST BE STRUCTURALLY CONSTANT.
+            The tagline could wrap to a second line, so the bar grew whenever
+            anything on the row changed width - the plan pill arriving after the
+            session loaded, the language button flipping between its wide
+            "Translate" hint and a narrow flag, the DOM translator swapping in a
+            longer string. Each of those republished --topbar-h, which moves the
+            sticky List/Map/Activity row: the visible JUMP. `min-w-0` + `truncate`
+            makes the text shrink instead of wrapping, and `shrink-0` stops the
+            controls being squeezed into a second line. */}
+        <div className="mx-auto flex max-w-md items-center justify-between gap-2 px-4 pb-2.5 sm:max-w-lg md:max-w-3xl">
+          <div className="flex min-w-0 items-center gap-2">
             <BrandMark size={34} />
-            <div>
+            <div className="min-w-0">
               <h1 className="font-display text-lg font-extrabold leading-none text-strong">
                 Wheel<span className="text-brandblue">Deal</span>
               </h1>
-              <p className="text-[10px] font-bold text-faint">
+              <p className="truncate text-[10px] font-bold text-faint">
                 {t("Authentic bargains, negotiated for you")}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             {session && session.plan !== "free" && (
               <span
+                // `badge-ultra` is an infinite background-position animation.
+                // Inside a STICKY bar that is a repaint of the whole sticky
+                // layer on every frame of every scroll - the same per-frame
+                // cost the opaque topbar change was made to remove. The gradient
+                // stays; only the endless animation goes.
                 className={`rounded-full px-2 py-1 text-[10px] font-extrabold uppercase text-white ${
-                  session.plan === "ultra" ? "badge-ultra" : "bg-brandblue"
+                  session.plan === "ultra" ? "badge-ultra-static" : "bg-brandblue"
                 }`}
               >
                 {session.plan}

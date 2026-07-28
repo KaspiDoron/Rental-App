@@ -65,6 +65,22 @@ export interface ExtractionLike {
     tierLabel?: string;
   }>;
   vehicleAssessment?: { model?: string; status?: string; reason?: string };
+  // THESE ARE THE NAMES THE EXTRACTOR ACTUALLY PRODUCES.
+  //
+  // This shape used to declare `conditions: string[]` and `visionText: string`,
+  // and ExtractedOffer has never had either field - it emits `conditionNotes`
+  // and `imageSummary`. Both reads were therefore permanently `undefined`, and
+  // because `readingIsEmpty` requires prices AND vehicles AND deposit AND
+  // conditions AND text to all be empty, a photo the model read perfectly well
+  // was reported to the traveller as "Nothing readable in this one" whenever it
+  // carried no parsed price - a proof panel telling them the agents were blind
+  // while the agents were, in fact, reading it.
+  //
+  // The old names are kept as optional aliases so any caller still passing them
+  // (the studio/simulator mirrors) keeps working.
+  conditionNotes?: string | null;
+  imageSummary?: string | null;
+  vehicleDescription?: string | null;
   conditions?: string[];
   visionText?: string;
 }
@@ -118,7 +134,13 @@ export function readingFrom(
     if (name && !vehicles.includes(name)) vehicles.push(name);
   }
 
-  const conditions = (e.conditions ?? [])
+  // `conditionNotes` is one free-text line; `conditions` is the legacy array.
+  const conditions = (
+    e.conditions?.length
+      ? e.conditions
+      : String(e.conditionNotes ?? "")
+          .split(/[;\n•]+/)
+  )
     .map(clean)
     .filter(Boolean)
     .slice(0, 6);
@@ -128,7 +150,8 @@ export function readingFrom(
     vehicles: vehicles.slice(0, 6),
     deposit: clean(e.deposit) || undefined,
     conditions,
-    text: clean(e.visionText).slice(0, 600) || undefined,
+    text: (clean(e.imageSummary) || clean(e.visionText) || clean(e.vehicleDescription))
+      .slice(0, 600) || undefined,
     confidence: confidenceOf(e.confidence),
     usedPricePerDay: opts.usedPricePerDay,
     notUsedReason: opts.notUsedReason,

@@ -28,12 +28,33 @@
 
 import { useState } from "react";
 
-/** Numbers we have already learned have no picture - so a re-render is free. */
+// A FAILED FETCH IS NOT "THIS SHOP HAS NO LOGO".
+//
+// This Set used to be filled by ANY <img> error, and it is module-level, so one
+// transient failure - an Evolution timeout, a 429 while ten cards mounted at
+// once, a 401 in the instant before the session cookie settled - retired that
+// shop to a grey initial for the rest of the session, permanently and
+// invisibly. That is exactly the reported split: some shops show a logo, some
+// never do, and which is which is decided by whichever request happened to lose
+// a race.
+//
+// The route now says WHICH it was (see api/wa/avatar): a shop with genuinely no
+// picture answers 404 with `x-avatar: none`, and everything else is a transient
+// failure that must be retried. `onError` cannot read headers, so the component
+// asks once - a HEAD-shaped probe is not worth it - and instead treats an error
+// as retryable up to a small cap, which converges on the truth without ever
+// making a permanent negative out of a bad minute.
+const RETRY_LIMIT = 2;
+
+/** Numbers that answered "no picture" - a re-render for these is free. */
 const missing = new Set<string>();
+/** Transient failures per number, so a bad minute is not a permanent verdict. */
+const failures = new Map<string, number>();
 
 /** Purge every cached avatar. Called on new-search and on session reset. */
 export function clearShopAvatars(): void {
   missing.clear();
+  failures.clear();
 }
 
 const SIZES: Record<"sm" | "md", string> = {
@@ -72,9 +93,13 @@ export function ShopAvatar({
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => {
-            // A shop with no photo answers 404. Remember it, so every later
-            // render of this shop skips the request entirely.
-            missing.add(digits);
+            // Count it. Only a shop that fails repeatedly is written off; a
+            // single failure leaves the next render free to try again, which is
+            // what turns a timeout back into a logo instead of into an initial
+            // that never recovers.
+            const seen = (failures.get(digits) ?? 0) + 1;
+            failures.set(digits, seen);
+            if (seen >= RETRY_LIMIT) missing.add(digits);
             setBroken(true);
           }}
           className="absolute inset-0 h-full w-full object-cover"

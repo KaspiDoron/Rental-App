@@ -250,6 +250,24 @@ input, textarea, select, button {
 .layer-veil { z-index: var(--z-veil); }
 .layer-alert { z-index: var(--z-alert); }
 
+/* COLLAPSE ON SCROLL - transform only, so the bar's laid-out height never
+   changes and TopbarMetrics has nothing new to measure. The element keeps its
+   box, so nothing below it shifts (CLS stays zero); it is simply drawn higher.
+   Only `transform` is animated, which the compositor handles without layout or
+   paint. See src/components/useHeaderCollapse.ts for why every other approach
+   was rejected. */
+.topbar {
+  transition: transform 260ms var(--fluid, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.topbar[data-collapsed="true"] {
+  /* Up by its own height plus the shadow, so no sliver is left behind. */
+  transform: translate3d(0, calc(-1 * var(--topbar-h, 100%)), 0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar { transition: none; }
+  .topbar[data-collapsed="true"] { transform: none; }
+}
+
 /* Anything that sticks BELOW the top bar. Opaque for the same reason; always
    exactly one layer down; and parked at the bar's MEASURED height, so there is
    never a strip of scrolling page visible between the two. All three are
@@ -604,6 +622,17 @@ html.dark .skeleton::after {
   background: linear-gradient(110deg, #7c3aed 0%, var(--blue) 45%, #7c3aed 100%);
   background-size: 220% 100%;
   animation: shine 5s linear infinite;
+  color: #ffffff;
+}
+
+/* The same badge WITHOUT the endless shine, for anywhere it lives inside a
+   sticky or fixed layer. `shine` animates background-position, which is a PAINT
+   property, not a composited one - so an infinite one inside the sticky top bar
+   repaints that layer on every frame of every scroll, which is precisely the
+   cost removing the bar's backdrop-filter was meant to eliminate. The premium
+   gradient is free; only the animation was expensive. */
+.badge-ultra-static {
+  background: linear-gradient(110deg, #7c3aed 0%, var(--blue) 45%, #7c3aed 100%);
   color: #ffffff;
 }
 

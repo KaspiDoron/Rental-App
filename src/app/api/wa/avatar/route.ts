@@ -76,9 +76,23 @@ export async function GET(req: Request) {
   // way to tell that apart from a shop with no photo. Proxying makes the render
   // depend on OUR fetch, and it keeps the shop's CDN URL server-side, which is
   // also the right answer for a photo that is not ours to hand around.
+  // TELL THE CLIENT WHICH KIND OF NOTHING THIS IS.
+  //
+  // Every failure used to answer a bare 404: "this shop has no picture", "the
+  // Evolution host timed out", "the CDN refused the signed URL" and "rate
+  // limited" were indistinguishable. The card then wrote the shop off
+  // permanently on the first one of any kind. `x-avatar` says which, so a
+  // transient failure can be retried and only a real absence is final.
+  const NONE = { ...NO_STORE, "x-avatar": "none" };
+  const FAILED = { ...NO_STORE, "x-avatar": "failed" };
   const wantsImage = new URL(req.url).searchParams.get("img") === "1";
   if (wantsImage) {
-    if (!pic.url) return new NextResponse(null, { status: 404, headers: NO_STORE });
+    if (!pic.url) {
+      return new NextResponse(null, {
+        status: 404,
+        headers: pic.error ? FAILED : NONE,
+      });
+    }
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8_000);
@@ -86,7 +100,8 @@ export async function GET(req: Request) {
       clearTimeout(timer);
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || !type.startsWith("image/")) {
-        return new NextResponse(null, { status: 404, headers: NO_STORE });
+        // The shop HAS a picture; fetching it failed. Retryable.
+        return new NextResponse(null, { status: 404, headers: FAILED });
       }
       // CACHEABLE, PRIVATELY. `no-store` meant a card scrolled out and back
       // re-fetched the shop's CDN photo every time - fifteen shops, every

@@ -87,7 +87,16 @@ export function DomTranslator() {
       const hit = dict[key];
       if (hit) {
         // Preserve surrounding whitespace of the original node.
-        node.nodeValue = (node.nodeValue ?? "").replace(key, hit);
+        //
+        // GUARDED, because "replace data" ALWAYS queues a characterData
+        // mutation record - even when the text is byte-identical. The observer
+        // below treats characterData as a reason to re-walk the entire body, so
+        // an unguarded write made this a self-feeding 400ms loop: translate ->
+        // mutation -> debounce -> TreeWalker over the whole document -> write ->
+        // mutation. Every one of those walks landed on top of whatever the user
+        // was doing, including scrolling.
+        const next = (node.nodeValue ?? "").replace(key, hit);
+        if (node.nodeValue !== next) node.nodeValue = next;
       }
     };
 
