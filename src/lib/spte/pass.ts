@@ -83,13 +83,6 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // ROUND-AWARE directive (ported from composeBargain): each push has a distinct
   // shape so four turns never read as one template. The model varies the words;
   // this varies the ANGLE.
-  const roundPlay = ctx.legalMoves.includes("bargain")
-    ? round <= 0
-      ? `BARGAIN ANGLE (first push): warmly say the quote is a bit high for you, use the ${days}-day rental as your reason, and ask for a friendly better daily rate. Vary the exact wording.\n`
-      : round === 1
-        ? `BARGAIN ANGLE (second push): DO NOT repeat the "since I'm booking for ${days} days" line - you already used it. Switch lever: ask for a small round-number discount, or a free extra (helmet/fuel/delivery), or mention you're ready to book right now.\n`
-        : `BARGAIN ANGLE (final gentle nudge): one last soft ask, then you will accept. Use a DIFFERENT phrasing and lever from your earlier messages.\n`
-    : "";
 
   // FIRM state - the two-firms-stop rule made explicit to the model too.
   const firmNote =
@@ -235,6 +228,24 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       plan.map((c, i) => `  ${i + 1}. ${c.line}`).join("\n") +
       `\nNEVER write the name of another rental shop in a message. Not the one that quoted less, not any other - say "a better offer" and give the price and the vehicle.\n`
     : "";
+  // THE ANGLE IS A SHAPE; THE REASON COMES FROM THE EVIDENCE.
+  //
+  // This used to hard-code "use the {days}-day rental as your reason" on the
+  // first push - the duration lever, always, no matter what the session knew.
+  // So when a rival shop had already quoted less for the same vehicle, the
+  // ranked plan put that card first and the prompt simultaneously instructed
+  // the model to argue from duration instead. The strongest card in the deck
+  // was computed, printed, and then talked over. Now the angle describes only
+  // the SHAPE of the push and defers the reason to `lead` whenever one exists,
+  // which is exactly what leverage.ts was built to decide.
+  const roundPlay = ctx.legalMoves.includes("bargain")
+    ? round <= 0
+      ? `BARGAIN ANGLE (first push): warmly say the quote is a bit high for you, give ${lead ? "the leverage above as your reason" : `the ${days}-day rental as your reason`}, and ask for a friendly better daily rate. Vary the exact wording.\n`
+      : round === 1
+        ? `BARGAIN ANGLE (second push): DO NOT reuse the reason you already gave - switch lever. ${lead ? "Use the next card in the leverage list." : "Ask for a small round-number discount, or a free extra (helmet/fuel/delivery), or mention you're ready to book right now."}\n`
+        : `BARGAIN ANGLE (final gentle nudge): one last soft ask, then you will accept. Use a DIFFERENT phrasing and lever from your earlier messages.\n`
+    : "";
+
   // Kept as its own line only when there is nothing stronger to lead with.
   const durationLeverage =
     !lead && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")

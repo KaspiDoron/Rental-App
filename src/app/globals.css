@@ -211,7 +211,17 @@ input, textarea, select, button {
  * `--topbar-z` is shared so anything else that sticks can sit strictly below it
  * by construction instead of by a guessed number. */
 :root {
+  /* THE LAYER LADDER. Every rung is named, so a new surface joins the order
+     instead of guessing a bigger number than whatever it lost to last time.
+     The ad-hoc numbers this replaces ran 50, 60, 900, 998, 1100, 1200, 1250,
+     1300, 1400, 2000 - an order nobody could see, and one the tab bar won
+     anyway because the number was never the real question. */
+  --z-chrome: 50; /* tab bar, floating page furniture */
   --topbar-z: 60;
+  --z-coach: 900; /* Will's anchored card - above chrome, below dialogs */
+  --z-overlay: 1200; /* modals, sheets, onboarding: they own the screen */
+  --z-veil: 1400; /* route-change veil - covers a dialog mid-navigation */
+  --z-alert: 2000; /* offline / test-mode banners - always legible */
   /* Overwritten with the bar's real measured height by <TopbarMetrics>. This
      value is only the pre-hydration guess, and it is deliberately derived from
      the bar's own padding rather than being a round number. */
@@ -230,6 +240,15 @@ input, textarea, select, button {
 :root[data-theme="dark"] .topbar {
   box-shadow: 0 8px 22px -12px rgba(0, 0, 0, 0.85);
 }
+
+/* The rungs, as classes, so a component states WHICH layer it is on rather
+   than carrying a magic number. `position` is deliberately not set here - an
+   overlay is still responsible for being fixed/absolute itself. */
+.layer-chrome { z-index: var(--z-chrome); }
+.layer-coach { z-index: var(--z-coach); }
+.layer-overlay { z-index: var(--z-overlay); }
+.layer-veil { z-index: var(--z-veil); }
+.layer-alert { z-index: var(--z-alert); }
 
 /* Anything that sticks BELOW the top bar. Opaque for the same reason; always
    exactly one layer down; and parked at the bar's MEASURED height, so there is

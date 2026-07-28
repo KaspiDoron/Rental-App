@@ -1694,9 +1694,31 @@ export default function Home() {
             : "scooter";
       switch (check.spec.id) {
         case "push-harder": {
+          // A BARGAIN IS COMPOSED SERVER-SIDE, WHERE THE LEVERAGE LIVES.
+          //
+          // This used to interpolate a literal here and post it verbatim, so a
+          // tap on "Push harder" produced "Hi again! Any chance of a better
+          // daily rate for the scooter?" - generic by construction. It never
+          // touched planLeverage, so a live rival quoting less for the same
+          // vehicle in the same search was never mentioned; and it skipped the
+          // post-rails, so nothing checked it for a rival's NAME or a number we
+          // never verified. The server draft knows all of that. The literal
+          // stays only as the offline fallback, which is the one case where
+          // there is no leverage to cite anyway.
+          const drafted = vendor && rfq
+            ? await fetch("/api/bargain-draft", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ vendor, rfq }),
+              })
+                .then((res) => (res.ok ? res.json() : null))
+                .then((d) => (typeof d?.message === "string" ? d.message.trim() : ""))
+                .catch(() => "")
+            : "";
           const r = await customMessage(
             vendorId,
-            `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
+            drafted ||
+              `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
           );
           setActionNote(
             outcomeFor(

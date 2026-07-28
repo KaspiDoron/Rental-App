@@ -8,6 +8,24 @@
 // "add to Home Screen" guide. Next / Back / Skip; works from 320px up.
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
+// AN OVERLAY IS SOMETHING THAT ESCAPES THE CANVAS, not something that picks a
+// big number.
+//
+// This was the only overlay in the app rendered INLINE, and it is why the
+// bottom navigation bar sat on top of the onboarding card and covered its
+// primary button. Its z-index was 1300 against the tab bar's 50 and it still
+// lost, because `.app-canvas` is a stacking context - `page-fade` is an
+// `animation ... both`, and a fill-forwards opacity animation stays "in effect"
+// forever, which is enough for the engine to make one. So 1300 was 1300 among
+// the canvas's OWN children, and the canvas itself (z-auto) was painted before
+// the portalled tab bar that follows it in the document.
+//
+// Portalling to <body> is the fix that does not depend on the canvas staying
+// innocent - which it has now failed to do twice.
+const overlay = (node: React.ReactNode) =>
+  typeof document === "undefined" ? null : createPortal(node, document.body);
 import { BrandMark } from "./BrandMark";
 import { lockBodyScroll } from "@/lib/scroll-lock";
 
@@ -250,8 +268,8 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   );
 
   if (osStep) {
-    return (
-      <div className="fixed inset-0 z-[1300] flex items-end justify-center bg-black/55 backdrop-blur-sm sm:items-center">
+    return overlay(
+      <div className="layer-overlay fixed inset-0 flex items-end justify-center bg-black/55 backdrop-blur-sm sm:items-center">
         <div className="surface-strong w-full max-w-md rounded-t-3xl p-6 pb-safe sm:rounded-blob animate-slide-up">
           <div className="mb-3 text-center">
             <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-3xl bg-brandyellow-soft text-3xl">
@@ -312,16 +330,16 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   }
 
   if (!spotlight) {
-    return (
-      <div className="fixed inset-0 z-[1300] flex items-end justify-center bg-black/55 backdrop-blur-sm sm:items-center">
+    return overlay(
+      <div className="layer-overlay fixed inset-0 flex items-end justify-center bg-black/55 backdrop-blur-sm sm:items-center">
         {card}
       </div>
     );
   }
 
   const pad = 6;
-  return (
-    <div className="pointer-events-none fixed inset-0 z-[1300]">
+  return overlay(
+    <div className="layer-overlay pointer-events-none fixed inset-0">
       {/* Spotlight hole: one div whose giant shadow dims everything around it */}
       <div
         className="absolute rounded-2xl border-2 border-brandblue transition-all duration-300"

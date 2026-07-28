@@ -168,12 +168,30 @@ export function GoogleButton({
         }`}
       />
       {!painted && !busy && (
+        // A SKELETON SAYS "SOMETHING GOES HERE". A SPINNER SAYS "IT IS COMING".
+        //
+        // GSI is a third-party script plus an iframe, so this container is
+        // visibly empty for a noticeable beat on a cold load - long enough that
+        // a static placeholder reads as a broken control rather than as work in
+        // progress. The shimmer still reserves the exact 44px pill (nothing
+        // below it jumps when the real button lands), and a ring turning inside
+        // it, with the reason spelled out, is what makes the wait legible.
+        //
+        // The ring is a CSS transform on one small element - no layout, no
+        // repaint of the page behind it, so it costs nothing while it spins.
         <div
           className="pointer-events-none absolute inset-0 flex items-center justify-center"
           role="status"
           aria-label={t("Loading Google sign-in")}
         >
           <Skeleton className="h-11 w-full max-w-[360px]" rounded="rounded-full" />
+          <span className="absolute flex items-center gap-2 text-[12px] font-bold text-faint">
+            <span
+              aria-hidden="true"
+              className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+            />
+            {t("Loading Google sign-in")}
+          </span>
         </div>
       )}
       {busy && (
