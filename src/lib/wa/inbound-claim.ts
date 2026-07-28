@@ -27,6 +27,30 @@ import { sbInsertReturning, sbSelect } from "../runtime-config";
  * another delivery already stored it (skip). Fails open (true) if the claim
  * store is unavailable.
  */
+/**
+ * Hand a reply claim BACK.
+ *
+ * The claim is a LEASE on "someone is answering this message", not a tombstone
+ * meaning "this message is finished with". It was being used as the latter: the
+ * row was inserted before the thread even resolved and was never removed, so a
+ * turn that threw - an LLM outage, a Supabase blip, any exception between the
+ * claim and the send - left the message permanently un-replyable AND
+ * un-replayable. The recovery sweep could not help either, because it skips
+ * anything already STORED and never asks whether a reply happened.
+ *
+ * That is one shop out of seven going quiet with nothing in any log.
+ */
+export async function releaseReplyClaim(waMessageId: string): Promise<void> {
+  const id = (waMessageId || "").trim();
+  if (!id) return;
+  try {
+    const { sbDelete } = await import("../runtime-config");
+    await sbDelete("wa_processed", `wa_message_id=eq.${encodeURIComponent(id)}`);
+  } catch {
+    /* best effort - the next redelivery or sweep retries */
+  }
+}
+
 export async function claimInboundStore(waMessageId: string): Promise<boolean> {
   const id = (waMessageId || "").trim();
   if (!id) return true; // no id to dedupe on - store it

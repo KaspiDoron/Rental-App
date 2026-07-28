@@ -212,32 +212,6 @@ export async function processVendorReply(opts: {
     ? `&raw->>sender=eq.${encodeURIComponent(opts.senderEmail)}`
     : "";
 
-  // Dedupe via an ATOMIC CLAIM. Providers retry webhooks and two deliveries of
-  // the same message can arrive concurrently; a count-based check let BOTH
-  // proceed (double reply) or BOTH bail (no reply). Claim the message id by
-  // inserting into wa_processed (primary key = wa_message_id): exactly one
-  // insert wins. Falls back to the legacy count check when the table is not
-  // migrated yet, so un-migrated deployments never silently go silent.
-  if (opts.waMessageId) {
-    const { sbInsertReturning } = await import("./runtime-config");
-    const claimed = await sbInsertReturning<{ wa_message_id: string }>("wa_processed", [
-      { wa_message_id: opts.waMessageId },
-    ]);
-    if (claimed.length === 0) {
-      const existing = await sbSelect(
-        "wa_processed",
-        `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&limit=1`
-      ).catch(() => []);
-      if (existing.length > 0) return; // another delivery already owns it
-      // wa_processed missing/unreachable -> legacy best-effort dedupe.
-      const dup = await sbSelect(
-        "whatsapp_messages",
-        `select=id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&direction=eq.inbound&limit=2`
-      );
-      if (dup.length > 1) return;
-    }
-  }
-
   // Find the thread through THE shared resolver (src/lib/wa/thread-context.ts).
   // It scans a window of recent outbound rows for the newest one carrying an
   // RFQ, instead of demanding that the very newest row carry it. That single
@@ -256,6 +230,85 @@ export async function processVendorReply(opts: {
     });
     return; // reply without a known thread - stored, not processed
   }
+
+  // ---- EXACTLY ONE TURN, AND ONLY WHILE WE ARE ACTUALLY TAKING IT ----------
+  //
+  // Both claims live HERE, after the thread resolves, for reasons that are the
+  // opposite sides of one mistake:
+  //
+  //   - The reply claim used to be taken at the very top, before we even knew
+  //     whether this was a thread we own, and was never released. Any turn that
+  //     threw left the message permanently un-replyable and un-replayable, with
+  //     no trace: one shop out of seven silently never answered. It is a LEASE
+  //     now - released in `finally` unless we actually delivered something.
+  //
+  //   - There was no per-THREAD exclusion at all. Two webhook frames from the
+  //     same shop each won their own message claim and each composed a reply,
+  //     because every "have we already said this?" counter reads the outbound
+  //     row, which is written only after the send. Two duplicate bargains in
+  //     the same minute.
+  const senderKeyForTurn = opts.senderEmail ?? "";
+  let holdsTurn = false;
+  let claimedReply = false;
+  let turnDelivered = false;
+
+  if (opts.waMessageId) {
+    const { sbInsertReturning } = await import("./runtime-config");
+    const claimed = await sbInsertReturning<{ wa_message_id: string }>("wa_processed", [
+      { wa_message_id: opts.waMessageId },
+    ]);
+    if (claimed.length === 0) {
+      const existing = await sbSelect(
+        "wa_processed",
+        `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&limit=1`
+      ).catch(() => []);
+      if (existing.length > 0) return; // another delivery already owns it
+      // wa_processed missing/unreachable -> legacy best-effort dedupe.
+      const dup = await sbSelect(
+        "whatsapp_messages",
+        `select=id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&direction=eq.inbound&limit=2`
+      );
+      if (dup.length > 1) return;
+    } else {
+      claimedReply = true;
+    }
+  }
+
+  try {
+    const { claimThreadTurn, releaseThreadTurn } = await import("./wa/turn-lock");
+    const turn = await claimThreadTurn(senderKeyForTurn, from);
+    if (turn === "lost") {
+      // A sibling turn owns this thread right now. Do NOT compose a second
+      // reply against a thread state that is about to change. Hand the message
+      // back so the burst is answered once, as one coalesced turn.
+      if (claimedReply && opts.waMessageId) {
+        const { releaseReplyClaim } = await import("./wa/inbound-claim");
+        await releaseReplyClaim(opts.waMessageId);
+      }
+      void noteInboundDropped(opts.senderEmail, from, "turn-in-flight", {
+        note: "another delivery is mid-turn for this thread; released for the winner to coalesce",
+      });
+      return;
+    }
+    holdsTurn = turn === "won";
+    void releaseThreadTurn; // released in the finally below
+
+    return await runVendorTurn();
+  } finally {
+    const { releaseThreadTurn } = await import("./wa/turn-lock");
+    if (holdsTurn) await releaseThreadTurn(senderKeyForTurn, from);
+    // A turn that did not deliver has not consumed the message. Give the claim
+    // back so a redelivery or the recovery sweep can answer it.
+    if (claimedReply && !turnDelivered && opts.waMessageId) {
+      const { releaseReplyClaim } = await import("./wa/inbound-claim");
+      await releaseReplyClaim(opts.waMessageId);
+    }
+  }
+
+  async function runVendorTurn(): Promise<void> {
+  // Already guaranteed by the guard above; restated because narrowing does not
+  // cross the closure boundary.
+  if (!ctx) return;
   const priorAt = resolved.newestAt;
   // "(unverified)" PURGE at the source: a historical thread whose outbound meta
   // carries the legacy drill suffix must not propagate it into pushes, events,
@@ -1151,6 +1204,11 @@ export async function processVendorReply(opts: {
     try {
       const { runSpteLiveTurn } = await import("./spte/live");
       await runSpteLiveTurn(turnInput, io);
+      // The turn reached an engine and produced its own outcome (sent, held or
+      // deliberately silent). The message is CONSUMED either way - keeping the
+      // claim is what stops an endless redelivery loop; releasing it is only
+      // for turns that never got this far.
+      turnDelivered = true;
       return;
     } catch (e) {
       await sbInsert("agent_events", [
@@ -1166,6 +1224,7 @@ export async function processVendorReply(opts: {
   }
   if (await graphEngineEnabled()) {
     await runGraphTurn(turnInput, io);
+    turnDelivered = true;
     return;
   }
 
@@ -1661,4 +1720,5 @@ export async function processVendorReply(opts: {
     });
   }
   await writeTrace(traces);
+  }
 }
