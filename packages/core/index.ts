@@ -89,9 +89,22 @@ export {
 } from "../../src/lib/wa-guard";
 
 // Plan-tier capacity + batch pacing (Module 6 outreach budgets).
-export { planCapacity, normalizeCapacityPlan, PLAN_CAPACITY } from "../../src/lib/wa/capacity";
+export {
+  planCapacity,
+  normalizeCapacityPlan,
+  PLAN_CAPACITY,
+  BATCH_WINDOW_MINUTES,
+  batchWindowMs,
+} from "../../src/lib/wa/capacity";
 export type { PlanCapacity, CapacityPlan } from "../../src/lib/wa/capacity";
-export { cappedStaggerOffsets, staggerOffsets, jitteredHold, gaussianUnit } from "../../src/lib/wa/pacing";
+export {
+  batchStagger,
+  staggerOffsets,
+  jitteredHold,
+  gaussianUnit,
+  HARD_MIN_GAP_SEC,
+} from "../../src/lib/wa/pacing";
+export type { BatchSchedule } from "../../src/lib/wa/pacing";
 
 // Config / persistence primitives (PostgREST adapter - see @wheeldeal/db).
 export {

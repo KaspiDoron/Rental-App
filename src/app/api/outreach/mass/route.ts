@@ -13,7 +13,7 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
-import { planCapacity } from "@/lib/wa/capacity";
+import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
@@ -156,7 +156,7 @@ export async function POST(req: Request) {
   const { guardOutbound, afterSend, claimForSend, releaseSendClaim } = await import(
     "@/lib/wa-guard"
   );
-  const { cappedStaggerOffsets, gaussianUnit } = await import("@/lib/wa/pacing");
+  const { batchStagger, gaussianUnit, HARD_MIN_GAP_SEC } = await import("@/lib/wa/pacing");
   const { randomBytes } = await import("crypto");
   const results: {
     id: string;
@@ -184,17 +184,31 @@ export async function POST(req: Request) {
   // 18:34" bug). Using the sender's conservative effective cap keeps the stamps
   // honest and stable.
   const { effectiveHourlyCap, getPolicies } = await import("@/lib/wa-guard");
-  const hourCap = await effectiveHourlyCap(session.email, session.plan).catch(() => 3);
-  // Space the stagger by the REAL min-gap (not a hardcoded 90s) so the parked
-  // not_before stamps match the fast rate the drain will actually honor - the
-  // full budget clears in ~10-15 min instead of being stamped an hour apart.
+  // A FAILED READ MUST NOT RESCHEDULE THE BATCH. This used to fall back to a
+  // literal 3, which is smaller than every plan's conversation budget - so a
+  // transient Supabase blip turned a 3-minute batch of 8 shops into three
+  // hour-groups spanning an afternoon, with nothing in the logs to say why. The
+  // plan's own capacity is a known constant and is the only honest fallback.
+  const planHourCap = planCapacity(session.plan).hourCap;
+  const hourCap = await effectiveHourlyCap(session.email, session.plan).catch(() => planHourCap);
+  // The gap the anti-ban policy ASKS for. batchStagger may compress it (never
+  // below the hard floor) when honouring it would break the batch promise.
   const gapSec = await getPolicies()
-    .then((p) => Math.max(8, p.min_gap_seconds))
+    .then((p) => Math.max(HARD_MIN_GAP_SEC, p.min_gap_seconds))
     .catch(() => 12);
-  // Gaussian (bell-curve) jitter for the cold lane: the same 45-75s band, but
-  // gaps cluster around the mean like human timing instead of a flat uniform
-  // spread (a faint machine tell). Bounds are unchanged (gaussianUnit is [0,1]).
-  const offsets = cappedStaggerOffsets(vendors.length, hourCap, gapSec, gaussianUnit);
+  // SCHEDULE TO THE DEADLINE, NOT TO THE GAP. The whole batch is on its way
+  // inside BATCH_WINDOW_MINUTES; see lib/wa/capacity for why that promise had to
+  // become a thing the code holds rather than an outcome it hoped for. Gaussian
+  // (bell-curve) jitter keeps the gaps human-shaped inside whatever the fitted
+  // gap turns out to be.
+  const schedule = batchStagger({
+    count: vendors.length,
+    hourCap,
+    gapSec,
+    windowMs: batchWindowMs(),
+    rand: gaussianUnit,
+  });
+  const offsets = schedule.offsets;
   const batchStart = Date.now();
   // The stagger index counts only shops that ACTUALLY enter the send stream -
   // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the
@@ -494,6 +508,13 @@ export async function POST(req: Request) {
     // Honest budget summary for the UI: how many shops start now vs deferred,
     // the rolling-window size, and when the next introduction slot frees.
     deferredTomorrow,
+    // THE PROMISE, STATED BACK. The last message of this batch is stamped
+    // within this many minutes - so a UI (or a test, or the owner reading a
+    // response) can hold the schedule to it instead of inferring it.
+    batchWindowMinutes: BATCH_WINDOW_MINUTES,
+    batchGapSeconds: schedule.gapSecUsed,
+    /** Shops beyond the sender's hourly ceiling - honestly scheduled later. */
+    batchOverflow: schedule.overflow,
     introBudget: {
       remaining: newIntrosLeft,
       cap: budget.cap,

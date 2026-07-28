@@ -55,6 +55,32 @@ export const PLAN_CAPACITY: Record<CapacityPlan, PlanCapacity> = {
   ultra: { newContacts: 40, windowHours: 3, hourCap: 40, concurrentCampaigns: 3 },
 };
 
+/**
+ * THE BATCH IS ON ITS WAY WITHIN THIS. A PROMISE, NOT AN OUTCOME.
+ *
+ * Everything above governs a single message: how many distinct shops per
+ * window, how many sends per hour, how many seconds between two of them.
+ * Nothing governed the BATCH - the thing the traveller actually experiences.
+ * The schedule was built bottom-up from a per-message gap and an hourly cap,
+ * and whatever total duration fell out, fell out. Nobody ever asked "will this
+ * finish while the traveller is still standing there?", so when any input
+ * drifted - an owner-raised min-gap, a cap that failed to read and fell back to
+ * 3 - a batch of eight shops silently stretched from 16:26 to 19:17 and the app
+ * looked broken while behaving exactly as written.
+ *
+ * This is that missing question, stated once: a batch of introductions is on
+ * its way inside 15 minutes. `batchStagger` (lib/wa/pacing) schedules TO this
+ * deadline instead of hoping one falls out, and it may never breach the hard
+ * safety floor to do so - if a batch genuinely cannot fit, it says so rather
+ * than smearing itself over an afternoon.
+ */
+export const BATCH_WINDOW_MINUTES = 15;
+
+/** The batch promise in ms - one place, so the route and the UI cannot drift. */
+export function batchWindowMs(): number {
+  return BATCH_WINDOW_MINUTES * 60_000;
+}
+
 export function normalizeCapacityPlan(plan?: string | null): CapacityPlan {
   const p = (plan ?? "").toLowerCase();
   if (p === "ultra" || p === "business") return "ultra";

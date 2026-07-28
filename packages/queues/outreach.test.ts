@@ -8,8 +8,8 @@ import {
   outreachVendorJobId,
   outreachSyncJobId,
 } from "./outreach";
-import { cappedStaggerOffsets } from "../../src/lib/wa/pacing";
-import { planCapacity } from "../../src/lib/wa/capacity";
+import { batchStagger } from "../../src/lib/wa/pacing";
+import { planCapacity, batchWindowMs } from "../../src/lib/wa/capacity";
 
 describe("outreach jobId builders - dedup contract (no ':' - BullMQ key separator)", () => {
   it("prefixes each kind and strips unsafe chars", () => {
@@ -28,22 +28,41 @@ describe("outreach jobId builders - dedup contract (no ':' - BullMQ key separato
   });
 });
 
-describe("vendor stagger = cappedStaggerOffsets(n, hourCap, 45) - the 45-75s structural gap", () => {
-  it("item 0 is immediate; each in-window gap is 45-75s and strictly increasing", () => {
-    const cap = planCapacity("ultra"); // hourCap 40
-    const offsets = cappedStaggerOffsets(20, cap.hourCap, 45);
+describe("the worker holds the SAME batch promise as the mass route", () => {
+  // Both dispatch paths used to build their own schedule - the route from the
+  // policy min-gap, this one from a hardcoded 45s - so the same click took a
+  // different amount of time depending on which ran it, and neither was
+  // accountable for the total. One scheduler, one deadline.
+  const stagger = (count: number, plan: string) =>
+    batchStagger({
+      count,
+      hourCap: planCapacity(plan).hourCap,
+      gapSec: 45,
+      windowMs: batchWindowMs(),
+      rand: () => 0.5,
+    });
+
+  it("item 0 is immediate and the whole fan-out lands inside the window", () => {
+    const { offsets } = stagger(20, "ultra"); // hourCap 40
     expect(offsets[0]).toBe(0);
     for (let i = 1; i < offsets.length; i++) {
-      const gap = (offsets[i] - offsets[i - 1]) / 1000;
-      expect(gap).toBeGreaterThanOrEqual(45);
-      expect(gap).toBeLessThanOrEqual(75);
       expect(offsets[i]).toBeGreaterThan(offsets[i - 1]);
     }
+    expect(offsets[offsets.length - 1]).toBeLessThanOrEqual(batchWindowMs());
   });
-  it("past the hour cap it jumps to the next window (never over the send budget)", () => {
+
+  it("the 45s structural gap is honoured when it fits, compressed when it would not", () => {
+    // 20 shops x 45s = 15 min exactly at the edge, so it compresses slightly;
+    // a small batch keeps the full gap.
+    expect(stagger(5, "ultra").gapSecUsed).toBe(45);
+    expect(stagger(20, "ultra").compressed).toBe(true);
+  });
+
+  it("past the hour cap it still jumps to the next window (a real ceiling)", () => {
     // free hourCap 10: the 11th item lands past the 1-hour boundary
-    const offsets = cappedStaggerOffsets(12, planCapacity("free").hourCap, 45);
+    const { offsets, overflow } = stagger(12, "free");
     expect(offsets[10]).toBeGreaterThanOrEqual(3600_000);
+    expect(overflow).toBe(2);
   });
 });
 

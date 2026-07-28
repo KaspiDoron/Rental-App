@@ -31,7 +31,8 @@ import {
   openerSeed,
   ensureGloballyUnique,
   planCapacity,
-  cappedStaggerOffsets,
+  batchStagger,
+  batchWindowMs,
   gaussianUnit,
   newContactBudget,
   introductionsInWindow,
@@ -152,9 +153,19 @@ async function handleBatch(job: Job<OutreachBatchJobV2 & LegacyBatchJob>): Promi
     return;
   }
 
-  // 4. Structural 45-75s stagger, hour-window aware (reuses the drain's math).
-  // Gaussian (bell-curve) cold-lane jitter - same 45-75s band, human-shaped gaps.
-  const delays = cappedStaggerOffsets(take.length, cap.hourCap, 45, gaussianUnit);
+  // 4. ONE BATCH PROMISE, BOTH DISPATCH PATHS. This used to build its own
+  // schedule from a hardcoded 45s gap, so the same click took a different
+  // amount of time depending on which path ran it and neither was accountable
+  // for the total. batchStagger schedules to BATCH_WINDOW_MINUTES and compresses
+  // toward it, never below the hard ban-safety floor. Gaussian (bell-curve)
+  // cold-lane jitter keeps the gaps human-shaped inside the fitted gap.
+  const delays = batchStagger({
+    count: take.length,
+    hourCap: cap.hourCap,
+    gapSec: 45,
+    windowMs: batchWindowMs(),
+    rand: gaussianUnit,
+  }).offsets;
 
   // 5. Init the progress hash, then fan out in ONE pipelined addBulk.
   await initCampaign(batchId, { userEmail, plan, total: take.length, skipped });

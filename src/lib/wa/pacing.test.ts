@@ -45,7 +45,8 @@ vi.mock("../runtime-config", () => ({
 import {
   jitteredHold,
   staggerOffsets,
-  cappedStaggerOffsets,
+  batchStagger,
+  HARD_MIN_GAP_SEC,
   gapBucket,
   claimSendSlots,
   messageSlotKey,
@@ -74,6 +75,9 @@ describe("jitteredHold - no shared release instant", () => {
     expect(seen.size).toBeGreaterThan(10);
   });
 });
+
+/** The batch promise, as the app declares it (lib/wa/capacity). */
+const WINDOW = 15 * 60_000;
 
 describe("staggerOffsets - the batch trickle", () => {
   it("first is immediate, every later step lands 45-75s after the previous", () => {
@@ -113,74 +117,97 @@ describe("gaussianUnit - bell-curve jitter that never breaks the pacing bounds",
     expect(inMiddle / N).toBeGreaterThan(0.45);
   });
 
-  it("is a drop-in rand for cappedStaggerOffsets - gaps stay within the min-gap band", () => {
-    const offs = cappedStaggerOffsets(40, 40, 12, gaussianUnit);
-    for (let i = 1; i < offs.length; i++) {
-      const step = offs[i] - offs[i - 1];
-      expect(step).toBeGreaterThanOrEqual(12_000); // >= min-gap
-      expect(step).toBeLessThanOrEqual(24_000); // <= min-gap + jitter cap
+  it("is a drop-in rand for batchStagger - gaps stay inside the fitted band", () => {
+    const { offsets, gapSecUsed } = batchStagger({
+      count: 40,
+      hourCap: 40,
+      gapSec: 12,
+      windowMs: WINDOW,
+      rand: gaussianUnit,
+    });
+    for (let i = 1; i < offsets.length; i++) {
+      const step = offsets[i] - offsets[i - 1];
+      expect(step).toBeGreaterThanOrEqual(gapSecUsed * 1000);
+      expect(step).toBeLessThanOrEqual(gapSecUsed * 1250);
     }
-    expect(new Set(offs).size).toBe(40); // still no shared timestamp
+    expect(new Set(offsets).size).toBe(40); // still no shared timestamp
   });
 });
 
-describe("cappedStaggerOffsets - honest cap-aware schedule (no optimistic-then-jump)", () => {
+// THE BATCH TOOK THREE HOURS.
+//
+// A traveller picked 8 shops at 16:26 and the app scheduled the last one for
+// 19:17. Nothing was broken in the sense of a crash: the schedule was built
+// bottom-up from a per-message gap and an hourly cap, every input was
+// individually defensible, and NOTHING was responsible for the total. So when
+// one input drifted - an owner-raised min-gap, or the hourly cap failing to
+// read and falling back to a literal 3, smaller than every plan's own budget -
+// the batch quietly stretched across an afternoon.
+//
+// `batchStagger` starts from the promise instead (lib/wa/capacity
+// BATCH_WINDOW_MINUTES) and works back to a gap.
+describe("batchStagger - schedules to a deadline, not to a gap", () => {
+
   it("first item is immediate", () => {
-    expect(cappedStaggerOffsets(6, 3)[0]).toBe(0);
+    expect(batchStagger({ count: 6, hourCap: 10, gapSec: 12, windowMs: WINDOW }).offsets[0]).toBe(0);
   });
 
-  it("puts at most hourCap items inside each 1-hour window", () => {
-    const cap = 3;
-    const offs = cappedStaggerOffsets(8, cap);
-    for (let hour = 0; hour < 3; hour++) {
-      const lo = hour * 3600_000;
-      const hi = (hour + 1) * 3600_000;
-      const inWindow = offs.filter((o) => o >= lo && o < hi).length;
-      expect(inWindow).toBeLessThanOrEqual(cap);
+  it("THE REPORTED CASE: 8 shops are all on their way inside the window", () => {
+    const { offsets } = batchStagger({ count: 8, hourCap: 10, gapSec: 12, windowMs: WINDOW });
+    expect(offsets[7]).toBeLessThanOrEqual(WINDOW);
+    // ...and nothing jumped an hour.
+    expect(offsets.every((o) => o < 3600_000)).toBe(true);
+  });
+
+  it("a full 40-intro ultra batch still fits, strictly in order", () => {
+    const { offsets } = batchStagger({ count: 40, hourCap: 40, gapSec: 12, windowMs: WINDOW });
+    for (let i = 1; i < offsets.length; i++) expect(offsets[i]).toBeGreaterThan(offsets[i - 1]);
+    expect(offsets[39]).toBeLessThanOrEqual(WINDOW);
+  });
+
+  it("compresses a slow policy gap rather than break the promise", () => {
+    // An owner-raised min-gap (or any drift) can no longer stretch the batch:
+    // the gap is fitted to the window, and `compressed` says it happened.
+    const s = batchStagger({ count: 40, hourCap: 40, gapSec: 600, windowMs: WINDOW });
+    expect(s.compressed).toBe(true);
+    expect(s.gapSecUsed).toBeLessThan(600);
+    expect(s.offsets[39]).toBeLessThanOrEqual(WINDOW);
+  });
+
+  it("...but NEVER below the hard ban-safety floor", () => {
+    // The one thing the deadline may not buy. 500 shops cannot fit in 15 min at
+    // 8s apart, so the schedule runs long instead of sending faster.
+    const s = batchStagger({ count: 500, hourCap: 500, gapSec: 12, windowMs: WINDOW });
+    expect(s.gapSecUsed).toBe(HARD_MIN_GAP_SEC);
+    for (let i = 1; i < s.offsets.length; i++) {
+      expect(s.offsets[i] - s.offsets[i - 1]).toBeGreaterThanOrEqual(HARD_MIN_GAP_SEC * 1000);
     }
   });
 
-  it("stamps the overflow at the NEXT hour boundary, not 'any minute'", () => {
-    const offs = cappedStaggerOffsets(6, 3); // items 3,4,5 spill to hour 2
-    // items 0-2 in the first hour (< 1h), items 3-5 at/after +1h
-    expect(offs[2]).toBeLessThan(3600_000);
-    expect(offs[3]).toBeGreaterThanOrEqual(3600_000);
-    expect(offs[5]).toBeGreaterThanOrEqual(3600_000);
-    expect(offs[5]).toBeLessThan(2 * 3600_000);
+  it("...and never SLOWER than the policy asked for", () => {
+    // A small batch under a deliberately slow policy stays slow - compression
+    // is only ever a rescue, never a speed-up nobody asked for.
+    const s = batchStagger({ count: 3, hourCap: 10, gapSec: 60, windowMs: WINDOW });
+    expect(s.gapSecUsed).toBe(60);
+    expect(s.compressed).toBe(false);
   });
 
-  it("within an hour the sends are spaced (never a shared timestamp)", () => {
-    const offs = cappedStaggerOffsets(3, 3);
-    expect(new Set(offs).size).toBe(3);
-    expect(offs[1]).toBeGreaterThan(offs[0]);
-    expect(offs[2]).toBeGreaterThan(offs[1]);
+  it("items beyond the hourly ceiling overflow HONESTLY, and are counted", () => {
+    // A real hourly limit cannot be compressed away - so it is reported rather
+    // than hidden inside a schedule that looks normal.
+    const s = batchStagger({ count: 6, hourCap: 3, gapSec: 12, windowMs: WINDOW });
+    expect(s.overflow).toBe(3);
+    expect(s.offsets[2]).toBeLessThan(3600_000);
+    expect(s.offsets[3]).toBeGreaterThanOrEqual(3600_000);
   });
 
-  it("a full 40-intro ultra batch at a 12s min-gap clears well inside 15 min, strictly in order", () => {
-    const offs = cappedStaggerOffsets(40, 40, 12);
-    // Every intro fits in the first hour group (hourCap 40 == batch size).
-    expect(offs.every((o) => o < 3600_000)).toBe(true);
-    // Strictly increasing (the old per-item formula could stamp #39 before #38).
-    for (let i = 1; i < offs.length; i++) expect(offs[i]).toBeGreaterThan(offs[i - 1]);
-    // The LAST intro is due comfortably under 15 min even at max jitter.
-    expect(offs[39]).toBeLessThan(15 * 60_000);
-    // ...and steps stay in the 12-24s band (min-gap + <= min-gap jitter).
-    for (let i = 1; i < offs.length; i++) {
-      const step = offs[i] - offs[i - 1];
-      expect(step).toBeGreaterThanOrEqual(12_000);
-      expect(step).toBeLessThanOrEqual(24_000);
-    }
+  it("within a group the sends are spaced - never a shared timestamp", () => {
+    const s = batchStagger({ count: 3, hourCap: 3, gapSec: 12, windowMs: WINDOW });
+    expect(new Set(s.offsets).size).toBe(3);
   });
 
-  it("hourCap of 1 (a heavily warmed-down number) spaces ~one per hour, past each boundary", () => {
-    const offs = cappedStaggerOffsets(3, 1);
-    expect(offs[0]).toBe(0);
-    // Each new hour-group lands just PAST the 1-hour boundary (a min-gap buffer)
-    // so the prior send has aged out of the drain's rolling window.
-    expect(offs[1]).toBeGreaterThan(3600_000);
-    expect(offs[1]).toBeLessThan(3600_000 + 5 * 60_000);
-    expect(offs[2]).toBeGreaterThan(2 * 3600_000);
-    expect(offs[2]).toBeLessThan(2 * 3600_000 + 5 * 60_000);
+  it("a batch of one is simply immediate", () => {
+    expect(batchStagger({ count: 1, hourCap: 10, gapSec: 12, windowMs: WINDOW }).offsets).toEqual([0]);
   });
 });
 

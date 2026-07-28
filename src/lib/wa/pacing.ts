@@ -63,44 +63,101 @@ export function staggerOffsets(count: number, rand: () => number = Math.random):
   return out;
 }
 
+// `cappedStaggerOffsets` lived here. It built a batch schedule bottom-up from a
+// per-message gap and an hourly cap and accepted whatever total fell out, which
+// is how a batch of eight shops came to span three hours. `batchStagger` below
+// replaces it on BOTH dispatch paths (the mass route and the outreach worker) -
+// deleted rather than left alongside, because two schedulers is how one call
+// site keeps the old behaviour.
+
 /**
- * Cap-AWARE stagger offsets. The first `hourCap` items are spaced ~minGap apart
- * (they fit inside the sender's hourly send budget and go out promptly); every
- * subsequent group of `hourCap` items jumps to the NEXT 1-hour window. So the
- * not_before stamps are the REAL times the anti-ban drain will honor - the
- * queued panel shows the honest schedule from the start, instead of an
- * optimistic "any minute" that silently jumps an hour when the drain hits the
- * cap and re-stamps the overflow. Item 0 is always immediate.
+ * THE HARD SAFETY FLOOR. No batch deadline may ever push two cold sends closer
+ * together than this - it is the one number the compression below is not
+ * allowed to trade away. Everything else about the schedule is negotiable.
  */
-export function cappedStaggerOffsets(
-  count: number,
-  hourCap: number,
-  minGapSec = 90,
-  rand: () => number = Math.random
-): number[] {
-  const cap = Math.max(1, Math.floor(hourCap));
-  const out: number[] = [];
+export const HARD_MIN_GAP_SEC = 8;
+
+export interface BatchSchedule {
+  /** ms after batch start for each item, in order. */
+  offsets: number[];
+  /** The gap actually used, after fitting to the window. */
+  gapSecUsed: number;
+  /** True when the requested gap had to be compressed to keep the promise. */
+  compressed: boolean;
+  /**
+   * Items that could not fit inside the window because they exceed the
+   * sender's hourly capacity - they are scheduled honestly into later hours,
+   * and the caller is expected to SAY so rather than let them look normal.
+   */
+  overflow: number;
+}
+
+/**
+ * SCHEDULE A BATCH TO A DEADLINE, not to a per-message gap.
+ *
+ * The old `cappedStaggerOffsets` built the schedule bottom-up: take the policy
+ * min-gap, add jitter, jump an hour whenever the hourly cap was reached, and
+ * accept whatever total came out. That is how a batch of 8 ended up spanning
+ * three hours - every input was individually defensible and nothing was
+ * responsible for the whole.
+ *
+ * This starts from the promise (lib/wa/capacity BATCH_WINDOW_MINUTES) and works
+ * back to a gap, with two things it will not do:
+ *
+ *   - It never goes below HARD_MIN_GAP_SEC. Ban safety is not negotiable, so a
+ *     batch that cannot fit at the floor overflows honestly instead.
+ *   - It never goes ABOVE the requested gap. A deliberately slow policy stays
+ *     slow for a small batch; compression only ever kicks in when the batch
+ *     would otherwise break the promise.
+ *
+ * Items beyond `hourCap` cannot go inside the window by definition - the hourly
+ * ceiling is a real limit - so they are placed in later hour groups and counted
+ * in `overflow`. In practice this is unreachable for a within-budget batch,
+ * because every plan's hourCap is >= its conversation budget.
+ */
+export function batchStagger(opts: {
+  count: number;
+  hourCap: number;
+  /** The gap the anti-ban policy asks for (p.min_gap_seconds). */
+  gapSec: number;
+  /** The batch promise, in ms. */
+  windowMs: number;
+  rand?: () => number;
+}): BatchSchedule {
+  const rand = opts.rand ?? Math.random;
+  const count = Math.max(0, Math.floor(opts.count));
+  const cap = Math.max(1, Math.floor(opts.hourCap));
+  const requested = Math.max(HARD_MIN_GAP_SEC, opts.gapSec);
+  // How many items must fit inside the window: the first hour-group, capped by
+  // the batch itself. Item 0 is immediate, so the gaps number one fewer.
+  const inWindow = Math.min(count, cap);
+  const gaps = Math.max(1, inWindow - 1);
+  // Leave room for jitter: a gap can stretch to 1.25x, so size the base gap so
+  // that even the slowest roll lands inside the window.
+  const fitSec = opts.windowMs / 1000 / (gaps * 1.25);
+  const gapSecUsed = Math.max(HARD_MIN_GAP_SEC, Math.min(requested, fitSec));
+
+  const offsets: number[] = [];
   let acc = 0;
   for (let i = 0; i < count; i++) {
     const hour = Math.floor(i / cap);
     const within = i % cap;
     if (within === 0) {
-      // Start of an hour-group. Push each new group a min-gap PAST the 3600s
-      // boundary so the previous group's oldest send has aged out of the drain's
-      // inclusive rolling-hour window (>= now-3600000) before this item is due -
-      // otherwise the boundary item still trips the cap and gets re-stamped.
-      acc = hour === 0 ? 0 : hour * 3600_000 + Math.round((minGapSec + 30) * 1000);
+      // A new hour group starts a min-gap PAST the 3600s boundary, so the
+      // previous group's oldest send has aged out of the drain's inclusive
+      // rolling-hour window before this item is due.
+      acc = hour === 0 ? 0 : hour * 3600_000 + Math.round((gapSecUsed + 30) * 1000);
     } else {
-      // CUMULATIVE spacing (was a per-item `within * step`, which for a large
-      // group with a small min-gap gave a wildly wide, sometimes NON-monotonic
-      // spread - the 40th intro landing anywhere from ~8 to ~27 min out). Jitter
-      // scales to the gap (never more than the gap itself), so a full 40-intro
-      // ultra batch at a 12s min-gap clears in ~12 min, strictly in order.
-      acc += (minGapSec + rand() * Math.min(30, minGapSec)) * 1000;
+      acc += Math.round((gapSecUsed + rand() * gapSecUsed * 0.25) * 1000);
     }
-    out.push(Math.round(acc));
+    offsets.push(acc);
   }
-  return out;
+  return {
+    offsets,
+    gapSecUsed,
+    compressed: gapSecUsed < requested,
+    overflow: Math.max(0, count - cap),
+  };
 }
 
 /** The min-gap bucket a timestamp falls into (bucket size = the HARD floor). */

@@ -363,6 +363,13 @@ export default function Home() {
   const pendingRemovals = useRef<Map<string, number>>(new Map());
   // Queue rows currently being removed (disables their Remove button).
   const [removingIds, setRemovingIds] = useState<Set<number>>(new Set());
+  // REMOVED BY YOU IS A NOTICE, NOT A LEDGER. It was an unconditional section
+  // that stayed on screen for the rest of the session, so a shop the traveller
+  // had already dealt with kept taking up space in the panel they use to watch
+  // live ones. Dismissal is per shop rather than a single "hide it" flag, so a
+  // NEW removal after a dismissal brings the notice back - which is what makes
+  // it behave like every other alert in the app instead of a wall.
+  const [dismissedRemovals, setDismissedRemovals] = useState<Set<string>>(new Set());
   // Local going-rate hint (item #6): what the cheapest scooter / economy car
   // honestly costs per day around the chosen stay, in the LOCAL currency.
   const [priceHint, setPriceHint] = useState<{
@@ -967,8 +974,22 @@ export default function Home() {
           // "Paused by you" flag - independent of the queue badge; shown when
           // the user removed messages for this shop and has not re-engaged.
           const digits = digitsOnly(v.whatsapp);
-          const isCancelled = Boolean(digits && cancelledDigits.has(digits));
+          // THE TOMBSTONE IS AUTHORITATIVE FOR THE SHOP, NOT ONLY FOR THE ROW.
+          //
+          // `pendingRemovals` already suppressed the removed QUEUE row, but this
+          // merge recomputed `cancelled` straight from the server list - and a
+          // poll that started before the delete committed still answers "not
+          // cancelled". So the optimistic removal was reverted for exactly one
+          // cycle, `queuedUntil` came back with it, and the shop visibly popped
+          // into CONTACTING before settling into REMOVED BY YOU. One local
+          // decision, two views, and only one of them respected it.
+          const tombstonedVendor = pendingRemovals.current.has(`v:${v.id}`);
+          const isCancelled =
+            tombstonedVendor || Boolean(digits && cancelledDigits.has(digits));
           let base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
+          if (tombstonedVendor && (base.queuedUntil || base.queuedReason)) {
+            base = { ...base, queuedUntil: undefined, queuedReason: undefined };
+          }
           // Mirror the authoritative DB state onto the card's stage (forward
           // only) so a messaged / actively-negotiating shop shows the right
           // status regardless of soft filters or feed truncation.
@@ -2043,7 +2064,13 @@ export default function Home() {
       // Cancelled with nothing ever sent: terminal, and counted nowhere else.
       // `sentText` is the test rather than the stage, because it is the only
       // field that records that words actually reached a shop.
-      else if (v.cancelled && !v.sentText && !v.queuedUntil) removed.push(v);
+      //
+      // A REMOVAL OUTRANKS A SCHEDULE. This used to also require
+      // `!v.queuedUntil`, so a shop the traveller had just removed - which for
+      // a moment still carried the stale schedule of the message being deleted
+      // - failed this test and fell through to the CONTACTING branch below.
+      // The decision is newer than the schedule, and ordering is what says so.
+      else if (v.cancelled && !v.sentText) removed.push(v);
       // A shop the agents already REACHED (a reply is pending / negotiation
       // is live) stays "messaged" even while a follow-up sits in the outbox -
       // otherwise the counters flicker right after a send. A shop whose FIRST
@@ -2063,6 +2090,20 @@ export default function Home() {
     }
     return { messaged, replied, queued, deals, removed };
   }, [vendors]);
+  // The notice only carries removals the traveller has NOT already acknowledged.
+  // Dismissing hides exactly the shops on screen at that moment; a later removal
+  // is a new fact and brings the notice back with only that shop in it.
+  const visibleRemoved = useMemo(
+    () => statusGroups.removed.filter((v) => !dismissedRemovals.has(v.id)),
+    [statusGroups.removed, dismissedRemovals]
+  );
+  const dismissRemoved = useCallbackRef(() => {
+    setDismissedRemovals((prev) => {
+      const next = new Set(prev);
+      for (const v of statusGroups.removed) next.add(v.id);
+      return next;
+    });
+  });
   const stageCounts = {
     messaged: statusGroups.messaged.length,
     replied: statusGroups.replied.length,
@@ -2685,14 +2726,29 @@ export default function Home() {
                 {/* SECTION 2.5 - Removed by you. Shown, not hidden: these
                     shops used to reappear under "Awaiting reply", which is how
                     the panel claimed 7 messaged for 3 real sends. Nothing was
-                    sent to them, so they are counted nowhere else. */}
-                {statusGroups.removed.length > 0 && (
+                    sent to them, so they are counted nowhere else.
+
+                    ...but it is a NOTICE, not a ledger. Unconditional, it stayed
+                    for the rest of the session and crowded the live shops out of
+                    the panel it shares. Dismissal is per shop, so removing
+                    another one later brings the notice back with only the new
+                    name in it. */}
+                {visibleRemoved.length > 0 && (
                   <div>
-                    <div className="mb-1 text-[10px] font-extrabold uppercase text-faint">
-                      🚫 {t("Removed by you")} ({statusGroups.removed.length})
+                    <div className="mb-1 flex items-center gap-2 text-[10px] font-extrabold uppercase text-faint">
+                      <span className="min-w-0 flex-1 truncate">
+                        🚫 {t("Removed by you")} ({visibleRemoved.length})
+                      </span>
+                      <button
+                        onClick={dismissRemoved}
+                        className="btn fluid-press shrink-0 rounded-full bg-card2 px-2 py-0.5 text-[9px] font-extrabold uppercase text-soft"
+                        aria-label={t("Dismiss")}
+                      >
+                        {t("Dismiss")}
+                      </button>
                     </div>
                     <p className="text-[11px] text-soft">
-                      {statusGroups.removed.map((v) => v.name).join(", ")} -{" "}
+                      {visibleRemoved.map((v) => v.name).join(", ")} -{" "}
                       {t("nothing was sent to these shops.")}
                     </p>
                   </div>
