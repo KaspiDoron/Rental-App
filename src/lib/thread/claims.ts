@@ -60,12 +60,29 @@ interface SubjectSpec {
 const SUBJECTS: SubjectSpec[] = [
   {
     subject: "deposit",
-    cue: /\b(deposit|down ?payment|collateral|security bond|as a bond)\b/i,
+    // PLURALS ARE LOAD-BEARING. `\b` cannot fall between "deposit" and its own
+    // "s", so the singular-only cue produced ZERO claims for a shop that wrote
+    // "Deposits for motorbikes (2 options)". That silence is what let the
+    // document-demand rule flag a plain statement of terms as a scam: the
+    // terms-exemption in inbound-risk asks this table whether the message is
+    // about a deposit, and this table said no.
+    cue: /\b(deposits?|down ?payments?|collaterals?|security bonds?|as a bond)\b/i,
+    // ORDER IS PRIORITY: `detail` is single-valued (first match wins), so a
+    // document must be tested before cash - the same "a document is the harder
+    // ask" rule parseDeposit uses for its legacy type. Cash-first meant
+    // "Copy Passport + 3000 THB" was filed as a plain cash deposit and the
+    // traveller never saw that a document was wanted at all.
     details: [
-      { detail: "cash", rx: /\b(cash|\d[\d,.]{2,}|money)\b/i },
+      // A photocopy left at the counter and the traveller's ONLY travel
+      // document are different asks, so they are different claims.
+      {
+        detail: "passport_copy",
+        rx: /\b(copy|photocopy|photo|picture|scan|xerox)\b[^.!?]{0,20}\bpassports?\b|\bpassports?\b[^.!?]{0,20}\b(copy|photocopy|photo|picture|scan)\b/i,
+      },
       { detail: "passport", rx: /\bpassports?\b/i },
-      { detail: "id", rx: /\b(id card|identity card)\b/i },
-      { detail: "licence", rx: /\b(driver'?s? )?licen[cs]e\b/i },
+      { detail: "id", rx: /\b(id cards?|identity cards?)\b/i },
+      { detail: "licence", rx: /\b(driver'?s? )?licen[cs]es?\b/i },
+      { detail: "cash", rx: /\b(cash|\d[\d,.]{2,}|money)\b/i },
     ],
   },
   {

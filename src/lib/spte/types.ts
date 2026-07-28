@@ -9,6 +9,7 @@
 
 import type { StructuredRFQ } from "../types";
 import type { VehicleOption } from "../offer-options";
+import type { DialogueActs } from "../wa/dialogue-acts";
 
 /** The closed move vocabulary. Every deterministic guard keys on these (the
  *  D-F1 invariant), which is why strategy is free but the vocabulary is not. */
@@ -98,6 +99,11 @@ export interface VerifiedExtraction {
   vehicleUnclear?: boolean;
   askedLocation?: boolean;
   askedQuestion?: boolean;
+  /** WHAT THE SHOP DID this turn - shared facts, asked something, or sent an
+   *  automated greeting. Derived per turn (lib/wa/dialogue-acts); this is what
+   *  `askedQuestion` is computed FROM, so a bare "?" can no longer make the
+   *  engine think it owes an answer. */
+  acts?: DialogueActs;
   /** The shop asked whether the traveller HAS a (international) license. */
   askedLicense?: boolean;
   /** The shop asked to SEE / get a photo/copy of the license. */

@@ -22,6 +22,7 @@ import { buildLedger } from "../thread/ledger";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
+import { classifyActs } from "../wa/dialogue-acts";
 import { vehicleKeyFor, groundedBenchmarkFor } from "../market";
 
 export interface SpteLiveResult {
@@ -41,6 +42,21 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
   const text = input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
     ? input.event.shopMessage ?? ""
     : "";
+  // WHAT THE SHOP DID, before anything decides how to answer it.
+  const acts = classifyActs({
+    text,
+    hadImage: input.event.kind === "inbound-image" || Boolean(ex?.imageKind),
+    imageKind: ex?.imageKind,
+    pricePerDay: input.usablePrice,
+    optionCount: Array.isArray(ex?.options) ? ex.options.length : 0,
+  });
+  // The legacy phrase list still widens the ask - it recognises real questions
+  // the classifier's grammar test can miss ("you mean the 125?") - but it can
+  // no longer promote a bare "?" or an automated greeting.
+  if (acts.ask === "none" && !acts.autoReply && text && shopAskedQuestion(text) && /\?/.test(text)) {
+    const stripped = text.replace(/\?/g, "");
+    if (shopAskedQuestion(stripped)) acts.ask = "substantive";
+  }
   return {
     found: Boolean(input.usablePrice),
     pricePerDay: input.usablePrice,
@@ -62,7 +78,15 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     options: Array.isArray(ex?.options) ? ex.options : undefined,
     variance: text ? signalsVariance(text) : false,
     askedLocation: text ? shopAskedLocation(text) : false,
-    askedQuestion: text ? shopAskedQuestion(text) : false,
+    // A QUESTION MARK IS NOT A QUESTION. `shopAskedQuestion` is `/\?/` plus a
+    // phrase list, so a price board captioned "...which model would you like?"
+    // and an auto-reply's rhetorical "How many days rental?" both counted as
+    // the shop waiting on us - which made `answer` the top legal move and fired
+    // the "Good question!" template at a shop that had asked nothing. The acts
+    // classifier decides now; the old detector stays as a widening OR only for
+    // the phrase list it recognises, never for bare punctuation.
+    askedQuestion: acts.ask !== "none",
+    acts,
     askedLicense: text ? shopAskedLicense(text) : false,
     askedLicensePhoto: text ? shopAskedLicensePhoto(text) : false,
     // The shop refused to lower ("last price") - the deterministic extractor

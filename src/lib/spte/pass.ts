@@ -15,6 +15,7 @@ import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
 import { planLeverage, leadCard } from "../negotiation/leverage";
 import { disclosureBlock } from "../negotiation/traveller-disclosure";
+import { describeActs } from "../wa/dialogue-acts";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -99,10 +100,17 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         : "";
 
   // QUESTION obligation - answer what the shop asked, first.
-  const questionNote =
-    ctx.inbound.verified.askedQuestion || ctx.inbound.verified.askedLocation
-      ? `The shop ASKED YOU something in their last message. Your reply MUST answer their question first, in a natural way, before anything else.\n`
-      : "";
+  //
+  // Now says WHAT was asked. Told only "the shop asked you something" on the
+  // strength of a question mark, the model opened with filler praise ("Good
+  // question!") for turns that contained no question at all.
+  const acts = ctx.inbound.verified.acts;
+  const askedSomething =
+    (acts ? acts.ask !== "none" : ctx.inbound.verified.askedQuestion) ||
+    ctx.inbound.verified.askedLocation;
+  const questionNote = askedSomething
+    ? `The shop ASKED YOU about ${acts && acts.ask !== "none" ? acts.ask.replace(/-/g, " ") : "something"} in their last message. Your reply MUST answer that first, in a natural way, before anything else.\n`
+    : `The shop did NOT ask you anything. Do not thank them for a question and do not open with filler - acknowledge what they actually sent, then make your move.\n`;
 
   // ANTI-REPETITION - the real fix for "same sentence every turn". The model
   // never saw its own prior sends; now it does, with a hard rule.
@@ -252,6 +260,15 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     `THIS SHOP so far:\n${digest}\n\n` +
     `RECENT MESSAGES:\n${tail || "(none yet)"}\n\n` +
     `SHOP JUST SAID: ${ctx.inbound.text || "(nothing - a scheduled follow-up)"}\n` +
+    // WHAT THEY SENT, not only what they typed. `imageSummary` has always been
+    // computed and never reached the model, so a shop that answered with four
+    // price boards looked to the LLM like a shop that said nothing.
+    (ctx.inbound.verified.acts
+      ? `SHOP'S TURN: ${describeActs(ctx.inbound.verified.acts)}\n`
+      : "") +
+    (ctx.inbound.verified.imageSummary
+      ? `FROM THEIR PHOTO we read: ${ctx.inbound.verified.imageSummary}\n`
+      : "") +
     (ctx.inbound.verified.found && ctx.inbound.verified.pricePerDay
       ? `VERIFIED: the shop's live quote is ${ctx.inbound.verified.pricePerDay} ${ctx.inbound.verified.currency ?? s.currency}/day.\n`
       : "") +
@@ -260,6 +277,12 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     `Choose the best move and write the message.`;
 
   return { system, user };
+}
+
+/** "a", "a and b", "a, b and c" - so an acknowledgment reads like a person. */
+function listOf(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 function vehicleLine(ctx: TurnContext): string {
@@ -343,7 +366,26 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
         return `Sure - I'll share a photo of my license once we finalize the rate and rental details 👍 What's your best price per day?`;
       if (v.askedLicense)
         return `Yes, I have a valid international driving license for this. What would your best price per day be?`;
-      return `Good question! Let's sort the main thing first - what's your best price per day for the ${days} days? Then we can go over the details.`;
+      // ACKNOWLEDGE WHAT THEY ACTUALLY DID.
+      //
+      // This branch used to open "Good question!" unconditionally and then ask
+      // for a price - so a shop that had just sent its price board, its hours
+      // and its deposit terms got thanked for a question it never asked, and
+      // asked for the number it had already given. Both halves are now
+      // conditioned on the turn's acts and on what we already read.
+      const shared = v.acts?.shared ?? [];
+      const got: string[] = [];
+      if (v.pricePerDay || v.sheetPricePerDay) got.push("the price");
+      else if (shared.includes("price-board")) got.push("the price list");
+      if (shared.includes("deposit")) got.push("the deposit info");
+      if (shared.includes("hours")) got.push("your hours");
+      const thanks = got.length ? `Thanks - got ${listOf(got)}.` : "";
+      // Never re-ask for a price we can already see.
+      const known = v.pricePerDay ?? v.sheetPricePerDay;
+      if (known) {
+        return `${thanks} Just to confirm - is ${known}${v.currency ? " " + v.currency : ""}/day the best you can do for ${days} days? 🙂`.trim();
+      }
+      return `${thanks} What would your best price per day be for ${days} days?`.trim();
     case "deposit-probe":
       // Non-commitment guardrail (issue 5): learn the terms while making clear
       // we are still comparing shops - never imply a guaranteed booking.

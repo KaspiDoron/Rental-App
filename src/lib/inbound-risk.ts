@@ -112,19 +112,38 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
   // the whole thread - was flagged HIGH RISK for document harvesting. Being
   // handed the vehicle IS the pickup; it is the opposite of a demand for a
   // scan over chat.
+  // A DOCUMENT WORD IS A NOUN. A DEMAND NEEDS A VERB.
+  //
+  // The old rule fired on CO-OCCURRENCE: any of send/photo/picture/copy/scan
+  // near any of passport/id/licence. But "copy" and "photo" are nouns as often
+  // as they are verbs, and every rental shop in Thailand writes its deposit
+  // terms exactly that way - "Deposits (2 options): 1) Original passport
+  // 2) Copy passport + 3000 THB". That is a shop telling you what it holds at
+  // the counter, and it was being shown to travellers as a scam warning.
+  //
+  // What actually distinguishes a demand is a TRANSMISSION VERB aimed at the
+  // traveller: send / share / upload / forward / submit / mail it to me. You
+  // cannot describe a deposit policy with those words, and you cannot ask
+  // someone to transmit a document without one. So the act is the signal, and
+  // the noun is only the object of it.
   const DOC = /\b(passports?|id cards?|identity|licen[cs]es?)\b/;
-  const SCAN = /\b(send|sends|photo|photos|picture|pictures|pics?|copy|scan)\b/;
+  const TRANSMIT =
+    /\b(send|sends|sending|share|shares|sharing|forward|upload|uploads|submit|submits|attach|mail|whats ?app|dm|e-?mail)\b/;
+  const DEMAND = new RegExp(
+    `${TRANSMIT.source}[^.!?]{0,40}${DOC.source}|${DOC.source}[^.!?]{0,30}${TRANSMIT.source}`
+  );
   if (
-    (SCAN.test(s) && DOC.test(s) &&
-      (/\b(send|photo|picture|pics?|copy|scan)\b[^.!?]{0,40}\b(passports?|id cards?|identity|licen[cs]es?)\b/.test(s) ||
-        /\b(passports?|id cards?)\b[^.!?]{0,30}\b(photo|picture|pics?|copy|scan|send)\b/.test(s))) &&
+    DEMAND.test(s) &&
     // ...and it must not be the shop DESCRIBING its terms. A typed claim about
     // the deposit or the handover is terms, not a demand for documents - the
     // structural half of the same fix, so a phrasing the boundaries miss still
     // cannot turn friendly terms into a red banner.
     !describesTerms(text)
   ) {
-    bump("high", "asked for a photo/copy of your passport or ID over chat - never send documents before you see the vehicle and the shop");
+    bump(
+      "high",
+      "asked you to send a photo or copy of your passport or ID over chat. Never send documents before you have seen the vehicle and the shop."
+    );
   }
 
   // 2. Money off-platform before viewing: transfers, crypto, gift cards.

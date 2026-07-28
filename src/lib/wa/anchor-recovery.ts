@@ -45,24 +45,48 @@ export function isUsableRfq(v: unknown): v is StructuredRFQ {
 }
 
 /**
- * Pick the RFQ to re-anchor with: the NEWEST usable search inside the window.
- * Pure, so the selection rules are unit-tested rather than inferred from logs.
+ * Pick the RFQ to re-anchor with.
+ *
+ * Recency alone is not enough, and that was a real failure: a traveller running
+ * an 8-day scooter thread who later searched for a 30-day car had the CAR
+ * search re-anchor the scooter thread, because it was newest. The repair is
+ * persisted, so the thread was permanently converted to terms its shop had
+ * never been quoted.
+ *
+ * So when we know what this thread promised (`want`), a candidate must MATCH it
+ * before recency is even considered: same vehicle class first, then the same
+ * duration. Only if nothing matches do we fall back to newest-usable, which is
+ * still better than going silent - and the caller records the repair either
+ * way.
  */
 export function pickRecoveryRfq(
   rows: SearchRfqRow[],
   nowMs: number,
-  maxAgeMs: number = RECOVERY_MAX_AGE_MS
+  maxAgeMs: number = RECOVERY_MAX_AGE_MS,
+  want?: { durationDays?: number; vehicleClass?: string } | null
 ): StructuredRFQ | null {
-  let best: { at: number; rfq: StructuredRFQ } | null = null;
+  const usable: { at: number; rfq: StructuredRFQ }[] = [];
   for (const r of rows) {
     const at = Date.parse(r.created_at);
     if (!Number.isFinite(at)) continue;
     if (nowMs - at > maxAgeMs) continue;
     if (at > nowMs + 60_000) continue; // clock skew guard - no future rows
     if (!isUsableRfq(r.rfq)) continue;
-    if (!best || at > best.at) best = { at, rfq: r.rfq };
+    usable.push({ at, rfq: r.rfq });
   }
-  return best?.rfq ?? null;
+  if (!usable.length) return null;
+  usable.sort((a, b) => b.at - a.at); // newest first, the tie-breaker throughout
+
+  if (want?.vehicleClass) {
+    const sameVehicle = usable.filter((u) => u.rfq.vehicleClass === want.vehicleClass);
+    if (sameVehicle.length) {
+      const exact = want.durationDays
+        ? sameVehicle.find((u) => u.rfq.durationDays === want.durationDays)
+        : undefined;
+      return (exact ?? sameVehicle[0]).rfq;
+    }
+  }
+  return usable[0].rfq;
 }
 
 /**
@@ -72,7 +96,8 @@ export function pickRecoveryRfq(
  */
 export async function recoverRfqForSender(
   senderEmail: string,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  want?: { durationDays?: number; vehicleClass?: string } | null
 ): Promise<StructuredRFQ | null> {
   if (!senderEmail) return null;
   const { sbSelect } = await import("../runtime-config");
@@ -83,5 +108,5 @@ export async function recoverRfqForSender(
       senderEmail
     )}&rfq=not.is.null&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=10`
   ).catch(() => [] as SearchRfqRow[]);
-  return pickRecoveryRfq(rows, nowMs);
+  return pickRecoveryRfq(rows, nowMs, RECOVERY_MAX_AGE_MS, want);
 }

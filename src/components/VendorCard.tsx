@@ -17,6 +17,7 @@ import { ThreadPeek } from "./ThreadPeek";
 import { OptionList } from "./OptionList";
 import { ShopAvatar } from "./ShopAvatar";
 import { vehicleStance } from "@/lib/offer-presentation";
+import { parseDeposit } from "@/lib/deposit";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
 // only its real reply produces a price. Everything happens INSIDE the app:
@@ -420,7 +421,12 @@ function VendorCardInner({
             <div className="mt-2 flex items-start gap-1.5 rounded-xl border-2 border-brandred/40 bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
               <Icon name="alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
-                {t("Will flagged this shop's reply")}: {riskNote}{" "}
+                {/* The reason is a sentence from the risk engine and the line
+                    after it is another one. Glued with a bare space they read
+                    as one run-on ("...and the shop Nothing was sent"), so the
+                    join terminates the first sentence itself rather than
+                    trusting every reason string to end in a full stop. */}
+                {t("Will has flagged this shop's reply")}: {riskNote.replace(/\s*[.;,]?\s*$/, "")}.{" "}
                 {t("Nothing was sent - review before you act.")}
               </span>
             </div>
@@ -525,15 +531,47 @@ function VendorCardInner({
                           </span>
                         );
                       }
+                      // A deposit is a set of ALTERNATIVES, each of which can be
+                      // a BUNDLE. "Original passport, or a copy + ฿3,000" is
+                      // two options; the old code joined every fragment with
+                      // "or" and told the traveller they could leave a passport
+                      // OR ฿3,000 - a cheaper, and wrong, deal. Options are
+                      // parsed from the shop's own words (lib/deposit) and only
+                      // fall back to the flat fields when none were readable.
+                      const opts = parseDeposit(offer.deposit, dCur)?.options ?? [];
+                      const fromOptions = opts
+                        .map((o) =>
+                          o.parts
+                            .map((p) =>
+                              p.kind === "cash" && p.amount != null
+                                ? moneyLocal(p.amount, p.currency || dCur)
+                                : p.kind === "cash"
+                                  ? t("cash")
+                                  : p.kind === "passport_original"
+                                    ? t("Original passport")
+                                    : p.kind === "passport_copy"
+                                      ? t("Passport copy")
+                                      : p.kind === "id"
+                                        ? t("ID card")
+                                        : t("Licence")
+                            )
+                            .join(" + ")
+                        )
+                        .filter(Boolean);
                       const doc =
                         type === "passport" ? t("Passport")
                         : type === "id" ? t("ID card")
                         : type === "license" ? t("Licence")
                         : "";
-                      const parts: string[] = [];
-                      if (doc) parts.push(doc);
-                      if (amt) parts.push(`${moneyLocal(amt, dCur)} ${t("cash")}`);
-                      const text = parts.length ? parts.join(` ${t("or")} `) : offer.deposit;
+                      let text: string | undefined;
+                      if (fromOptions.length) {
+                        text = fromOptions.join(` ${t("or")} `);
+                      } else {
+                        const parts: string[] = [];
+                        if (doc) parts.push(doc);
+                        if (amt) parts.push(`${moneyLocal(amt, dCur)} ${t("cash")}`);
+                        text = parts.length ? parts.join(` ${t("or")} `) : offer.deposit;
+                      }
                       const emoji = doc ? "🛂" : "🔒";
                       return (
                         <span className="rounded-full bg-brandblue-soft px-2 py-0.5 text-[9px] font-extrabold text-brandblue">

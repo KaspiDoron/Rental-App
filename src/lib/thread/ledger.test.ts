@@ -184,7 +184,12 @@ describe("the ledger reaches the decisions it exists for", () => {
   it("shop TERMS are not screened as a document demand", () => {
     const risk = readCode("src/lib/inbound-risk.ts");
     expect(risk).toMatch(/describesTerms\(text\)/);
-    // `pic` unanchored matched inside "pickup" - that is the false flag.
-    expect(risk).toMatch(/\\b\(send\|photo\|picture\|pics\?\|copy\|scan\)\\b/);
+    // A DEMAND NEEDS A VERB. Matching the NOUNS "copy"/"photo" near "passport"
+    // flagged every Thai shop's written deposit terms ("Copy Passport + 3000
+    // THB") as document harvesting. Only a transmission verb can express
+    // "send me your documents", and no terms statement can contain one.
+    expect(risk).toMatch(/const TRANSMIT =/);
+    expect(risk).toMatch(/send\|sends\|sending\|share/);
+    expect(risk).not.toMatch(/const SCAN =/);
   });
 });
