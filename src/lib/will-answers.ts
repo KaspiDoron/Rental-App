@@ -79,7 +79,11 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
     bits.push(
       safety.state === "pacing"
         ? "sends are pacing at a safe human rhythm"
-        : "sending is on a protective pause for your number right now"
+        : safety.state === "disconnected"
+          ? "your WhatsApp link is DOWN - shop replies can't reach me until you reconnect in Profile"
+          : safety.state === "attention"
+            ? "a few messages hit a snag in the last day - the activity feed has the details"
+            : "sending is on a protective pause for your number right now"
     );
   }
   if (ctx.paused) bits.push("the session is PAUSED on your orders - say 'resume' and I'm back on it");

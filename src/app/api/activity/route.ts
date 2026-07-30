@@ -216,9 +216,15 @@ export async function GET(req: Request) {
       // showed n@x.com the risk alerts (incl. message excerpts) of john@x.com.
       // Unstamped legacy rows are hidden by design; the feed is time-windowed
       // so they age out within a day.
-      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=eq.inbound-risk&user_email=eq.${encodeURIComponent(
+      //
+      // DROPS ARE FEED EVENTS TOO. The engine records inbound-dropped and
+      // send-dropped honestly, but the feed used to read inbound-risk ONLY -
+      // so a message the guard refused or a reply the pipeline lost had a
+      // durable trace no user surface ever showed. Benign drops (privacy
+      // gate, user pause, coalesced turns) are filtered out downstream.
+      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=in.("inbound-risk","inbound-dropped","send-dropped")&user_email=eq.${encodeURIComponent(
         email
-      )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=10`
+      )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=20`
     ).catch(() => []),
     sbSelect<{ from_number: string; body: string | null; received_at: string }>(
       "whatsapp_messages",
@@ -404,7 +410,24 @@ export async function GET(req: Request) {
         ` (${waitEta(w.not_before, now)})`,
     });
   }
+  const { dropFeedItem } = await import("@/lib/wa/safety-signals");
   for (const e of events) {
+    if (e.kind === "inbound-dropped" || e.kind === "send-dropped") {
+      const drop = dropFeedItem(e.kind, e.detail);
+      if (!drop) continue; // benign, deliberate outcome - not an alert
+      items.push({
+        id: `alert:${e.id}`,
+        at: e.created_at,
+        kind: "alert",
+        vendorId: e.vendor_id || undefined,
+        // vendor_name on drop events carries the shop's digits, not a name -
+        // the feed shows the honest copy, not a phone number masquerading.
+        title: drop.title,
+        detail: drop.detail,
+        meta: { risk: "info" },
+      });
+      continue;
+    }
     let excerpt = "";
     let risk = "high";
     let reasons: string[] = [];

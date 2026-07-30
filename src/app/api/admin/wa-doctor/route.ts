@@ -12,7 +12,7 @@ import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { webhookDiagnostics, reassertWebhook, instanceNameFor } from "@/lib/evolution";
 import { classifyIngestDetailed, type GateRaw } from "@/lib/wa/thread-gate";
-import { threadNumberOr } from "@/lib/wa/phone-key";
+import { threadNumberOr, sameNumber } from "@/lib/wa/phone-key";
 import { resolveThreadContext } from "@/lib/wa/thread-context";
 import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
@@ -109,10 +109,25 @@ export async function GET(req: Request) {
       isThreadTakenOver(email, number).catch(() => null),
       isSessionPaused(email).catch(() => null),
     ]);
-    // ONLY this number's drop traces. The old `?? dropTrace[0]` fallback showed
-    // an unrelated thread's drop as if it belonged to this one - which is how a
-    // stale trace from another shop reads as a live failure here.
-    const lastDrop = dropTrace.find((d) => (d.detail ?? "").includes(number)) ?? null;
+    // ONLY this number's drop traces, matched STRUCTURALLY. The old substring
+    // scan (`detail.includes(number)`) could never see an @lid drop - the one
+    // failure mode this tool exists to find - because an @lid trace carries
+    // `digits: null` and only a `lid` field, whose digits are (by the privacy
+    // keystone) NOT the phone number. The trace detail is JSON; read it as
+    // JSON: digits match tolerantly (any spelling), and a lid matches the
+    // shop's lid learned from our OWN outbound anchor.
+    const { lidAliasForShop } = await import("@/lib/wa/lid-alias");
+    const shopLid = await lidAliasForShop(email, number).catch(() => "");
+    const lastDrop =
+      dropTrace.find((d) => {
+        try {
+          const det = JSON.parse(d.detail ?? "{}") as { digits?: unknown; lid?: unknown };
+          if (typeof det.digits === "string" && det.digits && sameNumber(det.digits, number))
+            return true;
+          if (shopLid && typeof det.lid === "string" && det.lid === shopLid) return true;
+        } catch {}
+        return false;
+      }) ?? null;
 
     // The shop's profile picture, and - when there is none - WHY. Every avatar
     // on the board came back blank in the field while the shops plainly had

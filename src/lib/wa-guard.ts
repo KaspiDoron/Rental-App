@@ -2034,7 +2034,7 @@ export async function releaseSendClaim(
 // ---------------------------------------------------------------------------
 
 export interface SenderSafety {
-  state: "healthy" | "pacing" | "paused" | "recovering";
+  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention";
   /** RAW internal reason - admin surfaces only, never shown to travellers. */
   reason?: string;
   /** Calm, outcome-language explanation safe for the traveller UI. */
@@ -2046,15 +2046,86 @@ export interface SenderSafety {
   queueReasons: string[];
   /** Traveller-safe translations of queueReasons (same order, deduped). */
   publicQueueReasons: string[];
+  /** The raw inputs the verdict was computed from (admin/doctor surfaces). */
+  signals?: import("./wa/safety-signals").SafetySignals;
+}
+
+// The signal collection runs on every activity poll, so it is cached briefly
+// per sender (the same 20-30s currency every other health read accepts).
+const safetySignalCache = new Map<
+  string,
+  { at: number; sig: import("./wa/safety-signals").SafetySignals }
+>();
+
+/** The IMPURE half of the health verdict: gather the signals that actually
+ * fail in production. Every read degrades to null/0, and the pure classifier
+ * only flags on positive evidence - a DB blip cannot paint a number red. */
+async function collectSafetySignals(
+  senderKey: string
+): Promise<import("./wa/safety-signals").SafetySignals> {
+  const cached = safetySignalCache.get(senderKey);
+  if (cached && Date.now() - cached.at < 20_000) return cached.sig;
+  const enc = encodeURIComponent(senderKey);
+  const dayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const { isLoudDrop } = await import("./wa/safety-signals");
+  const { instanceNameFor } = await import("./evolution");
+  const [sess, hookOk, lastIn, lastOut, drops] = await Promise.all([
+    sbSelect<{ status: string | null }>(
+      "wa_sessions",
+      `select=status&email=eq.${enc}&limit=1`
+    ).catch(() => []),
+    sbSelect<{ created_at: string }>(
+      "agent_events",
+      `select=created_at&kind=eq.webhook-ok&vendor_name=eq.${encodeURIComponent(
+        instanceNameFor(senderKey)
+      )}&order=created_at.desc&limit=1`
+    ).catch(() => []),
+    sbSelect<{ received_at: string }>(
+      "whatsapp_messages",
+      `select=received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&order=received_at.desc&limit=1`
+    ).catch(() => []),
+    sbSelect<{ received_at: string }>(
+      "whatsapp_messages",
+      `select=received_at&direction=eq.outbound&raw->>sender=eq.${enc}&order=received_at.desc&limit=1`
+    ).catch(() => []),
+    sbSelect<{ kind: string; detail: string | null }>(
+      "agent_events",
+      `select=kind,detail&kind=in.("inbound-dropped","send-dropped")&user_email=eq.${enc}&created_at=gte.${encodeURIComponent(
+        dayAgo
+      )}&limit=60`
+    ).catch(() => []),
+  ]);
+  let inboundDropped24h = 0;
+  let sendDropped24h = 0;
+  for (const d of drops) {
+    let reason = "";
+    try {
+      reason = String(JSON.parse(d.detail ?? "{}").reason ?? "");
+    } catch {}
+    if (d.kind === "send-dropped") sendDropped24h += 1;
+    else if (isLoudDrop(reason)) inboundDropped24h += 1;
+  }
+  const sig = {
+    connection: sess[0]?.status ?? null,
+    lastWebhookOkAt: hookOk[0]?.created_at ?? null,
+    lastInboundAt: lastIn[0]?.received_at ?? null,
+    lastOutboundAt: lastOut[0]?.received_at ?? null,
+    inboundDropped24h,
+    sendDropped24h,
+  };
+  if (safetySignalCache.size > 2000) safetySignalCache.clear();
+  safetySignalCache.set(senderKey, { at: Date.now(), sig });
+  return sig;
 }
 
 export async function senderSafety(senderKey: string): Promise<SenderSafety> {
-  const [rep, outbox] = await Promise.all([
+  const [rep, outbox, signals] = await Promise.all([
     getReputation(senderKey).catch(() => null),
     sbSelect<{ meta: { reason?: string } | null }>(
       "wa_outbox",
       `select=meta&sender_key=eq.${encodeURIComponent(senderKey)}&limit=50`
     ).catch(() => [] as { meta: { reason?: string } | null }[]),
+    collectSafetySignals(senderKey).catch(() => null),
   ]);
 
   const queued = outbox.length;
@@ -2092,7 +2163,29 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
       queued,
       queueReasons,
       publicQueueReasons,
+      signals: signals ?? undefined,
     };
+  }
+  // The verdict layer that used to not exist: a dead connection or real drop
+  // events outrank "the queue is empty". During the incident the queue was
+  // CANCELLED empty while every reply bounced - and the banner showed green
+  // precisely because nothing was queued.
+  if (signals) {
+    const { classifySafety } = await import("./wa/safety-signals");
+    const flag = classifySafety(signals, Date.now());
+    if (flag) {
+      return {
+        state: flag.state,
+        reason: flag.reason,
+        publicReason: flag.publicReason,
+        trustScore,
+        riskScore,
+        queued,
+        queueReasons,
+        publicQueueReasons,
+        signals,
+      };
+    }
   }
   if (queued > 0) {
     return {
@@ -2107,7 +2200,16 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
       queued,
       queueReasons,
       publicQueueReasons,
+      signals: signals ?? undefined,
     };
   }
-  return { state: "healthy", trustScore, riskScore, queued, queueReasons, publicQueueReasons };
+  return {
+    state: "healthy",
+    trustScore,
+    riskScore,
+    queued,
+    queueReasons,
+    publicQueueReasons,
+    signals: signals ?? undefined,
+  };
 }

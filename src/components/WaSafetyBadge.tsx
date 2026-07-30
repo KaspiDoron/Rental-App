@@ -2,14 +2,17 @@
 
 // Honest anti-ban visibility: a compact pill that tells the traveller what
 // the safety engine is doing with their number RIGHT NOW - healthy, pacing,
-// paused, or recovering. Ends the "connected but silently held" confusion.
+// paused, recovering, disconnected or needs-attention. Ends the "connected
+// but silently held" confusion - and, since the incident, the reverse lie
+// too: this badge said "All good" while the connection was down and replies
+// were bouncing, because health used to be "reputation OK + queue empty".
 
 import { useState } from "react";
 import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 
 export interface WaSafety {
-  state: "healthy" | "pacing" | "paused" | "recovering";
+  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention";
   reason?: string;
   publicReason?: string;
   pausedUntil?: string;
@@ -37,6 +40,18 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
           cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
           icon: "clock",
           label: `${safety.queued} ${t("in line - sending automatically")}`,
+        }
+      : safety.state === "disconnected"
+      ? {
+          cls: "bg-brandred-soft text-brandred",
+          icon: "shield",
+          label: t("WhatsApp disconnected - replies can't reach the app"),
+        }
+      : safety.state === "attention"
+      ? {
+          cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+          icon: "shield",
+          label: t("Some messages need a look"),
         }
       : {
           cls: "bg-brandred-soft text-brandred",
