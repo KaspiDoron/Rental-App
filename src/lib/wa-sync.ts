@@ -15,7 +15,7 @@ import { processVendorReply } from "./agent-loop";
 import { noteInboundDropped } from "./wa/webhook-trace";
 import { digitsOnly } from "./phone";
 import { numberFilter, sameNumber, lidKey } from "./wa/phone-key";
-import { rememberAlias } from "./wa/lid-alias";
+import { rememberAlias, lidAliasForShop } from "./wa/lid-alias";
 import { boundedSet } from "./bounded-map";
 
 const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
@@ -87,7 +87,13 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // this path used to keep ingesting the friend's private chats for the
       // whole 36h window after the webhook had already stopped.
       const { isVendorThread } = await import("./drill");
-      if (!(await isVendorThread(digits, email))) {
+      const gate = await isVendorThread(digits, email);
+      if (gate === null) {
+        // Store unreachable: skip WITHOUT judging - the next sweep retries.
+        void noteInboundDropped(email, digits, "vendor-gate-unavailable", { via: "sync" });
+        continue;
+      }
+      if (!gate) {
         void noteInboundDropped(email, digits, "vendor-gate", { via: "sync" });
         continue;
       }
@@ -101,27 +107,44 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // future @lid frame instantly instead of dropping it.
       const chatLid = lidKey(jid);
       if (chatLid) rememberAlias(email, chatLid, digits);
-      const msgs = await fetchMessagesRaw(email, jid, 10);
-      const inbound = msgs.filter(
-        (m) =>
-          !m.fromMe &&
-          (m.text.trim() || m.hasImage) &&
-          // PRIVACY (per-message origin assertion): the message MUST belong to
-          // THIS exact chat. Even if any upstream read ever returned wider data,
-          // a personal chat's message is dropped here - never stapled onto the
-          // shop thread. @lid JIDs match only by exact equality (their numeric
-          // part is not the phone number).
-          (m.remoteJid === jid || sameNumber(m.remoteJid, digits)) &&
-          // ignore ancient history - only the active window matters
-          m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
-          // RACE GUARD: give the webhook a 10s head start on brand-new
-          // messages. If both paths ingest the same message simultaneously,
-          // the dedupe makes NEITHER process it - so the sync only touches
-          // messages the webhook has clearly missed. 10s keeps recovery snappy
-          // while still letting a working webhook win the race.
-          m.ts * 1000 < Date.now() - 10_000
-      );
+      // LID-AWARE PULL: a privacy-migrated chat stores its records under the
+      // @lid form, so a phone-jid pull can honestly find nothing while the
+      // messages exist. When our OWN outbound anchor learned the chat's lid
+      // (raw.lid, stamped at send time), pull under that form too. The
+      // per-message assertion below still matches each candidate STRICTLY -
+      // an @lid only ever by exact equality, so no privacy regression.
+      const knownLid = chatLid || (await lidAliasForShop(email, digits));
+      const candidateJids = [jid, ...(knownLid && !chatLid ? [`${knownLid}@lid`] : [])];
+      let inbound: Awaited<ReturnType<typeof fetchMessagesRaw>> = [];
+      let matchedJid = jid;
+      for (const cand of candidateJids) {
+        const msgs = await fetchMessagesRaw(email, cand, 10);
+        inbound = msgs.filter(
+          (m) =>
+            !m.fromMe &&
+            (m.text.trim() || m.hasImage) &&
+            // PRIVACY (per-message origin assertion): the message MUST belong to
+            // THIS exact chat. Even if any upstream read ever returned wider data,
+            // a personal chat's message is dropped here - never stapled onto the
+            // shop thread. @lid JIDs match only by exact equality (their numeric
+            // part is not the phone number).
+            (m.remoteJid === cand || sameNumber(m.remoteJid, digits)) &&
+            // ignore ancient history - only the active window matters
+            m.ts * 1000 > Date.now() - THREAD_WINDOW_H * 3600_000 &&
+            // RACE GUARD: give the webhook a 10s head start on brand-new
+            // messages. If both paths ingest the same message simultaneously,
+            // the dedupe makes NEITHER process it - so the sync only touches
+            // messages the webhook has clearly missed. 10s keeps recovery snappy
+            // while still letting a working webhook win the race.
+            m.ts * 1000 < Date.now() - 10_000
+        );
+        if (inbound.length > 0) {
+          matchedJid = cand;
+          break;
+        }
+      }
       if (inbound.length === 0) continue;
+      void matchedJid;
 
       // Which of these already made it in via the webhook?
       const ids = inbound.map((m) => m.id);

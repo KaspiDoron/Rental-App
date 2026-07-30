@@ -13,6 +13,7 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
+import { lidKey } from "@/lib/wa/phone-key";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
@@ -468,10 +469,12 @@ export async function POST(req: Request) {
 
     let ok = false;
     let reason: string | undefined;
+    let sentChatLid = "";
     if (personal) {
       const r = await sendFromUser(session.email, digits, guard.text);
       ok = r.ok;
       reason = r.error;
+      sentChatLid = lidKey(r.chatJid);
       if (r.rateLimited) {
         await releaseSendClaim(session.email, digits, guard.text).catch(() => {});
         results.push({ id: v.id, sent: false, reason: "rate-limit" });
@@ -494,6 +497,10 @@ export async function POST(req: Request) {
             channel: personal ? "personal-wa" : "cloud-api",
             ok: true,
             ...meta,
+            // The chat's privacy identity, when the provider reported one -
+            // this outbound anchor is what resolves the shop's FIRST @lid
+            // reply (wa/lid-alias reads raw.lid on both directions).
+            ...(sentChatLid ? { lid: sentChatLid } : {}),
           },
         },
       ]);

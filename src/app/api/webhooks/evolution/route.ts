@@ -33,8 +33,15 @@ export async function POST(req: Request) {
   // Durable "last inbound accepted at" (throttled per instance).
   void noteWebhookAccepted(String((body as { instance?: string; instanceName?: string })?.instance ?? (body as { instanceName?: string })?.instanceName ?? "") || undefined, String((body as { event?: string })?.event ?? "") || undefined);
 
-  await processEvolutionWebhook(body, { origin: url.origin, token: expected });
+  const outcome = await processEvolutionWebhook(body, { origin: url.origin, token: expected });
 
+  // FAIL LOUD ON OUR OWN OUTAGE. When a message could not be ingested because
+  // our storage was unreachable (not because it was judged not-ours), a 200
+  // here told Evolution "delivered" and the reply was permanently eaten. A
+  // 503 makes the provider redeliver once we are back.
+  if (outcome?.retryable) {
+    return NextResponse.json({ ok: false, retry: true }, { status: 503 });
+  }
   return NextResponse.json({ ok: true });
 }
 

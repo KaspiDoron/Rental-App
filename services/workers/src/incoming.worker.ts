@@ -89,7 +89,12 @@ export function startIncomingWorker(): Worker {
       // turns offload to the isolated pipeline; no origin/token: this
       // persistent process replaces the serverless tick chain.
       const data = (job as Job<InboundJob>).data;
-      await processEvolutionWebhook(data.raw, { enqueueVisionFlow });
+      const outcome = await processEvolutionWebhook(data.raw, { enqueueVisionFlow });
+      if (outcome?.retryable) {
+        // Our storage was unreachable mid-ingest - throw so BullMQ retries
+        // the job instead of acking a message we never stored.
+        throw new Error("ingest retryable: storage unavailable");
+      }
       logger.info(
         { jobId: job.id, ms: Date.now() - started, channel: data.channel },
         "inbound processed"

@@ -1804,7 +1804,18 @@ export async function sendFromUser(
   to: string,
   message: string,
   fast = false
-): Promise<{ ok: boolean; error?: string; rateLimited?: boolean; messageId?: string; unconfirmed?: boolean }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  rateLimited?: boolean;
+  messageId?: string;
+  unconfirmed?: boolean;
+  /** The provider's own record of WHICH chat this landed in. For a
+   * privacy-migrated contact this is the `<opaque>@lid` form - the exact
+   * lid<->phone mapping the inbound path needs to resolve the shop's FIRST
+   * reply (see wa/lid-alias: outbound rows stamp raw.lid from this). */
+  chatJid?: string;
+}> {
   const rate = await checkRateLimit(email);
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
 
@@ -1930,7 +1941,13 @@ export async function sendFromUser(
     // A clean send clears the stop-loss streak (the account is responding).
     import("./wa-guard").then((m) => m.noteSendOutcome(email, "ok")).catch(() => {});
     const id = String(res.data?.key?.id ?? res.data?.messageId ?? "");
-    return { ok: true, messageId: id || undefined, unconfirmed: !hasSendReceipt(res.data) };
+    const chatJid = String(res.data?.key?.remoteJid ?? "");
+    return {
+      ok: true,
+      messageId: id || undefined,
+      unconfirmed: !hasSendReceipt(res.data),
+      chatJid: chatJid || undefined,
+    };
   }
   const errText =
     res.data?.response?.message?.toString?.() ??

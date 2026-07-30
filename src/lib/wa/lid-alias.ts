@@ -34,17 +34,44 @@ export interface ResolvedIdentity {
   lid: string;
 }
 
-// Payload fields Evolution/Baileys are known to carry the real phone JID in for
-// a lid-addressed chat. Each candidate is VALIDATED as a phone JID before it is
-// believed, so an unknown build adding a new field can never inject junk.
+// Payload fields Evolution/Baileys are known to carry the real phone in for a
+// lid-addressed chat. Each candidate is VALIDATED before it is believed, so an
+// unknown build adding a new field can never inject junk.
 const PAYLOAD_PATHS = [
   ["key", "remoteJidAlt"],
   ["key", "senderPn"],
   ["key", "participantPn"],
   ["key", "previousRemoteJid"],
+  ["key", "participant"],
+  ["key", "participantAlt"],
   ["senderPn"],
   ["remoteJidAlt"],
+  ["participant"],
+  ["contextInfo", "participant"],
+  ["message", "contextInfo", "participant"],
 ] as const;
+
+/**
+ * Digits of a candidate value that plausibly names a PHONE LINE - in ANY
+ * spelling a provider build uses: a full phone JID, bare digits, or a
+ * human-formatted "+63 977 662 0146". The old validator required a strict
+ * JID shape, so a build writing the formatted form was thrown away and a
+ * resolvable first reply was dropped as "unresolved-identity".
+ *
+ * PRIVACY KEYSTONE, unchanged: an @lid's own digits are NEVER a phone -
+ * reading them as one is how a reply once got filed under a number nobody
+ * owns. Any lid-shaped candidate is rejected outright.
+ */
+function candidatePhone(v: string): string {
+  if (/@lid\b/i.test(v)) return "";
+  if (isPhoneJid(v)) {
+    const digits = waDigits(v);
+    return digits.length >= 8 ? digits : "";
+  }
+  // Free-form spelling: keep only digits, require a plausible E.164 length.
+  const digits = v.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15 ? digits : "";
+}
 
 function at(obj: unknown, path: readonly string[]): unknown {
   let cur: unknown = obj;
@@ -64,9 +91,8 @@ export function phoneFromPayload(data: unknown): string {
   for (const path of PAYLOAD_PATHS) {
     const v = at(data, path);
     if (typeof v !== "string" || !v) continue;
-    if (!isPhoneJid(v)) continue;
-    const digits = waDigits(v);
-    if (digits.length >= 8) return digits;
+    const digits = candidatePhone(v);
+    if (digits) return digits;
   }
   return "";
 }
@@ -143,13 +169,47 @@ export async function resolveChatIdentity(
 }
 
 /**
- * An alias we wrote onto an earlier inbound row (`raw.lid`) for this receiver.
- * Scoped to the receiver, so one user's chats can never name another's.
- * Returns "" on any failure - a missing alias is a normal outcome.
+ * REVERSE lookup: the lid our own outbound anchors recorded for this shop.
+ * Lets the recovery sweep pull a privacy-migrated chat under its @lid form
+ * when the phone-jid pull finds nothing.
+ */
+export async function lidAliasForShop(email: string, digits: string): Promise<string> {
+  if (!email || !digits) return "";
+  const { sbSelect } = await import("../runtime-config");
+  const { numberFilter } = await import("./phone-key");
+  const rows = await sbSelect<{ raw: { lid?: string } | null }>(
+    "whatsapp_messages",
+    `select=raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+      email
+    )}&raw->>lid=not.is.null&order=received_at.desc&limit=1${numberFilter("to_number", digits)}`
+  ).catch(() => [] as { raw: { lid?: string } | null }[]);
+  return String(rows[0]?.raw?.lid ?? "");
+}
+
+/**
+ * An alias persisted on an earlier thread row (`raw.lid`) for this user -
+ * read from BOTH directions. The outbound side is decisive: our own send is
+ * the strongest evidence there is, and it is the row that EXISTS on a fresh
+ * thread. The old inbound-only read needed a PREVIOUSLY-SUCCESSFUL ingest to
+ * have written the alias - a chicken-and-egg that made the FIRST reply of
+ * every privacy-migrated thread unresolvable (Qui's three price messages
+ * died exactly here). Scoped per user on both queries, so one user's chats
+ * can never name another's. Returns "" on any failure - a missing alias is
+ * a normal outcome.
  */
 async function aliasFromThreads(email: string, lid: string): Promise<string> {
   if (!email || !lid) return "";
   const { sbSelect } = await import("../runtime-config");
+  // Outbound anchor first: raw.lid is stamped at send time from the
+  // provider's own key.remoteJid (see sendFromUser -> the sent-row writers).
+  const outs = await sbSelect<{ to_number: string }>(
+    "whatsapp_messages",
+    `select=to_number&direction=eq.outbound&raw->>lid=eq.${encodeURIComponent(
+      lid
+    )}&raw->>sender=eq.${encodeURIComponent(email)}&order=received_at.desc&limit=1`
+  ).catch(() => [] as { to_number: string }[]);
+  const fromOutbound = waDigits(outs[0]?.to_number ?? "");
+  if (fromOutbound) return fromOutbound;
   const rows = await sbSelect<{ from_number: string }>(
     "whatsapp_messages",
     `select=from_number&direction=eq.inbound&raw->>lid=eq.${encodeURIComponent(

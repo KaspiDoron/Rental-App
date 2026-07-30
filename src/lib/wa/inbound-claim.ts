@@ -51,6 +51,22 @@ export async function releaseReplyClaim(waMessageId: string): Promise<void> {
   }
 }
 
+/**
+ * Hand a STORE claim back - taken when the winner's insert then FAILED. The
+ * claim without a row behind it turned every redelivery into a silent no-op:
+ * the message existed nowhere, and the dedup layer guaranteed it never would.
+ */
+export async function releaseInboundStore(waMessageId: string): Promise<void> {
+  const id = (waMessageId || "").trim();
+  if (!id) return;
+  try {
+    const { sbDelete } = await import("../runtime-config");
+    await sbDelete("wa_inbound_seen", `wa_message_id=eq.${encodeURIComponent(id)}`);
+  } catch {
+    /* best effort - the sweep can still re-pull the window */
+  }
+}
+
 export async function claimInboundStore(waMessageId: string): Promise<boolean> {
   const id = (waMessageId || "").trim();
   if (!id) return true; // no id to dedupe on - store it

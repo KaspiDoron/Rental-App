@@ -1,5 +1,5 @@
 import "server-only";
-import { sbSelect } from "./runtime-config";
+import { sbSelect, sbSelectStrict } from "./runtime-config";
 import { classifyIngest, DRILL_INGEST_WINDOW_MS, REAL_THREAD_INGEST_WINDOW_MS, type GateRaw } from "./wa/thread-gate";
 import { numberFilter } from "./wa/phone-key";
 
@@ -26,7 +26,18 @@ export { DRILL_INGEST_WINDOW_MS, REAL_THREAD_INGEST_WINDOW_MS };
 //      only; when the rehearsal is over, the friend's private messages stop
 //      being ingested on EVERY path.
 
-export async function isVendorThread(fromDigits: string, ownerEmail: string): Promise<boolean> {
+/**
+ * true = an ingestible shop thread; false = NOT ours (drop, with trace);
+ * null = the thread store is unreachable RIGHT NOW - the truth is UNKNOWN.
+ * A transient DB error used to collapse to [] -> false, and the webhook's
+ * 200 meant the provider never redelivered: a genuine shop reply was
+ * permanently eaten by OUR OWN outage. Callers must treat null as
+ * "retry later", never as "not a shop".
+ */
+export async function isVendorThread(
+  fromDigits: string,
+  ownerEmail: string
+): Promise<boolean | null> {
   // Look at the recent outbound history of THIS user to THIS number (not just
   // the single newest row: a human-manual reply could be newest while the
   // thread's real RFQ anchor is a few messages back). The pure gate logic lives
@@ -39,11 +50,14 @@ export async function isVendorThread(fromDigits: string, ownerEmail: string): Pr
   // inbound INTERNATIONAL one ("639661952196"). The gate answered "not a shop
   // thread" and the shop's reply was dropped before it was ever stored: the
   // agent went quiet, the traveller saw a ghosting shop, and no offer existed.
-  const rows = await sbSelect<{ received_at: string; raw: GateRaw | null }>(
+  const res = await sbSelectStrict<{ received_at: string; raw: GateRaw | null }>(
     "whatsapp_messages",
     `select=received_at,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       ownerEmail
     )}&order=received_at.desc&limit=10${numberFilter("to_number", fromDigits)}`
   );
-  return classifyIngest(rows, Date.now());
+  // "missing" (no table) can only mean a fresh deployment with no history -
+  // honestly not a thread; "unavailable" is OUR outage - unknown, fail loud.
+  if (!("rows" in res)) return res.error === "missing" ? false : null;
+  return classifyIngest(res.rows, Date.now());
 }

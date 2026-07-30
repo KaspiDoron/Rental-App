@@ -10,6 +10,7 @@ import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
+import { lidKey } from "@/lib/wa/phone-key";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
 import { jsonRoute } from "@/lib/http/json-route";
 
@@ -361,7 +362,15 @@ async function handlePost(req: Request) {
   //      sender a bargain can have, with strict anti-ban rate limits.
   //   2. The official Meta Cloud API (owner-level business number).
   //   3. Neither connected -> the UI falls back to copy-paste, still in-app.
-  let result: { channel: string; ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean } = {
+  let result: {
+    channel: string;
+    ok: boolean;
+    error?: string;
+    rateLimited?: boolean;
+    unconfirmed?: boolean;
+    messageId?: string;
+    chatJid?: string;
+  } = {
     channel: "none",
     ok: false,
   };
@@ -419,7 +428,15 @@ async function handlePost(req: Request) {
     configured = (await wasEverConnected(session.email)) || false;
     const r = await sendFromUser(session.email, digits, guardedMessage, true);
     if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
-    result = { channel: "personal-wa", ok: r.ok, error: r.error, rateLimited: r.rateLimited, unconfirmed: r.unconfirmed };
+    result = {
+      channel: "personal-wa",
+      ok: r.ok,
+      error: r.error,
+      rateLimited: r.rateLimited,
+      unconfirmed: r.unconfirmed,
+      messageId: r.messageId,
+      chatJid: r.chatJid,
+    };
     if (r.rateLimited) {
       const { releaseSendClaim } = await import("@/lib/wa-guard");
       await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
@@ -502,6 +519,9 @@ async function handlePost(req: Request) {
           // English gloss of a localized message so the traveller can read
           // what their agent sent on their behalf (card thread peek).
           ...(englishGloss ? { englishGloss } : {}),
+          // The chat's privacy identity, when the provider reported one -
+          // the outbound anchor is what resolves the shop's FIRST @lid reply.
+          ...(lidKey(result.chatJid) ? { lid: lidKey(result.chatJid) } : {}),
         },
       },
     ]).catch(async (e) => {

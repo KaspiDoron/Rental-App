@@ -150,9 +150,14 @@ export async function processEvolutionWebhook(
     token?: string;
     enqueueVisionFlow?: (req: VisionFlowRequest) => Promise<void>;
   } = {}
-): Promise<void> {
+): Promise<{ retryable: boolean }> {
   const body: any = payload ?? null;
-  if (!body) return;
+  // Set when a message could not be ingested because OUR OWN storage was
+  // unreachable (not because it was judged not-ours). The webhook route
+  // answers non-2xx so the provider REDELIVERS - failing loud instead of
+  // eating a possibly-genuine shop reply on our own outage.
+  let retryable = false;
+  if (!body) return { retryable };
 
   try {
     const event = String(body.event ?? "").toLowerCase().replace(/_/g, ".");
@@ -182,7 +187,7 @@ export async function processEvolutionWebhook(
       } catch {
         /* receipts are best-effort */
       }
-      return;
+      return { retryable };
     }
 
     // Connection lifecycle. IMPORTANT: a 401 "close" is ALSO emitted as a
@@ -215,14 +220,25 @@ export async function processEvolutionWebhook(
       } catch {
         /* best-effort */
       }
-      return;
+      return { retryable };
     }
 
-    if (!event.includes("messages.upsert")) return;
+    if (!event.includes("messages.upsert")) return { retryable };
 
     const items = Array.isArray(body.data) ? body.data : [body.data];
 
-    for (const data of items.slice(0, 3)) {
+    // Bounded, never SILENTLY truncated: the old slice(0, 3) discarded the
+    // 4th+ frame of a batched upsert with no trace of any kind - a shop
+    // sending four quick messages lost one invisibly.
+    const capped = items.slice(0, 10);
+    if (items.length > capped.length) {
+      void noteInboundDropped(undefined, "batch", "batch-truncated", {
+        via: "webhook",
+        total: items.length,
+        kept: capped.length,
+      });
+    }
+    for (const data of capped) {
       // Per-item isolation (audit DEFECT 5): a throw handling ONE message in a
       // multi-message webhook batch must not drop its siblings - the route always
       // returns 200, so Evolution never redelivers them. Contain each item.
@@ -259,9 +275,13 @@ export async function processEvolutionWebhook(
       const identity = await resolveChatIdentity(email, remoteJid, data).catch(() => null);
       const from = identity?.phone ?? "";
       if (!from) {
+        // The trace carries the LID as a structured field (not only as the
+        // digits slot) so the WA doctor can match it - an @lid drop used to
+        // be invisible to the very tool built to find it.
         void noteInboundDropped(email, lidKey(remoteJid) || remoteJid, "unresolved-identity", {
           via: "webhook",
           jid: remoteJid.slice(0, 48),
+          lid: lidKey(remoteJid),
         });
         continue;
       }
@@ -274,7 +294,18 @@ export async function processEvolutionWebhook(
       // Not a rental-shop thread THIS user opened? Drop it - never stored,
       // never read. (Applies to fromMe too: private chats stay sacred, and a
       // finished drill stops ingesting the friend's messages after 12h.)
-      if (!(await isVendorThread(from, email))) {
+      // STRICT: null means the thread store was unreachable - the truth is
+      // UNKNOWN, and eating a possibly-genuine shop reply on our own outage
+      // used to be a permanent loss (the route answered 200, so the provider
+      // never redelivered). Fail loud instead: mark the whole delivery
+      // retryable and let the webhook answer non-2xx.
+      const gate = await isVendorThread(from, email);
+      if (gate === null) {
+        retryable = true;
+        void noteInboundDropped(email, from, "vendor-gate-unavailable", { via: "webhook" });
+        continue;
+      }
+      if (!gate) {
         // Formerly a fully silent drop. Leave a throttled trace so a genuine
         // shop reply lost to a missing RFQ anchor is diagnosable (WA doctor).
         void noteInboundDropped(email, from, "vendor-gate", { via: "webhook" });
@@ -413,8 +444,14 @@ export async function processEvolutionWebhook(
       // provider message id first; only the winner writes the row. Redis/BullMQ
       // dedupe layers only exist on the worker path, so on the serverless path
       // this claim is the ONLY thing standing between a retry and a duplicate.
-      if (msgId && !(await claimInboundStore(msgId))) continue;
-      await sbInsert("whatsapp_messages", [
+      if (msgId && !(await claimInboundStore(msgId))) {
+        // A lost claim means another worker already stored this exact frame -
+        // normal on redelivery, but traced so a dedup bug can never eat
+        // messages invisibly again.
+        void noteInboundDropped(email, from, "store-claim-lost", { via: "webhook", msgId });
+        continue;
+      }
+      const stored = await sbInsert("whatsapp_messages", [
         {
           wa_message_id: msgId,
           from_number: from,
@@ -474,6 +511,19 @@ export async function processEvolutionWebhook(
           },
         },
       ]);
+      if (!stored) {
+        // The claim was taken but the row never landed: release the claim so
+        // a redelivery can store it, mark the delivery retryable, and trace.
+        // Before this check, a failed insert left the message permanently
+        // absent while the claim made every retry a silent no-op.
+        if (msgId) {
+          const { releaseInboundStore } = await import("@/lib/wa/inbound-claim");
+          await releaseInboundStore(msgId).catch(() => {});
+        }
+        retryable = true;
+        void noteInboundDropped(email, from, "store-failed", { via: "webhook", msgId });
+        continue;
+      }
       // Response-time analytics: record how fast this shop replied to our RFQ.
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
@@ -653,4 +703,5 @@ export async function processEvolutionWebhook(
     /* best-effort */
   }
 
+  return { retryable };
 }

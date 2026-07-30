@@ -34,7 +34,7 @@ import {
 } from "./wa/business-hours";
 import { jitteredHold, HARD_MIN_GAP_SEC } from "./wa/pacing";
 import { digitsOnly } from "./phone";
-import { numberFilter, waDigits } from "./wa/phone-key";
+import { numberFilter, waDigits, lidKey } from "./wa/phone-key";
 import {
   claimOutboxRow,
   releaseOutboxRow,
@@ -1836,7 +1836,14 @@ export async function drainOutbox(
     // transient failure so the branch below re-queues it. With the evoFetch
     // hard timeout in place, a slow host now returns {ok:false} rather than
     // hanging, but this keeps any other throw safe too.
-    let r: { ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string };
+    let r: {
+      ok: boolean;
+      error?: string;
+      rateLimited?: boolean;
+      unconfirmed?: boolean;
+      messageId?: string;
+      chatJid?: string;
+    };
     try {
       r = await send(row.sender_key, row.to_number, verdict.text);
     } catch (e) {
@@ -1874,6 +1881,13 @@ export async function drainOutbox(
             auto: true,
             queued: true,
             confirmed: r.unconfirmed ? false : true,
+            // The chat's privacy identity when the provider reported one. An
+            // outbound anchor carrying raw.lid is what lets the shop's FIRST
+            // @lid reply resolve (wa/lid-alias reads BOTH directions) - the
+            // old inbound-only alias trail needed a previously-successful
+            // ingest, a chicken-and-egg that dropped the opening reply of
+            // every privacy-migrated thread.
+            ...(lidKey(r.chatJid) ? { lid: lidKey(r.chatJid) } : {}),
           },
         },
       ]);
