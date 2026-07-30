@@ -12,6 +12,8 @@
 // etaFrom is the earliest a row could realistically leave, etaTo pads for the
 // slower branches (jitter, re-stamp, business-hours). The UI shows the range.
 
+import { classifyQueueReason } from "../queue-reason";
+
 export interface EtaRow {
   id: number;
   notBeforeMs: number;
@@ -76,10 +78,19 @@ export function computeQueueEtas(rows: EtaRow[], ctx: EtaContext): Map<number, E
       coldSeen += 1;
     }
 
-    // Upper bound: the slower drain branches. Cold rows can be re-stamped up to
-    // ~4 min; a business-hours-held row rolls to opening + up to 40 min jitter.
-    const closed = /hour|open/i.test(row.rawReason ?? "");
-    const kindPadMs = closed ? 40 * 60_000 : cold ? 4 * 60_000 : 90_000;
+    // Upper bound: the slower drain branches, keyed on the SAME classifier
+    // the labels use - two divergent regexes once disagreed about the same
+    // row ("shop is closed now" carried an overnight park but matched the
+    // tight 4-minute cold pad, so a 10-hour wait rendered as "~05:38-05:44").
+    // Hour-scale holds (opening roll + 40min jitter, caps, recovery, breaker
+    // freezes) get the wide pad; everything else keeps the tight ones.
+    const holdKind = classifyQueueReason(row.rawReason);
+    const wide =
+      holdKind === "closed" ||
+      holdKind === "limit" ||
+      holdKind === "breaker" ||
+      holdKind === "tomorrow";
+    const kindPadMs = wide ? 40 * 60_000 : cold ? 4 * 60_000 : 90_000;
     const to = from + jitterMs + drainCadenceMs + kindPadMs;
 
     out.set(row.id, { etaFromMs: from, etaToMs: to, overdue: row.notBeforeMs <= ctx.nowMs });

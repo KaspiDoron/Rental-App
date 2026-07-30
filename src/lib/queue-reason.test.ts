@@ -45,6 +45,23 @@ describe("classifyQueueReason", () => {
     expect(label).toMatch(/open up shortly|shortly/i);
     expect(label).not.toMatch(/tomorrow/i);
   });
+
+  it("the circuit breakers are legible - never a blank 'Queued - sends automatically'", () => {
+    // The single most consequential hold in the guard used to fall through
+    // to "unknown" (the copy the 05:38 incident's queued rows showed).
+    const reply =
+      "reply-rate circuit breaker (0% < 15%) - cold outreach frozen to protect the number";
+    const delivery = "delivery-rate breaker (40% delivered) - number may be soft-restricted";
+    expect(classifyQueueReason(reply)).toBe("breaker");
+    expect(classifyQueueReason(delivery)).toBe("breaker");
+    expect(queueReasonLabel(reply)).toMatch(/Protecting your WhatsApp number/);
+    expect(queueReasonLabel(reply)).not.toMatch(/shop to open|closed/i);
+  });
+
+  it("transient infrastructure holds all read as self-resuming", () => {
+    expect(classifyQueueReason("reconnecting - resumes automatically")).toBe("sync");
+    expect(classifyQueueReason("couldn't reach this shop - retry 2/5")).toBe("sync");
+  });
 });
 
 describe("queueEta", () => {

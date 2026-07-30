@@ -55,6 +55,15 @@ function etaRangeLabel(
   const start = from ?? (notBefore || undefined);
   if (!start) return "";
   const a = formatClock(start);
+  // A far-out hold must read as a WAIT, not as a clock promise: a bare
+  // "~05:38" on an overnight park scans as minutes away. Past ~75 minutes
+  // the label leads with the magnitude and keeps the clock as detail.
+  const startMs = Date.parse(start);
+  const waitMin = Math.round((startMs - Date.now()) / 60_000);
+  if (Number.isFinite(startMs) && waitMin >= 75) {
+    const hours = Math.max(1, Math.round(waitMin / 60));
+    return `${t("sends in about")} ${hours} ${t("h")} (~${a})`;
+  }
   const b = to ? formatClock(to) : a;
   return a === b ? `~${a}` : `~${a}-${b}`;
 }

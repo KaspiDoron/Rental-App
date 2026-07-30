@@ -29,4 +29,10 @@ export const I18N_EXTRAS: string[] = [
   "We could not read anything usable from this one.",
   "Could not read this one yet",
   "Nothing readable in this one",
+  // lib/queue-reason.ts - queueReasonLabel() picks these; the panel renders
+  // them via t(q.reason).
+  "Protecting your WhatsApp number - new-shop messages resume automatically in a few hours",
+  // app/page.tsx etaRangeLabel() - the far-out-hold wording.
+  "sends in about",
+  "h",
 ];

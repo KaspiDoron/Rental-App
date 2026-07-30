@@ -321,6 +321,12 @@ export async function POST(req: Request) {
       localLang: Boolean(body.localLang) && session.plan === "ultra",
       batchId,
       batchSize: vendors.length,
+      // DISPATCH FACTS RIDE THE ROW. The drain re-guards every parked row;
+      // without these it was blind to Google's "open now" and to the batch's
+      // 15-minute promise, so it could re-park a sibling of an immediate
+      // send on facts dispatch had already refuted (guardOutbound reads both).
+      batchDeadline: batchStart + batchWindowMs(),
+      ...(typeof v.openNow === "boolean" ? { openNow: v.openNow } : {}),
       // On queued rows the thread peek reads the gloss from outbox meta.
       ...((opener.gloss ?? englishGloss) ? { englishGloss: opener.gloss ?? englishGloss } : {}),
     };
@@ -372,7 +378,14 @@ export async function POST(req: Request) {
     const slot = sendIndex++;
     // Shops after the first: park with the stagger - the guard runs at drain.
     if (slot > 0) {
-      const notBefore = new Date(batchStart + offsets[slot]).toISOString();
+      // Floor at now + the hard gap: the per-shop opener work above (Places
+      // details + LLM localization) takes real time, so a later slot's offset
+      // can already be in the past by the time its row is written - a
+      // due-on-arrival row falls to the drain's 2-cold-per-tick trickle
+      // instead of its own schedule. The stagger survives the loop's latency.
+      const notBefore = new Date(
+        Math.max(batchStart + offsets[slot], Date.now() + HARD_MIN_GAP_SEC * 1000)
+      ).toISOString();
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: session.email,

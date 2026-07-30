@@ -65,10 +65,31 @@ describe("computeQueueEtas - honest envelope", () => {
     expect(computeQueueEtas(rows, baseCtx())).toEqual(computeQueueEtas(rows, baseCtx()));
   });
 
-  it("a business-hours-held row gets the wide upper bound", () => {
-    const m = computeQueueEtas([row(1, NOW + 5000, "rfq", "held for opening hours")], baseCtx());
-    const w = m.get(1)!;
-    // etaTo includes the ~40 min business-hours pad
-    expect(w.etaToMs - w.etaFromMs).toBeGreaterThanOrEqual(40 * 60_000);
+  it("hour-scale holds get the wide upper bound - keyed on the REAL stored reasons", () => {
+    // The old /hour|open/i regex missed "shop is closed now" entirely, so an
+    // overnight park rendered as a tight ~5-minute window ("~05:38-05:44" on
+    // a 10-hour wait). The pad now keys on the same classifier the labels
+    // use, exercised here with the exact strings the guard writes.
+    for (const reason of [
+      "shop is closed now",
+      "outside recipient business hours",
+      "hourly cap reached (40/h at trust 20)",
+      "daily cap reached (176/day) - resumes as capacity frees",
+      "reply-rate circuit breaker (0% < 15%) - cold outreach frozen to protect the number",
+      "delivery-rate breaker (40% delivered) - number may be soft-restricted",
+      "number paused (ban-risk recovery)",
+    ]) {
+      const m = computeQueueEtas([row(1, NOW + 5000, "rfq", reason)], baseCtx());
+      const w = m.get(1)!;
+      expect(w.etaToMs - w.etaFromMs).toBeGreaterThanOrEqual(40 * 60_000);
+    }
+  });
+
+  it("batch-spacing and pacing rows keep the tight pad", () => {
+    for (const reason of ["batch-spacing", "human pacing gap", null]) {
+      const m = computeQueueEtas([row(1, NOW + 5000, "rfq", reason)], baseCtx());
+      const w = m.get(1)!;
+      expect(w.etaToMs - w.etaFromMs).toBeLessThan(10 * 60_000);
+    }
   });
 });

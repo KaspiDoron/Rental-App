@@ -25,7 +25,14 @@ import "server-only";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, sbDelete, getConfig } from "./runtime-config";
 import { parseFlag } from "./config-flags";
 import { policyRowValue } from "./wa/policy-values";
-import { jitteredHold } from "./wa/pacing";
+import {
+  resolveOffset,
+  nextBusinessOpen,
+  clampToBusinessHours,
+  boundHold,
+  recipientLocalHour,
+} from "./wa/business-hours";
+import { jitteredHold, HARD_MIN_GAP_SEC } from "./wa/pacing";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits } from "./wa/phone-key";
 import {
@@ -585,127 +592,12 @@ export async function clearPause(senderKey: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Recipient business hours - country code -> rough UTC offset
+// Recipient business hours - extracted to wa/business-hours (pure, exported,
+// tested; the clamp is flag-aware there so no pacing hold can roll across the
+// night while fast dispatch is on).
 // ---------------------------------------------------------------------------
 
-// Phone prefix -> representative UTC offset (hours). Coarse is fine: the goal
-// is "never message a shop at 3 AM", not astronomy. Longer prefixes first so
-// "972" (Israel) wins over "9", and "1" (US/CA) stays last.
-const PREFIX_UTC: [string, number][] = [
-  ["972", 2], // Israel
-  ["351", 0], // Portugal
-  ["66", 7], // Thailand
-  ["62", 8], // Indonesia (Bali)
-  ["84", 7], // Vietnam
-  ["91", 5.5], // India
-  ["81", 9], // Japan
-  ["82", 9], // South Korea
-  ["63", 8], // Philippines
-  ["60", 8], // Malaysia
-  ["65", 8], // Singapore
-  ["86", 8], // China
-  ["852", 8], // Hong Kong
-  ["886", 8], // Taiwan
-  ["90", 3], // Turkey
-  ["971", 4], // UAE
-  ["966", 3], // Saudi
-  ["20", 2], // Egypt
-  ["212", 1], // Morocco
-  ["27", 2], // South Africa
-  ["254", 3], // Kenya
-  ["94", 5.5], // Sri Lanka
-  ["977", 5.75], // Nepal
-  ["52", -6], // Mexico
-  ["55", -3], // Brazil
-  ["54", -3], // Argentina
-  ["57", -5], // Colombia
-  ["51", -5], // Peru
-  ["56", -4], // Chile
-  ["61", 10], // Australia (east)
-  ["64", 12], // New Zealand
-  ["44", 0], // UK
-  ["34", 1], ["39", 1], ["33", 1], ["49", 1], ["30", 2], ["31", 1],
-  ["48", 1], ["420", 1], ["36", 1], ["46", 1], ["47", 1], ["45", 1], ["7", 3],
-  ["1", -5], // US/CA (east-coast bias)
-];
-
-// Region-string -> UTC offset. More reliable than a bare local number, because
-// the geocoded region almost always ends in the country name.
-const REGION_UTC: [RegExp, number][] = [
-  [/\bthai|\bthailand/i, 7], [/\bindonesia|\bbali/i, 8], [/\bvietnam/i, 7],
-  [/\bindia\b|\bgoa\b/i, 5.5], [/\bjapan/i, 9], [/\bkorea/i, 9],
-  [/\bphilippin/i, 8], [/\bmalaysia/i, 8], [/\bsingapore/i, 8],
-  [/\bchina\b/i, 8], [/\bhong kong/i, 8], [/\btaiwan/i, 8],
-  [/\bturkey|\btürkiye/i, 3], [/\bemirates|\bdubai|\buae\b/i, 4], [/\bsaudi/i, 3],
-  [/\begypt/i, 2], [/\bmorocco/i, 1], [/\bsouth africa/i, 2], [/\bkenya/i, 3],
-  [/\bsri lanka/i, 5.5], [/\bnepal/i, 5.75], [/\bisrael/i, 2],
-  [/\bmexico/i, -6], [/\bbrazil|\bbrasil/i, -3], [/\bargentin/i, -3],
-  [/\bcolombia/i, -5], [/\bperu/i, -5], [/\bchile/i, -4],
-  [/\baustralia/i, 10], [/\bnew zealand/i, 12],
-  [/\bunited kingdom|\bengland|\bscotland|\bwales|\blondon/i, 0],
-  [/\bportugal/i, 0], [/\bspain|\bitaly|\bfrance|\bgermany|\bnetherlands|\bbelgium|\baustria|\bpoland|\bczech|\bhungary/i, 1],
-  [/\bgreece\b/i, 2], [/\bsweden|\bnorway|\bdenmark/i, 1], [/\brussia|\bmoscow/i, 3],
-  [/\bunited states|\busa\b|\bcanada/i, -5],
-];
-
-// Returns the offset AND whether we actually know it (unknown => never queue on
-// hours; a false "closed" is worse UX than a rare off-hours send).
-function resolveOffset(digits: string, region?: string): { off: number; known: boolean } {
-  for (const [prefix, off] of PREFIX_UTC) {
-    if (digits.startsWith(prefix)) return { off, known: true };
-  }
-  if (region) {
-    for (const [re, off] of REGION_UTC) if (re.test(region)) return { off, known: true };
-  }
-  return { off: 0, known: false };
-}
-
-/** Recipient's local hour right now (0-23, fractional offsets floored). */
-export function recipientLocalHour(toDigits: string, region?: string): number {
-  const { off } = resolveOffset(toDigits, region);
-  const h = (new Date().getUTCHours() + new Date().getUTCMinutes() / 60 + off + 24) % 24;
-  return Math.floor(h);
-}
-
-/** Next moment the recipient's business window opens, as ISO string. */
-function nextBusinessOpen(toDigits: string, p: SecurityPolicies, region?: string): string {
-  const { off } = resolveOffset(toDigits, region);
-  const now = new Date();
-  const localHour = (now.getUTCHours() + now.getUTCMinutes() / 60 + off + 24) % 24;
-  let waitHours: number;
-  if (localHour < p.business_hour_start) {
-    waitHours = p.business_hour_start - localHour;
-  } else {
-    waitHours = 24 - localHour + p.business_hour_start;
-  }
-  // Add 0-40 min of jitter so queued sends don't all fire at 9:00:00 sharp.
-  const jitterMs = Math.floor(Math.random() * 40 * 60_000);
-  return new Date(now.getTime() + waitHours * 3600_000 + jitterMs).toISOString();
-}
-
-
-/** If `iso` lands outside the recipient's known business window, roll it
- *  forward to the next open; unknown timezone => return unchanged (never
- *  false-delay an open shop). */
-function clampToBusinessHours(
-  iso: string,
-  toDigits: string,
-  p: SecurityPolicies,
-  region?: string
-): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return iso;
-  const { off, known } = resolveOffset(toDigits, region);
-  if (!known) return iso;
-  const localH = (new Date(at).getUTCHours() + new Date(at).getUTCMinutes() / 60 + off + 24) % 24;
-  if (localH >= p.business_hour_start && localH < p.business_hour_end) return iso;
-  const waitHours =
-    localH < p.business_hour_start
-      ? p.business_hour_start - localH
-      : 24 - localH + p.business_hour_start;
-  const jitterMs = Math.floor(Math.random() * 30 * 60_000);
-  return new Date(at + waitHours * 3600_000 + jitterMs).toISOString();
-}
+export { recipientLocalHour };
 
 /**
  * Count the DISTINCT new-shop introductions (outbound RFQ opening messages)
@@ -818,6 +710,76 @@ export async function introHoldIso(
   const p = await getPolicies();
   const { nextFreeAt } = await newContactBudget(senderKey, plan);
   return clampToBusinessHours(nextFreeAt, toDigits, p, region);
+}
+
+/**
+ * Cold-outreach engagement over the trailing 7 days: how many DISTINCT shops
+ * this sender introduced, and how many of them engaged (replied OR read).
+ * Windowed on purpose - the lifetime replies_total/sent_total ratio latches
+ * (see the breaker comment in guardOutbound). Null when unreadable: the
+ * breaker then stands down - the risk pause and stop-loss still protect the
+ * number, and a guard must not freeze outreach on its own blindness.
+ */
+const BREAKER_WINDOW_HOURS = 7 * 24;
+export async function coldEngagementWindow(
+  senderKey: string
+): Promise<{ intros: number; engaged: number } | null> {
+  try {
+    const sinceIso = new Date(Date.now() - BREAKER_WINDOW_HOURS * 3600_000).toISOString();
+    const { entries } = await introductionsInWindow(senderKey, BREAKER_WINDOW_HOURS);
+    if (entries.length === 0) return { intros: 0, engaged: 0 };
+    const introDigits = new Set(entries.map((e) => digitsOnly(e.toNumber)).filter(Boolean));
+    const engaged = new Set<string>();
+    const inbound = await sbSelect<{ from_number: string }>(
+      "whatsapp_messages",
+      `select=from_number&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+        senderKey
+      )}&received_at=gte.${encodeURIComponent(sinceIso)}&limit=300`
+    );
+    for (const r of inbound) {
+      const d = digitsOnly(r.from_number ?? "");
+      if (introDigits.has(d)) engaged.add(d);
+    }
+    // Read receipts count: a shop that READ us engaged with the number even
+    // if it never typed - and reads are recorded through message-update
+    // events, so they survive an inbound-text ingest defect.
+    const state = await sbSelect<{ to_number: string; read: boolean | null; last_reply_at: string | null }>(
+      "wa_recipient_state",
+      `select=to_number,read,last_reply_at&sender_key=eq.${encodeURIComponent(senderKey)}&limit=500`
+    );
+    for (const r of state) {
+      if (!r.read && !r.last_reply_at) continue;
+      const d = digitsOnly(r.to_number ?? "");
+      if (introDigits.has(d)) engaged.add(d);
+    }
+    return { intros: introDigits.size, engaged: engaged.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A terminal refusal must leave a durable, attributable trace. Six shops once
+ * rendered as "REMOVED BY YOU" precisely because their refusals (engagement
+ * halt, dedup, tombstone) wrote nothing anywhere a client could read - the
+ * poll's cancellation list became the only available "explanation".
+ */
+async function recordSendDropped(
+  senderKey: string,
+  toDigits: string,
+  reason: string,
+  meta?: Record<string, unknown>
+): Promise<void> {
+  const digits = digitsOnly(toDigits);
+  await sbInsert("agent_events", [
+    {
+      kind: "send-dropped",
+      vendor_id: typeof meta?.vendorId === "string" ? (meta.vendorId as string) : "",
+      vendor_name: digits,
+      ...(senderKey ? { user_email: senderKey } : {}),
+      detail: JSON.stringify({ reason, digits }),
+    },
+  ]).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,6 +1043,32 @@ export async function guardOutbound(rawOpts: {
     repStrict ??
     ({ sender_key: opts.senderKey, trust_score: 20, sent_total: 0, replies_total: 0, last_send_at: null } as Reputation);
 
+  // DISPATCH FACTS SURVIVE THE QUEUE. The mass route knows Google's "open
+  // now" and the batch's 15-minute deadline at click time; the drain used to
+  // re-guard parked rows blind to both, so a sibling of an immediate send
+  // could be re-parked on facts dispatch had already refuted. Both now ride
+  // the row's meta and are honored on every path.
+  const shopOpenNow =
+    typeof opts.shopOpenNow === "boolean"
+      ? opts.shopOpenNow
+      : typeof opts.meta?.openNow === "boolean"
+        ? (opts.meta.openNow as boolean)
+        : undefined;
+  const batchDeadlineMs = Number(opts.meta?.batchDeadline);
+  // A pacing-class hold on a fast-dispatch batch may defer INSIDE the batch
+  // window, never past it - the 15-minute promise belongs to the batch, and
+  // a per-message rule must not silently re-author it. Safety holds (pause,
+  // ban recovery, fail-closed sync retries, breakers, burst rests, the
+  // min-gap floor) are deliberately NOT routed through this.
+  const boundToBatch = (iso: string): string => {
+    if (!p.fast_dispatch) return iso;
+    if (!Number.isFinite(batchDeadlineMs) || batchDeadlineMs <= now) return iso;
+    const at = Date.parse(iso);
+    if (!Number.isFinite(at) || at <= batchDeadlineMs) return iso;
+    const floor = now + HARD_MIN_GAP_SEC * 1000;
+    return new Date(Math.max(Math.min(at, batchDeadlineMs), floor)).toISOString();
+  };
+
   const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
     if (opts.queueIfBlocked !== false) {
       // ALREADY A ROW: this send came off the queue and is only being re-timed.
@@ -1223,6 +1211,7 @@ export async function guardOutbound(rawOpts: {
       (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
     );
     if (isDup) {
+      void recordSendDropped(opts.senderKey, opts.toDigits, "duplicate message suppressed (idempotency)", opts.meta);
       return { allow: false, terminal: true, reason: "duplicate message suppressed (idempotency)", text };
     }
   }
@@ -1243,6 +1232,7 @@ export async function guardOutbound(rawOpts: {
       )}&limit=1${numberFilter("to_number", opts.toDigits)}`
     );
     if (priorRfq.length > 0) {
+      void recordSendDropped(opts.senderKey, opts.toDigits, "rfq-dedup - this shop was already asked in the last 24h", opts.meta);
       return {
         allow: false,
         terminal: true,
@@ -1302,7 +1292,16 @@ export async function guardOutbound(rawOpts: {
   //    number until it has engaged - a reply OR at least a read receipt (blue
   //    tick). Delivered-but-ignored contacts are the #1 spam signal, so we do
   //    NOT keep pushing them.
-  if (opts.auto && p.engagement_halt && !isNewContact) {
+  //    A fresh RFQ is EXEMPT: an RFQ only ever originates from an explicit
+  //    user action (a search batch or an "Ask for price" tap), and the same
+  //    doctrine that lets a user action clear a cancellation tombstone
+  //    applies - the user re-initiating IS the signal. The 24h rfq-dedup
+  //    above still blocks a repeat ask; this halt is for the AGENT's own
+  //    follow-ups. (Before this exemption, re-selecting a shop from an
+  //    earlier silent batch was terminally dropped with no trace - the shop
+  //    then surfaced as "removed by you".)
+  const freshUserRfq = opts.meta?.kind === "rfq";
+  if (opts.auto && p.engagement_halt && !isNewContact && !freshUserRfq) {
     // Scoped to THIS sender: another user's thread with the same shop must
     // never trip (or clear) this user's engagement halt.
     const lastOut = await sbSelect<{ received_at: string }>(
@@ -1342,7 +1341,10 @@ export async function guardOutbound(rawOpts: {
         // we must not leave it perpetually re-parking in the queue either (that
         // is what kept a duplicate follow-up visible forever and burned drain
         // cycles). If the shop later engages, a fresh turn composes a new
-        // message that passes this halt.
+        // message that passes this halt. The drop leaves a durable trace -
+        // this branch used to write NOTHING, making it indistinguishable from
+        // a user removal after the fact.
+        void recordSendDropped(opts.senderKey, opts.toDigits, "engagement-halt: no reply or read receipt yet", opts.meta);
         return {
           allow: false,
           terminal: true,
@@ -1361,7 +1363,7 @@ export async function guardOutbound(rawOpts: {
   //         string first, then the phone prefix.
   //      c) If the timezone is genuinely unknown, DO NOT queue - a false
   //         "closed" on an open shop is the worse bug (issue #21).
-  if (opts.auto && opts.shopOpenNow !== true) {
+  if (opts.auto && shopOpenNow !== true) {
     // ACTIVE-CONVERSATION OVERRIDE: if this shop wrote to THIS user within the
     // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
     // a reply "until the shop opens" would be absurd (and was: a deal-close on
@@ -1383,7 +1385,7 @@ export async function guardOutbound(rawOpts: {
     // Google reports the shop closed right now. The message simply waits unread
     // until they open. This lifts the Google-closed park below (the clock gate
     // is lifted separately via ignore_business_hours).
-    if (!activelyChatting && opts.shopOpenNow === false && !p.fast_dispatch) {
+    if (!activelyChatting && shopOpenNow === false && !p.fast_dispatch) {
       // Google says closed. If it is DAYTIME at the shop (lunch break, late
       // opening), retry within the hour instead of parking until tomorrow
       // morning - the old behavior turned a 13:00 opening into a 22h wait.
@@ -1405,7 +1407,7 @@ export async function guardOutbound(rawOpts: {
       const inWindow = localHour >= p.business_hour_start && localHour < p.business_hour_end;
       if (!inWindow) {
         return await queue(
-          nextBusinessOpen(opts.toDigits, p, region),
+          boundToBatch(nextBusinessOpen(opts.toDigits, p, region)),
           "outside recipient business hours"
         );
       }
@@ -1423,37 +1425,68 @@ export async function guardOutbound(rawOpts: {
     // shop's business hours - NEVER a hard "tomorrow morning" wall. Capacity
     // comes back gradually as the oldest introduction ages out of the window.
     const budget = await newContactBudget(opts.senderKey, plan).catch(() => null);
+    const windowHours = Math.max(1, planCapacity(plan).windowHours);
     if (budget && budget.remaining <= 0) {
-      const until = clampToBusinessHours(budget.nextFreeAt, opts.toDigits, p, region);
+      // Bounded by the plan's own window - a budget wait is a pace, never a
+      // wall (and the clamp stands down entirely under fast dispatch).
+      const until = boundHold(
+        clampToBusinessHours(budget.nextFreeAt, opts.toDigits, p, region),
+        now,
+        windowHours
+      );
       return await queue(until, "introductions full - refreshes soon");
     }
-    // Reply-rate breaker: if we have enough history and almost nobody replies,
-    // freeze cold outreach - this is what actually trips WhatsApp's filters.
-    // HOLD (queue), never DROP: on the drain path the row was already claimed
-    // (deleted), so returning a bare !allow would silently LOSE the message.
-    // Park it a few hours out (clamped to the shop's business hours) so it
-    // resumes once the number recovers instead of vanishing.
-    if ((rep.sent_total || 0) >= p.min_reply_samples && replyRate(rep) < p.min_reply_rate) {
-      const until = clampToBusinessHours(
-        new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
-        opts.toDigits,
-        p,
-        region
-      );
-      return await queue(
-        until,
-        `reply-rate circuit breaker (${(replyRate(rep) * 100).toFixed(0)}% < ${(p.min_reply_rate * 100).toFixed(0)}%) - cold outreach frozen to protect the number`
-      );
+    // Reply-rate breaker: if enough recent history exists and almost nobody
+    // engages, freeze cold outreach - that pattern is what actually trips
+    // WhatsApp's filters. HOLD (queue), never DROP: on the drain path the row
+    // was already claimed, so a bare !allow would silently LOSE the message.
+    //
+    // WINDOWED, ENGAGEMENT-BASED - deliberately not the lifetime ratio it
+    // used to be. replies_total/sent_total latches: the denominator grows
+    // with every send while the numerator depends on inbound ingest actually
+    // recording replies, so one ingest defect froze every future batch
+    // permanently - and the unconditional business-hours clamp then rolled
+    // the 2-4h hold to the NEXT MORNING (the 05:38 incident). The window
+    // measures the last 7 days, a READ receipt counts as engagement (reads
+    // are recorded even when a reply's text is dropped), the freeze
+    // self-expires inside the plan window, and it never crosses the night
+    // under fast dispatch.
+    const win = await coldEngagementWindow(opts.senderKey);
+    if (win && win.intros >= p.min_reply_samples) {
+      const rate = win.engaged / Math.max(1, win.intros);
+      if (rate < p.min_reply_rate) {
+        const until = boundHold(
+          clampToBusinessHours(
+            new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
+            opts.toDigits,
+            p,
+            region
+          ),
+          now,
+          windowHours
+        );
+        return await queue(
+          until,
+          `reply-rate circuit breaker (${(rate * 100).toFixed(0)}% < ${(p.min_reply_rate * 100).toFixed(0)}%) - cold outreach frozen to protect the number`
+        );
+      }
     }
-    // Delivery-rate breaker (research: double-tick threshold ~60%).
+    // Delivery-rate breaker (research: double-tick threshold ~60%). Delivery
+    // receipts flow through message-update events, not text ingest, so the
+    // lifetime counters stay live here - but the hold is bounded and no
+    // longer rolls across the night.
     if ((rep.delivered_total || 0) >= 8) {
       const delivRate = (rep.delivered_total || 0) / Math.max(1, rep.sent_total || 0);
       if (delivRate < 0.6) {
-        const until = clampToBusinessHours(
-          new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
-          opts.toDigits,
-          p,
-          region
+        const until = boundHold(
+          clampToBusinessHours(
+            new Date(now + (2 + Math.random() * 2) * 3600_000).toISOString(),
+            opts.toDigits,
+            p,
+            region
+          ),
+          now,
+          windowHours
         );
         return await queue(
           until,

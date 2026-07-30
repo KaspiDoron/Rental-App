@@ -12,6 +12,7 @@ export type QueueReasonKind =
   | "sync"
   | "capacity"
   | "tomorrow"
+  | "breaker"
   | "limit"
   | "paused"
   | "hold"
@@ -23,10 +24,17 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   if (/closed|business hours/.test(r)) return "closed";
   if (/paused by you/.test(r)) return "paused";
   if (/batch-spacing/.test(r)) return "batch";
-  if (/sync-retry/.test(r)) return "sync";
+  // Transient infrastructure holds all resume on their own: fail-closed
+  // sync retries, a reconnecting WhatsApp link, and per-recipient retries.
+  if (/sync-retry|reconnecting|couldn't reach this shop/.test(r)) return "sync";
   // Rolling-window introductions budget: capacity refreshes continuously.
   if (/introductions full|refreshes soon|refreshes in/.test(r)) return "capacity";
   if (/daily introductions|resumes next morning/.test(r)) return "tomorrow";
+  // The circuit breakers protect the number itself. They used to fall
+  // through to "unknown" and render as a blank "Queued - sends
+  // automatically" - the single most consequential hold in the guard,
+  // invisible. (This is the copy the 05:38 incident's queued rows showed.)
+  if (/circuit breaker|-rate breaker|cold outreach frozen/.test(r)) return "breaker";
   if (/director hold|thinking time|human reply pacing/.test(r)) return "hold";
   if (/pacing|burst|gap/.test(r)) return "pacing";
   if (/cap|limit|paused|recovery|warm/.test(r)) return "limit";
@@ -50,6 +58,8 @@ export function queueReasonLabel(raw?: string | null): string {
       return "You've reached your plan's batch of new shops - more open up shortly, automatically";
     case "tomorrow":
       return "Today's introductions are done - this goes out tomorrow morning automatically";
+    case "breaker":
+      return "Protecting your WhatsApp number - new-shop messages resume automatically in a few hours";
     case "pacing":
       return "Queued briefly - sends are paced like a human";
     case "limit":
