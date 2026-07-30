@@ -2758,7 +2758,7 @@ export default function Home() {
                             title={t("Jump to this shop")}
                           >
                             <span className="shrink-0 text-brandblue">↧</span>
-                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" retryKey={v.stage} photoUrl={v.photoUrl} />
                             <span className="truncate">{v.name}</span>
                           </button>
                           {/* A shop with a MENU has no single price - showing
@@ -2815,7 +2815,7 @@ export default function Home() {
                             title={t("Jump to this shop")}
                           >
                             <span className="shrink-0 text-brandblue">↧</span>
-                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" retryKey={v.stage} photoUrl={v.photoUrl} />
                             <span className="truncate">{v.name}</span>
                           </button>
                           <span className="shrink-0 text-[10px] font-bold text-brandblue">
@@ -2881,7 +2881,7 @@ export default function Home() {
                             title={t("Jump to this shop")}
                           >
                             <span className="shrink-0 text-brandblue">↧</span>
-                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+                            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" retryKey={v.stage} photoUrl={v.photoUrl} />
                             <span className="truncate">{v.name}</span>
                           </button>
                           <span className="shrink-0 text-faint">

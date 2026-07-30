@@ -28,33 +28,46 @@
 
 import { useState } from "react";
 
-// A FAILED FETCH IS NOT "THIS SHOP HAS NO LOGO".
+// A FAILED FETCH IS NOT "THIS SHOP HAS NO LOGO" - AND NEITHER IS "ASKED TOO
+// EARLY".
 //
-// This Set used to be filled by ANY <img> error, and it is module-level, so one
-// transient failure - an Evolution timeout, a 429 while ten cards mounted at
-// once, a 401 in the instant before the session cookie settled - retired that
-// shop to a grey initial for the rest of the session, permanently and
-// invisibly. That is exactly the reported split: some shops show a logo, some
-// never do, and which is which is decided by whichever request happened to lose
-// a race.
+// Qui Motorbike Rental had a photo in WhatsApp and a grey initial in the app,
+// permanently, because three verdicts compounded:
 //
-// The route now says WHICH it was (see api/wa/avatar): a shop with genuinely no
-// picture answers 404 with `x-avatar: none`, and everything else is a transient
-// failure that must be retried. `onError` cannot read headers, so the component
-// asks once - a HEAD-shaped probe is not worth it - and instead treats an error
-// as retryable up to a small cap, which converges on the truth without ever
-// making a permanent negative out of a bad minute.
-const RETRY_LIMIT = 2;
+//   1. The card asked BEFORE the shop was messaged, the route answered
+//      "unowned", and the <img> onError latched a `broken` React state with no
+//      reset path - the memoized card never remounted, so the ONE ask happened
+//      at the one moment it could not succeed.
+//   2. Two strikes pushed the number into a module-level `missing` set with no
+//      expiry, shared by every mount site: a bad minute became a
+//      session-permanent verdict.
+//   3. Nothing ever changed the <img> identity, so even a re-render reused the
+//      browser's cached failure.
+//
+// The fix is a RETRY TOKEN + EXPIRING MEMORY: the caller passes `retryKey`
+// (derived from the vendor's stage), so the img identity - and the latched
+// `broken` state - change exactly when ownership becomes provable (queued ->
+// messaged -> replied). Negative memory expires (MISSING_TTL_MS) instead of
+// lasting the session. And when WhatsApp has nothing, the shop's own Google
+// Places photo (already public, already fetched for the card) fills the box.
+const MISSING_TTL_MS = 90_000;
 
-/** Numbers that answered "no picture" - a re-render for these is free. */
-const missing = new Set<string>();
-/** Transient failures per number, so a bad minute is not a permanent verdict. */
-const failures = new Map<string, number>();
+/** number -> when it answered "no picture"; entries expire, they never latch. */
+const missing = new Map<string, number>();
+
+function isMissing(digits: string): boolean {
+  const at = missing.get(digits);
+  if (at == null) return false;
+  if (Date.now() - at > MISSING_TTL_MS) {
+    missing.delete(digits);
+    return false;
+  }
+  return true;
+}
 
 /** Purge every cached avatar. Called on new-search and on session reset. */
 export function clearShopAvatars(): void {
   missing.clear();
-  failures.clear();
 }
 
 const SIZES: Record<"sm" | "md", string> = {
@@ -66,17 +79,30 @@ export function ShopAvatar({
   name,
   phone,
   size = "md",
+  retryKey,
+  photoUrl,
 }: {
   name: string;
   /** Only a shop we have actually messaged resolves - the route enforces it. */
   phone?: string | null;
   size?: "sm" | "md";
+  /** Changes when the shop's thread state changes (e.g. the vendor stage) -
+   * each change is one natural re-ask, timed to when ownership becomes
+   * provable. Optional: without it behavior matches the old single-ask. */
+  retryKey?: string | number;
+  /** The shop's public Google Places photo (already proxied for the card) -
+   * shown when WhatsApp has no picture for us. Memory-only, like the rest. */
+  photoUrl?: string | null;
 }) {
   const digits = (phone ?? "").replace(/\D/g, "");
-  const [broken, setBroken] = useState(false);
+  const askKey = `${digits}|${retryKey ?? ""}`;
+  // `broken` is keyed: a failure latches THIS askKey only, so a stage change
+  // (new retryKey) automatically un-latches without any effect or remount.
+  const [brokenKey, setBrokenKey] = useState<string | null>(null);
 
   const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
-  const showImage = Boolean(digits) && !broken && !missing.has(digits);
+  const showWa = Boolean(digits) && brokenKey !== askKey && !isMissing(digits);
+  const showPlaces = !showWa && Boolean(photoUrl);
 
   return (
     <span
@@ -84,23 +110,35 @@ export function ShopAvatar({
       className={`${SIZES[size]} relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-brandblue-soft font-extrabold text-brandblue`}
     >
       {initial}
-      {showImage && (
+      {showPlaces && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`/api/wa/avatar?img=1&number=${encodeURIComponent(digits)}`}
+          src={photoUrl as string}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      )}
+      {showWa && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          // The retry token rides the URL, so a stage change is a NEW image
+          // identity: the browser re-asks instead of replaying a cached miss.
+          src={`/api/wa/avatar?img=1&number=${encodeURIComponent(digits)}${
+            retryKey != null ? `&r=${encodeURIComponent(String(retryKey))}` : ""
+          }`}
           alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => {
-            // Count it. Only a shop that fails repeatedly is written off; a
-            // single failure leaves the next render free to try again, which is
-            // what turns a timeout back into a logo instead of into an initial
-            // that never recovers.
-            const seen = (failures.get(digits) ?? 0) + 1;
-            failures.set(digits, seen);
-            if (seen >= RETRY_LIMIT) missing.add(digits);
-            setBroken(true);
+            // Remember the miss BRIEFLY - long enough that a board of cards
+            // stops hammering, short enough that a shop whose photo exists is
+            // re-asked within a couple of minutes. Never a permanent verdict.
+            missing.set(digits, Date.now());
+            setBrokenKey(askKey);
           }}
           className="absolute inset-0 h-full w-full object-cover"
         />

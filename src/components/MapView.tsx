@@ -167,7 +167,7 @@ function ShopCard({
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5">
-            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" />
+            <ShopAvatar name={v.name} phone={v.whatsapp} size="sm" retryKey={v.stage} photoUrl={v.photoUrl} />
             <span className="truncate text-[14px] font-extrabold text-strong">{v.name}</span>
           </span>
           <span className="shrink-0 text-[14px] font-extrabold text-strong">

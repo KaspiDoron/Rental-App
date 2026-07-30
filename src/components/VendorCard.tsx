@@ -349,7 +349,7 @@ function VendorCardInner({
             <div className="flex items-center gap-2">
               {/* Only resolves for shops we have actually messaged, and only
                   while this search is open - see ShopAvatar. */}
-              <ShopAvatar name={vendor.name} phone={vendor.whatsapp} />
+              <ShopAvatar name={vendor.name} phone={vendor.whatsapp} retryKey={vendor.stage} photoUrl={vendor.photoUrl} />
               <h3 className="truncate text-[16px] font-extrabold text-strong">{vendor.name}</h3>
               {vendor.demo && (
                 <span className="shrink-0 rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">

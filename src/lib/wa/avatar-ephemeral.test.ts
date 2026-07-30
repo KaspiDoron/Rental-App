@@ -26,13 +26,13 @@ const readCode = (p: string) =>
 const ROUTE = "src/app/api/wa/avatar/route.ts";
 const CLIENT = "src/components/ShopAvatar.tsx";
 
-/** The `fetchProfilePicture` function body, isolated from the rest of the file. */
+/** The avatar-fetch region (the cached wrapper + the uncached worker),
+ * isolated from the rest of the file. */
 function avatarFetcherSource(): string {
   const src = readCode("src/lib/evolution.ts");
   const start = src.indexOf("export async function fetchProfilePicture(");
   expect(start, "fetchProfilePicture must exist in evolution.ts").toBeGreaterThan(-1);
-  // Top-level function bodies close with a `}` in column 0.
-  const end = src.indexOf("\n}\n", start);
+  const end = src.indexOf("export async function fetchProfilePictureUrl(", start);
   return src.slice(start, end === -1 ? undefined : end);
 }
 
@@ -135,13 +135,69 @@ describe("the avatar is one request, started at render", () => {
     expect(src).toMatch(/absolute inset-0/);
   });
 
-  it("a shop with no picture stops being asked", () => {
-    expect(avatar()).toMatch(/missing\.add\(digits\)/);
+  it("a miss is remembered BRIEFLY - never a session-permanent verdict", () => {
+    // DELIBERATE REWRITE of the old `missing.add(digits)` pin: the unbounded
+    // Set made one bad minute (asked pre-send, a 429 during a mount storm)
+    // retire a shop to a grey initial for the whole session. The memory now
+    // carries a timestamp and expires.
+    const src = avatar();
+    expect(src).toMatch(/missing\.set\(digits, Date\.now\(\)\)/);
+    expect(src).toMatch(/MISSING_TTL_MS/);
+    expect(src).not.toMatch(/missing\.add\(/);
   });
 
   it("the bytes are privately cacheable, and still never shared", () => {
     const route = readFileSync(join(process.cwd(), "src/app/api/wa/avatar/route.ts"), "utf8");
     expect(route).toMatch(/AVATAR_CACHE = \{ "Cache-Control": "private, max-age=\d+" \}/);
     expect(route).not.toMatch(/"Cache-Control": "public/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AN AVATAR FAILURE IS NOT A VERDICT. Qui's card asked before the shop was
+// messaged, got a 200 JSON body as its <img> answer, latched `broken` with no
+// reset path, and two strikes retired the number to a module-level Set for
+// the session - while WhatsApp plainly showed the photo. Each layer now has
+// the property the incident proved missing.
+// ---------------------------------------------------------------------------
+
+describe("an avatar failure is not a verdict", () => {
+  it("image mode NEVER answers a non-image body - every nothing is a 404 + x-avatar verdict", () => {
+    const route = readCode(ROUTE);
+    expect(route).toMatch(/"x-avatar": "unowned"/);
+    expect(route).toMatch(/"x-avatar": "none"/);
+    expect(route).toMatch(/"x-avatar": "failed"/);
+    // The pre-ownership and bad-number exits are image-shaped in image mode.
+    expect(route).toMatch(/if \(wantsImage\) return new NextResponse\(null, \{ status: 404, headers: UNOWNED \}\);/);
+  });
+
+  it("the client's ask identity changes with the vendor's state (the natural retry)", () => {
+    const client = readCode(CLIENT);
+    expect(client).toMatch(/retryKey/);
+    // broken latches per askKey, so a stage change un-latches by construction.
+    expect(client).toMatch(/brokenKey !== askKey/);
+  });
+
+  it("cards pass the vendor stage as the retry token", () => {
+    expect(readCode("src/components/VendorCard.tsx")).toMatch(/retryKey=\{vendor\.stage\}/);
+    expect(readCode("src/app/page.tsx")).toMatch(/retryKey=\{v\.stage\}/);
+  });
+
+  it("pre-contact, the shop's public Places photo fills the box (no blank board)", () => {
+    expect(readCode(CLIENT)).toMatch(/photoUrl/);
+    expect(readCode("src/components/VendorCard.tsx")).toMatch(/photoUrl=\{vendor\.photoUrl\}/);
+  });
+
+  it("the server lookup dedups in-flight, bounds its total time, and never feeds an @lid as a number", () => {
+    const fn = avatarFetcherSource();
+    expect(fn).toMatch(/avatarInFlight/);
+    expect(fn).toMatch(/Date\.now\(\) \+ 4_000/);
+    expect(fn).toMatch(/@lid\\b/);
+  });
+
+  it("a failure is negatively cached for SECONDS, a real answer for the full TTL", () => {
+    const fn = avatarFetcherSource();
+    expect(fn).toMatch(/exp: Date\.now\(\) \+ AVATAR_FAIL_TTL_MS/);
+    expect(fn).toMatch(/exp: Date\.now\(\) \+ AVATAR_TTL_MS/);
   });
 });

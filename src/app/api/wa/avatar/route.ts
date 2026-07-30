@@ -22,10 +22,23 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  // IMAGE MODE NEVER ANSWERS A NON-IMAGE BODY. The client points an <img>
+  // straight at `?img=1`; a JSON 200 here is a broken image to that tag, and
+  // the card's onError wrote the shop off - permanently, because the answer
+  // arrived BEFORE the shop was messaged (pre-ownership) and nothing ever
+  // asked again. Every non-picture outcome in image mode is an image-shaped
+  // 404 with an `x-avatar` verdict; JSON exists only for the JSON mode.
+  const wantsImage = new URL(req.url).searchParams.get("img") === "1";
+  if (!session) {
+    if (wantsImage) return new NextResponse(null, { status: 404, headers: FAILED });
+    return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  }
 
   const digits = waDigits(new URL(req.url).searchParams.get("number") ?? "");
-  if (!digits || digits.length < 6) return NextResponse.json({ url: null });
+  if (!digits || digits.length < 6) {
+    if (wantsImage) return new NextResponse(null, { status: 404, headers: UNOWNED });
+    return NextResponse.json({ url: null }, { headers: NO_STORE });
+  }
 
   const { sbSelect } = await import("@/lib/runtime-config");
   // OWNERSHIP = "this is one of your threads". A message the user has QUEUED to
@@ -58,8 +71,11 @@ export async function GET(req: Request) {
   ]);
   if (sent.length === 0 && queued.length === 0) {
     // Not one of your threads - answer the same way a missing picture answers,
-    // so this can never be used to probe which numbers exist.
-    return NextResponse.json({ url: null });
+    // so this can never be used to probe which numbers exist. "unowned" is a
+    // RETRYABLE verdict for the card: the common case is simply "asked before
+    // the send", and the retry token re-asks once the shop IS messaged.
+    if (wantsImage) return new NextResponse(null, { status: 404, headers: UNOWNED });
+    return NextResponse.json({ url: null }, { headers: NO_STORE });
   }
 
   const { fetchProfilePicture } = await import("@/lib/evolution");
@@ -83,9 +99,6 @@ export async function GET(req: Request) {
   // limited" were indistinguishable. The card then wrote the shop off
   // permanently on the first one of any kind. `x-avatar` says which, so a
   // transient failure can be retried and only a real absence is final.
-  const NONE = { ...NO_STORE, "x-avatar": "none" };
-  const FAILED = { ...NO_STORE, "x-avatar": "failed" };
-  const wantsImage = new URL(req.url).searchParams.get("img") === "1";
   if (wantsImage) {
     if (!pic.url) {
       return new NextResponse(null, {
@@ -115,7 +128,8 @@ export async function GET(req: Request) {
         headers: { ...AVATAR_CACHE, "Content-Type": type },
       });
     } catch {
-      return new NextResponse(null, { status: 404, headers: NO_STORE });
+      // Our own CDN fetch died - transient by definition, so say so.
+      return new NextResponse(null, { status: 404, headers: FAILED });
     }
   }
 
@@ -137,3 +151,10 @@ const NO_STORE = { "Cache-Control": "private, no-store" };
 // Long enough that scrolling the board is free, short enough that the picture
 // is never the app's to keep. Never shared - this is one traveller's session.
 const AVATAR_CACHE = { "Cache-Control": "private, max-age=600" };
+// The three kinds of nothing, so the client can tell them apart:
+//   unowned - not (yet) one of your threads; retry after the shop is messaged
+//   none    - a real absence: the shop has no picture or hides it
+//   failed  - a transient failure somewhere in the chain; retry soon
+const UNOWNED = { ...NO_STORE, "x-avatar": "unowned" };
+const NONE = { ...NO_STORE, "x-avatar": "none" };
+const FAILED = { ...NO_STORE, "x-avatar": "failed" };

@@ -1548,14 +1548,23 @@ export async function fetchMediaBase64(
 // search, and disappears with both. The route that calls this proves the user
 // actually messaged the number first.
 const AVATAR_TTL_MS = 10 * 60_000;
+// A FAILURE is cached too - briefly. Uncached failures meant five mount sites
+// hammered a dead Evolution host in lockstep on every board render; ten
+// minutes would freeze every avatar behind one bad moment. 45s is long enough
+// to absorb a render storm and short enough to recover within the minute.
+const AVATAR_FAIL_TTL_MS = 45_000;
 const AVATAR_CAP = 2000;
-function avatarStore(): Map<string, { url: string | null; exp: number }> {
+function avatarStore(): Map<string, { url: string | null; exp: number; err?: string }> {
   const g = globalThis as unknown as {
-    __wd_wa_avatars__?: Map<string, { url: string | null; exp: number }>;
+    __wd_wa_avatars__?: Map<string, { url: string | null; exp: number; err?: string }>;
   };
   if (!g.__wd_wa_avatars__) g.__wd_wa_avatars__ = new Map();
   return g.__wd_wa_avatars__;
 }
+// IN-FLIGHT DEDUP: the board mounts many <img> tags for the same shop at once
+// (card, map pin, status panel...). One upstream chain per (email, digits);
+// everyone else awaits the same promise instead of quadrupling the load.
+const avatarInFlight = new Map<string, Promise<ProfilePicture>>();
 
 /**
  * The shop's WhatsApp profile picture URL, or null when it has none / hides it.
@@ -1610,11 +1619,29 @@ export async function fetchProfilePicture(
   email: string,
   digits: string
 ): Promise<ProfilePicture> {
-  const key = `${email}:${digits}`;
+  // CANONICAL KEY: whatever spelling the caller holds, one shop is one cache
+  // entry and one in-flight chain.
+  const canon = digitsOnly(digits) || digits;
+  const key = `${email}:${canon}`;
   const store = avatarStore();
   const hit = store.get(key);
-  if (hit && hit.exp > Date.now()) return { url: hit.url };
+  if (hit && hit.exp > Date.now()) return { url: hit.url, error: hit.err };
 
+  const running = avatarInFlight.get(key);
+  if (running) return running;
+  const task = fetchProfilePictureUncached(email, canon, key, store).finally(() => {
+    avatarInFlight.delete(key);
+  });
+  avatarInFlight.set(key, task);
+  return task;
+}
+
+async function fetchProfilePictureUncached(
+  email: string,
+  digits: string,
+  key: string,
+  store: Map<string, { url: string | null; exp: number; err?: string }>
+): Promise<ProfilePicture> {
   const instance = instanceNameFor(email);
   let jid: string | null = null;
   try {
@@ -1622,6 +1649,11 @@ export async function fetchProfilePicture(
   } catch {
     jid = `${digits}@s.whatsapp.net`;
   }
+  // NEVER stuff an @lid into a `number` field. An @lid's digits are NOT the
+  // phone number (privacy keystone) - a build that parses the digits out of
+  // the identifier would look up a DIFFERENT person's picture. Phone-shaped
+  // identifiers only.
+  if (jid && /@lid\b/i.test(jid)) jid = null;
 
   const attempts: Array<{ path: string; body: Record<string, unknown> }> = [
     { path: `/chat/fetchProfilePictureUrl/${instance}`, body: { number: digits } },
@@ -1635,10 +1667,19 @@ export async function fetchProfilePicture(
     body: { where: { id: jid || `${digits}@s.whatsapp.net` } },
   });
 
+  // TOTAL deadline, not per-attempt: four routes each allowed a 12s abort
+  // meant a dead host held an avatar request open for ~48s while the page
+  // had long since rendered its initial. Whatever is not answered in ~4s is
+  // answered next time - the negative cache above keeps retries cheap.
+  const deadline = Date.now() + 4_000;
   let url: string | null = null;
   let lastError = "";
   let settled = false; // a clean 200 that simply had no picture
   for (const attempt of attempts) {
+    if (Date.now() > deadline) {
+      lastError = lastError || "avatar lookup deadline exceeded";
+      break;
+    }
     try {
       const res = await evo(email, attempt.path, {
         method: "POST",
@@ -1665,9 +1706,11 @@ export async function fetchProfilePicture(
 
   const error = url || settled ? undefined : lastError || "no route returned a picture";
   if (error) console.warn(`[wa/avatar] ${digits}: ${error}`);
-  // A genuine "no picture" is cached like any other answer; a FAILURE is not -
-  // caching an outage for ten minutes would freeze every avatar on the board.
+  // A genuine answer (picture or proven absence) is cached for the full TTL; a
+  // FAILURE is cached only briefly - long enough to absorb a render storm,
+  // short enough that one bad moment cannot freeze the board.
   if (!error) boundedSet(store, key, { url, exp: Date.now() + AVATAR_TTL_MS }, AVATAR_CAP);
+  else boundedSet(store, key, { url: null, exp: Date.now() + AVATAR_FAIL_TTL_MS, err: error }, AVATAR_CAP);
   return { url, error };
 }
 
