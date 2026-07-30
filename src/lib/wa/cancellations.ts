@@ -1,5 +1,6 @@
 import "server-only";
 import { getConfig, sbDelete, sbInsert, sbSelectStrict } from "../runtime-config";
+import { parseFlag } from "../config-flags";
 import { digitsOnly } from "../phone";
 
 // Cancellation tombstones - the "absolute queue deletion" guarantee.
@@ -158,10 +159,11 @@ export async function cancelledNumbers(senderKey: string): Promise<string[]> {
   return [...out];
 }
 
-/** Owner kill switch (default ON). */
+/** Owner kill switch (default ON). One flag dialect - "false"/"0"/"no" and
+ * a stray " off " all disable it too; an unreadable value keeps it ON. */
 export async function cancelGuardEnabled(): Promise<boolean> {
   const flag = await getConfig("CANCEL_GUARD").catch(() => undefined);
-  return (flag ?? "").toLowerCase() !== "off";
+  return parseFlag(flag, true);
 }
 
 /**

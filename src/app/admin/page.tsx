@@ -203,6 +203,7 @@ export default function AdminPage() {
     outbox: { id: number; to_number: string; not_before: string }[];
   } | null>(null);
   const [waHelp, setWaHelp] = useState<string | null>(null); // open info popup key
+  const [waPolicyErr, setWaPolicyErr] = useState<{ key: string; error: string } | null>(null);
   const [sponsors, setSponsors] = useState<
     { id: number; name: string; phone: string | null; active: boolean; notes: string | null }[]
   >([]);
@@ -1187,22 +1188,37 @@ export default function AdminPage() {
                           )}
                         </span>
                         <input
+                          // Keyed to the EFFECTIVE value: after a save (or a
+                          // rejection) the field re-mounts showing what the
+                          // engine actually holds, so the panel can never
+                          // display "on" while the engine holds false.
+                          key={`${k}:${String(v)}`}
                           defaultValue={String(v)}
                           onBlur={async (e) => {
                             const val = e.target.value.trim();
-                            if (val && val !== String(v)) {
-                              const r = await (
-                                await fetch("/api/admin/wa-security", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ key: k, value: val }),
-                                })
-                              ).json();
-                              if (r.policies) setWaSec({ ...waSec, policies: r.policies });
+                            if (!val || val === String(v)) return;
+                            const r = await (
+                              await fetch("/api/admin/wa-security", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ key: k, value: val }),
+                              })
+                            ).json();
+                            if (r.error) {
+                              setWaPolicyErr({ key: k, error: String(r.error) });
+                              e.target.value = String(v);
+                              return;
                             }
+                            setWaPolicyErr(null);
+                            if (r.policies) setWaSec({ ...waSec, policies: r.policies });
                           }}
                           className="mt-0.5 w-full rounded border border-line bg-card p-1 text-[12px] font-extrabold text-strong"
                         />
+                        {waPolicyErr?.key === k && (
+                          <div className="mt-1 text-[10px] font-extrabold text-brandred">
+                            {waPolicyErr.error}
+                          </div>
+                        )}
                         {waHelp === k && h && (
                           <div className="absolute left-0 top-full z-20 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-xl border-2 border-brandblue bg-card p-2.5 text-[11px] shadow-xl">
                             <div className="font-extrabold text-strong">{h.label}</div>

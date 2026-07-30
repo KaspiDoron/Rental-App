@@ -289,7 +289,8 @@ export async function processEvolutionWebhook(
       if (data.key.fromMe) {
         try {
           const { getConfig } = await import("@/lib/runtime-config");
-          if ((await getConfig("HUMAN_TAKEOVER"))?.toLowerCase() === "off") continue;
+          const { parseFlag } = await import("@/lib/config-flags");
+          if (!parseFlag(await getConfig("HUMAN_TAKEOVER"), true)) continue;
           const text = extractText(data);
           if (!text.trim()) continue; // media-only self message - out of scope
           const msgId = String(data.key.id ?? "");

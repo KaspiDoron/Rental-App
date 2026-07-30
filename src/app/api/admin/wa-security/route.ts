@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { getPolicies, setPolicy, clearPause, computeRisk } from "@/lib/wa-guard";
+import { getPolicies, setPolicy, deletePolicy, clearPause, computeRisk } from "@/lib/wa-guard";
+import { validatePolicyWrite, POLICY_SPEC } from "@/lib/wa/policy-values";
 import { sbSelect } from "@/lib/runtime-config";
 
 // Owner control panel for the Anti-Ban engine: current effective policies
@@ -130,6 +131,21 @@ const POLICY_HELP: Record<string, { label: string; help: string; best: string }>
     help: "Randomly varies each number's daily/hourly cap by ± this percent, per day.",
     best: "20. A perfectly fixed cap is itself a detectable pattern; a little wobble hides it.",
   },
+  reply_gap_seconds: {
+    label: "Reply lane min gap (s)",
+    help: "Minimum seconds between two REPLIES to already-engaged shops (a faster lane than cold intros).",
+    best: "5. Two-way conversations are low ban-risk; keeping replies responsive is what feels human.",
+  },
+  ignore_business_hours: {
+    label: "Ignore business hours (on/off)",
+    help: "If on, cold intros are NOT held for the shop's local clock window. Normally derived from Pacing Mode / Fast dispatch - a row here overrides both.",
+    best: "Leave unset. Set only to force a permanent 24/7 or clock-gated behavior regardless of the dials.",
+  },
+  fast_dispatch: {
+    label: "Fast dispatch (on/off)",
+    help: "If on, a new batch fires within its 15-minute window regardless of shop opening hours (messages simply wait unread). Normally derived from the FAST_DISPATCH key - a row here overrides it.",
+    best: "Leave unset (defaults on). Turning it off holds evening batches until shops open.",
+  },
 };
 
 export async function GET() {
@@ -173,11 +189,44 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  // Remove an override row so the code default applies again. setPolicy is
+  // upsert-only, so without this a bad row was permanent from the UI.
+  if (body.action === "reset" && body.key) {
+    const key = String(body.key).trim();
+    if (!(key in POLICY_SPEC)) {
+      return NextResponse.json({ error: `Unknown policy "${key}".` }, { status: 400 });
+    }
+    await deletePolicy(key);
+    return NextResponse.json({ ok: true, policies: await getPolicies() });
+  }
+
   const key = String(body.key ?? "").trim();
   const value = String(body.value ?? "").trim();
   if (!key || !value) {
     return NextResponse.json({ error: "key and value required" }, { status: 400 });
   }
-  await setPolicy(key, value);
+  // The value contract gates every write: unknown keys and out-of-range or
+  // wrong-dialect values are rejected with a reason the panel shows, and
+  // flags are stored in the canonical "true"/"false" spelling. Before this,
+  // any string was stored verbatim and the read side quietly inverted or
+  // ignored it - the owner's dial and the engine's behavior disagreed with
+  // no trace.
+  const verdict = validatePolicyWrite(key, value);
+  if (!verdict.ok) {
+    return NextResponse.json({ error: verdict.error }, { status: 400 });
+  }
+  // Guard the hours window as a pair: a write that would invert it is refused.
+  if (key === "business_hour_start" || key === "business_hour_end") {
+    const current = await getPolicies();
+    const start = key === "business_hour_start" ? Number(verdict.normalized) : current.business_hour_start;
+    const end = key === "business_hour_end" ? Number(verdict.normalized) : current.business_hour_end;
+    if (start >= end) {
+      return NextResponse.json(
+        { error: `Business hours must satisfy start < end (got ${start} >= ${end}).` },
+        { status: 400 }
+      );
+    }
+  }
+  await setPolicy(key, verdict.normalized);
   return NextResponse.json({ ok: true, policies: await getPolicies() });
 }

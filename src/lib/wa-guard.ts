@@ -22,7 +22,9 @@
 //     caps, scoring weights and hours from the DB without a redeploy.
 
 import "server-only";
-import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, getConfig } from "./runtime-config";
+import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, sbDelete, getConfig } from "./runtime-config";
+import { parseFlag } from "./config-flags";
+import { policyRowValue } from "./wa/policy-values";
 import { jitteredHold } from "./wa/pacing";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits } from "./wa/phone-key";
@@ -159,16 +161,18 @@ export async function getPolicies(): Promise<SecurityPolicies> {
   const [rows, modeRaw, fastRaw] = await Promise.all([
     sbSelect<{ key: string; value: string }>(
       "whatsapp_security_policies",
-      "select=key,value&limit=50"
+      // Ordered + generous limit: with the old bare limit=50, junk rows could
+      // non-deterministically push a real override past the cut.
+      "select=key,value&order=key.asc&limit=200"
     ),
     getConfig("PACING_MODE").catch(() => undefined),
     getConfig("FAST_DISPATCH").catch(() => undefined),
   ]);
   // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
   const mode = normalizePacingMode(modeRaw);
-  // FAST_DISPATCH defaults ON (owner directive). Only an explicit "off"/"false"
-  // restores conservative business-hours deferral for cold intros.
-  const fastDispatch = !["off", "false", "0", "no"].includes(String(fastRaw ?? "").toLowerCase());
+  // FAST_DISPATCH defaults ON (owner directive) - one shared flag dialect, an
+  // unreadable spelling keeps the default instead of silently flipping.
+  const fastDispatch = parseFlag(fastRaw, true);
   const merged: SecurityPolicies = {
     ...DEFAULTS,
     ...(PACING_PRESETS[mode] as Partial<SecurityPolicies>),
@@ -182,15 +186,33 @@ export async function getPolicies(): Promise<SecurityPolicies> {
   for (const r of rows) {
     const k = r.key as keyof SecurityPolicies;
     if (!(k in DEFAULTS)) continue;
-    if (typeof DEFAULTS[k] === "boolean") {
-      (merged as unknown as Record<string, unknown>)[k] = r.value === "true";
-    } else {
-      const n = Number(r.value);
-      if (Number.isFinite(n)) (merged as unknown as Record<string, unknown>)[k] = n;
-    }
+    // The policy-values contract owns coercion: flags accept both dialects
+    // (the old `=== "true"` turned a row spelled "on" into FALSE, silently
+    // re-arming the business-hours park against the owner's own dial), and
+    // numbers outside their sane range are ignored rather than applied.
+    (merged as unknown as Record<string, unknown>)[k] = policyRowValue(
+      r.key,
+      r.value,
+      (merged as unknown as Record<string, boolean | number>)[k]
+    );
+  }
+  // Cross-field sanity: an inverted or degenerate hours window would turn
+  // every hour of the day into "closed". Fall back to the shipped window.
+  if (merged.business_hour_start >= merged.business_hour_end) {
+    merged.business_hour_start = DEFAULTS.business_hour_start;
+    merged.business_hour_end = DEFAULTS.business_hour_end;
   }
   globalThis.__wd_wa_policies__ = { at: Date.now(), value: merged };
   return merged;
+}
+
+/** Remove a policy override row so the code default applies again. */
+export async function deletePolicy(key: string): Promise<void> {
+  await sbDelete(
+    "whatsapp_security_policies",
+    `key=eq.${encodeURIComponent(key)}`
+  );
+  globalThis.__wd_wa_policies__ = undefined;
 }
 
 export async function setPolicy(key: string, value: string): Promise<void> {

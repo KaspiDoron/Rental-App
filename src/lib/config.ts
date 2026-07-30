@@ -75,6 +75,8 @@ const KEYS: {
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
   { name: "GRAPH_ENGINE", label: "Negotiation engine ('off' = legacy pipeline)", scope: "ai", editable: true },
   { name: "HUMAN_TAKEOVER", label: "Human takeover detection ('off' = ignore user-typed WhatsApp messages)", scope: "messaging", editable: true },
+  { name: "FAST_DISPATCH", label: "Fast dispatch ('off' = cold intros wait for shop opening hours; default on - batches fire within their 15-min window)", scope: "messaging", editable: true },
+  { name: "CANCEL_GUARD", label: "Cancellation enforcement ('off' = removed shops may be messaged again; default on)", scope: "messaging", editable: true },
   { name: "EVOLUTION_HOSTS", label: "Evolution host pool (url|key per line)", scope: "messaging", editable: true },
   { name: "EVOLUTION_MAX_PER_HOST", label: "Max WhatsApp users per host", scope: "messaging", editable: true },
   { name: "EVOLUTION_PROXY", label: "Residential proxy URL (anti-ban - socks5://user:pass@host:port)", scope: "messaging", editable: true },
