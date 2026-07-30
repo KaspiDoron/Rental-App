@@ -513,6 +513,83 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // ===== TWO ENGINES, ONE TRUTH (reconciliation) ============================
+  //
+  // The LLM extractor and the deterministic reader used to run in SEQUENCE -
+  // deterministic only on an LLM miss - so an LLM MISREAD was never
+  // cross-checked. Thailand: "6 days 180 per day" divided by the model into
+  // ฿30/day while the deterministic reader had the correct 180 all along, and
+  // "1100b./6days" vanished entirely when the model missed and the (then
+  // token-blind) reader had no net. Now every LLM price is reconciled against
+  // the deterministic read: algebra decides the clear cases (a division
+  // artifact reconstructs the other engine's number), and a genuine semantic
+  // disagreement goes to ONE structured arbiter call - the LLM owns semantics,
+  // the algebra owns arithmetic, neither is trusted alone.
+  if (usablePrice && extractText) {
+    try {
+      const { extractRentalDailyPrice } = await import("./wa/price-extract");
+      const det = extractRentalDailyPrice(extractText, {
+        vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
+        durationDays: rfq.durationDays,
+        localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+      });
+      const dur = rfq.durationDays;
+      const close = (a: number, b: number) => b > 0 && Math.abs(a - b) / b <= 0.1;
+      if (det && det.classMatch !== false && det.pricePerDay > 0 && det.pricePerDay !== usablePrice) {
+        const adopt = async (why: string) => {
+          await sbInsert("agent_events", [
+            {
+              kind: "price-reconciled",
+              vendor_id: ctx.vendorId ?? "",
+              vendor_name: ctx.vendorName ?? "",
+              user_email: ctx.sender ?? "",
+              detail: `${why}: LLM read ${usablePrice}, deterministic read ${det.pricePerDay} - using ${det.pricePerDay}. "${(extractText ?? "").slice(0, 160)}"`,
+            },
+          ]).catch(() => {});
+          usablePrice = det.pricePerDay;
+          extraction.pricePerDay = det.pricePerDay;
+          if (det.currency) extraction.currency = det.currency;
+          if (extraction.confidence === "high") extraction.confidence = "medium";
+        };
+        if (dur > 1 && close(usablePrice * dur, det.pricePerDay)) {
+          // The model divided a number the shop stated whole/per-day.
+          await adopt("misdivision (LLM = deterministic / days)");
+        } else if (dur > 1 && close(det.pricePerDay * dur, usablePrice)) {
+          // The model took the whole-rental total at face value; the reader
+          // saw the denominator and divided it.
+          await adopt("total taken as daily (deterministic = LLM / days)");
+        } else if (Math.abs(det.pricePerDay - usablePrice) / usablePrice > 0.25) {
+          // Semantic disagreement - ask once, with the full context.
+          const { arbitratePriceBasis } = await import("./agents");
+          const llmBefore = usablePrice;
+          const pick = await arbitratePriceBasis({
+            message: extractText,
+            durationDays: dur,
+            candidateA: llmBefore,
+            candidateB: det.pricePerDay,
+          }).catch(() => null);
+          if (pick !== null && close(pick, det.pricePerDay)) {
+            await adopt("arbiter sided with the deterministic read");
+          } else if (pick !== null && !close(pick, llmBefore)) {
+            // The arbiter named a third number - never adopt an un-grounded
+            // amount; keep the LLM read and record the disagreement.
+            await sbInsert("agent_events", [
+              {
+                kind: "price-arbiter-odd",
+                vendor_id: ctx.vendorId ?? "",
+                vendor_name: ctx.vendorName ?? "",
+                user_email: ctx.sender ?? "",
+                detail: `Arbiter said ${pick}; candidates were ${llmBefore} (LLM) and ${det.pricePerDay} (det). Kept ${llmBefore}.`,
+              },
+            ]).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      /* reconciliation is a net - its failure must never drop a reply */
+    }
+  }
+
   // DURATION-LADDER OVERRIDE. A price board is not a list of numbers to choose
   // from - each row is the rate you earn by staying that long. The vision half
   // has no way to know that, and on 26 Jul it quoted a five-day traveller the
@@ -746,7 +823,9 @@ export async function processVendorReply(opts: {
       durationDays: rfq.durationDays,
       localCurrency: cur,
     }).allOffers.map((h) => h.pricePerDay);
-    const verdict = sanePrice(usablePrice, others, floorSameCur);
+    const verdict = sanePrice(usablePrice, others, floorSameCur, {
+      durationDays: rfq.durationDays,
+    });
     if (verdict.corrected) {
       await sbInsert("agent_events", [
         {

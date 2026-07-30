@@ -55,6 +55,29 @@ describe("a rate has a denominator", () => {
     expect(scanRates("Honda Click 125cc available")).toHaveLength(0);
   });
 
+  it("GLOBAL, NOT LOCALE: an unknown short tail glued to the amount is currency evidence", () => {
+    // The Thailand field test, verbatim: "b." is Thai baht shorthand and was
+    // in no list - and the next market will write "rs" or "fr". Structure is
+    // the signal; no country string list is load-bearing.
+    expect(scanRates("Honda click 125cc 1200b./6days")[0].perDay).toBe(200);
+    expect(scanRates("Honda click 125cc 1100b./6days")[0].perDay).toBe(183);
+    expect(scanRates("500rs/2days")[0].perDay).toBe(250);
+    expect(scanRates("700fr/day")[0].perDay).toBe(700);
+  });
+
+  it("...but reserved units and measures never masquerade as currency", () => {
+    // A km allowance is not a price; a clock time is not a rate.
+    expect(scanRates("100km/day free")).toHaveLength(0);
+    expect(scanRates("open 9 am - 7 pm daily")).toHaveLength(0);
+  });
+
+  it("THE FIELD MISDIVISION SHAPE: a marked daily beside a stay count stays a daily", () => {
+    // "6 days 180 per day" - the day count is the STAY, the marked rate is
+    // the price. Reading 180/6=30 put ฿30/day on a real traveller's card.
+    const rates = scanRates("6 days 180 per day");
+    expect(rates.map((r) => r.perDay)).toEqual([180]);
+  });
+
   it("reports where the money sits, so callers can read around it", () => {
     const [r] = scanRates(CAPTION);
     expect(CAPTION.slice(r.index, r.index + 3)).toBe("250");
@@ -90,8 +113,21 @@ describe("a price has to be believable", () => {
 
   it("a fifth of the regional floor is a misread, not a discount", () => {
     expect(plausibleDaily(1, BAND)).toBe(false);
-    expect(plausibleDaily(250 * IMPLAUSIBLE_RATIO, BAND)).toBe(true);
+    // DELIBERATE REWRITE: the bound is STRICT now. Thailand's ฿30/day (180/6)
+    // passed only because floor 150 * 0.2 landed EXACTLY on 30 and the old
+    // comparison was inclusive - a boundary coincidence must never decide
+    // that a price is real.
+    expect(plausibleDaily(250 * IMPLAUSIBLE_RATIO, BAND)).toBe(false);
+    expect(plausibleDaily(250 * IMPLAUSIBLE_RATIO + 1, BAND)).toBe(true);
     expect(plausibleDaily(200, BAND)).toBe(true); // shops DO undercut the seed
+  });
+
+  it("THE FIELD CASE: 180/6 = 30 is repaired to the 180 the shop actually wrote", () => {
+    const THAI = { floor: 150, typical: 240 };
+    const v = sanePrice(30, [30, 180], THAI, { durationDays: 6 });
+    expect(v.pricePerDay).toBe(180);
+    expect(v.corrected).toBe(true);
+    expect(v.reason).toMatch(/reconstructs 180/);
   });
 
   it("with no floor data nothing is second-guessed", () => {
@@ -143,7 +179,16 @@ describe("both nets are actually in the pipeline", () => {
 
   it("the reply loop refuses an implausible price and says so", () => {
     const a = readCode("src/lib/agent-loop.ts");
-    expect(a).toMatch(/sanePrice\(usablePrice, others, floorSameCur\)/);
+    expect(a).toMatch(/sanePrice\(usablePrice, others, floorSameCur, \{/);
+    expect(a).toMatch(/durationDays: rfq\.durationDays/);
     expect(a).toMatch(/price-implausible/);
+  });
+
+  it("the two engines RECONCILE - an LLM read is always cross-checked", () => {
+    const a = readCode("src/lib/agent-loop.ts");
+    expect(a).toMatch(/price-reconciled/);
+    expect(a).toMatch(/arbitratePriceBasis/);
+    // The arbiter may only PICK between grounded candidates, never invent.
+    expect(readCode("src/lib/agents.ts")).toMatch(/MUST be one of the two readings/);
   });
 });

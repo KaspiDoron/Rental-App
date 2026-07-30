@@ -45,14 +45,30 @@ export interface RateExpr {
   hasQuantity: boolean;
 }
 
-const CUR_SYM = "[$€฿₱₹₫]";
-const CUR_WORDS =
+// ONE source for the currency vocabulary - price-extract.ts imports these
+// instead of keeping a drifting copy (the two lists disagreeing is how a
+// pattern fix lands in one engine and not the other).
+export const CUR_SYM = "[$€฿₱₹₫]";
+export const CUR_WORDS =
   "usd|idr|rp|eur|thb|rm|php|inr|vnd|myr|aud|nzd|sgd|mxn|try|ils|zar|brl|mad|egp|lkr|npr|twd|jpy|krw" +
   "|baht|pesos?|piso|rupiah|rupees?|dong|ringgit|dollars?|euros?|shekels?|dirhams?";
 // Letter boundaries are not optional - "rp" in "airport", "mad" in "nomad".
-const CUR_LEAD = `${CUR_SYM}|\\b(?:${CUR_WORDS})(?![a-z])`;
-const CUR_TRAIL = `${CUR_SYM}|(?:${CUR_WORDS})(?![a-z])`;
-const NUM = "\\d{1,3}(?:[.,\\s]\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?";
+export const CUR_LEAD = `${CUR_SYM}|\\b(?:${CUR_WORDS})(?![a-z])`;
+export const CUR_TRAIL = `${CUR_SYM}|(?:${CUR_WORDS})(?![a-z])`;
+export const NUM = "\\d{1,3}(?:[.,\\s]\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?";
+
+// A GLOBAL platform cannot enumerate every currency shorthand on earth. The
+// Thai field test proved it: "1200b./6days" was invisible to every pattern
+// because "b." is in no list - and the next market will write "500rs" or
+// "700fr". STRUCTURE is the general signal: a short letter tail GLUED to an
+// amount, that is not a reserved unit/measure word, is currency-marker
+// EVIDENCE whatever the letters are. The reserved list below is closed and
+// tiny (units, separators, measures, magnitudes) - everything else is treated
+// as a marker, which is exactly how a human reads "1200b.".
+const RESERVED_TAIL =
+  "days?|d|per|each|a|w|wks?|weeks?|m|mths?|months?|h|hrs?|hours?|am|pm|min|mins?" +
+  "|km|kms|kmh|mph|cc|kg|hp|gb|mm|cm|k|x|to|or|and|no|not|ok|for|the|of|is|at|on|in|up|it|by";
+export const CUR_TAIL_GENERIC = `(?!(?:${RESERVED_TAIL})(?![a-z]))[a-z]{1,3}\\.?(?![a-z])`;
 
 // What can stand between the money and the unit. Up to three because shops type
 // "600.-/DAY" as one token, and dropping any of them loses the whole rate.
@@ -60,9 +76,10 @@ const SEP = `(?:[-/.@]|per\\b|each\\b|a\\b)`;
 
 const UNIT = `(days?|d(?![a-z])|24\\s*h(?:rs?|ours?)?|weeks?|wks?(?![a-z])|months?|mths?(?![a-z]))`;
 
-// 1 currency-lead | 2 amount | 3 currency-trail | 4 separators | 5 quantity | 6 unit
+// 1 currency-lead | 2 amount | 3 currency-trail (known word OR structural
+// marker tail) | 4 separators | 5 quantity | 6 unit
 const RATE = new RegExp(
-  `(${CUR_LEAD})?\\s*(${NUM})\\s*(${CUR_TRAIL})?\\s*((?:${SEP}\\s*){0,3})(?:(\\d{1,3})\\s*)?${UNIT}`,
+  `(${CUR_LEAD})?\\s*(${NUM})\\s*(${CUR_TRAIL}|${CUR_TAIL_GENERIC})?\\s*((?:${SEP}\\s*){0,3})(?:(\\d{1,3})\\s*)?${UNIT}`,
   "gi"
 );
 

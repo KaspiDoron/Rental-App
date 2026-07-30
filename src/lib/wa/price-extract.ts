@@ -22,7 +22,7 @@
 // as a backstop that rescues a price the LLM missed.
 
 import { parseRateLadder, tierForDays } from "./rate-ladder";
-import { scanRates } from "./rate-expr";
+import { scanRates, CUR_SYM as RATE_CUR_SYM, CUR_WORDS as RATE_CUR_WORDS } from "./rate-expr";
 
 export type VehicleClassHint = "car" | "motorbike" | "scooter" | undefined;
 
@@ -55,10 +55,11 @@ export interface RentalPriceHit {
 // per day", "4000 baht per month") - the word forms were missing, which made
 // every "<n> baht ..." quote invisible to the day/month/week patterns (a live
 // dropped-offer class).
-const CUR_SYM = "[$€฿₱₹₫]";
-const CUR_WORDS =
-  "usd|idr|rp|eur|thb|rm|php|inr|vnd|myr|aud|nzd|sgd|mxn|try|ils|zar|brl|mad|egp|lkr|npr|twd|jpy|krw" +
-  "|baht|pesos?|piso|rupiah|rupees?|dong|ringgit|dollars?|euros?|shekels?|dirhams?";
+// ONE vocabulary, owned by wa/rate-expr - a currency added there is instantly
+// known to both engines (the two lists drifting apart is how a pattern fix
+// landed in one reader and not the other).
+const CUR_SYM = RATE_CUR_SYM;
+const CUR_WORDS = RATE_CUR_WORDS;
 
 // LETTER BOUNDARIES ARE NOT OPTIONAL. Without them "no-RM-ally" made every Thai
 // shop that typed "normally it's 300/day" read as Malaysian Ringgit, and the app
@@ -411,6 +412,24 @@ export function extractQuotedPrices(
     };
   }
 
+  // Every EXPLICITLY per-day-marked amount in the whole message, before the
+  // line loop. Division (a total split over the days) is a weaker reading than
+  // a rate the shop marked "per day" - when the two contradict, the divided
+  // reading loses. This is the algebra guard behind the field's ฿30/day: on a
+  // coalesced message, "6 days 180" divided to 30 while "180 per day" sat one
+  // line away.
+  const explicitDailies: number[] = [];
+  for (const l of lines) {
+    for (const r of scanRates(expandK(l))) {
+      if (r.unit === "day" && r.quantity === 1 && !isDurationConditionAt(expandK(l), r.index, r.matched)) {
+        explicitDailies.push(r.perDay);
+      }
+    }
+  }
+  const contradictsExplicitDaily = (divided: number): boolean =>
+    explicitDailies.length > 0 &&
+    !explicitDailies.some((d) => Math.abs(d - divided) / d <= 0.35);
+
   for (const rawLine of lines) {
     if (SERVICE_LINE.test(rawLine)) continue; // transfer / tour / shuttle - skip
     const line = expandK(rawLine);
@@ -469,6 +488,7 @@ export function extractQuotedPrices(
       let took = false;
       for (const a of amounts) {
         if (!(a.amount > days)) continue;
+        if (contradictsExplicitDaily(Math.round(a.amount / days))) continue;
         hits.push({
           pricePerDay: Math.round(a.amount / days),
           currency: currencyIn(line) ?? opts.localCurrency,
@@ -489,13 +509,43 @@ export function extractQuotedPrices(
       const rev = !line.match(PRICE_TOTAL);
       const whole = parseAmount(rev ? total[2] : total[1]);
       const nDays = parseInt(rev ? total[1] : total[2], 10);
-      if (whole > 0 && nDays > 0 && whole > nDays) {
+      // MISDIVISION GUARDS (the field's ฿30/day). Division is the WEAKER
+      // reading: (a) an amount the shop marked per-day right after it ("6 days
+      // 180 per day") is a rate, never a total - the reversed pattern must not
+      // divide it; (b) a division that CONTRADICTS an explicitly marked daily
+      // anywhere in the message loses to it (a consistent total - 1500 beside
+      // 300/day for 5 days - still divides fine).
+      const amtAt = amountIndex(line, total, rev ? 2 : 1);
+      const afterAmount = line.slice(amtAt + String(Math.round(whole)).length, amtAt + 24);
+      const markedPerDay = /^\s*(?:baht|thb|php|pesos?|[a-z]{1,3}\.?)?\s*(?:\/|per\b|a\b|each\b|-)?\s*day/i.test(
+        afterAmount
+      );
+      const divided = nDays > 0 ? Math.round(whole / nDays) : 0;
+      if (
+        whole > 0 &&
+        nDays > 0 &&
+        whole > nDays &&
+        !markedPerDay &&
+        !contradictsExplicitDaily(divided)
+      ) {
         hits.push({
-          pricePerDay: Math.round(whole / nDays),
+          pricePerDay: divided,
           currency: currencyIn(line) ?? opts.localCurrency,
           line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
-          listPrice: isListPriceAt(line, amountIndex(line, total, rev ? 2 : 1)),
+          listPrice: isListPriceAt(line, amtAt),
+        });
+        continue;
+      }
+      // A per-day-marked amount the daily scanner somehow missed still counts
+      // as a rate at face value rather than being silently dropped.
+      if (whole > 0 && markedPerDay && !contradictsExplicitDaily(whole)) {
+        hits.push({
+          pricePerDay: Math.round(whole),
+          currency: currencyIn(line) ?? opts.localCurrency,
+          line: rawLine,
+          classMatch: cls ? cls === wantClass : undefined,
+          listPrice: isListPriceAt(line, amtAt),
         });
         continue;
       }

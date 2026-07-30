@@ -1189,6 +1189,43 @@ export function heuristicDepositFields(
   };
 }
 
+/**
+ * ONE structured call that settles a genuine per-day-vs-total disagreement
+ * between the LLM extractor and the deterministic reader. The algebra decides
+ * the clear cases without it (a division artifact reconstructs the other
+ * engine's number); this runs only when the two engines read genuinely
+ * different semantics out of the same words. The answer is only ever adopted
+ * when it lands ON one of the two grounded candidates - the arbiter picks,
+ * it never invents.
+ */
+export async function arbitratePriceBasis(input: {
+  message: string;
+  durationDays: number;
+  candidateA: number;
+  candidateB: number;
+}): Promise<number | null> {
+  const out = await chat(
+    [
+      {
+        role: "system",
+        content:
+          "You resolve ONE ambiguity in a rental-price message: what is the true PER-DAY price? " +
+          `The traveller asked for ${input.durationDays} day(s). Two readings exist: ` +
+          `${input.candidateA} per day, or ${input.candidateB} per day. ` +
+          "Shops often quote the TOTAL for the whole stay; a number the shop marked per day " +
+          '("per day", "/day", "a day") is a daily rate and is never divided. ' +
+          'Reply ONLY JSON: {"perDay": <number>} - it MUST be one of the two readings.',
+      },
+      { role: "user", content: input.message.slice(0, 600) },
+    ],
+    { maxTokens: 60, budgetMs: 6_000 }
+  );
+  if (!out) return null;
+  const j = extractJson<{ perDay?: number }>(out);
+  const n = typeof j?.perDay === "number" ? j.perDay : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function extractOffer(
   rfq: StructuredRFQ,
   text: string,
@@ -1392,6 +1429,9 @@ export async function extractOffer(
     "pricePerDay MUST be the true PER-DAY price: when the quote covers the whole " +
     "period, DIVIDE by the number of days. Only treat a number as per-day when the " +
     'shop says so ("per day", "/day", "a day") or quotes for 1 day. ' +
+    'AND THE RULE\'S OWN LIMIT: a number the shop already marked per-day is NEVER divided. ' +
+    '"6 days 180 per day" means 180/day (the day count is the STAY, the marked rate is the price) - ' +
+    "dividing a marked per-day rate by the stay is the exact misread this rule exists to prevent, in reverse. " +
     "deposit: ONLY if the shop explicitly stated a deposit requirement, a short " +
     "label like 'Passport only', '3,000 THB cash', 'Passport or 2,000 THB' - " +
     "otherwise an empty string. NEVER guess. " +

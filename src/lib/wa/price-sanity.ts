@@ -34,11 +34,33 @@ export interface FloorBand {
  */
 export const IMPLAUSIBLE_RATIO = 0.2;
 
-/** Could a real shop be quoting this per-day rate? Unknown floor = yes. */
+/** Could a real shop be quoting this per-day rate? Unknown floor = yes.
+ *  STRICTLY above the bound: the Thailand field ฿30/day (a 180/6 misdivision)
+ *  passed only because the threshold landed EXACTLY on 30 (floor 150 * 0.2)
+ *  and the comparison was inclusive. A boundary coincidence must never be the
+ *  thing that decides a price is real. */
 export function plausibleDaily(perDay: number, band?: FloorBand | null): boolean {
   if (!(perDay > 0)) return false;
   if (!band || !(band.floor > 0)) return true;
-  return perDay >= band.floor * IMPLAUSIBLE_RATIO;
+  return perDay > band.floor * IMPLAUSIBLE_RATIO;
+}
+
+/**
+ * Is `chosen` the ARTIFACT of dividing another amount in the same message by
+ * the rental length? "6 days 180 per day" misread as 180/6=30 leaves both 30
+ * and 180 in play, and 30 * 6 reconstructs 180 exactly. Pure arithmetic - no
+ * keyword is consulted, which is what makes it phrasing-proof worldwide.
+ */
+export function looksLikeMisdivision(
+  chosen: number,
+  candidates: number[],
+  durationDays?: number | null
+): number | null {
+  if (!durationDays || durationDays <= 1 || !(chosen > 0)) return null;
+  const reconstructed = candidates.find(
+    (c) => c !== chosen && Math.abs(c - chosen * durationDays) / c <= 0.02
+  );
+  return reconstructed ?? null;
 }
 
 export interface SanityVerdict {
@@ -62,9 +84,23 @@ export interface SanityVerdict {
 export function sanePrice(
   chosen: number,
   candidates: number[],
-  band?: FloorBand | null
+  band?: FloorBand | null,
+  opts?: { durationDays?: number | null }
 ): SanityVerdict {
   if (plausibleDaily(chosen, band)) return { pricePerDay: chosen, corrected: false };
+
+  // The misdivision repair outranks generic rescue: when the implausible pick
+  // is exactly another candidate divided by the stay ("6 days 180 per day"
+  // -> 30 with 180 in the same message), the DIVIDEND is the shop's number -
+  // restore it rather than merely picking the cheapest believable amount.
+  const dividend = looksLikeMisdivision(chosen, candidates, opts?.durationDays);
+  if (dividend !== null && plausibleDaily(dividend, band)) {
+    return {
+      pricePerDay: dividend,
+      corrected: true,
+      reason: `Read ${chosen}/day, but ${chosen} x ${opts?.durationDays} reconstructs ${dividend} from the same message - the shop's number was divided by the stay. Using ${dividend}/day.`,
+    };
+  }
 
   const rescue = candidates
     .filter((c) => c !== chosen && plausibleDaily(c, band))

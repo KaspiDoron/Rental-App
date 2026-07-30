@@ -33,6 +33,7 @@
 
 import { judgeReply, pairPricesWithVehicles, type DeclaredVehicle, type VehicleJudgement } from "./identity";
 import { ATTRIBUTES, describeSpec, type AttributeKey } from "./spec";
+import { scanRates } from "../wa/rate-expr";
 
 /** "a scooter" / "an automatic scooter" - a bot is given away by this. */
 function article(phrase: string): string {
@@ -176,7 +177,18 @@ export function pickOurPrice(
   }
   const unsure = assessed.filter((a) => a.assessment.status === "needs-confirmation");
   if (unsure.length) {
-    return unsure.reduce((best, a) => (a.price < best.price ? a : best));
+    // EVIDENCE OUTRANKS CHEAPNESS among unestablished prices. Preferring the
+    // cheapest here is how the field's ฿30 misdivision beat the shop's real
+    // "180 per day": both were needs-confirmation, and 30 was cheaper. An
+    // amount the shop explicitly marked per-day is the stronger reading.
+    const marked = new Set(
+      scanRates(text)
+        .filter((r) => r.unit === "day" && r.quantity === 1)
+        .map((r) => r.perDay)
+    );
+    const withEvidence = unsure.filter((a) => marked.has(a.price));
+    const pool = withEvidence.length ? withEvidence : unsure;
+    return pool.reduce((best, a) => (a.price < best.price ? a : best));
   }
   return null;
 }
