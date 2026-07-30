@@ -471,8 +471,18 @@ export async function processVendorReply(opts: {
       history,
       ctx.region || undefined
     ));
-  const verified =
-    extraction.found && extraction.matchesSpec && extraction.confidence === "high";
+  // NOTE: evaluated lazily (a getter-style function, not a const) because the
+  // vehicle gate + thread-confirmation blocks below may still upgrade or
+  // downgrade the extraction. VERIFIED now also requires the VEHICLE to be
+  // established: with unconfirmed prices becoming real (unverified) offers,
+  // a high-confidence read alone must not wear the green badge.
+  const isVerified = () =>
+    Boolean(
+      extraction.found &&
+        extraction.matchesSpec &&
+        extraction.confidence === "high" &&
+        (!extraction.vehicleAssessment || extraction.vehicleAssessment.status === "confirmed")
+    );
   // After we've clarified once, a found price counts even if not fully
   // verified - the human can see it; the agent must not nag the shop again.
   let usablePrice =
@@ -605,7 +615,60 @@ export async function processVendorReply(opts: {
       extraction.matchesSpec = false;
     } else if (assessment.status === "needs-confirmation") {
       extraction.vehicleVerdict = "unclear";
-      extraction.matchesSpec = false; // unresolved is NOT a match - see below
+      // NOT forced to matchesSpec=false anymore. "Unresolved" starved every
+      // downstream surface at once in the field: no offers row, no BEST PRICE,
+      // no rival for the leverage engine, a card frozen on the old quote. An
+      // unconfirmed price is now an UNVERIFIED offer, and the thread-level
+      // resolution below is what retires the question.
+    }
+  }
+
+  // ===== THREAD-LEVEL VEHICLE CONFIRMATION =================================
+  //
+  // The assessment above judges THIS message in isolation - and a shop that
+  // answers our question about a 125cc automatic with "6 days 180 per day"
+  // proves nothing to it, forever. The conversation proves it: our own
+  // outbound named the vehicle, the shop answered it directly. That fact is
+  // durable (negotiation_threads.fields.vehicleConfirmation, persisted by
+  // applyExtractionToState), never regresses, and retires the confirm
+  // question after ONE ask.
+  if (extractText && ctx.sender) {
+    try {
+      const { resolveConfirmation } = await import("./vehicle/confirmation");
+      const { loadThreadState, threadKeyFor } = await import("./graph/state");
+      const prevState = await loadThreadState(threadKeyFor(ctx.sender, from)).catch(() => null);
+      const prevConf = (prevState?.fields as {
+        vehicleConfirmation?: import("./vehicle/confirmation").VehicleConfirmationState;
+      } | null)?.vehicleConfirmation;
+      const lastOut = await sbSelect<{ body: string }>(
+        "whatsapp_messages",
+        `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+          ctx.sender
+        )}&order=received_at.desc&limit=1${numberFilter("to_number", from)}`
+      ).catch(() => [] as { body: string }[]);
+      const conf = resolveConfirmation(prevConf, {
+        declared,
+        inboundText: extractText,
+        lastOutboundText: lastOut[0]?.body ?? "",
+        messageStatus: extraction.vehicleAssessment?.status ?? null,
+        hasPrice: Boolean(usablePrice),
+      });
+      extraction.vehicleConfirmation = conf;
+      // A confirmed THREAD upgrades this message's verdict: the price on the
+      // table belongs to the vehicle the conversation already established, so
+      // no surface may keep asking and no offer stays "unverified".
+      if (conf.status === "confirmed" && extraction.vehicleAssessment?.status === "needs-confirmation") {
+        extraction.vehicleAssessment = {
+          ...extraction.vehicleAssessment,
+          status: "confirmed",
+          question: "",
+          travellerNote: "",
+          reason: conf.evidence,
+        };
+        extraction.vehicleVerdict = undefined;
+      }
+    } catch {
+      /* confirmation is an upgrade - its failure must never drop a reply */
     }
   }
 
@@ -851,7 +914,7 @@ export async function processVendorReply(opts: {
       currency: cur,
       round,
       simulated: false,
-      verified,
+      verified: isVerified(),
       region_key: regionKey,
       vehicle_key: vehicleKey,
       duration_days: rfq.durationDays ?? null,
@@ -1355,7 +1418,7 @@ export async function processVendorReply(opts: {
     shopAskedQuestion: shopAskedQuestion(text),
     shopSentVehiclePhoto: extraction.imageKind === "vehicle",
     hasUsablePrice: Boolean(usablePrice),
-    verified,
+    verified: isVerified(),
     hasClarifyMessage: Boolean(extraction.clarifyMessage),
     matchesSpecNotFalse: extraction.matchesSpec !== false,
     priceAtOrBelowFloor,

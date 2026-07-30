@@ -48,7 +48,17 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
     artifact.move === "close" ||
     artifact.move === "present" ||
     artifact.move === "momentum";
-  if (priceMove && gate && gate !== "confirmed") {
+  // ASK ONCE, THEN PROCEED. The rewrite below is what made the agent re-send
+  // a near-identical identity question in the field: every price move was
+  // force-replaced while the per-message gate stayed "needs-confirmation",
+  // even after the shop had answered our question. Once the confirm question
+  // has gone out (vehicleAsked - the durable thread fact), price moves run
+  // with the honest "assumed" status instead; only a positively WRONG vehicle
+  // still blocks them.
+  const identityBlocks =
+    gate === "wrong-vehicle" ||
+    (gate === "needs-confirmation" && !ctx.inbound.verified.vehicleAsked);
+  if (priceMove && gate && identityBlocks) {
     const question = ctx.inbound.verified.vehicleQuestion;
     if (question) {
       return {

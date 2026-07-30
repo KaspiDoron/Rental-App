@@ -1050,6 +1050,19 @@ export interface ExtractedOffer {
     missing: string[];
     model?: string;
   };
+  /**
+   * The THREAD-level confirmation state (src/lib/vehicle/confirmation.ts),
+   * resolved once per inbound turn in agent-loop and persisted with the
+   * negotiation thread. Message-level `vehicleAssessment` says what THIS text
+   * proves; this says what the CONVERSATION has established - a confirmed
+   * thread never regresses on a vehicle-less price update.
+   */
+  vehicleConfirmation?: {
+    status: "confirmed" | "assumed" | "unconfirmed";
+    evidence: string;
+    at: string;
+    askedAt?: string;
+  };
   confidence: "high" | "medium" | "low";
   clarifyMessage?: string;
   // ONLY set when the shop explicitly confirmed them - never guessed.

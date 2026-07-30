@@ -96,7 +96,7 @@ import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
-import { cheapestPresentable } from "@/lib/offer-presentation";
+import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -2676,10 +2676,17 @@ export default function Home() {
                 )}
               </div>
               <div className="mt-1 truncate text-[9.5px] font-bold text-faint">
+                {/* TRANSPARENT VERIFICATION: the lowest real offer shows
+                    IMMEDIATELY, labeled by confidence - "unverified" until the
+                    agent's automatic model check lands, then it seamlessly
+                    reads verified. The old behavior hid the price entirely
+                    behind "- confirming details" while ฿180 sat on screen. */}
                 {cheapest?.offer
-                  ? Math.round(totalSavings) > 0
-                    ? `${t("saved")} ${savingsSymbol}${Math.round(totalSavings)} ${t("so far")}`
-                    : `${t("per day")} · ${cheapest.name}`
+                  ? offerConfidence(cheapest.offer) === "unverified"
+                    ? `* ${t("unverified - confirming")} · ${cheapest.name}`
+                    : Math.round(totalSavings) > 0
+                      ? `${t("saved")} ${savingsSymbol}${Math.round(totalSavings)} ${t("so far")}`
+                      : `${t("per day")} · ${cheapest.name}`
                   : offersIn > 0
                     ? t("confirming details")
                     : t("agents are asking")}

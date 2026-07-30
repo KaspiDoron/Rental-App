@@ -95,6 +95,10 @@ export interface VerifiedExtraction {
   vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
   /** The exact question to put to the shop, already phrased by the gate. */
   vehicleQuestion?: string;
+  /** We ALREADY asked the confirm question in this thread (ask-once fact from
+   *  the durable thread confirmation state). A second identity ask is never
+   *  legal - the engine proceeds with the assumed status instead. */
+  vehicleAsked?: boolean;
   /** The shop has not said which vehicle yet. NOT terminal - we ask. */
   vehicleUnclear?: boolean;
   askedLocation?: boolean;

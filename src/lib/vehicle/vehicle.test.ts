@@ -261,9 +261,17 @@ describe("the gate is actually in the path", () => {
     expect(rails.indexOf("vehicle-identity")).toBeLessThan(rails.indexOf("checkOutboundNumbers({"));
   });
 
-  it("presentation refuses anything that is not confirmed", () => {
+  it("presentation bars a WRONG vehicle and labels an unestablished one", () => {
+    // DELIBERATE REWRITE of the old "refuses anything not confirmed" pin.
+    // Thailand proved that rule hid the cheapest real quote on the board: a
+    // shop answering our spec'd question with "6 days 180 per day" can never
+    // name the vehicle, so its live ฿180 was invisible. The contract is now
+    // NEVER HIDE, NEVER MISLEAD: only a positively wrong vehicle is barred;
+    // anything unestablished presents as an honest UNVERIFIED offer and the
+    // thread-level confirmation (vehicle/confirmation.ts) flips it verified.
     const pres = readCode("src/lib/offer-presentation.ts");
-    expect(pres).toMatch(/vehicleStatus && offer\.vehicleStatus !== "confirmed"/);
+    expect(pres).toMatch(/vehicleStatus === "wrong-vehicle"\) return false/);
+    expect(pres).toMatch(/export function offerConfidence/);
   });
 
   it("the verdict reaches the client, derived rather than stored", () => {

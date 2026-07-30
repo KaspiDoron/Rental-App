@@ -2,11 +2,21 @@
 // traveller as a real, lockable offer - shared by the results page, Will's
 // compare sheet and any future surface so the rule can never drift between them.
 //
-// The bug this centralizes against: an e-bike quoted at a low price (the shop
-// answered about the WRONG vehicle - matchesSpec === false) was surfaced as the
-// "Best price so far - Lock it" card, misleading the traveller into thinking it
-// matched their 125cc-scooter request. A price for a different vehicle is a
-// signal for the agent to clarify, never the traveller's best deal.
+// Two field incidents shaped it, in opposite directions:
+//
+//  - An e-bike quoted at a low price (the shop answered about the WRONG
+//    vehicle - matchesSpec === false) was surfaced as "Best price - Lock it".
+//    A price for a different vehicle is a signal for the agent to clarify,
+//    never the traveller's best deal. That exclusion stays absolute.
+//
+//  - Thailand: "unconfirmed is not presentable" hid EVERYTHING. A shop
+//    answering our question about a 125cc automatic with "6 days 180 per day"
+//    can never name the vehicle, so its live ฿180 was invisible - BEST PRICE
+//    showed a dash over the cheapest real quote on the board. NEVER HIDE,
+//    NEVER MISLEAD is the rule now: only a positively WRONG vehicle is barred;
+//    an unestablished one presents as an honest UNVERIFIED offer and flips to
+//    verified when the thread-level confirmation (vehicle/confirmation.ts)
+//    lands - automatically, with no button.
 
 export interface PresentableOffer {
   pricePerDay: number;
@@ -15,29 +25,35 @@ export interface PresentableOffer {
   // before this field existed) is treated as matching, so old data still shows.
   matchesSpec?: boolean;
   /**
-   * The vehicle-identity gate's verdict for this price (src/lib/vehicle).
+   * The vehicle-identity verdict for this price, THREAD-state merged
+   * (src/lib/vehicle + negotiation_threads.fields.vehicleConfirmation):
    *
-   * `matchesSpec` alone was never enough, and two live threads proved it: a
-   * price whose vehicle nobody could name defaulted to "must be theirs", so a
-   * 110cc BeAT at 400 became BEST PRICE for a traveller who had declared a 125.
-   * The gate distinguishes "confirmed" from "we cannot tell yet", and only the
-   * first is a deal.
+   *   confirmed - hard evidence or the shop answered our confirm question
+   *   assumed   - a direct price answer to our spec'd request; unverified
+   *   needs-confirmation - nothing ties the price to the vehicle yet
+   *   wrong-vehicle - positively a different machine; never presentable
    */
-  vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+  vehicleStatus?: "confirmed" | "assumed" | "needs-confirmation" | "wrong-vehicle";
 }
 
 /**
- * An offer counts as a real deal only when it is for the requested vehicle.
- *
- * UNCONFIRMED IS NOT PRESENTABLE. That is the whole change: a price the agent
- * is still confirming the vehicle for stays visible on its card, with the
- * reason, but it can never be the headline, the "best price", or the thing a
- * Lock button books.
+ * May this price be shown/locked as a real offer? Only a positively wrong
+ * vehicle is barred. Everything else shows - with `offerConfidence` telling
+ * the surface how to LABEL it, which is the honest half of the contract.
  */
 export function isPresentableOffer(offer: PresentableOffer | undefined | null): boolean {
   if (!offer) return false;
-  if (offer.vehicleStatus && offer.vehicleStatus !== "confirmed") return false;
+  if (offer.vehicleStatus === "wrong-vehicle") return false;
   return offer.matchesSpec !== false;
+}
+
+/** How a surface must caption a presentable offer: verified or unverified. */
+export function offerConfidence(
+  offer: PresentableOffer | undefined | null
+): "verified" | "unverified" {
+  return offer?.vehicleStatus === "confirmed" || offer?.vehicleStatus === undefined
+    ? "verified"
+    : "unverified";
 }
 
 /**
@@ -53,7 +69,8 @@ export function isPresentableOffer(offer: PresentableOffer | undefined | null): 
  * So the stance is derived once, here, and every surface renders it:
  *
  *   ok         - the gate confirmed the traveller's vehicle
- *   confirming - nobody has established it yet (never an accusation)
+ *   confirming - nobody has established it yet (never an accusation); covers
+ *                both "assumed" (honest unverified offer) and raw unknown
  *   mismatch   - the gate positively identified a DIFFERENT vehicle
  *
  * The default matters more than the mapping: an unresolved signal reads as
@@ -65,15 +82,18 @@ export type VehicleStance = "ok" | "confirming" | "mismatch";
 export function vehicleStance(offer: PresentableOffer | undefined | null): VehicleStance {
   if (!offer) return "ok";
   if (offer.vehicleStatus === "wrong-vehicle") return "mismatch";
-  if (offer.vehicleStatus === "needs-confirmation") return "confirming";
+  if (offer.vehicleStatus === "needs-confirmation" || offer.vehicleStatus === "assumed") {
+    return "confirming";
+  }
   if (offer.vehicleStatus === "confirmed") return "ok";
   return offer.matchesSpec === false ? "confirming" : "ok";
 }
 
 /**
- * The cheapest offer that actually matches the traveller's request, within a
- * single currency (mixed-currency comparison is dishonest). Off-spec quotes are
- * excluded entirely - they can never be the "cheapest".
+ * The cheapest offer that may be presented, within a single currency
+ * (mixed-currency comparison is dishonest). Positively-wrong quotes are
+ * excluded entirely; unverified ones compete - the caller labels them via
+ * offerConfidence so the traveller is never misled about confidence.
  */
 export function cheapestPresentable<T extends { offer?: PresentableOffer }>(
   vendors: T[],

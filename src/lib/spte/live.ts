@@ -72,6 +72,10 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     // it is computed from what the shop stated plus what the catalogue knows.
     vehicleStatus: ex?.vehicleAssessment?.status,
     vehicleQuestion: ex?.vehicleAssessment?.question,
+    // The ask-once fact from the durable thread state (resolved in agent-loop,
+    // persisted with the negotiation thread): once our confirm question has
+    // gone out, a repeat is never legal - the engine proceeds as "assumed".
+    vehicleAsked: Boolean(ex?.vehicleConfirmation?.askedAt),
     // The shop offered a CHOICE. Without these two the primary engine could not
     // tell "I have two bikes at different prices" from "here is my price", and
     // read the ambiguity as "wrong vehicle" - closing a live negotiation.

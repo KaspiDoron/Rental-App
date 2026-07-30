@@ -185,6 +185,16 @@ export interface ThreadFields {
   // shareable address - the agent stops probing and the app prompts the user
   // for their hotel instead of looping the boilerplate delivery question.
   awaitingUserLocation?: boolean;
+  // THREAD-level vehicle confirmation (src/lib/vehicle/confirmation.ts).
+  // What the CONVERSATION has established about the vehicle, durable across
+  // turns: "confirmed" never regresses on a vehicle-less price update, and
+  // askedAt is the ask-once fact that retires the confirm question.
+  vehicleConfirmation?: {
+    status: "confirmed" | "assumed" | "unconfirmed";
+    evidence: string;
+    at: string;
+    askedAt?: string;
+  };
 }
 
 export interface NegotiationThreadState {

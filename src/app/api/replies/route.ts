@@ -107,6 +107,7 @@ export async function GET(req: Request) {
       pickupOffered?: boolean;
       pickupConsent?: boolean;
       declined?: boolean;
+      vehicleConfirmation?: { status?: string; evidence?: string };
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -251,6 +252,22 @@ export async function GET(req: Request) {
           : r.delivers === true
           ? "delivery"
           : undefined;
+      // THREAD state outranks per-row derivation - except a positively WRONG
+      // vehicle, which stays wrong per row. The field failure this closes: the
+      // shop confirms the vehicle once, then sends "1100b./6days"; the per-row
+      // gate re-judges that text alone as unconfirmed and the card freezes on
+      // the old price. What the conversation established travels with every
+      // later row.
+      const rowGate = gateFor(r.reply_text, r.price_per_day);
+      const conf = st?.vehicleConfirmation?.status;
+      const vehicleStatus =
+        rowGate?.status === "wrong-vehicle"
+          ? ("wrong-vehicle" as const)
+          : conf === "confirmed"
+            ? ("confirmed" as const)
+            : conf === "assumed" && rowGate?.status !== "confirmed"
+              ? ("assumed" as const)
+              : rowGate?.status ?? null;
       return {
       id: r.id,
       vendorId: r.vendor_id,
@@ -258,13 +275,17 @@ export async function GET(req: Request) {
       replyText: r.reply_text,
       found: r.found,
       pricePerDay: r.price_per_day,
-      verified: r.matches_spec && r.confidence === "high",
+      // VERIFIED = high-confidence read AND the vehicle is established. The
+      // column pair alone stopped meaning that when unconfirmed prices became
+      // real (unverified) offers.
+      verified: r.matches_spec && r.confidence === "high" && vehicleStatus === "confirmed",
       // Raw spec match: false = the shop quoted a DIFFERENT vehicle. The client
       // must never present such a price as the best/lockable offer.
       matchesSpec: r.matches_spec,
-      // Only "confirmed" may ever be shown as a deal - see offer-presentation.
-      vehicleStatus: gateFor(r.reply_text, r.price_per_day)?.status ?? null,
-      vehicleNote: gateFor(r.reply_text, r.price_per_day)?.note ?? null,
+      // Transparent verification states: "confirmed" wears the badge, "assumed"
+      // presents as an honest unverified offer, only "wrong-vehicle" is barred.
+      vehicleStatus,
+      vehicleNote: vehicleStatus === "confirmed" ? null : rowGate?.note ?? null,
       auto: r.auto,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,

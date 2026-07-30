@@ -85,7 +85,7 @@ export interface Offer {
    * `confirmed` is the only state that may be presented as a deal; the others
    * carry `vehicleNote`, which says plainly what is still being established.
    */
-  vehicleStatus?: "confirmed" | "needs-confirmation" | "wrong-vehicle";
+  vehicleStatus?: "confirmed" | "assumed" | "needs-confirmation" | "wrong-vehicle";
   /** One line for the card: why this price is not (yet) being called a deal. */
   vehicleNote?: string;
   simulated: boolean;

@@ -60,7 +60,13 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // the identity gate's status - never a rule about the shop's wording, and it
   // sits ahead of every price move because coerceToLegal and the LLM-down
   // fallback both take legal[0].
-  if (v.vehicleStatus === "needs-confirmation" && !dealComplete(ctx)) {
+  // ...and ONLY ONCE. The Thailand field test showed the stateless version of
+  // this rule re-asking the same identity question after the shop had already
+  // answered it: the gate is recomputed per message, and a direct answer that
+  // names no vehicle looks "unconfirmed" forever. The durable thread state
+  // (vehicleAsked, from negotiation_threads.fields.vehicleConfirmation) is the
+  // ask-once fact - after one ask the engine proceeds with the assumed status.
+  if (v.vehicleStatus === "needs-confirmation" && !v.vehicleAsked && !dealComplete(ctx)) {
     moves.push("confirm-vehicle");
   }
 

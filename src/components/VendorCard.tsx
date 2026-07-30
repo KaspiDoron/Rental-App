@@ -512,8 +512,11 @@ function VendorCardInner({
                       {t("DIFFERENT VEHICLE")}
                     </span>
                   ) : stance === "confirming" ? (
+                    // Transparent verification state: the price is real and
+                    // lockable, the agent is auto-confirming the model in the
+                    // background - the badge flips to VERIFIED on its own.
                     <span className="rounded bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
-                      {t("CHECKING MODEL")}
+                      {t("UNVERIFIED")}
                     </span>
                   ) : offer.verified ? (
                     <span className="rounded bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
@@ -692,15 +695,12 @@ function VendorCardInner({
               <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
                 🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
-            ) : stance === "mismatch" ? (
-              <div className="mt-2 rounded-xl bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
-                ⚠️ {t("This price is for a different vehicle than you asked for - your agent is checking whether they have the one you want.")}
-              </div>
-            ) : stance === "confirming" ? (
-              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
-                🔎 {offer.vehicleNote || t("Your agent is confirming exactly which model this price is for.")}
-              </div>
             ) : (
+              // ONE banner per concern: the vehicle note above already tells
+              // the mismatch/confirming story - repeating it here is exactly
+              // the duplicated "Confirming this is the automatic 125cc..."
+              // pair from the Thailand screenshots.
+              stance === "ok" &&
               offer.presentable === false && (
                 <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
                   💬 {t("Your agent is still confirming the deposit and how you get the vehicle.")}
@@ -774,15 +774,19 @@ function VendorCardInner({
             )}
 
             <div className="mt-3 flex items-center gap-2">
-              {/* You can never LOCK a price that is for the wrong vehicle. Until
-                  the shop confirms the vehicle you asked for, the only action is
-                  to keep pressing them (the agent is already clarifying). */}
-              {stance !== "ok" ? (
+              {/* You can never LOCK a price that is for the wrong vehicle -
+                  that CTA stays. The manual "Confirm the model" button is
+                  GONE: model verification is the agent's job, end to end
+                  (thread-level confirmation resolves it automatically), and
+                  the button never confirmed anything anyway - it opened the
+                  generic bargain composer. An unverified offer is a real,
+                  lockable offer wearing an honest badge. */}
+              {stance === "mismatch" ? (
                 <button
                   onClick={() => onBargain(vendor)}
                   className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
                 >
-                  🔎 {stance === "mismatch" ? t("Ask for the right vehicle") : t("Confirm the model")}
+                  🔎 {t("Ask for the right vehicle")}
                 </button>
               ) : (
                 <>

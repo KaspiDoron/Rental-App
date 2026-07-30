@@ -114,11 +114,29 @@ export function applyExtractionToState(
   if (!extraction) return state;
   const f = { ...state.fields };
 
+  // Thread-level vehicle confirmation: resolved once per turn in agent-loop
+  // and carried on the extraction; persisted here (the ONLY place inbound
+  // facts land). Confirmed never regresses - a later vehicle-less price
+  // update keeps the thread confirmed.
+  if (extraction.vehicleConfirmation) {
+    const prev = f.vehicleConfirmation;
+    if (prev?.status !== "confirmed" || extraction.vehicleConfirmation.status === "confirmed") {
+      f.vehicleConfirmation = extraction.vehicleConfirmation;
+    } else if (extraction.vehicleConfirmation.askedAt && !prev.askedAt) {
+      f.vehicleConfirmation = { ...prev, askedAt: extraction.vehicleConfirmation.askedAt };
+    }
+  }
+
   if (usablePrice && usablePrice > 0) {
     f.pricePerDay = usablePrice;
     f.currency = currency;
     f.priceVerified = Boolean(
-      extraction.found && extraction.matchesSpec && extraction.confidence === "high"
+      extraction.found &&
+        extraction.matchesSpec &&
+        extraction.confidence === "high" &&
+        // VERIFIED also means the VEHICLE is established - matchesSpec alone
+        // stopped meaning that when unconfirmed prices became real offers.
+        (!extraction.vehicleAssessment || extraction.vehicleAssessment.status === "confirmed")
     );
     // A PRINTED price list is a firmer anchor than a spoken quote - remember
     // the listed price so the bargaining ladder keeps its asks credible
