@@ -300,10 +300,21 @@ export async function POST(req: Request) {
     }
     const digits = digitsOnly(to);
     // The user explicitly selected this shop for the mass run - that decision
-    // re-opens a previously removed/cancelled recipient.
+    // re-opens a previously removed/cancelled recipient. AUTHORITATIVE: when
+    // no durable store confirms the clear, refuse THIS shop honestly instead
+    // of queueing a row the guard will terminally kill at drain (a kill that
+    // then rendered as "REMOVED BY YOU" on a shop the user just selected).
     {
       const { clearCancellation } = await import("@/lib/wa/cancellations");
-      await clearCancellation(session.email, digits).catch(() => {});
+      const cleared = await clearCancellation(session.email, digits).catch(() => false);
+      if (!cleared) {
+        results.push({
+          id: v.id,
+          sent: false,
+          reason: "still-removed - could not confirm re-opening this shop, try again",
+        });
+        continue;
+      }
     }
 
     // Per-shop compiled opener (falls back to the legacy single message when

@@ -35,4 +35,7 @@ export const I18N_EXTRAS: string[] = [
   // app/page.tsx etaRangeLabel() - the far-out-hold wording.
   "sends in about",
   "h",
+  // app/page.tsx mass-result loop - refusal accounting.
+  "not sent",
+  "still marked removed - tap the shop to try again",
 ];

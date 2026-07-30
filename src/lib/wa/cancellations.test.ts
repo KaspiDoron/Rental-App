@@ -12,11 +12,12 @@ interface MarkerRow {
   sender: string;
   digits: string;
   kind: string;
+  reason?: string;
   at: number;
 }
 
 const state: {
-  tableRows: { sender_key: string; to_number: string }[];
+  tableRows: { sender_key: string; to_number: string; reason?: string }[];
   markers: MarkerRow[];
   // per-table availability: "ok" | "missing" | "unavailable"
   cancellationsMode: "ok" | "missing" | "unavailable";
@@ -41,18 +42,23 @@ vi.mock("../runtime-config", () => ({
         state.tableRows = state.tableRows.filter(
           (x) => !(x.sender_key === r.sender_key && x.to_number === r.to_number)
         );
-        state.tableRows.push({ sender_key: String(r.sender_key), to_number: String(r.to_number) });
+        state.tableRows.push({
+          sender_key: String(r.sender_key),
+          to_number: String(r.to_number),
+          reason: r.reason ? String(r.reason) : undefined,
+        });
       }
       return true;
     }
     if (table === "whatsapp_messages") {
       if (state.messagesMode !== "ok") return false;
       for (const r of rows) {
-        const raw = r.raw as { sender?: string; digits?: string; kind?: string };
+        const raw = r.raw as { sender?: string; digits?: string; kind?: string; reason?: string };
         state.markers.push({
           sender: String(raw.sender),
           digits: String(raw.digits),
           kind: String(raw.kind),
+          reason: raw.reason,
           at: state.clock++,
         });
       }
@@ -61,12 +67,22 @@ vi.mock("../runtime-config", () => ({
     return true;
   },
   sbDelete: async (table: string, query: string) => {
-    if (table !== "wa_cancellations") return;
+    if (table !== "wa_cancellations") return true;
+    if (state.cancellationsMode !== "ok") return false;
     const sender = decodeURIComponent(/sender_key=eq\.([^&]+)/.exec(query)?.[1] ?? "");
-    const to = decodeURIComponent(/to_number=eq\.([^&]+)/.exec(query)?.[1] ?? "");
-    state.tableRows = state.tableRows.filter(
-      (r) => !(r.sender_key === sender && (!to || r.to_number === to))
-    );
+    // clearCancellation now deletes TOLERANTLY (numberFilter or-group of
+    // spellings + a tail LIKE), so the mock honors any of them.
+    const eqs = [...query.matchAll(/to_number\.eq\.([0-9]+)/g)].map((m) => m[1]);
+    const exact = decodeURIComponent(/to_number=eq\.([^&]+)/.exec(query)?.[1] ?? "");
+    if (exact) eqs.push(exact);
+    const tail = /to_number\.like\.\*([0-9]+)/.exec(query)?.[1];
+    state.tableRows = state.tableRows.filter((r) => {
+      if (r.sender_key !== sender) return true;
+      if (eqs.length === 0 && !tail) return false; // sender-wide delete
+      const hit = eqs.includes(r.to_number) || (tail ? r.to_number.endsWith(tail) : false);
+      return !hit;
+    });
+    return true;
   },
   sbSelectStrict: async (table: string, query: string) => {
     if (table === "wa_cancellations") {
@@ -76,7 +92,12 @@ vi.mock("../runtime-config", () => ({
       return {
         rows: state.tableRows
           .filter((r) => r.sender_key === sender && (!to || r.to_number === to))
-          .map((r) => ({ id: 1, to_number: r.to_number })),
+          .map((r) => ({
+            id: 1,
+            to_number: r.to_number,
+            reason: r.reason ?? null,
+            created_at: new Date(1_700_000_000_000).toISOString(),
+          })),
       };
     }
     if (table === "whatsapp_messages") {
@@ -86,7 +107,10 @@ vi.mock("../runtime-config", () => ({
       const rows = state.markers
         .filter((m) => m.sender === sender && (!digits || m.digits === digits))
         .sort((a, b) => b.at - a.at)
-        .map((m) => ({ raw: { sender: m.sender, digits: m.digits, kind: m.kind } }));
+        .map((m) => ({
+          raw: { sender: m.sender, digits: m.digits, kind: m.kind, ...(m.reason ? { reason: m.reason } : {}) },
+          received_at: new Date(m.at).toISOString(),
+        }));
       return { rows };
     }
     return { rows: [] };
@@ -98,6 +122,7 @@ import {
   clearCancellation,
   isCancelled,
   cancelledNumbers,
+  cancelledEntries,
 } from "./cancellations";
 
 beforeEach(() => {
@@ -162,11 +187,50 @@ describe("cancellation tombstones (table + marker trail)", () => {
     expect(await cancelSends("a@x.com", "66812345678", "user-removed")).toBe(true);
   });
 
-  it("cancelledNumbers merges the table and the marker trail", async () => {
+  it("cancelledEntries merges the table and the marker trail WITH the actor", async () => {
+    // The reason column was always written but never read - which is how
+    // the client rendered the system's session-close sweep as "REMOVED BY
+    // YOU (6)" on shops the traveller never touched. The actor now rides
+    // every entry, from either store.
     await cancelSends("a@x.com", "111", "user-removed");
     state.cancellationsMode = "missing";
     await cancelSends("a@x.com", "222", "session-closed");
     state.cancellationsMode = "ok";
+    const entries = await cancelledEntries("a@x.com");
+    const byDigits = new Map(entries.map((e) => [e.digits, e]));
+    expect([...byDigits.keys()].sort()).toEqual(["111", "222"]);
+    expect(byDigits.get("111")?.reason).toBe("user-removed"); // table row
+    expect(byDigits.get("222")?.reason).toBe("session-closed"); // marker-only
+    // The digits digest stays for older readers.
     expect((await cancelledNumbers("a@x.com")).sort()).toEqual(["111", "222"]);
+  });
+
+  it("clearCancellation is AUTHORITATIVE: true only when a durable store confirmed", async () => {
+    await cancelSends("a@x.com", "66812345678", "user-removed");
+    expect(await clearCancellation("a@x.com", "66812345678")).toBe(true);
+    expect(await isCancelled("a@x.com", "66812345678")).toBe(false);
+    // Both stores dead: the clear CANNOT be confirmed - callers must refuse
+    // to queue for this shop instead of feeding the guard a row it will kill.
+    state.cancellationsMode = "unavailable";
+    state.messagesMode = "unavailable";
+    expect(await clearCancellation("a@x.com", "66812345678")).toBe(false);
+  });
+
+  it("clearCancellation clears a tombstone stored under a DIFFERENT spelling", async () => {
+    // Discovery stored the national form; the user re-selected the shop under
+    // the international one. The exact-string delete used to miss, leaving a
+    // 14-day tombstone the guard then enforced as "cancelled-by-user".
+    state.tableRows.push({ sender_key: "a@x.com", to_number: "09776620146", reason: "user-removed" });
+    await clearCancellation("a@x.com", "639776620146");
+    expect(state.tableRows).toHaveLength(0);
+  });
+
+  it("the clearing marker is written UNCONDITIONALLY (a transient read cannot skip it)", async () => {
+    state.cancellationsMode = "missing"; // pre-migration: markers only
+    await cancelSends("a@x.com", "66812345678", "user-removed");
+    await clearCancellation("a@x.com", "66812345678");
+    const newest = state.markers[state.markers.length - 1];
+    expect(newest.kind).toBe("cancel-cleared");
+    expect(await isCancelled("a@x.com", "66812345678")).toBe(false);
   });
 });

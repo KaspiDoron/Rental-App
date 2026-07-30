@@ -16,17 +16,35 @@ import { cancelSends, pruneCancellations } from "@/lib/wa/cancellations";
 //      still stored (never lost), but the agent goes silent - no clarify, no
 //      bargain, no closer. A brand-new search re-opens a shop's thread simply
 //      by sending a new (post-marker) message.
-export async function POST() {
+export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
-  // 1. Drop EVERYTHING this user still has parked - returning the recipients
-  //    so each one gets a tombstone. Recipients of pending wakeups are
-  //    tombstone-covered too via the thread_key purge + negotiation threads
-  //    are bounded (session cap 10), so the enumeration stays tiny.
+  // A CLOSE IS SCOPED TO THE SESSION IT CLOSES. The client sends the epochs
+  // that bound the closing session: `from` (when it started) and `before`
+  // (when the NEW session began - i.e. the close cutoff). Everything this
+  // route touches is bounded by them, which makes the close IDEMPOTENT and
+  // RETRY-SAFE: a retried close can never tombstone a shop the new session
+  // has since queued or messaged, and it never reaches back across every
+  // shop messaged in the last 7 days (that over-reach is what painted six
+  // never-removed shops as "REMOVED BY YOU" at the next search).
+  const body = (await req.json().catch(() => ({}))) as { from?: number; before?: number };
+  const nowMs = Date.now();
+  const beforeMs = Number.isFinite(body.before)
+    ? Math.min(Number(body.before), nowMs)
+    : nowMs;
+  const fromMs = Number.isFinite(body.from)
+    ? Math.max(Number(body.from), nowMs - 7 * 24 * 3600_000)
+    : nowMs - 7 * 24 * 3600_000;
+  const beforeIso = new Date(beforeMs).toISOString();
+  const fromIso = new Date(fromMs).toISOString();
+
+  // 1. Drop what the CLOSING session still has parked - returning the
+  //    recipients so each one gets a tombstone. Rows created after the
+  //    cutoff belong to the new session and are left alone.
   const purged = await sbDeleteReturning<{ to_number: string }>(
     "wa_outbox",
-    `sender_key=eq.${encodeURIComponent(session.email)}`
+    `sender_key=eq.${encodeURIComponent(session.email)}&created_at=lte.${encodeURIComponent(beforeIso)}`
   ).catch(() => [] as { to_number: string }[]);
 
   // Wakeups: EXACT owner match on the stamped column only. The old
@@ -57,19 +75,33 @@ export async function POST() {
   // pushes its rows past the limit. Recency-bounded to the shops with a send in
   // the last 7 days (mid-negotiation threads always qualify); 500 covers any
   // realistic user.
+  //    SCOPE: only shops whose last send falls inside the CLOSING session's
+  //    own window [from, before]. Shops from earlier (already-closed)
+  //    sessions are covered by their own close's marker; shops of the NEW
+  //    session have last_sent_at > before and are untouchable here.
   const activeShops = await sbSelect<{ to_number: string }>(
     "wa_recipient_state",
     `select=to_number&sender_key=eq.${encodeURIComponent(
       session.email
-    )}&last_sent_at=gte.${encodeURIComponent(
-      new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
+    )}&last_sent_at=gte.${encodeURIComponent(fromIso)}&last_sent_at=lte.${encodeURIComponent(
+      beforeIso
     )}&limit=500`
   ).catch(() => [] as { to_number: string }[]);
+  // BELT for the retry race: a shop the NEW session has already queued must
+  // never be re-tombstoned by this (possibly retried) close - the mass route
+  // just cleared it deliberately.
+  const freshRows = await sbSelect<{ to_number: string }>(
+    "wa_outbox",
+    `select=to_number&sender_key=eq.${encodeURIComponent(
+      session.email
+    )}&created_at=gt.${encodeURIComponent(beforeIso)}&limit=200`
+  ).catch(() => [] as { to_number: string }[]);
+  const freshlyQueued = new Set(freshRows.map((r) => r.to_number));
   const digits = [
     ...new Set(
       [...purged.map((r) => r.to_number), ...activeShops.map((r) => r.to_number)].filter(Boolean)
     ),
-  ];
+  ].filter((d) => !freshlyQueued.has(d));
   for (const d of digits) {
     await cancelSends(session.email, d, "session-closed").catch(() => {});
   }

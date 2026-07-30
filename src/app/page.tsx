@@ -38,6 +38,7 @@ import { FixedLayer } from "@/components/FixedLayer";
 import { saveSearch } from "@/lib/client/search-persist";
 import { fetchJson } from "@/lib/client/fetch-json";
 import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
+import { dismissalKey, loadDismissals, saveDismissals } from "@/lib/client/dismissals";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
 
@@ -378,7 +379,14 @@ export default function Home() {
   // live ones. Dismissal is per shop rather than a single "hide it" flag, so a
   // NEW removal after a dismissal brings the notice back - which is what makes
   // it behave like every other alert in the app instead of a wall.
-  const [dismissedRemovals, setDismissedRemovals] = useState<Set<string>>(new Set());
+  // PERSISTED: TabBar navigation is a full document load and the vendor list
+  // (with cancelled=true) is restored from sessionStorage - a bare in-memory
+  // set here meant one hop to Deals resurrected the whole notice, which is
+  // why DISMISS read as "does nothing". Keys carry the tombstone's timestamp
+  // so a LATER removal of the same shop still reappears.
+  const [dismissedRemovals, setDismissedRemovals] = useState<Set<string>>(() =>
+    loadDismissals(typeof window !== "undefined" ? window.sessionStorage : null)
+  );
   // Local going-rate hint (item #6): what the cheapest scooter / economy car
   // honestly costs per day around the chosen stay, in the LOCAL currency.
   const [priceHint, setPriceHint] = useState<{
@@ -513,15 +521,22 @@ export default function Home() {
     clearShopAvatars();
     setQueueItems([]);
     // Future replies belong to a NEW session - anything before now is dead.
-    setSearchEpoch(Date.now());
+    const clearEpoch = Date.now();
+    setSearchEpoch(clearEpoch);
     // HARD close on the server too: purge every queued message, tombstone the
     // recipients and stamp the session-closed marker so the agents stop
     // talking to the old shops. AWAITED with one retry - a silently failed
     // close would leave server-side sends alive, which is exactly the lie
     // the user asked us to kill. On double failure, say so honestly.
+    // SCOPED to the closing session's own window, so the retry stays safe.
     void (async () => {
+      const payload = JSON.stringify({ from: searchEpoch || undefined, before: clearEpoch });
       const close = () =>
-        fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
+        fetch("/api/session/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+        }).then((r) => r.ok);
       let ok = await close().catch(() => false);
       if (!ok) {
         await new Promise((r) => setTimeout(r, 1500));
@@ -918,11 +933,23 @@ export default function Home() {
         setQueueItems(deduped);
       }
       setIntroBudget(d.introBudget ?? null);
-      // Shops the user explicitly paused (removed queued messages) - the card
-      // says so instead of pretending nothing happened.
-      const cancelledDigits = new Set<string>(
-        Array.isArray(d.cancelledNumbers) ? d.cancelledNumbers : []
-      );
+      // Tombstoned shops WITH the actor behind each tombstone. Only
+      // "user-removed" may ever render as "Removed by you" - the system's
+      // own session-close/deal-close sweeps are its actions, not the
+      // traveller's (six never-removed shops once carried that blame).
+      const cancelledInfo = new Map<string, { reason: string; at: string | null }>();
+      for (const c of (Array.isArray(d.cancelledShops) ? d.cancelledShops : []) as {
+        digits?: string;
+        reason?: string;
+        at?: string | null;
+      }[]) {
+        if (c.digits) cancelledInfo.set(c.digits, { reason: c.reason ?? "unknown", at: c.at ?? null });
+      }
+      // Legacy digest fallback (older payloads): digits with no reason.
+      for (const dgt of (Array.isArray(d.cancelledNumbers) ? d.cancelledNumbers : []) as string[]) {
+        if (!cancelledInfo.has(dgt)) cancelledInfo.set(dgt, { reason: "unknown", at: null });
+      }
+      const cancelledDigits = new Set<string>(cancelledInfo.keys());
       // Reconcile the cards with the SERVER (single source of truth for the
       // queued badge, covering every send path): set badge + REAL reason for
       // shops with a held message; when the row leaves the outbox, decide
@@ -995,8 +1022,23 @@ export default function Home() {
           const tombstonedVendor = pendingRemovals.current.has(`v:${v.id}`);
           const isCancelled =
             tombstonedVendor || Boolean(digits && cancelledDigits.has(digits));
-          let base = v.cancelled === isCancelled ? v : { ...v, cancelled: isCancelled };
-          if (tombstonedVendor && (base.queuedUntil || base.queuedReason)) {
+          // The ACTOR rides along: a local optimistic removal is by
+          // definition the user's; a server tombstone carries its reason.
+          const serverInfo = digits ? cancelledInfo.get(digits) : undefined;
+          const cancelReason = !isCancelled
+            ? undefined
+            : tombstonedVendor
+              ? ("user-removed" as const)
+              : ((serverInfo?.reason ?? "unknown") as Vendor["cancelReason"]);
+          const cancelledAt = isCancelled ? (serverInfo?.at ?? null) : undefined;
+          let base =
+            v.cancelled === isCancelled && v.cancelReason === cancelReason && v.cancelledAt === cancelledAt
+              ? v
+              : { ...v, cancelled: isCancelled, cancelReason, cancelledAt };
+          // A cancellation outranks any stale schedule, whoever wrote it: the
+          // rows are terminally dropped at drain, so a lingering queuedUntil
+          // is a promise already broken.
+          if (isCancelled && (base.queuedUntil || base.queuedReason)) {
             base = { ...base, queuedUntil: undefined, queuedReason: undefined };
           }
           // Mirror the authoritative DB state onto the card's stage (forward
@@ -1526,7 +1568,19 @@ export default function Home() {
     //     it. On the free-text path the class genuinely is the profiler's
     //     answer, and only that path still waits.
     const closing = (async () => {
-      const close = () => fetch("/api/session/close", { method: "POST" }).then((r) => r.ok);
+      // SCOPED close: the server only touches the session bounded by these
+      // epochs (from = the closing session's start, before = this new
+      // session's start). That is what makes the retry below SAFE - a
+      // retried close can never reach shops the new session queues in the
+      // meantime, which is how six never-removed shops once rendered as
+      // "REMOVED BY YOU".
+      const payload = JSON.stringify({ from: searchEpoch || undefined, before: epoch });
+      const close = () =>
+        fetch("/api/session/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+        }).then((r) => r.ok);
       let closed = await close().catch(() => false);
       if (!closed) {
         await new Promise((r) => setTimeout(r, 1200));
@@ -1875,6 +1929,13 @@ export default function Home() {
       }
       if (d.results) {
         let alreadyAsked = 0;
+        // EVERY refusal is accounted for. The old loop handled only
+        // sent/queued/rfq-dedup/no-phone; any other reason left the card
+        // untouched, and the shop's only later "explanation" was the poll's
+        // tombstone list - i.e. the system's own refusal rendered as
+        // "removed by you".
+        let notSent = 0;
+        let notSentReason: string | undefined;
         for (const r of d.results) {
           if (r.sent) {
             patchVendor(r.id, {
@@ -1905,6 +1966,22 @@ export default function Home() {
             // Honest terminal state - this shop cannot be messaged at all,
             // so it must never look contacted anywhere.
             patchVendor(r.id, { stage: "no-contact", lastEventAt: Date.now() });
+          } else if (String(r.reason ?? "").startsWith("still-removed")) {
+            // The tombstone clear could not be confirmed - the shop stays
+            // honestly in "Removed by you" (the user's own earlier action)
+            // instead of being queued into a row the guard would kill.
+            notSent += 1;
+            if (!notSentReason) notSentReason = "still marked removed - tap the shop to try again";
+            patchVendor(r.id, {
+              cancelled: true,
+              cancelReason: "user-removed",
+              lastEventAt: Date.now(),
+            });
+          } else {
+            // Anything else (queue-unavailable, rate-limit, a guard refusal)
+            // is counted and said out loud, never dropped on the floor.
+            notSent += 1;
+            if (!notSentReason && r.reason) notSentReason = String(r.reason);
           }
         }
         refreshQueue();
@@ -1916,20 +1993,25 @@ export default function Home() {
         const refreshMin = nextFreeMs ? Math.max(1, Math.round((nextFreeMs - Date.now()) / 60_000)) : 0;
         const refreshText =
           refreshMin >= 90 ? `~${Math.round(refreshMin / 60)} h` : `~${refreshMin} min`;
+        // Refusals are part of the story, not a silent gap in it.
+        const notSentSuffix =
+          notSent > 0
+            ? ` · ${notSent} ${t("not sent")}${notSentReason ? ` (${t(notSentReason)})` : ""}`
+            : "";
         setMassNote(
           d.deferredTomorrow > 0
             ? `${t("Starting now:")} ${startingNow} ${t("shops, one at a time.")} ${d.deferredTomorrow} ${t(
                 "more begin automatically as capacity refreshes"
-              )}${refreshMin ? ` (${t("next slot in")} ${refreshText})` : ""}.`
+              )}${refreshMin ? ` (${t("next slot in")} ${refreshText})` : ""}.${notSentSuffix}`
             : d.sent > 0 || d.queued > 0 || alreadyAsked > 0
               ? `${t("Agents are on it - shops asked:")} ${d.sent}${
                   d.queued > 0 ? ` · ${d.queued} ${t("in line, sending one at a time")}` : ""
                 }${
                   alreadyAsked > 0 ? ` · ${alreadyAsked} ${t("already in conversation")}` : ""
-                }`
+                }${notSentSuffix}`
               : d.connect
                 ? t("Connect your WhatsApp in Profile first.")
-                : t("No shops could be messaged right now.")
+                : `${t("No shops could be messaged right now.")}${notSentSuffix}`
         );
       } else {
         setMassNote(d.error ?? t("Could not start the mass bargain."));
@@ -2070,16 +2152,23 @@ export default function Home() {
       if (v.offer) deals.push(v);
       else if (v.lastInboundAt || v.stage === "negotiating" || v.stage === "counter-offer")
         replied.push(v);
-      // Cancelled with nothing ever sent: terminal, and counted nowhere else.
-      // `sentText` is the test rather than the stage, because it is the only
-      // field that records that words actually reached a shop.
+      // Cancelled BY THE USER with nothing ever sent: terminal, and counted
+      // nowhere else. `sentText` is the test rather than the stage, because
+      // it is the only field that records that words actually reached a shop.
       //
       // A REMOVAL OUTRANKS A SCHEDULE. This used to also require
       // `!v.queuedUntil`, so a shop the traveller had just removed - which for
       // a moment still carried the stale schedule of the message being deleted
       // - failed this test and fell through to the CONTACTING branch below.
       // The decision is newer than the schedule, and ordering is what says so.
-      else if (v.cancelled && !v.sentText) removed.push(v);
+      //
+      // THE ACTOR DECIDES THE BUCKET. A tombstone written by the system
+      // (session-close, deal-close) is NOT a user removal - rendering it as
+      // one is how six never-removed shops appeared under "REMOVED BY YOU".
+      // A system-cancelled, never-messaged shop is honestly just a search
+      // result again and is intentionally not counted anywhere.
+      else if (v.cancelled && v.cancelReason === "user-removed" && !v.sentText) removed.push(v);
+      else if (v.cancelled && !v.sentText) continue;
       // A shop the agents already REACHED (a reply is pending / negotiation
       // is live) stays "messaged" even while a follow-up sits in the outbox -
       // otherwise the counters flicker right after a send. A shop whose FIRST
@@ -2103,13 +2192,17 @@ export default function Home() {
   // Dismissing hides exactly the shops on screen at that moment; a later removal
   // is a new fact and brings the notice back with only that shop in it.
   const visibleRemoved = useMemo(
-    () => statusGroups.removed.filter((v) => !dismissedRemovals.has(v.id)),
+    () => statusGroups.removed.filter((v) => !dismissedRemovals.has(dismissalKey(v.id, v.cancelledAt))),
     [statusGroups.removed, dismissedRemovals]
   );
   const dismissRemoved = useCallbackRef(() => {
     setDismissedRemovals((prev) => {
       const next = new Set(prev);
-      for (const v of statusGroups.removed) next.add(v.id);
+      for (const v of statusGroups.removed) next.add(dismissalKey(v.id, v.cancelledAt));
+      // Survives the TabBar's full document navigation - the vendors it
+      // acknowledges are restored from sessionStorage, so the acknowledgement
+      // must be too.
+      saveDismissals(typeof window !== "undefined" ? window.sessionStorage : null, next);
       return next;
     });
   });

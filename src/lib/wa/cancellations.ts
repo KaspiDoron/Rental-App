@@ -2,6 +2,7 @@ import "server-only";
 import { getConfig, sbDelete, sbInsert, sbSelectStrict } from "../runtime-config";
 import { parseFlag } from "../config-flags";
 import { digitsOnly } from "../phone";
+import { numberFilter } from "./phone-key";
 
 // Cancellation tombstones - the "absolute queue deletion" guarantee.
 //
@@ -85,18 +86,31 @@ export async function cancelSends(
   return table || marker;
 }
 
-/** Remove the tombstone - called by every EXPLICIT user send action. */
-export async function clearCancellation(senderKey: string, toDigits: string): Promise<void> {
+/**
+ * Remove the tombstone - called by every EXPLICIT user send action. Returns
+ * true only when at least one durable store CONFIRMED the clear; a caller
+ * about to queue a message for this shop must treat false as "still
+ * removed" and refuse honestly, because the guard will otherwise terminally
+ * kill the row at drain - which is how six never-removed shops once rendered
+ * as "REMOVED BY YOU".
+ */
+export async function clearCancellation(senderKey: string, toDigits: string): Promise<boolean> {
   const digits = digitsOnly(toDigits);
-  if (!senderKey || !digits) return;
-  await sbDelete(
+  if (!senderKey || !digits) return false;
+  // TOLERANT delete: the tombstone may be stored under a different spelling
+  // of the same line (international vs national). An exact-string miss left
+  // a 14-day tombstone in force after the user explicitly re-selected the
+  // shop.
+  const deleted = await sbDelete(
     "wa_cancellations",
-    `sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(digits)}`
-  ).catch(() => {});
-  // Only append a cleared-marker when a cancelled-marker is actually in
-  // force - keeps the marker trail short on the common path.
-  const m = await markerSaysCancelled(senderKey, digits).catch(() => false);
-  if (m === true) await writeMarker(senderKey, digits, "cancel-cleared").catch(() => {});
+    `sender_key=eq.${encodeURIComponent(senderKey)}${numberFilter("to_number", digits)}`
+  ).catch(() => false);
+  // The clearing marker is written UNCONDITIONALLY. The old version only
+  // wrote it when the cancelled-marker read returned exactly true - so a
+  // transient read failure skipped it and left the newest marker saying
+  // "cancelled-shop" for 14 days, overriding the user's explicit re-open.
+  const marked = await writeMarker(senderKey, digits, "cancel-cleared").catch(() => false);
+  return Boolean(deleted) || Boolean(marked);
 }
 
 /**
@@ -130,18 +144,43 @@ export async function isCancelled(
   return false;
 }
 
-/** All tombstoned numbers for a user (feeds the "paused" card state). */
-export async function cancelledNumbers(senderKey: string): Promise<string[]> {
-  const out = new Set<string>();
-  const res = await sbSelectStrict<{ to_number: string }>(
+/** A tombstone with its ACTOR attached - who cancelled, and when. */
+export interface CancelledEntry {
+  digits: string;
+  reason: CancelReason | "unknown";
+  at: string | null;
+}
+
+/**
+ * All tombstones for a user WITH their reason and timestamp. The reason
+ * column was always written but never read - so the client rendered every
+ * tombstone as "Removed by you", attributing the system's own session-close
+ * sweeps to the traveller ("REMOVED BY YOU (6)" on shops the owner never
+ * touched). Membership semantics are unchanged: the table wins, and the
+ * newest marker per shop fills in marker-only tombstones.
+ */
+export async function cancelledEntries(senderKey: string): Promise<CancelledEntry[]> {
+  const out = new Map<string, CancelledEntry>();
+  const res = await sbSelectStrict<{ to_number: string; reason: string | null; created_at: string | null }>(
     "wa_cancellations",
-    `select=to_number&sender_key=eq.${encodeURIComponent(senderKey)}&limit=100`
+    `select=to_number,reason,created_at&sender_key=eq.${encodeURIComponent(senderKey)}&limit=100`
   );
-  if ("rows" in res) for (const r of res.rows) out.add(r.to_number);
+  if ("rows" in res) {
+    for (const r of res.rows) {
+      out.set(r.to_number, {
+        digits: r.to_number,
+        reason: isCancelReason(r.reason) ? r.reason : "unknown",
+        at: r.created_at ?? null,
+      });
+    }
+  }
   // Fold the marker trail (newest marker per shop wins).
-  const markers = await sbSelectStrict<{ raw: { digits?: string; kind?: string } | null }>(
+  const markers = await sbSelectStrict<{
+    raw: { digits?: string; kind?: string; reason?: string } | null;
+    received_at: string | null;
+  }>(
     "whatsapp_messages",
-    `select=raw&to_number=eq.cancel&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=raw,received_at&to_number=eq.cancel&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       senderKey
     )}&received_at=gte.${encodeURIComponent(
       new Date(Date.now() - MARKER_WINDOW_MS).toISOString()
@@ -153,10 +192,25 @@ export async function cancelledNumbers(senderKey: string): Promise<string[]> {
       const d = m.raw?.digits;
       if (!d || seen.has(d)) continue;
       seen.add(d);
-      if (m.raw?.kind === "cancelled-shop") out.add(d);
+      if (m.raw?.kind === "cancelled-shop" && !out.has(d)) {
+        out.set(d, {
+          digits: d,
+          reason: isCancelReason(m.raw?.reason) ? m.raw.reason : "unknown",
+          at: m.received_at ?? null,
+        });
+      }
     }
   }
-  return [...out];
+  return [...out.values()];
+}
+
+function isCancelReason(v: unknown): v is CancelReason {
+  return v === "user-removed" || v === "session-closed" || v === "deal-closed";
+}
+
+/** Back-compat digest of cancelledEntries - digits only. */
+export async function cancelledNumbers(senderKey: string): Promise<string[]> {
+  return (await cancelledEntries(senderKey)).map((e) => e.digits);
 }
 
 /** Owner kill switch (default ON). One flag dialect - "false"/"0"/"no" and

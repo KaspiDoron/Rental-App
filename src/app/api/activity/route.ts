@@ -410,11 +410,22 @@ export async function GET(req: Request) {
   const { queueReasonLabel } = await import("@/lib/queue-reason");
   const { cleanShopName } = await import("@/lib/text");
   const { outboxState } = await import("@/lib/wa/outbox-lifecycle");
+  // Tombstones WITH their actor, fetched before the queue is shaped: a
+  // tombstoned shop's rows are terminally dropped at drain, so advertising
+  // them here ("next at ~05:38" over removed shops) was a promise the drain
+  // was about to break. They are excluded from the queue payload, the ETA
+  // simulation and the progress counters alike.
+  let cancelledShops: { digits: string; reason: string; at: string | null }[] = [];
+  try {
+    const { cancelledEntries } = await import("@/lib/wa/cancellations");
+    cancelledShops = await cancelledEntries(email);
+  } catch {}
+  const cancelledSet = new Set(cancelledShops.map((c) => c.digits));
   const INTRO_KINDS = new Set(["rfq", "custom", "human-manual"]);
   const queue = outbox
     .filter((r) => {
       const kind = (r.meta as { kind?: string } | null)?.kind;
-      return !kind || INTRO_KINDS.has(kind);
+      return (!kind || INTRO_KINDS.has(kind)) && !cancelledSet.has(r.to_number);
     })
     .map((r) => {
       const meta = r.meta as { vendorId?: string; vendorName?: string; reason?: string; kind?: string } | null;
@@ -527,14 +538,10 @@ export async function GET(req: Request) {
     sessionPausedVersion = state.version;
   } catch {}
 
-  // Numbers the user explicitly cancelled (removed queued messages) - the UI
-  // shows those shops as "paused by you" instead of pretending nothing
-  // happened, and the resume CTA is the explicit action that clears it.
-  let cancelled: string[] = [];
-  try {
-    const { cancelledNumbers } = await import("@/lib/wa/cancellations");
-    cancelled = await cancelledNumbers(email);
-  } catch {}
+  // Tombstoned shops (fetched above, before the queue was shaped). The digits
+  // digest stays for older clients; the typed list is what the UI now reads -
+  // the ACTOR decides the copy ("Removed by you" only for user-removed).
+  const cancelled = cancelledShops.map((c) => c.digits);
 
   // "(unverified)" PURGE: historical rows stamped the legacy drill suffix into
   // vendor names - strip it from every feed item so it never renders again.
@@ -555,6 +562,7 @@ export async function GET(req: Request) {
     sessionPaused, // live kill-switch state, so the panel cannot contradict the queue
     sessionPausedVersion, // monotonic: the client only ever moves this forward
     cancelledNumbers: cancelled,
+    cancelledShops, // typed: {digits, reason, at} - the actor behind each tombstone
     now: new Date().toISOString(),
   });
 }
