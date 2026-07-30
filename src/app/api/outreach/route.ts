@@ -202,6 +202,37 @@ async function handlePost(req: Request) {
   // respect volume caps. Blocked-by-hours sends are QUEUED, not lost.
   const kind = String(body.kind ?? "custom");
   const isAuto = kind !== "custom";
+
+  // ONE MOVE PER HUMAN BEAT (wa/turn-lock). A tap on Push harder / Bargain
+  // composes a FRESH draft every time, so the exact-text dedupe further down
+  // can never see that two taps are the same intent - which is exactly how
+  // three near-identical bargains landed in one shop's chat inside a minute
+  // in the field. The client marks those sends userMove:true; one such move
+  // per (traveller, shop) per ~3-minute window, refused HONESTLY. Hand-typed
+  // messages are not marked and are never throttled here.
+  const isUserMove = body.userMove === true;
+  const moveClaimAt = Date.now();
+  if (isUserMove) {
+    const { claimUserMove } = await import("@/lib/wa/turn-lock");
+    const move = await claimUserMove(session.email, digits, moveClaimAt);
+    if (move === "lost") {
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        held: true,
+        error:
+          "Your agent just made a move in this chat - give the shop a couple of minutes to answer before pushing again.",
+      });
+    }
+  }
+  // A move that did NOT happen (refused, failed) gives the window back so the
+  // traveller's retry is not stranded; a sent or queued move keeps it - the
+  // window IS the debounce.
+  const releaseMove = async () => {
+    if (!isUserMove) return;
+    const { releaseUserMove } = await import("@/lib/wa/turn-lock");
+    await releaseUserMove(session.email, digits, moveClaimAt).catch(() => {});
+  };
   const wantsLocal = Boolean(body.localLang) && session.plan === "ultra";
 
   // RFQ INTEGRITY: an agent send stamped kind rfq/bargain/clarify MUST carry a
@@ -334,6 +365,8 @@ async function handlePost(req: Request) {
     },
   });
   if (!guard.allow) {
+    // A refusal with nothing queued means no move happened - give it back.
+    if (!guard.queuedUntil) await releaseMove();
     const halted =
       (guard.reason ?? "").startsWith("engagement-halt") ||
       (guard.reason ?? "").startsWith("rfq-dedup");
@@ -440,6 +473,7 @@ async function handlePost(req: Request) {
     if (r.rateLimited) {
       const { releaseSendClaim } = await import("@/lib/wa-guard");
       await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
+      await releaseMove();
       return NextResponse.json({
         allowed: true,
         sent: false,
@@ -452,6 +486,7 @@ async function handlePost(req: Request) {
     if (r.error === "reconnecting") {
       const { releaseSendClaim } = await import("@/lib/wa-guard");
       await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
+      await releaseMove();
       return NextResponse.json({
         allowed: true,
         sent: false,
@@ -475,6 +510,7 @@ async function handlePost(req: Request) {
     // not swallowed as a "duplicate" of the failure.
     const { releaseSendClaim } = await import("@/lib/wa-guard");
     await releaseSendClaim(session.email, digits, guardedMessage).catch(() => {});
+    await releaseMove();
   }
 
   // TRUTH RULE: the outbound whatsapp_messages row is the record every

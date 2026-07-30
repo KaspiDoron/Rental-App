@@ -271,6 +271,9 @@ export interface OutreachReply {
   phone?: string;
   /** false when the send landed but our record of it did not. */
   logged?: boolean;
+  /** One user move per (traveller, shop) window - this tap was inside it.
+   *  Nothing was sent; `error` carries the honest explanation. */
+  held?: boolean;
   notice?: string | null;
   blocked?: boolean;
   cooldownMinutes?: number;

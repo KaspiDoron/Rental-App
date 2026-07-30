@@ -36,6 +36,20 @@ import { digitsOnly } from "../phone";
  *  exclusivity covers one turn without stranding the next. */
 export const TURN_WINDOW_SEC = 60;
 
+/**
+ * THE OTHER RACE, SAME PRIMITIVE: the traveller's own taps.
+ *
+ * In the field, every tap on "Push harder" / "Bargain" composed a FRESH draft
+ * and sent it kind:"custom" - so the exact-text dedupe (a sha of the body)
+ * never matched, and one impatient minute put three near-identical bargain
+ * messages into a real shop's chat. The missing statement is not "this text
+ * was sent" but "the traveller already made a move in this thread just now".
+ * Three minutes is one human conversational beat: long enough that a second
+ * tap inside it is the same intent, short enough that a genuine follow-up
+ * (the shop answered, push again) is never blocked.
+ */
+export const USER_MOVE_WINDOW_SEC = 180;
+
 /** The bucket a moment falls into. Same shape as the pacing gap buckets. */
 export function turnBucket(nowMs: number, windowSec: number = TURN_WINDOW_SEC): number {
   return Math.floor(nowMs / (Math.max(1, windowSec) * 1000));
@@ -45,6 +59,12 @@ export function turnBucket(nowMs: number, windowSec: number = TURN_WINDOW_SEC): 
  *  so the existing 2h claim GC reclaims it. */
 export function threadTurnSlot(toDigits: string, bucket: number): string {
   return `turn:${digitsOnly(toDigits)}:${bucket}`;
+}
+
+/** The slot ONE user-initiated move per (sender, shop) window occupies. Same
+ *  non-`msg:` namespace, so the existing GC sweeps it too. */
+export function userMoveSlot(toDigits: string, bucket: number): string {
+  return `umove:${digitsOnly(toDigits)}:${bucket}`;
 }
 
 export type TurnClaim = "won" | "lost" | "error";
@@ -66,12 +86,38 @@ export async function claimThreadTurn(
   toDigits: string,
   nowMs: number = Date.now()
 ): Promise<TurnClaim> {
+  return claimWindowSlot(senderKey, toDigits, nowMs, TURN_WINDOW_SEC, threadTurnSlot);
+}
+
+/**
+ * Claim the right to make a USER-initiated move in this thread now.
+ *
+ * Identical mechanics to the turn claim (straddle-proof two-bucket insert on
+ * wa_send_claims, fails open pre-migration) over the longer human window. The
+ * caller that loses gets an HONEST refusal to show - never a silent drop and
+ * never a second near-identical bargain in the same shop chat.
+ */
+export async function claimUserMove(
+  senderKey: string,
+  toDigits: string,
+  nowMs: number = Date.now()
+): Promise<TurnClaim> {
+  return claimWindowSlot(senderKey, toDigits, nowMs, USER_MOVE_WINDOW_SEC, userMoveSlot);
+}
+
+async function claimWindowSlot(
+  senderKey: string,
+  toDigits: string,
+  nowMs: number,
+  windowSec: number,
+  slotFor: (toDigits: string, bucket: number) => string
+): Promise<TurnClaim> {
   if (!senderKey || !toDigits) return "won";
   const { sbInsertClaim, sbSelectStrict } = await import("../runtime-config");
-  const bucket = turnBucket(nowMs);
+  const bucket = turnBucket(nowMs, windowSec);
   const got = await sbInsertClaim("wa_send_claims", {
     sender_key: senderKey,
-    slot_key: threadTurnSlot(toDigits, bucket),
+    slot_key: slotFor(toDigits, bucket),
   });
   if (got === "lost") return "lost";
   if (got === "error") {
@@ -83,7 +129,7 @@ export async function claimThreadTurn(
   // inside the window, so stand down and let it finish.
   const prev = await sbInsertClaim("wa_send_claims", {
     sender_key: senderKey,
-    slot_key: threadTurnSlot(toDigits, bucket - 1),
+    slot_key: slotFor(toDigits, bucket - 1),
   });
   if (prev === "lost") {
     // We hold ONLY the current bucket here - the SIBLING owns the previous
@@ -93,7 +139,7 @@ export async function claimThreadTurn(
     await sbDelete(
       "wa_send_claims",
       `sender_key=eq.${encodeURIComponent(senderKey)}&slot_key=eq.${encodeURIComponent(
-        threadTurnSlot(toDigits, bucket)
+        slotFor(toDigits, bucket)
       )}`
     ).catch(() => {});
     return "lost";
@@ -121,10 +167,33 @@ export async function releaseThreadTurn(
   toDigits: string,
   nowMs: number = Date.now()
 ): Promise<void> {
+  return releaseWindowSlot(senderKey, toDigits, nowMs, TURN_WINDOW_SEC, threadTurnSlot);
+}
+
+/**
+ * Give a user move back. ONLY for a move that did not happen - a failed send,
+ * a guard refusal with nothing queued. A move that sent or queued keeps its
+ * claim: the window IS the debounce.
+ */
+export async function releaseUserMove(
+  senderKey: string,
+  toDigits: string,
+  nowMs: number = Date.now()
+): Promise<void> {
+  return releaseWindowSlot(senderKey, toDigits, nowMs, USER_MOVE_WINDOW_SEC, userMoveSlot);
+}
+
+async function releaseWindowSlot(
+  senderKey: string,
+  toDigits: string,
+  nowMs: number,
+  windowSec: number,
+  slotFor: (toDigits: string, bucket: number) => string
+): Promise<void> {
   if (!senderKey || !toDigits) return;
   const { sbDelete } = await import("../runtime-config");
-  const bucket = turnBucket(nowMs);
-  const slots = [threadTurnSlot(toDigits, bucket), threadTurnSlot(toDigits, bucket - 1)];
+  const bucket = turnBucket(nowMs, windowSec);
+  const slots = [slotFor(toDigits, bucket), slotFor(toDigits, bucket - 1)];
   await sbDelete(
     "wa_send_claims",
     `sender_key=eq.${encodeURIComponent(senderKey)}&slot_key=in.(${slots

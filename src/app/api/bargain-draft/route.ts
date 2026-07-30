@@ -37,6 +37,34 @@ export async function POST(req: Request) {
   const quoted: number | undefined = body.currentPricePerDay;
   const cur = currencyForRegion(region) || "USD";
 
+  // ONE MOVE PER HUMAN BEAT: inside the user-move window a second tap gets the
+  // SAME draft back, not a freshly-worded one. Every dedupe downstream keys on
+  // exact text - a re-composed draft is a new string by construction, which is
+  // precisely how "Push harder" tapped twice put two near-identical bargains
+  // into one shop's chat. Returning the last draft verbatim restores the
+  // exact-text dedupe's power over the whole tap-again path.
+  try {
+    const { USER_MOVE_WINDOW_SEC } = await import("@/lib/wa/turn-lock");
+    const since = new Date(Date.now() - USER_MOVE_WINDOW_SEC * 1000).toISOString();
+    const recent = await sbSelect<{ tactic: string | null; message: string | null }>(
+      "bargain_drafts",
+      `select=tactic,message&user_email=eq.${encodeURIComponent(
+        session.email
+      )}&vendor_id=eq.${encodeURIComponent(String(vendor.id ?? ""))}&created_at=gte.${encodeURIComponent(
+        since
+      )}&order=created_at.desc&limit=1`
+    );
+    if (recent[0]?.message) {
+      return NextResponse.json({
+        message: recent[0].message,
+        tacticId: recent[0].tactic ?? "reused",
+        reused: true,
+      });
+    }
+  } catch {
+    /* reuse is a guard, never a blocker - fall through to a fresh compose */
+  }
+
   // Market floor: the same anchor the automatic agent uses, so the manual
   // Bargain button never proposes a weak or absurd number.
   let floorPrice: number | undefined;

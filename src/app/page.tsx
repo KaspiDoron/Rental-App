@@ -1734,7 +1734,8 @@ export default function Home() {
 
   const customMessage = useCallbackRef(async (
     vendorId: string,
-    message: string
+    message: string,
+    opts?: { userMove?: boolean }
   ): Promise<OutreachReply> => {
     const vendor = vendors.find((v) => v.id === vendorId);
     // `res.json()` threw here on any non-JSON response - an HTML 500, a gateway
@@ -1755,6 +1756,10 @@ export default function Home() {
         rfq,
         region: origin?.label || undefined,
         openNow: vendor?.openNow,
+        // Action-chip sends (Push harder, Ask deposit, ...) mark themselves so
+        // the server's one-move-per-window debounce applies; a hand-typed
+        // message never sets this and is never throttled by it.
+        userMove: Boolean(opts?.userMove),
       }),
     });
     if (r.data) return r.data;
@@ -1782,6 +1787,12 @@ export default function Home() {
     return () => clearTimeout(id);
   }, [actionNote]);
 
+  // ONE ACTION PER SHOP AT A TIME (the client half of the user-move debounce).
+  // A slow /api/outreach round-trip left the chip live, and every extra tap
+  // started a WHOLE NEW compose+send - the server window (wa/turn-lock) is the
+  // guarantee, this ref is the instant, zero-latency first line.
+  const actionsInFlight = useRef<Set<string>>(new Set());
+
   const runAction = useCallbackRef(
     async (id: string, rawArgs?: Record<string, unknown>, wasConfirmed?: boolean) => {
       const args = rawArgs ?? {};
@@ -1808,6 +1819,30 @@ export default function Home() {
           : rfq?.vehicleClass === "motorbike"
             ? "motorbike"
             : "scooter";
+      const outbound = ["push-harder", "ask-deposit", "request-photo", "counter-at"].includes(
+        check.spec.id
+      );
+      const flightKey = `${check.spec.id}:${vendorId}`;
+      if (outbound) {
+        if (actionsInFlight.current.has(flightKey)) {
+          // A repeat tap while the first is still travelling: say so, do nothing.
+          setActionNote(
+            outcomeFor(check.spec.id, { ok: true }, t("On it - your agent is already making this move."))
+          );
+          return { ok: false as const, reason: "in-flight" as const };
+        }
+        actionsInFlight.current.add(flightKey);
+        // Instant acknowledgement - the traveller sees movement the moment they
+        // tap, not after the network settles.
+        setActionNote(
+          outcomeFor(
+            check.spec.id,
+            { ok: true },
+            t("On it - messaging {shop} now.").replace("{shop}", vendor?.name ?? t("the shop"))
+          )
+        );
+      }
+      try {
       switch (check.spec.id) {
         case "push-harder": {
           // A BARGAIN IS COMPOSED SERVER-SIDE, WHERE THE LEVERAGE LIVES.
@@ -1834,7 +1869,8 @@ export default function Home() {
           const r = await customMessage(
             vendorId,
             drafted ||
-              `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`
+              `Hi again! Any chance of a better daily rate for the ${vehicle}? Ready to book if the price works 🙏`,
+            { userMove: true }
           );
           // THE OUTREACH ROUTE HAS NEVER RETURNED `ok`. This read
           // `r?.ok !== false` against an untyped `res.json()`, so it was
@@ -1855,16 +1891,20 @@ export default function Home() {
           return r;
         }
         case "ask-deposit":
-          return await customMessage(vendorId, `One more thing - what deposit do you need?`);
+          return await customMessage(vendorId, `One more thing - what deposit do you need?`, {
+            userMove: true,
+          });
         case "request-photo":
           return await customMessage(
             vendorId,
-            `Could you send a photo of the actual ${vehicle} please?`
+            `Could you send a photo of the actual ${vehicle} please?`,
+            { userMove: true }
           );
         case "counter-at":
           return await customMessage(
             vendorId,
-            `Could you do ${Number(args.pricePerDay)} per day? I can book right away 🙏`
+            `Could you do ${Number(args.pricePerDay)} per day? I can book right away 🙏`,
+            { userMove: true }
           );
         case "mass-bargain":
           await runMassBargain();
@@ -1887,6 +1927,9 @@ export default function Home() {
           // `vendor` is read above so an unknown id cannot silently no-op with
           // a stale reference; every real branch returns before here.
           return { ok: false as const, reason: "unknown-action" as const, vendor: vendor?.id };
+      }
+      } finally {
+        if (outbound) actionsInFlight.current.delete(flightKey);
       }
     }
   );
@@ -3599,10 +3642,14 @@ export default function Home() {
                   // A REAL ACTION now, not a panel. It goes through the same
                   // guarded outbound path an agent message does, and it is
                   // confirmed because it reaches a shop (lib/actions/registry).
+                  // The chip goes busy for the whole round-trip and the card
+                  // dismisses when it settles - a lingering live chip was how
+                  // repeated taps stacked near-identical bargains in the field.
                   label: t("Push harder"),
+                  dismissOnDone: true,
                   onAction: () => {
-                    if (best?.id) void runAction("push-harder", { vendorId: best.id }, true);
-                    else setWillOpen(true);
+                    if (best?.id) return runAction("push-harder", { vendorId: best.id }, true);
+                    setWillOpen(true);
                   },
                 },
               ],

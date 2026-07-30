@@ -38,6 +38,7 @@ import {
   buildSafeBargainAsk,
   checkOutboundNumbers,
   correctDuration,
+  verbatimNumerals,
   hardConstraintBreached,
   hardConstraintDecline,
 } from "./guardrails";
@@ -1211,6 +1212,27 @@ async function runTailGates(args: {
         rivalPrice: args.rivalPrice,
         allowAbove: isBargain && args.sheetRef ? [args.sheetRef] : undefined,
         excludeExact,
+        // PROVENANCE: a draft numeral must be a number this thread holds or a
+        // closed derivation of one (total/days, daily*days, rounding). The
+        // ladder target is grounded by construction (computeRoundTarget clamps
+        // it to floor/quote/rival); an LLM-invented price is not, whatever the
+        // bounds happen to allow.
+        grounded: [
+          args.target,
+          args.shopCeiling,
+          args.sheetRef,
+          input.floorPrice,
+          input.extraction?.pricePerDay,
+          ...(input.extraction?.options ?? []).map((o) => o.pricePerDay),
+          // Every numeral the conversation verbatim contains - a number
+          // either party already said is never an invention.
+          ...verbatimNumerals([
+            input.history,
+            input.event.kind !== "tick" ? input.event.shopMessage : undefined,
+            ...input.priorOutbound,
+          ]),
+        ].filter((n): n is number => typeof n === "number" && n > 0),
+        durationDays: input.rfq?.durationDays,
         checkAskBounds: isBargain,
       });
       if (!check.ok) {

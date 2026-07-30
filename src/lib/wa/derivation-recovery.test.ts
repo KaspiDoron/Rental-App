@@ -64,7 +64,10 @@ describe("the thread lock releases EXACTLY what it claimed", () => {
   const lock = readCode("src/lib/wa/turn-lock.ts");
 
   it("release deletes BOTH claimed buckets, computed from the CLAIM time", () => {
-    expect(lock).toMatch(/threadTurnSlot\(toDigits, bucket\), threadTurnSlot\(toDigits, bucket - 1\)/);
+    // DELIBERATE REWRITE: release moved into the shared releaseWindowSlot so
+    // the user-move window inherits it - same both-buckets invariant, spelt
+    // through the generic slot function.
+    expect(lock).toMatch(/slotFor\(toDigits, bucket\), slotFor\(toDigits, bucket - 1\)/);
     expect(lock).toMatch(/slot_key=in\.\(/);
   });
 

@@ -52,8 +52,11 @@ describe("a thread runs one turn at a time", () => {
   });
 
   it("is straddle-proof - the previous bucket must be free too", () => {
+    // DELIBERATE REWRITE: the straddle check moved into the shared
+    // claimWindowSlot so the user-move window (umove:) inherits the exact
+    // same proof - the invariant is unchanged, its spelling is generic.
     const src = readCode("src/lib/wa/turn-lock.ts");
-    expect(src).toMatch(/threadTurnSlot\(toDigits, bucket - 1\)/);
+    expect(src).toMatch(/slotFor\(toDigits, bucket - 1\)/);
     expect(src).toMatch(/if \(prev === "lost"\)/);
   });
 

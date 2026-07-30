@@ -24,8 +24,14 @@ import { useI18n } from "@/lib/i18n";
 
 export interface WillAction {
   label: string;
-  onAction: () => void;
+  /** May be async - the chip shows a busy state until it settles, and every
+   *  chip is disabled while ANY action is in flight (one move at a time). */
+  onAction: () => void | Promise<unknown>;
   primary?: boolean;
+  /** Dismiss the whole guidance card once this action settles. For outbound
+   *  moves (Push harder) the card lingering with a live chip was exactly how
+   *  repeated taps stacked near-identical bargains in the field. */
+  dismissOnDone?: boolean;
 }
 
 export function WillGuideOverlay({
@@ -47,6 +53,10 @@ export function WillGuideOverlay({
 }) {
   const { t } = useI18n();
   const cardRef = useRef<HTMLDivElement | null>(null);
+  // The label of the chip whose action is currently running, if any. While it
+  // is set every chip is disabled - a second tap during a slow outbound is the
+  // same intent, not a new instruction.
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [anchorRect, setAnchorRect] = useState<Rect | null>(null);
   // The last rect we COMMITTED, so a scroll that did not actually move the
   // anchor costs nothing at all.
@@ -208,8 +218,19 @@ export function WillGuideOverlay({
             {actions.map((a) => (
               <button
                 key={a.label}
-                onClick={a.onAction}
-                className={`btn btn-sm rounded-xl px-3 py-1.5 text-[11.5px] font-extrabold ${
+                onClick={async () => {
+                  if (busyLabel) return;
+                  setBusyLabel(a.label);
+                  try {
+                    await a.onAction();
+                  } finally {
+                    setBusyLabel(null);
+                    if (a.dismissOnDone) onDismiss?.();
+                  }
+                }}
+                disabled={busyLabel !== null}
+                aria-busy={busyLabel === a.label}
+                className={`btn btn-sm rounded-xl px-3 py-1.5 text-[11.5px] font-extrabold disabled:opacity-60 ${
                   a.primary
                     ? celebrate
                       ? "bg-[#25D366] text-white"
@@ -217,7 +238,7 @@ export function WillGuideOverlay({
                     : "chip bg-card2 text-brandblue"
                 }`}
               >
-                {a.label}
+                {busyLabel === a.label ? t("On it…") : a.label}
               </button>
             ))}
             {onOpenChat && (

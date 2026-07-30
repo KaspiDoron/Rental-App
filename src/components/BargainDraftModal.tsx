@@ -40,7 +40,7 @@ export function BargainDraftModal({
   const [busy, setBusy] = useState(true);
   const [edited, setEdited] = useState(false);
   const [sendState, setSendState] = useState<
-    "idle" | "sending" | "sent" | "queued" | "reconnecting" | "blocked" | "manual" | "ratelimited"
+    "idle" | "sending" | "sent" | "queued" | "held" | "reconnecting" | "blocked" | "manual" | "ratelimited"
   >("idle");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [upgradeNote, setUpgradeNote] = useState(false);
@@ -98,6 +98,10 @@ export function BargainDraftModal({
           // A hand-edited message is a custom send (safety-screened, and it skips
           // the agent engagement-halt); an untouched AI draft is a bargain.
           kind: edited ? "custom" : "bargain",
+          // Either way this is ONE user move on this shop: the server's
+          // per-window debounce refuses a second near-identical bargain fired
+          // moments after the first (the field's action-spam failure).
+          userMove: true,
           rfq,
           round,
           region,
@@ -121,6 +125,13 @@ export function BargainDraftModal({
                 d.queuedUntil
               ).toLocaleString()}).`
             : t("Your message is queued and will send shortly.")
+        );
+      } else if (d.held) {
+        // One move per window: nothing was sent, and the reason is honest.
+        setSendState("held");
+        setStatusMsg(
+          d.error ??
+            t("Your agent just made a move in this chat - give the shop a couple of minutes to answer.")
         );
       } else if (d.reconnecting) {
         setSendState("reconnecting");
@@ -264,6 +275,11 @@ export function BargainDraftModal({
           {sendState === "queued" && statusMsg && (
             <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-center text-[11px] font-bold text-brandblue">
               🕒 {statusMsg}
+            </p>
+          )}
+          {sendState === "held" && statusMsg && (
+            <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-center text-[11px] font-bold text-brandblue">
+              ⏳ {statusMsg}
             </p>
           )}
           {(sendState === "reconnecting" || sendState === "ratelimited") && statusMsg && (

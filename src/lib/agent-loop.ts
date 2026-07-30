@@ -22,6 +22,7 @@ import {
   correctDuration,
   buildSafeBargainAsk,
   stripRivalClaims,
+  verbatimNumerals,
 } from "./graph/guardrails";
 
 /**
@@ -1760,6 +1761,21 @@ export async function processVendorReply(opts: {
       floor: isBargain ? floorPrice : undefined,
       rivalPrice,
       excludeExact,
+      // PROVENANCE: the numbers this thread actually holds. A draft numeral
+      // must be one of these or a closed derivation (total/days, daily*days,
+      // rounding) - the field's invented "Your price 300 is too much" had no
+      // path here and dies; a derived "200/day" from "1200 for 6 days" lives.
+      grounded: [
+        usablePrice,
+        target,
+        floorPrice,
+        extraction.pricePerDay,
+        ...(extraction.options ?? []).map((o) => o.pricePerDay),
+        // Every numeral the conversation verbatim contains, both directions -
+        // a number either party already said is never an invention.
+        ...verbatimNumerals([text, ...thread.map((m) => m.body ?? "")]),
+      ].filter((n): n is number => typeof n === "number" && n > 0),
+      durationDays: rfq.durationDays,
       checkAskBounds: isBargain,
     });
     if (!numCheck.ok) {

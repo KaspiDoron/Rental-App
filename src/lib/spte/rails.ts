@@ -6,7 +6,7 @@
 // correctDuration) so a council-composed message is held to the same standard,
 // plus the never-finalize-a-time protocol rule (Step 5).
 
-import { checkOutboundNumbers, correctDuration } from "../graph/guardrails";
+import { checkOutboundNumbers, correctDuration, verbatimNumerals } from "../graph/guardrails";
 import { rivalIdentityTokens, namesRival } from "../negotiation/leverage";
 import { inventsADate } from "../negotiation/traveller-disclosure";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
@@ -153,6 +153,36 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
       ...(ctx.thread.digest.options ?? []).map((o) => o.pricePerDay),
     ].filter((n): n is number => typeof n === "number" && n > 0),
     excludeExact: [ctx.session.rfq.durationDays, ctx.session.rfq.engineSizeCc ?? 0].filter(Boolean),
+    // PROVENANCE: every price-scale numeral must be a number this thread's
+    // structured state holds or a closed derivation of one (total/days,
+    // daily*days, rounding). Derived rates are legal - "1200 for 6 days"
+    // grounds a "200/day" ask - but the field's invented "Your price 300"
+    // (against a 250B greeting the extractor had missed) is not.
+    // A pickup-location message is owned ENTIRELY by the location rail below
+    // (verified address, approved link, no raw coordinates) - a street number
+    // in a real address must never read as an ungrounded price.
+    grounded: artifact.move === "pickup-location" ? [] : [
+      ctx.inbound.verified.pricePerDay,
+      ctx.thread.digest.quotedPricePerDay,
+      ctx.inbound.verified.sheetPricePerDay,
+      // The pass's own counter ask. It is not a free pass: for price moves
+      // every text numeral still has to sit inside [floor, ceiling] below,
+      // and a within-bounds ask IS the ladder - what provenance adds is that
+      // no OTHER number ("Your price 300 is too much") can ride along.
+      artifact.counterPricePerDay,
+      ctx.session.benchmark?.pricePerDay,
+      ...(ctx.thread.digest.options ?? []).map((o) => o.pricePerDay),
+      // Every numeral the conversation VERBATIM contains - the shop's own
+      // words and ours. A number either party already said is never an
+      // invention; what this basis has no path to is the field's "Your
+      // price 300 is too much" against a thread that never held a 300.
+      ...verbatimNumerals([
+        ctx.inbound.text,
+        ...ctx.tail.map((m) => m.text),
+        ...(ctx.thread.digest.lastOutbound ?? []),
+      ]),
+    ].filter((n): n is number => typeof n === "number" && n > 0),
+    durationDays: ctx.session.rfq.durationDays,
     checkAskBounds: artifact.move === "bargain" || artifact.move === "momentum",
   });
   if (!check.ok) {
