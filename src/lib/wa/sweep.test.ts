@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickSweepEmails } from "./sweep";
+import { pickSweepEmails, rotateWindow } from "./sweep";
 
 describe("pickSweepEmails - fair minute-rotated coverage", () => {
   const emails = ["a@x.com", "b@x.com", "c@x.com", "d@x.com", "e@x.com"];
@@ -28,5 +28,30 @@ describe("pickSweepEmails - fair minute-rotated coverage", () => {
 
   it("is deterministic for a fixed minute", () => {
     expect(pickSweepEmails(emails, 7, 3)).toEqual(pickSweepEmails(emails, 7, 3));
+  });
+});
+
+describe("rotateWindow - the per-thread sweep visits EVERY open thread", () => {
+  const items = ["n1", "n2", "n3", "n4", "n5", "n6", "n7"];
+
+  it("returns everything when the list fits the window", () => {
+    expect(rotateWindow(items.slice(0, 3), 99, 5)).toEqual(["n1", "n2", "n3"]);
+  });
+
+  it("advances a FULL window per tick (not one item), so coverage is fast", () => {
+    expect(rotateWindow(items, 0, 5)).toEqual(["n1", "n2", "n3", "n4", "n5"]);
+    expect(rotateWindow(items, 1, 5)).toEqual(["n6", "n7", "n1", "n2", "n3"]);
+  });
+
+  it("covers a 40-shop ultra batch completely across consecutive ticks", () => {
+    const batch = Array.from({ length: 40 }, (_, i) => `shop${i}`);
+    const seen = new Set<string>();
+    for (let t = 0; t < 8; t++) rotateWindow(batch, t, 5).forEach((s) => seen.add(s));
+    expect(seen.size).toBe(40);
+  });
+
+  it("tolerates negative ticks and bad sizes", () => {
+    expect(rotateWindow(items, -3, 5)).toHaveLength(5);
+    expect(rotateWindow(items, 2, 0)).toEqual([]);
   });
 });

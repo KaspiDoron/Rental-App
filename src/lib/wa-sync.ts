@@ -72,9 +72,15 @@ export async function syncInboundReplies(email: string): Promise<number> {
       email
     )}&received_at=gte.${encodeURIComponent(since)}&order=received_at.desc&limit=60`
   ).catch(() => []);
-  const numbers = [...new Set(outbound.map((o) => digitsOnly(o.to_number)))]
-    .filter((n) => n.length >= 7)
-    .slice(0, MAX_THREADS);
+  const allNumbers = [...new Set(outbound.map((o) => digitsOnly(o.to_number)))].filter(
+    (n) => n.length >= 7
+  );
+  // ROTATE the window instead of always taking the newest MAX_THREADS: on a
+  // large batch (ultra: 40 shops) the earlier shops were NEVER swept - the
+  // same newest five were re-checked every pass while an older shop's missed
+  // reply stayed missed. The minute index walks the whole list over time.
+  const { rotateWindow } = await import("./wa/sweep");
+  const numbers = rotateWindow(allNumbers, Math.floor(Date.now() / 60_000), MAX_THREADS);
   if (numbers.length === 0) return 0;
 
   let recovered = 0;
@@ -155,6 +161,20 @@ export async function syncInboundReplies(email: string): Promise<number> {
           .join(",")})&limit=${ids.length}`
       ).catch(() => []);
       const seenIds = new Set(seen.map((s) => s.wa_message_id));
+      // ...and which were actually ANSWERED? Row existence was the whole skip
+      // predicate here, so a message the webhook stored whose agent turn then
+      // DIED (LLM outage, DB blip, lost turn) was skipped forever - stored,
+      // silent, unrecoverable. The wa_processed lease is the durable record
+      // of a DELIVERED turn (a failed turn releases it), so it is the honest
+      // "done" signal. STRICT read: pre-migration ("missing") degrades to the
+      // old stored-means-done behavior instead of re-answering everything.
+      const { sbSelectStrict } = await import("./runtime-config");
+      const answeredRes = await sbSelectStrict<{ wa_message_id: string }>(
+        "wa_processed",
+        `select=wa_message_id&wa_message_id=in.(${ids.map((i) => `"${i}"`).join(",")})&limit=${ids.length}`
+      );
+      const answeredIds =
+        "rows" in answeredRes ? new Set(answeredRes.rows.map((r) => r.wa_message_id)) : seenIds;
 
       // SELF-ECHO GUARD (mirrors the webhook's): if Evolution's stored record
       // lost the fromMe flag, a message the USER typed would come back here
@@ -174,46 +194,61 @@ export async function syncInboundReplies(email: string): Promise<number> {
       const ourIds = new Set(ours.map((o) => o.wa_message_id).filter(Boolean));
 
       for (const m of inbound) {
-        if (seenIds.has(m.id)) continue;
+        // ANSWERED is the skip predicate, not STORED: a stored row whose turn
+        // failed still deserves a retry (its reply claim was released).
+        if (answeredIds.has(m.id)) continue;
         if (ourIds.has(m.id)) continue; // our own send, mislabelled inbound
         if (m.text.trim() && ourBodies.has(norm(m.text))) continue; // self-echo
-        recovered += 1;
-        // Mirror the webhook's insert so the thread history stays coherent.
-        await sbInsert("whatsapp_messages", [
-          {
-            wa_message_id: m.id,
-            from_number: digits,
-            to_number: "",
-            body: m.text || (m.hasImage ? "[photo]" : ""),
-            type: m.hasImage ? "image" : "text",
-            direction: "inbound",
-            // receiver = the user whose WhatsApp this sync ran for - without
-            // it a recovered row would be invisible to every scoped read.
-            raw: { channel: "evolution", recovered: true, receiver: email },
-          },
-        ]).catch(() => {});
+        // Mirror the webhook's insert so the thread history stays coherent
+        // (only for messages the webhook never stored).
+        if (!seenIds.has(m.id)) {
+          await sbInsert("whatsapp_messages", [
+            {
+              wa_message_id: m.id,
+              from_number: digits,
+              to_number: "",
+              body: m.text || (m.hasImage ? "[photo]" : ""),
+              type: m.hasImage ? "image" : "text",
+              direction: "inbound",
+              // receiver = the user whose WhatsApp this sync ran for - without
+              // it a recovered row would be invisible to every scoped read.
+              raw: { channel: "evolution", recovered: true, receiver: email },
+            },
+          ]).catch(() => {});
+        }
 
         const images: { mime: string; base64: string }[] = [];
         if (m.hasImage) {
           const media = await fetchMediaBase64(email, m.record);
           if (media) images.push(media);
         }
-        await processVendorReply({
-          fromDigits: digits,
-          // The PHONE form of this chat. We arrived here from THIS user's own
-          // outbound rows, so `digits` is the proven line; `m.remoteJid` may be
-          // the privacy @lid address of the same chat, which the attribution
-          // assertion downstream (rightly) refuses to trust on its own. Passing
-          // the resolved line is what keeps an @lid-addressed shop from going
-          // silent on the recovery path.
-          remoteJid: `${digits}@s.whatsapp.net`,
-          text: m.text,
-          images,
-          waMessageId: m.id,
-          senderEmail: email,
-          humanDelay: true,
-          send: (to, message) => sendFromUser(email, to, message),
-        }).catch(() => {});
+        // `recovered` counts only turns that RAN to completion. It used to be
+        // incremented before processing, with the failure swallowed by a bare
+        // catch - so a message stored-then-dropped was REPORTED as a recovery.
+        try {
+          await processVendorReply({
+            fromDigits: digits,
+            // The PHONE form of this chat. We arrived here from THIS user's own
+            // outbound rows, so `digits` is the proven line; `m.remoteJid` may be
+            // the privacy @lid address of the same chat, which the attribution
+            // assertion downstream (rightly) refuses to trust on its own. Passing
+            // the resolved line is what keeps an @lid-addressed shop from going
+            // silent on the recovery path.
+            remoteJid: `${digits}@s.whatsapp.net`,
+            text: m.text,
+            images,
+            waMessageId: m.id,
+            senderEmail: email,
+            humanDelay: true,
+            send: (to, message) => sendFromUser(email, to, message),
+          });
+          recovered += 1;
+        } catch (e) {
+          void noteInboundDropped(email, digits, "sync-turn-failed", {
+            msgId: m.id,
+            msg: e instanceof Error ? e.message.slice(0, 120) : "unknown",
+          });
+        }
       }
     } catch (e) {
       /* one broken thread must not kill the sync - but trace it (the pull

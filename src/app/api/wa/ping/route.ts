@@ -36,6 +36,26 @@ export async function GET(req: Request) {
     /* best-effort */
   }
 
+  // INBOUND RECOVERY, on the one runner that actually exists in production.
+  // The BullMQ inbound-recovery sweep lives on the (still-unprovisioned)
+  // workers VM, and the only other syncInboundReplies caller is the client's
+  // replies poll - i.e. with the app closed there was NO backstop at all: a
+  // reply the webhook missed stayed missed until the owner opened the app.
+  // This cron fires every minute (render.yaml wd-queue-drain), so a bounded
+  // sweep here gives every recently-active user app-closed recovery.
+  let synced = 0;
+  try {
+    const { recentActiveSenders, syncInboundReplies } = await import("@/lib/wa-sync");
+    const { pickSweepEmails } = await import("@/lib/wa/sweep");
+    const senders = await recentActiveSenders();
+    const minute = Math.floor(Date.now() / 60_000);
+    for (const email of pickSweepEmails(senders, minute, 3)) {
+      synced += await syncInboundReplies(email).catch(() => 0);
+    }
+  } catch {
+    /* best-effort */
+  }
+
   // Extend this ping's reach: kick the self-chaining drain so one cron hit
   // keeps a staggered batch progressing for the following ~30 minutes even
   // between cron intervals (fire-and-forget; the chain is single-runner).
@@ -50,6 +70,7 @@ export async function GET(req: Request) {
     hosts: hosts.length,
     awake: hosts.filter((h) => h.ok).length,
     drained,
+    synced,
     at: new Date().toISOString(),
   });
 }

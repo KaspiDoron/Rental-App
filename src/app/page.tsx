@@ -401,6 +401,12 @@ export default function Home() {
   // (a previous search's offers/threads) is rejected, so a "New search" can
   // never resurrect a stale bargain from a shop you already left.
   const [searchEpoch, setSearchEpoch] = useState<number>(0);
+  // SERVER-CLOCK epoch. `searchEpoch` is stamped from THIS device's clock, but
+  // every `since=` filter it feeds runs against SERVER timestamps - a phone
+  // running a couple of minutes fast silently ate replies that arrived right
+  // after the search started. The activity poll already measures the skew
+  // (clockSkewRef); every server-facing use of the epoch goes through here.
+  const epochOnServerClock = () => (searchEpoch ? searchEpoch + clockSkewRef.current : 0);
 
   // Restore the local-language preference.
   useEffect(() => {
@@ -1358,7 +1364,10 @@ export default function Home() {
         // previous search's replies can never render on the new results.
         // The declared spec travels with the poll so the shop's menu is scoped
         // to the vehicle they actually asked for (and hold a licence for).
-        const spec = new URLSearchParams({ since: String(searchEpoch), t: String(Date.now()) });
+        const spec = new URLSearchParams({
+          since: String(epochOnServerClock()),
+          t: String(Date.now()),
+        });
         if (rfq?.engineSizeCc) spec.set("cc", String(rfq.engineSizeCc));
         if (rfq?.vehicleClass) spec.set("vclass", rfq.vehicleClass);
         if (rfq?.transmission && rfq.transmission !== "any") spec.set("tx", rfq.transmission);
@@ -1386,7 +1395,8 @@ export default function Home() {
         const newestByVendor = new Map<string, (typeof d.replies)[number]>();
         for (const r of d.replies ?? []) {
           if (!r.found || !r.pricePerDay) continue;
-          if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < searchEpoch) continue;
+          if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < epochOnServerClock())
+            continue;
           const cur = newestByVendor.get(r.vendorId);
           if (!cur || Date.parse(r.createdAt) > Date.parse(cur.createdAt)) {
             newestByVendor.set(r.vendorId, r);
@@ -3230,7 +3240,7 @@ export default function Home() {
                   waConnected={waConnected}
                   localLang={localLangActive}
                   region={origin?.label ?? ""}
-                  searchEpoch={searchEpoch}
+                  searchEpoch={epochOnServerClock()}
                   onBook={onBookVendor}
                   onReviews={setReviewsVendor}
                   onBargain={onBargainVendor}
@@ -3370,7 +3380,7 @@ export default function Home() {
         <ThreadDashboard
           vendor={dashboardFor}
           rfq={rfq}
-          searchEpoch={searchEpoch || undefined}
+          searchEpoch={epochOnServerClock() || undefined}
           queueItem={(() => {
             const q = queueItems.find((it) => it.vendorId === dashboardFor.id);
             return q ? { etaFrom: q.etaFrom, etaTo: q.etaTo, reason: q.reason, due: q.due } : null;
@@ -3387,7 +3397,7 @@ export default function Home() {
         <TranscriptSheet
           vendorId={transcriptFor.id}
           vendorName={transcriptFor.name}
-          since={searchEpoch || undefined}
+          since={epochOnServerClock() || undefined}
           onClose={() => setTranscriptFor(null)}
         />
       )}

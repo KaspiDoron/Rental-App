@@ -86,7 +86,16 @@ export async function claimThreadTurn(
     slot_key: threadTurnSlot(toDigits, bucket - 1),
   });
   if (prev === "lost") {
-    await releaseThreadTurn(senderKey, toDigits, nowMs);
+    // We hold ONLY the current bucket here - the SIBLING owns the previous
+    // one. Hand back exactly our slot; releasing both (as the full release
+    // does) would destroy the sibling's live claim and let two turns run.
+    const { sbDelete } = await import("../runtime-config");
+    await sbDelete(
+      "wa_send_claims",
+      `sender_key=eq.${encodeURIComponent(senderKey)}&slot_key=eq.${encodeURIComponent(
+        threadTurnSlot(toDigits, bucket)
+      )}`
+    ).catch(() => {});
     return "lost";
   }
   return "won";
@@ -98,6 +107,14 @@ export async function claimThreadTurn(
  * A turn that ends without sending anything - silent, held, blocked - must not
  * freeze its thread for the rest of the window, or a shop's next message waits
  * a minute for nothing.
+ *
+ * RELEASES EXACTLY WHAT THE CLAIM TOOK. claimThreadTurn inserts TWO slots
+ * (the current bucket and the previous one); this used to delete only the
+ * bucket computed at RELEASE time - so a turn straddling the 60s boundary
+ * deleted a slot it never held while leaving BOTH held rows behind, and the
+ * leaked claims made a shop's next messages lose their turns (a 3-message
+ * burst like Qui's price run could lose two of three). Callers pass the
+ * CLAIM-time timestamp; both claimed slots are removed.
  */
 export async function releaseThreadTurn(
   senderKey: string,
@@ -106,9 +123,12 @@ export async function releaseThreadTurn(
 ): Promise<void> {
   if (!senderKey || !toDigits) return;
   const { sbDelete } = await import("../runtime-config");
-  const slot = threadTurnSlot(toDigits, turnBucket(nowMs));
+  const bucket = turnBucket(nowMs);
+  const slots = [threadTurnSlot(toDigits, bucket), threadTurnSlot(toDigits, bucket - 1)];
   await sbDelete(
     "wa_send_claims",
-    `sender_key=eq.${encodeURIComponent(senderKey)}&slot_key=eq.${encodeURIComponent(slot)}`
+    `sender_key=eq.${encodeURIComponent(senderKey)}&slot_key=in.(${slots
+      .map((s) => `"${encodeURIComponent(s)}"`)
+      .join(",")})`
   ).catch(() => {});
 }

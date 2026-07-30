@@ -221,6 +221,19 @@ export async function processVendorReply(opts: {
   // format ("09661952196") still resolve for an international inbound.
   const resolved = await resolveThreadContext(from, opts.senderEmail ?? "");
   const ctx = resolved.ctx as (OutboundRow["raw"] & { rfq?: unknown }) | null;
+  // ATTRIBUTION FALLBACK: the RFQ anchor row and the identity row (newest
+  // raw.vendorId) can be DIFFERENT rows. When the anchor lost its vendorId,
+  // every derived row (vendor_replies, offers, events) was written with
+  // vendor_id "" - persisted but unreadable by every card surface, the
+  // textbook stored-but-invisible reply. The identity row's vendorId fills
+  // the gap; a thread with neither leaves a trace instead of writing rows
+  // no card can ever find.
+  if (ctx && !ctx.vendorId && resolved.vendorId) ctx.vendorId = resolved.vendorId;
+  if (ctx && !ctx.vendorId) {
+    void noteInboundDropped(opts.senderEmail, from, "derived-unattributed", {
+      note: "thread carries no vendorId - derived rows would be invisible to cards",
+    });
+  }
   if (!resolved.rfq || !ctx) {
     // Still no anchor: we genuinely never sent this number an RFQ. Trace it so
     // the WA doctor can explain "why no agent reply" instead of going silent.
@@ -274,9 +287,13 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // Captured ONCE so claim and release compute the SAME buckets - a release
+  // computed at its own time deleted a slot the claim never took whenever
+  // the turn straddled a 60s bucket boundary (see wa/turn-lock).
+  const turnClaimedAtMs = Date.now();
   try {
     const { claimThreadTurn, releaseThreadTurn } = await import("./wa/turn-lock");
-    const turn = await claimThreadTurn(senderKeyForTurn, from);
+    const turn = await claimThreadTurn(senderKeyForTurn, from, turnClaimedAtMs);
     if (turn === "lost") {
       // A sibling turn owns this thread right now. Do NOT compose a second
       // reply against a thread state that is about to change. Hand the message
@@ -296,7 +313,7 @@ export async function processVendorReply(opts: {
     return await runVendorTurn();
   } finally {
     const { releaseThreadTurn } = await import("./wa/turn-lock");
-    if (holdsTurn) await releaseThreadTurn(senderKeyForTurn, from);
+    if (holdsTurn) await releaseThreadTurn(senderKeyForTurn, from, turnClaimedAtMs);
     // A turn that did not deliver has not consumed the message. Give the claim
     // back so a redelivery or the recovery sweep can answer it.
     if (claimedReply && !turnDelivered && opts.waMessageId) {

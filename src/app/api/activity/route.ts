@@ -134,7 +134,7 @@ export async function GET(req: Request) {
   const sinceIso = new Date(sinceMs).toISOString();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 40, 10), 80);
 
-  const [traces, outbound, replies, offers, outbox, wakeups, events] = await Promise.all([
+  const [traces, outbound, replies, offers, outbox, wakeups, events, inboundRows] = await Promise.all([
     sbSelect<TraceRow>(
       "agent_traces",
       `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=120`
@@ -220,6 +220,15 @@ export async function GET(req: Request) {
         email
       )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=10`
     ).catch(() => []),
+    sbSelect<{ from_number: string; body: string | null; received_at: string }>(
+      "whatsapp_messages",
+      // STORED inbound, straight from the wire. vendor_replies only exists once
+      // the agent turn DERIVED the message - so a stored reply whose turn
+      // failed (or is still queued for the recovery sweep) left the card on
+      // "Awaiting reply" while the reply sat in the DB. The card state must
+      // follow the wire, not the derivation.
+      `select=from_number,body,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${sinceIso}&order=received_at.desc&limit=60`
+    ).catch(() => []),
   ]);
 
   // decisionId per vendor (newest first) so cards can open "Why this move?".
@@ -256,6 +265,17 @@ export async function GET(req: Request) {
   // has REPLIED - either way it is a live conversation, not a queued message.
   for (const t of traces) if (STAGE_TITLES[t.stage]) bumpState(t.vendor_id, "active");
   for (const r of replies) bumpState(r.vendor_id, "active");
+  // A reply STORED but not yet derived counts too: join the raw inbound rows to
+  // vendors by number via our own outbound rows. "Awaiting reply" can never
+  // coexist with a reply already sitting in whatsapp_messages.
+  const { digitsOnly } = await import("@/lib/phone");
+  const vendorByDigits: Record<string, string> = {};
+  for (const m of outbound) {
+    const id = m.raw?.vendorId;
+    const digits = digitsOnly(m.to_number);
+    if (id && digits && !vendorByDigits[digits]) vendorByDigits[digits] = id;
+  }
+  for (const m of inboundRows) bumpState(vendorByDigits[digitsOnly(m.from_number)], "active");
   // A real priced OFFER is the strongest state.
   for (const o of offers) if (o.price_per_day) bumpState(o.vendor_id, "offer");
 
@@ -296,6 +316,16 @@ export async function GET(req: Request) {
     if (slot.lastInboundAt) continue;
     slot.lastInboundText = (r.reply_text || (r.image_count ? "[photo]" : "") || "").slice(0, 240);
     slot.lastInboundAt = r.created_at;
+  }
+  // Underived-but-stored inbound fills the gap (newest-first here too), so the
+  // panel shows what the shop actually said even before the agent turn runs.
+  for (const m of inboundRows) {
+    const id = vendorByDigits[digitsOnly(m.from_number)];
+    if (!id) continue;
+    const slot = ensureLast(id);
+    if (slot.lastInboundAt && Date.parse(slot.lastInboundAt) >= Date.parse(m.received_at)) continue;
+    slot.lastInboundText = (m.body || "").slice(0, 240) || slot.lastInboundText;
+    slot.lastInboundAt = m.received_at;
   }
 
   const items: ActivityItem[] = [];
