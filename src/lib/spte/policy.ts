@@ -124,7 +124,24 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // logistics close-out below.
   const priceKnown = v.found && typeof v.pricePerDay === "number";
   const roundsLeft = (d.round ?? 0) < ctx.guards.maxRounds;
-  if (priceKnown && roundsLeft && firmAllowsBargain && !dealComplete(ctx)) {
+  // NEVER BARGAIN AGAINST YOUR OWN FLOOR - ONE NUDGE, THEN LOCK.
+  //
+  // `session.lowest` has been computed since the engine shipped and read by
+  // nothing that decides anything: a swarm signal and a telemetry chip. So at
+  // Ko Tao, with the session's best price at 180 and THIS shop quoting 180,
+  // the engine bargained by construction - `rivalCheaper` and
+  // `priceFarAboveFloor` are only consulted when firmCount === 1, and at
+  // firmCount 0 bargain is unconditional. We answered the cheapest shop in the
+  // session with "that's a bit high for me", against a floor we had set
+  // ourselves. There is no rival to leverage, because we ARE the rival.
+  //
+  // The owner's rule, and it is the right one: exactly ONE price move at or
+  // below the session low, then switch to terms whatever happens. The nudge
+  // is worth having - shops move on a first ask - but a second one is
+  // bargaining with ourselves, and it is how a won deal turns into a shop that
+  // stops replying.
+  const lockedAtFloor = atSessionLow(ctx) && alreadyPushedAtFloor(ctx);
+  if (priceKnown && roundsLeft && firmAllowsBargain && !lockedAtFloor && !dealComplete(ctx)) {
     moves.push("bargain");
   }
 
@@ -283,6 +300,59 @@ export function reflexTurn(
 export function coerceToLegal(artifact: TurnArtifact, legal: MoveKind[]): MoveKind {
   if (legal.includes(artifact.move)) return artifact.move;
   return legal[0] ?? "silent";
+}
+
+/**
+ * Is THIS shop's live quote the cheapest thing in the whole session?
+ *
+ * `<=` and not `===`: `session.lowest` is computed from the stored rows, and
+ * this turn's quote may be newer than the snapshot that produced it (a shop
+ * that just dropped 250 -> 200 while the ledger still says 210). Whenever our
+ * own number is at or under the session floor, there is nobody left to
+ * leverage.
+ *
+ * Exported because the leverage planner needs the same answer, and two modules
+ * disagreeing about who the cheapest shop is would be worse than either
+ * answer.
+ */
+export function atSessionLow(ctx: TurnContext): boolean {
+  const low = ctx.session.lowest?.pricePerDay;
+  const mine = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
+  return typeof low === "number" && typeof mine === "number" && mine <= low;
+}
+
+/**
+ * Have we already spent our one nudge at this price?
+ *
+ * Derived, not stored: our own last messages are already in the digest as the
+ * anti-repetition memory, and a bargain always names the number it asks for.
+ * So "did we already push below this quote" is a question the thread can
+ * answer, with no new column and no counter to keep in sync.
+ *
+ * A PRICE NAMES A PRICE; A MEASUREMENT NAMES A UNIT. That is what separates
+ * the two, and it has to, because a band cannot: "125cc" for a 180/day quote
+ * sits squarely inside any plausible price range. So a number carrying a unit
+ * is not an ask - "3 days", "125cc", "9am" - while "160" and "160/day" are.
+ * The band then catches what is left.
+ */
+const MEASUREMENT_UNIT =
+  /^\s*(cc|km|kms|kilometers?|kg|mm|cm|hp|l|lit(er|re)s?|%|days?|nights?|weeks?|months?|years?|hours?|hrs?|mins?|minutes?|people|persons?|pax|am|pm|o'clock)\b/i;
+
+function alreadyPushedAtFloor(ctx: TurnContext): boolean {
+  const quote = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
+  if (typeof quote !== "number" || quote <= 0) return false;
+  const mine = ctx.thread.digest.lastOutbound ?? [];
+  for (const msg of mine) {
+    const text = String(msg);
+    for (const m of text.matchAll(/\d[\d,.]*/g)) {
+      if (MEASUREMENT_UNIT.test(text.slice(m.index + m[0].length))) continue;
+      const n = Number(m[0].replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, ""));
+      if (!Number.isFinite(n)) continue;
+      // Below the quote, but not absurdly below - an ask, not a house number.
+      if (n < quote && n >= quote * 0.5) return true;
+    }
+  }
+  return false;
 }
 
 // ---- fact helpers (read from the thread-derived digest; all deterministic) ---

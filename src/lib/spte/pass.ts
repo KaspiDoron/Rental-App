@@ -9,7 +9,7 @@
 
 import { chat, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
-import { coerceToLegal, passportCounterDue } from "./policy";
+import { coerceToLegal, passportCounterDue, atSessionLow } from "./policy";
 import { moveGlossary, normalizeMove } from "./moves";
 import { composePassportCounter } from "../negotiation/deposit-counter";
 import { isRepetitive } from "../wa/similarity";
@@ -230,6 +230,10 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         durationDays: days,
         round,
         vehicleLabel: vehicleLine(ctx),
+        // The same fact the policy uses to retire `bargain`, read from the
+        // same place. Two modules disagreeing about who the cheapest shop is
+        // would be worse than either answer.
+        isSessionLow: atSessionLow(ctx),
       })
     : [];
   const lead = leadCard(plan);

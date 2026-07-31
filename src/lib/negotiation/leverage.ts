@@ -44,6 +44,15 @@ export interface LeverageInput {
   round: number;
   /** How the traveller's vehicle reads in a sentence ("automatic 125cc scooter"). */
   vehicleLabel: string;
+  /**
+   * THIS shop is already the cheapest quote in the session.
+   *
+   * There is then nothing to leverage - we would be arguing against a floor we
+   * set ourselves. In the field the planner fell through to its weakest card
+   * (duration, strength 40) and told the cheapest shop on the island that
+   * 180/day was "a bit high", four minutes after another shop had quoted 250.
+   */
+  isSessionLow?: boolean;
 }
 
 /** A rival only counts when it is genuinely CHEAPER than what is on the table. */
@@ -73,6 +82,29 @@ export function cheapestCheaperRival(
 export function planLeverage(input: LeverageInput): LeverageCard[] {
   const cards: LeverageCard[] = [];
   const cur = input.currency ?? "";
+
+  // THE CHEAPEST SHOP IN THE SESSION IS NOT A SHOP TO ARGUE WITH.
+  //
+  // This function returns whatever it has, and the caller leads with the
+  // strongest card it gets - so with no rival cheaper and no round played, the
+  // list still came back holding "3 days is a long rental" and the agent
+  // pushed. Being the floor is not a weak position to argue from; it is a
+  // position with no argument in it. Returning nothing lets the caller do the
+  // right thing (terms, not price) instead of the least-wrong thing.
+  //
+  // The bundle card survives on purpose: asking for a helmet or free delivery
+  // at the best price in the session is not bargaining against ourselves, it
+  // is the one ask left that can still improve the deal.
+  if (input.isSessionLow) {
+    if (input.round >= 1) {
+      cards.push({
+        kind: "bundle",
+        strength: 30,
+        line: `They are already the best price you have. Do not push the number again - ask for something thrown in instead: a helmet, fuel, or free delivery.`,
+      });
+    }
+    return cards;
+  }
 
   const rival = cheapestCheaperRival(input.rivals, input.quotePerDay);
   if (rival && typeof input.quotePerDay === "number") {
