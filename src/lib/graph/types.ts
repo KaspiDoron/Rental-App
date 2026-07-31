@@ -370,6 +370,8 @@ export interface DeliverResult {
   detail: string;
   finalText?: string;
   queuedUntil?: string;
+  /** The wa_outbox row the message is parked in - the Ops join key (F10). */
+  outboxRowId?: number;
 }
 
 // ---------------------------------------------------------------------------

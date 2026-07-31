@@ -9,7 +9,7 @@ import { getConfig } from "./runtime-config";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-type ProviderName =
+export type ProviderName =
   | "groq"
   | "openrouter"
   | "cerebras"

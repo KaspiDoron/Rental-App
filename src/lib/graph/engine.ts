@@ -1513,6 +1513,9 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           detail: verdict.reason ?? "held by the anti-ban gate",
           queuedUntil: verdict.queuedUntil,
           finalText: verdict.text,
+          // The exact row, so Ops can say WHERE it is held rather than only
+          // that it is (F10).
+          outboxRowId: verdict.outboxRowId,
         };
       }
       // LAST-INSTANT cancellation re-check: narrows the window between the

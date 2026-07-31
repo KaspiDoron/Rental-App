@@ -5,6 +5,11 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("../ai", () => ({
   chat: async () => null,
+  // The single pass moved to chatDetailed so the route can record WHICH
+  // provider answered - `chat()` was discarding it, which is why the Ops turn
+  // row showed `mock/local` on every turn including live ones. No provider
+  // configured here: text null, provider undefined.
+  chatDetailed: async () => ({ text: null }),
   extractJson: () => null,
 }));
 

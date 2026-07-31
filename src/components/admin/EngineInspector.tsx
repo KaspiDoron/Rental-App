@@ -45,7 +45,25 @@ interface Snapshot {
     leverageUsePct?: number | null;
     leverageOpportunities?: number;
   };
-  queue: { depth: number; dueNow: number; nextAt: string | null };
+  queue: {
+    depth: number;
+    dueNow: number;
+    nextAt: string | null;
+    /** Rows whose claim lapsed - a drainer died mid-send (F10). */
+    lapsed?: number;
+    /** WHERE each held message actually is, and why. */
+    held?: {
+      id: number;
+      vendorName: string | null;
+      kind: string | null;
+      notBefore: string;
+      state: "due" | "waiting" | "sending";
+      lapsed: boolean;
+      reasonKind: string;
+      reason: string | null;
+      reasonLabel: string;
+    }[];
+  };
   sockets: { live: number; total: number; stampedAt?: string | null };
   webhook: { lastInboundAt: string | null; lastAcceptedAt?: string | null; last403At?: string | null };
   charts?: Charts;
@@ -209,6 +227,57 @@ export function EngineInspector() {
               />
               <StatTile helpId="socketsStamped" value={ago(snap.sockets.stampedAt)} />
             </div>
+
+            {/* WHERE IS THIS MESSAGE HELD? - the owner's question, answered per
+                row rather than as a depth count. Everything here is real state:
+                `outboxState` is the same definition the queue viewer and the
+                status panel read, and the reason is the guard's own words -
+                never a guess, so a row with no reason honestly reads as one. */}
+            {(snap.queue.held?.length ?? 0) > 0 && (
+              <div className="rounded-2xl border border-line bg-card p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[12px] font-extrabold uppercase text-soft">
+                    Held right now ({snap.queue.depth})
+                  </div>
+                  {(snap.queue.lapsed ?? 0) > 0 && (
+                    <div className="text-[11px] font-extrabold text-brandred">
+                      {snap.queue.lapsed} interrupted mid-send
+                    </div>
+                  )}
+                </div>
+                <div className="max-h-64 space-y-1 overflow-y-auto">
+                  {snap.queue.held!.map((h) => (
+                    <div key={h.id} className="rounded-xl bg-card2 p-2 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-extrabold text-strong">
+                          {h.vendorName ?? `#${h.id}`}
+                          {h.kind ? <span className="ml-1 font-bold text-faint">{h.kind}</span> : null}
+                        </span>
+                        <span
+                          className={`shrink-0 font-extrabold ${
+                            h.lapsed
+                              ? "text-brandred"
+                              : h.state === "sending"
+                                ? "text-savings"
+                                : h.state === "due"
+                                  ? "text-brandblue"
+                                  : "text-faint"
+                          }`}
+                        >
+                          {h.lapsed ? "interrupted mid-send" : h.state}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-[10px] font-bold text-soft">
+                        {h.reasonLabel} · due {ago(h.notBefore)}
+                      </div>
+                      {h.reason && (
+                        <div className="mt-0.5 truncate text-[10px] text-faint">{h.reason}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Operations (live 6h): the realized-outcome + responsiveness row.
                 Derived from real offers + message timing, so it is honest about

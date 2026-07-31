@@ -77,13 +77,49 @@ export async function GET() {
   }
 
   // ---- Queue health: outbox depth + how far ahead the next send is ----------
-  const queue = await sbSelect<{ id: number; not_before: string; meta: { kind?: string } | null }>(
+  //
+  // WHERE IS THIS MESSAGE HELD? The owner's question, and this route already
+  // had the whole answer in hand and threw it away for a count. `meta.reason`
+  // is the guard's own words for why a row is parked; `outboxState` is the
+  // definition every other surface reads; `claimedAt` says whether a drainer
+  // is mid-send or died holding it. All of it, per row, for the price of the
+  // query that was already running.
+  const queue = await sbSelect<{
+    id: number;
+    to_number: string;
+    not_before: string;
+    meta: { kind?: string; reason?: string; vendorName?: string; claimedAt?: number } | null;
+  }>(
     "wa_outbox",
-    `select=id,not_before,meta&order=not_before.asc&limit=200`
+    `select=id,to_number,not_before,meta&order=not_before.asc&limit=200`
   ).catch(() => []);
   const now = Date.now();
   const dueNow = queue.filter((q) => Date.parse(q.not_before) <= now).length;
   const nextAt = queue[0]?.not_before ?? null;
+  const { outboxState, CLAIM_LEASE_MS } = await import("@/lib/wa/outbox-lifecycle");
+  const { classifyQueueReason, queueReasonLabel } = await import("@/lib/queue-reason");
+  const held = queue.slice(0, 40).map((r) => {
+    const claimedAt = Number(r.meta?.claimedAt);
+    // A LAPSED CLAIM is a drainer that died mid-send. The lease is its own
+    // fix - the row is due again by definition - but until now nothing SHOWED
+    // it, so an interrupted send was folklore. (outbox-lifecycle exports
+    // `lapsedClaims` for exactly this and has never had a caller.)
+    const lapsed = Number.isFinite(claimedAt) && now - claimedAt >= CLAIM_LEASE_MS;
+    return {
+      id: r.id,
+      vendorName: r.meta?.vendorName ?? null,
+      kind: r.meta?.kind ?? null,
+      notBefore: r.not_before,
+      state: outboxState(r.not_before, r.meta ?? null, now),
+      lapsed,
+      // The guard's real words, and the traveller-readable version of them.
+      // Never a guess: an empty reason renders as unknown, which is honest.
+      reasonKind: classifyQueueReason(r.meta?.reason),
+      reason: r.meta?.reason ?? null,
+      reasonLabel: queueReasonLabel(r.meta?.reason),
+    };
+  });
+  const lapsedCount = held.filter((h) => h.lapsed).length;
 
   // ---- WA socket liveness (sessions marked open) ----------------------------
   const sessions = await sbSelect<{ email: string; status?: string | null; updated_at?: string }>(
@@ -233,7 +269,7 @@ export async function GET() {
       leverageUsePct: leverage.pct,
       leverageOpportunities: leverage.opportunities,
     },
-    queue: { depth: queue.length, dueNow, nextAt },
+    queue: { depth: queue.length, dueNow, nextAt, lapsed: lapsedCount, held },
     sockets: { live: liveSockets, total: sessions.length, stampedAt: socketsStampedAt },
     webhook: { lastInboundAt: inbound[0]?.received_at ?? null, lastAcceptedAt, last403At },
     charts,

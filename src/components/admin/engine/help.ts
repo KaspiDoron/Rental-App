@@ -113,8 +113,8 @@ export const ENGINE_HELP: Record<string, MetricHelp> = {
   },
   providerMix: {
     label: "Provider mix",
-    what: "Which AI model provider served each turn. 'mock/local' means no live key was used for that turn.",
-    drift: "Unexpected 'mock/local' share means a provider key is missing or rate-limited.",
+    what: "Which AI model provider actually answered each turn - groq, gemini, cerebras and the rest of the failover chain. 'mock/local' means no provider answered and the turn fell back to a deterministic template.",
+    drift: "A rising 'mock/local' share means keys are missing, rate-limited or timing out. Before this was wired up it read 100% on every turn, including turns a real model composed - if you are looking at old data, that is why.",
   },
 
   // ---- Tier 3: turn stream --------------------------------------------------

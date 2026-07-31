@@ -7,7 +7,7 @@
 // Gemini Flash -> Cerebras -> OpenRouter). On malformed JSON: one retry, then a
 // deterministic fallback artifact (never throws, never silent).
 
-import { chat, extractJson } from "../ai";
+import { chat, chatDetailed, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
 import { coerceToLegal, passportCounterDue, atSessionLow } from "./policy";
 import { moveGlossary, normalizeMove } from "./moves";
@@ -499,13 +499,20 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
       attempt === 0
         ? user
         : `${user}\n\nYour previous draft repeated an earlier message almost word for word. Rewrite it from scratch with a DIFFERENT sentence structure and a DIFFERENT lever.`;
-    const raw = await chat(
+    // chatDetailed, not chat, for ONE reason: it returns which provider
+    // answered, and `chat()` was throwing that away. `route.provider` has been
+    // declared since the engine shipped and assigned by nobody, so Ops showed
+    // its `mock/local` fallback chip on every turn - including the ones a real
+    // model composed - while the help text explained that meant no live key
+    // was used. A cosmetic omission that read as a broken deployment.
+    const { text: raw, provider } = await chatDetailed(
       [
         { role: "system", content: system },
         { role: "user", content: userMsg },
       ],
       { maxTokens: 500, budgetMs: 9000 }
     );
+    if (provider) route.provider = provider;
     if (!raw) break; // no provider available -> fallback
     const parsed = extractJson<Partial<TurnArtifact>>(raw);
     if (parsed && typeof parsed.move === "string") {

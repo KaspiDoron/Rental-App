@@ -223,7 +223,21 @@ export interface RailResult {
 
 export interface ModelRoute {
   tier: "R" | "F" | "M";
-  provider?: "groq" | "gemini" | "cerebras" | "openrouter";
+  /**
+   * WHICH PROVIDER ACTUALLY ANSWERED.
+   *
+   * Declared here since the engine shipped and assigned by nobody, so the Ops
+   * turn row fell through to its `mock/local` chip on one hundred percent of
+   * turns - including every turn a real model composed. The help text then
+   * explained that "'mock/local' means no live key was used", which made a
+   * cosmetic omission read as a broken deployment.
+   *
+   * The failover chain has always known the answer (chatDetailed returns it);
+   * `chat()` simply threw it away at the call site. The hand-written union
+   * knew four of the nine configurable providers, which is its own way of
+   * losing the truth, so it reads the real list now.
+   */
+  provider?: import("../ai").ProviderName;
   model?: string;
   reason: "reflex" | "default" | "multimodal" | "high-stakes" | "quota-overflow" | "replay";
 }

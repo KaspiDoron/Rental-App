@@ -953,6 +953,16 @@ export interface GuardVerdict {
   allow: boolean;
   reason?: string;
   queuedUntil?: string; // set when the message was parked in wa_outbox (re-queued)
+  /**
+   * WHICH ROW IT IS PARKED IN.
+   *
+   * Ops could tell the owner a message was "queued" and nothing else - the
+   * chip is written once into the turn detail at compose time, agent_events
+   * is append-only, and nothing ever joined back to wa_outbox. So a turn sent
+   * at 12:43 still read `queued` an hour later, and "where is it held" had no
+   * answer anywhere in the system. This is the exact join key.
+   */
+  outboxRowId?: number;
   terminal?: boolean;   // set when the message must be DROPPED for good (cancelled,
                         // duplicate, rfq-dedup, takeover). The drain uses this to
                         // tell "safely re-queued" and "deliberately dropped" apart
@@ -1081,7 +1091,7 @@ export async function guardOutbound(rawOpts: {
           reason,
         });
         return held
-          ? { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text }
+          ? { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text, outboxRowId: opts.outboxRowId }
           : { allow: false, reason, text };
       }
       const parked = await sbInsert("wa_outbox", [
@@ -1122,7 +1132,21 @@ export async function guardOutbound(rawOpts: {
       // the idempotency preflight + msg claim slot prevent a double-send if the
       // first insert actually landed but its response timed out.
       if (parked) {
-        return { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text };
+        // Read the id back so Ops can point at the exact row. One extra query,
+        // only on the path that is already parking a message, and a failure to
+        // find it costs a join and nothing else - never the send.
+        const mine = await sbSelect<{ id: number }>(
+          "wa_outbox",
+          `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
+            `&to_number=eq.${encodeURIComponent(opts.toDigits)}&order=id.desc&limit=1`
+        ).catch(() => [] as { id: number }[]);
+        return {
+          allow: false,
+          reason: `${reason} - queued`,
+          queuedUntil: notBefore,
+          text,
+          outboxRowId: mine[0]?.id,
+        };
       }
       return { allow: false, reason, text };
     }

@@ -382,6 +382,12 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   };
 
   let delivered: SpteLiveResult["delivered"] = "silent";
+  // WHERE THE MESSAGE ENDED UP, when it did not go out. `delivered` is written
+  // once into the turn detail at compose time and agent_events is append-only,
+  // so a turn parked at 12:23 reads `queued` forever - which is a display bug
+  // that has been read as a delivery bug more than once. Ops can now join to
+  // the row and render what it is ACTUALLY doing right now.
+  let outboxRowId: number | null = null;
   const send = outcome.text && outcome.move !== "silent" ? outcome.text : undefined;
 
   if (send) {
@@ -401,6 +407,7 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
       }
       const res = await io.guardAndSend({ senderKey, toNumber, text: send, meta, shopOpenNow: input.shopOpenNow });
       delivered = res.delivered;
+      outboxRowId = res.outboxRowId ?? null;
     } catch {
       // Post-decision send failure: park it so the drain retries, never re-run
       // the whole turn (that path belongs to the pre-send fallback only).
@@ -491,6 +498,7 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         quote: input.usablePrice ?? null,
         materialDrop: outcome.materialDrop,
         delivered,
+        outboxRowId,
         // Response latency (ms) for this turn - feeds the p50/p95 KPI. Only a
         // real reply that actually went out is a meaningful latency sample.
         latencyMs: delivered === "sent" ? Date.now() - startedAt : null,
