@@ -12,7 +12,7 @@ import { moneyLocal } from "@/lib/currency";
 export interface FeedItem {
   id: string;
   at: string;
-  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert";
+  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert" | "drop";
   vendorId?: string;
   vendorName?: string;
   title: string;
@@ -30,6 +30,9 @@ const KIND_ICON: Record<FeedItem["kind"], string> = {
   wait: "clock",
   judge: "star",
   alert: "alert",
+  // A delivery drop is operational info, not a scam warning - it borrows the
+  // alert glyph but never the red risk styling below.
+  drop: "alert",
 };
 
 function relTime(iso: string): string {
@@ -78,7 +81,7 @@ export function ActivityFeed({
             ? "bg-savings-soft text-savings"
             : it.kind === "alert"
             ? "bg-brandred-soft text-brandred"
-            : it.kind === "wait" || it.kind === "queued"
+            : it.kind === "wait" || it.kind === "queued" || it.kind === "drop"
             ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
             : it.kind === "reply"
             ? "bg-card2 text-soft"

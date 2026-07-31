@@ -9,7 +9,8 @@
 
 import { chat, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
-import { coerceToLegal } from "./policy";
+import { coerceToLegal, passportCounterDue } from "./policy";
+import { composePassportCounter } from "../negotiation/deposit-counter";
 import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
@@ -104,6 +105,14 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   const questionNote = askedSomething
     ? `The shop ASKED YOU about ${acts && acts.ask !== "none" ? acts.ask.replace(/-/g, " ") : "something"} in their last message. Your reply MUST answer that first, in a natural way, before anything else.\n`
     : `The shop did NOT ask you anything. Do not thank them for a question and do not open with filler - acknowledge what they actually sent, then make your move.\n`;
+
+  // ONE-SHOT PASSPORT-DEPOSIT COUNTER: when the shop's stated terms demand the
+  // original passport with no cash route (and we have never asked), the legal
+  // deposit-probe IS the polite alternative ask - coach the composed message
+  // to match the deterministic template's strategy.
+  const depositCounterNote = passportCounterDue(ctx)
+    ? "DEPOSIT TERMS: the shop requires leaving the ORIGINAL passport, with no cash option offered. If you pick deposit-probe, make ONE ultra-polite counter: say we'd prefer a cash deposit plus a PHOTO of the passport, framed as a preference (never a refusal, never a safety lecture). If they decline, we accept their terms graciously - this is asked once and never again.\n"
+    : "";
 
   // ANTI-REPETITION - the real fix for "same sentence every turn". The model
   // never saw its own prior sends; now it does, with a hard rule.
@@ -259,6 +268,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     menuBlock +
     roundPlay +
     firmNote +
+    depositCounterNote +
     questionNote +
     vehiclePlay +
     optionPlay +
@@ -412,6 +422,11 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       }
       return `${thanks} What would your best price per day be for ${days} days?`.trim();
     case "deposit-probe":
+      // THE ONE-SHOT PASSPORT COUNTER: when the shop's stated terms demand the
+      // original passport with no cash route, this probe IS the polite
+      // alternative ask (seeded wording, one attempt ever - see
+      // negotiation/deposit-counter). Otherwise it is the ordinary terms probe.
+      if (passportCounterDue(ctx)) return composePassportCounter(ctx.thread.threadKey);
       // Non-commitment guardrail (issue 5): learn the terms while making clear
       // we are still comparing shops - never imply a guaranteed booking.
       return `Thanks! We're finalizing our pick between a few shops today - could you let me know your deposit? Cash amount or passport?`;

@@ -85,6 +85,9 @@ function VendorCardInner({
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  // The exact risk text the traveller dismissed - a DIFFERENT reason (new
+  // text) shows again on its own; the same one stays away.
+  const [dismissedRisk, setDismissedRisk] = useState<string | null>(null);
   const [chatState, setChatState] = useState<{
     status: "idle" | "checking" | "sent" | "queued" | "blocked";
     reason?: string;
@@ -442,18 +445,29 @@ function VendorCardInner({
               ⏸ {t("Paused by you - sending a new message re-opens this shop")}
             </div>
           )}
-          {riskNote && (
+          {riskNote && dismissedRisk !== riskNote && (
             <div className="mt-2 flex items-start gap-1.5 rounded-xl border-2 border-brandred/40 bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
               <Icon name="alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                {/* The reason is a sentence from the risk engine and the line
-                    after it is another one. Glued with a bare space they read
-                    as one run-on ("...and the shop Nothing was sent"), so the
-                    join terminates the first sentence itself rather than
-                    trusting every reason string to end in a full stop. */}
+              <span className="min-w-0 flex-1">
+                {/* The reason is a sentence from the risk engine; terminate it
+                    ourselves rather than trusting every reason string to end
+                    in a full stop. The old suffix here said "Nothing was
+                    sent" - FALSE copy: the risk screen informs the traveller
+                    and never freezes the engine, and claiming otherwise is
+                    exactly how a calm heads-up read as a dead conversation. */}
                 {t("Will has flagged this shop's reply")}: {riskNote.replace(/\s*[.;,]?\s*$/, "")}.{" "}
-                {t("Nothing was sent - review before you act.")}
+                {t("Your agent keeps negotiating - this is a heads-up, not a block.")}
               </span>
+              {/* Dismissible: a warning the traveller has read and weighed must
+                  not latch onto the card for the rest of the session. A NEW
+                  reason (different text) resurfaces on its own. */}
+              <button
+                onClick={() => setDismissedRisk(riskNote)}
+                aria-label={t("Dismiss")}
+                className="btn btn-sm -mr-1 -mt-1 h-5 w-5 shrink-0 rounded-full text-brandred/70 hover:text-brandred"
+              >
+                ✕
+              </button>
             </div>
           )}
           <Pipeline stage={vendor.stage ?? "queued"} />

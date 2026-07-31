@@ -18,7 +18,7 @@ import { deriveCountered } from "@/lib/counter-offer";
 export interface ActivityItem {
   id: string;
   at: string; // ISO
-  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert";
+  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert" | "drop";
   vendorId?: string;
   vendorName?: string;
   title: string;
@@ -416,9 +416,13 @@ export async function GET(req: Request) {
       const drop = dropFeedItem(e.kind, e.detail);
       if (!drop) continue; // benign, deliberate outcome - not an alert
       items.push({
-        id: `alert:${e.id}`,
+        // ITS OWN KIND. A delivery drop is operational information; emitted as
+        // kind:"alert" it wore the risk-screen's red styling AND fed the
+        // card's "Will flagged this reply" banner - an undelivered message
+        // masquerading as a scam warning.
+        id: `drop:${e.id}`,
         at: e.created_at,
-        kind: "alert",
+        kind: "drop",
         vendorId: e.vendor_id || undefined,
         // vendor_name on drop events carries the shop's digits, not a name -
         // the feed shows the honest copy, not a phone number masquerading.

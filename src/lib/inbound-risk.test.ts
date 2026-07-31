@@ -1,5 +1,18 @@
-import { describe, it, expect } from "vitest";
-import { isLocationLink, screenInboundDeterministic } from "./inbound-risk";
+import { describe, it, expect, beforeEach } from "vitest";
+import { vi } from "vitest";
+import { isLocationLink, screenInbound, screenInboundDeterministic } from "./inbound-risk";
+
+const mocks = vi.hoisted(() => ({ chat: vi.fn() }));
+vi.mock("./ai", () => ({
+  chat: (...a: unknown[]) => mocks.chat(...a),
+  extractJson: (s: string) => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  },
+}));
 
 describe("inbound risk screen (deterministic)", () => {
   it("normal haggling is clean", () => {
@@ -64,5 +77,61 @@ describe("a map pin is an answer, not a lure", () => {
       "send a photo of your passport first, then https://maps.app.goo.gl/xyz"
     );
     expect(r.risk).toBe("high");
+  });
+});
+
+// THE FIELD FAILURE (Thailand, Bigman): the shop stated its ordinary terms -
+// leave the original passport as the deposit - and the LLM half called it
+// SUSPICIOUS. The code accepted that verdict with only a link filter, so the
+// exact message class the deterministic half was TAUGHT to pass (F1: a
+// document demand needs a transmit verb; stated terms are never a demand)
+// came back as a red banner through the other door, froze the traveller's
+// trust and cost a real ฿1,100 discount.
+describe("the LLM half is held to the same deposit grammar", () => {
+  const BIGMAN = "For rent you leave original passport for deposit. Bike ready today.";
+
+  beforeEach(() => mocks.chat.mockReset());
+
+  it("a model 'suspicious passport' verdict on stated deposit terms is discarded", async () => {
+    mocks.chat.mockResolvedValue(
+      JSON.stringify({
+        risk: "high",
+        reasons: ["The shop demands your passport - possible document harvesting"],
+      })
+    );
+    const r = await screenInbound(BIGMAN, { vendorName: "Bigman" });
+    expect(r.risk).toBe("none");
+    expect(r.reasons).toHaveLength(0);
+  });
+
+  it("the model can still raise a NON-document risk the regexes missed", async () => {
+    mocks.chat.mockResolvedValue(
+      JSON.stringify({
+        risk: "caution",
+        reasons: ["pressures you to settle the full amount before you arrive"],
+      })
+    );
+    const r = await screenInbound("Best you settle everything today, full amount, then we hold the bike");
+    expect(r.risk).toBe("caution");
+    expect(r.reasons[0]).toMatch(/full amount/);
+  });
+
+  it("the prompt itself teaches that passport-at-counter is standard practice", async () => {
+    mocks.chat.mockResolvedValue(JSON.stringify({ risk: "none", reasons: [] }));
+    await screenInbound(BIGMAN);
+    const system = String(
+      (mocks.chat.mock.calls[0]?.[0] as Array<{ content: string }>)[0]?.content ?? ""
+    );
+    expect(system).toMatch(/STANDARD practice/);
+    expect(system).toMatch(/TRANSMIT a document over chat/);
+  });
+
+  it("an unreachable model changes nothing", async () => {
+    // The real `chat` degrades rather than throwing: no provider -> "" (the
+    // repo's no-key fallback rule). Unparseable output is the other shape.
+    mocks.chat.mockImplementation(async () => "");
+    expect((await screenInbound(BIGMAN)).risk).toBe("none");
+    mocks.chat.mockImplementation(async () => "sorry, I cannot help with that");
+    expect((await screenInbound(BIGMAN)).risk).toBe("none");
   });
 });

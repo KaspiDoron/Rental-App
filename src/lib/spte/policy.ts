@@ -8,6 +8,7 @@ import type { MoveKind, TurnContext, TurnArtifact } from "./types";
 import { menuUnresolved } from "../offer-options";
 import { alreadyAsked, unaskedObligations, type ThreadLedger } from "../thread/ledger";
 import type { ClaimSubject } from "../thread/claims";
+import { passportOnlyDeposit, counterAlreadyMade } from "../negotiation/deposit-counter";
 
 /**
  * Compute the legal move set for this turn from verified facts. Ordered by the
@@ -108,6 +109,13 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   if (!moves.includes("bargain")) {
     if (!priceKnown) moves.push("clarify");
     if (priceKnown && !depositKnown(ctx)) moves.push("deposit-probe");
+    // THE PASSPORT-DEPOSIT COUNTER (negotiation/deposit-counter): the shop's
+    // known terms demand the ORIGINAL passport with no cash route, and we have
+    // never asked for the alternative - ONE polite counter is legal. After we
+    // send it the ask-once ledger gate holds it outstanding, and once the shop
+    // answers, counterAlreadyMade keeps it retired forever - a decline is
+    // accepted gracefully by construction.
+    if (priceKnown && depositKnown(ctx) && passportCounterDue(ctx)) moves.push("deposit-probe");
     if (priceKnown && !fulfillmentKnown(ctx)) moves.push("fulfillment-probe");
   }
 
@@ -155,6 +163,15 @@ const QUESTION_SUBJECT: Partial<Record<MoveKind, ClaimSubject>> = {
 };
 
 const EMPTY_LEDGER: ThreadLedger = { claims: [], known: [], outstanding: [], owed: [] };
+
+/** One cash-deposit counter is due: original-passport-only terms, never asked. */
+export function passportCounterDue(ctx: TurnContext): boolean {
+  return (
+    passportOnlyDeposit(ctx.thread.digest.ledger) &&
+    !counterAlreadyMade(ctx.thread.digest.lastOutbound ?? []) &&
+    !counterAlreadyMade(ctx.tail.filter((m) => m.dir === "out").map((m) => m.text))
+  );
+}
 
 function withoutRepeatedAsks(ctx: TurnContext, moves: MoveKind[]): MoveKind[] {
   const ledger = ctx.thread.digest.ledger;

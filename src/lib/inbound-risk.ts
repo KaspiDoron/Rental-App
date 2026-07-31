@@ -91,6 +91,20 @@ function describesTerms(text: string): boolean {
   );
 }
 
+// A DOCUMENT WORD IS A NOUN. A DEMAND NEEDS A VERB. (Module scope so the LLM
+// half below holds the model to the SAME grammar - in the field the model
+// called a shop's standard passport-deposit terms "SUSPICIOUS" and the code
+// accepted that verdict with only a link filter, which is how the Bigman chat
+// got a red banner, a frozen composer and a lost ฿1,100 discount.)
+const DOC = /\b(passports?|id cards?|identity|licen[cs]es?)\b/;
+const TRANSMIT =
+  /\b(send|sends|sending|share|shares|sharing|forward|upload|uploads|submit|submits|attach|mail|whats ?app|dm|e-?mail)\b/;
+const DEMAND = new RegExp(
+  `${TRANSMIT.source}[^.!?]{0,40}${DOC.source}|${DOC.source}[^.!?]{0,30}${TRANSMIT.source}`
+);
+/** Does the model's stated reason hinge on documents/IDs? */
+const DOC_REASON = /\b(passport|id card|identity|licen[cs]e|document)/i;
+
 export function screenInboundDeterministic(text: string, vendorName?: string): InboundRisk {
   const reasons: string[] = [];
   const cleared: string[] = [];
@@ -125,13 +139,8 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
   // traveller: send / share / upload / forward / submit / mail it to me. You
   // cannot describe a deposit policy with those words, and you cannot ask
   // someone to transmit a document without one. So the act is the signal, and
-  // the noun is only the object of it.
-  const DOC = /\b(passports?|id cards?|identity|licen[cs]es?)\b/;
-  const TRANSMIT =
-    /\b(send|sends|sending|share|shares|sharing|forward|upload|uploads|submit|submits|attach|mail|whats ?app|dm|e-?mail)\b/;
-  const DEMAND = new RegExp(
-    `${TRANSMIT.source}[^.!?]{0,40}${DOC.source}|${DOC.source}[^.!?]{0,30}${TRANSMIT.source}`
-  );
+  // the noun is only the object of it. (DOC/TRANSMIT/DEMAND live at module
+  // scope now - the LLM half is held to the same grammar.)
   if (
     DEMAND.test(s) &&
     // ...and it must not be the shop DESCRIBING its terms. A typed claim about
@@ -208,7 +217,7 @@ export async function screenInbound(
         {
           role: "system",
           content:
-            'You screen a rental shop\'s WhatsApp message for risks TO THE TRAVELLER (scams, document harvesting, off-platform payment pressure, phishing links). Reply ONLY JSON: {"risk":"none"|"caution"|"high","reasons":["short plain-language warning"...]}. Normal haggling, prices, deposits paid in person at pickup are NOT risks. A link to the shop\'s OWN website' +
+            'You screen a rental shop\'s WhatsApp message for risks TO THE TRAVELLER (scams, document harvesting, off-platform payment pressure, phishing links). Reply ONLY JSON: {"risk":"none"|"caution"|"high","reasons":["short plain-language warning"...]}. Normal haggling, prices, deposits paid in person at pickup are NOT risks. Holding a passport (or a passport photocopy + cash) as the rental deposit AT THE COUNTER is STANDARD practice across Southeast Asia - a shop STATING those terms is never a risk; only an instruction to TRANSMIT a document over chat ("send me a photo of your passport") is. A link to the shop\'s OWN website' +
             (opts?.vendorName ? ` (the shop is "${opts.vendorName}")` : "") +
             " is NOT a risk. A MAP LINK (Google/Apple Maps, a location pin) is the shop answering where it is - that is NEVER a risk." +
             // Telling the model what we already cleared stops it re-raising a
@@ -226,9 +235,20 @@ export async function screenInbound(
       if (j && (j.risk === "high" || j.risk === "caution") && Array.isArray(j.reasons)) {
         // Drop any model reason that only re-raises a host we already cleared -
         // the model does not get to overrule a positive deterministic judgement.
+        //
+        // AND HOLD IT TO THE DOCUMENT GRAMMAR. The deterministic half learned
+        // (F1) that a document DEMAND needs a transmit verb and that stated
+        // deposit/handover terms are never a demand - but the model's verdict
+        // used to bypass both, so the exact message the regexes were taught to
+        // pass ("Deposit: original passport, or copy + 3000") came back as a
+        // red banner via this path. A model reason built on documents is
+        // accepted ONLY when the message itself carries a transmit-verb demand
+        // and is not the shop describing its terms.
+        const textDemandsDoc = DEMAND.test(text.toLowerCase()) && !describesTerms(text);
         const modelReasons = j.reasons
           .map(String)
-          .filter((r) => !cleared.some((h) => r.toLowerCase().includes(h.toLowerCase())));
+          .filter((r) => !cleared.some((h) => r.toLowerCase().includes(h.toLowerCase())))
+          .filter((r) => !DOC_REASON.test(r) || textDemandsDoc);
         // NOTHING LEFT means the model's only objection was a cleared link, so
         // the deterministic verdict stands. The old code here read
         // `det.risk === "caution" || j.risk === "high" ? j.risk : j.risk` - both
