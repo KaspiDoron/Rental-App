@@ -29,10 +29,20 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
 
-  // The share must have something server-verified to say.
+  // The share must have something server-verified to say - EITHER a saved stay
+  // OR a one-off place the traveller just chose.
+  //
+  // This guard used to run first and unconditionally, so a traveller with no
+  // saved stay was refused outright ("Add your hotel or address first") even
+  // when they had just picked a place in the share sheet for THIS share. The
+  // one-off path below (sharePlaceId / shareQuery, both re-resolved against
+  // Google here - a client string is never trusted as a location fact) was
+  // therefore unreachable for exactly the people who needed it: anyone who had
+  // not filled in a stay, which on a first search is everyone.
+  const oneOff = Boolean(body.sharePlaceId || body.shareQuery);
   const { getUserStay } = await import("@/lib/access");
   const stay = await getUserStay(session.email);
-  if (!stay?.label) {
+  if (!stay?.label && !oneOff) {
     return NextResponse.json({
       ok: false,
       reason: "no-stay",

@@ -31,6 +31,7 @@ export function LocationShareSheet({
   askedQuote,
   onClose,
   onShare,
+  searchOrigin,
 }: {
   shopName: string;
   /** The shop's own question, when we have it - always better than a guess. */
@@ -38,11 +39,21 @@ export function LocationShareSheet({
   onClose: () => void;
   /** `place` is a resolved place NAME, never coordinates. Omit to use the stay. */
   onShare: (place?: string) => Promise<LocationShareResult>;
+  /** Where this search is centred (the town/area the traveller typed). A real,
+   *  already-chosen place - the honest third answer when there is no saved stay
+   *  and the traveller does not want to type another address. */
+  searchOrigin?: string;
 }) {
   const { t } = useI18n();
   const [picked, setPicked] = useState<string | null>(null);
   const [savedStay, setSavedStay] = useState<string | null>(null);
-  const [mode, setMode] = useState<"stay" | "other">("other");
+  // THREE ANSWERS, not two. Without the search origin a traveller with no
+  // saved stay had exactly one option - type a new address - which is the
+  // worst moment to ask for typing: the shop is waiting, and the app already
+  // KNOWS an honest answer (the area they searched in).
+  const [mode, setMode] = useState<"stay" | "origin" | "other">(
+    searchOrigin ? "origin" : "other"
+  );
   const [state, setState] = useState<"idle" | "sending" | "done" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -64,12 +75,20 @@ export function LocationShareSheet({
     };
   }, []);
 
-  const canSend = state !== "sending" && (mode === "stay" ? Boolean(savedStay) : Boolean(picked));
+  const canSend =
+    state !== "sending" &&
+    (mode === "stay"
+      ? Boolean(savedStay)
+      : mode === "origin"
+        ? Boolean(searchOrigin)
+        : Boolean(picked));
 
   async function send() {
     setState("sending");
     setError(null);
-    const r = await onShare(mode === "other" ? picked ?? undefined : undefined);
+    const r = await onShare(
+      mode === "other" ? picked ?? undefined : mode === "origin" ? searchOrigin : undefined
+    );
     if (r.ok) {
       setState("done");
       setTimeout(onClose, 1200);
@@ -117,6 +136,22 @@ export function LocationShareSheet({
           </button>
         )}
 
+        {/* THE AREA THEY SEARCHED IN. Already chosen, already resolved, and
+            the right answer far more often than typing a second address. */}
+        {searchOrigin && (
+          <button
+            onClick={() => setMode("origin")}
+            className={`w-full rounded-2xl border-2 p-3 text-left transition ${
+              mode === "origin" ? "border-brandblue bg-brandblue-soft" : "border-line bg-card"
+            }`}
+          >
+            <div className="text-[12px] font-extrabold text-strong">
+              📍 {t("Where I'm searching")}
+            </div>
+            <div className="mt-0.5 text-[11px] text-soft">{searchOrigin}</div>
+          </button>
+        )}
+
         <div
           className={`rounded-2xl border-2 p-3 transition ${
             mode === "other" ? "border-brandblue bg-brandblue-soft" : "border-line bg-card"
@@ -137,6 +172,13 @@ export function LocationShareSheet({
                 showMyLocation
                 value={picked ?? ""}
                 onPick={(p) => setPicked(p.label)}
+                // A REFUSED PERMISSION MUST NOT STRAND THE FLOW. The field
+                // says so itself; here we also fall back to the pre-resolved
+                // search origin, so the traveller can still answer the shop
+                // with one tap instead of typing an address under pressure.
+                onDenied={() => {
+                  if (searchOrigin) setMode("origin");
+                }}
               />
             </div>
           )}

@@ -1939,7 +1939,12 @@ export async function runUserAction(args: {
   if (args.stayLabelOverride && input.ctx) {
     // Drop any consented coords along with the label: they belong to the SAVED
     // stay, and pinning them to a different address would be a false location.
-    input.ctx.stay = { label: args.stayLabelOverride, shareConsent: false };
+    // CHOOSING THIS PLACE FOR THIS SHARE *IS* THE CONSENT: the traveller
+    // picked it in the share sheet moments ago, for this shop, on purpose.
+    // There are still no coordinates, so no pin can be built - what the
+    // consent unlocks is the by-NAME maps link (see resolveShareableLocation),
+    // which spares the shop retyping an address into their own maps app.
+    input.ctx.stay = { label: args.stayLabelOverride, shareConsent: true };
   }
   // User actions send promptly - the traveller is watching the screen.
   input.humanDelay = false;

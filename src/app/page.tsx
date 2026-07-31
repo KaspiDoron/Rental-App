@@ -3443,6 +3443,10 @@ export default function Home() {
         <LocationShareSheet
           shopName={locationAskFor.name}
           askedQuote={locationAskFor.offer?.askedLocationQuote}
+          // The area this search is centred on - already chosen, already
+          // resolved, and the honest third answer for a traveller with no
+          // saved stay (and the fallback when device location is refused).
+          searchOrigin={origin?.label || undefined}
           onClose={() => setLocationAskFor(null)}
           onShare={(place) => pickupConsent(locationAskFor, place)}
         />

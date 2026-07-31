@@ -629,7 +629,19 @@ function VendorCardInner({
                       </span>
                     )}
                     {/* How the traveller gets the vehicle - only when the shop
-                        confirmed it. Delivery already shows via includesDelivery. */}
+                        confirmed it.
+                        DELIVERY HAS TWO SOURCES, and only one was rendered.
+                        `includesDelivery` comes off the extraction; the engine
+                        ALSO records a thread-state fulfillment of "delivery"
+                        (from the fulfillment-probe answer), and a shop that
+                        agreed to deliver mid-conversation set only the second.
+                        Those cards showed NO handover chip at all - the one
+                        fact the traveller most needs before booking. */}
+                    {offer.fulfillment === "delivery" && !offer.includesDelivery && (
+                      <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[9px] font-extrabold text-savings">
+                        🛵 {t("Delivers to you")}
+                      </span>
+                    )}
                     {offer.fulfillment === "on-shop" && (
                       <span className="rounded-full bg-card px-2 py-0.5 text-[9px] font-extrabold text-soft">
                         🏪 {t("On shop")}
@@ -756,11 +768,22 @@ function VendorCardInner({
                   </div>
                 ) : (
                   <div className="mt-2 flex gap-2">
+                    {/* THROUGH THE SHEET, like every other share.
+                        This button used to fire consent DIRECTLY, so the one
+                        flow where the shop had actually offered to collect the
+                        traveller was the one flow with no choice of WHERE -
+                        it silently used the saved stay, and for a traveller
+                        without one it simply failed. The sheet is the place
+                        that choice lives. */}
                     <button
-                      onClick={async () => {
-                        setPickupState("sending");
-                        const r = await onPickupConsent(vendor);
-                        setPickupState(r.ok ? "shared" : "failed");
+                      onClick={() => {
+                        if (onLocationRequest) onLocationRequest(vendor);
+                        else {
+                          setPickupState("sending");
+                          void onPickupConsent(vendor).then((r) =>
+                            setPickupState(r.ok ? "shared" : "failed")
+                          );
+                        }
                       }}
                       disabled={pickupState === "sending"}
                       className="btn btn-primary flex-1 rounded-xl py-2 text-[12px] disabled:opacity-60"
@@ -781,7 +804,12 @@ function VendorCardInner({
                 )}
                 {pickupState === "failed" && (
                   <div className="mt-1.5 text-[11px] font-bold text-brandred">
-                    {t("Could not share your location - allow location access and retry.")}
+                    {/* HONEST FAILURE. The old copy blamed the device ("allow location
+                        access") for a server-side share the browser's
+                        geolocation never touches - so the traveller went
+                        hunting through iOS settings for a permission that was
+                        never involved. */}
+                    {t("Could not share that just now - try again in a moment.")}
                   </div>
                 )}
               </div>

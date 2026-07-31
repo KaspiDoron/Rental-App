@@ -46,11 +46,49 @@ function validLng(n: unknown): n is number {
 export function resolveShareableLocation(stay: UserStayLike | null | undefined): ShareableLocation {
   const label = (stay?.label ?? "").trim();
   const out: ShareableLocation = { addressText: label || null };
-  if (!stay?.shareConsent) return out; // no consent -> text only, always
-  if (!validLat(stay.lat) || !validLng(stay.lng)) return out; // junk coords -> text only
+  // NO CONSENT -> NO LINK OF ANY KIND. The M5 leak contract, unchanged.
+  if (!stay?.shareConsent) return out;
+  // CONSENT, BUT NO USABLE PIN -> a link to the PLACE BY NAME.
+  //
+  // The only builder here was coordinate-based, so a consented share with no
+  // stored coordinates (every one-off "meet me at this cafe", where the
+  // traveller picks a place for THIS share and no position is stored) sent the
+  // shop a bare name to retype into their own maps app - the exact friction
+  // the delivery flow exists to remove. A search-by-name URL is a different
+  // privacy object from a pin: it says "this named place", not "this person is
+  // at these coordinates". It carries nothing the address text does not.
+  if (!validLat(stay.lat) || !validLng(stay.lng)) {
+    out.mapsLink = placeMapsLink(label);
+    return out;
+  }
   out.coords = { lat: stay.lat, lng: stay.lng };
   out.mapsLink = `https://maps.google.com/?q=${stay.lat.toFixed(6)},${stay.lng.toFixed(6)}`;
   return out;
+}
+
+/**
+ * A MAPS LINK FOR A PLACE, WITHOUT EXPOSING A POSITION.
+ *
+ * The only link builder here was coordinate-based and consent-gated, so a
+ * one-off share ("meet me at this cafe") could never carry a link at all -
+ * the shop got a bare name to type into their own maps app, which is exactly
+ * the friction the delivery flow exists to remove.
+ *
+ * A place-name search URL is a different privacy object from a pin: it says
+ * "this named place", not "this person is at these coordinates to six
+ * decimals". It needs no consent gate because it discloses nothing the
+ * address text does not already say - and the traveller chose the place.
+ *
+ * Server-composed only; the query is the Google-resolved label, never a
+ * string a client handed us.
+ */
+export function placeMapsLink(label: string | null | undefined): string | undefined {
+  const q = (label ?? "").trim();
+  if (q.length < 3) return undefined;
+  // A label that already IS a link is never re-wrapped (nothing downstream
+  // should be able to smuggle a URL through the address field).
+  if (/https?:\/\//i.test(q)) return undefined;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
 export interface StayInput {

@@ -12,6 +12,26 @@ import { digitsOnly } from "@/lib/phone";
 
 type Step = "verify" | "schedule" | "confirmed";
 
+/**
+ * THE THREE WAYS A VEHICLE AND ITS RENTER MEET.
+ *
+ * - "hotel-delivery" - the shop brings the vehicle to the traveller.
+ * - "shuttle"        - the shop COLLECTS the traveller and takes them to it.
+ * - "in-store"       - the traveller walks in.
+ *
+ * The middle one is not a variation on walking in: somebody has to be
+ * somewhere at a time, and the shop needs to know where. It is the standard
+ * answer in beach towns, and the two-button chooser had nowhere to put it.
+ * Maps 1:1 onto the engine's FulfillmentKind (delivery | pickup | on-shop).
+ */
+type Handover = "in-store" | "shuttle" | "hotel-delivery";
+
+const HANDOVER_TO_FULFILLMENT: Record<Handover, "delivery" | "pickup" | "on-shop"> = {
+  "hotel-delivery": "delivery",
+  shuttle: "pickup",
+  "in-store": "on-shop",
+};
+
 export function BookingSheet({
   vendor,
   rfq,
@@ -27,9 +47,24 @@ export function BookingSheet({
   const [verification, setVerification] = useState<string>("");
   // Fulfillment defaults from the request: a hotel-delivery RFQ pre-selects
   // delivery so the booking (and the shop message) match what was negotiated.
-  const [fulfillment, setFulfillment] = useState<"in-store" | "hotel-delivery">(
-    rfq?.fulfillment === "hotel-delivery" ? "hotel-delivery" : "in-store"
-  );
+  //
+  // THREE MODES, because there are three. The chooser offered two - "I'll pick
+  // up" and "Deliver to me" - and folded the third into the first, so a shop
+  // that had OFFERED to collect the traveller (a shuttle, the single most
+  // common answer in beach towns) had nowhere to be recorded, and the booking
+  // said "walk in" for a ride that was arranged. The engine's vocabulary
+  // already had all three (FulfillmentKind: delivery | pickup | on-shop);
+  // only this control was missing one.
+  //
+  // Pre-selected from what the SHOP offered, falling back to the request - so
+  // the booking matches what was actually negotiated instead of a default.
+  const [fulfillment, setFulfillment] = useState<Handover>(() => {
+    const offered = vendor.offer?.fulfillment;
+    if (offered === "delivery") return "hotel-delivery";
+    if (offered === "pickup") return "shuttle";
+    if (offered === "on-shop") return "in-store";
+    return rfq?.fulfillment === "hotel-delivery" ? "hotel-delivery" : "in-store";
+  });
   const [address, setAddress] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
@@ -74,7 +109,9 @@ export function BookingSheet({
   const returnDate = new Date(`${pickupDate}T00:00:00`);
   returnDate.setDate(returnDate.getDate() + Math.max(0, durationDays));
   const returnDateStr = returnDate.toISOString().slice(0, 10);
-  const deliveryReady = fulfillment !== "hotel-delivery" || address.trim().length > 2;
+  // BOTH off-shop modes need a place before the deal can be locked - a
+  // shuttle with nowhere to collect from is not an arrangement.
+  const deliveryReady = fulfillment === "in-store" || address.trim().length > 2;
 
   async function confirm() {
     if (submitting) return; // guard against a double-tap firing two bookings
@@ -96,7 +133,10 @@ export function BookingSheet({
           durationDays,
           currency: vendor.offer?.currency ?? "USD",
           fulfillment,
-          deliveryAddress: fulfillment === "hotel-delivery" ? address.trim() : undefined,
+          // The engine's own vocabulary, so the booking, the thread state and
+          // the shop message all say the same thing about the same handover.
+          handover: HANDOVER_TO_FULFILLMENT[fulfillment],
+          deliveryAddress: fulfillment !== "in-store" ? address.trim() : undefined,
           oneWayDropOff: rfq?.oneWayDropOff,
           scheduledAt: when,
           returnDate: returnDateStr,
@@ -131,12 +171,13 @@ export function BookingSheet({
           openNow: vendor.openNow,
           pricePerDay: vendor.offer?.pricePerDay,
           currency: vendor.offer?.currency,
-          fulfillment:
-            fulfillment === "hotel-delivery"
-              ? "delivery"
-              : vendor.offer?.fulfillment ?? "on-shop",
+          // THE TRAVELLER'S CHOICE IS THE TRUTH. This used to fall back to
+          // whatever the shop had offered whenever the choice was not
+          // "delivery" - so picking "I'll walk in" against a shop that had
+          // offered to collect you still told the shop a shuttle was on.
+          fulfillment: HANDOVER_TO_FULFILLMENT[fulfillment],
           when: `${pickupDate} around ${time}`,
-          address: fulfillment === "hotel-delivery" ? address.trim() : undefined,
+          address: fulfillment !== "in-store" ? address.trim() : undefined,
         }),
       });
       const d = await res.json();
@@ -226,17 +267,18 @@ export function BookingSheet({
           </p>
 
           {/* Fulfillment: pickup at the shop vs delivery to your stay */}
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
             {(
               [
-                { id: "in-store", label: "🏪 I'll pick up" },
+                { id: "in-store", label: "🏪 I'll walk in" },
+                { id: "shuttle", label: "🚐 Collect me" },
                 { id: "hotel-delivery", label: "🛵 Deliver to me" },
-              ] as { id: "in-store" | "hotel-delivery"; label: string }[]
+              ] as { id: Handover; label: string }[]
             ).map((o) => (
               <button
                 key={o.id}
                 onClick={() => setFulfillment(o.id)}
-                className={`btn chip rounded-2xl border-2 p-2.5 text-[13px] font-extrabold ${
+                className={`btn chip rounded-2xl border-2 p-2 text-[11.5px] font-extrabold leading-tight ${
                   fulfillment === o.id
                     ? "border-brandblue bg-brandblue-soft text-brandblue"
                     : "border-line text-soft"
@@ -246,11 +288,18 @@ export function BookingSheet({
               </button>
             ))}
           </div>
-          {fulfillment === "hotel-delivery" && (
+          {/* BOTH off-shop modes need a PLACE - somebody has to be somewhere.
+              Only the words differ: one is where the vehicle goes, the other
+              is where the traveller is picked up from. */}
+          {fulfillment !== "in-store" && (
             <div className="mt-2">
               <PlaceAutocomplete
-                label="Delivery address"
-                placeholder="Hotel name / address for delivery"
+                label={fulfillment === "shuttle" ? "Pick-up point" : "Delivery address"}
+                placeholder={
+                  fulfillment === "shuttle"
+                    ? "Where should they collect you?"
+                    : "Hotel name / address for delivery"
+                }
                 value={address}
                 onText={setAddress}
               />
@@ -307,12 +356,14 @@ export function BookingSheet({
                 </div>
               )}
               {vendor.offer?.deposit && <div>🔒 Deposit: {vendor.offer.deposit}</div>}
+              {/* The traveller's OWN choice, in all three modes - not the
+                  shop's offer overriding it. */}
               <div>
                 {fulfillment === "hotel-delivery"
                   ? `🛵 Delivery to ${address.trim() || "your stay"}`
-                  : vendor.offer?.fulfillment === "pickup"
-                  ? "🚗 The shop picks you up"
-                  : "🏪 Pick up at the shop"}
+                  : fulfillment === "shuttle"
+                  ? `🚐 They collect you at ${address.trim() || "your stay"}`
+                  : "🏪 You walk in to the shop"}
               </div>
               <div>📅 {pickupDate} around {time}</div>
             </div>
@@ -353,8 +404,8 @@ export function BookingSheet({
           >
             {submitting ? (
               <LoadingDots light label="Closing the deal & messaging the shop" />
-            ) : fulfillment === "hotel-delivery" && !deliveryReady ? (
-              "Add a delivery address"
+            ) : !deliveryReady ? (
+              fulfillment === "shuttle" ? "Add a pick-up point" : "Add a delivery address"
             ) : (
               "Yes, close this deal"
             )}

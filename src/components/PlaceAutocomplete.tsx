@@ -63,6 +63,7 @@ export function PlaceAutocomplete({
   icon = "pin",
   minChars = 2,
   className = "",
+  onDenied,
 }: {
   label?: string;
   placeholder?: string;
@@ -70,6 +71,9 @@ export function PlaceAutocomplete({
   value?: string;
   onPick?: (p: PlacePick) => void;
   onText?: (text: string) => void;
+  /** Device location was refused or unavailable. The caller can fall back to
+   *  the search origin instead of leaving the traveller with a dead control. */
+  onDenied?: () => void;
   showMyLocation?: boolean;
   icon?: string;
   minChars?: number;
@@ -210,7 +214,26 @@ export function PlaceAutocomplete({
         commit({ label: lbl, lat, lng });
         setLocating(false);
       },
-      () => setLocating(false),
+      // A DENIED PERMISSION IS NOT A DEAD END, and it must never be silent.
+      //
+      // This used to be a bare `setLocating(false)`: the spinner stopped, the
+      // field stayed empty, and nothing said why - so a traveller who had
+      // declined the browser prompt (or was indoors with no fix) was left
+      // staring at a control that looked broken, mid-way through arranging a
+      // delivery. Every one of these cases has the same honest answer: type
+      // the place instead, which is what the field beside it is for.
+      (err: GeolocationPositionError) => {
+        setLocating(false);
+        setNote(
+          err?.code === 1
+            ? "Location access is off for this site - type your hotel or area below instead and I'll use that."
+            : err?.code === 3
+              ? "Your phone could not get a fix in time - type your hotel or area below instead."
+              : "Could not read your location - type your hotel or area below instead."
+        );
+        setOpen(true);
+        onDenied?.();
+      },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }
