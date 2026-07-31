@@ -59,6 +59,41 @@ const HOURS =
 
 const DEPOSIT = /\b(deposits?|down ?payments?|collaterals?|security bonds?)\b/i;
 
+/**
+ * A DEPOSIT MENU IS INFORMATION, NOT A QUESTION - however it is punctuated.
+ *
+ * Ko Tao, 12:49. The shop sent:
+ *
+ *   "Can I use my passport as a deposit? Is a single original driver's license
+ *    acceptable? Or 4,000 baht in cash along with my national ID card?"
+ *
+ * That is the shop's own deposit menu, pasted, rendered in the first person by
+ * a machine translator - Thai has no obligatory subject pronoun, so "can use
+ * passport" comes back as "Can I use my passport". Interrogative in surface
+ * form, informational in intent. Read as a question, the agent tries to ANSWER
+ * the shop's own template, which is how a thread about terms turns into two
+ * parties asking each other the same thing.
+ *
+ * Detected STRUCTURALLY: enumerated alternatives - "or", or numbered/bulleted
+ * options - carrying deposit nouns, with at least two distinct deposit items
+ * among them. A phrase list would have to be rewritten for every translator.
+ */
+const DEPOSIT_ITEM =
+  /\b(passports?|id cards?|identity cards?|national id|ktp|driver'?s? licen[cs]e|licen[cs]e|\d[\d,.]{2,}\s*(baht|thb|฿|usd|\$|rp|idr|peso|php)?|cash)\b/gi;
+const ENUMERATED = /(^|[\s,;.])or\b|^\s*[-*•]\s|\b[1-3][).]\s/im;
+
+export function isDepositOptionsList(text: string): boolean {
+  const t = String(text ?? "");
+  if (!DEPOSIT.test(t)) return false;
+  if (!ENUMERATED.test(t)) return false;
+  const items = new Set(
+    (t.match(DEPOSIT_ITEM) ?? []).map((m) => m.trim().toLowerCase().replace(/\s+/g, " "))
+  );
+  // Two distinct things they will accept is a MENU. One is a demand, and a
+  // demand may well be a real question ("can you send your passport?").
+  return items.size >= 2;
+}
+
 const ASKS: Array<{ kind: AskKind; rx: RegExp }> = [
   {
     kind: "license-photo",
@@ -124,10 +159,16 @@ export function classifyActs(input: ActInput): DialogueActs {
   if (DEPOSIT.test(text)) shared.push("deposit");
   if (HOURS.test(text)) shared.push("hours");
 
+  // ...and a pasted deposit MENU is the shop stating its terms, whatever the
+  // punctuation says. Same treatment as an auto-reply: it shares, it does not
+  // ask, and the engine extracts the terms instead of answering the template.
+  const depositMenu = isDepositOptionsList(text);
+  if (depositMenu && !shared.includes("deposit")) shared.push("deposit");
+
   // An automated form letter is not a turn waiting on an answer. It shares
   // whatever it shares; its questions are boilerplate.
   let ask: AskKind = "none";
-  if (!autoReply) {
+  if (!autoReply && !depositMenu) {
     for (const { kind, rx } of ASKS) {
       if (rx.test(text)) {
         ask = kind;

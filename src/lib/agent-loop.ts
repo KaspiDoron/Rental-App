@@ -544,6 +544,17 @@ export async function processVendorReply(opts: {
           { ...riskRow, user_email: ctx.sender ?? null },
         ]);
         if (!stamped) await sbInsert("agent_events", [riskRow]);
+        // THROUGH THE GATE, like everything else. A risk always passes it -
+        // it is a handover, not news, and is deliberately exempt from the
+        // budget - but it must go through the ONE door so it is recorded, and
+        // so the ceiling counts what actually reached the phone. This site
+        // bypassed both and never called markPushSent, which is what made the
+        // 4-per-hour limit advisory rather than real.
+        const { worthAnInterruption } = await import("./notify/significance");
+        const { notifyState, markPushSent } = await import("./notify/state");
+        const pushState = await notifyState(ctx.sender!);
+        const gate = worthAnInterruption({ kind: "risk" }, pushState);
+        if (!gate.notify) return;
         const { sendPushToUser } = await import("./push");
         await sendPushToUser(ctx.sender!, {
           title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
@@ -554,6 +565,7 @@ export async function processVendorReply(opts: {
           // it must not silently replace one either.
           tag: `risk:${from}`,
         });
+        await markPushSent(ctx.sender!, `risk: ${gate.reason}`);
       } catch {
         /* screening is best-effort */
       }
@@ -1184,11 +1196,17 @@ export async function processVendorReply(opts: {
       try {
         const { classifyReply, worthAnInterruption } = await import("./notify/significance");
         const { notifyState, markPushSent } = await import("./notify/state");
-        const state = await notifyState(ctx.sender!);
+        // WITH THE VENDOR, so "this shop came down from 250" is a fact the
+        // gate can see. Without it, a shop moving while another sits cheaper
+        // produced nothing at all.
+        const state = await notifyState(ctx.sender!, Date.now(), ctx.vendorId);
+        const { classifyActs } = await import("./wa/dialogue-acts");
+        const acts = classifyActs({ text, pricePerDay: usablePrice ?? null });
         const event = classifyReply({
           pricePerDay: usablePrice,
           currency: cur,
           anyReplyYet: state.anyReplyYet,
+          termsLanded: acts.shared.includes("deposit"),
         });
         const verdict = worthAnInterruption(event, state);
         if (!verdict.notify) return;

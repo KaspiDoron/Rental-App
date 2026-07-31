@@ -57,13 +57,27 @@ describe("the notification fires when the message LANDS, not when the agent fini
     expect(loop).toMatch(/tag: `risk:\$\{from\}`/);
   });
 
-  it("the ingest push does NOT spend the traveller's interruption budget", () => {
-    // notify/state counts `push-sent` rows to decide whether a further
-    // interruption is warranted. Stamping ingest pushes there would suppress
-    // the more informative "price landed" upgrade - which costs no extra buzz
-    // because it shares the collapse tag.
+  it("...but it goes through the SAME gate, and it DOES spend the budget", () => {
+    // This test used to assert the opposite, on the reasoning that the agent
+    // turn's upgrade shares the collapse tag so the ingest push "costs no
+    // extra buzz". That was wrong in the one way that matters: the ingest push
+    // fires FIRST. The phone has already buzzed by the time the upgrade
+    // replaces it on the lock screen, and a buzz that reached the traveller is
+    // an interruption whatever happens to the notification afterwards. Not
+    // counting it made the 4-per-hour ceiling advisory.
+    //
+    // And the push itself is now judged, not unconditional: fifteen shops
+    // answering with auto-greetings was fifteen buzzes carrying nothing, which
+    // is the exact noise `worthAnInterruption` was written to stop - beside a
+    // call site that ignored it.
+    expect(body).toMatch(/worthAnInterruption/);
+    expect(body).toMatch(/markPushSent/);
+    // The delivery breadcrumb survives - it answers a different question
+    // ("did it reach a device") and the doctor reads it.
     expect(body).toMatch(/kind: "push-ingest"/);
-    expect(body).not.toMatch(/markPushSent/);
+    // ...including when we decide NOT to push. "We chose not to" is an answer;
+    // silence is not.
+    expect(body).toMatch(/skipped: `\$\{event\.kind\}: \$\{verdict\.reason\}`/);
     expect(stripComments(readCode("src/lib/notify/state.ts"))).toMatch(/kind=eq\.push-sent/);
   });
 });

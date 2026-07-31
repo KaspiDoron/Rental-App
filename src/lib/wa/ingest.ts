@@ -220,6 +220,33 @@ export async function processEvolutionWebhook(
         ) {
           const { enterBanRecovery } = await import("@/lib/wa-guard");
           await enterBanRecovery(email, 24);
+          // THE AGENT IS BLOCKED, and only they can unblock it.
+          //
+          // Every push this app sent described PROGRESS - a reply, a price, a
+          // deal. So the one state that genuinely needs a human, where the
+          // link has dropped and nothing will send or arrive until they
+          // re-pair, was the one state that produced silence. A hunt could sit
+          // dead for hours behind a phone showing "Alerts on".
+          void (async () => {
+            try {
+              const { worthAnInterruption } = await import("@/lib/notify/significance");
+              const { notifyState, markPushSent } = await import("@/lib/notify/state");
+              const g = worthAnInterruption({ kind: "agent-blocked" }, await notifyState(email));
+              if (!g.notify) return;
+              const { sendPushToUser } = await import("@/lib/push");
+              await sendPushToUser(email, {
+                title: "WhatsApp disconnected 🔌",
+                body: "Your agents are paused until you reconnect - open the app and scan the code to pick the hunt back up.",
+                url: "/profile",
+                // Its own lane: a connection problem must never be collapsed
+                // away by an ordinary reply push.
+                tag: "wa:disconnected",
+              });
+              await markPushSent(email, `agent-blocked: ${g.reason}`);
+            } catch {
+              /* a notification never blocks the webhook */
+            }
+          })();
         }
       } catch {
         /* best-effort */
@@ -395,12 +422,21 @@ export async function processEvolutionWebhook(
               "graph_wakeups",
               `kind=eq.tick&thread_key=eq.${encodeURIComponent(`${email}:${from}`)}`
             ).catch(() => {});
-            const { sendPushToUser } = await import("@/lib/push");
-            sendPushToUser(email, {
-              title: "You've got the wheel 🤝",
-              body: "You messaged this shop yourself - Will is standing down on that chat until you hand it back (open the conversation in the app).",
-              url: "/",
-            }).catch(() => {});
+            // Through the ONE door, and recorded. A takeover always passes -
+            // it is a handover, exempt from the budget - but going around the
+            // gate is how a ceiling stops being a ceiling.
+            const { worthAnInterruption } = await import("@/lib/notify/significance");
+            const { notifyState, markPushSent } = await import("@/lib/notify/state");
+            const g = worthAnInterruption({ kind: "takeover" }, await notifyState(email));
+            if (g.notify) {
+              const { sendPushToUser } = await import("@/lib/push");
+              await sendPushToUser(email, {
+                title: "You've got the wheel 🤝",
+                body: "You messaged this shop yourself - Will is standing down on that chat until you hand it back (open the conversation in the app).",
+                url: "/",
+              }).catch(() => {});
+              await markPushSent(email, `takeover: ${g.reason}`);
+            }
           }
         } catch {
           /* takeover detection is best-effort - never break the webhook */
@@ -533,22 +569,69 @@ export async function processEvolutionWebhook(
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
-      // NOTIFY AT INGEST, REASON LATER.
+      // NOTIFY AT INGEST, BUT ONLY WHEN IT IS WORTH IT.
       //
-      // The "a shop replied" push used to fire only at the END of a successful
-      // agent turn (agent-loop, after extraction + composition + send). Every
-      // path that did not reach that line - a parked reply, a vision offload, a
-      // takeover, a guard refusal, an LLM outage - produced NO notification at
-      // all, which is most of why the field test saw "Alerts on" and zero
-      // pushes. The message is already STORED here; that is the moment the
-      // traveller cares about, and it depends on nothing downstream.
+      // Two true things pull against each other here, and this is where they
+      // are reconciled.
       //
-      // The agent turn still upgrades this later ("they quoted B250/day") -
-      // the collapse tag means the upgrade REPLACES this on the lock screen
-      // rather than stacking a second buzz.
+      // The first: the agent turn is the WRONG place to decide alone. It fires
+      // at the end of a successful turn, so every path that never reaches that
+      // line - a parked reply, a vision offload, a takeover, a guard refusal,
+      // an LLM outage - produced no notification at all. That is most of why
+      // the field test showed "Alerts on" and a silent phone. The message is
+      // already stored right here, and that fact depends on nothing
+      // downstream.
+      //
+      // The second: `worthAnInterruption` exists precisely because "a shop
+      // replied" is not news. This site used to push UNCONDITIONALLY, which
+      // undid the policy it was written beside - fifteen shops, fifteen
+      // buzzes, most of them auto-greetings.
+      //
+      // So: the same gate, fed by the PURE detectors already available at
+      // ingest - no LLM, no extraction, nothing that can fail or stall. If it
+      // carries a price, terms, or nothing at all, the gate knows which and
+      // decides. The agent turn still upgrades a price later under the same
+      // collapse tag, replacing this on the lock screen rather than adding a
+      // second buzz.
       if (email) {
         void (async () => {
           try {
+            const body = syntheticText || "";
+            const { extractQuotedPrices } = await import("@/lib/wa/price-extract");
+            const { classifyActs } = await import("@/lib/wa/dialogue-acts");
+            const quoted = body ? extractQuotedPrices(body).offer?.pricePerDay : undefined;
+            const acts = classifyActs({ text: body, hadImage: hasImage, pricePerDay: quoted ?? null });
+            const { classifyReply, worthAnInterruption } = await import("@/lib/notify/significance");
+            const { notifyState, markPushSent } = await import("@/lib/notify/state");
+            const state = await notifyState(email);
+            const event = classifyReply({
+              pricePerDay: quoted,
+              anyReplyYet: state.anyReplyYet,
+              // The shop stating what it wants held is a fact the traveller
+              // acts on - find an ATM, decide about the passport. A photo we
+              // have not read yet is not: the agent turn will push if it
+              // turns out to carry a price.
+              termsLanded: acts.shared.includes("deposit"),
+            });
+            const verdict = worthAnInterruption(event, state);
+            const { sbInsert } = await import("@/lib/runtime-config");
+            if (!verdict.notify) {
+              // STILL A BREADCRUMB. The doctor's question is "did the last
+              // reply push, and if not why" - and "we decided not to" is an
+              // answer, where silence is not.
+              await sbInsert("agent_events", [
+                {
+                  kind: "push-ingest",
+                  user_email: email,
+                  detail: JSON.stringify({
+                    attempted: 0,
+                    delivered: 0,
+                    skipped: `${event.kind}: ${verdict.reason}`,
+                  }).slice(0, 200),
+                },
+              ]).catch(() => {});
+              return;
+            }
             const { sendPushToUser } = await import("@/lib/push");
             const shop = data.pushName || `+${from}`;
             const outcome = await sendPushToUser(email, {
@@ -557,18 +640,19 @@ export async function processEvolutionWebhook(
                 ? "Sent a photo - your agent is reading it now."
                 : hasAudio
                   ? "Sent a voice note - your agent is listening."
-                  : (syntheticText || "").slice(0, 120) || "Tap to see the message.",
+                  : body.slice(0, 120) || "Tap to see the message.",
               url: "/",
               tag: `shop:${from}`,
             });
-            // A SEPARATE KIND, deliberately. `push-sent` is the traveller's
-            // hourly interruption BUDGET (notify/state) and the agent turn's
-            // "price landed" upgrade shares this notification's collapse tag -
-            // spending a budget slot here would silence the more useful push
-            // for no extra buzz. This row exists purely so the doctor can
-            // answer "did the last reply actually push, and what did the push
-            // service say".
-            const { sbInsert } = await import("@/lib/runtime-config");
+            // SPEND THE BUDGET. This site used to skip `markPushSent` on the
+            // grounds that the agent turn's upgrade shares the collapse tag -
+            // but a push that reaches the phone IS an interruption, and not
+            // counting it made the 4-per-hour ceiling advisory.
+            await markPushSent(email, `${event.kind}: ${verdict.reason}`);
+            // A SEPARATE KIND from `push-sent`, deliberately: that one is the
+            // budget ledger, this one is the DELIVERY breadcrumb, so the
+            // doctor can answer "did the push actually reach a device, and
+            // what did the push service say". Both are written now.
             await sbInsert("agent_events", [
               {
                 kind: "push-ingest",

@@ -430,6 +430,46 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // Clamped AGAIN here: this is the last gate before a durable not_before, and a
   // wait measured in hours is never a tactic, only a bug (the "until 08:28 AM"
   // incident on a thread the shop was actively typing in).
+  // THE BEST SHOP JUST FELL OVER.
+  //
+  // A shop declining or running out is ordinary and stays in the app. The
+  // CHEAPEST shop of the session doing it is a different event entirely: the
+  // traveller's whole plan was that number, everything else on the board is
+  // dearer, and the agent has nothing left to do about it. That is the
+  // agent-blocked class - not news competing for attention, the system saying
+  // it cannot continue without them.
+  //
+  // Ko Tao, 12:38: LLL had quoted 180, the best of the hunt, and withdrew. The
+  // phone said nothing.
+  if (input.ctx.sender && (tc.inbound.verified.declined || tc.inbound.verified.shopUnavailable)) {
+    const low = tc.session.lowest;
+    const mine = tc.inbound.verified.pricePerDay ?? tc.thread.digest.quotedPricePerDay;
+    const wasBest =
+      Boolean(low) &&
+      (low!.vendorId === input.ctx.vendorId ||
+        (typeof mine === "number" && typeof low!.pricePerDay === "number" && mine <= low!.pricePerDay));
+    if (wasBest) {
+      void (async () => {
+        try {
+          const { worthAnInterruption } = await import("../notify/significance");
+          const { notifyState, markPushSent } = await import("../notify/state");
+          const g = worthAnInterruption({ kind: "agent-blocked" }, await notifyState(input.ctx.sender!));
+          if (!g.notify) return;
+          const m = await import("../push");
+          await m.sendPushToUser(input.ctx.sender!, {
+            title: "Your best price just fell through",
+            body: `${input.ctx.vendorName ?? "The cheapest shop"} is out - your agents are still on the others, but this one needs your call.`,
+            url: "/",
+            tag: `lost:${input.ctx.vendorId ?? "best"}`,
+          });
+          await markPushSent(input.ctx.sender!, `agent-blocked: ${g.reason}`);
+        } catch {
+          /* a notification is never worth breaking a turn for */
+        }
+      })();
+    }
+  }
+
   // A SILENT TURN ON A PRICELESS THREAD MUST STILL COME BACK.
   //
   // `silent` schedules nothing - it is the reflex for "nothing is owed", and

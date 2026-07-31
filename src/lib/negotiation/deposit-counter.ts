@@ -45,9 +45,25 @@ export function passportOnlyDeposit(ledger: ThreadLedger | undefined): boolean {
   return !cashOffered;
 }
 
-/** Have WE already made the cash-deposit counter in this thread? One shot. */
+/**
+ * Have WE already made the cash-deposit counter in this thread? One shot.
+ *
+ * A BARE `cash deposit` SUBSTRING IS TOO WEAK, and the adjacent risk is real:
+ * our own counter is first-person and interrogative ("Can we do a cash deposit
+ * instead?"), and so is a machine-translated shop deposit MENU ("Or 4,000 baht
+ * in cash along with my national ID card?"). The two are hard to tell apart by
+ * words alone, and if a shop's echo were ever ingested as ours, the substring
+ * would retire a counter we never sent.
+ *
+ * The counter has a SHAPE the menu does not: it names cash AND it asks for it
+ * INSTEAD OF something, or pairs it with a photo/copy of the passport. A menu
+ * enumerates what the shop accepts; it never proposes a substitution.
+ */
+const OUR_COUNTER =
+  /\bcash\s+deposit\b[\s\S]{0,80}?\b(instead|rather than|in place of|photo|copy|picture)\b|\b(instead|rather than|in place of)\b[\s\S]{0,80}?\bcash\s+deposit\b/i;
+
 export function counterAlreadyMade(ourTexts: Array<string | undefined | null>): boolean {
-  return ourTexts.some((t) => t && /cash\s+deposit/i.test(t));
+  return ourTexts.some((t) => Boolean(t) && OUR_COUNTER.test(String(t)));
 }
 
 /** Deterministic member of the polite-counter family for this thread. */

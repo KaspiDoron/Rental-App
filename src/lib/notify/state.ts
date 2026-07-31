@@ -11,7 +11,17 @@ export const NOTIFY_WINDOW_SEC = 3600;
 
 const EMPTY: NotifyState = { anyReplyYet: false, sentInWindow: 0 };
 
-export async function notifyState(email: string, nowMs = Date.now()): Promise<NotifyState> {
+export async function notifyState(
+  email: string,
+  nowMs = Date.now(),
+  /**
+   * The shop this event is about. Supplying it adds ONE fact: what that shop
+   * quoted last time. Without it a shop moving 250 -> 200 while another sits
+   * at 180 is invisible - not the session best, so not news - and that move is
+   * the only evidence the traveller has that the negotiation is working.
+   */
+  vendorId?: string
+): Promise<NotifyState> {
   if (!email) return EMPTY;
   const { sbSelect } = await import("../runtime-config");
   const since = new Date(nowMs - NOTIFY_WINDOW_SEC * 1000).toISOString();
@@ -33,11 +43,26 @@ export async function notifyState(email: string, nowMs = Date.now()): Promise<No
     ),
   ]);
 
+  // THIS shop's previous quote - the row BEFORE the one that just landed, so
+  // the comparison is against what the traveller had already been told. Two
+  // rows, newest first; index 1 is the previous one.
+  let vendorPreviousPricePerDay: number | undefined;
+  if (vendorId) {
+    const mine = await sbSelect<{ price_per_day: number | null }>(
+      "vendor_replies",
+      `select=price_per_day&user_email=eq.${who}&vendor_id=eq.${encodeURIComponent(
+        vendorId
+      )}&price_per_day=not.is.null&order=created_at.desc&limit=2`
+    ).catch(() => [] as { price_per_day: number | null }[]);
+    vendorPreviousPricePerDay = mine[1]?.price_per_day ?? undefined;
+  }
+
   return {
     sentInWindow: sent.length,
     bestPricePerDay: best[0]?.price_per_day ?? undefined,
     bestCurrency: best[0]?.currency ?? undefined,
     anyReplyYet: anyReply.length > 0,
+    vendorPreviousPricePerDay,
   };
 }
 
