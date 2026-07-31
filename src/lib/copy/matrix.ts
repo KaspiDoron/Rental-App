@@ -110,6 +110,23 @@ export const ASK_PHRASINGS = [
   "What would it cost per day?",
 ] as const;
 
+/**
+ * The traveller asked for something beyond the vehicle - a child seat, a phone
+ * mount, a top box. It reached the RFQ and then died there.
+ *
+ * The builder's free-text field folded into `notes`, which `buildMessage`
+ * never reads; `accessories` was hard-coded `[]`; and the opener is REPLACED
+ * server-side by compileOpener, which rendered vehicle and duration and
+ * nothing else. Three separate places for the same request to vanish, so a
+ * traveller who typed "child seat" got a message that never mentioned one.
+ */
+export const EXTRAS_PHRASINGS = [
+  (x: string) => `Would you have ${x} too?`,
+  (x: string) => `I'd also need ${x}.`,
+  (x: string) => `Also looking for ${x} if you have it.`,
+  (x: string) => `And ${x} if possible.`,
+] as const;
+
 export const SIGN_OFFS = [
   "Thanks!",
   "Thank you!",
@@ -159,6 +176,8 @@ export interface StyleChoice {
   vehiclePhrase: (v: string) => string;
   durationPhrase: (d: number) => string;
   ask: string;
+  /** How the traveller's extras are asked for, when there are any. */
+  extrasPhrase: (x: string) => string;
   signOff: string;
   emoji: string;
   order: SentenceOrder;
@@ -201,6 +220,7 @@ export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
     vehiclePhrase: seededPick(rng, VEHICLE_PHRASINGS),
     durationPhrase: seededPick(rng, DURATION_PHRASINGS),
     ask: seededPick(rng, ASK_PHRASINGS),
+    extrasPhrase: seededPick(rng, EXTRAS_PHRASINGS),
     signOff: seededPick(rng, SIGN_OFFS),
     // Emoji weight: ~2/3 of messages carry one (a real texting distribution).
     emoji: rng() < 0.66 ? seededPick(rng, EMOJIS.filter(Boolean)) : "",

@@ -317,7 +317,7 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   } else {
     if (rfq.engineSizeCc) spec.push(`${rfq.engineSizeCc}cc`);
     if (rfq.transmission !== "any") spec.push(rfq.transmission);
-    if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km`);
+    if (rfq.maxMileageKm) spec.push(`under ${rfq.maxMileageKm.toLocaleString()} km on the clock`);
   }
   const vehicle = `${vehicleTerm(rfq.vehicleClass)}${spec.length ? ` (${spec.join(", ")})` : ""}`;
   const days = `${rfq.durationDays} day${rfq.durationDays === 1 ? "" : "s"}`;
@@ -1289,7 +1289,7 @@ export async function extractOffer(
             ? "automatic "
             : "manual "
         }${rfq.vehicleClass === "scooter" ? "scooter" : "motorcycle"}${
-          rfq.maxMileageKm ? `, under ${rfq.maxMileageKm} km` : ""
+          rfq.maxMileageKm ? `, under ${rfq.maxMileageKm.toLocaleString()} km on the clock` : ""
         }`;
 
   // The local currency of the shop. When a shop replies with a bare number and
@@ -2014,7 +2014,7 @@ export function verificationMessage(rfq: StructuredRFQ): string {
   const checks = [
     vehicle,
     rfq.transmission !== "any" ? rfq.transmission : null,
-    rfq.maxMileageKm ? `under ${rfq.maxMileageKm.toLocaleString()} km` : null,
+    rfq.maxMileageKm ? `under ${rfq.maxMileageKm.toLocaleString()} km on the clock` : null,
     period,
     ...rfq.accessories,
   ].filter(Boolean);

@@ -23,6 +23,24 @@ export function vehicleWording(rfq: StructuredRFQ): string {
   return `${trans}${rfq.vehicleClass === "scooter" ? "scooter" : "motorbike"}${cc}`;
 }
 
+/**
+ * The traveller's extras as one readable clause: "a child seat and a top box".
+ *
+ * Bounded on purpose. Three items is a request; eight is a shopping list that
+ * buries the price question the message exists to ask, and the field accepts
+ * 240 characters of anything.
+ */
+export function extrasClause(rfq: StructuredRFQ): string {
+  const items = (rfq.accessories ?? [])
+    .map((a) => String(a ?? "").trim().replace(/\s{2,}/g, " "))
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((a) => (a.length > 40 ? a.slice(0, 40).trim() : a));
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 function applyContraction(text: string, style: "contracted" | "plain" | "mixed"): string {
   if (style === "contracted") {
     return text
@@ -72,6 +90,14 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
     // greet-first orders without ever misplacing a greeting.
     body = `${intro} ${s.ask}`;
   }
+
+  // WHAT ELSE THE TRAVELLER ASKED FOR. Until now this opener rendered the
+  // vehicle and the duration and stopped, and because it REPLACES whatever the
+  // client built (outreach/route.ts), a request for a child seat or a phone
+  // mount was silently dropped on its way to every shop. It goes after the ask
+  // so the price question stays the message's point.
+  const extras = extrasClause(rfq);
+  if (extras) body = `${body} ${s.extrasPhrase(extras)}`;
 
   let out = applyContraction(body, s.contraction).replace(/\s{2,}/g, " ").trim();
   if (signOff) out = `${out} ${signOff}`;

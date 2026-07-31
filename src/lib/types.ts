@@ -15,6 +15,15 @@ export interface StructuredRFQ {
   vehicleClass: VehicleClass;
   engineSizeCc?: number;
   transmission: Transmission;
+  /**
+   * THE ODOMETER, in km - the most the vehicle may already have done.
+   *
+   * Not a daily allowance. Every consumer has always read it this way
+   * (agents.ts asks for a bike "under N km on the clock", graph/gaps.ts
+   * asks for a photo of the odometer) while the one label the traveller
+   * ever saw said "Max mileage per day" - which is how a 30,000 km option
+   * reads as nonsense. The name is the meaning now, in both directions.
+   */
   maxMileageKm?: number;
   // Car-specific: number of seats and the body type the traveller wants.
   seats?: number;

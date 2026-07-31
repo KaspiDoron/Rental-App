@@ -264,7 +264,7 @@ export const I18N_CATALOG: string[] = [
   "Manual motorcycle",
   "Map",
   "Mass bargain - ask all shops at once",
-  "Max mileage per day",
+  "Max distance on the clock",
   "Maybe later - start saving",
   "Message blocked.",
   "Message this shop yourself",

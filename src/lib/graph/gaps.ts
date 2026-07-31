@@ -59,7 +59,7 @@ export async function assessMediaGaps(args: {
   // The traveller explicitly cares about mileage - a vehicle photo without a
   // readable odometer leaves that open.
   if (args.rfq.maxMileageKm && !(typeof e.mileageKm === "number" || f.mileageKm)) {
-    stillMissing.push(`the mileage (traveller wants under ${args.rfq.maxMileageKm.toLocaleString()} km)`);
+    stillMissing.push(`the odometer reading (traveller wants under ${args.rfq.maxMileageKm.toLocaleString()} km)`);
   }
   if (e.imageKind === "vehicle" && !e.conditionNotes) {
     stillMissing.push("a clear look at the condition (ask for more photos if it matters)");

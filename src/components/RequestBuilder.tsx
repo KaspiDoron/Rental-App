@@ -15,7 +15,38 @@ const SCOOTER_CC = [110, 125, 150, 160] as const;
 const MOTORBIKE_CC = [150, 200, 250, "300+"] as const;
 const CAR_TYPES = ["economy", "sedan", "suv", "van", "luxury"] as const;
 
+/**
+ * ODOMETER, NOT DAILY DISTANCE.
+ *
+ * The label said "Max mileage per day" and every consumer downstream read the
+ * number as an odometer reading: agents.ts asks the shop for a bike "under 100
+ * km", graph/gaps.ts asks for a photo of the odometer. Nobody meant a daily
+ * allowance, and the old options ([100, 150, 200]) only made sense as one - so
+ * a traveller reading "under 100 km" on a rental scooter saw either an absurd
+ * daily limit or an impossible odometer. It is the odometer, said plainly, at
+ * the ranges the owner asked for.
+ */
+const ODOMETER_MAX_KM = [null, 5_000, 15_000, 30_000] as const;
+
 type Vehicle = "scooter" | "motorbike" | "car";
+
+/**
+ * The traveller's extras, as structured items a message can ask for.
+ *
+ * Split on the separators people actually type. Deliberately shallow: we are
+ * turning "child seat, phone mount" into two askable things, not parsing
+ * English. Anything it cannot split stays one item, which still reaches the
+ * shop - the failure mode is a slightly long clause, never a lost request.
+ */
+export function parseExtras(storageBox: boolean, custom: string): string[] {
+  const out: string[] = [];
+  if (storageBox) out.push("a storage / top box");
+  for (const raw of String(custom ?? "").split(/[,;]|\band\b|\+/gi)) {
+    const item = raw.trim().replace(/\s{2,}/g, " ");
+    if (item) out.push(item.length > 40 ? item.slice(0, 40).trim() : item);
+  }
+  return out.slice(0, 8);
+}
 
 function OptionCard({
   active,
@@ -159,13 +190,22 @@ export function RequestBuilder({
       vehicleClass,
       durationDays: days,
       transmission,
-      accessories: [],
+      // EXTRAS ARE ACCESSORIES, NOT NOTES. This was hard-coded `[]` while the
+      // top-box toggle and the free-text field were folded into `notes` - and
+      // `notes` is read by nothing that composes a message. A traveller who
+      // typed "child seat" got an opener that never mentioned one, twice over:
+      // buildMessage reads `accessories`, and the server-side compileOpener
+      // (which replaces the client's text entirely) read neither until now.
+      accessories: parseExtras(storageBox, custom),
       fulfillment: delivery,
     };
     if (isTwoWheel && cc) fields.engineSizeCc = cc;
     if (isTwoWheel && helmets > 0) fields.helmetCount = helmets;
     if (vehicle === "car" && carType) fields.carType = carType;
     if (maxMileage) fields.maxMileageKm = maxMileage;
+    // `notes` keeps the traveller's RAW words - provenance for the surfaces
+    // that show the request back to them, and the thing to fall back on if the
+    // split above ever reads a sentence wrongly.
     const notes = [storageBox ? "storage box / top box" : "", custom.trim()].filter(Boolean).join("; ");
     if (notes) fields.notes = notes.slice(0, 240);
     onFieldsChange(fields);
@@ -262,10 +302,12 @@ export function RequestBuilder({
               </div>
             )}
             <div className="rounded-xl bg-card p-2.5">
-              <p className="mb-1.5 text-[12px] font-bold text-soft">{t("Max mileage per day")}</p>
+              <p className="mb-1.5 text-[12px] font-bold text-soft">{t("Max distance on the clock")}</p>
               <div className="flex flex-wrap gap-2">
-                {[null, 100, 150, 200].map((m) => (
-                  <Pill key={String(m)} active={maxMileage === m} onClick={() => setMaxMileage(m)}>{m === null ? t("Any") : `${m} km`}</Pill>
+                {ODOMETER_MAX_KM.map((m) => (
+                  <Pill key={String(m)} active={maxMileage === m} onClick={() => setMaxMileage(m)}>
+                    {m === null ? t("Any") : `< ${m.toLocaleString()} km`}
+                  </Pill>
                 ))}
               </div>
             </div>
@@ -305,7 +347,12 @@ export function RequestBuilder({
               {vehicle === "car" && carType && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t(carType)}</span>}
               <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{days} {t("days")}</span>
               {helmets > 0 && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{helmets} 🪖</span>}
-              {maxMileage && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">&lt;{maxMileage}km</span>}
+              {/* FORMATTED, like every other number the traveller sees. "<30000km"
+                  is not a quantity anybody reads at a glance. */}
+              {maxMileage && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">&lt; {maxMileage.toLocaleString()} km</span>}
+              {parseExtras(storageBox, custom).slice(0, 3).map((x) => (
+                <span key={x} className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{x}</span>
+              ))}
               {delivery !== "any" && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{delivery === "hotel-delivery" ? t("Delivered") : t("Pickup")}</span>}
             </div>
             <p className="rounded-xl bg-brandblue-soft px-3 py-2 text-[12px] font-bold text-brandblue">
