@@ -77,6 +77,21 @@ export function staggerOffsets(count: number, rand: () => number = Math.random):
  */
 export const HARD_MIN_GAP_SEC = 8;
 
+/**
+ * How close two of OUR messages may land on one shop, whichever lane sent them.
+ *
+ * The same number as the cold-batch floor, and for the same reason: it is the
+ * shortest interval that still reads as two separate messages from a person
+ * rather than one automated burst. Lanes pace themselves; this paces the shop's
+ * inbox. See the recipient mutex in claimSendSlots.
+ */
+export const RECIPIENT_LOCK_SEC = HARD_MIN_GAP_SEC;
+
+/** The mutex key. Keyed on the RECIPIENT only - no lane, no gap size. */
+export function recipientSlot(toDigits: string, bucket: number): string {
+  return `to:${digitsOnly(toDigits)}:${bucket}`;
+}
+
 export interface BatchSchedule {
   /** ms after batch start for each item, in order. */
   offsets: number[];
@@ -235,6 +250,66 @@ export async function claimSendSlots(opts: {
 
   if (!opts.auto) return { ok: true };
 
+  // ---- THE RECIPIENT MUTEX: one lane-independent lock per shop --------------
+  //
+  // Ko Tao, 12:21. Two of our messages landed on one shop inside the same
+  // minute: a cold introduction and an agent reply. Neither pacing lane was
+  // broken - they simply do not intersect. A cold intro claims
+  // `gap:12:<bucket>` with NO recipient in the key; a reply claims
+  // `gap:5:<digits>:<bucket>`. Different strings, so both win, and the shop
+  // gets two messages from a stranger at once.
+  //
+  // Every OTHER slot here is a pacing decision scoped to a lane. This one is
+  // not a lane at all: it is the shop's own inbox, and the invariant is that
+  // nothing we send lands on it twice inside the hard floor, whichever part of
+  // the system decided to send. That is also why it has to exist BEFORE a
+  // second dispatcher does - a reply-only drain running beside the global one
+  // would otherwise recreate the same collision by design.
+  //
+  // Deliberately AFTER the `!opts.auto` return: a message the traveller typed
+  // themselves is their decision, and has never been pacing-gated.
+  const recipientBucket = gapBucket(now, RECIPIENT_LOCK_SEC);
+  const recipientSlotFor = (b: number) => recipientSlot(opts.toDigits, b);
+  const ownRecipientSlot = recipientSlotFor(recipientBucket);
+  const mine = await sbInsertClaim("wa_send_claims", {
+    sender_key: opts.senderKey,
+    slot_key: recipientSlotFor(recipientBucket),
+  });
+  if (mine === "lost") {
+    await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
+    return { ok: false, kind: "pacing" };
+  }
+  if (mine === "error") {
+    await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
+    return { ok: false, kind: "error" };
+  }
+  // The same boundary straddle every other slot here guards: a bucket is a
+  // window, not a spacing promise, and two sends either side of its edge are
+  // milliseconds apart.
+  const prevRecipient = await sbInsertClaim("wa_send_claims", {
+    sender_key: opts.senderKey,
+    slot_key: recipientSlotFor(recipientBucket - 1),
+  });
+  if (prevRecipient === "lost") {
+    const row = await sbSelectStrict<{ created_at: string }>(
+      "wa_send_claims",
+      `select=created_at&sender_key=eq.${encodeURIComponent(
+        opts.senderKey
+      )}&slot_key=eq.${encodeURIComponent(recipientSlotFor(recipientBucket - 1))}&limit=1`
+    );
+    const prevAt = "rows" in row ? Date.parse(row.rows[0]?.created_at ?? "") : NaN;
+    if (Number.isFinite(prevAt) && now - prevAt < RECIPIENT_LOCK_SEC * 1000) {
+      await sbDelete(
+        "wa_send_claims",
+        `sender_key=eq.${encodeURIComponent(opts.senderKey)}&slot_key=eq.${encodeURIComponent(
+          ownRecipientSlot
+        )}`
+      ).catch(() => {});
+      await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
+      return { ok: false, kind: "pacing" };
+    }
+  }
+
   const bucket = gapBucket(now, opts.gapSeconds);
   // Reply lane -> the gap slot carries the recipient, so two DIFFERENT shops
   // never contend for the same bucket (only the same shop is serialized).
@@ -254,11 +329,11 @@ export async function claimSendSlots(opts: {
     slot_key: slotFor(bucket),
   });
   if (cur === "lost") {
-    await releaseOwn([msgSlot]); // let the queued retry re-claim the message
+    await releaseOwn([msgSlot, ownRecipientSlot]); // let the queued retry re-claim it
     return { ok: false, kind: "pacing" };
   }
   if (cur === "error") {
-    await releaseOwn([msgSlot]);
+    await releaseOwn([msgSlot, ownRecipientSlot]);
     return { ok: false, kind: "error" };
   }
 
@@ -277,7 +352,7 @@ export async function claimSendSlots(opts: {
     );
     const prevAt = "rows" in row ? Date.parse(row.rows[0]?.created_at ?? "") : NaN;
     if (Number.isFinite(prevAt) && now - prevAt < opts.gapSeconds * 1000) {
-      await releaseOwn([msgSlot, slotFor(bucket)]);
+      await releaseOwn([msgSlot, ownRecipientSlot, slotFor(bucket)]);
       return { ok: false, kind: "pacing" };
     }
   }
@@ -300,11 +375,11 @@ export async function claimSendSlots(opts: {
       slot_key: fleetSlotFor(fleetBucket),
     });
     if (fleet === "lost") {
-      await releaseOwn([msgSlot, slotFor(bucket)]);
+      await releaseOwn([msgSlot, ownRecipientSlot, slotFor(bucket)]);
       return { ok: false, kind: "pacing" };
     }
     if (fleet === "error") {
-      await releaseOwn([msgSlot, slotFor(bucket)]);
+      await releaseOwn([msgSlot, ownRecipientSlot, slotFor(bucket)]);
       return { ok: false, kind: "error" };
     }
     // THE SAME STRADDLE THE GAP SLOTS ALREADY GUARD. A bucket is a window, not
@@ -327,7 +402,7 @@ export async function claimSendSlots(opts: {
       );
       const prevAt = "rows" in row ? Date.parse(row.rows[0]?.created_at ?? "") : NaN;
       if (Number.isFinite(prevAt) && now - prevAt < opts.fleetGapSeconds * 1000) {
-        await releaseOwn([msgSlot, slotFor(bucket), fleetSlotFor(fleetBucket)]);
+        await releaseOwn([msgSlot, ownRecipientSlot, slotFor(bucket), fleetSlotFor(fleetBucket)]);
         return { ok: false, kind: "pacing" };
       }
     }
