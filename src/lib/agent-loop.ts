@@ -1104,7 +1104,16 @@ export async function processVendorReply(opts: {
         await m.sendPushCollapsed(
           ctx.sender!,
           `reply:${ctx.vendorId || from}`,
-          { title: usablePrice ? "New price 💰" : "Your hunt is live 🛵", body, url: "/" },
+          {
+            title: usablePrice ? "New price 💰" : "Your hunt is live 🛵",
+            body,
+            url: "/",
+            // SAME TAG AS THE INGEST BUZZ. This push is an UPGRADE of "the shop
+            // replied" that already fired the moment the message landed, so it
+            // must replace it on the lock screen instead of adding a second
+            // buzz for the same event.
+            tag: `shop:${from}`,
+          },
           { windowSec: 180, important: Boolean(usablePrice) }
         );
         await markPushSent(ctx.sender!, `${event.kind}: ${verdict.reason}`);
@@ -1312,6 +1321,10 @@ export async function processVendorReply(opts: {
           title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
           body: `${ctx.vendorName || "A shop"}: ${verdict.reasons[0] ?? "review this message before acting"}`,
           url: "/",
+          // ITS OWN LANE. A safety warning must never be collapsed away by an
+          // ordinary reply push (the shared default tag did exactly that), and
+          // it must not silently replace one either.
+          tag: `risk:${from}`,
         });
       } catch {
         /* screening is best-effort */

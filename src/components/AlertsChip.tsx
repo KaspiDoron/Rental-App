@@ -24,10 +24,17 @@ export function AlertsChip({ t }: { t: (s: string) => string }) {
   const on = state === "on";
   const busy = state === "busy" || state === "loading";
   const blocked = state === "denied" || state === "unsupported" || state === "ios-install";
+  // NEITHER ON NOR OFF. The account has alerts, this phone cannot receive them
+  // (a laptop holds the only subscription), or this phone holds one the server
+  // has forgotten. Both are one tap from fixed - and neither may be dressed up
+  // as "Alerts on", which is the exact lie the field test caught.
+  const needsFix = state === "on-elsewhere" || state === "stale";
 
   const label = (() => {
     if (busy) return null;
     if (on) return `🔔 ${t("Alerts on")} · ${t("tap to turn off")}`;
+    if (state === "on-elsewhere") return `🔕 ${t("Alerts on another device")} · ${t("turn on here")}`;
+    if (state === "stale") return `🔕 ${t("Alerts need fixing on this phone")}`;
     if (state === "ios-install") return `🔔 ${t("Add to Home Screen for alerts")}`;
     if (state === "unsupported") return `🔔 ${t("Alerts need Chrome or the installed app")}`;
     if (state === "denied") return `🔔 ${t("Alerts blocked in your browser")}`;
@@ -47,7 +54,9 @@ export function AlertsChip({ t }: { t: (s: string) => string }) {
             ? "bg-savings text-white"
             : blocked
               ? "border-2 border-line text-faint"
-              : "border-2 border-brandblue text-brandblue"
+              : needsFix
+                ? "border-2 border-brandyellow text-strong"
+                : "border-2 border-brandblue text-brandblue"
         }`}
       >
         {busy ? <LoadingDots label={t("Working")} /> : label}
@@ -71,6 +80,11 @@ export function AlertsChip({ t }: { t: (s: string) => string }) {
       {on && devices > 1 && (
         <span className="self-center text-[10px] font-bold text-brandblue/80">
           {devices} {t("devices")}
+        </span>
+      )}
+      {state === "on-elsewhere" && devices > 0 && (
+        <span className="self-center text-[10px] font-bold text-soft">
+          {devices} {devices === 1 ? t("other device") : t("other devices")}
         </span>
       )}
       {note && (

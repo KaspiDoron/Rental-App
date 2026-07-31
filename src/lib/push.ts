@@ -108,11 +108,24 @@ export async function saveSubscription(email: string, sub: PushSub): Promise<boo
 /** How many device subscriptions this user has (the server truth for "alerts
  * on" - a real toggle reflects THIS, not a localStorage flag). */
 export async function subscriptionCount(email: string): Promise<number> {
+  return (await subscriptionEndpoints(email)).length;
+}
+
+/**
+ * The endpoints this account has registered.
+ *
+ * The toggle only ever got a COUNT, which is an account-wide fact - so a
+ * traveller who had enabled alerts on a laptop was told "Alerts on" while the
+ * phone in their hand held no subscription at all and could never receive
+ * anything. The client needs the endpoints to answer the only question that
+ * matters to it: is THIS device one of them?
+ */
+export async function subscriptionEndpoints(email: string): Promise<string[]> {
   const rows = await sbSelect<{ endpoint: string }>(
     "push_subscriptions",
     `select=endpoint&user_email=eq.${encodeURIComponent(email)}&limit=50`
   ).catch(() => []);
-  return rows.length;
+  return rows.map((r) => r.endpoint).filter(Boolean);
 }
 
 /** Turn alerts OFF: remove this user's subscriptions (all, or one endpoint). */
@@ -145,7 +158,7 @@ interface SubRow {
 export async function sendPushCollapsed(
   email: string,
   collapseKey: string,
-  payload: { title: string; body: string; url?: string },
+  payload: { title: string; body: string; url?: string; tag?: string },
   opts: { windowSec?: number; important?: boolean } = {}
 ): Promise<void> {
   if (!email) return;
@@ -179,21 +192,33 @@ export async function sendPushCollapsed(
  */
 export async function sendPushToUser(
   email: string,
-  payload: { title: string; body: string; url?: string }
-): Promise<void> {
-  if (!email) return;
+  payload: { title: string; body: string; url?: string; tag?: string }
+): Promise<PushOutcome> {
+  const out: PushOutcome = { attempted: 0, delivered: 0, pruned: 0, results: [] };
+  if (!email) return out;
   const pub = await ensureVapid();
-  if (!pub) return; // push not configured - silent no-op
+  if (!pub) {
+    out.reason = "vapid-unconfigured";
+    return out;
+  }
   const subs = await sbSelect<SubRow>(
     "push_subscriptions",
     `select=endpoint,p256dh,auth&user_email=eq.${encodeURIComponent(email)}&limit=20`
   ).catch(() => [] as SubRow[]);
-  if (!subs.length) return;
+  if (!subs.length) {
+    out.reason = "no-subscriptions";
+    return out;
+  }
   const data = JSON.stringify({
     title: payload.title,
     body: payload.body,
     url: payload.url ?? "/",
+    // COLLAPSE PER SHOP. Three replies from one shop while the phone is in a
+    // pocket should land as one live notification, not three - the SW uses
+    // this as the notification tag.
+    tag: payload.tag,
   });
+  out.attempted = subs.length;
   await Promise.all(
     subs.map(async (s) => {
       try {
@@ -201,12 +226,115 @@ export async function sendPushToUser(
           { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
           data
         );
+        out.delivered += 1;
+        out.results.push({ endpoint: s.endpoint, ok: true });
       } catch (e: any) {
         const code = e?.statusCode;
-        if (code === 404 || code === 410) {
-          await sbDelete("push_subscriptions", `endpoint=eq.${encodeURIComponent(s.endpoint)}`).catch(() => {});
+        // A DEAD ROW IS DEAD, whichever way the push service says so.
+        //
+        // Only 404/410 were pruned. After a VAPID key rotation the service
+        // answers 400/401/403 instead - "these keys do not match this
+        // subscription" - and those rows lived forever, so every later send
+        // burned an attempt on a subscription that could never receive
+        // anything, and the UI counted them as "alerts on".
+        if (code === 400 || code === 401 || code === 403 || code === 404 || code === 410) {
+          await sbDelete(
+            "push_subscriptions",
+            `endpoint=eq.${encodeURIComponent(s.endpoint)}`
+          ).catch(() => {});
+          out.pruned += 1;
         }
+        out.results.push({
+          endpoint: s.endpoint,
+          ok: false,
+          status: typeof code === "number" ? code : undefined,
+          error: String(e?.body || e?.message || "push failed").slice(0, 200),
+        });
       }
     })
   );
+  return out;
+}
+
+/**
+ * WHAT ACTUALLY HAPPENED, per device.
+ *
+ * The old signature was `Promise<void>` and every failure was swallowed, so
+ * "Alerts on" could be true while every registered endpoint was rejecting -
+ * the exact field failure ("Alerts on", zero pushes). Callers that care (the
+ * test-send button, the doctor) can now say something true.
+ */
+export interface PushOutcome {
+  attempted: number;
+  delivered: number;
+  pruned: number;
+  /** Set when nothing was even attempted, and why. */
+  reason?: "vapid-unconfigured" | "no-subscriptions";
+  results: Array<{ endpoint: string; ok: boolean; status?: number; error?: string }>;
+}
+
+export interface PushDiagnostics {
+  /** "ok" = both keys present AND the public key derives from the private one. */
+  vapid: "ok" | "mismatched" | "half-configured" | "missing";
+  devices: number;
+  /** Endpoint HOSTS only - the token part identifies a device, so it never leaves. */
+  services: string[];
+  lastIngestPushAt: string | null;
+  /** The last ingest push's own verdict (attempted/delivered/pruned/reason). */
+  lastIngestPushDetail: string | null;
+  lastCollapseAt: string | null;
+}
+
+/**
+ * WHY IS NOBODY GETTING ALERTS? - answerable from a phone.
+ *
+ * A half-pasted or rotated VAPID pair is invisible from every UI: the toggle
+ * still says "on" (rows exist), sends still return 2xx-shaped promises, and
+ * nothing arrives. The doctor needs the three facts that separate those cases -
+ * are the keys internally consistent, does this account hold any device, and
+ * did a push actually leave recently.
+ */
+export async function pushDiagnostics(email: string): Promise<PushDiagnostics> {
+  const [pub, priv] = await Promise.all([
+    getConfig("VAPID_PUBLIC_KEY"),
+    getConfig("VAPID_PRIVATE_KEY"),
+  ]);
+  const vapid: PushDiagnostics["vapid"] = !pub && !priv
+    ? "missing"
+    : !pub || !priv
+      ? "half-configured"
+      : vapidPairMatches(pub, priv)
+        ? "ok"
+        : "mismatched";
+  const endpoints = email ? await subscriptionEndpoints(email) : [];
+  const services = Array.from(
+    new Set(
+      endpoints.map((e) => {
+        try {
+          return new URL(e).host;
+        } catch {
+          return "unparseable";
+        }
+      })
+    )
+  );
+  const enc = encodeURIComponent(email);
+  const [sent, collapse] = await Promise.all([
+    sbSelect<{ created_at: string; detail: string | null }>(
+      "agent_events",
+      `select=created_at,detail&kind=eq.push-ingest&user_email=eq.${enc}&order=created_at.desc&limit=1`
+    ).catch(() => []),
+    sbSelect<{ created_at: string }>(
+      "agent_events",
+      `select=created_at&kind=eq.push-collapse&order=created_at.desc&limit=1`
+    ).catch(() => []),
+  ]);
+  return {
+    vapid,
+    devices: endpoints.length,
+    services,
+    lastIngestPushAt: sent[0]?.created_at ?? null,
+    lastIngestPushDetail: sent[0]?.detail ?? null,
+    lastCollapseAt: collapse[0]?.created_at ?? null,
+  };
 }

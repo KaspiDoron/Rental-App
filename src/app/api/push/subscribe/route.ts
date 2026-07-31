@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import {
   saveSubscription,
-  subscriptionCount,
+  subscriptionEndpoints,
   removeSubscriptions,
   vapidPublicKey,
 } from "@/lib/push";
@@ -23,11 +23,18 @@ export async function POST(req: Request) {
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ configured: false, on: false, devices: 0 });
-  const [key, devices] = await Promise.all([
+  const [key, endpoints] = await Promise.all([
     vapidPublicKey(),
-    subscriptionCount(session.email),
+    subscriptionEndpoints(session.email),
   ]);
-  return NextResponse.json({ configured: Boolean(key), on: devices > 0, devices });
+  // `endpoints` lets the client tell "on for this account" from "on for THIS
+  // device" - the difference behind the field's "Alerts on", zero pushes.
+  return NextResponse.json({
+    configured: Boolean(key),
+    on: endpoints.length > 0,
+    devices: endpoints.length,
+    endpoints,
+  });
 }
 
 // Turn alerts OFF: remove this user's subscriptions (all, or a single endpoint).

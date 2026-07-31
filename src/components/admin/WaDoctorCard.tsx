@@ -23,6 +23,14 @@ interface DoctorReport {
     lastAcceptedAt: string | null;
     last403At: string | null;
   };
+  push: {
+    vapid: "ok" | "mismatched" | "half-configured" | "missing";
+    devices: number;
+    services: string[];
+    lastIngestPushAt: string | null;
+    lastIngestPushDetail: string | null;
+    lastCollapseAt: string | null;
+  } | null;
   thread?: {
     digits: string;
     anchors: { at: string; kind: string | null; hasRfq: boolean }[];
@@ -200,6 +208,54 @@ export function WaDoctorCard() {
               label="Evolution hosts"
               value={`${report.hosts.filter((h) => h.ok).length}/${report.hosts.length} healthy`}
             />
+
+            {/* ALERTS ARE A SEPARATE CHAIN. Everything above can be green while
+                the traveller's phone stays silent - a half-pasted or rotated
+                VAPID pair, or an account with rows but no live device. */}
+            {report.push && (
+              <>
+                <div className="mt-2 border-t border-line pt-2 text-[11px] font-extrabold text-strong">
+                  Alerts
+                </div>
+                <Row
+                  ok={report.push.vapid === "ok"}
+                  label="Push keys (VAPID)"
+                  value={
+                    report.push.vapid === "ok"
+                      ? "pair verified"
+                      : report.push.vapid === "mismatched"
+                        ? "MISMATCHED - public key is not derived from the private one"
+                        : report.push.vapid === "half-configured"
+                          ? "only one key set - paste both or clear both"
+                          : "not configured"
+                  }
+                />
+                <Row
+                  ok={report.push.devices > 0 ? true : null}
+                  label="Devices registered"
+                  value={
+                    report.push.devices
+                      ? `${report.push.devices} · ${report.push.services.join(", ")}`
+                      : "none"
+                  }
+                />
+                <Row
+                  ok={
+                    report.push.lastIngestPushDetail
+                      ? report.push.lastIngestPushDetail.includes('"delivered":0')
+                        ? false
+                        : true
+                      : null
+                  }
+                  label="Last reply push"
+                  value={`${ago(report.push.lastIngestPushAt)}${
+                    report.push.lastIngestPushDetail
+                      ? ` · ${report.push.lastIngestPushDetail.slice(0, 70)}`
+                      : ""
+                  }`}
+                />
+              </>
+            )}
 
             {report.thread && (
               <>

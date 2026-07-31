@@ -14,7 +14,11 @@ self.addEventListener("push", (event) => {
     body: data.body || "A rental shop just replied.",
     icon: "/icon.svg",
     badge: "/icon.svg",
-    tag: "wheeldeal-reply",
+    // PER-SHOP COLLAPSE. One global tag meant a reply from shop B replaced the
+    // unread notification from shop A - and the ingest-time alert plus the
+    // later "price landed" upgrade for the SAME shop must collapse onto each
+    // other, which only works if the tag identifies the shop.
+    tag: data.tag || "wheeldeal-reply",
     renotify: true,
     data: { url: data.url || "/" },
   };

@@ -528,6 +528,61 @@ export async function processEvolutionWebhook(
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
+      // NOTIFY AT INGEST, REASON LATER.
+      //
+      // The "a shop replied" push used to fire only at the END of a successful
+      // agent turn (agent-loop, after extraction + composition + send). Every
+      // path that did not reach that line - a parked reply, a vision offload, a
+      // takeover, a guard refusal, an LLM outage - produced NO notification at
+      // all, which is most of why the field test saw "Alerts on" and zero
+      // pushes. The message is already STORED here; that is the moment the
+      // traveller cares about, and it depends on nothing downstream.
+      //
+      // The agent turn still upgrades this later ("they quoted B250/day") -
+      // the collapse tag means the upgrade REPLACES this on the lock screen
+      // rather than stacking a second buzz.
+      if (email) {
+        void (async () => {
+          try {
+            const { sendPushToUser } = await import("@/lib/push");
+            const shop = data.pushName || `+${from}`;
+            const outcome = await sendPushToUser(email, {
+              title: `${shop} replied`,
+              body: hasImage
+                ? "Sent a photo - your agent is reading it now."
+                : hasAudio
+                  ? "Sent a voice note - your agent is listening."
+                  : (syntheticText || "").slice(0, 120) || "Tap to see the message.",
+              url: "/",
+              tag: `shop:${from}`,
+            });
+            // A SEPARATE KIND, deliberately. `push-sent` is the traveller's
+            // hourly interruption BUDGET (notify/state) and the agent turn's
+            // "price landed" upgrade shares this notification's collapse tag -
+            // spending a budget slot here would silence the more useful push
+            // for no extra buzz. This row exists purely so the doctor can
+            // answer "did the last reply actually push, and what did the push
+            // service say".
+            const { sbInsert } = await import("@/lib/runtime-config");
+            await sbInsert("agent_events", [
+              {
+                kind: "push-ingest",
+                user_email: email,
+                detail: JSON.stringify({
+                  attempted: outcome.attempted,
+                  delivered: outcome.delivered,
+                  pruned: outcome.pruned,
+                  reason: outcome.reason ?? null,
+                  statuses: outcome.results.filter((r) => !r.ok).map((r) => r.status ?? 0),
+                }).slice(0, 200),
+              },
+            ]).catch(() => {});
+          } catch {
+            /* a notification never blocks ingest */
+          }
+        })();
+      }
+
       // A real inbound proves the socket is live: persist "open" durably.
       {
         const { markOpen } = await import("@/lib/evolution");
