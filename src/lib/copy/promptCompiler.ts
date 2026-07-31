@@ -71,15 +71,36 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   const greet = s.particle ? s.greeting.replace(/!+$/, "") + ` ${s.particle}!` : s.greeting;
   const signOff = s.regionalThanks ?? s.signOff;
 
-  const intro = s.selfIntro
-    ? `${s.selfIntro} ${vehicle} ${duration}.`
-    : `${vehicle[0].toUpperCase()}${vehicle.slice(1)} ${duration} - possible?`;
+  // A VEHICLE PHRASE IS A PREDICATE, SO GIVE IT A SUBJECT.
+  //
+  // `vehicle` is always a verb phrase - "after a scooter", "need a scooter" -
+  // and the compiler dropped one in as a standalone sentence whenever the
+  // self-intro slot came up empty. That is the message the owner photographed:
+  // "Can I ask your daily price? after an automatic scooter (125cc) for 3 days
+  // straight." A sentence fragment, from a stranger, as a first contact.
+  //
+  // The subject travels with the phrasing (matrix.ts) because "I'm after" and
+  // "I need" do not take the same one - which is exactly why a single
+  // hard-coded prefix could not have fixed this.
+  const standalone = `${s.vehicleSubject} ${vehicle} ${duration}.`;
+  const intro = s.selfIntro ? `${s.selfIntro} ${vehicle} ${duration}.` : standalone;
 
   let body: string;
   if (s.order === "greet-intro-ask") {
     body = `${greet} ${intro} ${s.ask}`;
+  } else if (s.order === "greet-detail-ask") {
+    // Detail first, no self-intro at all - a traveller who gets to the point
+    // and is still a person about it.
+    body = `${greet} ${standalone} ${s.ask}`;
+  } else if (s.order === "intro-ask-plain") {
+    // Two sentences, no greeting: the shortest shape that is still whole.
+    body = `${standalone} ${s.ask}`;
   } else if (s.order === "greet-ask-intro") {
-    body = `${greet} ${s.ask} ${s.selfIntro ? `(${vehicle} ${duration})` : `${vehicle} ${duration}.`}`;
+    // The detail follows the ask as its own SENTENCE. The old form used
+    // `s.selfIntro` as a boolean and threw its text away, keeping the
+    // fragment either way - in brackets when an intro existed, bare when it
+    // did not.
+    body = `${greet} ${s.ask} ${intro}`;
   } else {
     // "intro-first": a terse, substance-led opener (a busy traveller getting
     // straight to the point) - the warmth is the appended sign-off + emoji, not

@@ -84,13 +84,27 @@ export function article(word: string): "a" | "an" {
   return /^[aeiou]/.test(w) ? "an" : "a";
 }
 
+/**
+ * A vehicle phrase is a VERB PHRASE, and it needs a subject to stand alone.
+ *
+ * Every entry here is a predicate - "after a scooter", "need a scooter" - and
+ * the compiler used to drop one straight after a question mark whenever the
+ * self-intro slot came up empty. That is the literal production defect the
+ * owner photographed: "Can I ask your daily price? after an automatic scooter
+ * (125cc) for 3 days straight." A fragment, from a stranger, as a first
+ * message.
+ *
+ * So each phrasing now carries the subject that makes it a sentence. "I'm
+ * after a scooter" and "I need a scooter" take different ones, which is
+ * exactly why a single hard-coded prefix could not have fixed it.
+ */
 export const VEHICLE_PHRASINGS = [
-  (v: string) => `looking to rent ${article(v)} ${v}`,
-  (v: string) => `need ${article(v)} ${v}`,
-  (v: string) => `hoping to get ${article(v)} ${v}`,
-  (v: string) => `after ${article(v)} ${v}`,
-  (v: string) => `want to rent ${article(v)} ${v}`,
-  (v: string) => `looking for ${article(v)} ${v} to rent`,
+  { subject: "I'm", phrase: (v: string) => `looking to rent ${article(v)} ${v}` },
+  { subject: "I", phrase: (v: string) => `need ${article(v)} ${v}` },
+  { subject: "I'm", phrase: (v: string) => `hoping to get ${article(v)} ${v}` },
+  { subject: "I'm", phrase: (v: string) => `after ${article(v)} ${v}` },
+  { subject: "I", phrase: (v: string) => `want to rent ${article(v)} ${v}` },
+  { subject: "I'm", phrase: (v: string) => `looking for ${article(v)} ${v} to rent` },
 ] as const;
 
 export const DURATION_PHRASINGS = [
@@ -148,6 +162,28 @@ export interface RegionFlavor {
   particles: readonly string[];
   thanks: readonly string[];
 }
+
+/**
+ * SHORT SENTENCES, PLAIN WORDS - the register a shop that reads English as a
+ * second language actually parses.
+ *
+ * The pools above are written for a native reader: "What's the best you can do
+ * per day?" is idiomatic and, to a counter in Ko Tao reading on a phone, it is
+ * a puzzle. REGION_FLAVOR supplied particles and a thank-you and nothing else,
+ * so every non-English-speaking region got the same idioms as everyone else.
+ *
+ * This is not baby talk and it is not a costume: it is the same request, in
+ * words with fewer meanings. Per the owner's decision the tone stays casual
+ * and the local particle stays.
+ */
+export const PLAIN_ASKS = [
+  "How much per day?",
+  "What is your best price per day?",
+  "Can you tell me the price per day?",
+  "Best price per day?",
+] as const;
+
+export const PLAIN_GREETINGS = ["Hi!", "Hello!", "Hi there!"] as const;
 export const REGION_FLAVOR: Record<ShopRegion, RegionFlavor> = {
   philippines: { particles: ["po"], thanks: ["Salamat!"] },
   thailand: { particles: ["krub", "ka"], thanks: ["Khop khun krub!", "Khop khun ka!"] }, // index-paired by gender
@@ -166,14 +202,29 @@ export type ContractionStyle = (typeof CONTRACTION_STYLES)[number];
 
 export const EMOJIS = ["🙂", "🙏", "😊", "🤙", "👌", ""] as const; // "" = no emoji
 
-/** Sentence-order templates for the opener skeleton. */
-export const SENTENCE_ORDERS = ["greet-intro-ask", "greet-ask-intro", "intro-first"] as const;
+/**
+ * Sentence-order templates for the opener skeleton.
+ *
+ * There were three, and the matrix's ~40k combinations were all one of three
+ * SHAPES - which is what a fingerprint actually keys on, far more than word
+ * choice. Two more, both real texting patterns: the ask sandwiched between
+ * greeting and detail, and a bare two-sentence opener with no greeting at all.
+ */
+export const SENTENCE_ORDERS = [
+  "greet-intro-ask",
+  "greet-ask-intro",
+  "intro-first",
+  "greet-detail-ask",
+  "intro-ask-plain",
+] as const;
 export type SentenceOrder = (typeof SENTENCE_ORDERS)[number];
 
 export interface StyleChoice {
   greeting: string;
   selfIntro: string;
   vehiclePhrase: (v: string) => string;
+  /** The subject that turns `vehiclePhrase` into a standalone sentence. */
+  vehicleSubject: string;
   durationPhrase: (d: number) => string;
   ask: string;
   /** How the traveller's extras are asked for, when there are any. */
@@ -206,20 +257,34 @@ export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
   if (flavor) {
     const genderRng = mulberry32(fnv1a32(`${seed.threadId}|${seed.vendorId}|particle`));
     const idx = flavor.particles.length ? Math.floor(genderRng() * flavor.particles.length) % flavor.particles.length : 0;
-    // Particle appears sparingly (~1/3) and only when the region actually has one.
-    particle = flavor.particles.length && rng() < 0.33 ? flavor.particles[idx] : undefined;
+    // The owner's call: casual English WITH the local particle. ~1/3 was sparse
+    // enough that most messages to a Thai shop carried no krub/ka at all, which
+    // is the one cheap signal that a stranger has bothered to be polite here.
+    particle = flavor.particles.length && rng() < 0.6 ? flavor.particles[idx] : undefined;
     // Regional thanks (terminal) appears sparingly too; gender-matched to the particle.
     if (flavor.thanks.length && rng() < 0.33) {
       regionalThanks = flavor.thanks[Math.min(idx, flavor.thanks.length - 1)];
     }
   }
 
+  // DRAW ORDER IS THE SEED'S CONTRACT. Every pick consumes the PRNG, so the
+  // order these are taken in decides what a given (thread, vendor, nonce)
+  // compiles to. Hoisting the vehicle pick above the greeting would silently
+  // re-shuffle every opener in the app; it is drawn in place instead.
+  // A region entry in REGION_FLAVOR IS the signal: those are the markets whose
+  // shops read English as a second language, which is the same set that gets
+  // particles and a local thank-you. One fact, not two lists to keep in sync.
+  const plain = Boolean(flavor);
+  const greeting = seededPick(rng, plain ? PLAIN_GREETINGS : GREETINGS);
+  const selfIntro = seededPick(rng, SELF_INTROS);
+  const vehicle = seededPick(rng, VEHICLE_PHRASINGS);
   return {
-    greeting: seededPick(rng, GREETINGS),
-    selfIntro: seededPick(rng, SELF_INTROS),
-    vehiclePhrase: seededPick(rng, VEHICLE_PHRASINGS),
+    greeting,
+    selfIntro,
+    vehiclePhrase: vehicle.phrase,
+    vehicleSubject: vehicle.subject,
     durationPhrase: seededPick(rng, DURATION_PHRASINGS),
-    ask: seededPick(rng, ASK_PHRASINGS),
+    ask: seededPick(rng, plain ? PLAIN_ASKS : ASK_PHRASINGS),
     extrasPhrase: seededPick(rng, EXTRAS_PHRASINGS),
     signOff: seededPick(rng, SIGN_OFFS),
     // Emoji weight: ~2/3 of messages carry one (a real texting distribution).
