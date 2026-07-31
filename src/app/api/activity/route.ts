@@ -512,6 +512,34 @@ export async function GET(req: Request) {
       };
     });
 
+  // WHICH SHOPS THE AGENT IS ALREADY MID-SENTENCE WITH.
+  //
+  // The queue above deliberately carries INTRO kinds only - it is the "your
+  // messages are going out" panel, and an agent's counter-reply is part of the
+  // conversation, not part of that queue. But that filter is also the reason
+  // the client could not see agent activity AT ALL, and the Bargain button
+  // paid for it: no `disabled`, no indicator, nothing to gate on. Tapping it
+  // twice queued two pushes at one shop, and only the server's 3-minute window
+  // stood between the traveller and a double message.
+  //
+  // So the agent's own rows are rolled up per vendor - a count and the fact of
+  // it, never the drafted text (that is the conversation's, and the queue
+  // payload is not where it belongs).
+  const agentPending: Record<string, { count: number; sending: boolean }> = {};
+  for (const r of outbox) {
+    const meta = r.meta as { vendorId?: string; kind?: string } | null;
+    const kind = meta?.kind;
+    if (!kind || INTRO_KINDS.has(kind)) continue;
+    if (cancelledSet.has(r.to_number)) continue;
+    const id = meta?.vendorId;
+    if (!id) continue;
+    const prev = agentPending[id] ?? { count: 0, sending: false };
+    agentPending[id] = {
+      count: prev.count + 1,
+      sending: prev.sending || outboxState(r.not_before, meta, now) === "sending",
+    };
+  }
+
   let waHealth: SenderSafety | null = null;
   try {
     waHealth = await senderSafety(email);
@@ -613,6 +641,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     items: items.slice(0, limit),
     queue,
+    agentPending, // F9: {vendorId: {count, sending}} - what the agent is mid-sentence with
     waHealth,
     introBudget,
     whyByVendor,

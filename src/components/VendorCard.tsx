@@ -44,6 +44,7 @@ function VendorCardInner({
   onWhy,
   onOpenThread,
   riskNote,
+  agentPending,
 }: {
   vendor: Vendor;
   rfq: StructuredRFQ | null;
@@ -81,6 +82,17 @@ function VendorCardInner({
   onOpenThread?: (vendor: Vendor) => void;
   // Inbound-risk warning from the safety screen ("asked for your passport...").
   riskNote?: string;
+  /**
+   * WHAT THE AGENT IS ALREADY MID-SENTENCE WITH at this shop, from the
+   * activity poll's `agentPending` rollup.
+   *
+   * The client could not see agent activity at all: the queue payload
+   * carries INTRO kinds only, by design. So the Bargain button had nothing
+   * to gate on - no `disabled`, no in-flight ref, no indicator, unlike the
+   * RFQ button twenty lines below it - and two taps queued two pushes at
+   * one shop, with only the server's 3-minute window in the way.
+   */
+  agentPending?: { count: number; sending: boolean };
 }) {
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
@@ -106,6 +118,24 @@ function VendorCardInner({
   // taps both dispatch a fetch (-> two outbox rows / a double send). This ref
   // flips before the first await, so the second tap is dropped immediately.
   const rfqInFlight = useRef(false);
+  // ...and the same guard for BARGAIN, which never had one. `onBargain` opens
+  // a composer rather than sending, so the ref clears on the next paint - long
+  // enough to swallow a double tap, short enough that a cancelled composer
+  // does not leave the button dead.
+  const bargainInFlight = useRef(false);
+  /**
+   * The agent is already writing to this shop, so the traveller pressing
+   * Bargain would stack a second push on top of it. Server truth, from the
+   * activity poll - never this component's own state, which resets on every
+   * remount and is why the composer's `sendState` guard was not enough.
+   */
+  const agentBusy = (agentPending?.count ?? 0) > 0;
+  const startBargain = (option?: VehicleOption) => {
+    if (bargainInFlight.current || agentBusy) return;
+    bargainInFlight.current = true;
+    timersRef.current.push(setTimeout(() => (bargainInFlight.current = false), 1_200));
+    onBargain(vendor, option);
+  };
   // "Already asked" survives navigation: it derives from the vendor's stage
   // (persisted with the search), not from this component's local state.
   const alreadyAsked = ["rfq-sent", "awaiting-response", "negotiating"].includes(
@@ -702,7 +732,7 @@ function VendorCardInner({
                 currency={offer.currency}
                 durationDays={rfq?.durationDays}
                 onLock={(o) => onBook(vendor, o)}
-                onBargain={(o) => onBargain(vendor, o)}
+                onBargain={(o) => startBargain(o)}
                 onAsk={(o) => {
                   // Reuse the composer the card already owns, pre-filled with
                   // the tier so the traveller edits rather than types.
@@ -825,10 +855,12 @@ function VendorCardInner({
                   lockable offer wearing an honest badge. */}
               {stance === "mismatch" ? (
                 <button
-                  onClick={() => onBargain(vendor)}
-                  className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm"
+                  onClick={() => startBargain()}
+                  disabled={agentBusy}
+                  aria-disabled={agentBusy}
+                  className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm disabled:opacity-60"
                 >
-                  🔎 {t("Ask for the right vehicle")}
+                  {agentBusy ? `🤖 ${t("Your agent is on it")}` : `🔎 ${t("Ask for the right vehicle")}`}
                 </button>
               ) : (
                 <>
@@ -840,10 +872,23 @@ function VendorCardInner({
                   </button>
                   {vendor.stage !== "declined" && (
                     <button
-                      onClick={() => onBargain(vendor)}
-                      className="btn btn-sm chip rounded-2xl border-2 border-brandred/30 bg-brandred-soft px-3 py-2.5 text-[12px] font-extrabold text-brandred"
+                      onClick={() => startBargain()}
+                      // GATED LIKE THE RFQ BUTTON TWENTY LINES BELOW, which has
+                      // always been. While the agent has a message of its own
+                      // queued for this shop, a second push is a double message
+                      // - and "queued" is a status, not a call to action, so it
+                      // reads as a muted chip rather than a live button.
+                      disabled={agentBusy}
+                      aria-disabled={agentBusy}
+                      className={`btn btn-sm chip rounded-2xl border-2 px-3 py-2.5 text-[12px] font-extrabold ${
+                        agentBusy
+                          ? "cursor-default border-line bg-card2 text-soft disabled:opacity-100"
+                          : "border-brandred/30 bg-brandred-soft text-brandred"
+                      }`}
                     >
-                      🥊 {t("Bargain")}
+                      {agentBusy
+                        ? `🤖 ${agentPending?.sending ? t("Sending now") : t("Your agent is on it")}`
+                        : `🥊 ${t("Bargain")}`}
                     </button>
                   )}
                 </>

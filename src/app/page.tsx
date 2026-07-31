@@ -228,6 +228,12 @@ export default function Home() {
   const [activityItems, setActivityItems] = useState<FeedItem[]>([]);
   const [waHealth, setWaHealth] = useState<WaSafety | null>(null);
   const [whyByVendor, setWhyByVendor] = useState<Record<string, string>>({});
+  // F9: which shops the AGENT already has a queued message for. The queue
+  // payload carries intro kinds only (by design - an agent's counter-reply is
+  // part of the conversation, not of the "your messages are going out" panel),
+  // so until this rollup the client could not see agent activity at all and
+  // the Bargain button had nothing to gate on.
+  const [agentPending, setAgentPending] = useState<Record<string, { count: number; sending: boolean }>>({});
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
@@ -836,6 +842,11 @@ export default function Home() {
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
+      setAgentPending(
+        d.agentPending && typeof d.agentPending === "object"
+          ? (d.agentPending as Record<string, { count: number; sending: boolean }>)
+          : {}
+      );
       // AUTHORITATIVE per-vendor conversation state (messaged / active / offer)
       // straight from the DB rollup - the single source of truth that keeps the
       // card status in lock-step with the Live Status panel, so a messaged shop
@@ -3338,6 +3349,7 @@ export default function Home() {
                   onWhy={openWhy}
                   onOpenThread={(vend) => setDashboardFor(vend)}
                   riskNote={riskByVendor[v.id]}
+                  agentPending={agentPending[v.id]}
                 />
               </div>
             ))}
