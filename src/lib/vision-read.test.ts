@@ -147,10 +147,23 @@ describe("the provenance reaches the extraction", () => {
     const agents = readCode("src/lib/agents.ts");
     expect(agents).toMatch(/imageRead\?: \{/);
     expect(agents).toMatch(/const imageRead: ExtractedOffer\["imageRead"\] = read\.ok/);
-    // The three ways out of the image branch: parsed model output, the caption
-    // fallback, and the give-up. All three must carry it, because the give-up is
-    // the one that used to be indistinguishable from a real negative read.
-    expect(agents).toMatch(/normalizeExtraction\(parsed, spec\), imageRead/);
+    // The ways out of the image branch: parsed model output (now possibly via
+    // the region-directed re-read), the caption fallback, and the give-up. ALL
+    // must carry it, because the give-up is the one that used to be
+    // indistinguishable from a real negative read.
+    //
+    // DELIBERATE REWRITE: the parsed-output exit used to be a single
+    // `normalizeExtraction(parsed, spec), imageRead` expression. The re-read
+    // split it into a named first result with two exits, so the pin asserts the
+    // INVARIANT - every return inside the image branch carries an imageRead -
+    // instead of one particular spelling of it.
+    const branch = agents.slice(
+      agents.indexOf("if (images.length > 0) {"),
+      agents.indexOf("return {\n      found: false,")
+    );
+    const returns = branch.match(/return \{[\s\S]*?\};/g) ?? [];
+    expect(returns.length).toBeGreaterThanOrEqual(3);
+    for (const r of returns) expect(r).toMatch(/imageRead/);
     expect(agents).toMatch(/\.\.\.capHit, imageRead/);
     expect(agents).toMatch(/clarifyMessage: `Thanks for the photo![\s\S]{0,200}imageRead,/);
   });

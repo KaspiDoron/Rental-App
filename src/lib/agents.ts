@@ -1084,6 +1084,15 @@ export interface ExtractedOffer {
   // What KIND of image the shop sent (set by the vision classifier). Lets the
   // branching engine thank the shop for a vehicle photo vs read a price sheet.
   imageKind?: "vehicle" | "price_sheet" | "document" | "other";
+  /**
+   * WHAT THE PICTURE SHOWS, judged from pixels rather than from any caption.
+   * A closed vocabulary, so it can cross-check the text-derived verdict: a
+   * photo of a car answering a scooter request is a wrong-vehicle signal even
+   * when every word in the message says otherwise.
+   */
+  seenVehicleClass?: "scooter" | "motorbike" | "car" | "unclear";
+  /** Does what we SEE match the traveller's declared class? null = unclear. */
+  seenMatchesRequest?: boolean | null;
   delivers?: boolean | null;
   // Extra rental terms, only when the shop explicitly stated them.
   deliveryFee?: number | null; // in the reply's currency; 0 = free
@@ -1330,6 +1339,13 @@ export async function extractOffer(
     '"shopFirm": boolean|null, "shopDeclined": boolean|null, ' +
     '"shopTone": "warm"|"neutral"|"annoyed"|null, ' +
     '"mileageKm": number|null, "conditionNotes": string|null, "imageSummary": string|null, ' +
+    // VISUAL VEHICLE CLASSIFICATION. A closed vocabulary, answered from the
+    // PICTURE rather than from any text - a photo of a car sent to someone who
+    // asked for a scooter is a wrong-vehicle signal even when nothing in the
+    // caption says so, and a board headed with a vehicle we cannot read is
+    // better reported as "unclear" than silently assumed to be ours.
+    '"seenVehicleClass": "scooter"|"motorbike"|"car"|"unclear"|null, ' +
+    '"seenMatchesRequest": boolean|null, ' +
     '"tags": string[] }. ' +
     // The Krabi failure: after agreeing 250/day the shop wrote "that is a
     // discount already, normally it's 300/day" and the app replaced the live
@@ -1402,6 +1418,15 @@ export async function extractOffer(
     "chosen row, but ALWAYS spell out the weekly rate and its per-day value in " +
     "imageSummary (1,900/7 = ~271/day) - for 7+ day rentals it is the honest " +
     "bargaining anchor. " +
+    // VISUAL CLASSIFICATION, from the PICTURE and nothing else.
+    "seenVehicleClass: when a photo shows an actual VEHICLE, say what it is " +
+    "from the picture alone - \"scooter\" (step-through, flat footboard, no " +
+    "visible gear lever), \"motorbike\" (manual/geared, fuel tank between the " +
+    "knees), \"car\", or \"unclear\" when the photo is a board, a document or " +
+    "too poor to judge. NEVER infer it from the caption or the model name - " +
+    "this field exists precisely to CROSS-CHECK those. seenMatchesRequest: " +
+    "true when what you SEE is the class the traveller asked for, false when " +
+    "it plainly is not, null when unclear. " +
     "The sheet may be in ANY language " +
     "(Thai, Hungarian, Indonesian...) - deposit lines like 'Letet: Utlevel vagy " +
     "3000 Baht' mean 'Deposit: passport or 3000 baht', so read deposit tiers per " +
@@ -1518,7 +1543,54 @@ export async function extractOffer(
     if (read.ok) {
       const parsed = extractJson<ExtractedOffer>(read.text);
       if (parsed && typeof parsed.found === "boolean") {
-        return { ...normalizeExtraction(parsed, spec), imageRead };
+        const first = normalizeExtraction(parsed, spec);
+        // REGION-DIRECTED RE-READ (the "multi-crop" retry, without pixels).
+        //
+        // A dense, low-contrast or badly-lit board is the case where one pass
+        // reliably under-reads: the model answers from the rows it attended to
+        // and the rest are simply absent - which is how a real Thai board came
+        // back with no usable row at all. We cannot CROP: there is no image
+        // library in this runtime, and adding one is the tens-of-MB weight the
+        // vision plan deliberately rejected for a 1GB worker. What we can do
+        // is direct ATTENTION, which costs one call and no dependencies: ask
+        // the model to transcribe the board top-to-bottom, region by region,
+        // verbatim, then extract from its own transcription.
+        //
+        // Fires ONLY on the case it is for: a price board that yielded nothing
+        // usable. A good first read is never spent on a second call.
+        const boardMissed =
+          first.imageKind === "price_sheet" &&
+          !first.found &&
+          first.vehicleVerdict !== "mismatch";
+        if (!boardMissed) return { ...first, imageRead };
+        try {
+          const focused = await readImages(
+            system +
+              " SECOND PASS - THE FIRST READ FOUND NOTHING. Work the board in " +
+              "regions: TOP third, then MIDDLE, then BOTTOM. For each region " +
+              "transcribe EVERY line you can see verbatim (model name, engine " +
+              "size, every number, the unit beside it), including faint, " +
+              "angled, glare-covered or handwritten lines. THEN extract from " +
+              "your own transcription. Put the full transcription in " +
+              "imageSummary so a human can check it against the photo.",
+            text || "Read this price board region by region.",
+            images,
+            { json: true }
+          );
+          if (focused.ok) {
+            const retried = extractJson<ExtractedOffer>(focused.text);
+            if (retried && typeof retried.found === "boolean") {
+              const second = normalizeExtraction(retried, spec);
+              // Only ADOPT a second read that actually recovered something.
+              if (second.found || (second.options?.length ?? 0) > 0) {
+                return { ...second, imageRead: { seen: true } };
+              }
+            }
+          }
+        } catch {
+          /* the re-read is an upgrade - its failure keeps the first result */
+        }
+        return { ...first, imageRead };
       }
     }
     // A photo with NO usable model output: still try the caption text with the
@@ -1640,6 +1712,21 @@ export async function extractOffer(
         ? "mismatch"
         : "match";
     e = { ...e, vehicleVerdict: verdict, matchesSpec: verdict !== "mismatch" };
+    // THE PICTURE CROSS-CHECKS THE WORDS. A photo the model itself classified as
+    // a different class from the one the traveller asked for downgrades a
+    // confident "match" to "unclear" - never straight to mismatch, because a
+    // shop may simply have sent a photo of a different bike it also rents. The
+    // engine then ASKS, which is exactly the behaviour an unestablished vehicle
+    // is supposed to produce. Only fires when the model actually judged the
+    // pixels (a closed value, never "unclear", and an explicit false).
+    if (
+      verdict === "match" &&
+      e.seenMatchesRequest === false &&
+      e.seenVehicleClass &&
+      e.seenVehicleClass !== "unclear"
+    ) {
+      e = { ...e, vehicleVerdict: "unclear", matchesSpec: true };
+    }
     // LIST PRICE IS NOT AN OFFER. When a shop defends a discount it already gave
     // ("that is a discount already, normally it's 300/day"), the only number in
     // the message is the REGULAR price. Reading it as a fresh quote replaced a
@@ -1727,6 +1814,15 @@ export async function extractOffer(
         e.imageKind && ["vehicle", "price_sheet", "document", "other"].includes(e.imageKind)
           ? e.imageKind
           : undefined,
+      // CLOSED VOCABULARY, enforced here rather than trusted from the model -
+      // anything outside the set is "we could not tell", never a guess.
+      seenVehicleClass:
+        e.seenVehicleClass &&
+        ["scooter", "motorbike", "car", "unclear"].includes(e.seenVehicleClass)
+          ? e.seenVehicleClass
+          : undefined,
+      seenMatchesRequest:
+        typeof e.seenMatchesRequest === "boolean" ? e.seenMatchesRequest : null,
       delivers: typeof e.delivers === "boolean" ? e.delivers : null,
       deliveryFee: typeof e.deliveryFee === "number" && e.deliveryFee >= 0 ? e.deliveryFee : null,
       insuranceIncluded: typeof e.insuranceIncluded === "boolean" ? e.insuranceIncluded : null,
