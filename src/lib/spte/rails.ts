@@ -45,7 +45,7 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   const gate = ctx.inbound.verified.vehicleStatus;
   const priceMove =
     artifact.move === "bargain" ||
-    artifact.move === "close" ||
+    artifact.move === "farewell" ||
     artifact.move === "present" ||
     artifact.move === "momentum";
   // ASK ONCE, THEN PROCEED. The rewrite below is what made the agent re-send
@@ -126,6 +126,40 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
         detail: "the draft states a rental date the traveller has not chosen",
       },
     };
+  }
+
+  // 0.8) A FAREWELL IS A GOODBYE. It may not carry a price or an agreement.
+  //
+  // Ko Tao, 12:43: the shop had said it had nothing to rent, the engine chose
+  // the goodbye move, and the message that went out was "great, 180 baht per
+  // day is a good price!" - an acceptance, sent to a shop that had already
+  // withdrawn, five minutes after we had told it we found the price too high.
+  //
+  // The move was renamed (`close` -> `farewell`) and the prompt now states its
+  // meaning, but both of those are instructions, and an instruction is advice.
+  // This is the guarantee: whatever the model writes, a farewell that names a
+  // number or agrees to one does not go out. `restock-probe` is held to the
+  // same rule for the same reason - a shop that just ran out is the single
+  // most dangerous moment to sound like we are accepting terms.
+  if (artifact.move === "farewell" || artifact.move === "redirect-close" || artifact.move === "restock-probe") {
+    const AGREE_RX =
+      /\b(deal|agreed?|i'?ll take it|we'?ll take it|book(ing|ed)? it|i'?ll book|confirm(ed|ing)?|sounds good|that works|good price|great price|perfect price|i accept|works for me)\b/i;
+    const agreed = AGREE_RX.exec(text);
+    // Any bare number of price magnitude. Deliberately blunt: a goodbye has no
+    // legitimate reason to carry one, so there is nothing here to be precise
+    // about. (Times were already refused by the rail below; this runs first.)
+    const priced = /\d[\d,.]*\s*(?:\/|per\s|a\s)?\s*(?:day|night|baht|thb|฿|rp|idr|usd|\$|€|£)|(?:฿|\$|€|£|rp)\s*\d/i.exec(text);
+    if (agreed || priced) {
+      return {
+        ok: false,
+        rejected: {
+          rule: "farewell-integrity",
+          detail: agreed
+            ? `a goodbye agreed to something ("${agreed[0]}")`
+            : `a goodbye carried a price ("${priced?.[0]?.trim()}")`,
+        },
+      };
+    }
   }
 
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.

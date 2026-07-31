@@ -191,7 +191,23 @@ export function stockState(ledger: ThreadLedger | undefined): {
     (c) => c.subject === "availability" && c.actor === "shop" && c.force !== "ask"
   );
   if (!claims.length) return { state: "unknown" };
-  const latest = claims.reduce((a, b) => (b.at >= a.at ? b : a));
+  // LATEST WINS, AND A DENIAL WINS A TIE.
+  //
+  // `b.at >= a.at` alone let array order decide when one message produced two
+  // availability claims - and one message routinely does: "no scooters today,
+  // bikes available tomorrow" is two claims stamped identically. Deciding that
+  // by whichever the scanner happened to emit last is a coin flip on the most
+  // consequential fact in the thread, and the wrong side of it keeps an agent
+  // haggling over a vehicle the shop just said it does not have.
+  //
+  // At equal timestamps the denial is the safe read: believing a shop has
+  // stock it lacks wastes the traveller's search; believing it lacks stock it
+  // has costs one extra question.
+  const latest = claims.reduce((a, b) => {
+    if (b.at > a.at) return b;
+    if (b.at < a.at) return a;
+    return a.polarity === "denied" ? a : b;
+  });
   const restockHint = latest.details.includes("restock")
     ? // The evidence carries the shop's own words; the detail only says one
       // was present. Showing their sentence beats inventing a paraphrase.

@@ -122,13 +122,15 @@ describe("we never READ 'free' as an availability signal", () => {
     }
   });
 
-  it("KNOWN GAP, owned by F4: natural out-of-stock phrasings still miss", () => {
-    // Documented rather than hidden. The cue's idiom branch is `all (rented|
-    // booked|gone|taken)` - adjacent words only - so a shop writing the same
-    // thing with a noun in the middle produces no claim at all. F4 rebuilds the
-    // cue structurally; until then this test states the truth so the gap cannot
-    // be mistaken for coverage.
-    expect(availability("all bikes are rented").length).toBe(0);
+  it("GAP CLOSED BY F4: the same fact with a noun in the middle now lands", () => {
+    // This test used to assert the gap. The cue's idiom branch was `all
+    // (rented|booked|gone|taken)` - adjacent words only - so a shop writing
+    // the identical thing with its noun in the middle produced no claim at
+    // all. F4 rebuilt the branch over the shared vehicle vocabulary with the
+    // noun and the copula both optional, which is how shops actually write.
+    const claims = availability("all bikes are rented");
+    expect(claims.length).toBeGreaterThan(0);
+    expect(claims.every((c) => c.polarity === "denied")).toBe(true);
   });
 
   it("a genuine in-stock statement is still an affirmation", () => {

@@ -10,6 +10,7 @@
 import { chat, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
 import { coerceToLegal, passportCounterDue } from "./policy";
+import { moveGlossary, normalizeMove } from "./moves";
 import { composePassportCounter } from "../negotiation/deposit-counter";
 import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
@@ -23,7 +24,7 @@ import { describeActs } from "../wa/dialogue-acts";
  *  decided BEFORE this is called and never reaches an LLM. */
 export function pickRoute(ctx: TurnContext): ModelRoute {
   const highStakes =
-    ctx.legalMoves.includes("close") ||
+    ctx.legalMoves.includes("farewell") ||
     ctx.legalMoves.includes("closing-message") ||
     (ctx.legalMoves.includes("bargain") && (ctx.thread.digest.round ?? 0) === 0);
   return highStakes
@@ -302,7 +303,10 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       ? `VERIFIED: the shop's live quote is ${ctx.inbound.verified.pricePerDay} ${ctx.inbound.verified.currency ?? s.currency}/day.\n`
       : "") +
     (ctx.guards.floorPerDay ? `Do not ask below ${ctx.guards.floorPerDay}/day.\n` : "") +
-    `LEGAL MOVES: ${ctx.legalMoves.join(", ")}\n` +
+    // WITH THEIR MEANINGS. A bare token list left the model to infer what each
+    // word meant, and on Ko Tao it inferred that `close` meant close the deal.
+    // A closed vocabulary is closed for the code, not for the reader.
+    `LEGAL MOVES (pick exactly one):\n${moveGlossary(ctx.legalMoves)}\n` +
     `Choose the best move and write the message.`;
 
   return { system, user };
@@ -391,7 +395,7 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
     }
     case "redirect-close":
       return `No worries, thanks for letting me know - have a great day!`;
-    case "close":
+    case "farewell":
       return `All good, thank you so much for your time!`;
     case "answer":
       // NEVER-SILENT (the live "agent never replied to my question" failure):
@@ -504,7 +508,10 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
       const artifact: TurnArtifact = {
         read: parsed.read ?? { intent: "" },
         think: typeof parsed.think === "string" ? parsed.think.slice(0, 200) : "",
-        move: parsed.move as MoveKind,
+        // Old vocabulary in, current vocabulary out. A model coached by an
+        // exemplar written before the rename still says "close"; coercing that
+        // to legal[0] would throw away a choice that was actually right.
+        move: normalizeMove(parsed.move) as MoveKind,
         message: typeof parsed.message === "string" ? parsed.message : undefined,
         counterPricePerDay:
           typeof parsed.counterPricePerDay === "number" ? parsed.counterPricePerDay : undefined,

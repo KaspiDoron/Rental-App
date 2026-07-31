@@ -171,6 +171,37 @@ interface SubjectSpec {
   freeMeansWaived?: boolean;
 }
 
+/**
+ * EVERY WORD A SHOP USES FOR THE THING IT RENTS, in one place.
+ *
+ * It was in three places, each slightly different: the possession branch of
+ * the availability cue knew about motorcycles and automatics, the
+ * noun-adjacent branch did not, and the persona scrubber kept its own copy. So
+ * "no motorcycles left" was invisible to exactly one of the two readings that
+ * could have caught it, for no reason anybody chose.
+ */
+const VEHICLE_NOUN =
+  "bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?|bicycles?";
+
+/**
+ * What a shop puts BETWEEN a possession verb and the vehicle it possesses.
+ *
+ * The old rule allowed articles and quantifiers only - `a|an|any|one|the` - so
+ * "My shop doesn't have free motorcycles." produced no claim at all. That is
+ * the Ko Tao message: the shop said it had run out, the system recorded
+ * nothing, the agent went on haggling, and the card waited for a price that
+ * was never coming. Shops describe stock with adjectives ("free", "automatic",
+ * "125cc", "big", "any more"), and enumerating them is a losing game.
+ *
+ * So: up to three intervening words, NONE of which may be a preposition or a
+ * conjunction. That exclusion is the whole safety property - a preposition
+ * means the noun has left this verb's grasp and joined another phrase ("I have
+ * a photo OF the bikes", "we have a place FOR cars"), which is not a claim
+ * about stock. Structure, not a phrase list.
+ */
+const MODIFIER_RUN =
+  "(?:(?!of\\b|for\\b|about\\b|with\\b|from\\b|to\\b|in\\b|on\\b|at\\b|by\\b|and\\b|or\\b|but\\b)[a-z0-9'-]+\\s+){0,3}";
+
 // One table, extended by adding a row - not by adding a branch somewhere.
 const SUBJECTS: SubjectSpec[] = [
   {
@@ -235,13 +266,32 @@ const SUBJECTS: SubjectSpec[] = [
     // same token could mean a shop had stock or had none. A shop writing "free"
     // in this trade means no-cost far more often than vacant - "free delivery",
     // "free helmet" - and guessing wrong on either reading costs a booking.
-    cue: /\b(available|availability|in stock|out of stock|sold out|all (rented|booked|gone|taken)|fully booked|(have|has|had|got|have got|rent|rents|left|remaining)\s+(a\s+|an\s+|any\s+|one\s+|the\s+)?(bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?)|(bikes?|scooters?|motorbikes?|cars?|vehicles?)\s+(available|left|ready))\b/i,
+    cue: new RegExp(
+      "\\b(available|availability|in stock|out of stock|sold out|fully booked" +
+        // "all bikes are rented", "all our scooters gone", "all rented".
+        // The vehicle noun and the copula are BOTH optional here: a shop that
+        // has run out drops whichever words it feels like dropping, and the
+        // old adjacency-only form (`all (rented|booked|gone|taken)`) caught the
+        // one phrasing where it dropped every single one of them.
+        `|all\\s+(?:the\\s+|our\\s+|my\\s+)?(?:(?:${VEHICLE_NOUN})\\s+)?(?:are\\s+|is\\s+)?(?:rented|booked|gone|taken|out|busy)` +
+        // A possession or supply verb applied to a vehicle noun. The negation
+        // machinery does the polarity, so "don't have bike", "no scooter left"
+        // and "we have bikes" are one rule with three readings.
+        `|(?:have|has|had|got|have got|rent|rents|left|remaining)\\s+${MODIFIER_RUN}(?:${VEHICLE_NOUN})` +
+        // ...and the same fact stated the other way round.
+        `|(?:${VEHICLE_NOUN})\\s+(?:are\\s+|is\\s+)?(?:available|left|ready|remaining))\\b`,
+      "i"
+    ),
     details: [
       // WHEN it comes back, when the shop says. The restock answer is the one
       // thing worth asking for after an out-of-stock, and it lands on the card.
       { detail: "restock", rx: /\b(tomorrow|today|tonight|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \d+ days?)\b/i },
     ],
-    negativeCue: /\b(out of stock|sold out|all (rented|booked|gone|taken)|fully booked)\b/i,
+    negativeCue: new RegExp(
+      "\\b(out of stock|sold out|fully booked" +
+        `|all\\s+(?:the\\s+|our\\s+|my\\s+)?(?:(?:${VEHICLE_NOUN})\\s+)?(?:are\\s+|is\\s+)?(?:rented|booked|gone|taken|out|busy))\\b`,
+      "i"
+    ),
   },
   {
     subject: "licence",
@@ -510,6 +560,15 @@ export function claimsIn(
       const trailing = clause.slice(hit.index + hit.length, hit.index + hit.length + 14);
       const isDenied =
         negated.has(hit.index) ||
+        // ...or the negator sits INSIDE the cue's own span. The scope rule
+        // above looks for a negator BEFORE a cue, which is the common shape
+        // ("no deposit", "we don't do delivery"). But a cue that spans a verb
+        // and its object swallows anything between them - "we have no more
+        // scooters", "got zero bikes" - and the negator then sits after the
+        // cue's start index, invisible to a rule that only looks forward. It is
+        // one constituent and it is a denial. Matched against the cue text
+        // only, so like negativeCue it can never reach a neighbouring subject.
+        new RegExp(NEGATORS.source, "i").test(clause.slice(hit.index, hit.index + hit.length)) ||
         (hit.spec.freeMeansWaived === true && /^\s*free\b/i.test(trailing)) ||
         // ...or a cue that IS the denial, with no negator to scope from
         // ("sold out", "fully booked"). Matched against the cue text itself,

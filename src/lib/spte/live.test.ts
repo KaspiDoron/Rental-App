@@ -109,8 +109,8 @@ describe("SPTE live glue", () => {
       }),
       io
     );
-    // close or silent - either way, a declined thread never keeps bargaining.
-    expect(["silent", "close"]).toContain(res.move);
+    // farewell or silent - either way, a declined thread never keeps bargaining.
+    expect(["silent", "farewell"]).toContain(res.move);
   });
 
   it("never throws after deciding a move even if the send path errors (no double-send risk)", async () => {

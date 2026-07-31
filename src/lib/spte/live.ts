@@ -295,7 +295,7 @@ function metaKindFor(move: MoveKind): string {
     case "pickup-location":
     case "option-probe":
       return "auto-answer";
-    case "close":
+    case "farewell":
     case "closing-message":
     case "redirect-close":
       return "auto-close";

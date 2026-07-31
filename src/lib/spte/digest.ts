@@ -43,7 +43,7 @@ export function mergeDigest(
 
   // The model's durable notes (deposit terms, condition, tone cues).
   for (const f of artifact.digestPatch) add(f);
-  if (artifact.move === "close" || artifact.move === "redirect-close") add("closed - one goodbye sent");
+  if (artifact.move === "farewell" || artifact.move === "redirect-close") add("closed - one goodbye sent");
 
   // Keep the freshest MAX_FACTS (evict oldest).
   const capped = facts.slice(Math.max(0, facts.length - MAX_FACTS));

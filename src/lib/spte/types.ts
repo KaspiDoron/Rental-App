@@ -18,7 +18,21 @@ export type MoveKind =
   | "answer"
   | "clarify"
   | "present"
-  | "close"
+  // A WARM GOODBYE, and nothing else.
+  //
+  // It was called `close`, and the model was never told what that meant. The
+  // prompt emits a bare `LEGAL MOVES: close, silent` with no glossary, so the
+  // only definition available to it was the English word - which in a sales
+  // conversation means CLOSE THE DEAL. On Ko Tao it did exactly that: the shop
+  // said it had no bikes, `close` became legal, and the agent replied "great,
+  // 180 baht per day is a good price!" to a shop that had just withdrawn.
+  //
+  // The name is now the definition. A move called `farewell` cannot be misread
+  // as an agreement by anything that reads English, and `moveGlossary` states
+  // it in the prompt anyway. `close` is still accepted on the way IN
+  // (normalizeMove) because model output, stored owner corrections and golden
+  // cases all predate the rename.
+  | "farewell"
   | "deposit-probe"
   | "fulfillment-probe"
   | "pickup-location"

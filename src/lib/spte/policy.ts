@@ -20,11 +20,32 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   const d = ctx.thread.digest;
   const moves: MoveKind[] = [];
 
-  // Terminal / silence conditions first (highest precedence).
+  // OUT OF STOCK OUTRANKS A DECLINE, and this order is the whole point.
+  //
+  // These two branches overlap constantly: a shop saying "sorry, I don't have
+  // any bikes" reads as BOTH - it is a refusal in surface form and an
+  // inventory fact in substance. Whichever branch runs first decides the
+  // thread's fate, and `declined` used to run first, so a temporary,
+  // completely normal stock-out was filed as a rejection and answered with a
+  // goodbye. That is the Ko Tao 12:38 message: the shop had quoted 180 a
+  // minute earlier, misread our "free" as a request for a free motorbike,
+  // said it had none - and got farewelled by an agent that then agreed to the
+  // price it had already been given.
+  //
+  // A decline ends a negotiation. A stock-out pauses one and gives us a
+  // question worth asking. When a message can be read as either, it is the
+  // one that keeps the thread alive.
+  if (v.shopUnavailable) {
+    if (!alreadyAskedStock(ctx)) moves.push("restock-probe");
+    moves.push("silent");
+    return dedupe(moves);
+  }
+
+  // Terminal / silence conditions (highest precedence after stock).
   if (v.declined) {
     // First decline owes exactly ONE warm goodbye, then silence (the B7 rule,
     // now structural): a close is legal while we have not closed yet.
-    if ((d.round ?? 0) >= 0 && !hasClosed(ctx)) moves.push("close");
+    if ((d.round ?? 0) >= 0 && !hasClosed(ctx)) moves.push("farewell");
     moves.push("silent");
     return dedupe(moves);
   }
@@ -38,17 +59,9 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     return dedupe(moves);
   }
 
-  // OUT OF STOCK OUTRANKS EVERY PRICE MOVE. A shop that has just said it has
-  // no vehicle is not a shop to haggle with - and it is not a decline either.
-  // Acknowledge warmly, ask ONE question (when does it come back?), then let
-  // the ask-once ledger gate hold it. In the field "Now I don't have bike."
-  // produced no state and no move at all: the agent carried on bargaining over
-  // a scooter that did not exist.
-  if (v.shopUnavailable) {
-    if (!alreadyAskedStock(ctx)) moves.push("restock-probe");
-    moves.push("silent");
-    return dedupe(moves);
-  }
+  // (The out-of-stock branch moved ABOVE `declined` - see the note there. It
+  // outranks every price move for the same reason it outranks a decline: a
+  // shop that has just said it has no vehicle is not a shop to haggle with.)
 
   // ANSWER-FIRST when the shop asked something. This MUST precede bargain in the
   // ladder: coerceToLegal and the fallback both take legal[0], so if bargain led

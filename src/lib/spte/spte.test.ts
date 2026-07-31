@@ -45,10 +45,10 @@ describe("SPTE policy rails (legal move computation)", () => {
     expect(legal).not.toContain("fulfillment-probe");
   });
 
-  it("a first-turn decline owes exactly one close then silence (B7 structural)", () => {
+  it("a first-turn decline owes exactly one farewell then silence (B7 structural)", () => {
     const c = ctx({ verified: { found: false, declined: true } });
     const legal = legalMovesFor(c);
-    expect(legal).toEqual(["close", "silent"]);
+    expect(legal).toEqual(["farewell", "silent"]);
   });
 
   it("wrong vehicle -> redirect-close on first contact, never bare silence", () => {
@@ -192,7 +192,7 @@ describe("SPTE reflex tier (0-token)", () => {
 describe("SPTE move coercion (the B7 lesson generalized)", () => {
   it("an out-of-set LLM move is coerced to the top legal move", () => {
     const artifact = { move: "present" } as TurnArtifact;
-    expect(coerceToLegal(artifact, ["close", "silent"])).toBe("close");
+    expect(coerceToLegal(artifact, ["farewell", "silent"])).toBe("farewell");
   });
   it("a legal LLM move is kept", () => {
     const artifact = { move: "bargain" } as TurnArtifact;
@@ -317,7 +317,7 @@ describe("SPTE post-rails (deterministic number + protocol integrity)", () => {
   });
 
   it("strips a concrete time commitment and appends the defer line", () => {
-    const a = { move: "close", message: "Great, see you tomorrow at 9am!", leverageUsed: [], digestPatch: [], read: { intent: "" }, think: "" } as TurnArtifact;
+    const a = { move: "closing-message", message: "Great, see you tomorrow at 9am!", leverageUsed: [], digestPatch: [], read: { intent: "" }, think: "" } as TurnArtifact;
     const r = runPostRails(base, a);
     expect(r.ok).toBe(true);
     expect(r.finalText).toMatch(/confirm the exact time/i);
