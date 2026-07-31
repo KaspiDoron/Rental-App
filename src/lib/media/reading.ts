@@ -117,6 +117,8 @@ export interface ExtractionLike {
   // (the studio/simulator mirrors) keeps working.
   conditionNotes?: string | null;
   imageSummary?: string | null;
+  /** What the vision classifier called the media - present only on image turns. */
+  imageKind?: "vehicle" | "price_sheet" | "document" | "other";
   vehicleDescription?: string | null;
   conditions?: string[];
   visionText?: string;
@@ -128,6 +130,33 @@ export interface ExtractionLike {
     detail?: string;
     retryable?: boolean;
   };
+}
+
+/**
+ * DOES THIS TURN HOLD A READING OF MEDIA?
+ *
+ * The stamp that writes a MediaReading onto the message used to ask a
+ * different question - "did the caller hand me image BYTES?" - and on the
+ * production path the answer is always no. The vision Flow reads the photo in
+ * an isolated worker and the CONTINUATION composes the reply, calling the
+ * engine with `images: []` and the finished extraction. So the summary was
+ * only ever written on the inline path, and in the field every photo rendered
+ * with no agent reading under it.
+ *
+ * The right question is about the EXTRACTION, which carries its own vision
+ * provenance whether or not the bytes travelled with it. Pure, so the exact
+ * continuation shape is testable without a queue or a database.
+ */
+export function holdsMediaReading(
+  imageCount: number,
+  extraction: ExtractionLike | null | undefined
+): boolean {
+  if (imageCount > 0) return true;
+  const e = extraction ?? {};
+  // `imageRead` is set by readImages on EVERY extraction that had images -
+  // including the ones where every provider failed, which are exactly the
+  // turns a traveller most needs an honest "nobody could look at this" for.
+  return Boolean(e.imageRead || e.imageKind || clean(e.imageSummary));
 }
 
 /** Plain-English reason per failure kind, for the traveller (never a status code). */

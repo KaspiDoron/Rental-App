@@ -1167,9 +1167,30 @@ export async function processVendorReply(opts: {
         await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
           raw: { ...(row.raw ?? {}), reading },
         });
+        return;
       }
-    } catch {
-      /* the summary is a proof surface - never blocks the reply */
+      // NO ROW TO STAMP is itself the bug we spent a field test chasing. An
+      // empty catch made a missing summary indistinguishable from a summary
+      // nobody looked for; the trace makes it a thing the doctor can show.
+      await sbInsert("agent_events", [
+        {
+          kind: "reading-stamp-failed",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: `no inbound row matched (waMessageId=${opts.waMessageId ?? "none"})`.slice(0, 500),
+        },
+      ]).catch(() => {});
+    } catch (e) {
+      // The summary is a proof surface - it never blocks the reply, but it
+      // never disappears silently either.
+      await sbInsert("agent_events", [
+        {
+          kind: "reading-stamp-failed",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: (e instanceof Error ? e.message : "stamp threw").slice(0, 500),
+        },
+      ]).catch(() => {});
     }
   };
   /** Record the move this turn took on the media, so the panel can stop guessing. */
@@ -1182,7 +1203,18 @@ export async function processVendorReply(opts: {
     void stampMediaReading(mediaReading);
   };
 
-  if (images.length > 0 && ctx.sender) {
+  // THE TURN THAT LOOKED IS NOT ALWAYS THE TURN THAT HOLDS THE BYTES.
+  //
+  // This gate used to be `images.length > 0`, which is true only on the inline
+  // path. In production the vision Flow reads the photo in an isolated worker
+  // and the CONTINUATION composes the reply - calling this function with
+  // `images: []` and the finished extraction in `preExtracted`. So on the path
+  // every real traveller is served by, the stamp never ran: the photo rendered
+  // in the conversation and the agent's summary under it never existed. The
+  // question the gate must ask is "does this turn HOLD a reading of media?",
+  // and the extraction answers that whether or not the bytes came with it.
+  const { holdsMediaReading: turnHoldsMedia } = await import("./media/reading");
+  if (turnHoldsMedia(images.length, extraction as never) && ctx.sender) {
     const { readingFrom } = await import("./media/reading");
     mediaReading = readingFrom(extraction as never, {
       usedPricePerDay: usablePrice,

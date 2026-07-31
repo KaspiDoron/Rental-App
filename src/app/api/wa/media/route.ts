@@ -53,23 +53,31 @@ async function auditCopy(waMessageId: string): Promise<Response | null> {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!base || !key) return null;
+  // TWO NAMES, ONE FILE. The vision worker stores a coalesced burst as
+  // `<id>-<i>.<ext>` (it can hold several frames per message) while this route
+  // only ever asked for `<id>.<ext>` - so once WhatsApp expired the bytes,
+  // every audit copy the worker HAD saved was unreachable and the photo was
+  // permanently blank. Try the frame-indexed name too; frame 0 is the leader.
+  const names = [waMessageId, `${waMessageId}-0`];
   for (const ext of AUDIT_EXTS) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 10_000);
-      let res: Response;
+    for (const name of names) {
       try {
-        res = await fetch(`${base}/storage/v1/object/wa-media/${waMessageId}.${ext}`, {
-          headers: { authorization: `Bearer ${key}` },
-          cache: "no-store",
-          signal: ctrl.signal,
-        });
-      } finally {
-        clearTimeout(timer);
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10_000);
+        let res: Response;
+        try {
+          res = await fetch(`${base}/storage/v1/object/wa-media/${name}.${ext}`, {
+            headers: { authorization: `Bearer ${key}` },
+            cache: "no-store",
+            signal: ctrl.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (res.ok && res.body) return res;
+      } catch {
+        /* try the next name / extension */
       }
-      if (res.ok && res.body) return res;
-    } catch {
-      /* try the next extension */
     }
   }
   return null;

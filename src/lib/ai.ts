@@ -556,20 +556,55 @@ export function lastVisionDiagnostics(): VisionAttempt[] {
   return globalThis.__wd_vision_diag__?.attempts ?? [];
 }
 
-// Groq's multimodal Llama-4 models (Scout first - faster; Maverick fallback).
-const GROQ_VISION_MODELS = [
+// THE VISION LADDER, KEPT ALIVE.
+//
+// A vision id that a provider has retired does not degrade - it 400s, and the
+// whole rung is wasted latency inside a bounded budget. Both ladders were
+// pinned to models that have since been decommissioned (Groq deprecated the
+// Llama-4 vision pair; Google retired gemini-2.0-flash), which is a large part
+// of why a real price board in Thailand came back as "we could not read it".
+//
+// Groq: Qwen3.6-27B is Groq's current multimodal model and OCRs non-Latin
+// scripts (Thai included) far better than Llama-4 did. Scout stays as a
+// temporary rung until it 404s, so a deployment mid-migration is never blind.
+const GROQ_VISION_FALLBACKS = [
+  "qwen/qwen3.6-27b",
   "meta-llama/llama-4-scout-17b-16e-instruct",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
 ];
 // gemini-2.5-flash-lite 404s for NEW API keys ("no longer available to new
 // users" - seen verbatim in the owner's Media Lab), so the rolling aliases
-// come right after the pinned primary.
-const GEMINI_VISION_MODELS = [
+// come right after the pinned primary. gemini-3-flash-preview is the current
+// generation; the `-latest` aliases keep working when a pin is retired.
+const GEMINI_VISION_FALLBACKS = [
   GEMINI_MODEL,
+  "gemini-3-flash-preview",
   "gemini-flash-latest",
   "gemini-flash-lite-latest",
-  "gemini-2.0-flash",
 ];
+
+/**
+ * The vision ladders, with the owner's Key Vault override FIRST.
+ *
+ * Text model ids have been hot-fixable from Admin -> Keys for a long time
+ * (GROQ_MODEL, GEMINI_MODEL, ...); vision ids were hard-coded, so the one
+ * class of failure the owner cannot see coming - a provider retiring a
+ * multimodal id - was also the only one they could not fix without a
+ * redeploy. GEMINI_VISION_MODEL / GROQ_VISION_MODEL close that gap.
+ */
+async function visionLadders(): Promise<{ gemini: string[]; groq: string[] }> {
+  const [gemOverride, groqOverride] = await Promise.all([
+    getConfig("GEMINI_VISION_MODEL"),
+    getConfig("GROQ_VISION_MODEL"),
+  ]);
+  const withOverride = (override: string | undefined, defaults: string[]) => {
+    const o = (override ?? "").trim();
+    return o ? [o, ...defaults.filter((m) => m !== o)] : defaults;
+  };
+  return {
+    gemini: withOverride(gemOverride, GEMINI_VISION_FALLBACKS),
+    groq: withOverride(groqOverride, GROQ_VISION_FALLBACKS),
+  };
+}
 
 // A VISION CALL IS NOT A TEXT COMPLETION.
 //
@@ -592,7 +627,8 @@ async function geminiVisionAttempt(
   system: string,
   userText: string,
   images: { mime: string; base64: string }[],
-  timeoutMs: number
+  timeoutMs: number,
+  json: boolean
 ): Promise<VisionAttemptOutcome> {
   try {
     const res = await fetchWithTimeout(
@@ -613,7 +649,19 @@ async function geminiVisionAttempt(
               ],
             },
           ],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+          // A REAL PRICE BOARD IS LONG. 600 tokens truncated a 17-row Thai
+          // board mid-JSON, and a truncated generation returns no parseable
+          // candidate - which this code then reported as "blocked", i.e. an
+          // outage. The ceiling has to fit the artefact, not the average.
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 2_048,
+            // STRUCTURE, NOT FENCES. The caller that reads price boards parses
+            // JSON out of this; asking the PROVIDER for JSON removes the whole
+            // class of "the model wrapped it in prose / half a fence" failures
+            // that fence-parsing can only guess around.
+            ...(json ? { responseMimeType: "application/json" } : {}),
+          },
         }),
       },
       timeoutMs
@@ -641,7 +689,8 @@ async function groqVisionAttempt(
   system: string,
   userText: string,
   images: { mime: string; base64: string }[],
-  timeoutMs: number
+  timeoutMs: number,
+  json: boolean
 ): Promise<VisionAttemptOutcome> {
   try {
     const res = await fetchWithTimeout(
@@ -655,7 +704,9 @@ async function groqVisionAttempt(
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          max_tokens: 700,
+          // Same reason as the Gemini ceiling above: a long board must fit.
+          max_tokens: 2_048,
+          ...(json ? { response_format: { type: "json_object" } } : {}),
           messages: [
             {
               role: "user",
@@ -699,13 +750,19 @@ async function groqVisionAttempt(
 export async function readImages(
   system: string,
   userText: string,
-  images: { mime: string; base64: string }[]
+  images: { mime: string; base64: string }[],
+  opts?: { json?: boolean }
 ): Promise<VisionRead> {
+  const json = opts?.json === true;
   const attempts: VisionAttempt[] = [];
   globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
   const deadline = Date.now() + VISION_TOTAL_BUDGET_MS;
 
-  const [gemini, groq] = await Promise.all([getConfig("GEMINI_TOKEN"), getConfig("GROQ_TOKEN")]);
+  const [gemini, groq, models] = await Promise.all([
+    getConfig("GEMINI_TOKEN"),
+    getConfig("GROQ_TOKEN"),
+    visionLadders(),
+  ]);
   if (!gemini)
     attempts.push({
       provider: "gemini",
@@ -734,20 +791,20 @@ export async function readImages(
     run: (timeoutMs: number) => Promise<VisionAttemptOutcome>;
   }> = [];
   if (gemini) {
-    for (const model of GEMINI_VISION_MODELS) {
+    for (const model of models.gemini) {
       ladder.push({
         provider: "gemini",
         model,
-        run: (ms) => geminiVisionAttempt(gemini, model, system, userText, images, ms),
+        run: (ms) => geminiVisionAttempt(gemini, model, system, userText, images, ms, json),
       });
     }
   }
   if (groq && groqImages.length > 0) {
-    for (const model of GROQ_VISION_MODELS) {
+    for (const model of models.groq) {
       ladder.push({
         provider: "groq",
         model,
-        run: (ms) => groqVisionAttempt(groq, model, system, userText, groqImages, ms),
+        run: (ms) => groqVisionAttempt(groq, model, system, userText, groqImages, ms, json),
       });
     }
   } else if (groq && images.length > 0 && groqImages.length === 0) {

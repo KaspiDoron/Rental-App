@@ -1486,7 +1486,9 @@ export async function extractOffer(
   if (images.length > 0) {
     let read: import("./ai").VisionRead;
     try {
-      read = await readImages(system, text || "See attached price list.", images);
+      // The extractor's whole contract is a JSON row set - ask the provider
+      // for JSON rather than fishing it back out of prose or a half-fence.
+      read = await readImages(system, text || "See attached price list.", images, { json: true });
     } catch (e) {
       read = {
         ok: false,
