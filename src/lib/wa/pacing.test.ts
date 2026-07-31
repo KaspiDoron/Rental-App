@@ -350,10 +350,55 @@ describe("claimSendSlots - reply FLEET ceiling (atomic total-velocity cap)", () 
   });
 
   it("once the fleet gap passes, the next shop sends", async () => {
+    // The mock stamps claim rows with state.nowMs, so it has to advance with
+    // the simulated clock: the fleet lane now runs the SAME previous-bucket
+    // straddle check the gap lane always had, and that check reads the stored
+    // created_at. (Before, nothing read it, so a frozen mock clock went
+    // unnoticed.)
+    state.nowMs = t0;
     const a = await claimSendSlots({ ...common, toDigits: "111111", text: "A", nowMs: t0 });
+    state.nowMs = t0 + 7000;
     const b = await claimSendSlots({ ...common, toDigits: "222222", text: "B", nowMs: t0 + 7000 });
     expect(a.ok).toBe(true);
-    expect(b.ok).toBe(true); // next 6s fleet bucket
+    expect(b.ok).toBe(true); // next 6s fleet bucket, a full fleet gap later
+  });
+
+  // THE HOLE THIS COMMIT CLOSES. A bucket is a window, not a spacing promise:
+  // one send at the very end of fleet bucket N and another at the very start of
+  // N+1 both WIN their claims and land milliseconds apart - two shops answered
+  // simultaneously, the exact bulk-sender signature the ceiling exists to stop.
+  // Tightening the engaged lane makes that boundary far easier to hit.
+  it("REFUSES a send that straddles the fleet bucket boundary", async () => {
+    state.nowMs = t0 + 5_900; // last moment of fleet bucket N
+    const a = await claimSendSlots({ ...common, toDigits: "111111", text: "A", nowMs: state.nowMs });
+    state.nowMs = t0 + 6_100; // first moment of N+1 - 200ms later
+    const b = await claimSendSlots({ ...common, toDigits: "222222", text: "B", nowMs: state.nowMs });
+    expect(a.ok).toBe(true);
+    expect(b).toEqual({ ok: false, kind: "pacing" });
+    // ...and the loser frees its message slot so its own retry is not a dupe.
+    expect(state.claims.has(`u@x.com|${messageSlotKey("222222", "B")}`)).toBe(false);
+  });
+
+  it("N parallel replies to N shops come out spaced by at least the fleet gap", async () => {
+    // 20 shops answering at once is the realistic load, and the property that
+    // matters is not "some were refused" but that everything ACCEPTED is
+    // pairwise >= fleetGap apart. Walk a simulated window in 1s steps.
+    const accepted: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const at = t0 + i * 1_000;
+      state.nowMs = at;
+      const r = await claimSendSlots({
+        ...common,
+        toDigits: `55555${i}`,
+        text: `reply ${i}`,
+        nowMs: at,
+      });
+      if (r.ok) accepted.push(at);
+    }
+    expect(accepted.length).toBeGreaterThan(1);
+    for (let i = 1; i < accepted.length; i++) {
+      expect(accepted[i] - accepted[i - 1]).toBeGreaterThanOrEqual(6_000);
+    }
   });
 
   it("a fleet loser frees its message + recipient slots for the retry", async () => {

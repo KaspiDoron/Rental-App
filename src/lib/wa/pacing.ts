@@ -293,10 +293,11 @@ export async function claimSendSlots(opts: {
   // distinct shops overlap. Lost -> pace this one out; distinct shops just take
   // turns through the fleet gap instead of all firing at once.
   if (opts.perRecipient && opts.fleetGapSeconds && opts.fleetGapSeconds > 0) {
-    const fleetSlot = `rfleet:${opts.fleetGapSeconds}:${gapBucket(now, opts.fleetGapSeconds)}`;
+    const fleetBucket = gapBucket(now, opts.fleetGapSeconds);
+    const fleetSlotFor = (b: number) => `rfleet:${opts.fleetGapSeconds}:${b}`;
     const fleet = await sbInsertClaim("wa_send_claims", {
       sender_key: opts.senderKey,
-      slot_key: fleetSlot,
+      slot_key: fleetSlotFor(fleetBucket),
     });
     if (fleet === "lost") {
       await releaseOwn([msgSlot, slotFor(bucket)]);
@@ -306,6 +307,33 @@ export async function claimSendSlots(opts: {
       await releaseOwn([msgSlot, slotFor(bucket)]);
       return { ok: false, kind: "error" };
     }
+    // THE SAME STRADDLE THE GAP SLOTS ALREADY GUARD. A bucket is a window, not
+    // a spacing promise: a send at the last instant of bucket N and another at
+    // the first instant of N+1 both win their claims and land milliseconds
+    // apart - two different shops answered simultaneously, which is exactly the
+    // bulk-sender signature the fleet ceiling exists to prevent. Speeding the
+    // engaged lane up makes that boundary far more reachable, so it has to
+    // close here rather than being left to luck.
+    const prevFleet = await sbInsertClaim("wa_send_claims", {
+      sender_key: opts.senderKey,
+      slot_key: fleetSlotFor(fleetBucket - 1),
+    });
+    if (prevFleet === "lost") {
+      const row = await sbSelectStrict<{ created_at: string }>(
+        "wa_send_claims",
+        `select=created_at&sender_key=eq.${encodeURIComponent(
+          opts.senderKey
+        )}&slot_key=eq.${encodeURIComponent(fleetSlotFor(fleetBucket - 1))}&limit=1`
+      );
+      const prevAt = "rows" in row ? Date.parse(row.rows[0]?.created_at ?? "") : NaN;
+      if (Number.isFinite(prevAt) && now - prevAt < opts.fleetGapSeconds * 1000) {
+        await releaseOwn([msgSlot, slotFor(bucket), fleetSlotFor(fleetBucket)]);
+        return { ok: false, kind: "pacing" };
+      }
+    }
+    // prevFleet === "error" is tolerable for the same reason as the gap lane:
+    // the current-bucket claim already serializes the window, and failing a
+    // legitimate reply on a flaky secondary read is the worse trade.
   }
   return { ok: true };
 }

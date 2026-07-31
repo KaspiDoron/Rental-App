@@ -31,6 +31,18 @@ interface DoctorReport {
     lastIngestPushDetail: string | null;
     lastCollapseAt: string | null;
   } | null;
+  speed: {
+    samples: number;
+    composeP50: number | null;
+    composeP95: number | null;
+    totalP50Sec: number | null;
+    totalP95Sec: number | null;
+    parked: number;
+    sent: number;
+    failed: number;
+    /** false = the atomic pacing table is missing and the guard fails OPEN. */
+    claimsTable: boolean;
+  } | null;
   thread?: {
     digits: string;
     anchors: { at: string; kind: string | null; hasRfq: boolean }[];
@@ -254,6 +266,59 @@ export function WaDoctorCard() {
                       : ""
                   }`}
                 />
+              </>
+            )}
+
+            {report.speed && (
+              <>
+                <div className="mt-2 border-t border-line pt-2 text-[11px] font-extrabold text-strong">
+                  Reply speed
+                </div>
+                <Row
+                  ok={
+                    report.speed.totalP95Sec === null
+                      ? null
+                      : report.speed.totalP95Sec <= 90
+                  }
+                  label="Engaged reply (p50 / p95)"
+                  value={
+                    report.speed.samples === 0
+                      ? "no turns recorded yet"
+                      : `${report.speed.totalP50Sec}s / ${report.speed.totalP95Sec}s · ${report.speed.samples} turns`
+                  }
+                />
+                <Row
+                  ok={
+                    report.speed.composeP95 === null ? null : report.speed.composeP95 <= 30_000
+                  }
+                  label="Agent thinking time (p50 / p95)"
+                  value={
+                    report.speed.samples === 0
+                      ? "-"
+                      : `${Math.round((report.speed.composeP50 ?? 0) / 100) / 10}s / ${
+                          Math.round((report.speed.composeP95 ?? 0) / 100) / 10
+                        }s`
+                  }
+                />
+                {/* A missing table means the guard fails OPEN: every time-based
+                    check still passes, so nothing else on this panel turns red
+                    while the only atomic concurrency floor is simply absent. */}
+                <Row
+                  ok={report.speed.claimsTable}
+                  label="Pacing claim table"
+                  value={
+                    report.speed.claimsTable
+                      ? "present (floors atomic)"
+                      : "MISSING - run supabase/schema.sql, floors are not enforced"
+                  }
+                />
+                {report.speed.failed > 0 && (
+                  <Row
+                    ok={false}
+                    label="Failed sends in sample"
+                    value={`${report.speed.failed} of ${report.speed.samples}`}
+                  />
+                )}
               </>
             )}
 

@@ -16,6 +16,7 @@ import { getTactics, recordOutcome } from "./memory";
 import { parseDeposit } from "./deposit";
 import { extractQuotedPrices, extractRentalDailyPrice } from "./wa/price-extract";
 import { catalogueFactsFor } from "./vehicle/catalogue";
+import { isEnglishSpeaking } from "./locale";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -590,6 +591,12 @@ export async function localizeMessage(
 ): Promise<{ text: string; english?: string; localized: boolean }> {
   void voiceKey; // persona intentionally not applied to local-language output
   if (!region) return { text: message, localized: false };
+  // ENGLISH -> ENGLISH IS NOT A TRANSLATION. Where the everyday language
+  // already is English, this call spent up to two LLM round trips (9s budget
+  // each, with a retry) to hand back the text it was given - pure latency on
+  // the critical path between composing a reply and sending it. Same output,
+  // no call. Any country not on the list simply behaves as before.
+  if (isEnglishSpeaking(region)) return { text: message, localized: false };
   // NB: we deliberately do NOT inject the English voice persona here - its
   // literal greeting ("Hey") was leaking into the local-language output. The
   // local register itself carries the human tone.

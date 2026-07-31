@@ -18,6 +18,7 @@ import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
 import { publicRequestOrigin } from "@/lib/request-origin";
 import { pushDiagnostics } from "@/lib/push";
+import { turnLatencyStats } from "@/lib/wa/turn-latency";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
   // Forwarded-aware: lets the expected-URL diagnosis work from the live public
   // host even before APP_DOMAIN is saved (the canonicalizer still prefers it).
   const reqOrigin = publicRequestOrigin(req) ?? undefined;
-  const [diag, sessionRow, waOk, wa403, push] = await Promise.all([
+  const [diag, sessionRow, waOk, wa403, push, latencyRows, claimsTable] = await Promise.all([
     webhookDiagnostics(email, reqOrigin).catch(() => null),
     sbSelect<{ status: string | null; host_url: string | null; updated_at: string | null }>(
       "wa_sessions",
@@ -52,6 +53,19 @@ export async function GET(req: Request) {
     // "shops replied and nothing happened", and until now the doctor could not
     // tell them apart - so a broken VAPID pair looked like a broken webhook.
     pushDiagnostics(email).catch(() => null),
+    // How fast this user's agent ACTUALLY answers engaged shops. The composer's
+    // pacing delay was always visible; the chain time before it never was, so
+    // "replies feel slow" had no number attached to it.
+    sbSelect<{ detail: string | null }>(
+      "agent_events",
+      `select=detail&kind=eq.turn-latency&user_email=eq.${enc}&order=created_at.desc&limit=50`
+    ).catch(() => []),
+    // The atomic pacing table. Before it existed the guard failed OPEN, so a
+    // deployment that skipped the migration silently lost every concurrency
+    // floor while every other check stayed green.
+    sbSelect<{ slot_key: string }>("wa_send_claims", "select=slot_key&limit=1")
+      .then(() => true)
+      .catch(() => false),
   ]);
 
   const report: Record<string, unknown> = {
@@ -70,6 +84,7 @@ export async function GET(req: Request) {
       last403At: wa403[0]?.created_at ?? null,
     },
     push,
+    speed: { ...turnLatencyStats(latencyRows.map((r) => r.detail)), claimsTable },
   };
 
   // ---- Optional per-number thread trace (the "why no reply" answer) ---------

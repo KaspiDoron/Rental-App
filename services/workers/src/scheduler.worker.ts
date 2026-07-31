@@ -14,6 +14,7 @@ import {
   recentActiveSenders,
   syncInboundReplies,
   pickSweepEmails,
+  setDrainArmer,
 } from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
 import { bullConnection } from "@wheeldeal/redis";
@@ -32,6 +33,8 @@ const DLQ_SWEEP_EVERY_MS = 15 * 60_000; // 15m
 const REARM_EVERY_MS = 30 * 60_000; // 30m - reassert webhooks (find+set, throttled ~1h/instance)
 const RECOVERY_EVERY_MS = 60_000; // 1m - app-closed inbound-recovery sweep (<=3 senders/tick)
 const RECOVERY_PER_TICK = 3;
+/** Only arm a precise drain for work due soon; the heartbeat covers the rest. */
+const ARM_HORIZON_MS = 10 * 60_000;
 
 /** Register the repeatable heartbeat jobs (idempotent - same repeat keys). */
 export async function scheduleHeartbeat(): Promise<void> {
@@ -147,5 +150,23 @@ export function startSchedulerWorker(): Worker<SchedulerJob> {
     },
     { connection: bullConnection(), concurrency: 1 } // one drainer - no herd
   );
+  // PARK -> DRAIN AT THE EXACT DUE TIME. The heartbeat is a 20s backstop, so a
+  // reply parked 6-15s out actually landed anywhere up to a heartbeat later -
+  // the composer's delay was a floor, not the latency. Arming a delayed job at
+  // not_before removes that tail entirely. The jobId collapses everything due
+  // in the same second to ONE job, so 40 shops answering at once cannot fan out
+  // into 40 drains (concurrency is 1 regardless, but the queue stays small).
+  setDrainArmer((atMs) => {
+    const delay = Math.max(0, atMs - Date.now());
+    if (delay > ARM_HORIZON_MS) return; // far-future rows are the heartbeat's job
+    queue(SCHEDULER_QUEUE)
+      .add("drain", { kind: "drain" } satisfies SchedulerJob, {
+        delay,
+        jobId: `drain-at-${Math.floor(atMs / 1000)}`,
+        removeOnComplete: 50,
+        removeOnFail: 50,
+      })
+      .catch((e) => logger.warn({ err: (e as Error).message }, "drain arm failed"));
+  });
   return worker;
 }

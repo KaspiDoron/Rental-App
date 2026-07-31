@@ -28,6 +28,26 @@ export const LOW_ENGLISH_CURRENCIES = new Set([
   "PKR", "UAH", "RUB", "GEL", "UZS", "KZT",
 ]);
 
+// Places where the EVERYDAY language already is English, so "rewrite this in
+// the local language" is a round trip that returns the text it was given.
+//
+// This list is a LATENCY optimisation, never a correctness gate: a country
+// missing from it just pays for a translation call that returns the same
+// English, exactly as before. Nothing downstream branches on it.
+const ENGLISH_SPEAKING_COUNTRIES = new Set([
+  "united kingdom", "uk", "england", "scotland", "wales", "northern ireland",
+  "ireland", "united states", "usa", "us", "united states of america",
+  "canada", "australia", "new zealand", "singapore", "malta", "jamaica",
+  "barbados", "bahamas", "trinidad and tobago", "belize", "guyana",
+]);
+
+/** True when composing in "the local language" here means composing in English. */
+export function isEnglishSpeaking(region?: string): boolean {
+  const country = countryFromRegion(region);
+  if (country && ENGLISH_SPEAKING_COUNTRIES.has(country)) return true;
+  return Boolean(region && ENGLISH_SPEAKING_COUNTRIES.has(region.trim().toLowerCase()));
+}
+
 /** Extract the lowercase country segment from a geocoded region label. */
 export function countryFromRegion(region?: string): string | undefined {
   if (!region) return undefined;

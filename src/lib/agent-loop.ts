@@ -42,7 +42,13 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
   return ""; // asserts a rival price that is not our verified one - drop it
 }
 import { floorPriceFor, credibleFloor } from "./market";
-import { guardOutbound, afterSend, recordInboundEngagement } from "./wa-guard";
+import {
+  guardOutbound,
+  afterSend,
+  recordInboundEngagement,
+  claimForSend,
+  releaseSendClaim,
+} from "./wa-guard";
 import { noteInboundDropped } from "./wa/webhook-trace";
 import { waDigits, numberFilter } from "./wa/phone-key";
 import { resolveThreadContext } from "./wa/thread-context";
@@ -148,6 +154,28 @@ export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
   } as import("./agents").ExtractedOffer;
 }
 
+/**
+ * Record how long THIS turn actually took, at the point the reply left our
+ * hands. `composeMs` is the honest cost of the whole chain (extraction, engine
+ * pass, validator, localization); `plannedDelayS` is the deliberate human
+ * pacing on top. Fire-and-forget - a metric never delays a reply.
+ */
+function stampTurnLatency(
+  email: string | undefined,
+  toDigits: string,
+  detail: { composeMs: number; plannedDelayS: number; outcome: string }
+): void {
+  if (!email) return;
+  void sbInsert("agent_events", [
+    {
+      kind: "turn-latency",
+      user_email: email,
+      vendor_name: toDigits,
+      detail: JSON.stringify(detail),
+    },
+  ]).catch(() => {});
+}
+
 export async function processVendorReply(opts: {
   fromDigits: string;
   text: string;
@@ -179,6 +207,12 @@ export async function processVendorReply(opts: {
   preExtracted?: import("./agents").ExtractedOffer;
   send: SendFn;
 }): Promise<void> {
+  // TURN LATENCY, MEASURED NOT ASSUMED. "Replies land in ~1-2 min" was a claim
+  // nobody could check: the composer's delay was visible in the trace, but the
+  // part that actually blew the ceiling - how long the LLM chain took before
+  // that delay even started - was never recorded. This stamps the real number
+  // at each terminal point so the doctor can show p50/p95 instead of a promise.
+  const turnStartedAt = Date.now();
   let text = opts.text.trim();
   const images = opts.images ?? [];
   const transcript = opts.transcript ?? null;
@@ -461,6 +495,69 @@ export async function processVendorReply(opts: {
         detail: text.slice(0, 500),
       },
     ]).catch(() => {});
+  }
+
+  // INBOUND SAFETY SCREEN - STARTED BEFORE THE EXTRACTION IT USED TO FOLLOW.
+  // It is fire-and-forget either way, so it never blocked the turn; but sitting
+  // after the extractor meant its own LLM call only BEGAN once the extraction
+  // had finished, and the traveller learned a message was dangerous seconds
+  // after their agent had already answered it. Nothing here depends on the
+  // extraction, so the two run side by side and the warning arrives first.
+  // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
+  // photos, off-platform transfers, shady links - for the USER. Never touches
+  // what the engine replies.
+  //
+  // NEVER SELF-FLAG: a message the user wrote themselves (a lost fromMe flag
+  // upstream can mislabel it inbound) must not be screened as "the shop's
+  // reply" - anything matching our recent outbound to this number is skipped.
+  if (ctx.sender && text) {
+    void (async () => {
+      try {
+        const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+        const ours = await sbSelect<{ body: string }>(
+          "whatsapp_messages",
+          `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+            ctx.sender!
+          )}&received_at=gte.${encodeURIComponent(
+            new Date(Date.now() - 24 * 3600_000).toISOString()
+          )}&order=received_at.desc&limit=30${numberFilter("to_number", from)}`
+        ).catch(() => [] as { body: string }[]);
+        if (ours.some((o) => norm(o.body || "") === norm(text))) return;
+        const { screenInbound } = await import("./inbound-risk");
+        const verdict = await screenInbound(text, { vendorName: ctx.vendorName ?? undefined });
+        if (verdict.risk === "none") return;
+        // user_email column = EXACT ownership scoping for the risk feed (the
+        // old detail LIKE *email* filter leaked alerts across users whose
+        // emails were substrings). Retry without the column pre-migration.
+        const riskRow = {
+          kind: "inbound-risk",
+          vendor_id: ctx.vendorId ?? "",
+          vendor_name: ctx.vendorName ?? "",
+          detail: JSON.stringify({
+            email: ctx.sender,
+            risk: verdict.risk,
+            reasons: verdict.reasons,
+            excerpt: text.slice(0, 200),
+          }),
+        };
+        const stamped = await sbInsert("agent_events", [
+          { ...riskRow, user_email: ctx.sender ?? null },
+        ]);
+        if (!stamped) await sbInsert("agent_events", [riskRow]);
+        const { sendPushToUser } = await import("./push");
+        await sendPushToUser(ctx.sender!, {
+          title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
+          body: `${ctx.vendorName || "A shop"}: ${verdict.reasons[0] ?? "review this message before acting"}`,
+          url: "/",
+          // ITS OWN LANE. A safety warning must never be collapsed away by an
+          // ordinary reply push (the shared default tag did exactly that), and
+          // it must not silently replace one either.
+          tag: `risk:${from}`,
+        });
+      } catch {
+        /* screening is best-effort */
+      }
+    })();
   }
 
   const extraction =
@@ -1275,63 +1372,6 @@ export async function processVendorReply(opts: {
     }
   }
 
-  // INBOUND SAFETY SCREEN (fire-and-forget): flag risky shop asks - passport
-  // photos, off-platform transfers, shady links - for the USER. Never touches
-  // what the engine replies.
-  //
-  // NEVER SELF-FLAG: a message the user wrote themselves (a lost fromMe flag
-  // upstream can mislabel it inbound) must not be screened as "the shop's
-  // reply" - anything matching our recent outbound to this number is skipped.
-  if (ctx.sender && text) {
-    void (async () => {
-      try {
-        const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-        const ours = await sbSelect<{ body: string }>(
-          "whatsapp_messages",
-          `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
-            ctx.sender!
-          )}&received_at=gte.${encodeURIComponent(
-            new Date(Date.now() - 24 * 3600_000).toISOString()
-          )}&order=received_at.desc&limit=30${numberFilter("to_number", from)}`
-        ).catch(() => [] as { body: string }[]);
-        if (ours.some((o) => norm(o.body || "") === norm(text))) return;
-        const { screenInbound } = await import("./inbound-risk");
-        const verdict = await screenInbound(text, { vendorName: ctx.vendorName ?? undefined });
-        if (verdict.risk === "none") return;
-        // user_email column = EXACT ownership scoping for the risk feed (the
-        // old detail LIKE *email* filter leaked alerts across users whose
-        // emails were substrings). Retry without the column pre-migration.
-        const riskRow = {
-          kind: "inbound-risk",
-          vendor_id: ctx.vendorId ?? "",
-          vendor_name: ctx.vendorName ?? "",
-          detail: JSON.stringify({
-            email: ctx.sender,
-            risk: verdict.risk,
-            reasons: verdict.reasons,
-            excerpt: text.slice(0, 200),
-          }),
-        };
-        const stamped = await sbInsert("agent_events", [
-          { ...riskRow, user_email: ctx.sender ?? null },
-        ]);
-        if (!stamped) await sbInsert("agent_events", [riskRow]);
-        const { sendPushToUser } = await import("./push");
-        await sendPushToUser(ctx.sender!, {
-          title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
-          body: `${ctx.vendorName || "A shop"}: ${verdict.reasons[0] ?? "review this message before acting"}`,
-          url: "/",
-          // ITS OWN LANE. A safety warning must never be collapsed away by an
-          // ordinary reply push (the shared default tag did exactly that), and
-          // it must not silently replace one either.
-          tag: `risk:${from}`,
-        });
-      } catch {
-        /* screening is best-effort */
-      }
-    })();
-  }
-
   // HUMAN TAKEOVER GATE (pre-engine): the user typed in this shop's thread
   // themselves - the agents stand down for THIS thread until handback. The
   // reply was stored and pushed above; we just don't answer it.
@@ -1907,12 +1947,19 @@ export async function processVendorReply(opts: {
       // strict ~1-2 min ceiling (owner). Still jittered - a sub-second reply is
       // the robotic tell. A strategist WAIT is deliberate but clamped to 90s so
       // it never blows the ceiling for an engaged shop.
+      //
+      // These bounds are pure SCHEDULING, not safety: every parked row is
+      // re-gated at drain time (guardOutbound + the atomic claims), so tightening
+      // them cannot outrun a floor - it only stops the delay stacking on top of
+      // the LLM turn and the drain cadence into the minutes the field test saw.
+      // The lower bound stays above the ~6s fleet gap; below that the claim
+      // would just re-park the message and the cut would buy nothing.
       const delayS =
         strat.action === "wait" && strat.waitSeconds
           ? Math.min(strat.waitSeconds, 90)
           : followKind === "close" || followKind === "answer"
-          ? 10 + Math.floor(Math.random() * 15) // 10-25s
-          : 15 + Math.floor(Math.random() * 25); // 15-40s (a bargain "thinks")
+          ? 6 + Math.floor(Math.random() * 10) // 6-15s
+          : 10 + Math.floor(Math.random() * 16); // 10-25s (a bargain "thinks")
       // Dedup: one pending row per shop (parkOutboxOnce replaces any older
       // pending row) so an awaiting-reply shop never accumulates duplicates.
       const { parkOutboxOnce } = await import("./wa/park");
@@ -1943,6 +1990,11 @@ export async function processVendorReply(opts: {
             : `parked with human thinking delay ${delayS}s`,
         output: `queued until +${delayS}s`,
       });
+      stampTurnLatency(ctx.sender, from, {
+        composeMs: Date.now() - turnStartedAt,
+        plannedDelayS: delayS,
+        outcome: "parked",
+      });
       await writeTrace(traces);
       return;
     }
@@ -1967,7 +2019,37 @@ export async function processVendorReply(opts: {
       await writeTrace(traces);
       return;
     }
+    // THE LAST SEND SITE WITHOUT AN ATOMIC CLAIM. guardOutbound's checks are
+    // read-then-act, so N concurrent turns for the same sender all pass them
+    // together - this branch could emit two replies milliseconds apart while
+    // every drained row was properly serialized. It matters more now that the
+    // engaged lane is fast: the window this races through is seconds wide.
+    const senderKey = ctx.sender ?? "system";
+    const claim = await claimForSend(senderKey, from, verdict.text, true, true);
+    if (!claim.ok) {
+      traces.push({
+        ...traceBase,
+        stage: "deliver",
+        input: followUp,
+        reasoning:
+          claim.kind === "duplicate"
+            ? "another turn is already delivering this exact message"
+            : "pacing slot held by a concurrent send",
+        output: "(held)",
+      });
+      await writeTrace(traces);
+      return;
+    }
     const result = await opts.send(from, verdict.text);
+    // A failed send must free the message slot or its own retry reads as a
+    // duplicate of itself. The gap slot is deliberately kept - the attempt
+    // consumed the pacing window either way.
+    if (!result.ok) await releaseSendClaim(senderKey, from, verdict.text);
+    stampTurnLatency(ctx.sender, from, {
+      composeMs: Date.now() - turnStartedAt,
+      plannedDelayS: 0,
+      outcome: result.ok ? "sent" : "send-failed",
+    });
     if (result.ok) {
       await afterSend(ctx.sender ?? "system", from);
       await sbInsert("whatsapp_messages", [

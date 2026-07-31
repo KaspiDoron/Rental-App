@@ -23,7 +23,12 @@ export const POLICY_SPEC: Record<string, PolicySpec> = {
   day_cap: { kind: "number", min: 1, max: 5000 },
   min_gap_seconds: { kind: "number", min: 1, max: 3600 },
   gap_jitter_seconds: { kind: "number", min: 0, max: 3600 },
-  reply_gap_seconds: { kind: "number", min: 1, max: 600 },
+  // FLOOR = THE REAL SAFETY PROMISE, not a wish. The reply lane is gated by an
+  // atomic fleet slot whose code floor is 5s (replyFleetGapSeconds in
+  // wa-guard.ts), so a row saying 1 could never actually produce 1s spacing -
+  // it only made the dial lie about what the engine would do. A knob must not
+  // accept a number the engine will silently override.
+  reply_gap_seconds: { kind: "number", min: 5, max: 600 },
   warmup_days: { kind: "number", min: 0, max: 60 },
   business_hour_start: { kind: "number", min: 0, max: 23 },
   business_hour_end: { kind: "number", min: 1, max: 24 },

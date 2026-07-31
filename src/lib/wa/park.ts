@@ -39,6 +39,26 @@ const PENDING_AUTO = "meta->>kind=not.in.(rfq,custom,human-manual)";
 // - a claimed row is leased, never deleted, so a re-queue is a patch on a row
 // that already exists and there is no insert left to lose.
 
+/**
+ * ARM A DRAIN AT `not_before` (dependency-inverted, exactly like the vision
+ * Flow hook - this file must never import BullMQ into the Next bundle).
+ *
+ * A reply parked 6-15s out was still gated by whatever ran next: the worker's
+ * 20s heartbeat, or nothing at all until the following one. So the delay the
+ * composer chose was a FLOOR, and the real latency was that floor plus up to a
+ * full heartbeat - which is how a "snappy" reply still read as a minute away.
+ * The worker runtime sets this to a delayed drain job scheduled at exactly the
+ * moment the row comes due.
+ *
+ * Unset (the Next runtime) it is a no-op: that path already kicks the
+ * self-chaining /api/wa/tick, which waits the row out in-process.
+ */
+let armDrainAt: ((atMs: number) => void) | null = null;
+
+export function setDrainArmer(fn: ((atMs: number) => void) | null): void {
+  armDrainAt = fn;
+}
+
 export async function parkOutboxOnce(row: {
   senderKey: string;
   toNumber: string;
@@ -82,5 +102,13 @@ export async function parkOutboxOnce(row: {
         ]).catch(() => {});
       }
     }
+  }
+  // A row EXISTS for this shop either way (fresh insert, or the concurrent
+  // compose we lost to), so arming the drain is correct in both branches - and
+  // the arm must never be able to break the park.
+  try {
+    armDrainAt?.(row.notBeforeMs);
+  } catch {
+    /* a missed arm only costs the next heartbeat, never the message */
   }
 }
