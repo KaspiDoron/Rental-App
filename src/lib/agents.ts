@@ -329,17 +329,21 @@ function buildMessage(rfq: StructuredRFQ, raw: string): string {
   // available for [X] days (starting [date])?" - a real person's first message,
   // never a wordy self-introduction. Variation stays in the greeting + verb so
   // no two shops get an identical payload, but every variant is this shape.
+  // NEVER "free" FOR "available" - see CASUAL_SWAPS in wa/persona.ts. A shop
+  // asked whether we can have a bike "free" hears a request for a free bike,
+  // and the honest answer to that is no. These two variants used to say it
+  // outright; "spare" carries the vacancy sense with none of the price sense.
   const opener = when
     ? pick([
         `Hi! Do you have ${article(vehicle)} ${vehicle} available for ${days} starting ${when}?`,
         `Hello! Is ${article(vehicle)} ${vehicle} available for ${days} from ${when}?`,
-        `Hi there! Do you have ${article(vehicle)} ${vehicle} free for ${days} starting ${when}?`,
+        `Hi there! Do you have a spare ${vehicle} for ${days} starting ${when}?`,
         `Hey! Could I rent ${article(vehicle)} ${vehicle} for ${days} from ${when}?`,
       ])
     : pick([
         `Hi! Do you have ${article(vehicle)} ${vehicle} available for ${days}?`,
         `Hello! Is ${article(vehicle)} ${vehicle} available for ${days}?`,
-        `Hi there! Do you have ${article(vehicle)} ${vehicle} free for ${days}?`,
+        `Hi there! Do you have a spare ${vehicle} for ${days}?`,
         `Hey! Could I rent ${article(vehicle)} ${vehicle} for ${days}?`,
       ]);
   const dropOff = rfq.oneWayDropOff

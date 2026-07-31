@@ -156,6 +156,19 @@ interface SubjectSpec {
    * confirming it had stock.
    */
   negativeCue?: RegExp;
+  /**
+   * Does a trailing "free" mean this subject is WAIVED?
+   *
+   * "Deposit free" and "delivery free" mean no deposit and no delivery charge -
+   * a denial. "Bikes free" means nothing of the kind: it is either "we have
+   * bikes spare" or "we give bikes away", and a rental shop means neither often
+   * enough to guess. The rule used to be global, so "we have bikes free" - a
+   * shop confirming stock - was recorded as a shop DENYING it.
+   *
+   * Opt-in per subject, because the reading is a property of the subject, not
+   * of the word.
+   */
+  freeMeansWaived?: boolean;
 }
 
 // One table, extended by adding a row - not by adding a branch somewhere.
@@ -182,6 +195,7 @@ const SUBJECTS: SubjectSpec[] = [
       { detail: "id", rx: /\b(id cards?|identity cards?|ktp)\b/i, document: true },
       { detail: "licence", rx: /\b(driver'?s? )?licen[cs]e\b/i, document: true },
     ],
+    freeMeansWaived: true,
   },
   {
     // What the traveller must LEAVE or SHOW, separate from money held. A shop
@@ -202,6 +216,7 @@ const SUBJECTS: SubjectSpec[] = [
         rx: /\b(pick ?up|pick it up|collect|come (to|by|in ?to) ((the|our|my|your) )?(shop|store|office|counter)|(at|in) ((the|our|my) )?(shop|store|office|counter)|in ?store)\b/i,
       },
     ],
+    freeMeansWaived: true,
   },
   {
     // IS THERE A VEHICLE AT ALL? The most basic fact in the whole thread, and
@@ -215,7 +230,12 @@ const SUBJECTS: SubjectSpec[] = [
     // negation machinery above then does the polarity, so "don't have bike",
     // "no scooter left" and "we have bike" are one rule with three readings.
     subject: "availability",
-    cue: /\b(available|availability|in stock|out of stock|sold out|all (rented|booked|gone|taken)|fully booked|(have|has|had|got|have got|rent|rents|left|remaining)\s+(a\s+|an\s+|any\s+|one\s+|the\s+)?(bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?)|(bikes?|scooters?|motorbikes?|cars?|vehicles?)\s+(available|left|free|ready)|free (today|tomorrow))\b/i,
+    // "free" IS NOT AN AVAILABILITY WORD, in either position. It used to be
+    // both an affirming cue here and (via the trailing rule) a denial, so the
+    // same token could mean a shop had stock or had none. A shop writing "free"
+    // in this trade means no-cost far more often than vacant - "free delivery",
+    // "free helmet" - and guessing wrong on either reading costs a booking.
+    cue: /\b(available|availability|in stock|out of stock|sold out|all (rented|booked|gone|taken)|fully booked|(have|has|had|got|have got|rent|rents|left|remaining)\s+(a\s+|an\s+|any\s+|one\s+|the\s+)?(bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?)|(bikes?|scooters?|motorbikes?|cars?|vehicles?)\s+(available|left|ready))\b/i,
     details: [
       // WHEN it comes back, when the shop says. The restock answer is the one
       // thing worth asking for after an out-of-stock, and it lands on the card.
@@ -231,10 +251,12 @@ const SUBJECTS: SubjectSpec[] = [
   {
     subject: "insurance",
     cue: /\b(insurance|insured|coverage|covered)\b/i,
+    freeMeansWaived: true,
   },
   {
     subject: "helmet",
     cue: /\bhelmets?\b/i,
+    freeMeansWaived: true,
   },
   {
     subject: "price",
@@ -482,10 +504,13 @@ export function claimsIn(
     const target = targetOf(clause);
     for (const hit of hits) {
       // "deposit free" / "deposit only" - the denial trailing its subject.
+      // Only for subjects that can actually be WAIVED (see freeMeansWaived):
+      // applied globally, this read "we have bikes free" as a shop denying it
+      // had bikes.
       const trailing = clause.slice(hit.index + hit.length, hit.index + hit.length + 14);
       const isDenied =
         negated.has(hit.index) ||
-        /^\s*free\b/i.test(trailing) ||
+        (hit.spec.freeMeansWaived === true && /^\s*free\b/i.test(trailing)) ||
         // ...or a cue that IS the denial, with no negator to scope from
         // ("sold out", "fully booked"). Matched against the cue text itself,
         // so it can never reach across the clause and flip a neighbour.

@@ -38,6 +38,17 @@ export function stripBotSpeak(text: string): string {
 
 // Colloquial swaps: nudge formal phrasing toward how a traveller actually texts.
 // Applied probabilistically so the SAME source line varies across shops.
+//
+// A SWAP MAY ONLY CHANGE THE REGISTER, NEVER THE MEANING. That line used to
+// include `available -> free`, and on Ko Tao it cost a real booking: the agent
+// asked "is that one of the bikes you have free?", the shop read it as a
+// request for a free motorbike and answered "My shop doesn't have free
+// motorcycles. You should try another shop; maybe they'll give you one" - one
+// minute after quoting 180 baht. In every market this app serves, "free" means
+// no-cost first and vacant second. A word with two meanings is not a synonym.
+//
+// The bar for anything added here: it must be unambiguous to a non-native
+// English speaker reading it on a phone, in a hurry, in a second language.
 const CASUAL_SWAPS: [RegExp, string][] = [
   [/\bI would like to\b/gi, "I wanna"],
   [/\bI would like\b/gi, "I want"],
@@ -48,9 +59,10 @@ const CASUAL_SWAPS: [RegExp, string][] = [
   [/\bapproximately\b/gi, "around"],
   [/\bregarding\b/gi, "about"],
   [/\bhowever\b/gi, "but"],
-  [/\bavailable\b/gi, "free"],
   [/\bassist\b/gi, "help"],
-  [/\bcurrently\b/gi, "rn"],
+  // `currently -> rn` is deliberately NOT here either: "rn" is opaque to a
+  // shop owner reading English as a second language, which is the same class
+  // of failure as "free" - a register win that costs comprehension.
 ];
 
 /** casual, imperfect, mobile-typed register. `rand` keeps it testable. */
@@ -68,6 +80,45 @@ export function casualize(text: string, rand: () => number = Math.random): strin
   return out;
 }
 
+// A VEHICLE IS NEVER "free". It is available, or it is spare.
+//
+// Removing the swap above stops US writing it. This stops EVERYTHING writing
+// it - the LLM composer, the opener templates, the graph engine, the legacy
+// orchestrator - because `personaHumanize` is the one function every auto
+// message passes through on its way to the wire (wa-guard.ts, the
+// `opts.auto` branch). A rail in one engine would have covered one engine.
+//
+// Scoped deliberately: only "free" standing next to a vehicle noun, in either
+// order, is rewritten. "free delivery", "free helmet" and "free of charge" are
+// real offers a shop makes and must survive untouched - the whole point is that
+// the no-cost sense is the dominant one.
+const VEHICLE_NOUN = "bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?";
+const FREE_BEFORE_VEHICLE = new RegExp(`\\bfree\\s+(${VEHICLE_NOUN})\\b`, "gi");
+const VEHICLE_BEFORE_FREE = new RegExp(`\\b(${VEHICLE_NOUN})\\s+free\\b`, "gi");
+// The field sentence put four words between the noun and the adjective - "the
+// bikes you have free?" - so adjacency alone would have missed the exact
+// message that cost the booking. A possession verb with `free` hanging off the
+// end of the clause is the same claim at a distance. Bounded to clause-final
+// position on purpose: "we have free delivery" has a noun after it and is a
+// real no-cost offer.
+const HAVE_FREE_DANGLING = /\b(have|has|had|got|have got)\s+free\s*(?=[?.!,;]|$)/gi;
+
+/**
+ * Rewrite the one ambiguity that cost a live booking on Ko Tao: the agent asked
+ * "is that one of the bikes you have free?" meaning vacant, and the shop -
+ * which had quoted 180 baht a minute earlier - read it as asking for a bike at
+ * no cost and told us to try somewhere else.
+ *
+ * "Spare" carries the vacancy sense and nothing else, so this is a rewrite
+ * rather than a rejection: the sentence was otherwise correct.
+ */
+export function deAmbiguateFree(text: string): string {
+  return text
+    .replace(FREE_BEFORE_VEHICLE, (_m, noun: string) => `spare ${noun}`)
+    .replace(VEHICLE_BEFORE_FREE, (_m, noun: string) => `${noun} spare`)
+    .replace(HAVE_FREE_DANGLING, (_m, verb: string) => `${verb} spare`);
+}
+
 // Sparing, warm, context-free emojis a customer trying to lock a rental uses.
 const HUMAN_EMOJI = ["👍", "🤙", "🙏", "😊", "👌", "🙂"];
 
@@ -79,6 +130,9 @@ const HUMAN_EMOJI = ["👍", "🤙", "🙏", "😊", "👌", "🙂"];
 export function personaHumanize(text: string, rand: () => number = Math.random): string {
   let out = stripBotSpeak(text);
   out = casualize(out, rand);
+  // AFTER casualize, not before: this has to be the last word on the subject
+  // whatever the composer or the swaps produced.
+  out = deAmbiguateFree(out);
   // At most one emoji, and only sometimes - not every message (that is itself a
   // pattern). Skip if the message already carries one.
   const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2764}]/u.test(out);
