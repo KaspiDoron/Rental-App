@@ -1626,12 +1626,23 @@ export async function extractOffer(
   }
 
   // Text path via any configured LLM.
+  //
+  // BUDGETED, like every other call on the reply path. This one inherited the
+  // 38-second default while its siblings run on 6-9s, and it sits at the FRONT
+  // of the turn: nothing else - not the director, not the composer - starts
+  // until it returns. One slow provider therefore spent most of a reply's
+  // latency budget before a single word was written. On timeout the
+  // deterministic extractor below still reads the price, so the ceiling costs
+  // accuracy only in the cases the model would have rescued.
   let llm: string | null = null;
   try {
-    llm = await chat([
-      { role: "system", content: system },
-      { role: "user", content: text },
-    ]);
+    llm = await chat(
+      [
+        { role: "system", content: system },
+        { role: "user", content: text },
+      ],
+      { budgetMs: 9_000 }
+    );
   } catch {
     llm = null;
   }

@@ -116,13 +116,17 @@ export async function GET(req: Request) {
     const bounded = <T,>(p: Promise<T>) =>
       Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
+    // fast=true - the 8s budget below is the whole reason this matters: one row
+    // paying 4-12s of presence simulation could consume the entire drain, so
+    // the poll sent ONE message and timed out. The anti-ban floors are the
+    // guard and the pacing claims, and both still run per row.
     await bounded(
-      drainOutbox((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+      drainOutbox((k, to, text) => sendFromUser(k, to, text, true)).catch((e) =>
         console.error("[drain:outbox]", e instanceof Error ? e.message : e)
       )
     );
     await bounded(
-      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text)).catch((e) =>
+      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true)).catch((e) =>
         console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
       )
     );

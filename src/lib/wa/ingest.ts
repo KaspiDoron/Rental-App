@@ -157,6 +157,10 @@ export async function processEvolutionWebhook(
   // answers non-2xx so the provider REDELIVERS - failing loud instead of
   // eating a possibly-genuine shop reply on our own outage.
   let retryable = false;
+  // Every user whose thread moved in THIS webhook batch. Their reply
+  // dispatcher is kicked at the end - per sender, so one traveller's cold
+  // batch can never gate another's answer.
+  const touchedSenders = new Set<string>();
   if (!body) return { retryable };
 
   try {
@@ -265,6 +269,7 @@ export async function processEvolutionWebhook(
         ]).catch(() => {});
         continue;
       }
+      touchedSenders.add(email);
 
       // ONE identity for this chat. A phone JID resolves to its digits (waDigits,
       // NOT a raw split: a multi-device JID carries a device suffix "…:12", and
@@ -726,28 +731,42 @@ export async function processEvolutionWebhook(
   // Opportunistic queue drain: any webhook activity flushes due outbox
   // messages (business-hours / pacing queue) AND due graph wakeups (strategic
   // waits + judge jobs) without a dedicated worker.
+  // fast=true: this is the webhook path, not a cron. The presence simulation it
+  // skips costs 4-12s PER ROW and buys nothing - the guard, the pacing claims
+  // and the recipient mutex are what make a send look human, and they all still
+  // run. Paying it here just made the reply we are racing to deliver later.
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
-    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text));
+    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
   } catch {
     /* best-effort */
   }
   try {
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text));
+    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
   } catch {
     /* best-effort */
   }
 
   // FAST COUNTER-REPLY: the agent's reply we just composed is parked ~10-40s in
-  // the future, so the drain above (rows due NOW) cannot send it, and waiting for
-  // the next 60s cron would blow the ~2 min ceiling. Kick the self-chaining tick:
-  // it claims a single-runner slot and, because the reply is due within its 45s
-  // in-call budget, WAITS in-process until due and drains it - delivering the
-  // counter-message within ~its human-delay, app open or closed. The 30s chain
-  // claim collapses many concurrent inbound webhooks to one runner (no herd).
+  // the future, so the drain above (rows due NOW) cannot send it, and waiting
+  // for the next 60s cron would blow the ceiling.
+  //
+  // This used to kick `/api/wa/tick` alone, and in the field that kick was
+  // refused every single time: the tick is ONE GLOBAL runner, and a cold
+  // introductions batch keeps a chain alive continuously, so every inbound got
+  // "another runner" / "chain already live". The reply lane now has its own
+  // per-sender dispatcher that no cold batch can hold - the tick kick stays as
+  // the batch's own driver.
   if (opts.origin && opts.token) {
-    fetch(`${opts.origin}/api/wa/tick?token=${encodeURIComponent(opts.token)}&hop=0`).catch(() => {});
+    const origin = opts.origin;
+    const token = encodeURIComponent(opts.token);
+    for (const sender of touchedSenders) {
+      fetch(
+        `${origin}/api/wa/reply-tick?token=${token}&sender=${encodeURIComponent(sender)}&hop=0`
+      ).catch(() => {});
+    }
+    fetch(`${origin}/api/wa/tick?token=${token}&hop=0`).catch(() => {});
   }
   // Quiet sessions whose users have not used the app for a while - the link
   // survives, but the device stops looking permanently active on WhatsApp.

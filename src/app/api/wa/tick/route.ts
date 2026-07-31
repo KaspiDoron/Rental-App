@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { webhookToken, sendFromUser } from "@/lib/evolution";
-import { sbSelect, sbInsertClaim } from "@/lib/runtime-config";
+import { sbSelect, sbInsertClaim, sbDelete } from "@/lib/runtime-config";
 
 // SELF-CHAINING QUEUE DRIVER - the fix for "I locked my phone and nothing
 // sent for an hour". When no background worker is running: the
@@ -56,6 +56,18 @@ export async function GET(req: Request) {
       slot_key: `chain:${Math.floor(Date.now() / 30_000) - 1}`,
     });
     if (prev === "lost") {
+      // RELEASE WHAT WE JUST TOOK. This branch used to return holding the
+      // CURRENT window's chain slot, which it had won a few lines above. The
+      // live runner's next hop then lost that slot, slept 30s waiting for the
+      // window to roll, and - if another kick had leaked it again by then -
+      // gave up entirely. Inbound volume was actively killing the drain: the
+      // more shops replied, the more likely the chain died.
+      await sbDelete(
+        "wa_send_claims",
+        `sender_key=eq.__chain__&slot_key=eq.${encodeURIComponent(
+          `chain:${Math.floor(Date.now() / 30_000)}`
+        )}`
+      ).catch(() => {});
       return NextResponse.json({ ok: true, ran: false, why: "chain already live" });
     }
   }
@@ -75,34 +87,46 @@ export async function GET(req: Request) {
       console.error("[wa:tick]", e instanceof Error ? e.message : e);
     }
   };
+  /**
+   * When is the next row we could USEFULLY wait for?
+   *
+   * This used to read the global minimum `not_before` with no lower bound, so a
+   * single overdue cold-intro row - and a stalled batch leaves dozens - made
+   * `due` permanently negative. The loop then took its "due right now" branch,
+   * drained once, saw the same overdue row still sitting there (it was outside
+   * the drain's 30-row slice, or held by the guard), concluded "not
+   * progressing" and broke. Every hop did exactly one drain and handed off, so
+   * the in-process wait that the fast-counter-reply path depends on never
+   * happened while a batch was in flight.
+   *
+   * Asking only about the FUTURE fixes it: overdue work is the drain's problem,
+   * not the wait's, and what we want to know here is when to wake up next.
+   */
   const nextDueMs = async (): Promise<number | null> => {
     const rows = await sbSelect<{ not_before: string }>(
       "wa_outbox",
-      "select=not_before&order=not_before.asc&limit=1"
+      `select=not_before&not_before=gt.${encodeURIComponent(
+        new Date().toISOString()
+      )}&order=not_before.asc&limit=1`
     ).catch(() => []);
     const at = rows[0] ? Date.parse(rows[0].not_before) : NaN;
     return Number.isFinite(at) ? at - Date.now() : null;
   };
 
   await drainOnce();
-  // Ride out short waits inside THIS invocation (one stagger step).
+  // Ride out short waits inside THIS invocation - this is the whole point of
+  // the chain, and the reason a reply parked 6-15s out can land on time.
+  // `nextDueMs` now only ever reports FUTURE work, so there is no
+  // "due right now but not progressing" state to detect: anything already due
+  // was just drained, and anything the guard re-queued forward comes back as a
+  // future time we can wait for.
   for (;;) {
     const due = await nextDueMs();
-    if (due === null) break; // queue empty - chain ends
+    if (due === null) break; // nothing scheduled ahead - chain ends
     const remaining = IN_CALL_BUDGET_MS - (Date.now() - started);
-    if (due > 0 && due < remaining) {
-      await new Promise((r) => setTimeout(r, due + 500));
-      await drainOnce();
-      continue;
-    }
-    if (due <= 0 && remaining > 5_000) {
-      // Due right now (guard may have re-queued forward) - one more pass.
-      await drainOnce();
-      const after = await nextDueMs();
-      if (after !== null && after <= 0) break; // not progressing - stop
-      continue;
-    }
-    break;
+    if (due >= remaining) break; // too far out for this invocation - hand off
+    await new Promise((r) => setTimeout(r, Math.max(0, due) + 500));
+    await drainOnce();
   }
 
   // Continue the chain in a fresh invocation while near-term work remains.

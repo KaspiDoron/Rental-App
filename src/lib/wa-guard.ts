@@ -32,7 +32,7 @@ import {
   boundHold,
   recipientLocalHour,
 } from "./wa/business-hours";
-import { jitteredHold, HARD_MIN_GAP_SEC } from "./wa/pacing";
+import { jitteredHold, HARD_MIN_GAP_SEC, RECIPIENT_LOCK_SEC } from "./wa/pacing";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits, lidKey } from "./wa/phone-key";
 import {
@@ -1511,9 +1511,18 @@ export async function guardOutbound(rawOpts: {
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
   // moment the DB blips - the exact outage-mode failure the guard exists for).
-  const sentRes = await sbSelectStrict<{ received_at: string; to_number: string }>(
+  const sentRes = await sbSelectStrict<{
+    received_at: string;
+    to_number: string;
+    kind?: string | null;
+  }>(
     "whatsapp_messages",
-    `select=received_at,to_number&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
+    // `kind` is the outbox row's own meta.kind, spread into `raw` at send time
+    // (see the insert at the end of drainOutbox). It is what separates a COLD
+    // first-contact ("rfq") from an engaged reply, and the burst guard below
+    // needs that separation - without it a cold batch's velocity parks a
+    // counter-reply for half an hour.
+    `select=received_at,to_number,kind:raw->>kind&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       opts.senderKey
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()
@@ -1590,15 +1599,49 @@ export async function guardOutbound(rawOpts: {
 
   // 5. BURST COOLDOWN - even within caps, N sends in a short window is a robotic
   //    burst. After a burst, enforce a longer rest before the next send.
+  //
+  //    TWO LANES, TWO BUDGETS. This used to be one counter over every outbound
+  //    row, and it was the only real coupling left between cold outreach and
+  //    engaged conversation: a 40-intro batch is BUILT to fill a 600s window,
+  //    so the moment it did, the next counter-reply inherited a 30-MINUTE
+  //    cooldown it had done nothing to earn. That is the Ko Tao shape - shop
+  //    quotes at 12:22, our answer lands at 12:39.
+  //
+  //    A reply to a number that messaged US is not the vector this guard
+  //    exists for (unsolicited first contact is), so it is counted on its own
+  //    lane, against its own ceiling, and cooled in SECONDS. What still bounds
+  //    it: the daily cap above (all sends), the per-recipient min-gap below,
+  //    the fleet gap and the recipient mutex in wa/pacing. Nothing was traded
+  //    away here - the reply lane simply stopped paying the cold lane's fine.
+  const isReply = opts.auto && !isNewContact;
   const burstWindowAgo = new Date(now - p.burst_window_seconds * 1000).toISOString();
-  const inBurst = sentRows.filter((r) => r.received_at >= burstWindowAgo).length;
+  const burstRows = sentRows.filter((r) => r.received_at >= burstWindowAgo);
+  const inBurst = burstRows.length;
   // Burst tolerance scales with the plan's hourly headroom; stealth tightens it
   // when the number is in the danger zone. Fresh/low-trust numbers keep the floor.
   const burstMax = Math.max(
     3,
     Math.round(Math.max(p.burst_max_in_window, Math.ceil(hourCap * 0.7)) / stealth)
   );
-  if (opts.auto && inBurst >= burstMax) {
+  if (opts.auto && isReply) {
+    // Replies only. A row with no recorded kind predates this field; treat it
+    // as cold (the conservative read - it keeps such a row OUT of the reply
+    // budget rather than silently inflating it).
+    const replyBurst = burstRows.filter((r) => r.kind && r.kind !== "rfq").length;
+    // A pathological-loop backstop, not a pacer: at the plan's conversation
+    // budget every live thread could legitimately answer twice inside one
+    // window. Below this ceiling the fleet gap is what actually paces replies.
+    const replyMax = Math.max(burstMax, planCapacity(plan).newContacts * 2);
+    if (replyBurst >= replyMax) {
+      const newestReply = burstRows.find((r) => r.kind && r.kind !== "rfq");
+      const anchor = newestReply ? Date.parse(newestReply.received_at) : now;
+      const cool = (45 + Math.random() * 45) * 1000;
+      return await queue(
+        new Date(Math.max(now, anchor) + cool).toISOString(),
+        `reply burst cooldown (${replyBurst} in ${p.burst_window_seconds}s)`
+      );
+    }
+  } else if (opts.auto && inBurst >= burstMax) {
     const newest = sentRows[0] ? Date.parse(sentRows[0].received_at) : now;
     const until = new Date(newest + p.burst_cooldown_minutes * 60_000).toISOString();
     return await queue(until, `burst cooldown (${inBurst} in ${p.burst_window_seconds}s)`);
@@ -1612,7 +1655,6 @@ export async function guardOutbound(rawOpts: {
   //    threads never queue behind one another (the "one shop at a time" bug).
   //    A human juggling many chats answers several within a minute; only the
   //    SAME shop is min-gap paced. Cold intros keep the strict per-sender gap.
-  const isReply = opts.auto && !isNewContact;
   let lastSendRefMs = 0;
   if (isReply) {
     const toDig = digitsOnly(opts.toDigits);
@@ -1748,19 +1790,67 @@ async function staleDraftDropped(
   }
 }
 
+/**
+ * What counts as an ENGAGED REPLY, as a PostgREST fragment.
+ *
+ * One definition, shared by the drain's reply select and the reply
+ * dispatcher's "when is the next one due?" probe, so the lane can never
+ * disagree with itself about what it is carrying.
+ */
+export const REPLY_KIND_FILTER = "not.in.(rfq,custom,human-manual)";
+
+export type DrainOptions = {
+  /**
+   * Carry ONLY engaged replies. The reply dispatcher sets this so a cold batch
+   * - however large, however stalled - is not even in its result set.
+   */
+  replyOnly?: boolean;
+  /** Restrict to one user's rows (the reply dispatcher is per-sender). */
+  senderKey?: string;
+};
+
 export async function drainOutbox(
   send: (
     senderKey: string,
     to: string,
     text: string
-  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string }>
+  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string }>,
+  opts?: DrainOptions
 ): Promise<number> {
-  const dueRows = await sbSelect<OutboxRow>(
-    "wa_outbox",
-    `select=id,sender_key,to_number,body,not_before,meta&not_before=lte.${encodeURIComponent(
-      new Date().toISOString()
-    )}&order=not_before.asc&limit=48`
-  );
+  const due = encodeURIComponent(new Date().toISOString());
+  const cols = "select=id,sender_key,to_number,body,not_before,meta";
+  const senderFilter = opts?.senderKey
+    ? `&sender_key=eq.${encodeURIComponent(opts.senderKey)}`
+    : "";
+  // TWO SELECTS, AND THE REPLY ONE IS NOT OPTIONAL.
+  //
+  // There has always been a priority sort below, and its comment has always
+  // promised that an engaged shop never waits behind a cold batch. But the sort
+  // ran on rows that had already survived a GLOBAL `not_before.asc LIMIT 48`
+  // across every user - so once a stalled batch left more than 48 overdue
+  // introductions, a fresh reply due seconds ago was not in the list at all and
+  // the sort never saw it. A ranking cannot rescue what the query dropped.
+  //
+  // Asking for replies in their own query makes the promise structural: they
+  // are in the pool whatever the cold queue is doing.
+  const replyQuery =
+    `${cols}&not_before=lte.${due}&meta->>kind=${REPLY_KIND_FILTER}` +
+    `${senderFilter}&order=not_before.asc&limit=24`;
+  const [replyRows, anyRows] = await Promise.all([
+    sbSelect<OutboxRow>("wa_outbox", replyQuery).catch(() => [] as OutboxRow[]),
+    // The reply lane runs on its OWN dispatcher (api/wa/reply-tick) and must not
+    // touch the cold batch: that is the whole point of a second lane. Only the
+    // general drain asks for everything.
+    opts?.replyOnly
+      ? Promise.resolve([] as OutboxRow[])
+      : sbSelect<OutboxRow>(
+          "wa_outbox",
+          `${cols}&not_before=lte.${due}${senderFilter}&order=not_before.asc&limit=48`
+        ),
+  ]);
+  const byId = new Map<number, OutboxRow>();
+  for (const r of [...replyRows, ...anyRows]) byId.set(r.id, r);
+  const dueRows = [...byId.values()];
   // PRIORITY: an engaged shop waiting on our reply must never sit behind a cold
   // introductions batch due at the same moment (the "our agents never message
   // back" report). The rule lives in outbox-policy so it is unit-pinned.
@@ -1794,11 +1884,17 @@ export async function drainOutbox(
       : replyBudget <= 0 || replySentToRecipient.has(rcptKey);
     if (overCap) {
       // SMOOTH the remainder so the NEXT drain doesn't instantly fire it either
-      // (a slow-motion burst). Replies get a gentler push (~30-90s) so an
-      // engaged shop still hears back within the ~2 min ceiling; cold intros are
-      // held longer (2-4 min) - velocity to new numbers is the ban risk.
+      // (a slow-motion burst). Cold intros are held 2-4 min - velocity to new
+      // numbers is the ban risk. A REPLY is over budget for two reasons only:
+      // this invocation's ceiling is spent, or this shop already got a message
+      // - and both clear in seconds now that the recipient mutex and the fleet
+      // gap are the real pacers. It used to wait 30-90s here for a queueing
+      // artefact, on top of everything else, which is how a "reply in seconds"
+      // target quietly became minutes.
       await sbUpdate("wa_outbox", `id=eq.${cand.id}`, {
-        not_before: cold ? jitteredHold(Date.now(), 2, 2) : jitteredHold(Date.now(), 0.5, 1),
+        not_before: cold
+          ? jitteredHold(Date.now(), 2, 2)
+          : new Date(Date.now() + (RECIPIENT_LOCK_SEC + 2 + Math.random() * 6) * 1000).toISOString(),
       }).catch(() => {});
       continue;
     }
@@ -1851,9 +1947,18 @@ export async function drainOutbox(
       const { needsRepark } = await import("./wa/outbox-policy");
       if (verdict.terminal) await completeOutboxRow(row.id);
       else if (needsRepark(verdict)) {
-        await release(Date.parse(jitteredHold(Date.now(), 5, 5)) - Date.now(), {
-          reason: "sync-retry",
-        });
+        // A TRANSIENT READ IS NOT A FIVE-MINUTE PROBLEM. This is the fail-closed
+        // path: a reputation row, tombstone table or session flag that could not
+        // be read, so the guard refused without re-queueing. Under the database
+        // load a 40-shop batch generates that is a routine blip, and parking an
+        // engaged reply 5-10 minutes for it is the cleanest explanation for the
+        // 17- and 21-minute outliers in the field. Cold intros keep the long
+        // hold; a reply retries in seconds and fails closed again if the read is
+        // genuinely broken.
+        const backoff = isCold(cand)
+          ? Date.parse(jitteredHold(Date.now(), 5, 5)) - Date.now()
+          : (20 + Math.random() * 20) * 1000; // ~20-40s
+        await release(backoff, { reason: "sync-retry" });
       }
       continue;
     }
@@ -1930,8 +2035,20 @@ export async function drainOutbox(
         }
         continue;
       }
-      // pacing loss / unknown -> back into the queue beyond the gap window.
-      await release(Date.parse(jitteredHold(Date.now(), 1, 2)) - Date.now(), {
+      // PENALTY PROPORTIONAL TO THE LANE THAT REFUSED.
+      //
+      // The lanes a reply loses are measured in SECONDS - a 5s per-shop gap, a
+      // 6s fleet slot, an 8s recipient mutex - and the penalty for losing one
+      // was a flat 1-3 MINUTES. Two losses in a row and a reply that was ready
+      // at 12:23 leaves at 12:29. Waiting out the window that refused you is
+      // the whole cost; anything beyond it is invented latency.
+      //
+      // Cold intros keep the minute-scale hold: velocity to new numbers is the
+      // ban vector, and their lane is 12s+ anyway.
+      const lostLane = isCold(cand)
+        ? Date.parse(jitteredHold(Date.now(), 1, 2)) - Date.now()
+        : (RECIPIENT_LOCK_SEC + 2 + Math.random() * 4) * 1000; // ~10-14s
+      await release(lostLane, {
         reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
       });
       await sbInsert("agent_events", [

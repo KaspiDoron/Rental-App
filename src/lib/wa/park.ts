@@ -50,8 +50,19 @@ const PENDING_AUTO = "meta->>kind=not.in.(rfq,custom,human-manual)";
  * The worker runtime sets this to a delayed drain job scheduled at exactly the
  * moment the row comes due.
  *
- * Unset (the Next runtime) it is a no-op: that path already kicks the
- * self-chaining /api/wa/tick, which waits the row out in-process.
+ * Unset (the Next runtime) it is a no-op - and that is the ONLY runtime live
+ * today: `services/workers` is in no Dockerfile CMD and no deploy manifest, so
+ * this hook is dark in production. It stayed dark and unnoticed because the
+ * comment here used to say the Next path "already kicks the self-chaining
+ * /api/wa/tick, which waits the row out in-process" - true of the code, false
+ * of the outcome. That kick was refused every time a cold batch was draining
+ * (one global runner, one chain claim), which is exactly when a reply matters.
+ *
+ * The Next runtime is now self-sufficient by design rather than by assumption:
+ * ingest kicks `/api/wa/reply-tick` PER SENDER, and that dispatcher carries
+ * reply rows only, holds a per-sender claim no cold batch can take, and waits
+ * a due row out in-process. Provisioning the worker would make replies land
+ * marginally sooner; nothing depends on it.
  */
 let armDrainAt: ((atMs: number) => void) | null = null;
 
