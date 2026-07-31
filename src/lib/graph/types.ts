@@ -306,6 +306,14 @@ export interface GraphTurnInput {
     // ONLY when they consented to share it with shops (privacy). Coordinates are
     // present only with consent; label-only otherwise.
     stay?: { label: string; lat?: number; lng?: number; shareConsent: boolean };
+    /**
+     * Provider id of the inbound message this turn is answering.
+     *
+     * Carried so a composed draft can be STAMPED with what it is a reply to,
+     * and the drain can refuse to send it once the shop has moved past that
+     * message (wa/freshness.ts). Absent on ticks, which answer nothing.
+     */
+    inboundId?: string;
   };
   rfq: StructuredRFQ;
   extraction: ExtractedOffer | null;

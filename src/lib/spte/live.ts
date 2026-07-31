@@ -370,6 +370,15 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     engine: "v3",
     move: outcome.move,
     tacticId: outcome.move,
+    // The freshness fingerprint - see wa/freshness.ts. A parked reply carries
+    // what it was an answer to, so the drain can tell whether it still is one.
+    composedAgainst: {
+      inboundId: input.ctx.inboundId,
+      inboundAt: new Date(startedAt).toISOString(),
+      quotePerDay: tc.inbound.verified.pricePerDay,
+      stockState: tc.inbound.verified.shopUnavailable ? "out-of-stock" : "unknown",
+      move: outcome.move,
+    },
   };
 
   let delivered: SpteLiveResult["delivered"] = "silent";

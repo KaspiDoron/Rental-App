@@ -1466,7 +1466,10 @@ export async function processVendorReply(opts: {
       images,
       audios: [],
     },
-    ctx,
+    // WHAT THIS TURN IS ANSWERING. Threaded so every engine can stamp its
+    // parked draft with it, and the drain can refuse a reply the shop has
+    // already moved past (wa/freshness.ts).
+    ctx: { ...ctx, inboundId: opts.waMessageId },
     rfq,
     extraction,
     usablePrice,
@@ -1974,6 +1977,17 @@ export async function processVendorReply(opts: {
           round: nextRound,
           auto: true,
           ...(englishGloss ? { englishGloss } : {}),
+          // WHAT THIS DRAFT IS AN ANSWER TO. The drain re-reads it and refuses
+          // to send a reply to a message the shop has already moved past - the
+          // 12:39 bargain and the 12:43 close both went out after the shop had
+          // said its piece, because nothing on the send path knew what they
+          // were replying to. See wa/freshness.ts.
+          composedAgainst: {
+            inboundId: opts.waMessageId,
+            inboundAt: new Date(turnStartedAt).toISOString(),
+            quotePerDay: usablePrice,
+            move: followKind,
+          },
           reason:
             strat.action === "wait"
               ? "strategist hold - choosing the best reply order"

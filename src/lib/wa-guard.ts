@@ -1655,6 +1655,99 @@ export async function afterSend(senderKey: string, toNumber?: string): Promise<v
  * webhook and the WA status poll, so the queue drains while the app is alive
  * without a dedicated worker.
  */
+/**
+ * Is this parked draft still an answer to the conversation as it stands - and
+ * if not, drop it AND make sure something else speaks.
+ *
+ * Returns true when the row was consumed (dropped + re-triggered), false when
+ * the caller should carry on and send it.
+ *
+ * Every read here fails OPEN. A draft that cannot be judged is sent, because
+ * the alternative - deleting a correct message because one query blipped -
+ * trades a visible failure for an invisible one, and the re-trigger would need
+ * the same database that just failed.
+ */
+async function staleDraftDropped(
+  row: { id: number; sender_key: string; to_number: string; meta: unknown },
+  rowKind: string | undefined
+): Promise<boolean> {
+  // Cold introductions answer nothing, and a user's own typed message is theirs
+  // to send. Only auto REPLIES can go stale.
+  if (rowKind === "rfq" || rowKind === "custom" || rowKind === "human-manual") return false;
+  const meta = (row.meta ?? {}) as { composedAgainst?: import("./wa/freshness").ComposedAgainst };
+  const composedAgainst = meta.composedAgainst;
+  if (!composedAgainst) return false; // parked before this shipped - not our business
+
+  try {
+    const { judgeFreshness } = await import("./wa/freshness");
+    const enc = encodeURIComponent(row.sender_key);
+    const inbound = await sbSelect<{ wa_message_id: string | null; received_at: string; body: string | null }>(
+      "whatsapp_messages",
+      `select=wa_message_id,received_at,body&direction=eq.inbound&raw->>receiver=eq.${enc}` +
+        `&order=received_at.desc&limit=10${numberFilter("from_number", row.to_number)}`
+    );
+    if (!inbound.length) return false; // nothing to compare against
+
+    // Stock as the thread reads RIGHT NOW, from the shop's own recent words.
+    // Bounded to the rows already fetched - this must not become a second query
+    // per drained message.
+    let stockNow: "in-stock" | "out-of-stock" | "unknown" = "unknown";
+    try {
+      const { claimsAcross } = await import("./thread/claims");
+      const { stockState } = await import("./thread/ledger");
+      const bodies = [...inbound].reverse().map((m) => m.body ?? "");
+      // stockState reads the ledger's claim list; the other ledger fields play
+      // no part in the stock verdict, so a claims-only view is the whole input.
+      stockNow = stockState({
+        claims: claimsAcross(bodies, "shop"),
+        known: [],
+        outstanding: [],
+        owed: [],
+      }).state;
+    } catch {
+      /* stock is the narrower rule; rule 1 stands on its own */
+    }
+
+    const verdict = judgeFreshness({
+      composedAgainst,
+      latestInboundId: inbound[0].wa_message_id,
+      latestInboundAt: inbound[0].received_at,
+      stockNow,
+    });
+    if (!verdict.stale) return false;
+
+    // The row is gone. Say so loudly - a silent drop is how a thread dies.
+    await completeOutboxRow(row.id);
+    await sbInsert("agent_events", [
+      {
+        kind: "wa-send-stale",
+        user_email: row.sender_key,
+        vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
+        detail: `${verdict.reason}: ${verdict.detail ?? ""}`.slice(0, 300),
+      },
+    ]).catch(() => {});
+
+    // ...and make sure the shop still hears from us. The newer inbound may have
+    // had no turn of its own; this schedules one, and the wakeup drain applies
+    // its own per-thread claim so a turn already in flight is not duplicated.
+    const { threadKeyFor } = await import("./graph/state");
+    const threadKey = threadKeyFor(row.sender_key, row.to_number);
+    const base = {
+      kind: "tick",
+      thread_key: threadKey,
+      not_before: new Date(Date.now() + 2_000).toISOString(),
+      payload: { reason: "stale-draft-recompose" },
+    };
+    const ok = await sbInsert("graph_wakeups", [{ ...base, user_email: row.sender_key }]).catch(
+      () => false
+    );
+    if (!ok) await sbInsert("graph_wakeups", [base]).catch(() => {});
+    return true;
+  } catch {
+    return false; // unreadable => send, never delete on a blip
+  }
+}
+
 export async function drainOutbox(
   send: (
     senderKey: string,
@@ -1777,6 +1870,21 @@ export async function drainOutbox(
       await release(60_000, { reason: "sync-retry" });
       continue;
     }
+
+    // IS THIS STILL TRUE? - the one semantic question the send path never asked.
+    //
+    // Everything above this line is anti-ban, cancellation and pacing. None of
+    // it reads the conversation, so a draft written at 12:23 went out at 12:39
+    // unchanged, after the shop had said something at 12:38 that made it wrong.
+    // A message is a promise made at compose time and kept at send time, and
+    // between those two moments the thread can move.
+    //
+    // DROP AND RECOMPOSE, NEVER DROP AND HOPE. Deleting the row alone would
+    // assume the newer inbound ran a turn of its own - and it may not have
+    // (guard refusal, takeover flip, LLM outage, vision offload, coalescing).
+    // So a stale drop always schedules a fresh turn against the latest inbound.
+    if (await staleDraftDropped(row, rowKind)) continue;
+
     // ATOMIC SEND SLOTS: the guard's time-based checks are read-then-act and
     // N concurrent drainers all pass them together. The claim row is the
     // lock: exactly ONE invocation per min-gap window per sender sends, and
