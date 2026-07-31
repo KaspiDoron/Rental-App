@@ -107,6 +107,8 @@ export async function GET(req: Request) {
       pickupOffered?: boolean;
       pickupConsent?: boolean;
       declined?: boolean;
+      shopUnavailable?: boolean;
+      restockHint?: string;
       vehicleConfirmation?: { status?: string; evidence?: string };
     } | null;
   }
@@ -301,6 +303,11 @@ export async function GET(req: Request) {
       // The shop walked away - the card must say so instead of pretending
       // the agent is still working ("still confirming the deposit...").
       declined: st?.declined === true,
+      // The shop has nothing to rent right now - a real, temporary state. The
+      // card stops waiting for a price and says so, and the agent has already
+      // asked when one is back.
+      unavailable: st?.shopUnavailable === true,
+      restockHint: st?.restockHint ?? null,
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
       // Every tier this shop offered, so the card can show the CHOICE instead

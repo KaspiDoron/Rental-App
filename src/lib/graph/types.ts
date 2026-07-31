@@ -170,6 +170,10 @@ export interface ThreadFields {
   firmCount: number; // times the shop held firm on price
   toneDegraded: boolean; // the shop sounded annoyed - stop pushing
   declined?: boolean; // the shop walked away - negotiation over
+  /** The shop has no vehicle right now - temporary, and NOT a decline. */
+  shopUnavailable?: boolean;
+  /** The shop's own words about when stock returns ("maybe tomorrow"). */
+  restockHint?: string;
   // Printed price-list anchor: the listed price of the chosen model. Keeps
   // bargaining asks credible against a posted board (never deep lowballs).
   sheetPricePerDay?: number;

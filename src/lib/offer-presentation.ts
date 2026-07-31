@@ -95,13 +95,18 @@ export function vehicleStance(offer: PresentableOffer | undefined | null): Vehic
  * excluded entirely; unverified ones compete - the caller labels them via
  * offerConfidence so the traveller is never misled about confidence.
  */
-export function cheapestPresentable<T extends { offer?: PresentableOffer }>(
-  vendors: T[],
-  dominantCurrency: string | null
-): T | undefined {
+export function cheapestPresentable<
+  T extends { offer?: PresentableOffer; stage?: string },
+>(vendors: T[], dominantCurrency: string | null): T | undefined {
   return vendors
     .filter(
-      (v) => isPresentableOffer(v.offer) && v.offer!.currency === dominantCurrency
+      (v) =>
+        isPresentableOffer(v.offer) &&
+        v.offer!.currency === dominantCurrency &&
+        // A price from a shop with nothing to rent is not a deal the traveller
+        // can take today. It stays on the card (with the honest state); it just
+        // never wears BEST PRICE.
+        v.stage !== "out-of-stock"
     )
     .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay)[0];
 }

@@ -39,6 +39,12 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     "offer-received": { text: "Offer in", cls: "bg-savings-soft text-savings" },
     "counter-offer": { text: "Counter sent", cls: "bg-brandred-soft text-brandred" },
     "no-response": { text: "No response", cls: "bg-card2 text-faint" },
+    // Amber, not red: they have nothing TODAY. A decline is a closed door; this
+    // one reopens the moment they restock, and the agent has asked when.
+    "out-of-stock": {
+      text: "Out of stock",
+      cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+    },
     declined: { text: "Declined", cls: "bg-brandred-soft text-brandred" },
   };
   const s = map[stage];
@@ -89,6 +95,11 @@ export function stageCaption(stage: TrackerStage): { emoji: string; text: string
       return { emoji: "🔁", text: "Your agent countered the shop's quote - pushing for a better price." };
     case "no-response":
       return { emoji: "💤", text: "No reply yet. Your agent will keep watching for one." };
+    case "out-of-stock":
+      return {
+        emoji: "📭",
+        text: "No vehicle available here right now - your agent asked when one is back.",
+      };
     case "declined":
       return { emoji: "🚫", text: "This shop passed - other shops are still negotiating." };
     default:
@@ -99,7 +110,13 @@ export function stageCaption(stage: TrackerStage): { emoji: string; text: string
 /** Horizontal pipeline showing progress through the negotiation flow. */
 export function Pipeline({ stage }: { stage: TrackerStage }) {
   const idx = ORDER.indexOf(stage);
-  const failed = stage === "no-response" || stage === "declined" || stage === "no-contact";
+  // Out of stock stops the pipeline like a decline does - the difference is
+  // that it is temporary, which the badge and the caption both say.
+  const failed =
+    stage === "no-response" ||
+    stage === "declined" ||
+    stage === "no-contact" ||
+    stage === "out-of-stock";
   return (
     <div className="flex items-center gap-1">
       {FLOW.map((step) => {

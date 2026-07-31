@@ -182,6 +182,14 @@ export function applyExtractionToState(
   // goodbye at most, then silence; the UI shows the thread as declined.
   if (extraction.shopDeclined === true) f.declined = true;
 
+  // OUT OF STOCK, both ways. Resolved in agent-loop from the thread's own
+  // availability claims, so the shop's LAST word wins: "we have one now" sets
+  // it back to false on its own and the card un-sticks with no special case.
+  if (typeof extraction.shopUnavailable === "boolean") {
+    f.shopUnavailable = extraction.shopUnavailable;
+    f.restockHint = extraction.shopUnavailable ? extraction.restockHint : undefined;
+  }
+
   // RE-ENGAGEMENT (winnable-deal recovery): a thread we treated as dead /
   // declined is NOT permanently over if the shop later comes back with a
   // concrete new price ("ok ok, 250 is fine, come"). A fresh usable NUMBER on

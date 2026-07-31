@@ -745,6 +745,28 @@ export async function processVendorReply(opts: {
         };
         extraction.vehicleVerdict = undefined;
       }
+      // OUT OF STOCK IS A STATE, resolved from the same conversation and made
+      // durable the same way. "Now I don't have bike." used to match nothing
+      // anywhere: no claim, no state, no card - so the agent kept haggling
+      // over a scooter that did not exist and the traveller kept waiting for a
+      // price. A later "we have one now" flips it back with no special case,
+      // because it is read from the shop's LAST availability claim.
+      const { buildLedger, stockState } = await import("./thread/ledger");
+      const stock = stockState(
+        buildLedger({
+          inbound: thread
+            .filter((m) => m.direction === "inbound")
+            .map((m) => m.body ?? "")
+            .filter(Boolean),
+          outbound: thread
+            .filter((m) => m.direction === "outbound")
+            .map((m) => m.body ?? "")
+            .filter(Boolean),
+          currentInbound: extractText,
+        })
+      );
+      extraction.shopUnavailable = stock.state === "out-of-stock";
+      extraction.restockHint = stock.restockHint;
     } catch {
       /* confirmation is an upgrade - its failure must never drop a reply */
     }

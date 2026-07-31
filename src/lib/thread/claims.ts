@@ -148,6 +148,14 @@ interface SubjectSpec {
   cue: RegExp;
   /** Optional kinds, matched inside the same clause as the cue. */
   details?: DetailSpec[];
+  /**
+   * Cues that are DENIALS in themselves, carrying no negator for the scope
+   * rule to find. "Sold out" and "fully booked" mean exactly the opposite of
+   * "available" while looking, grammatically, like plain assertions - so
+   * without this a shop announcing it had run out was recorded as a shop
+   * confirming it had stock.
+   */
+  negativeCue?: RegExp;
 }
 
 // One table, extended by adding a row - not by adding a branch somewhere.
@@ -196,8 +204,24 @@ const SUBJECTS: SubjectSpec[] = [
     ],
   },
   {
+    // IS THERE A VEHICLE AT ALL? The most basic fact in the whole thread, and
+    // the one the cue could not see. "Now I don't have bike." matched nothing
+    // here - `we have` needs the pronoun, and the shop had written a negated
+    // bare `have bike` - so a shop that had just gone out of stock produced no
+    // claim, no state, and a card that sat waiting for a price forever.
+    //
+    // STRUCTURE, NOT PHRASES: a stock claim is a possession/supply verb applied
+    // to a VEHICLE NOUN, plus the handful of explicit stock idioms. The
+    // negation machinery above then does the polarity, so "don't have bike",
+    // "no scooter left" and "we have bike" are one rule with three readings.
     subject: "availability",
-    cue: /\b(available|availability|in stock|we have|got one|free (today|tomorrow))\b/i,
+    cue: /\b(available|availability|in stock|out of stock|sold out|all (rented|booked|gone|taken)|fully booked|(have|has|had|got|have got|rent|rents|left|remaining)\s+(a\s+|an\s+|any\s+|one\s+|the\s+)?(bikes?|scooters?|motorbikes?|motorcycles?|mopeds?|cars?|vehicles?|automatics?)|(bikes?|scooters?|motorbikes?|cars?|vehicles?)\s+(available|left|free|ready)|free (today|tomorrow))\b/i,
+    details: [
+      // WHEN it comes back, when the shop says. The restock answer is the one
+      // thing worth asking for after an out-of-stock, and it lands on the card.
+      { detail: "restock", rx: /\b(tomorrow|today|tonight|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \d+ days?)\b/i },
+    ],
+    negativeCue: /\b(out of stock|sold out|all (rented|booked|gone|taken)|fully booked)\b/i,
   },
   {
     subject: "licence",
@@ -459,7 +483,15 @@ export function claimsIn(
     for (const hit of hits) {
       // "deposit free" / "deposit only" - the denial trailing its subject.
       const trailing = clause.slice(hit.index + hit.length, hit.index + hit.length + 14);
-      const isDenied = negated.has(hit.index) || /^\s*free\b/i.test(trailing);
+      const isDenied =
+        negated.has(hit.index) ||
+        /^\s*free\b/i.test(trailing) ||
+        // ...or a cue that IS the denial, with no negator to scope from
+        // ("sold out", "fully booked"). Matched against the cue text itself,
+        // so it can never reach across the clause and flip a neighbour.
+        Boolean(
+          hit.spec.negativeCue?.test(clause.slice(hit.index, hit.index + hit.length))
+        );
       const parts = partsOf(clause, hit.spec);
       out.push({
         subject: hit.spec.subject,

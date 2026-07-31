@@ -1063,6 +1063,16 @@ export interface ExtractedOffer {
     at: string;
     askedAt?: string;
   };
+  /**
+   * THE SHOP HAS NOTHING TO RENT right now. Resolved per turn from the thread's
+   * own availability claims (thread/ledger stockState) and persisted with the
+   * negotiation thread, exactly like `vehicleConfirmation` above - so the card
+   * can say "out of stock" instead of waiting forever for a price, and a later
+   * "we have one now" clears it with no special case.
+   */
+  shopUnavailable?: boolean;
+  /** The shop's own words about when stock returns, when it gave any. */
+  restockHint?: string;
   confidence: "high" | "medium" | "low";
   clarifyMessage?: string;
   // ONLY set when the shop explicitly confirmed them - never guessed.

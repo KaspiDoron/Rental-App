@@ -430,6 +430,20 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       // Non-commitment guardrail (issue 5): learn the terms while making clear
       // we are still comparing shops - never imply a guaranteed booking.
       return `Thanks! We're finalizing our pick between a few shops today - could you let me know your deposit? Cash amount or passport?`;
+    case "restock-probe": {
+      // OUT OF STOCK IS NORMAL. No disappointment, no pressure, no goodbye -
+      // just the one question worth asking. Seeded per thread so shops do not
+      // all receive the same sentence, and stable for golden replays.
+      const FAMILY = [
+        `No worries at all, thanks for letting me know! Any idea when you'll have one available again?`,
+        `Ah okay, thanks for telling me! When do you expect to have one back?`,
+        `That's alright - thanks for the honesty! Do you know when one might be free again?`,
+      ];
+      let h = 5381;
+      const seed = ctx.thread.threadKey;
+      for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
+      return FAMILY[Math.abs(h) % FAMILY.length];
+    }
     case "fulfillment-probe":
       return `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
     case "momentum":

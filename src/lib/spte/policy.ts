@@ -38,6 +38,18 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     return dedupe(moves);
   }
 
+  // OUT OF STOCK OUTRANKS EVERY PRICE MOVE. A shop that has just said it has
+  // no vehicle is not a shop to haggle with - and it is not a decline either.
+  // Acknowledge warmly, ask ONE question (when does it come back?), then let
+  // the ask-once ledger gate hold it. In the field "Now I don't have bike."
+  // produced no state and no move at all: the agent carried on bargaining over
+  // a scooter that did not exist.
+  if (v.shopUnavailable) {
+    if (!alreadyAskedStock(ctx)) moves.push("restock-probe");
+    moves.push("silent");
+    return dedupe(moves);
+  }
+
   // ANSWER-FIRST when the shop asked something. This MUST precede bargain in the
   // ladder: coerceToLegal and the fallback both take legal[0], so if bargain led
   // the list a question would go unanswered (the live "agent ignored 'Around
@@ -160,9 +172,21 @@ const QUESTION_SUBJECT: Partial<Record<MoveKind, ClaimSubject>> = {
   clarify: "price",
   "deposit-probe": "deposit",
   "fulfillment-probe": "handover",
+  "restock-probe": "availability",
 };
 
 const EMPTY_LEDGER: ThreadLedger = { claims: [], known: [], outstanding: [], owed: [] };
+
+/** Have we already put the restock question, or has the shop already answered
+ *  it? Either way, asking again is nagging a shop that told us it has nothing. */
+function alreadyAskedStock(ctx: TurnContext): boolean {
+  const ledger = ctx.thread.digest.ledger;
+  if (ledger && alreadyAsked(ledger, "availability")) return true;
+  if (ctx.inbound.verified.restockHint) return true; // they already said when
+  return (ctx.thread.digest.lastOutbound ?? []).some((m) =>
+    /\b(back in stock|available again|when.{0,20}(available|back))\b/i.test(m ?? "")
+  );
+}
 
 /** One cash-deposit counter is due: original-passport-only terms, never asked. */
 export function passportCounterDue(ctx: TurnContext): boolean {

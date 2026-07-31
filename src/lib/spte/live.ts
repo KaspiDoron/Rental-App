@@ -96,6 +96,12 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     // The shop refused to lower ("last price") - the deterministic extractor
     // read it (agents.ts FIRM_RX) and it USED to be dropped on the floor here.
     firm: Boolean((ex as { shopFirm?: boolean } | null)?.shopFirm),
+    // OUT OF STOCK IS A STATE, and it is read from the thread's own claims -
+    // the shop's last word on whether it has a vehicle at all. A later "we
+    // have one now" un-sticks it with no special case.
+    // (filled in by buildTurnContext from the thread ledger - the shop's own
+    // last word on whether it has a vehicle at all)
+    shopUnavailable: false,
     // WHAT THE SHOP SENT. These all existed on ExtractedOffer and none of them
     // reached the primary engine, so a shop that answered with four price boards
     // looked identical to one that said nothing - and got asked to type it out.
@@ -300,6 +306,16 @@ function metaKindFor(move: MoveKind): string {
 
 async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<TurnContext> {
   const verified = mapVerified(input);
+  const digest = buildDigest(input);
+  // OUT OF STOCK IS A STATE (thread/ledger stockState), derived from the same
+  // claims every other durable fact comes from - so "we have one now" un-sticks
+  // it with no special case, and nothing has to be persisted.
+  {
+    const { stockState } = await import("../thread/ledger");
+    const stock = stockState(digest.ledger);
+    verified.shopUnavailable = stock.state === "out-of-stock";
+    verified.restockHint = stock.restockHint;
+  }
   const session = await buildSession(input, io, verified);
   const text = input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
     ? input.event.shopMessage ?? ""
@@ -322,7 +338,7 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
       threadKey: input.event.threadKey,
       vendorId: input.ctx.vendorId ?? "",
       shop: input.ctx.vendorName ?? input.ctx.vendorId ?? "shop",
-      digest: buildDigest(input),
+      digest,
     },
     tail: buildTail(input),
     inbound: { text, verified },

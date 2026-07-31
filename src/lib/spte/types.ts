@@ -31,6 +31,10 @@ export type MoveKind =
   // nameplate that comes in several sizes and nobody said which. Settle the
   // vehicle before anything is haggled, presented or booked.
   | "confirm-vehicle"
+  // The shop has just told us it has nothing to rent right now ("Now I don't
+  // have bike."). Not a decline and not a dead end - acknowledge it warmly and
+  // ask ONE question worth asking: when does it come back?
+  | "restock-probe"
   | "redirect-close" // NEW (B7): wrong-vehicle / not-offering -> thank + close
   | "momentum"
   | "closing-message"
@@ -114,6 +118,11 @@ export interface VerifiedExtraction {
   askedLicensePhoto?: boolean;
   /** The shop refused to lower a price it already gave ("last price"). */
   firm?: boolean;
+  /** THE SHOP HAS NOTHING TO RENT right now (thread/ledger stockState). A real,
+   *  temporary state - the card says so and the agent asks when it returns. */
+  shopUnavailable?: boolean;
+  /** The shop's own words about when stock returns, when it offered them. */
+  restockHint?: string;
   /** The tiers this reply offered, when the shop gave a CHOICE rather than a
    *  single price. Empty/absent for an ordinary one-price reply. */
   options?: VehicleOption[];

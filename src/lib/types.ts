@@ -59,6 +59,10 @@ export type TrackerStage =
   | "offer-received"
   | "counter-offer" // agent countered the shop's quote - active price haggling
   | "no-response"
+  // The shop has nothing to rent right now ("Now I don't have bike"). NOT a
+  // decline: a temporary, extremely common state that used to have no
+  // representation at all, so the card sat waiting for a price forever.
+  | "out-of-stock"
   | "declined";
 
 export interface Offer {

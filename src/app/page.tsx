@@ -1388,6 +1388,28 @@ export default function Home() {
             )
           );
         }
+        // OUT OF STOCK is its own state - the shop is willing, it simply has no
+        // vehicle today. A card that sat on "awaiting reply" forever is what
+        // this replaces; when they restock the flag clears and the card returns
+        // to the live flow on its own.
+        const outOfStockIds = new Set<string>(
+          (d.replies ?? [])
+            .filter((r: { unavailable?: boolean }) => r.unavailable)
+            .map((r: { vendorId: string }) => r.vendorId)
+        );
+        setVendors((vs) =>
+          vs.map((v) => {
+            const out = outOfStockIds.has(v.id);
+            if (out && v.stage !== "out-of-stock" && !declinedIds.has(v.id)) {
+              return { ...v, stage: "out-of-stock" as TrackerStage };
+            }
+            // Restocked: hand the card back to the normal flow.
+            if (!out && v.stage === "out-of-stock") {
+              return { ...v, stage: (v.offer ? "offer-received" : "awaiting-response") as TrackerStage };
+            }
+            return v;
+          })
+        );
         // NEWEST ROW PER VENDOR WINS. The feed arrives newest-first; applying
         // every row would make the OLDEST functional update win (React applies
         // them in order), silently reverting a fresher negotiated price to an

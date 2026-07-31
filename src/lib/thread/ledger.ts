@@ -169,3 +169,36 @@ export function alreadyAsked(ledger: ThreadLedger, subject: ClaimSubject): boole
 export function unaskedObligations(ledger: ThreadLedger): ClaimSubject[] {
   return ledger.owed.filter((s) => !ledger.outstanding.includes(s));
 }
+
+/**
+ * IS THERE A VEHICLE TO RENT, ACCORDING TO THE SHOP?
+ *
+ * "Now I don't have bike." matched nothing anywhere in the system: the card
+ * sat waiting for a price that was never coming, the map kept the pin live,
+ * and the agent kept haggling over a scooter that did not exist. Out of stock
+ * is a normal, temporary, extremely common state - not a decline, not a
+ * failure, and certainly not silence.
+ *
+ * Read from the shop's LAST availability claim, so a restock ("we have one
+ * now") un-sticks the state by itself, exactly like every other fact here.
+ * `restockHint` is the shop's own timing word when it gave one.
+ */
+export function stockState(ledger: ThreadLedger | undefined): {
+  state: "in-stock" | "out-of-stock" | "unknown";
+  restockHint?: string;
+} {
+  const claims = (ledger?.claims ?? []).filter(
+    (c) => c.subject === "availability" && c.actor === "shop" && c.force !== "ask"
+  );
+  if (!claims.length) return { state: "unknown" };
+  const latest = claims.reduce((a, b) => (b.at >= a.at ? b : a));
+  const restockHint = latest.details.includes("restock")
+    ? // The evidence carries the shop's own words; the detail only says one
+      // was present. Showing their sentence beats inventing a paraphrase.
+      latest.evidence
+    : undefined;
+  return {
+    state: latest.polarity === "denied" ? "out-of-stock" : "in-stock",
+    restockHint,
+  };
+}
