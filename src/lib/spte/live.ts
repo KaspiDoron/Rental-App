@@ -423,7 +423,30 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // Clamped AGAIN here: this is the last gate before a durable not_before, and a
   // wait measured in hours is never a tactic, only a bug (the "until 08:28 AM"
   // incident on a thread the shop was actively typing in).
-  const waitMinutes = clampWaitMinutes(outcome.waitMinutes);
+  // A SILENT TURN ON A PRICELESS THREAD MUST STILL COME BACK.
+  //
+  // `silent` schedules nothing - it is the reflex for "nothing is owed", and
+  // for a thread that has its price and its terms that is exactly right. But
+  // the same move is also where a thread lands when the shop said something
+  // the engine could not act on ("Sorry,we do already discount."), and there
+  // it means the opposite: everything is still owed and there is no event
+  // coming that will re-enter this thread. The shop has answered, so no
+  // inbound is due; nothing else ticks a specific thread. It simply stops.
+  //
+  // That is the A & T thread on Ko Tao - 28 minutes of silence on a shop that
+  // was one nudge away from a quote. So a silent turn with no price on the
+  // table schedules its own return, and the move set it comes back to now
+  // contains `momentum` (see policy.ts).
+  //
+  // Bounded by the same one-nudge rule downstream: the wakeup re-runs the
+  // policy, and a thread that has already been nudged simply goes silent again
+  // - once, this time for good.
+  const silentAndPriceless =
+    outcome.move === "silent" &&
+    typeof (tc.inbound.verified.pricePerDay ?? tc.thread.digest.quotedPricePerDay) !== "number" &&
+    !tc.inbound.verified.declined &&
+    !tc.inbound.verified.shopUnavailable;
+  const waitMinutes = clampWaitMinutes(outcome.waitMinutes) ?? (silentAndPriceless ? 3 : undefined);
   if (waitMinutes) {
     await io
       .insertWakeup({
@@ -434,8 +457,11 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
           userEmail: input.ctx.sender,
           vendorId: input.ctx.vendorId,
           engine: "v3",
-          // The feed reads this instead of inventing generic copy.
-          reason: `giving the shop ~${waitMinutes} min before the next nudge`,
+          // The feed reads this instead of inventing generic copy - so it has
+          // to say which of the two this actually is.
+          reason: silentAndPriceless
+            ? `no price from them yet - checking back in ~${waitMinutes} min`
+            : `giving the shop ~${waitMinutes} min before the next nudge`,
           vendorName: input.ctx.vendorName,
         },
       })

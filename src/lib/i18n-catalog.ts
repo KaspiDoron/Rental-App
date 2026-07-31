@@ -520,6 +520,8 @@ export const I18N_CATALOG: string[] = [
   "The short version: your number, your control - disconnect any time.",
   "The short, honest version",
   "They did not say why - it's most likely to check whether they can deliver the vehicle to you.",
+  "They have run out - your agent asked when they are back.",
+  "They passed on this one.",
   "This browser can't do push alerts. Try Chrome, or install the app.",
   "This decision's reasoning is no longer available (older decisions are pruned).",
   "This hunt already reached its 10-shop beta limit - replies from the contacted shops keep flowing in.",

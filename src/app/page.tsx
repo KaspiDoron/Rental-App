@@ -2899,8 +2899,21 @@ export default function Home() {
                             💬 {v.lastInboundText}
                           </div>
                         )}
+                        {/* WHAT IS ACTUALLY HAPPENING, not one sentence for
+                            everybody. This line read "No price yet - your
+                            agent is asking for one" for every shop in the
+                            bucket, including shops that had told us they had
+                            run out and shops that had said no. Both are in
+                            here (the partition keys on `lastInboundAt`), and
+                            for both the sentence was simply false. The stage
+                            is state we already hold; the fuller derivation -
+                            queued, held, which guard - is F10's outbox join. */}
                         <div className="mt-1 text-[10px] font-bold text-faint">
-                          {t("No price yet - your agent is asking for one.")}
+                          {v.stage === "out-of-stock"
+                            ? t("They have run out - your agent asked when they are back.")
+                            : v.stage === "declined"
+                              ? t("They passed on this one.")
+                              : t("No price yet - your agent is asking for one.")}
                         </div>
                       </div>
                     ))}

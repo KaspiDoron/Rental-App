@@ -191,6 +191,26 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     }
   }
 
+  // A THREAD WITH NO PRICE IS NOT A FINISHED THREAD.
+  //
+  // Ko Tao, A & T Rental, 12:26: "Sorry,we do already discount." No price, no
+  // question, no firm, no decline, no availability cue - so `clarify` was the
+  // only move pushed, and the ask-once gate removed it (we asked "price" in
+  // the opener, and their reply has no price token to settle it). Empty set,
+  // reflex `silent`, and 28 minutes of nothing. That thread was one nudge away
+  // from a quote and the engine had no way to send it, because the only move
+  // it knew was the question it had already asked.
+  //
+  // `momentum` is that move. It has had a template since the graph engine
+  // (pass.ts) and was never made legal anywhere on the SPTE path - a whole
+  // move sitting unreachable. It is not the question again; it is a light
+  // re-opening, which is exactly what a shop that answered vaguely needs.
+  //
+  // Once only, and only while the thing we came for is still missing.
+  if (gated.length === 0 && !priceKnown && !alreadyNudged(ctx) && !v.declined) {
+    gated.push("momentum");
+  }
+
   // Nothing owed -> silence is the most human move (the graph's default).
   if (gated.length === 0) gated.push("silent");
   return dedupe(gated);
@@ -206,6 +226,20 @@ const QUESTION_SUBJECT: Partial<Record<MoveKind, ClaimSubject>> = {
 };
 
 const EMPTY_LEDGER: ThreadLedger = { claims: [], known: [], outstanding: [], owed: [] };
+
+/**
+ * Have we already nudged this quiet thread?
+ *
+ * A nudge is a re-opening, not a question, so the ask-once ledger has nothing
+ * to say about it - it gates FACT questions, deliberately. The bound lives
+ * here instead: our own recent messages are already in the digest, and one
+ * check-in is a nudge while two is pestering.
+ */
+function alreadyNudged(ctx: TurnContext): boolean {
+  return (ctx.thread.digest.lastOutbound ?? []).some((m) =>
+    /\b(hi again|checking in|just following up|any chance on that|any update)\b/i.test(m ?? "")
+  );
+}
 
 /** Have we already put the restock question, or has the shop already answered
  *  it? Either way, asking again is nagging a shop that told us it has nothing. */
