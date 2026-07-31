@@ -4,7 +4,7 @@
 //
 // The single highest-risk EXIF path in this app is a traveller standing in front
 // of a shop, photographing a price board with an iPhone held vertically, and
-// attaching it in PasteReplyModal. That file is Orientation=6 nine times out of
+// attaching it. That file is Orientation=6 nine times out of
 // ten. Every downstream reader then has to guess, and the vision model reading a
 // sideways board turns its columns into rows - which is how a "250/day" row gets
 // attached to the wrong vehicle, or dropped.
@@ -17,7 +17,8 @@
 // the server never has to own a codec.
 //
 // This replaces three near-identical hand-rolled `new Image()` + `drawImage()`
-// helpers (PasteReplyModal, FeedbackModal, MediaStudio). All three destroyed EXIF
+// helpers (FeedbackModal, MediaStudio, and a paste-reply modal since removed).
+// All of them destroyed EXIF
 // irreversibly - `canvas.toDataURL` writes no metadata - while relying on the
 // engine having silently auto-applied orientation during decode. Where that
 // assumption held, the output was upright by luck; where it did not, the photo
@@ -65,7 +66,7 @@ export interface NormalizeOptions {
   maxDim?: number;
   /** Initial JPEG quality. Lowered first when the size cap is exceeded. */
   quality?: number;
-  /** Hard ceiling on the encoded bytes. The cap PasteReplyModal never had. */
+  /** Hard ceiling on the encoded bytes - the cap the original uploaders lacked. */
   maxBytes?: number;
 }
 

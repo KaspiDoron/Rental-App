@@ -1,6 +1,6 @@
 // Plan entitlements - the single source of truth for what each plan can do.
 // Isomorphic on purpose (no server-only imports): the same map drives server
-// route gates, the <PlanGate> component and the pricing page, so a feature can
+// route gates and the pricing page, so a feature can
 // never be "unlocked in the UI but blocked by the API" or vice versa.
 
 import type { PlanId } from "./access";

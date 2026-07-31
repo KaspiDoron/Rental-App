@@ -102,7 +102,6 @@ export {
 export type { PlanCapacity, CapacityPlan } from "../../src/lib/wa/capacity";
 export {
   batchStagger,
-  staggerOffsets,
   jitteredHold,
   gaussianUnit,
   HARD_MIN_GAP_SEC,

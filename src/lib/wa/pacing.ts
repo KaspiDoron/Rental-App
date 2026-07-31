@@ -47,23 +47,16 @@ export function jitteredHold(
   return new Date(nowMs + (baseMinutes + rand() * spreadMinutes) * 60_000).toISOString();
 }
 
-/**
- * Cumulative stagger offsets for a batch of size `count`: item 0 is
- * immediate (offset 0), every later item lands 45-75s after the previous
- * one. Durable by design - the offsets become wa_outbox.not_before rows, so
- * they survive restarts, refreshes and redeploys.
- */
-export function staggerOffsets(count: number, rand: () => number = Math.random): number[] {
-  const out: number[] = [];
-  let acc = 0;
-  for (let i = 0; i < count; i++) {
-    if (i > 0) acc += (45 + rand() * 30) * 1000;
-    out.push(Math.round(acc));
-  }
-  return out;
-}
-
-// `cappedStaggerOffsets` lived here. It built a batch schedule bottom-up from a
+// `staggerOffsets` lived here: a 45-75s cumulative trickle, exported, tested,
+// re-exported from @wheeldeal/core - and called by nothing. `batchStagger`
+// below is what both dispatch paths actually use, and it schedules to a
+// DEADLINE rather than accumulating a fixed step. The dead one was worse than
+// unused: reading the Ko Tao timeline, a 45-75s stagger was the obvious
+// suspect for the delay, and it cost real time to establish that the code
+// could not have run. Unreachable code that looks like an explanation is a
+// liability, not a spare part.
+//
+// `cappedStaggerOffsets` lived here too. It built a batch schedule bottom-up from a
 // per-message gap and an hourly cap and accepted whatever total fell out, which
 // is how a batch of eight shops came to span three hours. `batchStagger` below
 // replaces it on BOTH dispatch paths (the mass route and the outreach worker) -

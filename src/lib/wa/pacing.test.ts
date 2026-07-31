@@ -44,7 +44,6 @@ vi.mock("../runtime-config", () => ({
 
 import {
   jitteredHold,
-  staggerOffsets,
   batchStagger,
   HARD_MIN_GAP_SEC,
   gapBucket,
@@ -78,23 +77,6 @@ describe("jitteredHold - no shared release instant", () => {
 
 /** The batch promise, as the app declares it (lib/wa/capacity). */
 const WINDOW = 15 * 60_000;
-
-describe("staggerOffsets - the batch trickle", () => {
-  it("first is immediate, every later step lands 45-75s after the previous", () => {
-    const offs = staggerOffsets(10);
-    expect(offs[0]).toBe(0);
-    for (let i = 1; i < offs.length; i++) {
-      const step = offs[i] - offs[i - 1];
-      expect(step).toBeGreaterThanOrEqual(45_000);
-      expect(step).toBeLessThanOrEqual(75_000);
-    }
-  });
-
-  it("ten shops never share a timestamp (the '~15:27 x10' regression)", () => {
-    const offs = staggerOffsets(10);
-    expect(new Set(offs).size).toBe(10);
-  });
-});
 
 describe("gaussianUnit - bell-curve jitter that never breaks the pacing bounds", () => {
   it("always returns a value inside [0,1] (so 45+rand*30 stays 45-75s)", () => {
