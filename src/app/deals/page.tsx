@@ -17,6 +17,7 @@ import { useReadiness } from "@/lib/client/readiness";
 /** Everything Trips waits on before it stops looking like it is loading. */
 const TRIPS_SOURCES = ["session", "trips"] as const;
 import { TabBar } from "@/components/TabBar";
+import { saveSearch } from "@/lib/client/search-persist";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { startNav } from "@/components/NavVeil";
@@ -198,9 +199,17 @@ export default function DealsPage() {
         setRestoreErr(t("Could not re-open that hunt. Try again."));
         return;
       }
-      try {
-        sessionStorage.setItem("wd_search", JSON.stringify(d.payload));
-      } catch {}
+      // THE SAME BUDGET LADDER THE LIVE SEARCH USES. A raw setItem here threw
+      // on a big restored hunt and the `catch` swallowed it, so the traveller
+      // was navigated home to an EMPTY workspace with no error - the one
+      // failure mode this ladder exists to prevent. saveSearch sheds galleries,
+      // then message bodies, until the write lands.
+      const saved = saveSearch(sessionStorage, "wd_search", d.payload);
+      if (!saved.ok) {
+        setRestoring(null);
+        setRestoreErr(t("That hunt is too big to hold on this device."));
+        return;
+      }
       startNav();
       window.location.href = "/";
     } catch {

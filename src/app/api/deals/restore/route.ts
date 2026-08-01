@@ -64,9 +64,15 @@ export async function GET(req: Request) {
   const plan = (session.plan ?? "free") as PlanId;
   const hasHistory = can(plan, "trips-history");
 
+  // `ts=latest` - "whatever hunt I was on". The iOS PWA can be killed at any
+  // moment and sessionStorage goes with it, so the Find-deals screen needs to
+  // ask for the newest session by name rather than by a timestamp it no longer
+  // has. It is always index 0, which is always ungated (see the gate below), so
+  // this opens no door the explicit path did not already open.
   const ts = new URL(req.url).searchParams.get("ts") ?? "";
+  const wantLatest = ts === "latest";
   const startMs = Date.parse(ts);
-  if (!Number.isFinite(startMs)) {
+  if (!wantLatest && !Number.isFinite(startMs)) {
     return NextResponse.json({ error: "ts (session start) required" }, { status: 400 });
   }
   const enc = encodeURIComponent(session.email);
@@ -99,7 +105,9 @@ export async function GET(req: Request) {
   }
   groups.reverse(); // newest session first, matching the Trips list order
 
-  const gi = groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
+  const gi = wantLatest
+    ? 0
+    : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
 
   // Gate: everything except the newest session needs trips-history.

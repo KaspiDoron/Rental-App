@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "./LoadingDots";
+import { Skeleton } from "./Skeleton";
 import { Icon } from "./icons";
 import { WaTermsModal } from "./WaTermsModal";
 import { TrustPanel } from "./landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 import { probeWaStatus } from "@/lib/wa-status";
 import { deriveConnectionPhase, isFrozen } from "@/lib/wa/connection-state";
+import { readWaCache, writeWaCache } from "@/lib/client/wa-cache";
 import { useWillAssistant } from "./will/WillAssistantProvider";
 import { WillGuideOverlay } from "./will/WillGuideOverlay";
 import { WILL_SLOW_AUTH_MS } from "@/lib/will-assistant";
@@ -43,6 +45,8 @@ export function WaConnect({
      *  the UI had no way to tell "waiting to be scanned" from "verifying". */
     state?: string | null;
   } | null>(null);
+  /** Last verdict this device saw, read from localStorage before the probe. */
+  const [cached, setCached] = useState<boolean | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,17 +103,29 @@ export function WaConnect({
   }, [phase]);
 
   useEffect(() => {
+    // LAST KNOWN GOOD, read before the probe even starts.
+    //
+    // The probe is a network round trip, and until it answers `wa` is null -
+    // which fell straight through to the full "connect your WhatsApp" pitch.
+    // A traveller whose number has been linked for weeks opened Profile and
+    // was told to link it, every single time, for as long as the request took.
+    // On a slow connection that is seconds of a screen saying the opposite of
+    // the truth. The cached verdict is a HINT, never authority: the probe
+    // overwrites it the moment it lands.
+    setCached(readWaCache());
     // Shared probe (bounded + retried + never cached) - the same read the
     // Find-deals gate and the Profile pill use, so the three can never
     // disagree about whether this number is linked.
     probeWaStatus().then((s) => {
-      if (s.reachable)
+      if (s.reachable) {
         setWa({
           available: s.available ?? true,
           connected: s.connected,
           reconnecting: s.reconnecting,
           state: s.state,
         });
+        writeWaCache(s.connected);
+      }
     });
     return () => clearInterval(poll.current);
   }, []);
@@ -261,6 +277,33 @@ export function WaConnect({
     } finally {
       setBusy(false);
     }
+  }
+
+  // STILL ASKING. Never assert the negative while we do not know: show the
+  // remembered state (dimmed, so it is honest about being a memory) or a
+  // shimmer. `compact` renders a single pill, so it gets a single pill.
+  if (wa === null) {
+    if (cached) {
+      return (
+        <div className="rounded-2xl bg-savings-soft p-3 opacity-70" aria-busy="true">
+          <span className="text-[13px] font-extrabold text-savings">
+            ✓ {t("WhatsApp connected - agents bargain as you")}
+          </span>
+          <p className="mt-1 text-[11px] font-bold text-faint">{t("Checking the link...")}</p>
+        </div>
+      );
+    }
+    return (
+      <div aria-busy="true">
+        <Skeleton className="h-[46px] w-full" rounded="rounded-2xl" />
+        {!compact && (
+          <>
+            <Skeleton className="mt-2 h-[70px] w-full" rounded="rounded-2xl" />
+            <Skeleton className="mt-2 h-10 w-full" rounded="rounded-2xl" />
+          </>
+        )}
+      </div>
+    );
   }
 
   if (wa && !wa.available) {

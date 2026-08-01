@@ -504,6 +504,53 @@ export default function Home() {
     setRestored(true);
   }, []);
 
+  // COLD START AFTER AN EVICTION. The live hunt lives in sessionStorage, and
+  // sessionStorage does not survive an iOS PWA being killed - which iOS does
+  // aggressively, in the background, while the agents are mid-negotiation. The
+  // traveller re-opens the app and finds the search screen, as if nothing had
+  // ever run. Every shop, offer and thread is still on the server; only this
+  // device forgot.
+  //
+  // /api/deals/restore can rebuild the whole workspace and has been able to
+  // since it shipped - it just had to be asked, by hand, from the Trips tab.
+  // The NEWEST session is ungated for every plan (it IS the live workspace), so
+  // asking for it automatically opens no paid door.
+  useEffect(() => {
+    if (!restored || vendors.length || phase !== "idle") return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/deals/restore?ts=latest", { cache: "no-store" });
+        if (!r.ok || !alive) return;
+        const d = await r.json().catch(() => null);
+        const p = d?.payload;
+        if (!alive || !p?.vendors?.length) return;
+        // Do not stomp a search the traveller started while this was in flight.
+        if (sessionStorage.getItem("wd_search")) return;
+        setVendors(p.vendors);
+        setRfq(p.rfq ?? null);
+        setSource(p.source ?? null);
+        setRawText(p.rawText ?? ALL_EXAMPLES[0]);
+        if (p.origin) setOrigin(p.origin);
+        if (typeof p.radiusKm === "number") setRadiusKm(p.radiusKm);
+        if (typeof p.searchEpoch === "number") setSearchEpoch(p.searchEpoch);
+        setPhase("done");
+        setActionNote({
+          tone: "info",
+          text: t("Picked your hunt back up - the agents never stopped."),
+        });
+      } catch {
+        /* offline / signed out: the search screen is the honest fallback */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // Runs once, on the cold mount that found nothing. `restored` flips exactly
+    // once; the guards above cover the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored]);
+
   // Persist the search whenever the vendor list changes.
   useEffect(() => {
     if (!restored) return;
