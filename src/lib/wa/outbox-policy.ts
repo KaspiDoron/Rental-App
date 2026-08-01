@@ -38,3 +38,37 @@ export function outboxSendPriority(kind: string | null | undefined): number {
   if (kind === "rfq") return 2; // cold outreach - lowest urgency
   return 1; // agent reply / answer / bargain to an engaged shop
 }
+
+/**
+ * PRIORITY PROCESSING, the paid feature that was sold and never built.
+ *
+ * The plans have advertised faster handling for Pro and Ultra since they
+ * shipped, and the drain sorted by message KIND alone - so a paying traveller's
+ * reply sat behind a free user's reply that happened to be due a second
+ * earlier. Not a scandal at ten users; at a thousand it is the difference
+ * between the feature existing and not.
+ *
+ * It is a TIE-BREAK, never a queue-jump past a different kind of message. A
+ * paid cold introduction still waits behind a free user's live reply, because
+ * an engaged shop waiting on an answer is the more urgent thing in the system
+ * whoever is paying. Money buys position among equals, not the right to make
+ * someone else's conversation go cold.
+ */
+export function planSendPriority(plan: string | null | undefined): number {
+  const p = String(plan ?? "").toLowerCase();
+  if (p === "ultra") return 0;
+  if (p === "pro") return 1;
+  return 2;
+}
+
+/** The full comparator: kind first, then plan, then age. */
+export function compareOutboxRows(
+  a: { kind?: string | null; plan?: string | null; notBefore: string },
+  b: { kind?: string | null; plan?: string | null; notBefore: string }
+): number {
+  return (
+    outboxSendPriority(a.kind) - outboxSendPriority(b.kind) ||
+    planSendPriority(a.plan) - planSendPriority(b.plan) ||
+    a.notBefore.localeCompare(b.notBefore)
+  );
+}

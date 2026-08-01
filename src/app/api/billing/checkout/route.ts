@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { PLANS } from "@/lib/plans";
 import { createPaypalCheckout, paypalConfigured } from "@/lib/paypal";
-import { requestOrigin } from "@/lib/request-origin";
+import { publicRequestOrigin } from "@/lib/request-origin";
+import { resolveSiteOrigin } from "@/lib/site";
 
 // Start a checkout for a paid plan via PayPal Subscriptions (no merchant-
 // approval gate, $0/month, supports Israeli residents + Israeli bank payouts).
@@ -21,7 +22,16 @@ export async function POST(req: Request) {
   const { planId } = await req.json().catch(() => ({}));
   // Proxy-aware: PayPal return/cancel URLs must carry the PUBLIC host, not the
   // Cloud Run container bind address.
-  const origin = requestOrigin(req);
+  // PAYPAL HAS TO BE ABLE TO SEND THE TRAVELLER BACK.
+  //
+  // `requestOrigin` deliberately keeps localhost and container hostnames valid
+  // (it is used for local dev), and on Cloud Run the request can arrive with a
+  // bind address rather than the public host - so a checkout could be created
+  // with a return URL PayPal cannot reach, and the traveller who paid landed
+  // nowhere. `publicRequestOrigin` applies the routability filter; the
+  // configured site origin is the fallback, because a payment must not be
+  // created against a URL nobody can follow.
+  const origin = publicRequestOrigin(req) ?? (await resolveSiteOrigin());
 
   // TEST MODE sandbox: flagged testers get the plan applied instantly - no
   // real charge, no payment provider round-trip. Only while the owner's

@@ -5,6 +5,7 @@ import { findRealVendors } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 import type { Vendor, VehicleClass, Fulfillment } from "@/lib/types";
+import { can } from "@/lib/entitlements";
 
 interface Body {
   origin: { lat: number; lng: number };
@@ -158,7 +159,20 @@ export async function POST(req: Request) {
   );
   if (ok === false) await sbInsert("searches", [searchRow]).catch(() => {});
 
-  return NextResponse.json({ vendors, source, sourceError });
+  // AN ULTRA INSIGHT THAT SHIPS TO EVERYONE IS NOT AN ULTRA INSIGHT.
+  //
+  // `fastResponder` marks the fastest-replying quartile of shops - the signal
+  // behind the Ultra-only "reply speed" filter (entitlements:
+  // fast-responder-filter). Discovery stamped it on every vendor and the route
+  // returned it to every plan, so the whole value of the feature was sitting in
+  // a free user's network tab. Stripped on the way out for anyone without the
+  // entitlement, which is where the plan is actually known.
+  const canSeeSpeed = can(session.plan, "fast-responder-filter");
+  const payload = canSeeSpeed
+    ? vendors
+    : vendors.map((v) => (v.fastResponder ? { ...v, fastResponder: undefined } : v));
+
+  return NextResponse.json({ vendors: payload, source, sourceError });
 }
 
 // maxDuration: lift the request-timeout ceiling for slow upstreams.

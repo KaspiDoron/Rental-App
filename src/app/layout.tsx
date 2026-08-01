@@ -19,6 +19,10 @@ const description =
 // geocoder User-Agent, robots and the sitemap.
 export async function generateMetadata(): Promise<Metadata> {
   const siteUrl = await resolveSiteOrigin();
+  // Same resolution order as every other key: the admin Key Vault first, then
+  // the environment. Best-effort - social card metadata never blocks a render.
+  const { getConfig } = await import("@/lib/runtime-config");
+  const twitterHandle = await getConfig("TWITTER_HANDLE").catch(() => "");
   return {
     metadataBase: new URL(siteUrl),
     title: { default: title, template: "%s · WheelDeal" },
@@ -53,8 +57,13 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      site: process.env.TWITTER_HANDLE || undefined,
-      creator: process.env.TWITTER_HANDLE || undefined,
+      // ONE PLACE A KEY LIVES. The admin Key Vault writes TWITTER_HANDLE and
+      // the Keys screen reads it back, so the owner sets it and nothing
+      // changes - this read went straight to process.env, which on Cloud Run
+      // is whatever was baked at deploy time. Every other integration key
+      // resolves through getConfig for exactly this reason.
+      site: twitterHandle || undefined,
+      creator: twitterHandle || undefined,
     },
     robots: { index: true, follow: true },
     alternates: { canonical: "/" },

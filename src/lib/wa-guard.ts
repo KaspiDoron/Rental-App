@@ -1854,11 +1854,20 @@ export async function drainOutbox(
   // PRIORITY: an engaged shop waiting on our reply must never sit behind a cold
   // introductions batch due at the same moment (the "our agents never message
   // back" report). The rule lives in outbox-policy so it is unit-pinned.
-  const { outboxSendPriority } = await import("./wa/outbox-policy");
-  const priOf = (row: OutboxRow) => outboxSendPriority((row.meta as { kind?: string } | null)?.kind);
-  const candidates = [...dueRows]
-    .sort((a, b) => priOf(a) - priOf(b) || a.not_before.localeCompare(b.not_before))
-    .slice(0, 30);
+  //
+  // ...and PLAN breaks the tie inside a kind. Priority processing has been on
+  // the Pro and Ultra plan cards since they shipped and was never built: the
+  // sort knew about message kind and nothing else, so a paying traveller's
+  // reply sat behind a free user's reply that happened to be due a second
+  // earlier. It is deliberately a tie-break and not a queue-jump - a paid cold
+  // introduction still waits behind anyone's live reply, because an engaged
+  // shop is the more urgent thing in the system whoever is paying.
+  const { compareOutboxRows } = await import("./wa/outbox-policy");
+  const keyOf = (row: OutboxRow) => {
+    const meta = row.meta as { kind?: string; plan?: string } | null;
+    return { kind: meta?.kind ?? null, plan: meta?.plan ?? null, notBefore: row.not_before };
+  };
+  const candidates = [...dueRows].sort((a, b) => compareOutboxRows(keyOf(a), keyOf(b))).slice(0, 30);
   const { claimSendSlots, releaseMessageClaim, gcSendClaims } = await import("./wa/pacing");
   const p = await getPolicies();
   let sent = 0;
