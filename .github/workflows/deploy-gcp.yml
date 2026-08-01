@@ -3,7 +3,15 @@
 # Required repository secrets:
 #   GCP_SA_KEY                     - JSON key of a service account with roles:
 #                                    Artifact Registry Writer, Cloud Run Admin,
-#                                    Service Account User
+#                                    Service Account User, and - for the queue
+#                                    heartbeat - Cloud Scheduler Admin +
+#                                    Service Usage Admin. Without the last two
+#                                    the deploy still succeeds and the app runs,
+#                                    but NOTHING drains the queue while the
+#                                    owner's phone is closed: the step below
+#                                    says so loudly instead of failing silently,
+#                                    and .github/workflows/heartbeat.yml keeps
+#                                    pinging every 5 minutes as a backstop.
 #   GCP_PROJECT_ID                 - the GCP project id
 #   SUPABASE_URL                   - bootstrap runtime env (see CLAUDE.md Deploy)
 #   SUPABASE_SERVICE_ROLE_KEY
@@ -134,6 +142,8 @@ jobs:
             --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}" \
             --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
             --build-arg NEXT_PUBLIC_SITE_URL="${{ secrets.NEXT_PUBLIC_SITE_URL }}" \
+            --build-arg WD_BUILD_SHA="${{ github.sha }}" \
+            --build-arg WD_BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:${{ github.sha }}" \
             -t "$IMAGE:latest" \
             .
@@ -288,8 +298,50 @@ jobs:
           TOKEN="$(printf 'wd-webhook:%s' "$SESSION_SECRET" | sha256sum | cut -c1-32)"
           TARGET="$URL/api/wa/ping?token=$TOKEN"
           JOB="wheeldeal-drain"
-          # Enable on first run; a no-op afterwards.
-          gcloud services enable cloudscheduler.googleapis.com --quiet || true
+
+          # FAILURES HERE USED TO BE INVISIBLE, WHICH IS HOW THE HEARTBEAT CAME
+          # TO READ "never". `gcloud services enable ... || true` swallowed the
+          # permission error, the create then 403'd, and the deploy had already
+          # printed a green service URL. The service was live and unwatched.
+          #
+          # The deploying service account needs TWO roles beyond the documented
+          # three (Artifact Registry Writer, Cloud Run Admin, Service Account
+          # User). If they are missing we say exactly that, print the commands
+          # that fix it, and DO NOT fail the deploy - the app is fine, it is the
+          # watchdog that is missing, and the GitHub-Actions backstop
+          # (.github/workflows/heartbeat.yml) keeps the queue draining meanwhile.
+          fail_loudly() {
+            echo ""
+            echo "=============================================================="
+            echo "ACTION REQUIRED - the queue heartbeat was NOT provisioned."
+            echo "=============================================================="
+            echo "Reason: $1"
+            echo ""
+            echo "Grant the deploy service account these two roles, once:"
+            echo "  gcloud projects add-iam-policy-binding $PROJECT_ID \\"
+            echo "    --member=serviceAccount:<the GCP_SA_KEY account> \\"
+            echo "    --role=roles/cloudscheduler.admin"
+            echo "  gcloud projects add-iam-policy-binding $PROJECT_ID \\"
+            echo "    --member=serviceAccount:<the GCP_SA_KEY account> \\"
+            echo "    --role=roles/serviceusage.serviceUsageAdmin"
+            echo ""
+            echo "Or create the job by hand (one command, never repeated):"
+            echo "  gcloud services enable cloudscheduler.googleapis.com"
+            echo "  gcloud scheduler jobs create http $JOB \\"
+            echo "    --location $REGION --schedule '* * * * *' \\"
+            echo "    --uri '<service-url>/api/wa/ping?token=<token>' \\"
+            echo "    --http-method GET --attempt-deadline 60s"
+            echo ""
+            echo "Until then the GitHub Actions backstop pings every 5 minutes,"
+            echo "and Admin -> Keys shows the heartbeat age either way."
+            echo "=============================================================="
+            exit 0
+          }
+
+          if ! gcloud services enable cloudscheduler.googleapis.com --quiet 2>&1; then
+            fail_loudly "could not enable the Cloud Scheduler API (needs roles/serviceusage.serviceUsageAdmin)"
+          fi
+
           if gcloud scheduler jobs describe "$JOB" --location "$REGION" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "$JOB" \
               --location "$REGION" \
@@ -297,8 +349,7 @@ jobs:
               --uri "$TARGET" \
               --http-method GET \
               --attempt-deadline 60s \
-              --quiet
-            echo "Heartbeat updated (every minute)."
+              --quiet || fail_loudly "could not UPDATE the scheduler job (needs roles/cloudscheduler.admin)"
           else
             gcloud scheduler jobs create http "$JOB" \
               --location "$REGION" \
@@ -306,6 +357,17 @@ jobs:
               --uri "$TARGET" \
               --http-method GET \
               --attempt-deadline 60s \
-              --quiet
-            echo "Heartbeat created (every minute)."
+              --quiet || fail_loudly "could not CREATE the scheduler job (needs roles/cloudscheduler.admin)"
+          fi
+
+          # VERIFY, rather than trust the exit code. A job that exists is the
+          # only evidence that matters, and this is the line that would have
+          # caught the original silent failure.
+          if gcloud scheduler jobs describe "$JOB" --location "$REGION" \
+              --format='value(schedule,state)' 2>/dev/null | grep -q .; then
+            echo "Heartbeat verified:"
+            gcloud scheduler jobs describe "$JOB" --location "$REGION" \
+              --format='value(name,schedule,state)'
+          else
+            fail_loudly "the job did not exist after writing it"
           fi

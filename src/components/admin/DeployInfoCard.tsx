@@ -21,9 +21,24 @@ interface DeployInfo {
   problems: string[];
   build: { sha: string | null; at: string | null; revision: string | null; node: string };
   schema: Record<string, Probe>;
-  heartbeat: { lastAt: string | null; ageSec: number | null; ok: boolean; detail: string };
+  heartbeat: {
+    lastAt: string | null;
+    ageSec: number | null;
+    ok: boolean;
+    state: "never" | "stale" | "live" | "unreadable";
+    detail: string;
+    nextStep?: string;
+  };
   ai: { configured: boolean; providers: string[]; detail: string };
   at: string;
+}
+
+interface DrainResult {
+  ok: boolean;
+  drained: number;
+  wakeups: number;
+  verdict: string;
+  steps: Array<{ step: string; ok: boolean; detail: string }>;
 }
 
 const ageLabel = (sec: number | null): string => {
@@ -36,6 +51,8 @@ const ageLabel = (sec: number | null): string => {
 export default function DeployInfoCard() {
   const [info, setInfo] = useState<DeployInfo | null>(null);
   const [busy, setBusy] = useState(false);
+  const [drain, setDrain] = useState<DrainResult | null>(null);
+  const [draining, setDraining] = useState(false);
 
   const load = async () => {
     setBusy(true);
@@ -51,6 +68,24 @@ export default function DeployInfoCard() {
   useEffect(() => {
     void load();
   }, []);
+
+  // RUN THE DRAIN BY HAND. A red heartbeat cannot tell you whether nothing is
+  // CALLING the drain or the drain itself is broken - and those have completely
+  // different fixes. One tap settles it, and a successful run also writes the
+  // same breadcrumb the cron writes, so the tile above turns green.
+  const runDrain = async () => {
+    setDraining(true);
+    setDrain(null);
+    try {
+      const res = await fetch("/api/admin/heartbeat-test", { method: "POST" });
+      setDrain(res.ok ? await res.json() : null);
+    } catch {
+      setDrain(null);
+    } finally {
+      setDraining(false);
+      void load();
+    }
+  };
 
   const tone = !info
     ? "border-line bg-card2 text-soft"
@@ -90,10 +125,38 @@ export default function DeployInfoCard() {
           </div>
 
           <div className="rounded-xl border-2 border-line bg-card p-2">
-            <div className="font-black">Heartbeat</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-black">Heartbeat</div>
+              <button
+                onClick={() => void runDrain()}
+                disabled={draining}
+                className="rounded-full border-2 border-line bg-card2 px-2.5 py-1 text-[11px] font-bold text-ink disabled:opacity-50"
+              >
+                {draining ? "Running…" : "Run the drain now"}
+              </button>
+            </div>
             <div className={info.heartbeat.ok ? "text-savings" : "text-brandred"}>
               last drain {ageLabel(info.heartbeat.ageSec)} - {info.heartbeat.detail}
             </div>
+            {info.heartbeat.nextStep && (
+              <div className="mt-1 text-soft">{info.heartbeat.nextStep}</div>
+            )}
+            {drain && (
+              <div
+                className={`mt-1.5 rounded-lg border-2 p-1.5 ${
+                  drain.ok ? "border-savings bg-savings-soft" : "border-brandred bg-brandred-soft"
+                }`}
+              >
+                <div className="font-black">{drain.verdict}</div>
+                <ul className="mt-0.5 space-y-0.5">
+                  {drain.steps.map((s) => (
+                    <li key={s.step} className={s.ok ? "text-savings" : "text-brandred"}>
+                      {s.ok ? "OK" : "FAILED"} - {s.step}: {s.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl border-2 border-line bg-card p-2">

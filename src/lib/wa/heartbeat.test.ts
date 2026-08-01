@@ -72,8 +72,11 @@ describe("a heartbeat that stops must be visible", () => {
     const info = readCode("src/app/api/admin/deploy-info/route.ts");
     expect(info).toMatch(/kind=eq\.cron-ping/);
     expect(info).toMatch(/HEARTBEAT_STALE_MS/);
+    // The wording now names WHICH failure it is - "never provisioned" and
+    // "it lapsed" have different fixes, and the old copy said the same thing
+    // for both.
     expect(read("src/app/api/admin/deploy-info/route.ts")).toMatch(
-      /NOTHING is draining the queue/
+      /the drain STOPPED being called/
     );
   });
 });
@@ -107,5 +110,80 @@ describe("the self-check answers the questions a field failure raises", () => {
   it("and it is reachable from the admin screen on a phone", () => {
     const admin = readCode("src/app/admin/page.tsx");
     expect(admin).toMatch(/DeployInfoCard/);
+  });
+});
+
+// THE OWNER'S PRODUCTION SCREENSHOT: database green, 8 providers green, and two
+// red lines - "Build: commit unknown" and "Heartbeat: last drain never".
+//
+// That combination is diagnostic. The card, the schema probes and the cron-ping
+// breadcrumb all shipped in ONE commit, so the card rendering at all proves
+// that code is live. The red lines were never missing code: they were
+// deploy-time wiring that never ran.
+
+describe("the build can say what it is, however it was deployed", () => {
+  it("REPRODUCTION: the SHA is baked into the IMAGE, not only passed at deploy", () => {
+    // As a Cloud Run env var alone it exists only if that one deploy step ran.
+    // A console redeploy, a manual gcloud run deploy, or an image promoted from
+    // an earlier build all ship new code with the previous revision's env - and
+    // the service can no longer name the commit it is serving.
+    const df = read("Dockerfile");
+    expect(df).toMatch(/ARG WD_BUILD_SHA=unknown/);
+    expect(df).toMatch(/ENV WD_BUILD_SHA=\$WD_BUILD_SHA/);
+    const wf = read(".github/workflows/deploy-gcp.yml");
+    expect(wf).toMatch(/--build-arg WD_BUILD_SHA="\$\{\{ github\.sha \}\}"/);
+  });
+});
+
+describe("a heartbeat with one source of failure is not a heartbeat", () => {
+  const wf = read(".github/workflows/deploy-gcp.yml");
+
+  it("REPRODUCTION: the scheduler step can no longer fail silently", () => {
+    // `gcloud services enable ... || true` swallowed the permission error, the
+    // create then 403'd, and the deploy had already printed a green URL.
+    expect(wf).not.toMatch(/gcloud services enable cloudscheduler\.googleapis\.com --quiet \|\| true/);
+    expect(wf).toMatch(/ACTION REQUIRED - the queue heartbeat was NOT provisioned/);
+    expect(wf).toMatch(/roles\/cloudscheduler\.admin/);
+    expect(wf).toMatch(/roles\/serviceusage\.serviceUsageAdmin/);
+  });
+
+  it("it VERIFIES the job exists rather than trusting an exit code", () => {
+    expect(wf).toMatch(/Heartbeat verified:/);
+    expect(wf).toMatch(/fail_loudly "the job did not exist after writing it"/);
+  });
+
+  it("and the required roles are documented where the secrets are", () => {
+    expect(wf).toMatch(/Cloud Scheduler Admin \+/);
+  });
+
+  it("a backstop pinger runs on GitHub's own schedule, needing no GCP role", () => {
+    const hb = read(".github/workflows/heartbeat.yml");
+    expect(hb).toMatch(/cron: "\*\/5 \* \* \* \*"/);
+    expect(hb).toMatch(/\/api\/wa\/ping\?token=/);
+    // Same token derivation - no new secret for the owner to manage.
+    expect(hb).toMatch(/printf 'wd-webhook:%s' "\$SESSION_SECRET" \| sha256sum \| cut -c1-32/);
+    // A failed ping must not paint the repo red and train the owner to ignore it.
+    expect(hb).toMatch(/::warning::/);
+  });
+});
+
+describe("the owner can prove the drain works without waiting for a cron", () => {
+  it("one owner-gated route runs exactly what the schedule runs", () => {
+    const t = readCode("src/app/api/admin/heartbeat-test/route.ts");
+    expect(t).toMatch(/requireManagement\(\)/);
+    expect(t).toMatch(/drainOutbox\(/);
+    expect(t).toMatch(/drainGraphWakeups\(/);
+    // ...and writes the same breadcrumb, so a successful tap turns the tile green.
+    expect(t).toMatch(/kind: "cron-ping"/);
+  });
+
+  it("the card separates 'never provisioned' from 'it lapsed'", () => {
+    const info = readCode("src/app/api/admin/deploy-info/route.ts");
+    expect(info).toMatch(/state: "never"/);
+    expect(info).toMatch(/state: live \? "live" : "stale"/);
+    expect(info).toMatch(/nextStep/);
+    const card = readCode("src/components/admin/DeployInfoCard.tsx");
+    expect(card).toMatch(/Run the drain now/);
+    expect(card).toMatch(/heartbeat-test/);
   });
 });

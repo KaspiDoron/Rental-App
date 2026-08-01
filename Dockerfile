@@ -52,6 +52,20 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=8080 \
     HOSTNAME=0.0.0.0
+# WHAT THIS IMAGE IS, BAKED IN.
+#
+# The build SHA used to arrive only as a Cloud Run env var set by one step of
+# the deploy job. Any other path to production - a console redeploy, a manual
+# `gcloud run deploy`, an image promoted from an earlier build - ships the new
+# code with the PREVIOUS revision's environment, and the running service can no
+# longer say what it is. The owner's self-check read "commit unknown" while
+# serving code from a commit it could not name.
+#
+# An image knows its own identity. Stamped here, it survives every deploy path.
+ARG WD_BUILD_SHA=unknown
+ARG WD_BUILD_AT=unknown
+ENV WD_BUILD_SHA=$WD_BUILD_SHA \
+    WD_BUILD_AT=$WD_BUILD_AT
 RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m nextjs
 # Standalone output = server.js + the traced node_modules subset only.
 COPY --from=builder /app/public ./public

@@ -70,11 +70,32 @@ export async function GET() {
   };
 
   // --- is anything actually waking the system? -----------------------------
-  let heartbeat: { lastAt: string | null; ageSec: number | null; ok: boolean; detail: string } = {
+  // TWO RED HEARTBEATS MEAN DIFFERENT THINGS, AND THE FIX IS DIFFERENT.
+  //
+  //   "never"  - nothing has EVER called the drain. The schedule was never
+  //              created (the deploy's scheduler step needs GCP roles the
+  //              deploying account may not have) - an infrastructure gap.
+  //   "stale"  - it ran and then stopped. A lapse: a deleted job, a rotated
+  //              token, a paused schedule.
+  //
+  // The card said "never - no ping recorded yet" for both, which reads like a
+  // bug in the app rather than a missing cron job. Name the state and give the
+  // next action inline.
+  let heartbeat: {
+    lastAt: string | null;
+    ageSec: number | null;
+    ok: boolean;
+    state: "never" | "stale" | "live" | "unreadable";
+    detail: string;
+    nextStep?: string;
+  } = {
     lastAt: null,
     ageSec: null,
     ok: false,
-    detail: "no ping recorded yet",
+    state: "never",
+    detail: "nothing has ever called the drain on this deployment",
+    nextStep:
+      "The schedule was never created. Re-run the deploy (the workflow now says exactly which GCP role is missing if it cannot create it), or tap 'Run the drain now' below to prove the machinery works meanwhile.",
   };
   try {
     const rows = await sbSelect<{ created_at: string }>(
@@ -84,18 +105,26 @@ export async function GET() {
     const lastAt = rows[0]?.created_at ?? null;
     if (lastAt) {
       const ageMs = Date.now() - Date.parse(lastAt);
+      const live = ageMs < HEARTBEAT_STALE_MS;
       heartbeat = {
         lastAt,
         ageSec: Math.round(ageMs / 1000),
-        ok: ageMs < HEARTBEAT_STALE_MS,
-        detail:
-          ageMs < HEARTBEAT_STALE_MS
-            ? "the drain is being called on schedule"
-            : "NOTHING is draining the queue - queued messages and scheduled follow-ups are waiting for someone to open the app",
+        ok: live,
+        state: live ? "live" : "stale",
+        detail: live
+          ? "the drain is being called on schedule"
+          : "the drain STOPPED being called - queued messages and scheduled follow-ups are waiting for someone to open the app",
+        nextStep: live
+          ? undefined
+          : "It ran before and stopped: check the Cloud Scheduler job still exists and is enabled, and that SESSION_SECRET has not been rotated (the ping token is derived from it).",
       };
     }
   } catch (e) {
-    heartbeat.detail = e instanceof Error ? e.message.slice(0, 200) : "unreadable";
+    heartbeat = {
+      ...heartbeat,
+      state: "unreadable",
+      detail: e instanceof Error ? e.message.slice(0, 200) : "unreadable",
+    };
   }
 
   // --- can the agents think? -----------------------------------------------

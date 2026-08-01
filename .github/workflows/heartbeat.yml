@@ -1,0 +1,70 @@
+# THE BACKSTOP PINGER - a heartbeat that needs no GCP permissions.
+#
+# Nothing in this app moves on its own. A queued message, a strategic wait, a
+# three-minute check-back on a quiet thread: each is a row with a due time and
+# no timer behind it, and every drain runs inside an HTTP request handler. With
+# the traveller's phone locked and no shop replying, a due row waits.
+#
+# Cloud Scheduler (provisioned by deploy-gcp.yml) is the primary heartbeat and
+# fires every minute. But it needs roles the deploying service account may not
+# have been granted, and when it silently failed to be created the owner's
+# dashboard read "last drain: never" while the app looked perfectly healthy.
+#
+# A watchdog with a single source of failure is not a watchdog. This one runs
+# on GitHub's own schedule, needs only the secrets this repo already holds, and
+# keeps the queue draining even if nobody ever grants the scheduler role.
+#
+# GitHub cron is BEST-EFFORT and coarse (5 minutes, often later under load) -
+# which is exactly why it is the backstop and not the primary. Both write the
+# same `cron-ping` breadcrumb, so Admin -> Keys shows the true age either way.
+
+name: Queue heartbeat
+
+on:
+  schedule:
+    # Every 5 minutes - the finest granularity GitHub honours in practice.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# One ping at a time. A backed-up runner queue must never stack pings.
+concurrency:
+  group: wheeldeal-heartbeat
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the drain
+        env:
+          # The public app origin. Falls back to the Cloud Run URL secret when
+          # no custom domain is set.
+          APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+          SERVICE_URL: ${{ secrets.CLOUD_RUN_URL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          set -uo pipefail
+          BASE="${APP_DOMAIN:-${SERVICE_URL:-}}"
+          if [ -z "$BASE" ]; then
+            echo "No APP_DOMAIN or CLOUD_RUN_URL secret set - nothing to ping."
+            echo "Set either one so the backstop heartbeat can reach the app."
+            exit 0
+          fi
+          case "$BASE" in
+            http://*|https://*) ;;
+            *) BASE="https://$BASE" ;;
+          esac
+          # Same derivation as src/lib/wa/webhook-token.ts - no new secret.
+          TOKEN="$(printf 'wd-webhook:%s' "$SESSION_SECRET" | sha256sum | cut -c1-32)"
+          CODE="$(curl -sS -o /tmp/ping.out -w '%{http_code}' --max-time 60 \
+            "$BASE/api/wa/ping?token=$TOKEN" || echo 000)"
+          echo "HTTP $CODE"
+          head -c 500 /tmp/ping.out || true
+          echo ""
+          # A failed ping must not turn the repo's checks red - the next one is
+          # five minutes away, and a red X here would train the owner to ignore
+          # a signal that matters. Report and move on.
+          if [ "$CODE" != "200" ]; then
+            echo "::warning::Heartbeat ping returned $CODE - check Admin -> Keys for the drain age."
+          fi
