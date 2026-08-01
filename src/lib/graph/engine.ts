@@ -1518,6 +1518,46 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           outboxRowId: verdict.outboxRowId,
         };
       }
+      // LAST-INSTANT FRESHNESS RE-CHECK: is this still the right thing to say?
+      //
+      // The freshness guard was built for PARKED drafts and lived only in the
+      // drain - but parking is the exception. This path composes a reply and
+      // sends it in the same request after a human-like pause of up to ten
+      // seconds, and it never asked the question at all. So the exact Ko Tao
+      // failure (an answer written at 12:23, sent at 12:39, into a conversation
+      // that had moved on at 12:38) stayed fully reproducible on the path that
+      // carries most of the traffic.
+      //
+      // A draft that no longer fits does not go out and does not vanish: the
+      // thread is handed a fresh turn against the current state.
+      try {
+        const { threadMovedOn, scheduleRecompose } = await import("../wa/freshness-live");
+        const stale = await threadMovedOn({
+          senderKey,
+          toNumber,
+          composedAgainst: (meta as { composedAgainst?: import("../wa/freshness").ComposedAgainst })
+            ?.composedAgainst,
+          kind: (meta as { kind?: string } | undefined)?.kind,
+        });
+        if (stale.stale) {
+          await sbInsert("agent_events", [
+            {
+              kind: "wa-send-stale",
+              user_email: senderKey,
+              vendor_name: String((meta as { vendorName?: string } | undefined)?.vendorName ?? toNumber),
+              detail: `inline ${stale.reason}: ${stale.detail ?? ""}`.slice(0, 300),
+            },
+          ]).catch(() => {});
+          await scheduleRecompose(senderKey, toNumber, "stale-draft-recompose");
+          return {
+            delivered: "blocked",
+            detail: `dropped as stale (${stale.reason}) - recomposing against what the shop just said`,
+            finalText: verdict.text,
+          };
+        }
+      } catch {
+        /* fail open: an unreadable thread must never delete a good reply */
+      }
       // LAST-INSTANT cancellation re-check: narrows the window between the
       // guard's verdict and the actual network send, so a user tapping Remove
       // right now still wins. (The sub-second residue is a documented limit.)

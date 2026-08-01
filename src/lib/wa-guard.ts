@@ -1745,40 +1745,15 @@ async function staleDraftDropped(
   if (!composedAgainst) return false; // parked before this shipped - not our business
 
   try {
-    const { judgeFreshness } = await import("./wa/freshness");
-    const enc = encodeURIComponent(row.sender_key);
-    const inbound = await sbSelect<{ wa_message_id: string | null; received_at: string; body: string | null }>(
-      "whatsapp_messages",
-      `select=wa_message_id,received_at,body&direction=eq.inbound&raw->>receiver=eq.${enc}` +
-        `&order=received_at.desc&limit=10${numberFilter("from_number", row.to_number)}`
-    );
-    if (!inbound.length) return false; // nothing to compare against
-
-    // Stock as the thread reads RIGHT NOW, from the shop's own recent words.
-    // Bounded to the rows already fetched - this must not become a second query
-    // per drained message.
-    let stockNow: "in-stock" | "out-of-stock" | "unknown" = "unknown";
-    try {
-      const { claimsAcross } = await import("./thread/claims");
-      const { stockState } = await import("./thread/ledger");
-      const bodies = [...inbound].reverse().map((m) => m.body ?? "");
-      // stockState reads the ledger's claim list; the other ledger fields play
-      // no part in the stock verdict, so a claims-only view is the whole input.
-      stockNow = stockState({
-        claims: claimsAcross(bodies, "shop"),
-        known: [],
-        outstanding: [],
-        owed: [],
-      }).state;
-    } catch {
-      /* stock is the narrower rule; rule 1 stands on its own */
-    }
-
-    const verdict = judgeFreshness({
+    // ONE ASKER, SHARED WITH THE INLINE SEND PATH (wa/freshness-live.ts). The
+    // drain and the in-request send must never disagree about what "stale"
+    // means, or a draft refused here would go straight out there.
+    const { threadMovedOn } = await import("./wa/freshness-live");
+    const verdict = await threadMovedOn({
+      senderKey: row.sender_key,
+      toNumber: row.to_number,
       composedAgainst,
-      latestInboundId: inbound[0].wa_message_id,
-      latestInboundAt: inbound[0].received_at,
-      stockNow,
+      kind: rowKind,
     });
     if (!verdict.stale) return false;
 

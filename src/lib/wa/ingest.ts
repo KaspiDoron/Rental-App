@@ -71,6 +71,18 @@ function hasAudioMessage(data: any): boolean {
 function hasImageMessage(data: any): boolean {
   return Boolean(unwrap(data)?.imageMessage);
 }
+// A VIDEO WITH NO CAPTION USED TO BE NOTHING AT ALL.
+//
+// extractText already reads videoMessage.caption, but nothing detected the
+// video itself - so "here is the scooter running", sent with no words, stored
+// as an empty-bodied row, hit the no-text-no-media check below and was dropped
+// with no reply and no placeholder in the transcript. To the traveller the shop
+// had sent something and the agent had ignored it; to the agent nothing had
+// happened. Same class as the price-list photo, and a shop filming the bike is
+// usually a shop that wants to do business.
+function hasVideoMessage(data: any): boolean {
+  return Boolean(unwrap(data)?.videoMessage);
+}
 // Beyond image/audio: documents (PDF rate cards), location pins and contact
 // cards used to be silently dropped - now every one becomes either engine
 // input or an honest user-facing note.
@@ -449,6 +461,7 @@ export async function processEvolutionWebhook(
       const msgId = String(data.key.id ?? "");
       const hasImage = hasImageMessage(data);
       const hasAudio = hasAudioMessage(data);
+      const hasVideo = hasVideoMessage(data);
       const doc = documentMessage(data);
       const loc = locationMessage(data);
       const contact = contactMessage(data);
@@ -504,6 +517,8 @@ export async function processEvolutionWebhook(
               ? "[photo]"
               : hasAudio
               ? "[voice note]"
+              : hasVideo
+              ? "[video]"
               : doc
               ? `[document: ${doc.fileName ?? "file"}]`
               : ""),
@@ -511,6 +526,8 @@ export async function processEvolutionWebhook(
             ? "image"
             : hasAudio
             ? "audio"
+            : hasVideo
+            ? "video"
             : doc
             ? "document"
             : pinLoc
@@ -701,6 +718,13 @@ export async function processEvolutionWebhook(
       // is the common case - read the media, don't skip it. A frame with NO
       // text and NO media (sticker/reaction/system) is a real nothing-to-do
       // drop, but leave a throttled trace so it is never mistaken for silence.
+      //
+      // A CAPTIONLESS VIDEO IS NOT NOTHING. It used to land here and be
+      // discarded: no reply, no placeholder in the transcript, so the traveller
+      // saw the shop send something and the agent ignore it. We cannot read the
+      // video, but we can say that it arrived and ask for the part we need in
+      // words - which is what a person would do.
+      if (!syntheticText && hasVideo) syntheticText = "[video]";
       if (!syntheticText && !hasImage && !hasAudio && !docIsImage) {
         void noteInboundDropped(email, from, "empty-media", { via: "webhook" });
         continue;
