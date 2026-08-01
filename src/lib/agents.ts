@@ -17,6 +17,8 @@ import { parseDeposit } from "./deposit";
 import { extractQuotedPrices, extractRentalDailyPrice } from "./wa/price-extract";
 import { catalogueFactsFor } from "./vehicle/catalogue";
 import { isEnglishSpeaking } from "./locale";
+import { deAmbiguateFree } from "./wa/persona";
+import { numbersPreserved } from "./integrity/translation";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -594,13 +596,20 @@ export async function localizeMessage(
   street = true
 ): Promise<{ text: string; english?: string; localized: boolean }> {
   void voiceKey; // persona intentionally not applied to local-language output
-  if (!region) return { text: message, localized: false };
+  // ...but the ONE persona rule that is about meaning rather than register has
+  // to run here too. `personaHumanize` (which carries deAmbiguateFree) is
+  // skipped on this path, so an English source saying "free" for "vacant" got
+  // translated with the no-cost sense intact - the Ko Tao failure, in a script
+  // the traveller cannot proofread. Fix the SOURCE before the model sees it;
+  // the prompt rule below is the second layer, not the only one.
+  const source = deAmbiguateFree(message);
+  if (!region) return { text: source, localized: false };
   // ENGLISH -> ENGLISH IS NOT A TRANSLATION. Where the everyday language
   // already is English, this call spent up to two LLM round trips (9s budget
   // each, with a retry) to hand back the text it was given - pure latency on
   // the critical path between composing a reply and sending it. Same output,
   // no call. Any country not on the list simply behaves as before.
-  if (isEnglishSpeaking(region)) return { text: message, localized: false };
+  if (isEnglishSpeaking(region)) return { text: source, localized: false };
   // NB: we deliberately do NOT inject the English voice persona here - its
   // literal greeting ("Hey") was leaking into the local-language output. The
   // local register itself carries the human tone.
@@ -624,12 +633,22 @@ export async function localizeMessage(
             "1. Translate the WHOLE message including the greeting and sign-off. Do NOT leave ANY English " +
             "words (no 'Hey', 'Hi', 'Thanks', etc.) - use a natural LOCAL greeting instead.\n" +
             "2. Keep every fact exactly (vehicle, cc, days, accessories, prices); numbers stay as given.\n" +
+            // THE AMBIGUITY TRAVELS. The English rail (persona.deAmbiguateFree)
+            // is deliberately not applied to local-language output, so if the
+            // source says "free" meaning vacant, the translator carries that
+            // sense straight into Thai - where "ฟรี" is unambiguously
+            // no-charge, and asking a shop for a free motorbike ends the
+            // conversation exactly as it did on Ko Tao.
+            "2b. If the English says \"free\" about a VEHICLE, it always means AVAILABLE / not " +
+            "rented out - never at no cost. Translate it as available/spare. Only translate " +
+            "\"free\" as no-charge when it is clearly about something included " +
+            "(free delivery, free helmet).\n" +
             "3. The \"english\" field MUST be a FAITHFUL, COMPLETE English translation of the local-language " +
             "message you wrote - the SAME meaning and detail, sentence for sentence, NOT a shortened summary. " +
             "The traveller reads it to know EXACTLY what was sent on their behalf.\n" +
             'Reply ONLY as JSON: { "message": "<full local-language text>", "english": "<faithful full English translation of that exact text>" }.',
         },
-        { role: "user", content: message },
+        { role: "user", content: source },
       ],
       { budgetMs: 9_000 }
     );
@@ -637,11 +656,23 @@ export async function localizeMessage(
       const parsed = extractJson<{ message?: string; english?: string }>(out);
       if (parsed?.message && parsed.message.trim().length > 5) {
         const { sanitizeAiText } = await import("./text");
+        const text = sanitizeAiText(parsed.message);
+        // THE FACTS HAVE TO SURVIVE THE TRIP. Everything upstream treats a
+        // numeral as load-bearing - provenance, the duration rail, the rate
+        // algebra - and then the last hop handed the text to a model and sent
+        // whatever came back, in a script the traveller cannot proofread. A
+        // dropped or drifted price is a wrong offer sent in their name. Only
+        // 3+ digit numbers are enforced; see integrity/translation.ts for why.
+        if (!numbersPreserved(source, text)) {
+          // Attempt 0 retries (the loop); attempt 1 falls through to English,
+          // which the shop can still read and which quotes the right number.
+          continue;
+        }
         return {
-          text: sanitizeAiText(parsed.message),
+          text,
           // The gloss is the faithful translation of what we actually sent; if
           // the model omitted it, fall back to the original English source.
-          english: parsed.english ? sanitizeAiText(parsed.english) : message,
+          english: parsed.english ? sanitizeAiText(parsed.english) : source,
           localized: true,
         };
       }
@@ -649,7 +680,7 @@ export async function localizeMessage(
   }
   // Honest, DOCUMENTED fallback: English beats a failed send. Callers log a
   // localize-fallback event so a language flip is never a silent mystery.
-  return { text: message, localized: false };
+  return { text: source, localized: false };
 }
 
 export async function composeBargain(opts: {

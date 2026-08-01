@@ -102,6 +102,17 @@ const VEHICLE_BEFORE_FREE = new RegExp(`\\b(${VEHICLE_NOUN})\\s+free\\b`, "gi");
 // position on purpose: "we have free delivery" has a noun after it and is a
 // real no-cost offer.
 const HAVE_FREE_DANGLING = /\b(have|has|had|got|have got)\s+free\s*(?=[?.!,;]|$)/gi;
+// "...when one might be free again?" - a deterministic FALLBACK template shipped
+// this exact sentence, and it fires precisely when the LLM is unavailable, i.e.
+// when the prompt rule above cannot help. Two more predicative shapes, both of
+// which can only mean vacancy:
+//   * "free again" - a price never becomes free again; a vehicle does.
+//   * a pronoun subject with a copula: "one is free", "any are free",
+//     "it might be free". A no-cost offer names the thing that is free
+//     ("delivery is free"), so a bare pronoun here is always the vacancy sense.
+const FREE_AGAIN = /\bfree\s+again\b/gi;
+const PRONOUN_IS_FREE =
+  /\b(one|any|it|that|some|they|these|those)\s+((?:is|are|was|were|might be|will be|would be|becomes?|gets?)\s+)free\b/gi;
 
 /**
  * Rewrite the one ambiguity that cost a live booking on Ko Tao: the agent asked
@@ -116,7 +127,9 @@ export function deAmbiguateFree(text: string): string {
   return text
     .replace(FREE_BEFORE_VEHICLE, (_m, noun: string) => `spare ${noun}`)
     .replace(VEHICLE_BEFORE_FREE, (_m, noun: string) => `${noun} spare`)
-    .replace(HAVE_FREE_DANGLING, (_m, verb: string) => `${verb} spare`);
+    .replace(HAVE_FREE_DANGLING, (_m, verb: string) => `${verb} spare`)
+    .replace(FREE_AGAIN, "available again")
+    .replace(PRONOUN_IS_FREE, (_m, subj: string, verb: string) => `${subj} ${verb}available`);
 }
 
 // Sparing, warm, context-free emojis a customer trying to lock a rental uses.

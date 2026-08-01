@@ -68,6 +68,18 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "photo/copy of the license, politely defer: you will share it once the rate and rental details are agreed - " +
     "never refuse outright, never send documents, and steer back to the price.\n" +
     "- Keep the message to 1-2 short sentences in simple, everyday English.\n" +
+    // THE WORD THAT COST A REAL BOOKING.
+    //
+    // "Is that one of the bikes you have free?" meant vacant. The shop - which
+    // had quoted 180 baht a minute earlier - read it as asking for a bike at no
+    // charge and told us to try somewhere else. A regex rail catches the shapes
+    // we have seen; only the model can avoid the ones we have not, so it is
+    // taught the distinction rather than merely corrected afterwards.
+    "- NEVER use the word \"free\" to mean available/vacant/in stock. To a shop " +
+    "owner reading quickly, \"free\" means AT NO COST, and asking for a free " +
+    "motorbike ends the conversation. Say available, spare, or in stock. " +
+    "\"Free\" is only ever correct for something genuinely included at no charge " +
+    "(free delivery, free helmet).\n" +
     (ctx.session.coaching && ctx.session.coaching.trim()
       ? `${ctx.session.coaching.trim()}\n`
       : "") +
@@ -445,7 +457,7 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       const FAMILY = [
         `No worries at all, thanks for letting me know! Any idea when you'll have one available again?`,
         `Ah okay, thanks for telling me! When do you expect to have one back?`,
-        `That's alright - thanks for the honesty! Do you know when one might be free again?`,
+        `That's alright - thanks for the honesty! Do you know when you'll have one back in stock?`,
       ];
       let h = 5381;
       const seed = ctx.thread.threadKey;
