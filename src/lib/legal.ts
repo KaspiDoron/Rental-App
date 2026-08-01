@@ -54,6 +54,80 @@ export interface LegalSection {
 
 // ---- Terms of Use --------------------------------------------------------------
 
+// ---- The six named risks -------------------------------------------------------
+//
+// The general releases above are broad, and breadth is exactly the problem: a
+// clause that covers "any and all claims" tells a traveller nothing about what
+// can actually go wrong to THEM, and tells a court nothing about what they were
+// told. These six are the failure modes this product really produces - each one
+// has either happened in the field or is one bad afternoon away - and each is
+// named so it can be pointed at.
+//
+// The ANCHORS are load-bearing. They are asserted by a test, so a future edit
+// cannot quietly drop one while leaving the section looking complete; and they
+// are what the first-touch modal renders, so the summary and the full terms
+// cannot drift apart.
+export interface IndemnityClause {
+  /** Stable id. Never rename one - a test and the consent record both use it. */
+  anchor: string;
+  n: string;
+  title: string;
+  /** One line for the first-touch modal. */
+  summary: string;
+  body: string;
+}
+
+export const INDEMNITY_CLAUSES: IndemnityClause[] = [
+  {
+    anchor: "misdirected-messages",
+    n: "11",
+    title: "Messages sent to the wrong person, or that you did not write",
+    summary: "Automated messages go out from your number - including, occasionally, to the wrong number.",
+    body:
+      `Messages are sent automatically FROM YOUR OWN WhatsApp number, in your name, without you seeing each one first. Phone numbers published by businesses are frequently wrong, reassigned, or belong to a private individual, and an automated message may therefore reach someone who never asked to hear from you. You accept sole responsibility for every message sent from your account, including misdirected messages, messages a recipient considers unsolicited, and messages you did not personally compose or approve. ${OPERATOR_NAME} has no liability for any claim, complaint, report, distress or dispute arising from any message sent from your number.`,
+  },
+  {
+    anchor: "whatsapp-bans",
+    n: "12",
+    title: "WhatsApp flags, suspensions and permanent bans - yours AND the shop's",
+    summary: "Your WhatsApp number can be limited or permanently banned. So can a shop's.",
+    body:
+      `Automated messaging can cause WhatsApp to rate-limit, flag, suspend or PERMANENTLY BAN a phone number, and this applies both to YOUR number and to the number of any business you message - a business may be flagged for receiving or replying to automated traffic. ${OPERATOR_NAME} applies human-pace limits and anti-pattern controls but gives NO guarantee whatsoever. You accept the total loss of your number, your message history, and any account tied to it, and you indemnify ${OPERATOR_NAME} against any claim by any business whose number is restricted in connection with your use of the service.`,
+  },
+  {
+    anchor: "ai-errors",
+    n: "13",
+    title: "AI errors: wrong prices, false availability, promises we cannot keep",
+    summary: "The AI can state a wrong price, a vehicle that is not available, or a promise nobody agreed to.",
+    body:
+      `The automated agents read messages and reply on your behalf, and they can be WRONG in ways that cost money: quoting or accepting a price that was never offered, reporting a vehicle as available when it is not, misreading a photo, a price board or a foreign-language reply, or making a statement a business later treats as a commitment. No message sent by the service is a verified fact or a binding agreement, and ${OPERATOR_NAME} does not warrant the accuracy of any price, availability, specification or term surfaced by the app. You must confirm every material detail directly with the business before you pay, sign, or collect a vehicle.`,
+  },
+  {
+    anchor: "vehicle-and-road",
+    n: "14",
+    title: "The vehicle, the road, and the law where you are riding",
+    summary: "Defects, accidents, insurance, helmets and traffic fines are between you, the shop and local law.",
+    body:
+      "The condition, roadworthiness, maintenance, brakes, tyres and safety of any vehicle are the responsibility of the business that rents it to you. You are solely responsible for holding a licence valid in that country for that vehicle class, for any international driving permit requirement, for wearing a helmet and complying with every local traffic law, and for any fine, penalty, impoundment or prosecution. Rental vehicles frequently carry NO insurance, or insurance that excludes an unlicensed rider. The Released Parties accept no responsibility whatsoever for any accident, injury, death, damage, theft, fine or legal consequence arising from any vehicle or any journey.",
+  },
+  {
+    anchor: "deposits-and-documents",
+    n: "15",
+    title: "Deposits, passports held as security, and damage disputes",
+    summary: "Cash deposits and held passports can be lost, withheld, or used to extract a payment.",
+    body:
+      `It is normal practice in many rental markets to demand a cash deposit or to hold a passport, identity document or driving licence for the duration of the rental. These arrangements carry real risk: a deposit may not be returned, a document may be withheld to force payment, and a business may allege pre-existing damage in order to keep money or a passport. ${OPERATOR_NAME} warns against surrendering original identity documents but has NO involvement in, control over, or liability for any deposit, any document you hand over, or any damage dispute. Any deposit you pay and any document you surrender is entirely at your own risk.`,
+  },
+  {
+    anchor: "payments-and-currency",
+    n: "16",
+    title: "Payment failures and currency conversion",
+    summary: "Payment providers can fail or double-charge, and conversion rates are estimates.",
+    body:
+      `Subscription payments are handled by third-party payment providers. ${OPERATOR_NAME} is not liable for any failure, delay, decline, duplicate charge, chargeback, fraud or outage at a payment provider, nor for any fee that provider or your bank applies. All prices shown in a currency other than the one you are billed or quoted in are ESTIMATES produced by third-party exchange-rate data; the amount actually charged by a payment provider or demanded by a rental business may differ, and that difference is yours.`,
+  },
+];
+
 export const TERMS_SECTIONS: LegalSection[] = [
   {
     n: "1",
@@ -115,14 +189,17 @@ export const TERMS_SECTIONS: LegalSection[] = [
     body:
       "All rental agreements, payments, deposits, pricing, availability, vehicle condition, insurance, licensing and legal compliance are strictly between you and the rental business. Prices, deposits, ratings, distances and other details are provided by third parties or estimated by automated assistants and may be incomplete, outdated or wrong. Always confirm every detail directly with the rental business before paying or signing anything. The Released Parties accept no responsibility or liability whatsoever for any loss, damage, injury, death, theft, fraud, dispute, fine or expense arising from any rental or vehicle use.",
   },
+  // The six named risks, spliced in so the full terms and the first-touch
+  // modal are rendered from ONE list rather than two that drift.
+  ...INDEMNITY_CLAUSES.map(({ n, title, body }) => ({ n, title, body })),
   {
-    n: "11",
+    n: "17",
     title: "Governing law & exclusive jurisdiction",
     body:
       `These terms, and any dispute or claim arising out of or in connection with them or the service (including non-contractual disputes), are governed exclusively by the laws of ${GOVERNING_LAW}, without regard to conflict-of-law rules. Any dispute shall be resolved EXCLUSIVELY in ${JURISDICTION}, and you irrevocably submit to their exclusive jurisdiction.`,
   },
   {
-    n: "12",
+    n: "18",
     title: "Changes, severability & survival",
     body:
       "These terms may be updated at any time; material changes require you to re-accept the latest version on your next sign-in. If any provision is held unenforceable, the remainder stays in full force. The releases, waivers, disclaimers, limitations, indemnities, the liability cap, the class-action waiver, and the governing-law and jurisdiction provisions survive termination indefinitely. BY CREATING AN ACCOUNT YOU CONFIRM YOU HAVE READ, UNDERSTOOD AND AGREED TO ALL OF THE FOREGOING.",
