@@ -1217,3 +1217,27 @@ alter table public.whatsapp_messages add column if not exists dedupe_key text;
 -- yet migrated - stays legal with a null key.
 create unique index if not exists whatsapp_messages_dedupe_uidx
   on public.whatsapp_messages (dedupe_key) where dedupe_key is not null;
+
+-- ---- Consent ledger (consent_events) -------------------------------------------
+-- A consent nobody recorded is a consent you cannot rely on when it matters.
+-- The legal text and the mandatory checkboxes both existed; the PROOF did not.
+-- app_users carries one timestamp per signup consent, which cannot answer the
+-- three questions that actually come up: which VERSION did they agree to, did
+-- they accept the WhatsApp release each time they linked a number, and did they
+-- confirm the deal terms on THIS booking. Those are per-event facts and they
+-- need rows, not columns.
+--
+-- Append-only by construction: nothing in the app updates or deletes a row here.
+create table if not exists public.consent_events (
+  id          bigint generated always as identity primary key,
+  email       text not null,
+  kind        text not null,          -- terms | wa_risk | ai_responsibility | wa_link | deal_terms
+  version     text,                   -- the TERMS_VERSION in force at acceptance
+  context     jsonb,                  -- vendor, number, booking - what was accepted ABOUT
+  accepted_at timestamptz not null default now()
+);
+create index if not exists consent_events_email_idx
+  on public.consent_events (email, accepted_at desc);
+create index if not exists consent_events_kind_idx
+  on public.consent_events (kind, accepted_at desc);
+alter table public.consent_events enable row level security;

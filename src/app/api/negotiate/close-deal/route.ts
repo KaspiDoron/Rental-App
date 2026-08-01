@@ -6,13 +6,15 @@ import { sendFromUser, disconnectInstance } from "@/lib/evolution";
 import { sbSelect, sbInsert, sbDelete, sbDeleteReturning } from "@/lib/runtime-config";
 import { cancelSends, clearCancellation } from "@/lib/wa/cancellations";
 import { digitsOnly } from "@/lib/phone";
+import { finishBeforeResponse } from "@/lib/after";
 
 // Close-deal handoff: the traveller confirmed a deal on a card. We (1) send the
 // shop a final closing message via the engine's closing-message node, then (2)
 // DISCONNECT the traveller's WhatsApp so they continue the conversation in
 // their own WhatsApp app - they can reconnect anytime from Profile.
 //
-// Body: { to?, placeId?, pricePerDay?, currency?, fulfillment?, when?, address? }
+// Body: { to?, placeId?, pricePerDay?, currency?, fulfillment?, when?, address?,
+//         dealTermsAccepted? }
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
@@ -42,6 +44,35 @@ export async function POST(req: Request) {
       );
     }
     digits = stored;
+  }
+
+  // THE DEAL-TERMS ACKNOWLEDGEMENT, RECORDED WHERE IT IS MADE.
+  //
+  // The booking sheet's "I understand WheelDeal takes no responsibility for the
+  // vehicle, deposits, accidents or disputes" checkbox gated its own submit
+  // button on the CLIENT and was never sent anywhere - so at the single moment
+  // the traveller commits real money to a stranger with a motorbike, the only
+  // record of the acknowledgement was a React state variable that stopped
+  // existing when the sheet closed.
+  //
+  // The commitment is this route, so the record belongs to this route: it lands
+  // whether the closing message sends, queues or fails, because what is being
+  // recorded is the traveller's acceptance, not the shop's reachability.
+  if (body.dealTermsAccepted === true) {
+    const { recordConsent } = await import("@/lib/consent");
+    await finishBeforeResponse("deal-terms-consent", () =>
+      recordConsent({
+        email: session.email,
+        kind: "deal_terms",
+        context: {
+          vendorId: body.vendorId ?? null,
+          placeId: body.placeId ?? null,
+          pricePerDay: body.pricePerDay ?? null,
+          currency: body.currency ?? null,
+          fulfillment: body.fulfillment ?? null,
+        },
+      })
+    );
   }
 
   // COMMITMENT LOCK: one confirmed deal at a time. If a DIFFERENT shop was

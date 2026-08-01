@@ -258,3 +258,44 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
       "We do not sell your personal data. This Privacy Policy may be updated; material changes require re-acceptance on your next sign-in.",
   },
 ];
+
+// ---- The operator's real name --------------------------------------------------
+//
+// `OPERATOR_NAME` is a placeholder ("the Operator") with a TODO on it, and it is
+// baked into every clause above by template interpolation - so registering an
+// actual legal entity meant a code change and a redeploy, which is exactly the
+// class of key the Key Vault exists to remove. It is the one value in this file
+// that identifies WHO is protected by it, which makes it the one value that most
+// needs to be right at the moment it matters.
+//
+// It resolves like every other owner-settable value: Key Vault first, then the
+// placeholder. Substitution happens at RENDER time rather than by rebuilding the
+// clause bodies, so there is still exactly one copy of the legal text.
+
+/** Escape a literal for use inside a RegExp. */
+function escapeRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Rewrite the placeholder to the configured legal entity.
+ *
+ * Returns the SAME array when there is nothing to change, so a page that has no
+ * configured name pays nothing and renders the exact reviewed text.
+ */
+export function withOperator<T extends { title: string; body: string }>(
+  sections: T[],
+  operator?: string | null
+): T[] {
+  const name = String(operator ?? "").trim();
+  if (!name || name === OPERATOR_NAME) return sections;
+  const rx = new RegExp(escapeRx(OPERATOR_NAME), "g");
+  return sections.map((s) => ({
+    ...s,
+    title: s.title.replace(rx, name),
+    body: s.body.replace(rx, name),
+    ...("summary" in s && typeof (s as { summary?: unknown }).summary === "string"
+      ? { summary: (s as unknown as { summary: string }).summary.replace(rx, name) }
+      : {}),
+  }));
+}

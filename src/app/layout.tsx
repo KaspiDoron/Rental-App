@@ -7,6 +7,7 @@ import { DomTranslator } from "@/components/DomTranslator";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
+import { FirstTouchTerms } from "@/components/FirstTouchTerms";
 import "./globals.css";
 
 // SELF-HOSTED, NOT FETCHED AT RUNTIME.
@@ -186,6 +187,12 @@ export default function RootLayout({
             <DomTranslator />
             <OfflineBanner />
             <TestModeBanner />
+            {/* MANDATORY FIRST TOUCH. Not dismissable, no backdrop tap: the app
+                is behind it until the acceptance is RECORDED with its version,
+                so a terms bump asks again instead of changing the document
+                under everyone silently. Signed-out visitors never see it - the
+                gate is decided server-side in /api/auth/me. */}
+            <FirstTouchTerms />
           </WillAssistantProvider>
         </I18nProvider>
       </body>

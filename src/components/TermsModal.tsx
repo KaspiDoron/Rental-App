@@ -7,13 +7,27 @@ import {
   PRIVACY_SECTIONS,
   TERMS_SECTIONS,
   TERMS_VERSION,
+  withOperator,
 } from "@/lib/legal";
 
 // Terms of Use + Privacy Policy popup, rendered from the single legal source
 // (lib/legal.ts) so it always matches the /terms and /privacy pages. Aggressive
 // zero-liability tone; Israel / Tel Aviv governing law.
-export function TermsModal({ onClose }: { onClose: () => void }) {
+export function TermsModal({
+  onClose,
+  operatorName,
+}: {
+  onClose: () => void;
+  /**
+   * The legal entity from the Key Vault. The clauses interpolate a placeholder
+   * ("the Operator") and the owner sets the real name in Admin -> Keys; the
+   * substitution happens here so there is still one copy of the text.
+   */
+  operatorName?: string;
+}) {
   const [tab, setTab] = useState<"terms" | "privacy">("terms");
+  const terms = withOperator(TERMS_SECTIONS, operatorName);
+  const privacy = withOperator(PRIVACY_SECTIONS, operatorName);
   return (
     <Modal onClose={onClose} center>
       <div className="mb-3 flex gap-2">
@@ -36,9 +50,9 @@ export function TermsModal({ onClose }: { onClose: () => void }) {
       </div>
       <div className="max-h-[60dvh] overflow-y-auto pr-1">
         {tab === "terms" ? (
-          <LegalDoc title="Terms of Use" version={TERMS_VERSION} sections={TERMS_SECTIONS} />
+          <LegalDoc title="Terms of Use" version={TERMS_VERSION} sections={terms} />
         ) : (
-          <LegalDoc title="Privacy Policy" version={TERMS_VERSION} sections={PRIVACY_SECTIONS} />
+          <LegalDoc title="Privacy Policy" version={TERMS_VERSION} sections={privacy} />
         )}
       </div>
       <button onClick={onClose} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">

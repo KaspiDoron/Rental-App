@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getSession, clearSessionCookie } from "@/lib/session";
 import { getUser } from "@/lib/access";
 import { isAllowed } from "@/lib/allowlist";
+import { needsReacceptance, reacceptanceReason } from "@/lib/consent";
+import { TERMS_VERSION } from "@/lib/legal";
+import { getConfig } from "@/lib/runtime-config";
 
 export async function GET() {
   const session = await getSession();
@@ -28,7 +31,17 @@ export async function GET() {
           hasPassword: Boolean(profile.passwordHash),
           stayLabel: profile.stayLabel ?? null,
           stayShareConsent: Boolean(profile.stayShareConsentAt),
+          // WHETHER THE TERMS IN FORCE HAVE BEEN ACCEPTED. The first-touch
+          // modal blocks the app on this, and it is decided here rather than in
+          // the browser: a client that computed it could simply not.
+          termsVersion: profile.termsVersion ?? null,
+          needsTerms: needsReacceptance(profile),
+          termsReason: reacceptanceReason(profile),
         }
       : null,
+    // The document's own version, so the modal can show what is being accepted
+    // and a bump reaches a live client on its next poll.
+    termsVersion: TERMS_VERSION,
+    operatorName: await getConfig("OPERATOR_NAME").catch(() => ""),
   });
 }

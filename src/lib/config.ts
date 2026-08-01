@@ -105,6 +105,11 @@ const KEYS: {
   { name: "PAYPAL_ENV", label: "PayPal environment ('live' | 'sandbox'; blank = live)", scope: "billing", editable: true },
   { name: "ADSENSE_CLIENT", label: "Google AdSense Client (ca-pub-...)", scope: "billing", editable: true },
   { name: "TWITTER_HANDLE", label: "X (Twitter) handle (@wheeldeal)", scope: "auth", editable: true },
+  // The legal entity the Terms, the Privacy Policy and every indemnity clause
+  // protect. It was a placeholder constant with a TODO on it, so registering a
+  // company meant a code change - the one value in the legal text that names
+  // WHO is protected, and the only one that could not be set.
+  { name: "OPERATOR_NAME", label: "Legal entity name in the Terms (e.g. 'WheelDeal Ltd.')", scope: "auth", editable: true },
   { name: "APP_DOMAIN", label: "Public app domain (https://... - drives share links, SEO & sender identity)", scope: "auth", editable: true },
   { name: "TEST_MODE", label: "Test Mode ('on' = flagged testers ride Ultra free + sandbox billing + banner)", scope: "auth", editable: true },
   { name: "SCALE_MODE", label: "Scale Mode ('on' = 3x per-user limits + relaxed polling for high load)", scope: "data", editable: true },

@@ -38,6 +38,13 @@ export interface UserRecord {
   passwordHash?: string;
   mustChangePassword?: boolean;
   termsAcceptedAt?: number;
+  /**
+   * WHICH VERSION they accepted. The column shipped with the schema and nothing
+   * ever wrote it, so a TERMS_VERSION bump changed the document under everyone
+   * with no re-acceptance and no way to say what anyone had agreed to - see
+   * lib/consent.
+   */
+  termsVersion?: string;
   // The two additional mandatory consents (WhatsApp ban risk + AI responsibility).
   waRiskAcceptedAt?: number;
   aiResponsibilityAcceptedAt?: number;
@@ -105,6 +112,7 @@ interface UserRow {
   password_hash: string | null;
   must_change_password: boolean | null;
   terms_accepted_at: string | null;
+  terms_version: string | null;
   wa_risk_accepted_at: string | null;
   ai_responsibility_accepted_at: string | null;
   stay_label: string | null;
@@ -128,6 +136,7 @@ function fromRow(r: UserRow): UserRecord {
     passwordHash: r.password_hash ?? undefined,
     mustChangePassword: Boolean(r.must_change_password),
     termsAcceptedAt: r.terms_accepted_at ? Date.parse(r.terms_accepted_at) : undefined,
+    termsVersion: r.terms_version ?? undefined,
     waRiskAcceptedAt: r.wa_risk_accepted_at ? Date.parse(r.wa_risk_accepted_at) : undefined,
     aiResponsibilityAcceptedAt: r.ai_responsibility_accepted_at
       ? Date.parse(r.ai_responsibility_accepted_at)

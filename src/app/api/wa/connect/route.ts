@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { connectInstance, evolutionConfigured } from "@/lib/evolution";
 import { requestOrigin } from "@/lib/request-origin";
+import { finishBeforeResponse } from "@/lib/after";
 
 // Start (or resume) the signed-in user's personal WhatsApp session: creates
 // the Evolution instance and returns a QR code to scan from the Profile page.
@@ -53,6 +54,30 @@ export async function POST(req: Request) {
   const result = await connectInstance(session.email, origin, phone, {
     fresh: body.fresh === true,
   });
+
+  // PER LINKING EVENT, not once at signup. The WhatsApp release (WaTermsModal)
+  // is the heaviest document in the product - it is the one that says the user
+  // may lose their number - and it was a modal you closed. Nothing recorded
+  // that anyone had seen it, for any link, ever.
+  //
+  // A link request IS the acceptance: the release is on screen and the UI does
+  // not offer this button without it. Recorded here rather than from the
+  // browser so the proof does not depend on a client call that can simply not
+  // be made. `fresh` retries re-issue a code on the same instance and are not
+  // new acceptances.
+  if (body.fresh !== true) {
+    const { recordConsent } = await import("@/lib/consent");
+    await finishBeforeResponse("wa-link-consent", () =>
+      recordConsent({
+        email: session.email,
+        kind: "wa_link",
+        // The number that carries the risk. Last four only - the full number is
+        // already on the user row and a ledger does not need a second copy.
+        context: { phoneTail: String(phone ?? "").slice(-4) || null },
+      })
+    );
+  }
+
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }
 

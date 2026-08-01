@@ -222,6 +222,11 @@ export function BookingSheet({
           fulfillment: HANDOVER_TO_FULFILLMENT[fulfillment],
           when: `${pickupDate} around ${time}`,
           address: fulfillment !== "in-store" ? address.trim() : undefined,
+          // THE ACKNOWLEDGEMENT TRAVELS WITH THE COMMITMENT. This checkbox
+          // gated the submit button and went no further, so the one moment the
+          // traveller accepts that the vehicle, the deposit and the dispute are
+          // theirs left no record at all. The server writes the consent row.
+          dealTermsAccepted: dealTerms,
         }),
       });
       const d = await res.json();

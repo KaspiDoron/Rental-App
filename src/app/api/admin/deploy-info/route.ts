@@ -54,18 +54,28 @@ export async function GET() {
   // Each of these is a fix whose behaviour silently degrades to the pre-fix
   // state if the column is missing, which is the least debuggable failure this
   // app has.
-  const [claims, outboxKey, searchRfq, consents, wakeups] = await Promise.all([
-    probe("wa_send_claims", "sender_key"),
-    probe("wa_outbox", "to_key"),
-    probe("searches", "rfq,snapshot"),
-    probe("app_users", "wa_risk_accepted_at,ai_responsibility_accepted_at"),
-    probe("graph_wakeups", "id,not_before"),
-  ]);
+  const [claims, outboxKey, searchRfq, consents, termsVersion, ledger, wakeups] =
+    await Promise.all([
+      probe("wa_send_claims", "sender_key"),
+      probe("wa_outbox", "to_key"),
+      probe("searches", "rfq,snapshot"),
+      probe("app_users", "wa_risk_accepted_at,ai_responsibility_accepted_at"),
+      // Without this column a TERMS_VERSION bump asks nobody to re-accept, and
+      // no user record can say WHICH version they agreed to - the exact silent
+      // degradation this whole probe list exists to catch.
+      probe("app_users", "terms_version"),
+      // The per-event ledger: WhatsApp linking releases and booking-time deal
+      // terms. Missing = those acceptances are written nowhere at all.
+      probe("consent_events", "email,kind,version"),
+      probe("graph_wakeups", "id,not_before"),
+    ]);
   const schema = {
     wa_send_claims: claims, // send mutex + idempotency; missing = locks fail open
     "wa_outbox.to_key": outboxKey, // one pending row per shop across spellings
     "searches.rfq/snapshot": searchRfq, // full session restore after an app kill
     "app_users consents": consents, // durable proof of the two extra consents
+    "app_users.terms_version": termsVersion, // re-acceptance on a version bump
+    consent_events: ledger, // per-event proof: WhatsApp linking + deal terms
     graph_wakeups: wakeups, // every scheduled follow-up lives here
   };
 
