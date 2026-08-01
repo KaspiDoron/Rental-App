@@ -237,6 +237,8 @@ export default function Home() {
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
+  /** A shop a push asked us to open, held until the vendor list is restored. */
+  const pendingShopRef = useRef<string | null>(null);
   // The shop asked where the traveller is - the sheet that lets them choose
   // what to answer. Nothing is shared until they pick.
   const [locationAskFor, setLocationAskFor] = useState<Vendor | null>(null);
@@ -319,6 +321,23 @@ export default function Home() {
   // highlight it, and smooth-scroll it into view. The list is WINDOWED
   // (visibleCount) - a card beyond the window has no DOM node, so the window
   // must grow past the target first or the tap silently does nothing.
+  // CONSUME THE PUSH'S DESTINATION once the hunt is actually on screen. The
+  // vendor list arrives asynchronously (session restore, then the activity
+  // poll), so the id a notification carried is held in a ref until there is
+  // something to open - then used exactly once.
+  useEffect(() => {
+    const want = pendingShopRef.current;
+    if (!want || vendors.length === 0) return;
+    const target =
+      vendors.find((v) => v.id === want) ||
+      vendors.find((v) => digitsOnly(v.whatsapp ?? "").endsWith(digitsOnly(want).slice(-8)));
+    if (!target) return;
+    pendingShopRef.current = null;
+    scrollToVendor(target.id);
+    setDashboardFor(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendors]);
+
   function scrollToVendor(id: string) {
     setView("list");
     setSelectedId(id);
@@ -596,6 +615,19 @@ export default function Home() {
     // Deep link from Will's edge companion (?will=1): open his chat directly.
     if (params.get("will") === "1") {
       setWillOpen(true);
+      window.history.replaceState({}, "", "/");
+    }
+    // A PUSH NOW HAS SOMEWHERE TO GO.
+    //
+    // Every notification the app sent pointed at "/", so tapping "New price"
+    // after iOS had evicted the app landed on a cold home screen with the
+    // thread nowhere in sight - the traveller had to find the shop themselves,
+    // which is the moment they stop trusting the alerts. The shop id (or its
+    // number, from the ingest buzz) is remembered here and consumed once the
+    // vendor list exists, since the restore is asynchronous.
+    const deepShop = params.get("shop") || params.get("from");
+    if (deepShop) {
+      pendingShopRef.current = deepShop;
       window.history.replaceState({}, "", "/");
     }
     // Returning from PayPal Checkout.

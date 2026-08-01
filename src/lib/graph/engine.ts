@@ -1,4 +1,5 @@
 import { outboxKey } from "../wa/phone-key";
+import { finishBeforeResponse } from "../after";
 // The digraph execution engine - one serverless invocation per event.
 //
 //   sense (transcribe -> extract -> coherence -> comparator)
@@ -748,15 +749,33 @@ export async function runGraphTurn(
           })
           .catch(() => {});
       }
-      import("../push")
-        .then((m) =>
-          m.sendPushToUser(input.ctx.sender!, {
-            title: "A shop needs your hotel 🏨",
-            body: `${input.ctx.vendorName ?? "A shop"} asked where to deliver - add your hotel in your profile to keep the deal moving.`,
-            url: "/",
-          })
-        )
-        .catch(() => {});
+      // THROUGH THE GATE, LIKE EVERY OTHER PUSH.
+      //
+      // This one went straight to the push service: no significance check, no
+      // budget spend, no markPushSent. So a thread that kept landing on this
+      // transition buzzed the traveller every single time, uncounted against
+      // the per-window ceiling that makes the other pushes bearable - and the
+      // ceiling itself was understated by exactly these sends.
+      //
+      // Awaited for the same reason as the others: a detached promise here does
+      // not "finish in the background" on Cloud Run, it stops.
+      await finishBeforeResponse("location-push", async () => {
+        const { worthAnInterruption } = await import("../notify/significance");
+        const { notifyState, markPushSent } = await import("../notify/state");
+        const gate = worthAnInterruption(
+          { kind: "agent-blocked" },
+          await notifyState(input.ctx.sender!)
+        );
+        if (!gate.notify) return;
+        const { sendPushToUser } = await import("../push");
+        await sendPushToUser(input.ctx.sender!, {
+          title: "A shop needs your hotel 🏨",
+          body: `${input.ctx.vendorName ?? "A shop"} asked where to deliver - add your hotel in your profile to keep the deal moving.`,
+          url: "/profile",
+          tag: `location:${input.ctx.vendorId ?? "shop"}`,
+        });
+        await markPushSent(input.ctx.sender!, "awaiting-location");
+      });
     }
     push({
       stage: node.kind,

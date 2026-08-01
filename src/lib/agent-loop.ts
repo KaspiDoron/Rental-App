@@ -15,6 +15,7 @@
 
 import "server-only";
 import { sbInsert, sbSelect, sbUpdate } from "./runtime-config";
+import { finishBeforeResponse } from "./after";
 import { extractOffer, composeBargain, runSafety, currencyForRegion, money } from "./agents";
 import {
   checkOutboundNumbers,
@@ -511,7 +512,7 @@ export async function processVendorReply(opts: {
   // upstream can mislabel it inbound) must not be screened as "the shop's
   // reply" - anything matching our recent outbound to this number is skipped.
   if (ctx.sender && text) {
-    void (async () => {
+    await finishBeforeResponse("risk-screen", async () => {
       try {
         const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
         const ours = await sbSelect<{ body: string }>(
@@ -559,7 +560,7 @@ export async function processVendorReply(opts: {
         await sendPushToUser(ctx.sender!, {
           title: verdict.risk === "high" ? "⚠️ Check this reply" : "Heads up on a reply",
           body: `${ctx.vendorName || "A shop"}: ${verdict.reasons[0] ?? "review this message before acting"}`,
-          url: "/",
+          url: ctx.vendorId ? `/?shop=${encodeURIComponent(ctx.vendorId)}` : "/",
           // ITS OWN LANE. A safety warning must never be collapsed away by an
           // ordinary reply push (the shared default tag did exactly that), and
           // it must not silently replace one either.
@@ -569,7 +570,7 @@ export async function processVendorReply(opts: {
       } catch {
         /* screening is best-effort */
       }
-    })();
+    });
   }
 
   const extraction =
@@ -1192,7 +1193,7 @@ export async function processVendorReply(opts: {
   // moment the hunt comes alive - and everything else stays in the app, where
   // it is still perfectly visible.
   if (ctx.sender) {
-    void (async () => {
+    await finishBeforeResponse("reply-push", async () => {
       try {
         const { classifyReply, worthAnInterruption } = await import("./notify/significance");
         const { notifyState, markPushSent } = await import("./notify/state");
@@ -1222,7 +1223,11 @@ export async function processVendorReply(opts: {
           {
             title: usablePrice ? "New price 💰" : "Your hunt is live 🛵",
             body,
-            url: "/",
+            // A DESTINATION, NOT JUST A BUZZ. Every push in the app pointed at
+            // "/" - so a tap after the app had been killed landed on a cold
+            // home screen with the thread nowhere in sight. The id is enough
+            // for the app to restore the hunt and open this shop.
+            url: ctx.vendorId ? `/?shop=${encodeURIComponent(ctx.vendorId)}` : "/",
             // SAME TAG AS THE INGEST BUZZ. This push is an UPGRADE of "the shop
             // replied" that already fired the moment the message landed, so it
             // must replace it on the lock screen instead of adding a second
@@ -1235,7 +1240,7 @@ export async function processVendorReply(opts: {
       } catch {
         /* a notification is never worth breaking the reply loop for */
       }
-    })();
+    });
   }
 
   // INBOUND GLOSS (fire-and-forget): translate a local-language shop reply to
@@ -1244,7 +1249,7 @@ export async function processVendorReply(opts: {
   // The traveller must always understand the conversation their agent is
   // having - that IS the product.
   if (ctx.sender && text) {
-    void (async () => {
+    await finishBeforeResponse("inbound-gloss", async () => {
       try {
         const { translateToEnglish } = await import("./agents");
         const english = await translateToEnglish(text);
@@ -1275,7 +1280,7 @@ export async function processVendorReply(opts: {
       } catch {
         /* gloss is an enhancement - never blocks the loop */
       }
-    })();
+    });
   }
 
   // THE READING, STORED BESIDE THE PICTURE IT CAME FROM.

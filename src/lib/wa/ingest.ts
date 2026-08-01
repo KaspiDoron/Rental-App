@@ -31,6 +31,7 @@ import { waDigits, numberFilter, waIdKind, lidKey } from "@/lib/wa/phone-key";
 import { resolveChatIdentity } from "@/lib/wa/lid-alias";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { kickDispatcher } from "@/lib/wa/kick";
+import { finishBeforeResponse } from "@/lib/after";
 import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
 // The region of the last outbound to this shop - primes the voice transcriber
@@ -240,7 +241,7 @@ export async function processEvolutionWebhook(
           // link has dropped and nothing will send or arrive until they
           // re-pair, was the one state that produced silence. A hunt could sit
           // dead for hours behind a phone showing "Alerts on".
-          void (async () => {
+          await finishBeforeResponse("wa-disconnected-push", async () => {
             try {
               const { worthAnInterruption } = await import("@/lib/notify/significance");
               const { notifyState, markPushSent } = await import("@/lib/notify/state");
@@ -259,7 +260,7 @@ export async function processEvolutionWebhook(
             } catch {
               /* a notification never blocks the webhook */
             }
-          })();
+          });
         }
       } catch {
         /* best-effort */
@@ -612,7 +613,7 @@ export async function processEvolutionWebhook(
       // collapse tag, replacing this on the lock screen rather than adding a
       // second buzz.
       if (email) {
-        void (async () => {
+        await finishBeforeResponse("ingest-push", async () => {
           try {
             const body = syntheticText || "";
             const { extractQuotedPrices } = await import("@/lib/wa/price-extract");
@@ -659,7 +660,10 @@ export async function processEvolutionWebhook(
                 : hasAudio
                   ? "Sent a voice note - your agent is listening."
                   : body.slice(0, 120) || "Tap to see the message.",
-              url: "/",
+              // The shop is identified by its number here (the vendor id lives
+              // on the turn, not the raw inbound), and the app resolves it the
+              // same way the thread does.
+              url: `/?from=${encodeURIComponent(from)}`,
               tag: `shop:${from}`,
             });
             // SPEND THE BUDGET. This site used to skip `markPushSent` on the
@@ -687,7 +691,7 @@ export async function processEvolutionWebhook(
           } catch {
             /* a notification never blocks ingest */
           }
-        })();
+        });
       }
 
       // A real inbound proves the socket is live: persist "open" durably.

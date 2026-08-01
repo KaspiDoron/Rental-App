@@ -30,14 +30,24 @@ describe("the notification fires when the message LANDS, not when the agent fini
   });
 
   it("it never blocks or breaks ingest", () => {
-    // Fire-and-forget inside its own try: a push service having a bad minute
-    // must not cost us the webhook (Evolution retries a non-2xx, which would
-    // re-deliver the whole batch).
-    const start = body.lastIndexOf("void (async () => {", body.indexOf("`${shop} replied`"));
+    // A push service having a bad minute must not cost us the webhook
+    // (Evolution retries a non-2xx, which would re-deliver the whole batch).
+    //
+    // This used to be `void (async () => {...})()` - detached, so it could not
+    // block by construction. On Cloud Run that also meant it frequently never
+    // finished: the CPU is throttled to ~0 the moment the response is flushed,
+    // and the push stopped mid-flight. The invariant was never "detached", it
+    // was "cannot hold the webhook open and cannot throw" - which is exactly
+    // what finishBeforeResponse guarantees, while actually completing.
+    const start = body.lastIndexOf('finishBeforeResponse("ingest-push"', body.indexOf("`${shop} replied`"));
     expect(start).toBeGreaterThan(0);
     const block = body.slice(start, body.indexOf("markOpen", start));
     expect(block).toMatch(/sendPushToUser\(email/);
     expect(block).toMatch(/catch \{/);
+    // Bounded: the budget is what stops a hung provider from holding Evolution.
+    expect(readFileSync(join(process.cwd(), "src/lib/after.ts"), "utf8")).toMatch(
+      /AFTER_BUDGET_MS = 8_000/
+    );
   });
 
   it("photos and voice notes say what actually arrived", () => {
