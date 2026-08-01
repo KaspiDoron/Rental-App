@@ -17,6 +17,9 @@ import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 import LocationConfig from "@/components/LocationConfig";
 import { AlertsToggle } from "@/components/AlertsToggle";
 import { SiteFooter } from "@/components/SiteFooter";
+import { TabBar } from "@/components/TabBar";
+import { FeedbackModal } from "@/components/FeedbackModal";
+import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { CURRENCIES, savedCurrency, setSavedCurrency, moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 
@@ -232,6 +235,8 @@ export default function ProfilePage() {
   }
 
   const isOwner = session?.role === "owner";
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const isMgmt = session && session.role !== "user";
 
   return (
@@ -798,6 +803,25 @@ export default function ProfilePage() {
 
       {/* Will follows the journey - one tap back to the workspace chat */}
       {/* Floating Will widget removed (R4) - Will guides inline on the funnel. */}
+
+      {feedbackOpen && <FeedbackModal email={session?.email} onClose={() => setFeedbackOpen(false)} />}
+      {upgradeOpen && <UpgradeSheet onClose={() => setUpgradeOpen(false)} />}
+
+      {/* THE ONE SCREEN WITH NO WAY OUT. Home and Trips both mount the global
+          nav; Profile reserved `pb-32` for a bar it never rendered, so the
+          traveller who tapped Profile had the browser back button and nothing
+          else - on a standalone PWA, where there is no browser chrome, that is
+          a dead end. */}
+      <TabBar
+        active="profile"
+        onSelect={(tab) => {
+          if (tab === "home") window.location.href = "/";
+          else if (tab === "deals") window.location.href = "/deals";
+        }}
+        onFeedback={() => setFeedbackOpen(true)}
+        onUpgrade={() => setUpgradeOpen(true)}
+        showUpgrade={!upgradeOpen && (session?.plan ?? "free") === "free"}
+      />
     </main>
   );
 }

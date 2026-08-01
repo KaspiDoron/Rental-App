@@ -19,6 +19,7 @@ import { OptionList } from "./OptionList";
 import { ShopAvatar } from "./ShopAvatar";
 import { vehicleStance } from "@/lib/offer-presentation";
 import { parseDeposit } from "@/lib/deposit";
+import { agentBusyLabel } from "@/lib/client/agent-busy";
 
 // A rental-shop card. Prices are NEVER invented - we first ask the shop, and
 // only its real reply produces a price. Everything happens INSIDE the app:
@@ -92,7 +93,7 @@ function VendorCardInner({
    * RFQ button twenty lines below it - and two taps queued two pushes at
    * one shop, with only the server's 3-minute window in the way.
    */
-  agentPending?: { count: number; sending: boolean };
+  agentPending?: { count: number; sending: boolean; own?: boolean };
 }) {
   const { t } = useI18n();
   const [chatOpen, setChatOpen] = useState(false);
@@ -860,7 +861,7 @@ function VendorCardInner({
                   aria-disabled={agentBusy}
                   className="btn btn-primary flex-1 rounded-2xl px-3 py-2.5 text-sm disabled:opacity-60"
                 >
-                  {agentBusy ? `🤖 ${t("Your agent is on it")}` : `🔎 ${t("Ask for the right vehicle")}`}
+                  {agentBusy ? agentBusyLabel(agentPending, t) : `🔎 ${t("Ask for the right vehicle")}`}
                 </button>
               ) : (
                 <>
@@ -886,9 +887,7 @@ function VendorCardInner({
                           : "border-brandred/30 bg-brandred-soft text-brandred"
                       }`}
                     >
-                      {agentBusy
-                        ? `🤖 ${agentPending?.sending ? t("Sending now") : t("Your agent is on it")}`
-                        : `🥊 ${t("Bargain")}`}
+                      {agentBusy ? agentBusyLabel(agentPending, t) : `🥊 ${t("Bargain")}`}
                     </button>
                   )}
                 </>

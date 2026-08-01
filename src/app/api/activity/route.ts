@@ -525,18 +525,36 @@ export async function GET(req: Request) {
   // So the agent's own rows are rolled up per vendor - a count and the fact of
   // it, never the drafted text (that is the conversation's, and the queue
   // payload is not where it belongs).
-  const agentPending: Record<string, { count: number; sending: boolean }> = {};
+  //
+  // REPRODUCTION OF THE HOLE: this loop reused INTRO_KINDS, which contains
+  // "custom" - and "custom" is exactly what an EDITED bargain draft is queued
+  // as (BargainDraftModal: `kind: edited ? "custom" : "bargain"`). So the one
+  // path where the traveller had just written a message by hand was the one
+  // path the lock could not see: row queued, button still live, second tap
+  // stacks a second message at the same shop. The queue PANEL keeps its own
+  // INTRO_KINDS filter (a different question - "are my introductions going
+  // out?"); busy-ness is its own set.
+  //
+  // What counts as busy: anything in flight to this shop that is not the cold
+  // introduction. `human-manual` is excluded because it mirrors a message the
+  // traveller already sent from WhatsApp itself - it is a record, not a send
+  // we are about to make. A row with no kind is legacy and stays excluded.
+  const NOT_BUSY_KINDS = new Set(["rfq", "human-manual"]);
+  const agentPending: Record<string, { count: number; sending: boolean; own: boolean }> = {};
   for (const r of outbox) {
     const meta = r.meta as { vendorId?: string; kind?: string } | null;
     const kind = meta?.kind;
-    if (!kind || INTRO_KINDS.has(kind)) continue;
+    if (!kind || NOT_BUSY_KINDS.has(kind)) continue;
     if (cancelledSet.has(r.to_number)) continue;
     const id = meta?.vendorId;
     if (!id) continue;
-    const prev = agentPending[id] ?? { count: 0, sending: false };
+    const prev = agentPending[id] ?? { count: 0, sending: false, own: false };
     agentPending[id] = {
       count: prev.count + 1,
       sending: prev.sending || outboxState(r.not_before, meta, now) === "sending",
+      // Whose message is holding the shop. "Your agent is on it" is a lie when
+      // the queued row is the traveller's own hand-edited text.
+      own: prev.own || kind === "custom",
     };
   }
 

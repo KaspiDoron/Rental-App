@@ -17,6 +17,7 @@ import { ShopPhoto } from "./ShopPhoto";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { MessageBubble, type ThreadMsg } from "./MessageBubble";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
+import { agentBusyLabel } from "@/lib/client/agent-busy";
 
 type Msg = ThreadMsg;
 interface Delivery {
@@ -34,6 +35,14 @@ export interface ThreadDashboardProps {
   rfq: StructuredRFQ | null;
   searchEpoch?: number;
   queueItem?: { etaFrom?: string; etaTo?: string; reason: string; due: boolean } | null;
+  /**
+   * Server truth (activity poll) about what the agent already has in flight
+   * with THIS shop. Same prop, same meaning and same source as VendorCard's -
+   * the lock was implemented on the card and this panel has its own Bargain
+   * button, so the traveller could stack a second push simply by opening the
+   * thread first. A guarantee that holds on one of two buttons is not one.
+   */
+  agentPending?: { count: number; sending: boolean; own?: boolean };
   whyDecisionId?: string;
   onClose: () => void;
   onBook: (v: Vendor) => void;
@@ -50,6 +59,7 @@ export function ThreadDashboard({
   rfq,
   searchEpoch,
   queueItem,
+  agentPending,
   whyDecisionId,
   onClose,
   onBook,
@@ -58,6 +68,8 @@ export function ThreadDashboard({
   onWhy,
 }: ThreadDashboardProps) {
   const { t } = useI18n();
+  // The F9 lock, second half. See the prop's comment.
+  const agentBusy = (agentPending?.count ?? 0) > 0;
   const [mounted, setMounted] = useState(false);
   const [messages, setMessages] = useState<Msg[] | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
@@ -82,21 +94,35 @@ export function ThreadDashboard({
   useEffect(() => {
     if (!vendor.id) return;
     let alive = true;
+    // OVERLAPPING POLLS ARRIVE OUT OF ORDER. The interval fires every 5s and
+    // never cared whether the previous request had come back; on a slow
+    // connection two are in flight at once and the OLDER response can land
+    // last, rewinding the transcript to a state the traveller already scrolled
+    // past. Each tick aborts the one before it, so the newest read always wins
+    // and a stalled request cannot hold a socket for the life of the panel.
+    let inFlight: AbortController | null = null;
     const load = () => {
+      inFlight?.abort();
+      const ctl = new AbortController();
+      inFlight = ctl;
       const q = new URLSearchParams({ vendorId: vendor.id!, full: "1" });
       if (searchEpoch) q.set("since", String(searchEpoch));
       // Cache-bust: a Safari / Cloud Run intermediary caching this GET froze the
       // transcript on the first snapshot (the "app out of sync with WhatsApp"
       // report). no-store + a per-tick token guarantees a fresh read each poll.
       q.set("t", String(Date.now()));
-      fetch(`/api/thread?${q.toString()}`, { cache: "no-store" })
+      fetch(`/api/thread?${q.toString()}`, { cache: "no-store", signal: ctl.signal })
         .then((r) => r.json())
         .then((d) => {
-          if (!alive) return;
+          if (!alive || ctl.signal.aborted) return;
           setMessages(Array.isArray(d.messages) ? d.messages : []);
           setDelivery(d.delivery ?? null);
         })
-        .catch(() => alive && setMessages([]));
+        // An abort is this component replacing its own request, never a
+        // failure - blanking the transcript for it would be the bug it fixes.
+        .catch((e) => {
+          if (alive && (e as { name?: string })?.name !== "AbortError") setMessages([]);
+        });
     };
     load();
     const id = setInterval(() => !document.hidden && load(), 5000);
@@ -107,6 +133,7 @@ export function ThreadDashboard({
     return () => {
       alive = false;
       clearInterval(id);
+      inFlight?.abort();
     };
   }, [vendor.id, searchEpoch]);
 
@@ -345,10 +372,20 @@ export function ThreadDashboard({
           </button>
         ) : null}
         <button
-          onClick={() => onBargain(vendor)}
-          className="btn flex-1 rounded-2xl border-2 border-brandred py-2.5 text-sm font-extrabold text-brandred"
+          onClick={() => {
+            if (agentBusy) return;
+            onBargain(vendor);
+          }}
+          disabled={agentBusy}
+          aria-disabled={agentBusy}
+          title={agentBusy ? t("Agents are currently negotiating with this shop") : undefined}
+          className={`btn flex-1 rounded-2xl border-2 py-2.5 text-sm font-extrabold ${
+            agentBusy
+              ? "cursor-not-allowed border-line text-muted opacity-60"
+              : "border-brandred text-brandred"
+          }`}
         >
-          🥊 {t("Bargain")}
+          {agentBusy ? agentBusyLabel(agentPending, t) : `🥊 ${t("Bargain")}`}
         </button>
       </div>
 

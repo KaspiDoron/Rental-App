@@ -616,6 +616,8 @@ export const I18N_CATALOG: string[] = [
   "Your WhatsApp, your agent",
   "Your agent is confirming exactly which model this price is for.",
   "Your agent is on it",
+  "Your message is going out",
+  "Agents are currently negotiating with this shop",
   "Your agent is still confirming the deposit and how you get the vehicle.",
   "Your agents bargain from your own number, so shops talk to a real traveller - and every reply lands back here.",
   "Your chats stay private: we only ever read the rental-shop threads you open through WheelDeal, never your personal conversations.",

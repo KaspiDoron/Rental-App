@@ -233,7 +233,7 @@ export default function Home() {
   // part of the conversation, not of the "your messages are going out" panel),
   // so until this rollup the client could not see agent activity at all and
   // the Bargain button had nothing to gate on.
-  const [agentPending, setAgentPending] = useState<Record<string, { count: number; sending: boolean }>>({});
+  const [agentPending, setAgentPending] = useState<Record<string, { count: number; sending: boolean; own?: boolean }>>({});
   const [whyDecision, setWhyDecision] = useState<string | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<{ id: string; name: string } | null>(null);
   const [dashboardFor, setDashboardFor] = useState<Vendor | null>(null);
@@ -876,7 +876,7 @@ export default function Home() {
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
       setAgentPending(
         d.agentPending && typeof d.agentPending === "object"
-          ? (d.agentPending as Record<string, { count: number; sending: boolean }>)
+          ? (d.agentPending as Record<string, { count: number; sending: boolean; own?: boolean }>)
           : {}
       );
       // AUTHORITATIVE per-vendor conversation state (messaged / active / offer)
@@ -3518,6 +3518,7 @@ export default function Home() {
             const q = queueItems.find((it) => it.vendorId === dashboardFor.id);
             return q ? { etaFrom: q.etaFrom, etaTo: q.etaTo, reason: q.reason, due: q.due } : null;
           })()}
+          agentPending={agentPending[dashboardFor.id]}
           whyDecisionId={whyByVendor[dashboardFor.id]}
           onClose={() => setDashboardFor(null)}
           onBook={setBookingVendor}

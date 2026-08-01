@@ -21,12 +21,15 @@ const readCode = (p: string) =>
 // agent was already mid-sentence with that shop.
 
 const card = readCode("src/components/VendorCard.tsx");
+const panel = readCode("src/components/ThreadDashboard.tsx");
 const activity = readCode("src/app/api/activity/route.ts");
 const page = readCode("src/app/page.tsx");
 
 describe("the client can finally see the agent working", () => {
   it("the route rolls agent rows up per vendor, beside the intro queue", () => {
-    expect(activity).toMatch(/const agentPending: Record<string, \{ count: number; sending: boolean \}>/);
+    expect(activity).toMatch(
+      /const agentPending: Record<string, \{ count: number; sending: boolean; own: boolean \}>/
+    );
     expect(activity).toMatch(/\n    agentPending,/); // it reaches the response body
   });
 
@@ -35,10 +38,23 @@ describe("the client can finally see the agent working", () => {
     expect(block).toMatch(/outboxState\(r\.not_before, meta, now\) === "sending"/);
   });
 
-  it("it excludes intro kinds and removed shops - it is the agent's lane only", () => {
-    const block = activity.slice(activity.indexOf("const agentPending"), activity.indexOf("let waHealth"));
-    expect(block).toMatch(/if \(!kind \|\| INTRO_KINDS\.has\(kind\)\) continue;/);
+  it("REPRODUCTION: an EDITED bargain draft counts as busy - it did not", () => {
+    // The rollup reused INTRO_KINDS, which contains "custom" - and "custom" is
+    // exactly what BargainDraftModal queues a hand-edited draft as. So the one
+    // path where the traveller had just written the message by hand was the one
+    // the lock could not see, and a second tap stacked a second message.
+    const block = activity.slice(activity.indexOf("const NOT_BUSY_KINDS"), activity.indexOf("let waHealth"));
+    expect(block).toMatch(/const NOT_BUSY_KINDS = new Set\(\["rfq", "human-manual"\]\);/);
+    expect(block).toMatch(/if \(!kind \|\| NOT_BUSY_KINDS\.has\(kind\)\) continue;/);
+    expect(block).not.toMatch(/INTRO_KINDS/);
     expect(block).toMatch(/if \(cancelledSet\.has\(r\.to_number\)\) continue;/);
+    // ...and the QUEUE panel keeps its own filter: a different question.
+    expect(activity).toMatch(/const INTRO_KINDS = new Set\(\["rfq", "custom", "human-manual"\]\);/);
+  });
+
+  it("and it says WHOSE message is holding the shop", () => {
+    const block = activity.slice(activity.indexOf("const NOT_BUSY_KINDS"), activity.indexOf("let waHealth"));
+    expect(block).toMatch(/own: prev\.own \|\| kind === "custom"/);
   });
 
   it("it carries a COUNT and a state, never the drafted text", () => {
@@ -49,9 +65,10 @@ describe("the client can finally see the agent working", () => {
     expect(block).not.toMatch(/\bbody\b/);
   });
 
-  it("the page threads it to the card it gates", () => {
+  it("the page threads it to BOTH surfaces that can bargain", () => {
     expect(page).toMatch(/setAgentPending\(/);
     expect(page).toMatch(/agentPending=\{agentPending\[v\.id\]\}/);
+    expect(page).toMatch(/agentPending=\{agentPending\[dashboardFor\.id\]\}/);
   });
 });
 
@@ -91,8 +108,7 @@ describe("and the button is gated exactly like the one beside it", () => {
   it("a busy button is disabled, and says why", () => {
     expect(card).toMatch(/disabled=\{agentBusy\}/);
     expect(card).toMatch(/aria-disabled=\{agentBusy\}/);
-    expect(card).toMatch(/Your agent is on it/);
-    expect(card).toMatch(/agentPending\?\.sending \? t\("Sending now"\)/);
+    expect(card).toMatch(/agentBusyLabel\(agentPending, t\)/);
   });
 
   it("busy reads as a STATUS, not as a live red button", () => {
@@ -101,9 +117,42 @@ describe("and the button is gated exactly like the one beside it", () => {
     expect(card).toMatch(/cursor-default border-line bg-card2 text-soft disabled:opacity-100/);
   });
 
+  it("REPRODUCTION: the OTHER Bargain button is gated too", () => {
+    // The lock was written on the card. ThreadDashboard has its own Bargain
+    // button in its sticky action bar, and it was the plain
+    // `onClick={() => onBargain(vendor)}` this suite bans on the card - so
+    // opening the thread first walked straight around the guarantee.
+    expect(panel).toMatch(/const agentBusy = \(agentPending\?\.count \?\? 0\) > 0;/);
+    expect(panel).toMatch(/disabled=\{agentBusy\}/);
+    expect(panel).toMatch(/aria-disabled=\{agentBusy\}/);
+    expect(panel).toMatch(/if \(agentBusy\) return;/);
+    expect(panel).not.toMatch(/onClick=\{\(\) => onBargain\(vendor\)\}/);
+    expect(panel).toMatch(/Agents are currently negotiating with this shop/);
+  });
+
+  it("both buttons say the same thing, from one definition", () => {
+    // Two surfaces drifting apart is how the first hole opened.
+    const shared = readCode("src/lib/client/agent-busy.ts");
+    expect(shared).toMatch(/export function agentBusyLabel/);
+    expect(shared).toMatch(/Your message is going out/);
+    expect(card).toMatch(/agentBusyLabel\(agentPending, t\)/);
+    expect(panel).toMatch(/agentBusyLabel\(agentPending, t\)/);
+  });
+
+  it("the thread poll cannot land an OLD response over a new one", () => {
+    expect(panel).toMatch(/let inFlight: AbortController \| null = null;/);
+    expect(panel).toMatch(/inFlight\?\.abort\(\);/);
+    expect(panel).toMatch(/signal: ctl\.signal/);
+    // An abort is us replacing our own request - blanking the transcript for
+    // it would be the bug it fixes.
+    expect(panel).toMatch(/!== "AbortError"/);
+  });
+
   it("the new copy is translatable", () => {
     const cat = readCode("src/lib/i18n-catalog.ts");
     expect(cat).toMatch(/"Your agent is on it"/);
     expect(cat).toMatch(/"Sending now"/);
+    expect(cat).toMatch(/"Your message is going out"/);
+    expect(cat).toMatch(/"Agents are currently negotiating with this shop"/);
   });
 });
