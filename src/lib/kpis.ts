@@ -55,6 +55,26 @@ export interface FieldKpis {
 
 const sinceIso = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 
+/**
+ * How many distinct CONVERSATIONS a set of agent_events rows covers.
+ *
+ * A thread is one traveller talking to one shop, so the key is the pair. Rows
+ * missing either half are pre-attribution legacy and are counted once, under a
+ * single bucket, rather than dropped - dropping them would understate the
+ * denominator and inflate the rate all over again.
+ */
+export function distinctThreads(
+  rows: { user_email?: string | null; vendor_id?: string | null }[]
+): number {
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const email = (r.user_email ?? "").trim().toLowerCase();
+    const vendor = (r.vendor_id ?? "").trim();
+    seen.add(email && vendor ? `${email}|${vendor}` : "unattributed");
+  }
+  return seen.size;
+}
+
 export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   const since = sinceIso(windowDays);
   const [offers, searches, bookings, takeovers, threads] = await Promise.all([
@@ -64,15 +84,16 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
     ).catch(() => []),
     sbSelect<{ id: number }>("searches", `select=id&created_at=gte.${since}&limit=10000`).catch(() => []),
     sbSelect<{ id: number }>("bookings", `select=id&created_at=gte.${since}&limit=10000`).catch(() => []),
-    sbSelect<{ id: number }>(
+    sbSelect<{ user_email: string | null; vendor_id: string | null }>(
       "agent_events",
-      `select=id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${since}&limit=10000`
+      `select=user_email,vendor_id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${since}&limit=10000`
     ).catch(() => []),
-    // engine-v3-turn events double as the escalation denominator (count) AND
-    // the response-latency source (each carries `latencyMs` on a delivered reply).
-    sbSelect<{ detail: string }>(
+    // engine-v3-turn events are the response-latency source (each carries
+    // `latencyMs` on a delivered reply) AND, once reduced to distinct threads,
+    // the escalation denominator.
+    sbSelect<{ detail: string; user_email: string | null; vendor_id: string | null }>(
       "agent_events",
-      `select=detail&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
+      `select=detail,user_email,vendor_id&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
     ).catch(() => []),
   ]);
 
@@ -80,8 +101,21 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   const conversionPct = searches.length
     ? Number(((bookings.length / searches.length) * 100).toFixed(1))
     : null;
-  const escalationPct = threads.length
-    ? Number(((takeovers.length / threads.length) * 100).toFixed(1))
+  // ESCALATION IS PER CONVERSATION, NOT PER TURN.
+  //
+  // The denominator was the raw count of engine-v3-turn EVENTS - one row per
+  // agent turn - so a thread that ran twelve turns counted twelve times. The
+  // rate was therefore divided by the average conversation length: a product
+  // where one negotiation in five needs a human read as "4% escalation", and
+  // the number that decides whether the agents are trusted to run unattended
+  // was wrong by an order of magnitude, in the flattering direction.
+  //
+  // The numerator has the same shape: a thread a human took over twice is ONE
+  // escalation, not two.
+  const escalated = distinctThreads(takeovers);
+  const conversations = distinctThreads(threads);
+  const escalationPct = conversations
+    ? Number(((escalated / conversations) * 100).toFixed(1))
     : null;
 
   // Response latency p50/p95 from the per-turn stamps (delivered replies only).

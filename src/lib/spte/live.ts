@@ -385,6 +385,22 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   const startedAt = Date.now();
   // ---- pre-send (fallible): build the blackboard context + run the pass ------
   const tc = await buildTurnContext(input, io);
+
+  // WHAT THE LAST MOVE ACHIEVED. The learning update needs the shop's ANSWER,
+  // so it is credited one turn late - the digest still holds the quote the shop
+  // was on before this reply, and the extraction holds the one it just gave.
+  // Best-effort and awaited only because it is a memory write, not a send: it
+  // can never fail the turn (see lib/learning/outcomes).
+  {
+    const { learnFromReply } = await import("../learning/outcomes");
+    const { lastTacticId } = await import("../learning/last-move");
+    await learnFromReply({
+      tacticId: await lastTacticId(input.ctx.sender ?? "", input.event.toDigits),
+      previousQuote: tc.thread.digest.quotedPricePerDay,
+      newQuote: tc.inbound.verified.pricePerDay,
+    }).catch(() => null);
+  }
+
   const outcome = await runTurn(tc); // never throws, never silent on a composable move
 
   // ---- from here we OWN the turn: never throw (would risk a double send) -----

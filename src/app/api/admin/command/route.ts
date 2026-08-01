@@ -132,8 +132,13 @@ export async function GET() {
       detail:
         "The anti-ban engine paused these numbers to prevent a restriction: " +
         paused.slice(0, 3).map((r) => r.sender_key).join(", ") +
-        ". Review in the Agents tab.",
-      href: "agents",
+        ". The per-number detail is on this screen, below.",
+      // THE MOST URGENT ALERT IN THE APP POINTED AT THE WRONG SCREEN. Number
+      // reputation - trust score, pause state, block and read rates - is
+      // rendered on the Command tab; the Agents tab is the orchestrator and has
+      // nothing about WhatsApp numbers at all. So the one tap the owner makes
+      // when a number is auto-paused took them somewhere that could not answer.
+      href: "command",
     });
   }
   // Numbers trending toward risk (low trust) but not yet paused.
@@ -145,7 +150,7 @@ export async function GET() {
       detail:
         "Low trust (lots of outbound, few replies): " +
         lowTrust.slice(0, 3).map((r) => `${r.sender_key} (${r.trust_score})`).join(", "),
-      href: "agents",
+      href: "command",
     });
   }
   // Explicit ban-risk events raised by the engine.
@@ -155,7 +160,7 @@ export async function GET() {
       level: "critical",
       title: `${banEvents.length} ban-risk event${banEvents.length > 1 ? "s" : ""}`,
       detail: banEvents.slice(0, 2).map((e) => e.detail).join(" · "),
-      href: "agents",
+      href: "command",
     });
   }
 

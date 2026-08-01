@@ -208,7 +208,8 @@ export async function GET() {
   const now = Date.now();
   const iso30 = new Date(now - 30 * 60_000).toISOString();
   const iso60 = new Date(now - 60 * 60_000).toISOString();
-  const [outbound60, inbound30, webhookOk30, openSessions] = await Promise.all([
+  const [outbound60, inbound30, webhookOk30, openSessions, lastPing, queued, turns60, pushes24] =
+    await Promise.all([
     sbSelect<{ id: number }>(
       "whatsapp_messages",
       `select=id&direction=eq.outbound&received_at=gte.${encodeURIComponent(iso60)}&limit=1`
@@ -227,6 +228,35 @@ export async function GET() {
       "wa_sessions",
       `select=email&status=eq.open&limit=1`
     ).catch(() => []),
+    // THE WATCHDOG'S WATCHDOG. Nothing drains the outbox or fires a scheduled
+    // follow-up unless something pings, and for a long time nothing did - the
+    // scheduler was never provisioned and the failure was completely silent
+    // because every surface only ever showed what HAD happened. The last ping's
+    // age is the one number that says whether the machinery is alive at all.
+    sbSelect<{ created_at: string }>(
+      "agent_events",
+      "select=created_at&kind=eq.cron-ping&order=created_at.desc&limit=1"
+    ).catch(() => []),
+    // QUEUE DEPTH: how many sends are waiting, and how long the oldest has been.
+    sbSelect<{ not_before: string }>(
+      "wa_outbox",
+      "select=not_before&order=not_before.asc&limit=500"
+    ).catch(() => []),
+    // Per-turn stamps: latency percentiles and which provider actually answered.
+    sbSelect<{ detail: string }>(
+      "agent_events",
+      `select=detail&kind=eq.engine-v3-turn&created_at=gte.${encodeURIComponent(
+        iso60
+      )}&order=created_at.desc&limit=500`
+    ).catch(() => []),
+    // Push breadcrumbs - a notification that was composed but never delivered
+    // leaves a trail nobody was reading.
+    sbSelect<{ kind: string }>(
+      "agent_events",
+      `select=kind&kind=in.(push-sent,push-failed,push-skipped)&created_at=gte.${encodeURIComponent(
+        new Date(now - 24 * 3600_000).toISOString()
+      )}&limit=2000`
+    ).catch(() => []),
   ]);
   const webhookSilent =
     outbound60.length > 0 &&
@@ -234,11 +264,23 @@ export async function GET() {
     webhookOk30.length === 0 &&
     openSessions.length > 0;
 
+  // ---- the numbers the owner needs to see WITHOUT reading a log ------------
+  const { pulse, queueDepth, turnLatency, providerErrors, pushBreadcrumbs } = await import(
+    "@/lib/ops/vitals"
+  );
+
   return NextResponse.json({
     services,
     guardCounters,
     webhookSilent,
     webhookLastAcceptedAt: webhookOk30[0]?.created_at ?? null,
+    // The cron watchdog. "never" and "stale" are different failures with
+    // different fixes, and the tile says which - see lib/ops/vitals.
+    heartbeat: pulse(lastPing[0]?.created_at ?? null, now),
+    queue: queueDepth(queued, now),
+    turnLatencyMs: turnLatency(turns60),
+    providerErrors: providerErrors(turns60),
+    push24h: pushBreadcrumbs(pushes24),
     checkedAt: new Date().toISOString(),
   });
 }

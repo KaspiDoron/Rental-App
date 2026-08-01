@@ -7,6 +7,17 @@
 import { useEffect, useRef, useState } from "react";
 import { LoadingDots } from "./LoadingDots";
 
+interface Vitals {
+  heartbeat: { state: "beating" | "stale" | "never"; ageMs: number | null; action: string | null };
+  queue: { waiting: number; overdue: number; oldestOverdueMs: number | null };
+  turnLatencyMs: { p50: number | null; p95: number | null; samples: number };
+  providerErrors: { degraded: number; total: number; reasons: { reason: string; count: number }[] };
+  push24h: { sent: number; failed: number; skipped: number; failureRate: number | null };
+}
+
+const agoMins = (ms: number | null | undefined) =>
+  typeof ms === "number" ? `${Math.round(ms / 60_000)}m` : "-";
+
 interface ServiceHealth {
   id: string;
   label: string;
@@ -29,6 +40,10 @@ export function HealthPanel() {
   const [guardCounters, setGuardCounters] = useState<Record<string, number> | null>(null);
   const [webhookSilent, setWebhookSilent] = useState(false);
   const [webhookLastAt, setWebhookLastAt] = useState<string | null>(null);
+  // THE VITALS, not just the roll call. A services list can be all-green while
+  // nothing is draining the queue and no provider is answering - both of which
+  // took the product down in the field and were invisible on every screen.
+  const [vitals, setVitals] = useState<Vitals | null>(null);
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [busy, setBusy] = useState(false);
   const [nextInS, setNextInS] = useState(REFRESH_MS / 1000);
@@ -46,6 +61,17 @@ export function HealthPanel() {
       if (d.guardCounters) setGuardCounters(d.guardCounters);
       setWebhookSilent(Boolean(d.webhookSilent));
       setWebhookLastAt(typeof d.webhookLastAcceptedAt === "string" ? d.webhookLastAcceptedAt : null);
+      setVitals(
+        d.heartbeat
+          ? {
+              heartbeat: d.heartbeat,
+              queue: d.queue,
+              turnLatencyMs: d.turnLatencyMs,
+              providerErrors: d.providerErrors,
+              push24h: d.push24h,
+            }
+          : null
+      );
     } catch {
       /* keep the last snapshot */
     } finally {
@@ -174,6 +200,78 @@ export function HealthPanel() {
                   {k}: {n}
                 </span>
               ))}
+          </div>
+        </div>
+      )}
+      {vitals && (
+        <div className="mt-2 space-y-2">
+          {/* THE WATCHDOG. Nothing drains the outbox or fires a scheduled
+              follow-up unless something pings, and for a long time nothing did -
+              silently, because every surface only showed what HAD happened.
+              "never" and "stale" are different failures with different fixes,
+              so the tile says which and what to do about it. */}
+          <div
+            className={`rounded-2xl border-2 p-2.5 text-[11px] font-bold ${
+              vitals.heartbeat.state === "beating"
+                ? "border-savings bg-savings-soft text-savings"
+                : "border-brandred bg-brandred-soft text-brandred"
+            }`}
+          >
+            <div className="font-extrabold">
+              Heartbeat:{" "}
+              {vitals.heartbeat.state === "beating"
+                ? `beating (last ping ${agoMins(vitals.heartbeat.ageMs)} ago)`
+                : vitals.heartbeat.state === "never"
+                  ? "NEVER - nothing has ever pinged the drain"
+                  : `STALE - last ping ${agoMins(vitals.heartbeat.ageMs)} ago`}
+            </div>
+            {vitals.heartbeat.action && (
+              <p className="mt-1 leading-snug">{vitals.heartbeat.action}</p>
+            )}
+          </div>
+
+          <div className="rounded-2xl bg-card2 p-2.5">
+            <div className="text-[11px] font-extrabold text-strong">Live vitals</div>
+            <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-bold">
+              {/* A deep queue is not a problem - the pacing spreads a batch on
+                  purpose. A queue of rows whose time has PASSED is. */}
+              <span className="rounded-full bg-card px-2 py-0.5 text-soft">
+                queue {vitals.queue.waiting}
+              </span>
+              {vitals.queue.overdue > 0 && (
+                <span className="rounded-full bg-brandred-soft px-2 py-0.5 text-brandred">
+                  {vitals.queue.overdue} overdue (oldest {agoMins(vitals.queue.oldestOverdueMs)})
+                </span>
+              )}
+              {vitals.turnLatencyMs.samples > 0 && (
+                <span className="rounded-full bg-card px-2 py-0.5 text-soft">
+                  reply p50 {Math.round((vitals.turnLatencyMs.p50 ?? 0) / 1000)}s · p95{" "}
+                  {Math.round((vitals.turnLatencyMs.p95 ?? 0) / 1000)}s
+                </span>
+              )}
+              {vitals.providerErrors.degraded > 0 && (
+                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[#8a6100] dark:text-brandyellow">
+                  {vitals.providerErrors.degraded}/{vitals.providerErrors.total} turns with no
+                  provider
+                </span>
+              )}
+              {vitals.push24h.failureRate !== null && vitals.push24h.failureRate > 0 && (
+                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[#8a6100] dark:text-brandyellow">
+                  push {vitals.push24h.failureRate}% failing ({vitals.push24h.failed}/24h)
+                </span>
+              )}
+            </div>
+            {/* "No key configured" and "every key is failing" used to look
+                identical. The reasons are the difference. */}
+            {vitals.providerErrors.reasons.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5 text-[10px] leading-snug text-soft">
+                {vitals.providerErrors.reasons.map((r) => (
+                  <li key={r.reason}>
+                    <span className="font-extrabold">{r.count}x</span> {r.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}
