@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Baloo_2, Nunito } from "next/font/google";
 import { I18nProvider } from "@/lib/i18n";
 import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
@@ -7,6 +8,37 @@ import { OfflineBanner } from "@/components/OfflineBanner";
 import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
 import "./globals.css";
+
+// SELF-HOSTED, NOT FETCHED AT RUNTIME.
+//
+// The two brand faces were pulled with a `<link>` to fonts.googleapis.com, so
+// every cold open cost a DNS lookup, a TLS handshake and a CSS round trip to a
+// third party BEFORE a single glyph could be requested - and `display=swap`
+// meant the app painted in the system font and then reflowed when they landed.
+// That reflow is layout shift on the most text-dense screen in the app, and on
+// a hotel wifi in Ko Tao it is a visible second of it.
+//
+// `next/font` downloads both families at BUILD time, serves them from our own
+// origin, and emits a `@font-face` with metric overrides so the fallback
+// occupies the same space as the real face - the swap stops moving anything.
+// It also removes a third-party request from the critical path, which is the
+// part that mattered on a slow connection.
+const nunito = Nunito({
+  subsets: ["latin"],
+  weight: ["400", "600", "700", "800"],
+  variable: "--wd-font-body",
+  display: "swap",
+  // Adjusts the fallback face's metrics to match, so the swap is invisible.
+  adjustFontFallback: true,
+});
+
+const baloo = Baloo_2({
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
+  variable: "--wd-font-display",
+  display: "swap",
+  adjustFontFallback: true,
+});
 
 const title = "WheelDeal - cheapest local rides, negotiated for you";
 const description =
@@ -114,16 +146,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      // The two font variables land on the root, where globals.css reads them.
+      className={`${nunito.variable} ${baloo.variable}`}
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
-        <link
-          href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap"
-          rel="stylesheet"
-        />
         {/* Google AdSense site-level tag. UNCONDITIONAL: Google's reviewer
             fetches the page anonymously and fails the site if the tag is not
             already there, so it cannot wait on an env var being set. The

@@ -59,6 +59,44 @@ export function reconcileList<T extends object>(
   return changed ? next : items;
 }
 
+/**
+ * The same contract for a KEYED LOOKUP rather than a list.
+ *
+ * `setAgentPending(payload.agentPending)` replaced the whole record - and every
+ * value inside it - on every activity tick, so `agentPending[v.id]` was a brand
+ * new object for every card twice a poll cycle. `memo(VendorCard)` compares
+ * props by reference, so that single line un-memoised the entire board: exactly
+ * the bug this module was written for, applied to `vendors` and missed on the
+ * lookup handed alongside them.
+ *
+ * Returns the SAME record when nothing changed, and preserves the previous
+ * reference for every entry whose value is unchanged, so a card whose shop did
+ * not move is skipped even when a different shop did.
+ */
+export function reconcileRecord<T>(
+  current: Record<string, T>,
+  next: Record<string, T>
+): Record<string, T> {
+  let changed = false;
+  const out: Record<string, T> = {};
+  for (const key of Object.keys(next)) {
+    const before = current[key];
+    const after = next[key];
+    if (key in current && shallowEqual(before, after)) {
+      out[key] = before;
+    } else {
+      out[key] = after;
+      changed = true;
+    }
+  }
+  // A key that disappeared is a change too - a shop the agent has finished
+  // with must stop reporting as busy.
+  for (const key of Object.keys(current)) {
+    if (!(key in next)) changed = true;
+  }
+  return changed ? out : current;
+}
+
 /** Value equality for the kinds of values these patches carry. */
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;

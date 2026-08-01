@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { WaText } from "./WaText";
 import { waPlain } from "@/lib/wa/format";
+import { subscribeThreadPeek } from "@/lib/client/thread-peek-store";
 
 // The card's conversation peek: TWO individually collapsible sections in one
 // component - the last message we sent the shop and the last message the shop
@@ -81,36 +82,17 @@ export function ThreadPeek({
   );
 
   useEffect(() => {
-    let alive = true;
-    // POLL, don't fetch-once: the card mounts this peek the instant the RFQ is
-    // sent - BEFORE any reply exists - so a single fetch showed an empty thread
-    // forever and the shop's reply never rendered. Re-fetch on an interval (and
-    // no-store) so a reply that lands seconds later appears without a refresh.
-    const load = async () => {
-      // Pause in a hidden tab: with a peek mounted per engaged card, N x 10s
-      // would be needless load while the user is away (matches the activity
-      // poll's own visibility gate). It resumes on focus.
-      if (typeof document !== "undefined" && document.hidden) return;
-      try {
-        const r = await fetch(
-          `/api/thread?vendorId=${encodeURIComponent(vendorId)}${since ? `&since=${since}` : ""}`,
-          { cache: "no-store" }
-        );
-        if (!r.ok) return;
-        const d = await r.json();
-        if (!alive || !d) return;
-        if (d.sent?.text) setSent(d.sent);
-        if (d.received?.text) setReceived(d.received);
-      } catch {
-        /* transient - the next tick retries */
-      }
-    };
-    void load();
-    const iv = setInterval(load, 10_000);
-    return () => {
-      alive = false;
-      clearInterval(iv);
-    };
+    // SUBSCRIBE, don't poll. This component still needs live data - the card
+    // mounts it the instant the RFQ is sent, BEFORE any reply exists, so a
+    // single fetch showed an empty thread forever. But the poll does not belong
+    // HERE: one peek is mounted per engaged shop, so an interval per component
+    // meant twenty timers and twenty requests every ten seconds on a busy
+    // board. The store owns one timer and one batched request for every card
+    // and fans the answer out - see lib/client/thread-peek-store.
+    return subscribeThreadPeek(vendorId, since, (peek) => {
+      if (peek.sent?.text) setSent(peek.sent);
+      if (peek.received?.text) setReceived(peek.received);
+    });
   }, [vendorId, since]);
 
   if (!sent && !received) return null;

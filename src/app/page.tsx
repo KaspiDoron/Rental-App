@@ -37,7 +37,7 @@ import { checkAction, outcomeFor, compareOutcome, type ActionOutcome } from "@/l
 import { FixedLayer } from "@/components/FixedLayer";
 import { saveSearch } from "@/lib/client/search-persist";
 import { fetchJson } from "@/lib/client/fetch-json";
-import { reconcileList, staggerIndex } from "@/lib/client/reconcile";
+import { reconcileList, reconcileRecord, staggerIndex } from "@/lib/client/reconcile";
 import { dismissalKey, loadDismissals, saveDismissals } from "@/lib/client/dismissals";
 import { sendProgress } from "@/lib/batch-progress";
 import { formatClock } from "@/lib/clock";
@@ -948,10 +948,18 @@ export default function Home() {
       if (Array.isArray(d.items)) setActivityItems(d.items);
       if (d.waHealth) setWaHealth(d.waHealth);
       if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
-      setAgentPending(
-        d.agentPending && typeof d.agentPending === "object"
-          ? (d.agentPending as Record<string, { count: number; sending: boolean; own?: boolean }>)
-          : {}
+      // RECONCILE, don't replace. This handed every card a brand-new
+      // `agentPending` object every tick whether or not that shop's agent had
+      // moved, and `memo(VendorCard)` compares by reference - so this one line
+      // re-rendered the whole board twice a poll cycle, defeating the vendor
+      // reconciliation twenty lines below it.
+      setAgentPending((prev) =>
+        reconcileRecord(
+          prev,
+          d.agentPending && typeof d.agentPending === "object"
+            ? (d.agentPending as Record<string, { count: number; sending: boolean; own?: boolean }>)
+            : {}
+        )
       );
       // AUTHORITATIVE per-vendor conversation state (messaged / active / offer)
       // straight from the DB rollup - the single source of truth that keeps the
@@ -1875,6 +1883,12 @@ export default function Home() {
   const onBargainVendor = useCallbackRef((v: Vendor, option?: VehicleOption) =>
     pickVendorOption(setBargainVendor)(v, option)
   );
+  // The last two inline arrows on the card. `onX={(v) => setState(v)}` reads as
+  // free, but it allocates a new function on every render of this page and
+  // hands it to a memo'd child - which is the same memo break as passing a
+  // rebuilt object, just harder to see.
+  const onLocationRequest = useCallbackRef((v: Vendor) => setLocationAskFor(v));
+  const onOpenThread = useCallbackRef((v: Vendor) => setDashboardFor(v));
 
   const customMessage = useCallbackRef(async (
     vendorId: string,
@@ -3527,10 +3541,10 @@ export default function Home() {
                   onQueued={handleQueued}
                   onCustomMessage={customMessage}
                   onPickupConsent={pickupConsent}
-                  onLocationRequest={(vend) => setLocationAskFor(vend)}
+                  onLocationRequest={onLocationRequest}
                   whyDecisionId={whyByVendor[v.id]}
                   onWhy={openWhy}
-                  onOpenThread={(vend) => setDashboardFor(vend)}
+                  onOpenThread={onOpenThread}
                   riskNote={riskByVendor[v.id]}
                   agentPending={agentPending[v.id]}
                 />
