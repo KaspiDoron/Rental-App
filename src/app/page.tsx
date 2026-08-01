@@ -98,6 +98,7 @@ import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
+import { deviceTimeZone } from "@/lib/rental-window";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -1714,11 +1715,16 @@ export default function Home() {
     const profileP = fetch("/api/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        structuredFields
+      body: JSON.stringify({
+        ...(structuredFields
           ? { structured: true, fields: structuredFields }
-          : { text: requestText }
-      ),
+          : { text: requestText }),
+        // THE TRAVELLER'S DAY, not Greenwich's. clampRfqWindow already accepted
+        // a zone and already did the right thing with one - the client simply
+        // never sent it, so every rental window in Asia was decided against a
+        // date that was still yesterday.
+        timeZone: deviceTimeZone(),
+      }),
     });
 
     const discover = (vehicleClass: string, rfqSnap?: StructuredRFQ) =>

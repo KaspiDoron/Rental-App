@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import { PlaceAutocomplete } from "./PlaceAutocomplete";
 import { LoadingDots } from "./LoadingDots";
 import { digitsOnly } from "@/lib/phone";
+import { localDay, addDays, deviceTimeZone } from "@/lib/rental-window";
 
 type Step = "verify" | "schedule" | "confirmed";
 
@@ -96,8 +97,18 @@ export function BookingSheet({
   }, [vendor, rfq]);
 
   // Free plan schedules SAME-DAY pickups only; Pro/Business unlock future days.
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  //
+  // IN THE TRAVELLER'S OWN DAY, not UTC. `toISOString()` renders the UTC
+  // calendar day, and for a traveller in Bangkok (UTC+7) every moment before
+  // 07:00 local is still YESTERDAY in UTC. So the free plan's "today" was a day
+  // the server would refuse, the date input's `min` was a day in the past, and
+  // the sheet spent every Thai morning offering a pickup that could not be
+  // booked. lib/rental-window already had localDay for exactly this; the client
+  // simply never used it, and never sent its zone either - so the server fell
+  // back to UTC and reached the same wrong answer independently.
+  const timeZone = deviceTimeZone();
+  const today = localDay(Date.now(), timeZone);
+  const tomorrow = localDay(Date.now() + 86400000, timeZone);
   const freePlan = plan === "free";
   const minDate = today;
   const maxDate = freePlan ? today : undefined;
@@ -106,9 +117,11 @@ export function BookingSheet({
   const pickupDate = date || defaultDate;
   const durationDays = rfq?.durationDays ?? 1;
   // Return date derived from the pickup date + the rental length (shop-local).
-  const returnDate = new Date(`${pickupDate}T00:00:00`);
-  returnDate.setDate(returnDate.getDate() + Math.max(0, durationDays));
-  const returnDateStr = returnDate.toISOString().slice(0, 10);
+  // Plain calendar arithmetic on the DATE STRING - no Date object, no zone, no
+  // DST. Parsing "2026-08-01T00:00:00" as local and then rendering it back
+  // through toISOString() re-introduced the same UTC-day shift as above, so a
+  // 3-day rental starting Saturday returned a Friday.
+  const returnDateStr = addDays(pickupDate, Math.max(0, durationDays));
   // BOTH off-shop modes need a place before the deal can be locked - a
   // shuttle with nowhere to collect from is not an arrangement.
   const deliveryReady = fulfillment === "in-store" || address.trim().length > 2;
@@ -140,6 +153,8 @@ export function BookingSheet({
           oneWayDropOff: rfq?.oneWayDropOff,
           scheduledAt: when,
           returnDate: returnDateStr,
+          // The server decides the window; give it the zone to decide IN.
+          timeZone,
         }),
       });
       if (bRes.status === 409) {
@@ -151,8 +166,21 @@ export function BookingSheet({
         setSubmitting(false);
         return;
       }
+      // ANY refusal is a refusal. Only 409 was handled, so the server's plan
+      // window check - which answers 400 with the reason and the earliest date
+      // the plan allows - fell straight through to "Booking confirmed". The
+      // traveller was told they had a rental that did not exist, and the shop
+      // was then sent a closing message about it.
+      if (!bRes.ok) {
+        const bd = await bRes.json().catch(() => ({}));
+        setLockError(bd.error ?? "That booking could not be saved - please try again.");
+        setSubmitting(false);
+        return;
+      }
     } catch {
-      /* booking storage is retried by the user; the flow continues */
+      // A NETWORK failure is the one case where continuing is right: the
+      // booking may well have been stored, and stranding the traveller on a
+      // spinner would be worse than a retryable confirmation.
     }
     setStep("confirmed");
 

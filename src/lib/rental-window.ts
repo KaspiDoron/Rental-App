@@ -58,10 +58,36 @@ export function localDay(nowMs: number, timeZone?: string): string {
   }
 }
 
-function addDays(day: string, n: number): string {
+/**
+ * Calendar arithmetic on a YYYY-MM-DD string. Anchored at UTC midnight
+ * DELIBERATELY: the input carries no zone, so parsing it as local and rendering
+ * it back through toISOString() would shift the day by one for anyone east or
+ * west of Greenwich - and DST would move it again twice a year. This adds days
+ * to a date label, which is a different operation from adding days to a moment.
+ *
+ * Exported because the booking sheet was doing this arithmetic itself with a
+ * local Date, and getting a return date one day early for every traveller in
+ * Asia.
+ */
+export function addDays(day: string, n: number): string {
   const t = Date.parse(`${day}T00:00:00Z`);
   if (!Number.isFinite(t)) return day;
   return new Date(t + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The device's IANA zone, or undefined when the runtime will not say.
+ *
+ * Every date decision in this app is about the TRAVELLER'S day - "same-day
+ * pickup" means the day it is where they are standing, not in Greenwich - and
+ * the server can only honour that if the client tells it where that is.
+ */
+export function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
