@@ -149,9 +149,12 @@ describe("the wiring: the component renders the record, the loop writes it", () 
   it("the live engine's own outcome is what gets stamped", () => {
     const loop = readCode("src/lib/agent-loop.ts");
     // The SPTE result was discarded; it carries both the chosen move and how
-    // the send actually went, which is exactly what the panel needed.
-    expect(loop).toMatch(/const spte = await runSpteLiveTurn\(turnInput, io\)/);
-    expect(loop).toMatch(/recordMediaFollowUp\(spte\.move, spte\.delivered\)/);
+    // the send actually went, which is exactly what the panel needed. The turn
+    // now runs through the shared router (engine-route.ts) so a wakeup and an
+    // inbound reply get the same engine - the result still comes back, and it
+    // is still what gets stamped.
+    expect(loop).toMatch(/const routed = await runThreadTurn\(turnInput, io, "inbound"\)/);
+    expect(loop).toMatch(/recordMediaFollowUp\(routed\.spte\.move, routed\.spte\.delivered\)/);
     expect(loop).toMatch(/followUp: \{ move, delivered, at: new Date\(\)\.toISOString\(\) \}/);
   });
 });

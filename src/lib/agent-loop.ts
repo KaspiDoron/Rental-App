@@ -1466,7 +1466,7 @@ export async function processVendorReply(opts: {
     }
   }
 
-  const { graphEngineEnabled, runGraphTurn, liveGraphIO } = await import("./graph/engine");
+  const { liveGraphIO } = await import("./graph/engine");
   const { threadKeyFor } = await import("./graph/state");
   const eventKind: "inbound-text" | "inbound-image" =
     images.length > 0 ? "inbound-image" : "inbound-text";
@@ -1521,34 +1521,19 @@ export async function processVendorReply(opts: {
   // from its pre-send context build (never after a message leaves), so on ANY
   // error we log the telemetry and fail over to the repaired graph engine
   // WITHOUT dropping or double-sending the reply.
-  const { engineV3Enabled } = await import("./spte");
-  if (await engineV3Enabled()) {
-    try {
-      const { runSpteLiveTurn } = await import("./spte/live");
-      const spte = await runSpteLiveTurn(turnInput, io);
-      // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
-      // proof panel renders this; with nothing recorded it now claims nothing.
-      recordMediaFollowUp(spte.move, spte.delivered);
-      // The turn reached an engine and produced its own outcome (sent, held or
-      // deliberately silent). The message is CONSUMED either way - keeping the
-      // claim is what stops an endless redelivery loop; releasing it is only
-      // for turns that never got this far.
-      turnDelivered = true;
-      return;
-    } catch (e) {
-      await sbInsert("agent_events", [
-        {
-          kind: "engine-v3-fallback",
-          vendor_id: ctx.vendorId ?? "",
-          vendor_name: ctx.vendorName ?? "",
-          detail: `SPTE failover -> graph engine: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500),
-        },
-      ]).catch(() => {});
-      // fall through to the repaired graph engine below.
-    }
-  }
-  if (await graphEngineEnabled()) {
-    await runGraphTurn(turnInput, io);
+  // ONE routing authority, shared with the wakeup drain (engine-route.ts), so
+  // an inbound reply and a scheduled follow-up on the same thread can never be
+  // answered by different engines with different rules.
+  const { runThreadTurn } = await import("./engine-route");
+  const routed = await runThreadTurn(turnInput, io, "inbound");
+  if (routed.engine !== "none") {
+    // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
+    // proof panel renders this; with nothing recorded it now claims nothing.
+    if (routed.spte) recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
+    // The turn reached an engine and produced its own outcome (sent, held or
+    // deliberately silent). The message is CONSUMED either way - keeping the
+    // claim is what stops an endless redelivery loop; releasing it is only
+    // for turns that never got this far.
     turnDelivered = true;
     return;
   }

@@ -1713,7 +1713,14 @@ export async function drainGraphWakeups(send: LiveSend): Promise<number> {
         if (row.kind === "tick") {
           const input = await buildTurnFromThread(row.thread_key, "tick");
           if (input) {
-            await runGraphTurn(input, liveGraphIO(send));
+            // THE SAME BRAIN THE INBOUND PATH USES. This drain used to call
+            // runGraphTurn directly, so every scheduled follow-up - the quiet-
+            // thread return, the strategic wait - ran the engine that has none
+            // of the current negotiation rules, while SPTE's own wakeups (which
+            // stamp payload.engine = "v3" right here in this table) were routed
+            // straight past it. See src/lib/engine-route.ts.
+            const { runThreadTurn } = await import("../engine-route");
+            await runThreadTurn(input, liveGraphIO(send), "wakeup");
             ran++;
           }
           // input === null -> the thread was cancelled / taken over / closed:
