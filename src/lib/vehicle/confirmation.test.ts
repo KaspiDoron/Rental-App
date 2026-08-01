@@ -162,7 +162,11 @@ describe("the thread fact is wired end to end (source pins)", () => {
     const card = readCode("src/components/VendorCard.tsx");
     expect(card).not.toMatch(/Confirm the model/);
     expect(card).toMatch(/Ask for the right vehicle/);
-    expect(card).toMatch(/UNVERIFIED/);
+    // The badge WORDS moved into one vocabulary (lib/offer-badges) so the
+    // label and the tooltip that explains it cannot drift apart. The state is
+    // unchanged; only where the string lives is.
+    const badges = readCode("src/lib/offer-badges.ts");
+    expect(badges).toMatch(/label: "UNVERIFIED"/);
   });
 
   it("BEST PRICE shows the minimum immediately with the honest confidence label", () => {

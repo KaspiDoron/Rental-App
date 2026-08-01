@@ -18,6 +18,8 @@ import { ThreadPeek } from "./ThreadPeek";
 import { OptionList } from "./OptionList";
 import { ShopAvatar } from "./ShopAvatar";
 import { vehicleStance } from "@/lib/offer-presentation";
+import { offerBadge } from "@/lib/offer-badges";
+import { InfoTip } from "./InfoTip";
 import { parseDeposit } from "@/lib/deposit";
 import { agentBusyLabel } from "@/lib/client/agent-busy";
 
@@ -191,6 +193,9 @@ function VendorCardInner({
   // bit cannot tell "wrong bike" from "not established yet" - so a shop quoting
   // the exact 125cc asked for was told it had quoted something else.
   const stance = vehicleStance(offer);
+  // The badge AND its plain-language explanation, from one entry - see
+  // lib/offer-badges for why these four words needed a tooltip at all.
+  const badge = offerBadge({ stance, verified: offer?.verified });
   // The offer's own currency symbol - prices display in the shop's money.
   const curSymbol = offer ? currencySymbol(offer.currency) : "$";
   // Traveller's own currency (item #6) - set after mount so SSR markup stays
@@ -615,26 +620,32 @@ function VendorCardInner({
                       genuine offers look fake. VERIFIED is the premium state
                       (exact vehicle match + high-confidence read); DIFFERENT
                       VEHICLE flags a mismatched quote. */}
-                  {stance === "mismatch" ? (
-                    <span className="rounded bg-brandred-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandred">
-                      {t("DIFFERENT VEHICLE")}
-                    </span>
-                  ) : stance === "confirming" ? (
-                    // Transparent verification state: the price is real and
-                    // lockable, the agent is auto-confirming the model in the
-                    // background - the badge flips to VERIFIED on its own.
-                    <span className="rounded bg-brandblue-soft px-1.5 py-0.5 text-[9px] font-extrabold text-brandblue">
-                      {t("UNVERIFIED")}
-                    </span>
-                  ) : offer.verified ? (
-                    <span className="rounded bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">
-                      {t("VERIFIED")}
-                    </span>
-                  ) : (
-                    <span className="rounded bg-card2 px-1.5 py-0.5 text-[9px] font-extrabold text-soft">
-                      {t("SHOP QUOTE")}
-                    </span>
-                  )}
+                  {/* ONE VOCABULARY (lib/offer-badges): the badge text and the
+                      sentence behind the "i" come from the same entry, so a
+                      future wording change cannot leave the explanation
+                      describing the old badge. The two states that SOUND
+                      alarming - SHOP QUOTE and UNVERIFIED - are the two that
+                      usually mean nothing is wrong, which is exactly why they
+                      needed the tooltip most. */}
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[9px] font-extrabold ${
+                      badge.id === "mismatch"
+                        ? "bg-brandred-soft text-brandred"
+                        : badge.id === "confirming"
+                          ? "bg-brandblue-soft text-brandblue"
+                          : badge.id === "verified"
+                            ? "bg-savings-soft text-savings"
+                            : "bg-card2 text-soft"
+                    }`}
+                  >
+                    {t(badge.label)}
+                  </span>
+                  <InfoTip
+                    id={`offer-badge-${vendor.id}`}
+                    label={t(badge.label)}
+                    what={t(badge.what)}
+                    drift={badge.next ? t(badge.next) : undefined}
+                  />
                 </div>
                 <div className="text-2xl font-extrabold text-strong">
                   {curSymbol}
