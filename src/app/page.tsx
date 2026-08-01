@@ -474,6 +474,20 @@ export default function Home() {
     };
   }, [origin?.label]);
   const localLangActive = localLang && session?.plan === "ultra";
+  // ONCE A HUNT IS UNDER WAY, THE LANGUAGE IS SETTLED.
+  //
+  // Flipping this switch mid-hunt changed the language of every ALREADY-OPEN
+  // conversation, so a shop that had been messaged in Thai for ten minutes got
+  // the next line in English and the one after that in Thai again - which reads
+  // as a bot, not a bilingual customer. The server refuses the change per
+  // thread whatever the client sends (wa/thread-language); this is the half
+  // that makes the refusal visible instead of silently ignoring a tap.
+  const languageLocked = vendors.some(
+    (v) =>
+      Boolean(v.sentText) ||
+      Boolean(v.queuedUntil) ||
+      ["rfq-sent", "awaiting-response", "negotiating"].includes(v.stage ?? "")
+  );
 
   // Fresh random suggestion chips on every visit (client-only so SSR markup
   // stays deterministic). Free users never see future-day pickup suggestions.
@@ -3299,7 +3313,15 @@ export default function Home() {
         {/* Ultra: bargain in the shop's LOCAL language (optional toggle). */}
         {rfq && (
           <button
+            disabled={languageLocked}
+            aria-disabled={languageLocked}
+            title={
+              languageLocked
+                ? t("The language is set for this hunt - start a new search to change it.")
+                : undefined
+            }
             onClick={() => {
+              if (languageLocked) return;
               if (session?.plan !== "ultra") {
                 setUpgradeOpen(true);
                 return;
@@ -3311,6 +3333,8 @@ export default function Home() {
               } catch {}
             }}
             className={`mt-3 flex w-full items-center justify-between rounded-2xl border-2 px-4 py-2.5 text-[13px] font-extrabold transition ${
+              languageLocked ? "cursor-not-allowed opacity-60 " : ""
+            }${
               localLangActive
                 ? "border-transparent bg-gradient-to-r from-brandblue via-[#7c5cff] to-brandred text-white shadow-lg"
                 : "border-line bg-card text-soft"
@@ -3328,6 +3352,11 @@ export default function Home() {
               </span>
             </span>
           </button>
+        )}
+        {languageLocked && rfq && (
+          <p className="mt-1 text-[11px] font-bold text-faint">
+            🔒 {t("The language is set for this hunt - start a new search to change it.")}
+          </p>
         )}
         {localLangActive && (
           <p className="mt-1 text-[11px] font-bold text-brandblue">

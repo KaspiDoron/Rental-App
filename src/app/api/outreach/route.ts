@@ -233,7 +233,19 @@ async function handlePost(req: Request) {
     const { releaseUserMove } = await import("@/lib/wa/turn-lock");
     await releaseUserMove(session.email, digits, moveClaimAt).catch(() => {});
   };
-  const wantsLocal = Boolean(body.localLang) && session.plan === "ultra";
+  // THE THREAD'S OWN LANGUAGE OUTRANKS THE LIVE TOGGLE.
+  //
+  // The switch is global and the traveller can flip it at any moment - which,
+  // before this, changed the language of every OPEN conversation mid-sentence.
+  // To the shop, the customer they have been messaging in Thai for ten minutes
+  // suddenly writes English, then Thai again: the exact bot tell the whole
+  // anti-fingerprinting effort exists to avoid. The opener decides; the toggle
+  // only governs threads that have not started.
+  const requestedLocal = Boolean(body.localLang) && session.plan === "ultra";
+  const { threadLanguageMode, resolveThreadLanguage } = await import("@/lib/wa/thread-language");
+  const established = await threadLanguageMode(session.email, digits);
+  const langChoice = resolveThreadLanguage({ requested: requestedLocal, established });
+  const wantsLocal = langChoice.localLang;
 
   // RFQ INTEGRITY: an agent send stamped kind rfq/bargain/clarify MUST carry a
   // real rfq, or the stored thread has no anchor (the "RFQ anchor MISSING" drop)
@@ -358,7 +370,7 @@ async function handlePost(req: Request) {
       rfq: body.rfq ?? null,
       region: String(body.region ?? ""),
       plan: session.plan,
-      localLang: Boolean(body.localLang) && session.plan === "ultra",
+      localLang: wantsLocal,
       // Carried on the queued outbox row so the card's thread peek can show
       // the English reading of a held local-language message.
       ...(englishGloss ? { englishGloss } : {}),
