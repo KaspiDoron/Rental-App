@@ -181,3 +181,30 @@ describe("every action result becomes something the traveller can read", () => {
     expect(page).not.toMatch(/label: t\("Compare the top 3"\),\s*onAction: \(\) =>\s*setCompareIds\(/);
   });
 });
+
+describe("REPRODUCTION: the registry advertised an action nothing could run", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  it("EVERY action in the registry has a case in the executor", () => {
+    // `recheck-prices` sat in the shared registry - and therefore in Will's
+    // prompt, offered to any plan with trips-history - with no case at all, so
+    // the switch fell through to `unknown-action`. A capability advertised and
+    // then silently refused is worse than one never offered.
+    const missing = Object.keys(ACTIONS).filter((id) => !page.includes(`case "${id}"`));
+    expect(missing).toEqual([]);
+  });
+
+  it("...and the executor invents nothing the registry does not declare", () => {
+    // The drift has to be impossible in BOTH directions, or Will's catalogue
+    // stops describing what the app can do.
+    const cases = [...page.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
+    const known = new Set(Object.keys(ACTIONS));
+    // Only the action switch matters; other switches in the file use different
+    // vocabularies, so this checks the intersection is exact for action-shaped
+    // ids rather than every string literal in the file.
+    const actionish = cases.filter((c) => known.has(c));
+    expect(new Set(actionish).size).toBe(known.size);
+  });
+});

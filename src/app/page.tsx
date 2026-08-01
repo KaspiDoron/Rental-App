@@ -2049,6 +2049,38 @@ export default function Home() {
         case "mass-bargain":
           await runMassBargain();
           return { ok: true };
+        // REGISTRY DRIFT, CLOSED. `recheck-prices` has been in the shared
+        // action registry - and therefore in Will's prompt, offered to any
+        // plan with trips-history - with no case here at all. So Will could
+        // propose it, the traveller could say yes, and the switch fell through
+        // to `unknown-action`: a capability advertised and then silently
+        // refused, which is worse than never offering it. The endpoint has
+        // existed the whole time; only the wiring was missing.
+        case "recheck-prices": {
+          const ts = String(args.startedAt ?? "");
+          if (!ts) return { ok: false as const, reason: "missing-session" as const };
+          const r = await fetch("/api/deals/recheck", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ts }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            setActionNote({ tone: "info", text: d.error ?? t("Could not re-ask those shops.") });
+            return { ok: false as const, reason: "failed" as const };
+          }
+          setActionNote(
+            outcomeFor(
+              "recheck-prices",
+              { ok: true },
+              t("Asked {n} shops whether their price still stands.").replace(
+                "{n}",
+                String(d.asked ?? d.count ?? 0)
+              )
+            )
+          );
+          return { ok: true };
+        }
         case "compare": {
           const ids = (args.vendorIds as string[]) ?? [];
           const blocked = compareOutcome(ids.length);
