@@ -217,18 +217,23 @@ async function buildSession(
     const dominant = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     const compareCur =
       dominant && !tally.has(input.currency) && tally.get(dominant)! >= 2 ? dominant : input.currency;
-    for (const r of rows) {
-      if (typeof r.pricePerDay !== "number" || !r.currency) continue;
-      if (r.currency !== compareCur) continue;
-      if (!lowest || r.pricePerDay < lowest.pricePerDay) {
-        lowest = { vendorId: r.vendorId, shop: r.vendorName, pricePerDay: r.pricePerDay };
-      }
-      if (r.vendorId !== thisVendor) {
-        rivals.push({ vendorId: r.vendorId, shop: r.vendorName, pricePerDay: r.pricePerDay, currency: r.currency });
-      }
-    }
-    // Keep the cheapest few rivals - the leverage that matters.
-    rivals = rivals.sort((a, b) => a.pricePerDay - b.pricePerDay).slice(0, 4);
+    // ONE AGGREGATOR, AND IT KNOWS WHAT A RIVAL IS.
+    //
+    // This loop used to accept every priced row the session read returned, with
+    // no test of whether the quote behind it was still one anyone could take.
+    // A rival is a THREAT - "another shop is at 200" only moves a price because
+    // the traveller could plausibly go there - so a withdrawn, dead or closed
+    // shop is not leverage, it is noise that spends the one disclosure this
+    // thread gets. validRivals is the shared predicate; it is pure, so the rule
+    // is reviewable and testable in one screen.
+    //
+    // This runs inside buildSession, which every entry point reaches through
+    // runThreadTurn - inline reply, scheduled wakeup and user action alike. It
+    // used to be the inline path only, which before the routing fix meant every
+    // scheduled follow-up negotiated with no cross-chat leverage at all.
+    const { validRivals, sessionFloor } = await import("../negotiation/session-rivals");
+    rivals = validRivals(rows, { excludeVendorId: thisVendor, currency: compareCur, limit: 4 });
+    lowest = sessionFloor(rows, compareCur);
   }
   // Grounded market benchmark (F5): the ONLY market rate allowed into the
   // prompt - web-grounded with a source URL, and ONLY when its currency matches
