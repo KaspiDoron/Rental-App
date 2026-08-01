@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 vi.mock("server-only", () => ({}));
 
@@ -167,9 +169,8 @@ describe("it does not change what was already true", () => {
   const t0 = 1_700_000_000_000 - (1_700_000_000_000 % 24_000);
 
   it("a message the TRAVELLER typed is still never pacing-gated", async () => {
-    // Their decision, their message. The mutex sits after the auto check on
-    // purpose - a human pressing send is not a burst.
-    await coldIntro("agent intro", t0);
+    // Their decision, their message: no lane budget, no anti-ban velocity
+    // window. With nothing else going to this shop it leaves immediately.
     const mine = await claimSendSlots({
       senderKey: SENDER,
       toDigits: SHOP,
@@ -179,6 +180,55 @@ describe("it does not change what was already true", () => {
       nowMs: t0 + 100,
     });
     expect(mine.ok).toBe(true);
+  });
+
+  // ...BUT IT IS NOW COLLISION-GATED, WHICH IS A DIFFERENT THING.
+  //
+  // This block previously asserted the opposite, on the reasoning that the
+  // mutex sits after the auto check "on purpose - a human pressing send is not
+  // a burst". That is right about pacing and wrong about the shop's inbox: the
+  // traveller tapping Bargain while an agent turn is going out is the same
+  // two-messages-in-one-minute the mutex exists to prevent, and it is the
+  // likeliest version of it, because the app puts that button in front of them
+  // exactly when the thread is active.
+  it("but it does NOT get to land on a shop the agent is mid-message with", async () => {
+    await coldIntro("agent intro", t0);
+    const mine = await claimSendSlots({
+      senderKey: SENDER,
+      toDigits: SHOP,
+      text: "hey, can I pick it up at 6?",
+      auto: false,
+      gapSeconds: 12,
+      nowMs: t0 + 100,
+    });
+    expect(mine).toEqual({ ok: false, kind: "recipient-busy" });
+  });
+
+  it("and the agent does not get to land on top of the traveller either", async () => {
+    const mine = await claimSendSlots({
+      senderKey: SENDER,
+      toDigits: SHOP,
+      text: "hey, can I pick it up at 6?",
+      auto: false,
+      gapSeconds: 12,
+      nowMs: t0,
+    });
+    expect(mine.ok).toBe(true);
+    // For the agent this is ordinary pacing: re-queue and try again shortly.
+    expect(await coldIntro("agent intro", t0 + 100)).toEqual({ ok: false, kind: "pacing" });
+  });
+
+  it("once the shop's window passes, the traveller's message goes out", async () => {
+    await coldIntro("agent intro", t0);
+    const later = await claimSendSlots({
+      senderKey: SENDER,
+      toDigits: SHOP,
+      text: "hey, can I pick it up at 6?",
+      auto: false,
+      gapSeconds: 12,
+      nowMs: t0 + (RECIPIENT_LOCK_SEC + 2) * 1000,
+    });
+    expect(later.ok).toBe(true);
   });
 
   it("exact-duplicate text is still refused as a duplicate, not as pacing", async () => {
@@ -197,5 +247,38 @@ describe("it does not change what was already true", () => {
     state.mode = "unavailable";
     const r = await coldIntro("db wobbling", t0);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("no send path walks around the lock", () => {
+  const readCode = (p: string) =>
+    readFileSync(join(process.cwd(), p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+
+  it("the Trips price re-check claims before it sends", () => {
+    // It re-asks every shop from a past session at once - the batch most likely
+    // to land on one the live agent is already mid-sentence with - and it used
+    // to go straight from the guard verdict to the wire, with no claim at all.
+    const recheck = readCode("src/app/api/deals/recheck/route.ts");
+    const claimAt = recheck.indexOf("claimForSend(session.email, digits, guard.text");
+    const sendAt = recheck.indexOf("sendFromUser(session.email, digits, guard.text)");
+    expect(claimAt).toBeGreaterThan(0);
+    expect(claimAt).toBeLessThan(sendAt);
+  });
+
+  it("so does the owner's live drill", () => {
+    const drill = readCode("src/app/api/admin/drill/route.ts");
+    const claimAt = drill.indexOf("claimForSend(session.email, digits, guard.text");
+    const sendAt = drill.indexOf("sendFromUser(session.email, digits, guard.text, true)");
+    expect(claimAt).toBeGreaterThan(0);
+    expect(claimAt).toBeLessThan(sendAt);
+  });
+
+  it("and the traveller is TOLD, not silently queued behind their own agent", () => {
+    const outreach = readCode("src/app/api/outreach/route.ts");
+    expect(outreach).toMatch(/claim\.kind === "recipient-busy"/);
+    expect(outreach).toMatch(/agentBusy: true/);
+    expect(outreach).toMatch(/Your agent is mid-message with this shop/);
   });
 });

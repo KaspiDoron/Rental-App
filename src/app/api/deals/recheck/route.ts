@@ -174,6 +174,25 @@ export async function POST(req: Request) {
       }
       continue;
     }
+    // THE MUTEX, ON THIS PATH TOO. guardOutbound's checks are read-then-act by
+    // its own documentation and cannot serialize anything; this route used to
+    // go straight from the verdict to the wire. It re-asks every shop from a
+    // past session at once, so it is precisely the batch most likely to land on
+    // a shop the live agent is already mid-sentence with.
+    const { claimForSend } = await import("@/lib/wa-guard");
+    const claim = await claimForSend(session.email, digits, guard.text, true, true);
+    if (!claim.ok) {
+      skipped += 1;
+      detail.push({
+        name: info.name,
+        state: "skipped",
+        reason:
+          claim.kind === "duplicate"
+            ? "already going out"
+            : "your agent is mid-message with this shop",
+      });
+      continue;
+    }
     const r = await sendFromUser(session.email, digits, guard.text).catch(() => ({
       ok: false,
       error: "send failed",

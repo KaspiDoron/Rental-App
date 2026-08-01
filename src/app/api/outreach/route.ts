@@ -424,6 +424,22 @@ async function handlePost(req: Request) {
         reason: "This exact message is already on its way to the shop.",
       });
     }
+    // THE AGENT IS MID-SENTENCE WITH THIS SHOP.
+    //
+    // A human send now takes the per-recipient mutex too (see wa/pacing.ts):
+    // the traveller tapping Bargain while an agent turn is going out is the
+    // likeliest version of two-messages-in-one-minute, because the app invites
+    // the tap exactly when a thread is active. Losing that lock is not a pacing
+    // hold to bury in the queue - the traveller is standing there - so say what
+    // happened. The card already renders this state ("Your agent is on it").
+    if (!claim.ok && claim.kind === "recipient-busy") {
+      return NextResponse.json({
+        allowed: true,
+        sent: false,
+        agentBusy: true,
+        reason: "Your agent is mid-message with this shop - give it a few seconds.",
+      });
+    }
     if (!claim.ok) {
       // pacing loss / unknown claim state: park honestly instead of racing.
       const { jitteredHold } = await import("@/lib/wa/pacing");

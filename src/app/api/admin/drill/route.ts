@@ -76,6 +76,22 @@ export async function POST(req: Request) {
     });
   }
 
+  // The owner's live drill sends through the same number as everything else, so
+  // it takes the same recipient lock. Without it a drill fired while an agent
+  // is mid-send lands two messages on one number - which is exactly the failure
+  // a drill is supposed to be testing FOR.
+  const { claimForSend } = await import("@/lib/wa-guard");
+  const drillClaim = await claimForSend(session.email, digits, guard.text, true, true);
+  if (!drillClaim.ok) {
+    return NextResponse.json({
+      sent: false,
+      vendorId,
+      error:
+        drillClaim.kind === "duplicate"
+          ? "That exact message is already going out."
+          : "Something else is sending to this number right now - try again in a few seconds.",
+    });
+  }
   const { sendFromUser } = await import("@/lib/evolution");
   const r = await sendFromUser(session.email, digits, guard.text, true);
   if (!r.ok) {

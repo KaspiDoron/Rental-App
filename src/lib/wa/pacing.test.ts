@@ -234,11 +234,36 @@ describe("claimSendSlots - lock-free serialization", () => {
     expect((await claimSendSlots({ ...base, text: "other", nowMs: t0 + 75_000 })).ok).toBe(true);
   });
 
-  it("manual sends take only the idempotency slot (no pacing serialization)", async () => {
+  it("manual sends take no LANE pacing - different shops never serialize", async () => {
+    // The point of exempting human sends from the lanes: the traveller is not
+    // an automated burst, and two shops they message back to back must not
+    // queue behind each other the way agent traffic does.
     const a = await claimSendSlots({ ...base, auto: false, nowMs: state.nowMs });
-    const b = await claimSendSlots({ ...base, auto: false, text: "second manual", nowMs: state.nowMs + 500 });
+    const b = await claimSendSlots({
+      ...base,
+      auto: false,
+      toDigits: "66899999999",
+      text: "second manual",
+      nowMs: state.nowMs + 500,
+    });
     expect(a.ok).toBe(true);
-    expect(b.ok).toBe(true); // two different manual messages, same window - fine
+    expect(b.ok).toBe(true);
+  });
+
+  it("...but two manual sends to ONE shop inside the floor are still a burst", async () => {
+    // This block used to assert the opposite. The recipient mutex is not a
+    // pacing lane - it is the shop's own inbox, and half a second apart is two
+    // messages at once however they were typed. The caller surfaces it as
+    // "your agent is mid-message with this shop" and the floor is 8 seconds.
+    const a = await claimSendSlots({ ...base, auto: false, nowMs: state.nowMs });
+    const b = await claimSendSlots({
+      ...base,
+      auto: false,
+      text: "second manual",
+      nowMs: state.nowMs + 500,
+    });
+    expect(a.ok).toBe(true);
+    expect(b).toEqual({ ok: false, kind: "recipient-busy" });
   });
 
   it("fails CLOSED on unknown claim state, degrades OPEN pre-migration", async () => {

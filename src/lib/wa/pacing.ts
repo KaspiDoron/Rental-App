@@ -185,7 +185,13 @@ export function messageSlotKey(toDigits: string, text: string): string {
 
 export type ClaimOutcome =
   | { ok: true }
-  | { ok: false; kind: "pacing" | "duplicate" | "error" };
+  /**
+   * `recipient-busy` is the human-send answer to the mutex: something else is
+   * mid-send to this exact shop right now. It is NOT a pacing hold to retry
+   * quietly - the traveller is standing there with their thumb on the button,
+   * so the caller tells them their agent is already talking to this shop.
+   */
+  | { ok: false; kind: "pacing" | "duplicate" | "error" | "recipient-busy" };
 
 /**
  * Atomically claim the right to SEND now.
@@ -241,8 +247,6 @@ export async function claimSendSlots(opts: {
     return { ok: false, kind: "error" };
   }
 
-  if (!opts.auto) return { ok: true };
-
   // ---- THE RECIPIENT MUTEX: one lane-independent lock per shop --------------
   //
   // Ko Tao, 12:21. Two of our messages landed on one shop inside the same
@@ -259,8 +263,21 @@ export async function claimSendSlots(opts: {
   // second dispatcher does - a reply-only drain running beside the global one
   // would otherwise recreate the same collision by design.
   //
-  // Deliberately AFTER the `!opts.auto` return: a message the traveller typed
-  // themselves is their decision, and has never been pacing-gated.
+  // AND IT APPLIES TO HUMAN SENDS TOO, which is the half that was missing.
+  //
+  // This block used to sit AFTER an early `if (!opts.auto) return {ok:true}`,
+  // on the reasoning that a message the traveller typed is their decision and
+  // has never been pacing-gated. That reasoning is right about PACING and wrong
+  // about COLLISION: the traveller tapping Bargain while the agent is mid-send
+  // is the same two-messages-in-one-minute the mutex exists to prevent, and it
+  // is the likeliest version of it, because the app invites the tap at exactly
+  // the moment a thread is active.
+  //
+  // So both lanes take the lock. What differs is what losing it MEANS: for the
+  // agent it is pacing (re-queue, try again shortly); for a person standing
+  // there with their thumb on the button it is news ("your agent is already
+  // talking to this shop"), and the caller says so instead of silently queuing
+  // a second message behind the first.
   const recipientBucket = gapBucket(now, RECIPIENT_LOCK_SEC);
   const recipientSlotFor = (b: number) => recipientSlot(opts.toDigits, b);
   const ownRecipientSlot = recipientSlotFor(recipientBucket);
@@ -270,7 +287,7 @@ export async function claimSendSlots(opts: {
   });
   if (mine === "lost") {
     await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
-    return { ok: false, kind: "pacing" };
+    return { ok: false, kind: opts.auto ? "pacing" : "recipient-busy" };
   }
   if (mine === "error") {
     await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
@@ -299,9 +316,15 @@ export async function claimSendSlots(opts: {
         )}`
       ).catch(() => {});
       await releaseMessageClaim(opts.senderKey, opts.toDigits, opts.text);
-      return { ok: false, kind: "pacing" };
+      return { ok: false, kind: opts.auto ? "pacing" : "recipient-busy" };
     }
   }
+
+  // A human send is now past the only gate that applies to it: the shop's own
+  // inbox. Everything below is LANE PACING - anti-ban velocity budgets for
+  // automated traffic - and a message the traveller typed has never been, and
+  // is not now, subject to it.
+  if (!opts.auto) return { ok: true };
 
   const bucket = gapBucket(now, opts.gapSeconds);
   // Reply lane -> the gap slot carries the recipient, so two DIFFERENT shops
