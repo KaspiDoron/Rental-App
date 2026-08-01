@@ -87,14 +87,27 @@ export async function GET(req: Request) {
     try {
       const { drainOutbox } = await import("@/lib/wa-guard");
       const { sendFromUser } = await import("@/lib/evolution");
+      // AWAITED, not fire-and-forget - the same Cloud Run truth the activity
+      // route documents: CPU is throttled to ~0 once the response is flushed,
+      // so a `void` drain here was suspended mid-send and the row it had just
+      // claimed sat until something else picked it up. Bounded so a slow host
+      // can never hold this poll open.
+      //
       // fast=true - see the note on the ingest drain: the presence simulation
       // costs 4-12s per row and none of the anti-ban floors depend on it.
-      drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
-        () => {}
+      const DRAIN_BUDGET_MS = 8_000;
+      const bounded = <T,>(p: Promise<T>) =>
+        Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
+      await bounded(
+        drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+          () => {}
+        )
       );
       const { drainGraphWakeups } = await import("@/lib/graph/engine");
-      drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
-        () => {}
+      await bounded(
+        drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+          () => {}
+        )
       );
     } catch {
       /* best-effort */

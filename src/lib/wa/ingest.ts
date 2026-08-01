@@ -30,6 +30,7 @@ import { digitsOnly } from "@/lib/phone";
 import { waDigits, numberFilter, waIdKind, lidKey } from "@/lib/wa/phone-key";
 import { resolveChatIdentity } from "@/lib/wa/lid-alias";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
+import { kickDispatcher } from "@/lib/wa/kick";
 import { parseInboundCoords, describeShopLocation, distanceNote } from "@/lib/wa/inbound-location";
 
 // The region of the last outbound to this shop - primes the voice transcriber
@@ -842,15 +843,31 @@ export async function processEvolutionWebhook(
   // "another runner" / "chain already live". The reply lane now has its own
   // per-sender dispatcher that no cold batch can hold - the tick kick stays as
   // the batch's own driver.
+  // AWAITED, NOT FIRE-AND-FORGET. This is the same Cloud Run lesson the
+  // activity route already learned the hard way: CPU is throttled to ~0 the
+  // instant the HTTP response is flushed, so an un-awaited fetch() has no
+  // guarantee of even completing its TCP handshake before the instance
+  // freezes. The dispatcher lane below is EVERYTHING for reply latency - it is
+  // what makes a counter-reply land in seconds instead of whenever the owner
+  // next opens the app - and it was being started by exactly that kind of
+  // ghost call. `tick`/`reply-tick` themselves already pause 350ms before
+  // returning for the same reason; the kick that starts them never did.
+  //
+  // Awaiting costs the webhook only the time to hand the request off (the
+  // dispatchers do their real work in their own invocation and return
+  // quickly), and the whole block is bounded so a hung dispatcher can never
+  // hold Evolution's webhook open.
   if (opts.origin && opts.token) {
     const origin = opts.origin;
     const token = encodeURIComponent(opts.token);
-    for (const sender of touchedSenders) {
-      fetch(
-        `${origin}/api/wa/reply-tick?token=${token}&sender=${encodeURIComponent(sender)}&hop=0`
-      ).catch(() => {});
-    }
-    fetch(`${origin}/api/wa/tick?token=${token}&hop=0`).catch(() => {});
+    const kicks = [
+      ...[...touchedSenders].map(
+        (sender) =>
+          `${origin}/api/wa/reply-tick?token=${token}&sender=${encodeURIComponent(sender)}&hop=0`
+      ),
+      `${origin}/api/wa/tick?token=${token}&hop=0`,
+    ];
+    await Promise.all(kicks.map((url) => kickDispatcher(url)));
   }
   // Quiet sessions whose users have not used the app for a while - the link
   // survives, but the device stops looking permanently active on WhatsApp.

@@ -293,13 +293,33 @@ export async function POST(req: Request) {
       /* best-effort */
     }
     // FAST COUNTER-REPLY: our just-composed reply is parked ~10-40s out, so kick
-    // the self-chaining tick to wait it out in-process and deliver within the
-    // ~2 min ceiling (same mechanism as the Evolution webhook).
+    // the dispatchers to wait it out in-process and deliver in seconds.
+    //
+    // TWO FIXES HERE. This path only ever kicked the GLOBAL tick - the one
+    // runner a cold introductions batch keeps permanently busy, which is the
+    // whole reason the per-sender reply lane exists - so a reply arriving on
+    // the Cloud channel was still queued behind the batch. And the kick was
+    // un-awaited, which on Cloud Run means it may never have left the
+    // instance at all (see wa/kick.ts).
     try {
       const { webhookToken } = await import("@/lib/evolution");
       const tok = await webhookToken();
       const origin = new URL(req.url).origin;
-      if (tok) fetch(`${origin}/api/wa/tick?token=${encodeURIComponent(tok)}&hop=0`).catch(() => {});
+      if (tok) {
+        const { kickDispatcher } = await import("@/lib/wa/kick");
+        const token = encodeURIComponent(tok);
+        const senders = new Set(
+          inbound.map(({ receiver }) => receiver).filter((r): r is string => Boolean(r))
+        );
+        await Promise.all([
+          ...[...senders].map((sender) =>
+            kickDispatcher(
+              `${origin}/api/wa/reply-tick?token=${token}&sender=${encodeURIComponent(sender)}&hop=0`
+            )
+          ),
+          kickDispatcher(`${origin}/api/wa/tick?token=${token}&hop=0`),
+        ]);
+      }
     } catch {
       /* best-effort */
     }
