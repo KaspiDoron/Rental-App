@@ -238,6 +238,16 @@ export interface ModelRoute {
    * losing the truth, so it reads the real list now.
    */
   provider?: import("../ai").ProviderName;
+  /**
+   * WHY NO PROVIDER ANSWERED, when none did.
+   *
+   * Without it, "no key is configured" and "every configured key is failing"
+   * are the same observation from the outside: a deterministic template, a null
+   * provider, and an Ops chip reading mock/local. One is a demo deployment and
+   * the other is an outage in progress, and the owner needs to tell them apart
+   * at a glance - especially now that eight providers are configured.
+   */
+  error?: string;
   model?: string;
   reason: "reflex" | "default" | "multimodal" | "high-stakes" | "quota-overflow" | "replay";
 }

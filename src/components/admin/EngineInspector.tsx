@@ -30,7 +30,16 @@ interface Snapshot {
   engine: string;
   generatedAt: string;
   turns: Turn[];
-  stats: { turnsLast6h: number; turnsCapped?: boolean; failoversLast6h: number; unconfirmedSendsLast6h: number };
+  stats: {
+    turnsLast6h: number;
+    turnsCapped?: boolean;
+    failoversLast6h: number;
+    unconfirmedSendsLast6h: number;
+    // The rows behind the counts. A number nobody can act on is decoration.
+    failoverDetail?: { shop: string; at: string; detail: string }[];
+    dropped?: { shop: string; at: string; detail: string; kind: string }[];
+    graphTurns?: { shop: string; at: string; detail: string }[];
+  };
   session: { lowestByVehicle: { key: string; shop: string; pricePerDay: number; currency: string }[]; activeOffers: number };
   operations?: {
     avgBargainMarginPct: number | null;
@@ -189,6 +198,38 @@ export function EngineInspector() {
           </div>
         )}
 
+        {/* WHAT THE GUARD REFUSED, WHERE ANYONE CAN SEE IT.
+            These counters were fetched every 30 seconds by this component and
+            never rendered - the health payload was consumed for one boolean.
+            They are the cross-cutting reasons a thread goes quiet without the
+            queue showing anything: a terminal drop leaves no outbox row, so
+            "Held right now" structurally cannot show it. */}
+        {health?.guardCounters &&
+          Object.values(health.guardCounters).some((n) => n > 0) && (
+            <div className="rounded-2xl border border-line bg-card p-3">
+              <div className="mb-2 text-[12px] font-extrabold uppercase text-soft">
+                Refused in the last 6h
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(health.guardCounters)
+                  .filter(([, n]) => n > 0)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([kind, n]) => (
+                    <span
+                      key={kind}
+                      className={`rounded-full px-2 py-1 text-[11px] font-bold ${
+                        kind === "send-dropped" || kind === "engine-graph-turn"
+                          ? "bg-brandred-soft text-brandred"
+                          : "bg-card2 text-ink"
+                      }`}
+                    >
+                      {kind.replace(/-/g, " ")}: {n}
+                    </span>
+                  ))}
+              </div>
+            </div>
+          )}
+
         {snap && (
           <>
             {/* ---- TIER 1: liveness + throughput -------------------------------- */}
@@ -204,6 +245,38 @@ export function EngineInspector() {
                 tone={snap.stats.failoversLast6h > 0 ? "text-brandred" : "text-savings"}
               />
               <StatTile helpId="unverified" value={snap.stats.unconfirmedSendsLast6h} />
+            </div>
+
+            {/* WHICH SHOP, AND WHY. "5 failovers in 6h" was a bare number while
+                the rows behind it already carried the vendor and the exception;
+                a terminal drop had no surface at all, because it never touches
+                the outbox the queue view reads. */}
+            {((snap.stats.failoverDetail?.length ?? 0) > 0 ||
+              (snap.stats.dropped?.length ?? 0) > 0 ||
+              (snap.stats.graphTurns?.length ?? 0) > 0) && (
+              <div className="space-y-1.5 rounded-2xl border border-line bg-card p-3">
+                <div className="text-[12px] font-extrabold uppercase text-soft">
+                  Threads that need a look
+                </div>
+                {snap.stats.graphTurns?.map((g, i) => (
+                  <div key={`g${i}`} className="text-[11px] font-semibold text-brandred">
+                    <b>{g.shop}</b> - answered by the OLD engine ({ago(g.at)}): {g.detail}
+                  </div>
+                ))}
+                {snap.stats.failoverDetail?.map((f, i) => (
+                  <div key={`f${i}`} className="text-[11px] font-semibold text-brandred">
+                    <b>{f.shop}</b> - engine failover ({ago(f.at)}): {f.detail}
+                  </div>
+                ))}
+                {snap.stats.dropped?.map((d, i) => (
+                  <div key={`d${i}`} className="text-[11px] font-semibold text-ink">
+                    <b>{d.shop}</b> - {d.kind === "wa-send-stale" ? "draft dropped as stale" : "message refused"} (
+                    {ago(d.at)}): {d.detail}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-2">
             </div>
             <div className="grid grid-cols-3 gap-2">
               <StatTile helpId="queue" value={`${snap.queue.dueNow} / ${snap.queue.depth}`} />

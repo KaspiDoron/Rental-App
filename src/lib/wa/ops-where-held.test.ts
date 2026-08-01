@@ -90,7 +90,9 @@ describe("the provider chip stops lying about every turn", () => {
     // the Ops turn row fell through to `mock/local` on 100% of turns - and the
     // help text explained that meant no live key was used.
     const pass = readCode("src/lib/spte/pass.ts");
-    expect(pass).toMatch(/const \{ text: raw, provider \} = await chatDetailed\(/);
+    // ...and the same call now also keeps the provider's FAILURE, so "no key
+    // configured" and "every configured key is failing" stop looking identical.
+    expect(pass).toMatch(/const \{ text: raw, provider, error \} = await chatDetailed\(/);
     expect(pass).toMatch(/if \(provider\) route\.provider = provider;/);
   });
 

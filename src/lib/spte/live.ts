@@ -530,6 +530,9 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         move: outcome.move,
         tier: outcome.route.tier,
         provider: outcome.route.provider ?? null,
+        // The provider's own failure reason when none answered. "no key" and
+        // "every key is failing" used to look identical here.
+        providerError: outcome.route.error ?? null,
         reason: outcome.route.reason,
         legalMoves: tc.legalMoves,
         floor: input.floorPrice ?? null,

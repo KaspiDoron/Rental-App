@@ -505,7 +505,7 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
     // its `mock/local` fallback chip on every turn - including the ones a real
     // model composed - while the help text explained that meant no live key
     // was used. A cosmetic omission that read as a broken deployment.
-    const { text: raw, provider } = await chatDetailed(
+    const { text: raw, provider, error } = await chatDetailed(
       [
         { role: "system", content: system },
         { role: "user", content: userMsg },
@@ -513,7 +513,19 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
       { maxTokens: 500, budgetMs: 9000 }
     );
     if (provider) route.provider = provider;
-    if (!raw) break; // no provider available -> fallback
+    if (!raw) {
+      // WHY THE MODEL DID NOT ANSWER, KEPT.
+      //
+      // chatDetailed returns the last provider's actual failure - a bad key, a
+      // 429, a timeout - and this line dropped it. Downstream, "no key
+      // configured" and "eight keys configured and every one of them is
+      // failing" produced the identical outcome: a deterministic template and
+      // provider:null on the turn. The Ops panel rendered both as its
+      // mock/local chip, so a live outage was indistinguishable from a demo
+      // deployment. It is one string; carry it.
+      route.error = error ?? "no provider available";
+      break; // fall through to the deterministic composer
+    }
     const parsed = extractJson<Partial<TurnArtifact>>(raw);
     if (parsed && typeof parsed.move === "string") {
       const artifact: TurnArtifact = {

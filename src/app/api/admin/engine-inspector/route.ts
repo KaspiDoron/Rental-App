@@ -32,7 +32,7 @@ export async function GET() {
   // ---- ENGINE_V3 turns + failovers (the ReAct execution telemetry) ----------
   const events = await sbSelect<EventRow>(
     "agent_events",
-    `select=kind,vendor_name,detail,created_at&kind=in.(engine-v3-turn,engine-v3-fallback,wa-send-unconfirmed)&created_at=gte.${encodeURIComponent(
+    `select=kind,vendor_name,detail,created_at&kind=in.(engine-v3-turn,engine-v3-fallback,engine-graph-turn,wa-send-unconfirmed,send-dropped,wa-send-stale)&created_at=gte.${encodeURIComponent(
       sinceIso
     )}&order=created_at.desc&limit=60`
   ).catch(() => [] as EventRow[]);
@@ -52,6 +52,33 @@ export async function GET() {
 
   const fallbacks = events.filter((e) => e.kind === "engine-v3-fallback").length;
   const unconfirmed = events.filter((e) => e.kind === "wa-send-unconfirmed").length;
+
+  // WHAT THE COUNTS WERE HIDING.
+  //
+  // "5 failovers in 6h" was rendered as a bare number while the rows behind it
+  // carried the vendor AND the exception message - already fetched, already in
+  // memory, thrown away. So the one question worth asking ("which shop, and
+  // why?") could not be answered from the panel that raised the alarm.
+  //
+  // Same for the terminal drops: a message refused for good (duplicate,
+  // rfq-dedup, engagement-halt) never touches wa_outbox, so the queue view
+  // structurally cannot show it. Without these rows a thread that got no reply
+  // looked identical to a thread with nothing to say.
+  const detailOf = (e: EventRow) => ({
+    shop: e.vendor_name ?? "shop",
+    at: e.created_at,
+    detail: (e.detail ?? "").slice(0, 300),
+  });
+  const failoverDetail = events
+    .filter((e) => e.kind === "engine-v3-fallback")
+    .map(detailOf)
+    .slice(0, 10);
+  const dropped = events
+    .filter((e) => e.kind === "send-dropped" || e.kind === "wa-send-stale")
+    .map((e) => ({ ...detailOf(e), kind: e.kind }))
+    .slice(0, 15);
+  // Turns the OLD engine answered. Should be ~0: it is the exception path now.
+  const graphTurns = events.filter((e) => e.kind === "engine-graph-turn").map(detailOf).slice(0, 10);
 
   // ---- Global session state: lowest offer + rivals per active search --------
   const offers = await sbSelect<{
@@ -252,6 +279,11 @@ export async function GET() {
       turnsCapped: turnsLast6h >= TURN_COUNT_CAP,
       failoversLast6h: fallbacks,
       unconfirmedSendsLast6h: unconfirmed,
+      // A count nobody can act on is decoration. These carry the shop and the
+      // reason, so the number is a starting point instead of an ending one.
+      failoverDetail,
+      dropped,
+      graphTurns,
     },
     session: {
       lowestByVehicle: [...lowestByVehicle.entries()].map(([k, v]) => ({ key: k, ...v })).slice(0, 12),

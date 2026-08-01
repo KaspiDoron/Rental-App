@@ -174,6 +174,21 @@ export async function GET() {
     "phase-anomaly",
     "ambiguous-inbound",
     "wa-send-dropped",
+    // THE GUARD'S OWN TERMINAL REFUSALS. `send-dropped` is what
+    // recordSendDropped() writes when a message is refused for good -
+    // duplicate-suppressed, rfq-dedup, engagement-halt - and it is a DIFFERENT
+    // kind from "wa-send-dropped" (which the drain writes when a send is
+    // attempted and fails). One letter of difference, and the consequence was
+    // that the three most terminal drops in the system appeared on no admin
+    // surface at all: they never touch wa_outbox either, so the queue view
+    // cannot show them and this counter did not count them.
+    "send-dropped",
+    // A draft binned for being answered by events. Rare and important: it means
+    // the shop moved on before we spoke, and the thread was handed a fresh turn.
+    "wa-send-stale",
+    // Which brain answered. A wakeup turn silently running the old engine is
+    // exactly the failure that survived a full deploy-and-verify cycle.
+    "engine-graph-turn",
   ];
   const eventRows = await sbSelect<{ kind: string }>(
     "agent_events",
