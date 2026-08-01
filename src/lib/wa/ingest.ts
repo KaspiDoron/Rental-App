@@ -208,6 +208,29 @@ export async function processEvolutionWebhook(
       return { retryable };
     }
 
+    // A SHOP IS RINGING THE TRAVELLER'S PHONE.
+    //
+    // The CALL event was never subscribed to, so this arrived nowhere: the ring
+    // reached a traveller who may be on airplane mode, out of local credit, or
+    // simply unable to negotiate a rental in spoken Thai - and what the shop
+    // experienced was a customer who had stopped answering. Handled in its own
+    // module because the privacy gate, the push and the reply all matter and
+    // none of them belong inline in this dispatcher.
+    //
+    // AWAITED, like every other side effect here: Cloud Run freezes the CPU the
+    // instant the response flushes, and a detached push about a ringing phone
+    // would be the definition of too late.
+    if (event.includes("call")) {
+      try {
+        const email = await emailForInstance(instance);
+        const { handleCallEvent } = await import("./call-intercept");
+        await finishBeforeResponse("inbound-call", () => handleCallEvent({ email, data: body.data }));
+      } catch {
+        /* a call we could not read is not a reason to fail the webhook */
+      }
+      return { retryable };
+    }
+
     // Connection lifecycle. IMPORTANT: a 401 "close" is ALSO emitted as a
     // normal part of the pairing-code handshake (restartRequired), so we must
     // NOT treat every 401 as a ban - that would pause a number the instant it

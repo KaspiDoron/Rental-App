@@ -43,7 +43,14 @@ export type NotifyKind =
   // guard that terminally refused a thread, the cheapest shop lost - was the
   // one state that produced silence. The owner's decision: high-value PLUS
   // agent-blocked.
-  | "agent-blocked";
+  | "agent-blocked"
+  // A SHOP IS RINGING THE TRAVELLER'S PHONE RIGHT NOW.
+  //
+  // Not news either - it is a person waiting on the line, in a country where
+  // the traveller may be on airplane mode, out of credit, or simply unable to
+  // hold a conversation in the local language. It expires in seconds, which is
+  // the one thing no budget should ever be allowed to delay.
+  | "call";
 
 export interface NotifyEvent {
   kind: NotifyKind;
@@ -107,6 +114,9 @@ export function worthAnInterruption(event: NotifyEvent, state: NotifyState): Sig
   if (event.kind === "agent-blocked") {
     return { notify: true, reason: "the agent is stuck and only they can unstick it" };
   }
+  // A ringing phone cannot wait for a budget window. By the time the window
+  // opened the call would be long over.
+  if (event.kind === "call") return { notify: true, reason: "a shop is calling them right now" };
 
   if (state.sentInWindow >= MAX_PUSHES_PER_WINDOW) {
     return { notify: false, reason: "already interrupted enough for one search" };

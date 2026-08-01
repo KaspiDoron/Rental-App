@@ -50,6 +50,21 @@ const CLIENT_BROWSER: readonly [string, string, string] = ["Mac OS", "Chrome", "
 // media on connect (data minimization AND removing the "reads everything on link"
 // bot signature). NOTE: syncFullHistory:false is intentionally ALSO written as a
 // literal in each create body - the hardening-invariants test pins that literal.
+// THE EVENT SET, WRITTEN ONCE.
+//
+// It lived as three separate literals - register, recreate, create - and the
+// only reason they matched was that nobody had edited one of them lately.
+// CALL is here because a shop RINGING the traveller is a real event this app
+// has to answer: the traveller is abroad, may be on airplane mode or simply
+// cannot take a call in a language they do not speak, and an unanswered ring
+// reads to a shop as a customer who lost interest.
+const WEBHOOK_EVENTS = [
+  "MESSAGES_UPSERT",
+  "MESSAGES_UPDATE",
+  "CONNECTION_UPDATE",
+  "CALL",
+] as const;
+
 const CONNECT_FINGERPRINT = { browser: CLIENT_BROWSER, mobile: false } as const;
 
 // A per-message "typing" duration that scales with message length, jittered so
@@ -319,7 +334,7 @@ export async function reassertWebhook(
   const token = await webhookToken();
   if (!token) return { ok: false, changed: false, registeredUrl: null, skipped: "no-host" };
   const webhookUrl = `${origin}/api/webhooks/evolution?token=${token}`;
-  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+  const events = [...WEBHOOK_EVENTS];
 
   // Read-before-write: don't churn a healthy instance.
   let registeredUrl: string | null = null;
@@ -883,7 +898,7 @@ export async function ensureConnected(
   // Resolve the canonical origin (APP_DOMAIN - the GCP gateway) + current token.
   const recreateOrigin = await canonicalWebhookOrigin();
   const recreateToken = await webhookToken();
-  const recreateEvents = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+  const recreateEvents = [...WEBHOOK_EVENTS];
   const recreateWebhook =
     recreateOrigin && recreateToken
       ? {
@@ -1115,7 +1130,7 @@ export async function connectInstance(
     // teaching import still reads recent messages of numbers the owner names.
     syncFullHistory: false,
   };
-  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"];
+  const events = [...WEBHOOK_EVENTS];
 
   // Pairing code needs the number PASSED AT CREATE time in Evolution v2 - the
   // create response then carries the pairing code directly.
