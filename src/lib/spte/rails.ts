@@ -18,6 +18,28 @@ const TIME_COMMIT_RX =
   /\b(see you|meet you|i'?ll be there|pick ?up at|come by at|let'?s meet|be there at)\b.*\b(\d{1,2}\s?(?:am|pm|:\d{2})|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const TIME_DEFER_LINE = " I'll confirm the exact time with you directly.";
 
+// ONLY THE TRAVELLER MAY COMMIT, AND ONLY BY TAPPING LOCK THIS DEAL.
+//
+// The farewell rail below has always refused agreement language, but it only
+// ran on three moves. Every other move - bargain, present, momentum, the
+// deposit and pickup probes - could say "great, we'll take it" or "book it for
+// me" and go straight out, from the traveller's own number, to a shop that then
+// holds a vehicle for someone who has not decided. That is a promise the app
+// made on a person's behalf.
+//
+// This list is deliberately NARROW and about ACTION, not approval. "Sounds
+// good" while haggling is register, not a booking; "I'll take it" is a booking.
+// The soft-approval words stay confined to the farewell rail, where a goodbye
+// has no business carrying any of them.
+const COMMIT_RX =
+  /\b(?:i'?ll|i will|we'?ll|we will)\s+(?:take|book|reserve|have)\s+(?:it|that|the\s+\w+)\b|\b(?:it'?s a deal|we have a deal|deal!)|\bbook (?:it|that|me)\b|\b(?:please )?(?:reserve|hold|keep) (?:it|that|one) for (?:me|us)\b|\bput (?:my|our) name\b|\bi (?:accept|agree|confirm)\b|\bwe (?:accept|agree|confirm)\b|\blet'?s do it\b|\bi'?m (?:coming|on my way)\b|\bi'?ll come (?:pick|and pick|get)\b/i;
+
+// The ONE move that is allowed to commit, because it exists only after the
+// traveller tapped Lock This Deal (graph/types.ts: "the traveller locked the
+// deal - tell the shop"; it is emitted by /api/negotiate/close-deal and is
+// never in the legal set a normal turn chooses from).
+const COMMIT_ALLOWED_MOVE = "closing-message";
+
 /**
  * Run all post-rails on a composed artifact. Returns the final wire text, or a
  * rejection the caller turns into a deterministic fallback (never a broken send).
@@ -157,6 +179,30 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
           detail: agreed
             ? `a goodbye agreed to something ("${agreed[0]}")`
             : `a goodbye carried a price ("${priced?.[0]?.trim()}")`,
+        },
+      };
+    }
+  }
+
+  // 0.9) THE COMMITMENT RAIL - now on EVERY move, not three of them.
+  //
+  // The traveller's decision has exactly one expression in this system: the
+  // Lock This Deal button, which produces `closing-message`. Anything else
+  // that books, reserves, accepts or announces we are on our way is the app
+  // deciding for them - and a shop that holds a bike on that promise is a real
+  // person losing a real rental when the traveller picks a cheaper shop.
+  //
+  // Information gathering is untouched by design (the owner's ruling): asking
+  // what deposit they take or whether they deliver is a question, and questions
+  // are how the traveller learns enough to decide.
+  if (artifact.move !== COMMIT_ALLOWED_MOVE) {
+    const committed = COMMIT_RX.exec(text);
+    if (committed) {
+      return {
+        ok: false,
+        rejected: {
+          rule: "commitment",
+          detail: `a ${artifact.move} committed on the traveller's behalf ("${committed[0].trim()}") - only Lock This Deal may do that`,
         },
       };
     }

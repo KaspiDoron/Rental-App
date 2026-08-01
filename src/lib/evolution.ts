@@ -1913,6 +1913,22 @@ export async function sendFromUser(
     /* presence is cosmetic - never block the send */
   }
 
+  // THE LAST GAP BEFORE THE WIRE, AND THE ONLY ONE WITH THE RIGHT SHAPE.
+  //
+  // Everything above is uniform noise, which still forms a flat block with hard
+  // edges when you collect enough of it. Real human message arrivals are a
+  // Poisson process, so the gap between them is exponential - mostly short,
+  // occasionally long. This draw sits immediately before the API call, so it is
+  // the inter-arrival time an observer on the other side actually measures.
+  //
+  // BACKGROUND ONLY. `fast` is an interactive send with a person watching the
+  // screen; adding up to 2.4s there would buy a distribution nobody is
+  // measuring at the cost of the one thing the user does notice.
+  if (!fast) {
+    const { poissonPause } = await import("./wa/jitter");
+    await poissonPause();
+  }
+
   const trySend = async () => {
     // v2 shape first, then the legacy v1 body. IMPORTANT: only fall back to the
     // v1 shape on a DEFINITIVE status error (4xx/5xx = the server rejected the

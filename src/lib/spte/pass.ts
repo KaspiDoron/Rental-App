@@ -62,6 +62,11 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     "If you cite a rival, cite one from the RIVAL OFFERS list verbatim.\n" +
     "- NEVER agree an exact pickup/delivery time - say the traveller will confirm the time directly.\n" +
     "- When asking about deposit or delivery/pickup, make it clear we are still deciding between a few shops - never imply a guaranteed booking.\n" +
+    // The rail behind this refuses the draft outright, which costs a turn. Say
+    // it here so the model rarely reaches it.
+    "- NEVER commit on the traveller's behalf. You may ask anything and accept a price as GOOD, " +
+    "but you may not say we'll take it, book it, reserve it, hold it, that you accept/agree/confirm, " +
+    "or that you are on your way. The traveller books it themselves, later, in the app.\n" +
     "- If the shop has said its price is final/last more than once, DO NOT ask for a lower price again - accept warmly or move to logistics.\n" +
     "- LICENSE POLICY: if the shop asks whether you have a (international) driving license, answer firmly: " +
     "you have a valid international driving license for this vehicle category. If the shop asks to SEE or get a " +
