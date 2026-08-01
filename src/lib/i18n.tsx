@@ -60,6 +60,15 @@ interface I18nValue {
   t: (s: string) => string;
   busy: boolean;
   error: string | null;
+  /**
+   * TRANSLATION HAS STOPPED, AND HERE IS WHY.
+   *
+   * Silently showing English while the language picker still says Thai is how
+   * the whole feature looked dead in the field. When the server gives a
+   * terminal answer - no AI provider, the daily budget spent - the sweep stops
+   * asking AND the traveller is told, in one sentence, in plain language.
+   */
+  unavailable: string | null;
 }
 
 const I18nContext = createContext<I18nValue>({
@@ -68,12 +77,18 @@ const I18nContext = createContext<I18nValue>({
   t: (s) => s,
   busy: false,
   error: null,
+  unavailable: null,
 });
 
 import { I18N_CATALOG } from "./i18n-catalog";
+import { translateOutcome, unavailableNote, retriable, missedFrom } from "./i18n-retry";
 
 // Strings seen by t() that still need a translation (swept in batches).
 const pending = new Set<string>();
+// Strings the server has already declined to translate. WITHOUT THIS SET the
+// sweep is a loop: t() re-adds every untranslated string on the next render,
+// the sweep asks again 1.5s later, and nothing ever changes the answer.
+const failed = new Set<string>();
 // The FULL app catalogue (generated at build time from every t("...") in the
 // codebase) plus anything t() sees at runtime. Seeding with the catalogue is
 // what makes a language switch translate EVERY page - tags, buttons, admin,
@@ -99,7 +114,11 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [dict, setDict] = useState<Dict>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const sweepTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+  // A terminal answer stops the sweep for this session. Held in a ref as well
+  // as state because the interval closure needs the CURRENT value, not the one
+  // captured when it was created.
+  const stoppedRef = useRef(false);
   const langRef = useRef(lang);
   langRef.current = lang;
 
@@ -111,39 +130,77 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   const fetchTranslations = useCallback(
     async (code: string, texts: string[]) => {
-      if (code === "en" || texts.length === 0) return;
+      if (code === "en" || texts.length === 0 || stoppedRef.current) return;
       setBusy(true);
       setError(null);
       try {
         // Batch so each request stays well inside the serverless time budget
-        // (the whole-app catalogue can be hundreds of strings). Results apply
-        // progressively - the page translates as batches land.
+        // (the whole-app catalogue can be hundreds of strings).
+        //
+        // IN PARALLEL, AND COMMITTED ONCE. Sequential batches meant a language
+        // switch was N round trips end to end, and each one called setDict -
+        // so every consumer of the context re-rendered once per batch, which on
+        // the full catalogue is a re-render storm on the slowest moment in the
+        // app. One await, one commit.
         const BATCH = 42;
-        for (let i = 0; i < texts.length; i += BATCH) {
-          if (langRef.current !== code) break; // user switched again
-          const res = await fetch("/api/translate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              lang: code,
-              langName: LANGS.find((l) => l.code === code)?.name ?? code,
-              texts: texts.slice(i, i + BATCH),
-            }),
-          });
-          const data = await res.json();
-          if (data.map && langRef.current === code) {
-            setDict((prev) => {
-              const next = { ...prev, ...data.map };
-              cacheSet(code, next);
-              return next;
+        const batches: string[][] = [];
+        for (let i = 0; i < texts.length; i += BATCH) batches.push(texts.slice(i, i + BATCH));
+
+        const results = await Promise.all(
+          batches.map(async (batch) => {
+            const res = await fetch("/api/translate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lang: code,
+                langName: LANGS.find((l) => l.code === code)?.name ?? code,
+                texts: batch,
+              }),
             });
+            const data = (await res.json().catch(() => null)) as {
+              map?: Record<string, string>;
+              error?: string;
+            } | null;
+            return { batch, status: res.status, data };
+          })
+        );
+
+        if (langRef.current !== code) return; // the user switched again
+
+        const merged: Dict = {};
+        let terminal: { status: number; data: { error?: string } | null } | null = null;
+        for (const r of results) {
+          const outcome = translateOutcome(r.status, r.data);
+          if (outcome === "stop") {
+            terminal = { status: r.status, data: r.data };
+            continue;
           }
-          if (data.error) {
-            setError(data.error);
-            break;
-          }
+          if (outcome === "retry") continue; // a transient miss stays retriable
+          Object.assign(merged, r.data?.map ?? {});
+          // Retire what the server answered "no" to, so the sweep stops asking.
+          for (const miss of missedFrom(r.batch, r.data?.map)) failed.add(miss);
+        }
+
+        if (Object.keys(merged).length > 0) {
+          setDict((prev) => {
+            const next = { ...prev, ...merged };
+            cacheSet(code, next);
+            return next;
+          });
+        }
+
+        if (terminal) {
+          // NOTHING ABOUT THIS SESSION WILL CHANGE THE ANSWER. Stop asking, and
+          // say so - a language picker that silently shows English is worse
+          // than one that admits it cannot.
+          stoppedRef.current = true;
+          const note = unavailableNote(terminal.status, terminal.data);
+          setUnavailable(note);
+          setError(note);
+          pending.clear();
         }
       } catch {
+        // A network blip IS worth retrying - the next sweep picks it up.
         setError("Could not reach the translation service.");
       } finally {
         setBusy(false);
@@ -159,6 +216,12 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem("wd_lang", code);
       } catch {}
       applyDirection(code);
+      // A NEW LANGUAGE IS A NEW QUESTION. Whatever the server declined for the
+      // previous one says nothing about this one, and a terminal stop must not
+      // outlive the language that caused it.
+      failed.clear();
+      stoppedRef.current = false;
+      setUnavailable(null);
       if (code === "en") {
         setDict({});
         return;
@@ -193,12 +256,13 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (lang === "en") return;
     const id = setInterval(() => {
-      if (pending.size === 0) return;
-      const batch = [...pending];
+      if (stoppedRef.current) return;
+      // Only the strings still worth asking about - see lib/i18n-retry.
+      const batch = retriable(pending, failed);
       pending.clear();
+      if (batch.length === 0) return;
       fetchTranslations(lang, batch);
     }, 1500);
-    sweepTimer.current = undefined;
     return () => clearInterval(id);
   }, [lang, fetchTranslations]);
 
@@ -208,7 +272,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       if (lang === "en") return s;
       const hit = dict[s];
       if (hit) return hit;
-      pending.add(s);
+      // A string the server has already declined is never queued again.
+      if (!failed.has(s)) pending.add(s);
       return s;
     },
     [lang, dict]
@@ -218,8 +283,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   // re-render) does not hand every useI18n consumer in the tree a brand-new
   // object and force a full-app re-render on each translate sweep.
   const value = useMemo(
-    () => ({ lang, setLang, t, busy, error }),
-    [lang, setLang, t, busy, error]
+    () => ({ lang, setLang, t, busy, error, unavailable }),
+    [lang, setLang, t, busy, error, unavailable]
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

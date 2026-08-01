@@ -95,12 +95,19 @@ export function VirtualVendorList({
             key={vendor.id}
             data-index={item.index}
             ref={virtualizer.measureElement}
+            // A windowed row is absolutely positioned, so it has no inline flow
+            // for `dir="rtl"` to mirror - the lane offset has to be flipped by
+            // hand. globals.css swaps `left` for `right` off this class and the
+            // custom property below.
+            className="wd-virtual-row"
             style={{
               position: "absolute",
               top: 0,
               // Two lanes share the width; one lane takes all of it. The gap is
               // baked into the width so the columns do not touch.
               left: lanes === 2 ? `calc(${item.lane * 50}% + ${item.lane * 6}px)` : 0,
+              ["--wd-lane-offset" as string]:
+                lanes === 2 ? `calc(${item.lane * 50}% + ${item.lane * 6}px)` : "0px",
               width: lanes === 2 ? "calc(50% - 6px)" : "100%",
               transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
             }}

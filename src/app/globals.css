@@ -891,3 +891,79 @@ html.dark .skeleton::after {
   animation: sponsored-glow 2.6s ease-in-out infinite;
   border-color: transparent !important;
 }
+
+/* =============================================================================
+   RIGHT-TO-LEFT: PRAGMATIC MIRRORING
+   =============================================================================
+   Hebrew and Arabic are in the language picker and `dir` has been set on <html>
+   since day one - which flips text and inline flow, and leaves every PHYSICAL
+   utility exactly where it was. So the app read right-to-left while its
+   scaffolding still pointed left: a speech-bubble tail on the wrong side of the
+   bubble, a close button on the wrong edge of a sheet, an avatar pushed away
+   from the name it belongs to.
+
+   The owner's decision was mirroring, not a logical-property refactor: fix the
+   load-bearing screens - nav, cards, modals, forms - and leave the rest to
+   inline flow, which already does the right thing.
+
+   Everything below is scoped to [dir="rtl"], so the LTR app is untouched. */
+
+[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
+
+/* Physical text alignment inside a mirrored layout. Utilities that name a SIDE
+   are the ones that cannot mirror themselves; `text-start`/`text-end` would be
+   the durable fix and this is the pragmatic one. */
+[dir="rtl"] .text-left { text-align: right; }
+[dir="rtl"] .text-right { text-align: left; }
+
+/* Absolutely-positioned chrome: badges, close buttons, bubble tails. Only the
+   small offsets used for decoration are mirrored - a full-bleed `left-0
+   right-0` pair is symmetric and needs nothing. */
+[dir="rtl"] .rtl-mirror-x {
+  left: auto;
+  right: 0;
+}
+
+/* The vendor list's two-column virtualiser positions lanes with an explicit
+   `left`, because a windowed row is absolutely positioned and has no inline
+   flow to mirror. Row order follows reading direction here. */
+[dir="rtl"] .wd-virtual-row {
+  left: auto !important;
+  right: var(--wd-lane-offset, 0);
+}
+
+/* ONE-DIRECTION ISLANDS. A phone number, a price, a URL and a WhatsApp
+   transcript are LTR content whatever the interface language is - rendering
+   them right-to-left moves the country code to the wrong end of the number and
+   the currency symbol to the wrong side of the amount. Mark them and they stay
+   put. (WaTermsModal already carries an explicit dir="ltr" for the same
+   reason.) */
+[dir="rtl"] .ltr-island {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
+}
+
+/* Scroll shadows / gradients that fade toward one edge. */
+[dir="rtl"] .fade-right {
+  background: linear-gradient(to left, var(--bg), transparent);
+}
+
+/* ---- Back-to-status FAB (glass) ----------------------------------------
+   The one place in the app where a backdrop blur is worth its cost: a small,
+   fixed, rarely-visible pill, NOT a sticky bar that re-samples its backdrop on
+   every frame of every scroll (see the top-bar note above for why that
+   matters). It appears only when the live status panel is off screen. */
+.wd-status-fab {
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  /* No color-mix (older WebViews): a solid card is the honest fallback -
+     a transparent pill with no blur would be unreadable over a photo. */
+  .wd-status-fab { background: var(--card); }
+}

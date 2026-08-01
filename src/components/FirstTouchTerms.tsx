@@ -96,7 +96,7 @@ export function FirstTouchTerms() {
 
   const gate = (
     <div
-      className="fixed inset-0 z-[var(--z-veil,90)] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm sm:items-center"
+      className="layer-veil fixed inset-0 flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm sm:items-center"
       role="dialog"
       aria-modal="true"
       aria-label="Terms of Use"

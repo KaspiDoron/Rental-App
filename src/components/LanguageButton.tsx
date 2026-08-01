@@ -9,7 +9,7 @@ import { LANGS, useI18n } from "@/lib/i18n";
 // including the login page. Flashy on first sight so travellers immediately
 // know the whole app can speak their language (AI translation).
 export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
-  const { lang, setLang, t, busy, error } = useI18n();
+  const { lang, setLang, t, busy, error, unavailable } = useI18n();
   const [open, setOpen] = useState(false);
   const [showHint, setShowHint] = useState(false);
 
@@ -48,6 +48,17 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
         {showHint && (
           <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-full bg-brandblue/40" />
         )}
+        {/* TRANSLATION HAS STOPPED AND THE PICKER IS CLOSED. The button still
+            shows a flag, so without this the app claims a language it is no
+            longer serving - which is exactly how the feature looked dead in the
+            field. A dot, and the sentence inside. */}
+        {unavailable && !open && (
+          <span
+            aria-hidden
+            title={unavailable}
+            className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warn ring-2 ring-[color:var(--bg)]"
+          />
+        )}
       </div>
 
       {open && (
@@ -77,9 +88,9 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
               <LoadingDots label={t("Translating the app...")} />
             </div>
           )}
-          {error && (
+          {(unavailable || error) && (
             <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-              {error}
+              {unavailable ?? error}
             </p>
           )}
 

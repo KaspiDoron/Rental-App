@@ -18,6 +18,7 @@ import { vehicleLabel } from "@/lib/labels";
 import { Icon } from "@/components/icons";
 import { Filters, DEFAULT_FILTERS, type FilterState } from "@/components/Filters";
 import { VendorCard } from "@/components/VendorCard";
+import { StatusFab } from "@/components/StatusFab";
 import { ShopAvatar, clearShopAvatars } from "@/components/ShopAvatar";
 import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
@@ -3995,6 +3996,16 @@ export default function Home() {
             {actionNote.text}
           </div>
         </FixedLayer>
+      )}
+
+      {/* BACK TO THE STATUS PANEL. The list no longer paginates, so a busy hunt
+          is an unbounded scroll and the panel that says what the agents are
+          doing is at the top of it. The button appears only once that panel is
+          off screen - a control pointing at something already visible is
+          clutter - and it watches the element itself rather than guessing from
+          a scroll offset that a collapsing header would invalidate. */}
+      {vendors.length > 0 && view === "list" && (
+        <StatusFab target="[data-tour='status']" label={t("Live status")} />
       )}
 
       <TabBar
