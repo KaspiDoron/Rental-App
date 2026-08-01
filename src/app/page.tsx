@@ -101,6 +101,7 @@ import { digitsOnly } from "@/lib/phone";
 import { deviceTimeZone } from "@/lib/rental-window";
 import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
 import { MassBargainPreview } from "@/components/MassBargainPreview";
+import { VirtualVendorList } from "@/components/VirtualVendorList";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -187,6 +188,8 @@ export default function Home() {
   const [waReachable, setWaReachable] = useState(true);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
+  /** Row the list should bring into view - see VirtualVendorList's prop. */
+  const [scrollToIndex, setScrollToIndex] = useState<number | null>(null);
   /** The pre-dispatch preview: who the run picked, before anything is sent. */
   const [massPreview, setMassPreview] = useState<{
     targets: Vendor[];
@@ -222,7 +225,6 @@ export default function Home() {
   const structuredMode = builderOpen && Boolean(builderFields?.vehicleClass);
   // Card windowing: render the first batch and reveal more on demand - keeps
   // long result lists cheap on low-end phones.
-  const [visibleCount, setVisibleCount] = useState(20);
   // Live status panel (expandable) + user-facing queued-message list (bug #1/#9).
   const [statusOpen, setStatusOpen] = useState(false);
   // AUTO-EXPAND once sending actually begins (issue 5.2): the live progress is
@@ -305,7 +307,10 @@ export default function Home() {
   // transition re-collapses it, a tap on the summary row re-opens it.
   useEffect(() => {
     if (phase === "running" || phase === "done") setFormOpen(false);
-    if (phase === "profiling" || phase === "discovering") setVisibleCount(20);
+    // A NEW HUNT STARTS AT THE TOP. The windowed list has no page counter to
+    // reset any more, but a stale scroll target from the previous search would
+    // still fire once the new vendors land.
+    if (phase === "profiling" || phase === "discovering") setScrollToIndex(null);
   }, [phase]);
   const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
 
@@ -327,9 +332,7 @@ export default function Home() {
   }
 
   // Jump straight to a shop's card from the status panel: switch to the list,
-  // highlight it, and smooth-scroll it into view. The list is WINDOWED
-  // (visibleCount) - a card beyond the window has no DOM node, so the window
-  // must grow past the target first or the tap silently does nothing.
+  // highlight it, and smooth-scroll it into view.
   // CONSUME THE PUSH'S DESTINATION once the hunt is actually on screen. The
   // vendor list arrives asynchronously (session restore, then the activity
   // poll), so the id a notification carried is held in a ref until there is
@@ -350,14 +353,15 @@ export default function Home() {
   function scrollToVendor(id: string) {
     setView("list");
     setSelectedId(id);
-    setVisibleCount((n) => {
-      // Index into the ACTUALLY-RENDERED list (filtered + sorted), not raw
-      // `vendors` (B9): the list renders `filtered.slice(0, visibleCount)`, so a
-      // window grown to the raw-array index can fall short whenever a sort/
-      // filter reorders the target - leaving no DOM node to scroll to.
+    // THE TARGET MAY NOT BE MOUNTED. The list is windowed, so a card far down
+    // it has no DOM node to scroll to - the old fix was to grow a "show more"
+    // window past the index, which the virtualizer replaced. Scroll the page to
+    // the row's position instead and let the virtualizer mount it on the way;
+    // the two frames below then centre the real element once it exists.
+    {
       const idx = filtered.findIndex((v) => v.id === id);
-      return idx >= 0 ? Math.max(n, idx + 5) : n;
-    });
+      if (idx >= 0) setScrollToIndex(idx);
+    }
     // Two frames: let React commit the larger window before scrolling.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
@@ -3484,12 +3488,21 @@ export default function Home() {
             />
           </div>
         ) : (
-          <div data-tour="vendors" className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-            {filtered.slice(0, visibleCount).map((v, i) => (
+          <div data-tour="vendors" className="mt-3">
+            {/* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
+                tracker, options, composer, a thread peek with its own poll -
+                all mounted and all re-rendering on every activity tick, on a
+                phone. "Show 20 more" was the old defence and it was a bad one
+                twice: it made the traveller work to see shops the app already
+                had, and it did nothing once tapped, which is exactly when the
+                list is heaviest. Only the rows near the viewport exist now. */}
+            <VirtualVendorList
+              vendors={filtered}
+              scrollToIndex={scrollToIndex}
+              renderCard={(v, i) => (
               <div
-                key={v.id}
                 id={`vendor-${v.id}`}
-                className={`rise-in scroll-mt-24 rounded-blob transition-shadow ${
+                className={`rise-in scroll-mt-24 mb-3 rounded-blob transition-shadow ${
                   selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
                 }`}
                 // The stagger was uncapped, so the twentieth card started
@@ -3522,15 +3535,8 @@ export default function Home() {
                   agentPending={agentPending[v.id]}
                 />
               </div>
-            ))}
-            {filtered.length > visibleCount && (
-              <button
-                onClick={() => setVisibleCount((n) => n + 20)}
-                className="btn btn-ghost w-full rounded-2xl py-3 text-[13px] font-extrabold text-brandblue md:col-span-2"
-              >
-                {t("Show")} {Math.min(20, filtered.length - visibleCount)} {t("more shops")}
-              </button>
-            )}
+              )}
+            />
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
                 <LoadingDots label={t("More agents reporting in")} />

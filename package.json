@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@paypal/react-paypal-js": "^10.1.2",
+    "@tanstack/react-virtual": "^3.14.9",
     "bullmq": "^5.80.9",
     "express": "^5.2.1",
     "ioredis": "^5.11.1",
