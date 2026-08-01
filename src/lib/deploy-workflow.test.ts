@@ -92,6 +92,18 @@ describe("secrets reach gcloud as environment variables, not as pasted text", ()
     expect(script).toMatch(/set -euo pipefail/);
   });
 
+  it("...and so does the heartbeat step that derives the ping token", () => {
+    // Same rule, newer step: SESSION_SECRET arrives as an env var and is
+    // referenced as $SESSION_SECRET. Pasted in as `${{ secrets.X }}` it would
+    // be substituted before bash saw the line, and a secret containing a quote
+    // or a backtick would rewrite the script around it.
+    const s = wf();
+    const h = s.slice(s.indexOf("- name: Ensure the drain heartbeat exists"));
+    expect(h).toMatch(/env:\s*\n\s*PROJECT_ID: \$\{\{ secrets\.GCP_PROJECT_ID \}\}/);
+    expect(h).toMatch(/SESSION_SECRET: \$\{\{ secrets\.SESSION_SECRET \}\}/);
+    expect(h.slice(h.indexOf("run: |"))).not.toMatch(/\$\{\{\s*secrets\./);
+  });
+
   it("an unset optional secret is skipped, not written empty", () => {
     // `[ -n "${{ secrets.X }}" ]` with an unset secret rendered as `[ -n ]`,
     // which bash evaluates as "is the string '-n' non-empty" - TRUE - so every

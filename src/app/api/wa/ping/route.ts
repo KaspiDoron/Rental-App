@@ -58,11 +58,33 @@ export async function GET(req: Request) {
 
   // Extend this ping's reach: kick the self-chaining drain so one cron hit
   // keeps a staggered batch progressing for the following ~30 minutes even
-  // between cron intervals (fire-and-forget; the chain is single-runner).
+  // between cron intervals. AWAITED to the point of leaving the instance - a
+  // detached fetch here is exactly the call Cloud Run freezes (see wa/kick.ts).
   if (expected) {
-    fetch(
+    const { kickDispatcher } = await import("@/lib/wa/kick");
+    await kickDispatcher(
       `${new URL(req.url).origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=0`
-    ).catch(() => {});
+    );
+  }
+
+  // THE HEARTBEAT ITSELF IS THE THING TO WATCH.
+  //
+  // This route is the only mechanism in the whole system that can move a queued
+  // message or a due wakeup while the owner's phone is in their pocket. If the
+  // scheduler behind it ever stops - a job deleted, a token rotated, a cron
+  // service that silently lapsed - the app does not break loudly. It goes quiet,
+  // which is indistinguishable from "the shops are slow today".
+  //
+  // So every hit leaves a dated mark. /api/admin/deploy-info reads the newest
+  // one and reports its age, so "is the heartbeat alive?" is a question the
+  // owner can answer from their phone in one look.
+  try {
+    const { sbInsert } = await import("@/lib/runtime-config");
+    await sbInsert("agent_events", [
+      { kind: "cron-ping", detail: JSON.stringify({ drained, synced, hosts: hosts.length }) },
+    ]);
+  } catch {
+    /* the ping still did its work; the breadcrumb is best-effort */
   }
 
   return NextResponse.json({

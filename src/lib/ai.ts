@@ -239,6 +239,13 @@ export async function aiEnabled(): Promise<boolean> {
   return (await providers()).length > 0;
 }
 
+/** The names of the providers that actually have a key, in the order they
+ *  would be tried. Cheap (no network) - the deploy self-check reports it so a
+ *  key-less deployment is visible rather than inferred from blunt replies. */
+export async function configuredProviders(): Promise<ProviderName[]> {
+  return (await providers()).map((p) => p.name);
+}
+
 // ---- usage accounting (per provider, per instance + durable log) ------------
 
 declare global {

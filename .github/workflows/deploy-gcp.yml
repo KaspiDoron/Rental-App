@@ -171,7 +171,12 @@ jobs:
           IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE"
           # ^##^ makes gcloud split on ## instead of "," so secret values may
           # safely contain commas (e.g. ADMIN_EMAILS, EVOLUTION_HOSTS).
-          ENV_VARS="SUPABASE_URL=$SUPABASE_URL"
+          # WHAT IS ACTUALLY SERVING. Stamped into the running service so
+          # /api/admin/deploy-info can answer "is the fix I just shipped live?"
+          # from the owner's phone, instead of it being an act of faith.
+          ENV_VARS="WD_BUILD_SHA=$IMAGE_TAG"
+          ENV_VARS="$ENV_VARS##WD_BUILD_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ENV_VARS="$ENV_VARS##SUPABASE_URL=$SUPABASE_URL"
           ENV_VARS="$ENV_VARS##SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
           ENV_VARS="$ENV_VARS##NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY"
           ENV_VARS="$ENV_VARS##SESSION_SECRET=$SESSION_SECRET"
@@ -243,3 +248,64 @@ jobs:
         run: |
           gcloud run services describe "$SERVICE" --region "$REGION" \
             --format="value(status.url)"
+
+      # THE HEARTBEAT. Without this, nothing in the system moves unless an HTTP
+      # request happens to arrive.
+      #
+      # A queued message, a strategic wait, a three-minute check-back on a quiet
+      # thread: every one of them is a row with a due time and NO timer behind
+      # it. The drains run inside request handlers - the webhook, the app's own
+      # polling - so with the owner's phone locked and no shop replying, a due
+      # row simply waits. The only periodic drain artifact this repo ever had is
+      # render.yaml's cron, which is a Render.com resource and does exactly
+      # nothing for a service running on Cloud Run, and the documented fallback
+      # was an out-of-repo cron-job.org job that PRODUCTION-READINESS.md itself
+      # flags as a single point of failure nobody would notice lapsing.
+      #
+      # Cloud Scheduler is the GCP-native answer: 3 jobs free, one HTTP call a
+      # minute, provisioned here so it exists as long as the service does.
+      #
+      # Note on CPU: we deliberately do NOT pass --no-cpu-throttling. It would
+      # flip this service to instance-based billing (charged for idle time,
+      # which a once-a-minute ping makes continuous) and it is not needed for
+      # correctness - every drain and dispatcher kick is now awaited inside its
+      # own request rather than left running after the response (see
+      # src/lib/wa/kick.ts).
+      - name: Ensure the drain heartbeat exists
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="$(gcloud run services describe "$SERVICE" --region "$REGION" \
+            --format='value(status.url)')"
+          if [ -z "$URL" ]; then
+            echo "No service URL yet - skipping scheduler wiring."
+            exit 0
+          fi
+          # Same derivation as src/lib/wa/webhook-token.ts: the ping route
+          # accepts the webhook token, so the schedule needs no new secret.
+          TOKEN="$(printf 'wd-webhook:%s' "$SESSION_SECRET" | sha256sum | cut -c1-32)"
+          TARGET="$URL/api/wa/ping?token=$TOKEN"
+          JOB="wheeldeal-drain"
+          # Enable on first run; a no-op afterwards.
+          gcloud services enable cloudscheduler.googleapis.com --quiet || true
+          if gcloud scheduler jobs describe "$JOB" --location "$REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB" \
+              --location "$REGION" \
+              --schedule "* * * * *" \
+              --uri "$TARGET" \
+              --http-method GET \
+              --attempt-deadline 60s \
+              --quiet
+            echo "Heartbeat updated (every minute)."
+          else
+            gcloud scheduler jobs create http "$JOB" \
+              --location "$REGION" \
+              --schedule "* * * * *" \
+              --uri "$TARGET" \
+              --http-method GET \
+              --attempt-deadline 60s \
+              --quiet
+            echo "Heartbeat created (every minute)."
+          fi

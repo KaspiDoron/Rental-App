@@ -25,6 +25,10 @@ const WaDoctorCard = dynamic(
   () => import("@/components/admin/WaDoctorCard").then((m) => m.WaDoctorCard),
   { ssr: false, loading: () => <LoadingDots label="Loading WA doctor" /> }
 );
+const DeployInfoCard = dynamic(() => import("@/components/admin/DeployInfoCard"), {
+  ssr: false,
+  loading: () => <LoadingDots label="Reading the running service" />,
+});
 const OpsCenterPanel = dynamic(
   () => import("@/components/ops/OpsCenter").then((m) => m.OpsCenter),
   { ssr: false, loading: () => <LoadingDots label="Loading the Ops Center" /> }
@@ -1510,6 +1514,12 @@ export default function AdminPage() {
 
       {loaded && tab === "keys" && (
         <div className="space-y-3">
+          {/* Ground truth first: what revision is serving, what the database
+              actually has, whether anything is still draining the queue, and
+              whether the agents have a model. A red line here explains a field
+              failure before any code is suspected. */}
+          <DeployInfoCard />
+
           {/* Live service health with 10-minute auto-refresh (item #12) */}
           <HealthPanel />
 
