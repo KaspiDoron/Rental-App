@@ -72,3 +72,31 @@ export function compareOutboxRows(
     a.notBefore.localeCompare(b.notBefore)
   );
 }
+
+/**
+ * A MESSAGE THAT IS TOO OLD TO SEND.
+ *
+ * The drain's only test was `not_before <= now`, which is a floor and not a
+ * ceiling: a row overdue by three days passes it exactly as well as a row
+ * overdue by three seconds. That was survivable while nothing was draining
+ * automatically, because the queue only moved when a human opened the app.
+ * The moment a scheduler starts calling the drain every minute it stops being
+ * survivable - a stalled backlog gets sent, in full, to real shops.
+ *
+ * And the freshness gate does not catch these. `NEVER_STALE` exempts rfq /
+ * custom / human-manual precisely because a cold introduction has no thread to
+ * be out of date with, so an ancient "do you have a scooter for tomorrow?" is
+ * judged perfectly fresh and goes out. Tomorrow was three days ago.
+ *
+ * Six hours: long enough that no legitimate pacing hold (the batch deadline
+ * clamps to the same evening) is ever caught by it, short enough that nothing
+ * sent is answering a question the traveller has forgotten asking.
+ */
+export const OUTBOX_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+export function outboxExpired(notBefore: string, nowMs: number): boolean {
+  const due = Date.parse(notBefore);
+  // An unparseable timestamp is not evidence of age. Leave it to the send path.
+  if (!Number.isFinite(due)) return false;
+  return nowMs - due > OUTBOX_MAX_AGE_MS;
+}

@@ -164,12 +164,20 @@ export async function GET() {
   // the send pipeline - a spike here is the first sign something is being
   // held back (cancellations firing, claims contended, fail-closed holds,
   // structurally illegal phase jumps).
-  const { sbSelect } = await import("@/lib/runtime-config");
+  const { sbSelect, sbCount } = await import("@/lib/runtime-config");
   const sinceIso = new Date(Date.now() - 24 * 3600_000).toISOString();
   const guardKinds = [
     "cancelled-send-blocked",
     "takeover-send-blocked",
+    // CONTENTION, which is the system pacing itself and is expected...
     "claim-lost",
+    // ...and its opposite, which used to share the counter above: a fail-closed
+    // refusal because the claim table could not be read. One is busy, the other
+    // is broken, and reading a single number could not tell the owner which.
+    "claim-error",
+    // A message binned for being older than the drain's age ceiling. Zero is
+    // normal; a spike means a backlog stalled long enough to go off.
+    "wa-send-expired",
     "bargain-blocked",
     "phase-anomaly",
     "ambiguous-inbound",
@@ -190,15 +198,31 @@ export async function GET() {
     // exactly the failure that survived a full deploy-and-verify cycle.
     "engine-graph-turn",
   ];
-  const eventRows = await sbSelect<{ kind: string }>(
-    "agent_events",
-    `select=kind&kind=in.(${guardKinds.join(",")})&created_at=gte.${encodeURIComponent(
-      sinceIso
-    )}&limit=500`
-  ).catch(() => []);
+  // ONE BUDGET SHARED BY TWELVE COUNTERS IS ELEVEN COUNTERS THAT CAN BE STARVED.
+  //
+  // This was a single `kind=in.(...)` read with `limit=500`. Every kind drew
+  // from the same 500 rows, so on a busy day one chatty kind - `claim-lost`
+  // during a pacing-heavy hour is exactly that - could fill the budget and
+  // every other counter would silently read ZERO. The numbers that say whether
+  // sends are being dropped would look their most reassuring precisely when the
+  // system was busiest.
+  //
+  // Ask each kind for its own count. PostgREST returns it in the Content-Range
+  // header with head=true, so this is twelve tiny HEAD-shaped requests rather
+  // than one large row transfer - cheaper than what it replaces, and each
+  // number is now independent of the others' volume.
+  const counts = await Promise.all(
+    guardKinds.map((k) =>
+      sbCount(
+        "agent_events",
+        `kind=eq.${encodeURIComponent(k)}&created_at=gte.${encodeURIComponent(sinceIso)}`
+      ).catch(() => 0)
+    )
+  );
   const guardCounters: Record<string, number> = {};
-  for (const k of guardKinds) guardCounters[k] = 0;
-  for (const r of eventRows) guardCounters[r.kind] = (guardCounters[r.kind] ?? 0) + 1;
+  guardKinds.forEach((k, i) => {
+    guardCounters[k] = counts[i];
+  });
 
   // WEBHOOK SILENCE DETECTOR: the launch-blocker signature is "we sent messages
   // recently, ≥1 session is open, but NO inbound arrived and NO webhook was

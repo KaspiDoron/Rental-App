@@ -5,6 +5,7 @@ import { isAllowed } from "@/lib/allowlist";
 import { needsReacceptance, reacceptanceReason } from "@/lib/consent";
 import { TERMS_VERSION } from "@/lib/legal";
 import { getConfig } from "@/lib/runtime-config";
+import { tableReady } from "@/lib/schema-probe";
 
 export async function GET() {
   const session = await getSession();
@@ -18,6 +19,27 @@ export async function GET() {
   // fresh: the profile (phone!) must come from the durable store, never a
   // stale per-instance cache - this is what pages read right after login.
   const profile = session ? (await getUser(session.email, { fresh: true })) ?? null : null;
+
+  // DO NOT RAISE A GATE YOU CANNOT CLOSE.
+  //
+  // The first-touch modal is non-dismissable and it closes on exactly one fact:
+  // `app_users.terms_version` being written. On a database where that column
+  // does not exist, the stamp 400s, `needsReacceptance` stays true, and the
+  // modal returns on every single page load for every single user - a whole
+  // user base locked out of the product by a legal screen that cannot record
+  // the thing it is asking for.
+  //
+  // So the gate is conditional on the column being writable. FAIL OPEN on both
+  // "missing" and "unavailable": suppressing it returns the app to exactly the
+  // posture it had before this feature (signup consents on the user row, Terms
+  // linked in the footer), whereas blocking everyone produces no proof AND no
+  // product. `needsReacceptance` itself stays pure - it is the policy, this is
+  // the precondition, and keeping them apart is what makes the policy testable.
+  let gateReady = true;
+  if (profile && needsReacceptance(profile)) {
+    gateReady = (await tableReady("app_users", "terms_version")) === "ready";
+  }
+
   return NextResponse.json({
     session,
     profile: profile
@@ -35,8 +57,11 @@ export async function GET() {
           // modal blocks the app on this, and it is decided here rather than in
           // the browser: a client that computed it could simply not.
           termsVersion: profile.termsVersion ?? null,
-          needsTerms: needsReacceptance(profile),
+          needsTerms: needsReacceptance(profile) && gateReady,
           termsReason: reacceptanceReason(profile),
+          // Suppressed rather than satisfied: the owner sees this on the admin
+          // surface so a silently-lowered legal gate is not silent.
+          termsGateDegraded: needsReacceptance(profile) && !gateReady,
         }
       : null,
     // The document's own version, so the modal can show what is being accepted

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
+import { tableReady, schemaDetail } from "@/lib/schema-probe";
 
 export const dynamic = "force-dynamic";
 
@@ -28,14 +29,17 @@ type Probe = { ok: boolean; detail: string };
 
 /** Does a table/column the code depends on actually exist in THIS database?
  *  A missing one fails softly at runtime (the helpers degrade), which is
- *  exactly why it needs to be visible here. */
+ *  exactly why it needs to be visible here.
+ *
+ *  THIS PROBE COULD NOT FAIL. It wrapped `sbSelect` in a try/catch, and
+ *  `sbSelect` has no throw path - unconfigured, not-ok and thrown all collapse
+ *  to []. So the catch was dead code and every probe returned `ok: true`
+ *  whatever the database contained: a green card over an empty schema, which is
+ *  the one failure this card exists to make impossible. `tableReady` asks the
+ *  question through `sbSelectStrict`, which can actually answer it. */
 async function probe(table: string, select: string): Promise<Probe> {
-  try {
-    await sbSelect(table, `select=${select}&limit=1`);
-    return { ok: true, detail: "present" };
-  } catch (e) {
-    return { ok: false, detail: e instanceof Error ? e.message.slice(0, 200) : "unreadable" };
-  }
+  const state = await tableReady(table, select);
+  return { ok: state === "ready", detail: schemaDetail(state) };
 }
 
 export async function GET() {
@@ -162,9 +166,12 @@ export async function GET() {
   }
 
   const problems = [
+    // Carry the probe's own detail: "missing" (run schema.sql) and "unreadable"
+    // (Supabase did not answer) need different actions from the owner, and this
+    // list is the only line they may read.
     ...Object.entries(schema)
       .filter(([, v]) => !v.ok)
-      .map(([k]) => `schema: ${k} missing`),
+      .map(([k, v]) => `schema: ${k} - ${v.detail}`),
     ...(heartbeat.ok ? [] : ["heartbeat: nothing is draining the queue"]),
     ...(ai.configured ? [] : ["ai: no provider configured"]),
   ];

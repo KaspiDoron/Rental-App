@@ -208,6 +208,67 @@ export async function sbSelect<T = Record<string, unknown>>(
 }
 
 /**
+ * How many rows match, without transferring any of them.
+ *
+ * The alternative - selecting rows and taking `.length` - is bounded by a
+ * `limit`, so it silently under-reports the moment the real count exceeds it.
+ * That is fine for a preview and wrong for a counter. PostgREST answers the
+ * exact number in `Content-Range` when asked with `count=exact`, and
+ * `Range: 0-0` keeps the body to a single row.
+ *
+ * Returns 0 on any failure - a metric is not worth throwing over - so callers
+ * that need to distinguish "none" from "could not read" must use sbSelectStrict.
+ */
+export async function sbCount(table: string, filter: string): Promise<number> {
+  const conn = supabase();
+  if (!conn) return 0;
+  try {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?select=id&${filter}`, {
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        Prefer: "count=exact",
+        Range: "0-0",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return 0;
+    // "0-0/1234" or "*/1234" - the total is after the slash.
+    const total = res.headers.get("content-range")?.split("/")[1];
+    const n = Number(total);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * EVERY WAY POSTGREST SAYS "THAT DOES NOT EXIST YET".
+ *
+ * Three dialects, and only the first two were ever matched:
+ *   - Postgres SQLSTATE in the body: 42P01 (undefined table), 42703 (undefined
+ *     column).
+ *   - PGRST204 / PGRST205: PostgREST's OWN schema-cache misses, which carry no
+ *     Postgres code at all because the query never reached the database.
+ *   - Bare prose ("column x does not exist", "relation y does not exist") from
+ *     versions that forward the message without the code.
+ *
+ * Exported so a test can prove all three map to "missing" rather than
+ * "unavailable" - the two answers send callers in opposite directions.
+ */
+export function isMissingSchemaBody(body: string): boolean {
+  if (!body) return false;
+  return (
+    body.includes("42P01") ||
+    body.includes("42703") ||
+    body.includes("PGRST204") ||
+    body.includes("PGRST205") ||
+    /does not exist/i.test(body) ||
+    /schema cache/i.test(body)
+  );
+}
+
+/**
  * STRICT variant of sbSelect for guard-critical reads where "empty" and
  * "unreadable" mean opposite things. sbSelect collapses every failure to []
  * which makes safety gates FAIL OPEN (a Supabase blip reads as "nothing sent
@@ -233,10 +294,19 @@ export async function sbSelectStrict<T = Record<string, unknown>>(
     });
     if (res.ok) return { rows: (await res.json()) as T[] };
     // PostgREST: 404 = unknown relation; 400 + 42703/42P01 = missing column/table.
+    //
+    // THE CODES ARE NOT THE ONLY SHAPE. PostgREST answers a missing column from
+    // its own schema cache as PGRST204 with no Postgres code at all, and several
+    // versions return only the prose ("column x does not exist"). A miss here
+    // degrades to "unavailable", and the two errors point callers in OPPOSITE
+    // directions - "missing" means the schema has not been run and the read is
+    // vacuously empty; "unavailable" means the truth is unknown and a guard must
+    // fail closed. Matching only the codes made a not-yet-migrated database look
+    // like a flaky one.
     if (res.status === 404) return { error: "missing" };
     if (res.status === 400) {
       const body = await res.text().catch(() => "");
-      if (body.includes("42P01") || body.includes("42703")) return { error: "missing" };
+      if (isMissingSchemaBody(body)) return { error: "missing" };
     }
     return { error: "unavailable" };
   } catch {

@@ -52,7 +52,10 @@ describe("priority processing, the paid feature that did not exist", () => {
 
   it("and the drain actually uses the comparator", () => {
     const guard = readCode("src/lib/wa-guard.ts");
-    expect(guard).toMatch(/const \{ compareOutboxRows \} = await import\("\.\/wa\/outbox-policy"\);/);
+    // The drain imports the comparator from the policy module. It now pulls the
+    // age ceiling from the same place, so the pin reads the import for the name
+    // it cares about rather than the exact destructure list.
+    expect(guard).toMatch(/const \{[^}]*\bcompareOutboxRows\b[^}]*\} = await import\("\.\/wa\/outbox-policy"\);/);
     expect(guard).toMatch(/\.sort\(\(a, b\) => compareOutboxRows\(keyOf\(a\), keyOf\(b\)\)\)/);
   });
 });

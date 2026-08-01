@@ -51,9 +51,31 @@ describe("every write stamps it, and the scope reads it", () => {
     const park = readCode("src/lib/wa/park.ts");
     expect(park).toMatch(/const key = outboxKey\(row\.toNumber\)/);
     expect(park).toMatch(/to_key=eq\.\$\{encodeURIComponent\(\s*key\s*\)\}/);
-    expect(park).toMatch(/to_key: key,/);
-    // The exact-string scope that made this function unable to do its job.
-    expect(park).not.toMatch(/to_number=eq\.\$\{encodeURIComponent\(\s*row\.toNumber\s*\)\}/);
+    expect(park).toMatch(/to_key: key/);
+  });
+
+  it("...and the to_number scope survives ONLY as the not-yet-migrated fallback", () => {
+    // This pin used to say `to_number=eq.` must not appear at all, because an
+    // exact-string scope is what made this function unable to do its job: a
+    // shop stored under two spellings kept two live pending rows.
+    //
+    // It now appears once, deliberately, behind a schema probe - because
+    // `to_key` is newer than some databases this code can reach, and against
+    // those the to_key scope 400s and EVERY agent reply park fails. A possible
+    // duplicate is a much better failure than a guaranteed silence.
+    //
+    // So the pin holds the shape rather than the absence: to_key is the branch
+    // taken whenever the column exists, and to_number is reachable only when it
+    // does not.
+    const park = readCode("src/lib/wa/park.ts");
+    expect(park).toMatch(/const hasToKey = \(await tableReady\("wa_outbox", "to_key"\)\) === "ready";/);
+    const scope = park.slice(park.indexOf("const scope = "), park.indexOf("await sbDelete("));
+    expect(scope).toMatch(/hasToKey\s*\?/);
+    // to_key on the true branch, to_number on the false branch - in that order.
+    expect(scope.indexOf("to_key=eq.")).toBeGreaterThan(-1);
+    expect(scope.indexOf("to_number=eq.")).toBeGreaterThan(scope.indexOf("to_key=eq."));
+    // And nowhere else in the file does an unguarded to_number scope appear.
+    expect(park.split("to_number=eq.").length - 1).toBe(1);
   });
 
   it("every wa_outbox insert site stamps to_key", () => {

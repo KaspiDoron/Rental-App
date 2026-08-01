@@ -45,11 +45,18 @@ export const CONSENT_KINDS = [
 
 export type ConsentKind = (typeof CONSENT_KINDS)[number];
 
+/** The breadcrumb kind a lost ledger row falls back to. On `agent_events`,
+ *  which exists on every database this app has ever had. */
+export const UNRECORDED_KIND = "consent-unrecorded";
+
 export interface ConsentEvent {
   kind: ConsentKind;
   version: string;
   at: number;
   context?: Record<string, unknown>;
+  /** True when this came from the fallback breadcrumb rather than the ledger -
+   *  the acceptance is real, the durable record was not written. */
+  degraded?: boolean;
 }
 
 /**
@@ -99,15 +106,43 @@ export async function recordConsent(input: {
 }): Promise<boolean> {
   const email = String(input.email ?? "").trim().toLowerCase();
   if (!email) return false;
-  return sbInsert("consent_events", [
+  const version = input.version ?? TERMS_VERSION;
+  const landed = await sbInsert("consent_events", [
     {
       email,
       kind: input.kind,
-      version: input.version ?? TERMS_VERSION,
+      version,
       context: input.context ?? null,
       accepted_at: new Date().toISOString(),
     },
   ]).catch(() => false);
+  if (landed) return true;
+
+  // THE LEDGER FAILED. THE CONSENT STILL HAPPENED.
+  //
+  // `consent_events` is a new table, and the code that writes it can reach a
+  // database where `supabase/schema.sql` has not been re-run - the insert 400s
+  // and this returns false, which every caller discards. The result is the exact
+  // failure this module was built to end: a person accepted something, and the
+  // system cannot prove it.
+  //
+  // `agent_events` predates all of this and is always there, so it is where a
+  // lost acceptance goes. A breadcrumb is a worse record than a ledger row - it
+  // has no schema and no index - but it is a RECORD, and `consentLedger` reads
+  // it back so the fallback is not write-only.
+  await sbInsert("agent_events", [
+    {
+      kind: UNRECORDED_KIND,
+      detail: JSON.stringify({
+        email,
+        consentKind: input.kind,
+        version,
+        context: input.context ?? null,
+        at: new Date().toISOString(),
+      }).slice(0, 2000),
+    },
+  ]).catch(() => false);
+  return false;
 }
 
 /**
@@ -131,22 +166,38 @@ export async function stampTermsVersion(
   ).catch(() => false);
 }
 
-/** One user's acceptance history, newest first - the admin proof view. */
+/**
+ * One user's acceptance history, newest first - the admin proof view.
+ *
+ * Reads BOTH sources. An empty ledger and a ledger the writes never reached
+ * look identical from a table read, and the difference is the whole question
+ * this view is asked. The breadcrumbs are merged in flagged `degraded` so the
+ * fallback in `recordConsent` is not write-only.
+ */
 export async function consentLedger(email: string, limit = 50): Promise<ConsentEvent[]> {
   const who = String(email ?? "").trim().toLowerCase();
   if (!who) return [];
-  const rows = await sbSelect<{
-    kind: string;
-    version: string | null;
-    context: Record<string, unknown> | null;
-    accepted_at: string;
-  }>(
-    "consent_events",
-    `select=kind,version,context,accepted_at&email=eq.${encodeURIComponent(
-      who
-    )}&order=accepted_at.desc&limit=${Math.max(1, Math.min(200, limit))}`
-  ).catch(() => []);
-  return rows
+  const cap = Math.max(1, Math.min(200, limit));
+
+  const [rows, crumbs] = await Promise.all([
+    sbSelect<{
+      kind: string;
+      version: string | null;
+      context: Record<string, unknown> | null;
+      accepted_at: string;
+    }>(
+      "consent_events",
+      `select=kind,version,context,accepted_at&email=eq.${encodeURIComponent(
+        who
+      )}&order=accepted_at.desc&limit=${cap}`
+    ).catch(() => []),
+    sbSelect<{ detail: string; created_at: string }>(
+      "agent_events",
+      `select=detail,created_at&kind=eq.${UNRECORDED_KIND}&order=created_at.desc&limit=200`
+    ).catch(() => []),
+  ]);
+
+  const fromLedger: ConsentEvent[] = rows
     .filter((r) => (CONSENT_KINDS as readonly string[]).includes(r.kind))
     .map((r) => ({
       kind: r.kind as ConsentKind,
@@ -154,4 +205,30 @@ export async function consentLedger(email: string, limit = 50): Promise<ConsentE
       at: Date.parse(r.accepted_at) || 0,
       context: r.context ?? undefined,
     }));
+
+  const fromCrumbs: ConsentEvent[] = [];
+  for (const c of crumbs) {
+    try {
+      const d = JSON.parse(c.detail) as {
+        email?: string;
+        consentKind?: string;
+        version?: string;
+        context?: Record<string, unknown> | null;
+        at?: string;
+      };
+      if (String(d.email ?? "").toLowerCase() !== who) continue;
+      if (!(CONSENT_KINDS as readonly string[]).includes(String(d.consentKind))) continue;
+      fromCrumbs.push({
+        kind: d.consentKind as ConsentKind,
+        version: d.version ?? "",
+        at: Date.parse(d.at ?? c.created_at) || 0,
+        context: d.context ?? undefined,
+        degraded: true,
+      });
+    } catch {
+      /* a breadcrumb we cannot parse is not an acceptance we can claim */
+    }
+  }
+
+  return [...fromLedger, ...fromCrumbs].sort((a, b) => b.at - a.at).slice(0, cap);
 }

@@ -1862,7 +1862,7 @@ export async function drainOutbox(
   // earlier. It is deliberately a tie-break and not a queue-jump - a paid cold
   // introduction still waits behind anyone's live reply, because an engaged
   // shop is the more urgent thing in the system whoever is paying.
-  const { compareOutboxRows } = await import("./wa/outbox-policy");
+  const { compareOutboxRows, outboxExpired, OUTBOX_MAX_AGE_MS } = await import("./wa/outbox-policy");
   const keyOf = (row: OutboxRow) => {
     const meta = row.meta as { kind?: string; plan?: string } | null;
     return { kind: meta?.kind ?? null, plan: meta?.plan ?? null, notBefore: row.not_before };
@@ -1886,6 +1886,26 @@ export async function drainOutbox(
   // supply the throughput; each drains a few and the fleet gap paces the total.
   let replyBudget = 6;
   for (const cand of candidates) {
+    // TOO OLD TO SEND. `not_before <= now` is a floor, not a ceiling: a row
+    // overdue by three days passed it exactly as well as one overdue by three
+    // seconds. That was survivable while nothing drained automatically. With a
+    // scheduler calling this every minute it is not - and the freshness gate
+    // cannot save us, because NEVER_STALE exempts cold introductions, so an
+    // ancient "do you have one for tomorrow?" is judged fresh and goes out.
+    if (outboxExpired(cand.not_before, Date.now())) {
+      await completeOutboxRow(cand.id);
+      await sbInsert("agent_events", [
+        {
+          kind: "wa-send-expired",
+          vendor_id: String((cand.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+          vendor_name: String(
+            (cand.meta as { vendorName?: string } | null)?.vendorName ?? cand.to_number
+          ),
+          detail: `Binned a message to +${cand.to_number} (sender ${cand.sender_key}) that had been due since ${cand.not_before} - older than the ${Math.round(OUTBOX_MAX_AGE_MS / 3600_000)}h ceiling. Sending it now would answer a question the traveller has moved on from.`,
+        },
+      ]).catch(() => {});
+      continue;
+    }
     const cold = isCold(cand);
     const rcptKey = `${cand.sender_key}|${digitsOnly(cand.to_number)}`;
     const overCap = cold
@@ -2060,8 +2080,23 @@ export async function drainOutbox(
       await release(lostLane, {
         reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry",
       });
+      // TWO OPPOSITE CAUSES WROTE THE SAME COUNTER.
+      //
+      // `claim.kind === "pacing"` means another sender legitimately holds the
+      // lane: the system working, the row re-parked for seconds and retried.
+      // Anything else is a FAIL-CLOSED refusal - the claim table could not be
+      // read, so we declined to send rather than risk a double. That is the
+      // send lane being down.
+      //
+      // Both landed on `claim-lost`, so the one number the owner reads on the
+      // dashboard meant either "busy" or "broken" and there was no way to tell
+      // which. A contention counter that can also mean an outage is not a
+      // signal, and it is the input the adaptive pacing wants to read.
       await sbInsert("agent_events", [
-        { kind: "claim-lost", detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}` },
+        {
+          kind: claim.kind === "pacing" ? "claim-lost" : "claim-error",
+          detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}`,
+        },
       ]).catch(() => {});
       continue;
     }

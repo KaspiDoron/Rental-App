@@ -1,4 +1,5 @@
 import { sbInsert, sbDelete, sbSelect } from "../runtime-config";
+import { tableReady } from "../schema-probe";
 import { outboxKey } from "./phone-key";
 
 /**
@@ -84,14 +85,29 @@ export async function parkOutboxOnce(row: {
   // exists to prevent, and the same mistake the unique index was migrated to
   // fix. The canonical key is what the index keys on; it is what we scope on.
   const key = outboxKey(row.toNumber);
-  const scope = `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(
-    key
-  )}&${PENDING_AUTO}`;
+
+  // THE SEATBELT: `to_key` IS NEWER THAN SOME DATABASES THIS CODE CAN REACH.
+  //
+  // Three things here hard-depend on the column - the delete scope, the insert
+  // record, and the existence probe below. Against a database where schema.sql
+  // has not been re-run, all three 400: the delete is swallowed, the insert
+  // returns false, the probe returns [] so `existing.length === 0` is true, the
+  // retry insert fails the same way, and EVERY agent reply park fails. A total
+  // reply outage whose only trace is a `wa-park-failed` breadcrumb.
+  //
+  // One probe, cached, decides which spelling of the scope to use. The
+  // to_number fallback is the exact pre-migration behaviour: it can leave two
+  // pending rows for a shop stored under two spellings, which is a duplicate
+  // risk - and a duplicate is enormously better than silence.
+  const hasToKey = (await tableReady("wa_outbox", "to_key")) === "ready";
+  const scope = hasToKey
+    ? `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(key)}&${PENDING_AUTO}`
+    : `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(row.toNumber)}&${PENDING_AUTO}`;
   await sbDelete("wa_outbox", scope).catch(() => {});
   const record = {
     sender_key: row.senderKey,
     to_number: row.toNumber,
-    to_key: key,
+    ...(hasToKey ? { to_key: key } : {}),
     body: row.body,
     not_before: new Date(row.notBeforeMs).toISOString(),
     meta: row.meta ?? {},

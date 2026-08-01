@@ -36,8 +36,24 @@ export async function POST(req: Request) {
   // The write is a durable side effect, so it goes through finishBeforeResponse
   // like every other one: on Cloud Run the CPU is throttled to ~0 the moment
   // this response flushes, and a detached insert simply never runs.
+  //
+  // THE TWO WRITES ARE NOT THE SAME PROMISE, so they are not reported as one.
+  //
+  //   `stamped`  - app_users.terms_version. This is what CLOSES THE GATE:
+  //                `needsReacceptance` reads it on every entry. If it did not
+  //                land, saying ok:true tells the browser to dismiss a modal
+  //                that the very next page load will raise again, forever.
+  //   `recorded` - the consent_events ledger row. This is the PROOF. Losing it
+  //                is serious and is caught by the breadcrumb in recordConsent,
+  //                but it is not a reason to bar someone from the app.
+  //
+  // Both booleans used to be discarded inside the closure and this returned
+  // {ok:true} unconditionally, so a write to a database that had never seen
+  // schema.sql was indistinguishable from a write that worked.
+  let stamped = true;
+  let recorded = false;
   await finishBeforeResponse("consent-record", async () => {
-    await recordConsent({
+    recorded = await recordConsent({
       email: session.email,
       kind,
       version: TERMS_VERSION,
@@ -46,9 +62,19 @@ export async function POST(req: Request) {
     // The three signup consents also carry a version on the user row, which is
     // what `needsReacceptance` reads on every entry.
     if (kind === "terms" || kind === "wa_risk" || kind === "ai_responsibility") {
-      await stampTermsVersion(session.email, TERMS_VERSION);
+      stamped = await stampTermsVersion(session.email, TERMS_VERSION);
     }
   });
 
-  return NextResponse.json({ ok: true, version: TERMS_VERSION });
+  if (!stamped) {
+    // FirstTouchTerms already renders "we could not record your acceptance -
+    // try again" on a non-ok response. Telling the truth here is the difference
+    // between one honest retry and an endless silent loop.
+    return NextResponse.json(
+      { ok: false, error: "We could not record your acceptance. Please try again." },
+      { status: 503 }
+    );
+  }
+
+  return NextResponse.json({ ok: true, recorded, version: TERMS_VERSION });
 }
