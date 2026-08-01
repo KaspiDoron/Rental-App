@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import { PlaceAutocomplete } from "./PlaceAutocomplete";
 import { LoadingDots } from "./LoadingDots";
 import { digitsOnly } from "@/lib/phone";
+import { useI18n } from "@/lib/i18n";
 import { localDay, addDays, deviceTimeZone } from "@/lib/rental-window";
 
 type Step = "verify" | "schedule" | "confirmed";
@@ -44,6 +45,7 @@ export function BookingSheet({
   plan?: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [step, setStep] = useState<Step>("verify");
   const [verification, setVerification] = useState<string>("");
   // Fulfillment defaults from the request: a hotel-delivery RFQ pre-selects
@@ -256,21 +258,32 @@ export function BookingSheet({
           <div className="rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-soft">
             {verification || "Requesting confirmation from the vendor..."}
           </div>
-          <div className="mt-2 space-y-1 text-[12px] text-soft">
+          {/* A GREEN TICK IS A CLAIM ABOUT THE SHOP, AND THIS LIST IS THE
+              TRAVELLER'S OWN REQUEST.
+              Every line here was rendered with a savings-coloured check, so a
+              helmet nobody had confirmed - or a 125cc the shop never agreed to -
+              read as verified, on the last screen before locking a deal and
+              handing over a deposit. The request has not stopped being useful;
+              it has stopped pretending to be an answer. The block above is the
+              real confirmation, and it comes from the shop. */}
+          <div className="mt-2 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+            {t("What you asked for")}
+          </div>
+          <div className="mt-1 space-y-1 text-[12px] text-soft">
             <div className="flex items-center gap-1.5">
-              <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+              <span aria-hidden className="text-faint">·</span>
               {rfq ? vehicleLabel(rfq.vehicleClass, rfq.transmission) : ""}
               {rfq?.engineSizeCc ? ` · ${rfq.engineSizeCc}cc` : ""}
             </div>
             {rfq?.maxMileageKm && (
               <div className="flex items-center gap-1.5">
-                <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+                <span aria-hidden className="text-faint">·</span>
                 under {rfq.maxMileageKm.toLocaleString()} km
               </div>
             )}
             {rfq?.accessories.map((a) => (
               <div key={a} className="flex items-center gap-1.5">
-                <Icon name="check" className="h-3.5 w-3.5 text-savings" />
+                <span aria-hidden className="text-faint">·</span>
                 {a}
               </div>
             ))}
@@ -279,7 +292,7 @@ export function BookingSheet({
             onClick={() => setStep("schedule")}
             className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
           >
-            Specs match - continue
+            {t("Looks right - continue")}
           </button>
         </div>
       )}
