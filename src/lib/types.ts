@@ -117,6 +117,13 @@ export interface Offer {
    * the shop had refused.
    */
   accessories?: import("./thread/accessories").AccessoryStatus[] | null;
+  /**
+   * THE SHOP OFFERED A DIFFERENT VEHICLE, close enough to be worth asking
+   * about. The thread is paused while this is set: the agent will not haggle a
+   * bike the traveller has not agreed to, and will not close a shop that is
+   * actively trying to do business.
+   */
+  alternativeOffer?: import("./vehicle/substitution").AlternativeOffer | null;
   // ---- Extra shop-confirmed rental terms (only when explicitly stated) ------
   deliveryFee?: number; // in the offer's currency; 0 = free delivery
   kmLimitPerDay?: number | "unlimited";

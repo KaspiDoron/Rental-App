@@ -186,6 +186,7 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
   };
 }
 
+
 /** Build the session snapshot (blackboard read) from the shared session table:
  *  rivals = other shops' live quotes in the SAME currency; lowest = the session's
  *  cheapest quote across all shops. Best-effort - a read failure yields an empty
@@ -320,6 +321,27 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
     const stock = stockState(digest.ledger);
     verified.shopUnavailable = stock.state === "out-of-stock";
     verified.restockHint = stock.restockHint;
+  }
+  // A SUBSTITUTION WAITING ON THE TRAVELLER pauses this thread instead of
+  // closing it (policy.ts). Read from the stored thread state, so every entry
+  // point - inbound reply, scheduled wakeup, user action - sees the same
+  // pending choice.
+  //
+  // STALENESS IS JUDGED ON READ, not at write time, because a choice goes stale
+  // by the passage of time and nothing writes to the row while a thread waits.
+  // A shop that offered a 150 six hours ago has rented it, and a thread paused
+  // on a tap that is never coming is a dead thread the traveller cannot see.
+  try {
+    const state = await io.loadState(input.event.threadKey);
+    const stored = (state?.fields as { alternativeOffer?: { at?: number } } | undefined)
+      ?.alternativeOffer;
+    const { CHOICE_TTL_MS } = await import("../vehicle/substitution");
+    digest.alternativeOffer =
+      stored && typeof stored.at === "number" && Date.now() - stored.at < CHOICE_TTL_MS
+        ? (stored as ThreadDigest["alternativeOffer"])
+        : null;
+  } catch {
+    digest.alternativeOffer = null;
   }
   const session = await buildSession(input, io, verified);
   const text = input.event.kind === "inbound-text" || input.event.kind === "inbound-image"

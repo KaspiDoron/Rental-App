@@ -162,6 +162,27 @@ function VendorCardInner({
   // once the server clears queuedUntil (delivered or removed).
   const queuedActive = rfqState === "queued" || Boolean(vendor.queuedUntil && !vendor.offer);
   const [galleryOpen, setGalleryOpen] = useState(false);
+  // The substitution choice. `altBusy` is a plain in-flight latch: this posts a
+  // decision, and a double tap would be a second decision on a choice that is
+  // already gone (the server answers 409, but the button should not invite it).
+  const [altBusy, setAltBusy] = useState(false);
+  const decideAlternative = async (accept: boolean) => {
+    if (altBusy) return;
+    setAltBusy(true);
+    try {
+      await fetch("/api/negotiate/alternative", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorId: vendor.id, accept }),
+      });
+      // The next poll carries the cleared choice and the thread's new state.
+      // Nothing is sent to the shop from here - the ordinary turn does that,
+      // inside the same rails as every other message.
+      onStage(vendor.id, accept ? "negotiating" : "declined");
+    } finally {
+      setAltBusy(false);
+    }
+  };
   const [pickupState, setPickupState] = useState<"idle" | "sending" | "shared" | "failed">("idle");
 
   const offer = vendor.offer;
@@ -474,6 +495,44 @@ function VendorCardInner({
           {vendor.cancelled && !vendor.queuedUntil && !offer && (
             <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
               ⏸ {t("Paused by you - sending a new message re-opens this shop")}
+            </div>
+          )}
+          {/* THE SHOP OFFERED SOMETHING ELSE, AND IT MIGHT BE FINE.
+              `wrongVehicle` used to make a goodbye the only legal move, so
+              "no 125 today, but I have a 150 for 220" ended the conversation.
+              The thread is paused while this sits here; the agent haggles
+              nothing until the traveller answers, and declining ends it
+              exactly where it would have ended anyway. */}
+          {offer?.alternativeOffer && (
+            <div className="mt-2 rounded-2xl border-2 border-brandblue/40 bg-brandblue-soft p-2.5">
+              <div className="text-[11px] font-extrabold text-brandblue">
+                🔁 {t("This shop offered a different vehicle")}
+              </div>
+              <div className="mt-0.5 text-[12.5px] font-bold text-strong">
+                {offer.alternativeOffer.vehicle}
+                {typeof offer.alternativeOffer.pricePerDay === "number"
+                  ? ` - ${offer.alternativeOffer.pricePerDay} ${offer.alternativeOffer.currency ?? ""}/${t("day")}`
+                  : ""}
+              </div>
+              {offer.alternativeOffer.reason && (
+                <p className="mt-0.5 text-[11px] leading-snug text-soft">{offer.alternativeOffer.reason}</p>
+              )}
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => decideAlternative(true)}
+                  disabled={altBusy}
+                  className="btn btn-primary flex-1 rounded-xl py-2 text-[12px] font-extrabold disabled:opacity-60"
+                >
+                  {altBusy ? <LoadingDots /> : t("Yes, negotiate this one")}
+                </button>
+                <button
+                  onClick={() => decideAlternative(false)}
+                  disabled={altBusy}
+                  className="btn flex-1 rounded-xl border-2 border-line py-2 text-[12px] font-bold text-soft disabled:opacity-60"
+                >
+                  {t("No thanks")}
+                </button>
+              </div>
             </div>
           )}
           {riskNote && dismissedRisk !== riskNote && (

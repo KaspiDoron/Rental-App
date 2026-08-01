@@ -616,6 +616,8 @@ export const I18N_CATALOG: string[] = [
   "Your WhatsApp, your agent",
   "Your agent is confirming exactly which model this price is for.",
   "Checking the link...",
+  "Yes, negotiate this one",
+  "This shop offered a different vehicle",
   "Looks right - continue",
   "What you asked for",
   "Sent in the shop's language - you'll see both versions after it goes.",

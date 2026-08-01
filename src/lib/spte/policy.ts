@@ -55,6 +55,18 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // answering "Normal scooters? Some models 200 and some new 250/day" got a
   // goodbye instead of a question.
   if (v.wrongVehicle) {
+    // A SHOP THAT OFFERS SOMETHING ELSE IS NOT A SHOP THAT SAID NO.
+    //
+    // While a substitution choice is waiting on the traveller, this thread
+    // goes SILENT rather than closing. Haggling someone else's bike, or
+    // thanking a shop that is actively trying to do business, are both wrong
+    // answers to "no 125 today, but I have a 150 for 220". The decision rules
+    // (and the TTL that stops a stale choice holding the thread forever) live
+    // in vehicle/substitution.ts.
+    if (ctx.thread.digest.alternativeOffer) {
+      moves.push("silent");
+      return dedupe(moves);
+    }
     moves.push(hasClosed(ctx) ? "silent" : "redirect-close");
     return dedupe(moves);
   }

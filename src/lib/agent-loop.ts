@@ -1544,6 +1544,38 @@ export async function processVendorReply(opts: {
     // only when there is actually something to read: no requested extras, no
     // call. Awaited rather than detached, because Cloud Run freezes the CPU
     // the moment the response flushes.
+    // A SHOP THAT OFFERS SOMETHING ELSE IS NOT A SHOP THAT SAID NO.
+    //
+    // `wrongVehicle` made redirect-close the only legal move, so "no 125
+    // today, but I have a 150 for 220" ended the thread - the same ride,
+    // twenty baht more, from a shop trying to do business. Read the offer
+    // after the turn (never on the reply path), and if it is close enough,
+    // park a choice for the traveller; the policy then holds the thread silent
+    // instead of closing it.
+    if (extraction?.matchesSpec === false && ctx.sender && ctx.vendorId) {
+      const email = ctx.sender;
+      const vendorId = ctx.vendorId;
+      const inboundText = opts.text ?? "";
+      const threadKey = turnInput.event.threadKey;
+      await finishBeforeResponse("substitution-offer", async () => {
+        const { readAlternativeOffer } = await import("./semantic/classifiers");
+        const { decideSubstitution } = await import("./vehicle/substitution");
+        const context =
+          `The traveller asked for: ${rfq?.vehicleClass ?? "a vehicle"}` +
+          (rfq?.engineSizeCc ? ` around ${rfq.engineSizeCc}cc` : "") +
+          (rfq?.transmission && rfq.transmission !== "any" ? `, ${rfq.transmission}` : "");
+        const read = await readAlternativeOffer(inboundText, context).catch(() => null);
+        const decision = decideSubstitution({
+          wrongVehicle: true,
+          alternative: read?.value ?? null,
+          currency: cur,
+          now: Date.now(),
+        });
+        if (decision.kind !== "offer-choice") return;
+        const { persistAlternativeOffer } = await import("./vehicle/substitution-store");
+        await persistAlternativeOffer({ email, vendorId, threadKey, offer: decision.offer });
+      });
+    }
     if (rfq?.accessories?.length && ctx.sender && ctx.vendorId) {
       const email = ctx.sender;
       const vendorId = ctx.vendorId;

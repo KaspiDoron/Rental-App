@@ -193,6 +193,13 @@ export interface ThreadFields {
    * wording - see thread/accessories.ts for the merge rules.
    */
   accessories?: import("../thread/accessories").AccessoryStatus[];
+  /**
+   * THE SHOP OFFERED A DIFFERENT VEHICLE and it is close enough to be worth
+   * asking about. While this is set (and fresh) the thread PAUSES rather than
+   * closing - see vehicle/substitution.ts. Cleared when the traveller accepts
+   * or declines.
+   */
+  alternativeOffer?: import("../vehicle/substitution").AlternativeOffer | null;
   // The shop asked WHERE the traveller is staying (for delivery) and we had no
   // shareable address - the agent stops probing and the app prompts the user
   // for their hotel instead of looping the boilerplate delivery question.

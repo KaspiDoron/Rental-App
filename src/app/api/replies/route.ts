@@ -113,6 +113,9 @@ export async function GET(req: Request) {
       // WHAT THE SHOP SAID ABOUT EACH EXTRA. Written by the accessory pass
       // after each inbound turn; the card renders one chip per requested item.
       accessories?: import("@/lib/thread/accessories").AccessoryStatus[];
+      // A substitution the shop offered, waiting on the traveller. While this
+      // is set the thread is PAUSED, not closed - see vehicle/substitution.ts.
+      alternativeOffer?: import("@/lib/vehicle/substitution").AlternativeOffer | null;
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -297,6 +300,9 @@ export async function GET(req: Request) {
       // could only show what was ASKED. One entry per requested item, each
       // honestly confirmed / refused / still unknown.
       accessories: st?.accessories ?? null,
+      // "No 125 today, but I have a 150 for 220." The card asks; nothing is
+      // haggled until the traveller answers.
+      alternativeOffer: st?.alternativeOffer ?? null,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,
       depositType: r.deposit_type ?? null,

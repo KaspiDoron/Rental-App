@@ -79,6 +79,13 @@ export interface SessionSnapshot {
 export interface ThreadDigest {
   facts: string[]; // <=10 durable one-liners; the compressed conversation
   quotedPricePerDay?: number;
+  /**
+   * A SUBSTITUTION WAITING ON THE TRAVELLER. The shop offered a different
+   * vehicle that is close enough to be worth asking about, so this thread is
+   * paused rather than closed until they accept or decline. See
+   * vehicle/substitution.ts for the decision rules and the staleness TTL.
+   */
+  alternativeOffer?: import("../vehicle/substitution").AlternativeOffer | null;
   round: number;
   tone?: "friendly" | "curt" | "eager" | "reluctant";
   // Thread-derived negotiation state (src/lib/spte/thread-facts.ts). Recomputed
