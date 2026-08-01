@@ -627,6 +627,14 @@ alter table public.bookings add column if not exists delivery_address text;
 alter table public.bookings add column if not exists one_way_dropoff text;
 alter table public.bookings add column if not exists driver_age      int;
 alter table public.bookings add column if not exists scheduled_tz    text;
+-- A BOOKED TRIP MUST OUTLIVE THE SEARCH THAT FOUND IT.
+--
+-- Everything a traveller needs after the deal is closed - the shop's WhatsApp
+-- number to ask a question, its coordinates to walk there, what they saved -
+-- lived only in the live search session, which expires. So a rental they are
+-- standing next to could stop being reachable from the app. One additive JSONB
+-- snapshot, written at close time, keeps the trip self-contained.
+alter table public.bookings add column if not exists meta jsonb;
 alter table public.offers   add column if not exists delivery_fee     numeric;
 alter table public.offers   add column if not exists insurance_included boolean;
 alter table public.offers   add column if not exists km_limit_per_day text;

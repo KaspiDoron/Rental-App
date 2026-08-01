@@ -124,6 +124,24 @@ export async function POST(req: Request) {
     one_way_dropoff: b.oneWayDropOff ? String(b.oneWayDropOff).slice(0, 120) : null,
     driver_age: Number.isFinite(Number(b.driverAge)) ? Math.floor(Number(b.driverAge)) : null,
     scheduled_tz: "shop-local", // scheduled_at is the shop's wall-clock, no offset
+    // THE TRIP MUST OUTLIVE THE SEARCH THAT FOUND IT.
+    //
+    // The shop's number, where it is, and what the traveller saved all lived in
+    // the live search session - which expires. A traveller standing outside the
+    // shop with a question could find the app had forgotten how to reach it.
+    // Snapshotted at close time, so the trip is self-contained from then on.
+    meta: {
+      whatsapp: typeof b.whatsapp === "string" ? b.whatsapp.slice(0, 32) : null,
+      placeId: typeof b.placeId === "string" ? b.placeId.slice(0, 120) : null,
+      lat: Number.isFinite(Number(b.lat)) ? Number(b.lat) : null,
+      lng: Number.isFinite(Number(b.lng)) ? Number(b.lng) : null,
+      address: typeof b.address === "string" ? b.address.slice(0, 200) : null,
+      // What the hunt was worth, frozen. Recomputing it later would need the
+      // other shops' quotes, which is exactly the data that expires.
+      savedPerDay: Number.isFinite(Number(b.savedPerDay)) ? Number(b.savedPerDay) : null,
+      benchmarkPerDay: Number.isFinite(Number(b.benchmarkPerDay)) ? Number(b.benchmarkPerDay) : null,
+      shopsCompared: Number.isFinite(Number(b.shopsCompared)) ? Math.floor(Number(b.shopsCompared)) : null,
+    },
   };
   const ok = await sbInsert("bookings", [{ ...bookingBase, ...extra }]);
   if (!ok) {
@@ -139,7 +157,7 @@ export async function GET() {
   const filter = `user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=25`;
   let rows = await sbSelect(
     "bookings",
-    `select=id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,return_date,delivery_address,driver_age,status,created_at&${filter}`
+    `select=id,vendor_id,vendor_name,price_per_day,total_price,currency,fulfillment,scheduled_at,return_date,delivery_address,driver_age,status,created_at,meta&${filter}`
   );
   if (rows.length === 0) {
     // Pre-migration fallbacks (a select naming an unknown column fails as []).

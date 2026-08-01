@@ -155,6 +155,20 @@ export function BookingSheet({
           oneWayDropOff: rfq?.oneWayDropOff,
           scheduledAt: when,
           returnDate: returnDateStr,
+          // THE TRIP SNAPSHOT. Everything the traveller will need once the
+          // search session that found this shop has expired: how to reach it,
+          // where it is, and what the hunt was worth. Recomputing the saving
+          // later would need the other shops' quotes, which is precisely the
+          // data that goes away.
+          whatsapp: vendor.whatsapp,
+          placeId: vendor.placeId,
+          lat: vendor.lat,
+          lng: vendor.lng,
+          address: vendor.address,
+          savedPerDay:
+            typeof vendor.offer?.pricePerDay === "number" && typeof vendor.basePricePerDay === "number"
+              ? Math.max(0, vendor.basePricePerDay - vendor.offer.pricePerDay)
+              : undefined,
           // The server decides the window; give it the zone to decide IN.
           timeZone,
         }),
