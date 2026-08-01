@@ -704,13 +704,19 @@ export default function Home() {
       pendingShopRef.current = deepShop;
       window.history.replaceState({}, "", "/");
     }
-    // Returning from PayPal Checkout.
+    // Returning from PayPal Checkout. The subscription id PayPal appends is
+    // forwarded so the server can verify it directly - the webhook stays the
+    // durable record, but a lost or misconfigured webhook no longer leaves a
+    // traveller who paid sitting on the free tier.
     const plan = params.get("plan");
     if (params.get("billing") === "success" && plan) {
       fetch("/api/billing/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({
+          plan,
+          subscriptionId: params.get("subscription_id") || undefined,
+        }),
       }).then(() => window.history.replaceState({}, "", "/"));
     }
 

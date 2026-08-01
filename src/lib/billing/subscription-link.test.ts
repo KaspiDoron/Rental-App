@@ -46,7 +46,10 @@ describe("a subscription can always be traced back to a traveller", () => {
     const s = readCode("src/lib/billing/subscription-link.ts");
     expect(s).toMatch(/return null/);
     expect(hook()).toMatch(/if \(verified && email && activates && tier\)/);
-    expect(hook()).toMatch(/verified && email && deactivates/);
+    // The deactivation branch is still gated on a VERIFIED event with a
+    // resolved account; what changed is that the effect is now decided by the
+    // suspension policy rather than by one flat "deactivates" list.
+    expect(hook()).toMatch(/\} else if \(verified && email\) \{/);
   });
 });
 
@@ -75,7 +78,10 @@ describe("the TIER comes from PayPal's plan, not from the caller", () => {
     // Documented in LAUNCH-wheeldeal.pro.md; pinned here so the two cannot
     // drift - a missing checkbox in the dashboard is invisible until a
     // cancellation silently does nothing.
-    const h = hook();
+    // The events are handled across TWO files since the suspension grace
+    // landed: activation in the route, the terminal/recoverable distinction in
+    // the policy. Both are part of the handling surface.
+    const h = hook() + readCode("src/lib/billing/suspension.ts");
     const doc = read("LAUNCH-wheeldeal.pro.md");
     for (const event of [
       "BILLING.SUBSCRIPTION.ACTIVATED",

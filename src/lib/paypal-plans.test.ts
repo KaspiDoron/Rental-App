@@ -78,10 +78,17 @@ describe("the secret is server-side, and stays there", () => {
 });
 
 describe("an approval is a claim, and is verified before anything is granted", () => {
-  const route = () => readCode("src/app/api/subscriptions/paypal-success/route.ts");
+  // The verification and the grant moved into ONE shared function so the
+  // redirect return path could stop depending solely on the webhook. The
+  // guarantees are unchanged; they are just no longer duplicated, so the pin
+  // covers the route and the module it delegates to.
+  const route = () =>
+    readCode("src/app/api/subscriptions/paypal-success/route.ts") +
+    readCode("src/lib/billing/confirm-subscription.ts");
 
   it("the subscription id is checked WITH PayPal, not trusted", () => {
-    expect(route()).toMatch(/fetchPaypalSubscription\(subscriptionID\)/);
+    expect(route()).toMatch(/fetchPaypalSubscription\(subscriptionId\)/);
+    expect(route()).toMatch(/subscriptionId: subscriptionID,/);
     expect(route()).toMatch(/subscriptionEntitles\(sub\.status\)/);
   });
 
@@ -94,15 +101,19 @@ describe("an approval is a claim, and is verified before anything is granted", (
     // What the client SAID it was buying is recorded in the audit row and used
     // for nothing else.
     expect(r).toMatch(/intendedPlan: body\.intendedPlan \?\? null/);
+    expect(r).toMatch(/intendedPlan: input\.intendedPlan \?\? null/);
     expect(r).not.toMatch(/tier = body\./);
   });
 
   it("a plan is only granted to the SIGNED-IN traveller", () => {
-    expect(route()).toMatch(/setPlan\(session\.email, tier\)/);
+    // The shared confirm resolves the signed-in email from its caller and never
+    // from the request body.
+    expect(route()).toMatch(/await setPlan\(email, tier\);/);
+    expect(route()).toMatch(/email: session\.email,/);
   });
 
   it("every activation leaves an audit row", () => {
-    expect(route()).toMatch(/kind: "subscription-activated"/);
+    expect(route()).toMatch(/kind: ACTIVATION_KIND,/);
   });
 
   it("the button posts the approval and grants nothing itself", () => {

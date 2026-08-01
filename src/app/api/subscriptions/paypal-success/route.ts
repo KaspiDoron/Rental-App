@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { isPaidPlan } from "@/lib/paypal-plans";
 
 // THE APPROVAL LANDS HERE - AND IS NOT BELIEVED.
 //
@@ -54,52 +53,22 @@ export async function POST(req: Request) {
     );
   }
 
-  const { fetchPaypalSubscription, subscriptionEntitles, tierForPaypalPlan } = await import(
-    "@/lib/paypal"
-  );
-  const sub = await fetchPaypalSubscription(subscriptionID);
-  if (!sub) {
+  // The verification and the grant live in ONE place, shared with the redirect
+  // return path - two copies of "how a subscription becomes a plan" is how one
+  // of them ends up subtly more permissive than the other.
+  const { confirmPaypalSubscription } = await import("@/lib/billing/confirm-subscription");
+  const outcome = await confirmPaypalSubscription({
+    email: session.email,
+    subscriptionId: subscriptionID,
+    intendedPlan: body.intendedPlan ?? null,
+    source: "button",
+  });
+  if (!outcome.ok) {
     return NextResponse.json<PaypalSuccessResponse>(
-      { ok: false, error: "We could not verify that subscription with PayPal. Nothing was charged twice - try again in a moment." },
-      { status: 502 }
-    );
-  }
-  if (!subscriptionEntitles(sub.status)) {
-    return NextResponse.json<PaypalSuccessResponse>(
-      { ok: false, error: `PayPal reports this subscription as ${sub.status.toLowerCase()}.` },
-      { status: 409 }
-    );
-  }
-
-  const tier = await tierForPaypalPlan(sub.planId);
-  if (!isPaidPlan(tier)) {
-    return NextResponse.json<PaypalSuccessResponse>(
-      { ok: false, error: "That subscription is not one of our plans." },
-      { status: 409 }
+      { ok: false, error: outcome.error },
+      { status: outcome.status }
     );
   }
 
-  const { setPlan } = await import("@/lib/access");
-  await setPlan(session.email, tier);
-
-  // The audit trail: who, which subscription, which tier, and what PayPal said.
-  const { sbInsert } = await import("@/lib/runtime-config");
-  await sbInsert("agent_events", [
-    {
-      kind: "subscription-activated",
-      user_email: session.email,
-      vendor_id: "",
-      vendor_name: "",
-      detail: JSON.stringify({
-        subscriptionId: sub.id,
-        planId: sub.planId,
-        tier,
-        status: sub.status,
-        nextBillingAt: sub.nextBillingAt,
-        intendedPlan: body.intendedPlan ?? null,
-      }).slice(0, 800),
-    },
-  ]).catch(() => {});
-
-  return NextResponse.json<PaypalSuccessResponse>({ ok: true, plan: tier });
+  return NextResponse.json<PaypalSuccessResponse>({ ok: true, plan: outcome.plan });
 }

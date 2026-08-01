@@ -179,6 +179,39 @@ export async function GET(req: Request) {
           result = { ok: false, detail: d?.error_description ?? `PayPal ${res.status} - wrong Client ID or Secret (check live vs sandbox).` };
           break;
         }
+        // THE WEBHOOK ID WAS ONLY CHECKED FOR PRESENCE.
+        //
+        // "Fully configured" meant a non-empty string, so a typo, a stale id
+        // from a deleted webhook, or a sandbox id pasted into a live account
+        // all reported green - and then every real event failed signature
+        // verification and no plan was ever granted. The webhook id is THE
+        // credential the whole billing grant path depends on; asking PayPal
+        // whether it exists is one call.
+        let webhookDetail = "";
+        if (webhookId) {
+          const listed = await fetch(`${base}/v1/notifications/webhooks`, {
+            headers: { Authorization: `Bearer ${d.access_token}` },
+            cache: "no-store",
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          const ids: string[] = Array.isArray(listed?.webhooks)
+            ? listed.webhooks.map((w: { id?: string }) => String(w?.id ?? ""))
+            : [];
+          if (ids.length && !ids.includes(String(webhookId).trim())) {
+            result = {
+              ok: false,
+              detail:
+                `PAYPAL_WEBHOOK_ID is not a webhook on this PayPal app` +
+                ` (${(env ?? "live").trim().toLowerCase() === "sandbox" ? "sandbox" : "live"}).` +
+                ` Every event will fail signature verification and no plan will be granted.` +
+                (ids.length === 1 ? ` The app's only webhook id is ${ids[0]}.` : ""),
+            };
+            break;
+          }
+          webhookDetail = ids.length ? " - webhook id verified with PayPal" : "";
+        }
+
         const missing = [
           !pp && "PLAN_PRO",
           !pu && "PLAN_ULTRA",
@@ -188,7 +221,9 @@ export async function GET(req: Request) {
           ok: missing.length === 0,
           detail:
             `PayPal credentials valid (${(env ?? "live").trim().toLowerCase() === "sandbox" ? "sandbox" : "live"})` +
-            (missing.length ? ` - still missing: ${missing.join(", ")}.` : " - checkout + webhook fully configured."),
+            (missing.length
+              ? ` - still missing: ${missing.join(", ")}.`
+              : ` - checkout + webhook fully configured${webhookDetail}.`),
         };
       } catch (e) {
         result = { ok: false, detail: e instanceof Error ? e.message : "network error" };

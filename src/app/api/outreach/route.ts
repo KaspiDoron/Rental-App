@@ -8,7 +8,8 @@ import {
 } from "@/lib/evolution";
 import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
-import { sbInsert } from "@/lib/runtime-config";
+import { sbInsert, sbSelect } from "@/lib/runtime-config";
+import { normalizePlan } from "@/lib/access";
 import { digitsOnly } from "@/lib/phone";
 import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
@@ -359,6 +360,39 @@ async function handlePost(req: Request) {
     }
   }
 
+  // CONCURRENT CAMPAIGNS: the paid concurrency lever, finally enforced.
+  //
+  // `PlanCapacity.concurrentCampaigns` has been in the type since Module 6 with
+  // a comment calling it "a separate, sellable concurrency lever" - and no call
+  // site ever read it, so a free account ran as many parallel hunts as it liked
+  // and the paid tiers sold nothing. A campaign is a search session's cold
+  // outreach; adding another shop to a hunt already in flight is always allowed
+  // (see campaignVerdict), only a NEW hunt beyond the plan is refused.
+  if (kind === "rfq") {
+    const { campaignVerdict } = await import("@/lib/wa/campaigns");
+    const pending = await sbSelect<{ meta: { kind?: string; campaign?: string } | null }>(
+      "wa_outbox",
+      `select=meta&sender_key=eq.${encodeURIComponent(session.email)}&limit=200`
+    ).catch(() => []);
+    const verdict = campaignVerdict(
+      normalizePlan(session.plan),
+      pending.map((r) => ({ kind: r.meta?.kind, campaign: r.meta?.campaign })),
+      body.campaign
+    );
+    if (!verdict.allowed) {
+      return NextResponse.json(
+        {
+          allowed: false,
+          sent: false,
+          upgrade: true,
+          reason: "concurrent-campaigns",
+          error: verdict.reason,
+        },
+        { status: 429 }
+      );
+    }
+  }
+
   const { guardOutbound, afterSend } = await import("@/lib/wa-guard");
   const guard = await guardOutbound({
     senderKey: session.email,
@@ -377,6 +411,10 @@ async function handlePost(req: Request) {
       kind,
       round: Number(body.round ?? 0),
       rfq: body.rfq ?? null,
+      // WHICH HUNT this introduction belongs to (the search epoch). Read back
+      // by the concurrent-campaigns check above - without it, every queued row
+      // would look like the same anonymous campaign.
+      ...(body.campaign ? { campaign: String(body.campaign) } : {}),
       region: String(body.region ?? ""),
       plan: session.plan,
       localLang: wantsLocal,

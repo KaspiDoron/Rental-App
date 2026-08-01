@@ -243,6 +243,10 @@ function VendorCardInner({
           region,
           openNow: vendor.openNow,
           localLang: Boolean(localLang),
+          // WHICH HUNT this introduction belongs to. The plan's
+          // concurrentCampaigns limit is metered on this - without it every
+          // queued row looks like the same anonymous campaign.
+          campaign: searchEpoch || undefined,
         }),
       });
       const d = r.data;

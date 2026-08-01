@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { verifyPaypalWebhook, tierForPaypalPlan } from "@/lib/paypal";
-import { subscriberFor } from "@/lib/billing/subscription-link";
+import {
+  subscriberFor,
+  suspendedSinceFor,
+  markSubscriptionState,
+  SUSPENDED_KIND,
+  RESUMED_KIND,
+} from "@/lib/billing/subscription-link";
+import { effectForEvent, clearsSuspension } from "@/lib/billing/suspension";
 import { setPlan } from "@/lib/access";
 import { getConfig, sbInsert } from "@/lib/runtime-config";
 
@@ -62,11 +69,6 @@ export async function POST(req: Request) {
     "BILLING.SUBSCRIPTION.RE-ACTIVATED",
     "PAYMENT.SALE.COMPLETED",
   ].includes(event);
-  const deactivates = [
-    "BILLING.SUBSCRIPTION.CANCELLED",
-    "BILLING.SUBSCRIPTION.EXPIRED",
-    "BILLING.SUBSCRIPTION.SUSPENDED",
-  ].includes(event);
 
   // WHO does this subscription belong to? The hint if PayPal carried one,
   // otherwise our own verified activation record - which is the only path that
@@ -98,8 +100,30 @@ export async function POST(req: Request) {
   // Only grant from a VERIFIED event (the sole trusted grant path).
   if (verified && email && activates && tier) {
     await setPlan(email, tier).catch(() => {});
-  } else if (verified && email && deactivates) {
-    await setPlan(email, "free").catch(() => {});
+    // Payment recovered - end any open grace window so a LATER suspension
+    // starts its own clock instead of inheriting an expired one.
+    if (subscriptionId && clearsSuspension(event)) {
+      await markSubscriptionState(RESUMED_KIND, { email, subscriptionId });
+    }
+  } else if (verified && email) {
+    // A SUSPENSION IS NOT A CANCELLATION. PayPal suspends for a recoverable
+    // payment failure and retries over about a week, sending RE-ACTIVATED when
+    // the money lands - so treating it like a cancellation dropped a paying
+    // traveller's agents mid-hunt and handed them back two days later with no
+    // explanation of either event. A cancellation is a decision and takes
+    // effect at once; a suspension gets the window.
+    const suspendedSince = subscriptionId
+      ? await suspendedSinceFor(subscriptionId).catch(() => null)
+      : null;
+    const effect = effectForEvent(event, { suspendedSince, now: Date.now() });
+    if (effect === "downgrade") {
+      await setPlan(email, "free").catch(() => {});
+    } else if (effect === "grace" && subscriptionId && !suspendedSince) {
+      // First sight: start the clock, keep the tier. A repeat SUSPENDED event
+      // must not restart it, which is why the record is only written when there
+      // is not one already.
+      await markSubscriptionState(SUSPENDED_KIND, { email, subscriptionId });
+    }
   }
 
   return NextResponse.json({ ok: true });

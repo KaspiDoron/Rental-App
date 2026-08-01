@@ -60,3 +60,56 @@ function matchesSubscription(detail: string | null | undefined, id: string): boo
     return false;
   }
 }
+
+// ---- Suspension state, derived from the same append-only evidence ------------
+//
+// A suspension needs a START so the grace window in ./suspension can be
+// measured. Rather than a mutable column that a lost webhook would leave wrong
+// forever, the state is DERIVED from the event trail: whichever of "suspended"
+// / "resumed" we saw most recently for this subscription is the current truth.
+// Append-only, self-correcting, and it survives a webhook arriving out of order
+// because the newest event still wins.
+
+export const SUSPENDED_KIND = "subscription-suspended";
+export const RESUMED_KIND = "subscription-resumed";
+
+/**
+ * When this subscription was first seen suspended, or null if it is not
+ * currently suspended (never was, or has since resumed).
+ */
+export async function suspendedSinceFor(subscriptionId: string): Promise<number | null> {
+  const id = subscriptionId.trim();
+  if (!id) return null;
+  const rows = await sbSelect<ActivationRow & { kind?: string; created_at?: string }>(
+    "agent_events",
+    `select=kind,detail,created_at&kind=in.(${SUSPENDED_KIND},${RESUMED_KIND})` +
+      `&detail=ilike.${encodeURIComponent(`*${id}*`)}` +
+      `&order=created_at.desc&limit=10`
+  ).catch(() => []);
+
+  for (const row of rows) {
+    if (!matchesSubscription(row.detail, id)) continue;
+    // The newest matching event decides. A resume ends the window; a suspension
+    // starts one.
+    if (row.kind === RESUMED_KIND) return null;
+    if (row.kind === SUSPENDED_KIND) return Date.parse(row.created_at ?? "") || null;
+  }
+  return null;
+}
+
+/** Record a suspension / resumption against a subscription. Best-effort. */
+export async function markSubscriptionState(
+  kind: typeof SUSPENDED_KIND | typeof RESUMED_KIND,
+  input: { email: string; subscriptionId: string }
+): Promise<void> {
+  const { sbInsert } = await import("@/lib/runtime-config");
+  await sbInsert("agent_events", [
+    {
+      kind,
+      user_email: input.email,
+      vendor_id: "",
+      vendor_name: "",
+      detail: JSON.stringify({ subscriptionId: input.subscriptionId }),
+    },
+  ]).catch(() => {});
+}
