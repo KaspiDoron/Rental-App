@@ -1535,6 +1535,38 @@ export async function processVendorReply(opts: {
     // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
     // proof panel renders this; with nothing recorded it now claims nothing.
     if (routed.spte) recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
+    // WHAT THE SHOP SAID ABOUT EACH EXTRA THE TRAVELLER ASKED FOR.
+    //
+    // The request - helmets, a phone mount, delivery - left the app in the
+    // opening message and never came back, so the booking screen could show a
+    // helmet the shop had already refused. Read AFTER the reply has gone, so
+    // it never sits on the path between a shop's message and our answer, and
+    // only when there is actually something to read: no requested extras, no
+    // call. Awaited rather than detached, because Cloud Run freezes the CPU
+    // the moment the response flushes.
+    if (rfq?.accessories?.length && ctx.sender && ctx.vendorId) {
+      const email = ctx.sender;
+      const vendorId = ctx.vendorId;
+      const inboundText = opts.text ?? "";
+      await finishBeforeResponse("accessory-verdicts", async () => {
+        const { recordAccessoryVerdicts, persistAccessoryStatus } = await import(
+          "./thread/accessory-pass"
+        );
+        const { verdicts } = await recordAccessoryVerdicts({
+          email,
+          vendorId,
+          requested: rfq.accessories,
+          inboundText,
+        });
+        if (verdicts)
+          await persistAccessoryStatus({
+            email,
+            vendorId,
+            requested: rfq.accessories,
+            verdicts,
+          });
+      });
+    }
     // The turn reached an engine and produced its own outcome (sent, held or
     // deliberately silent). The message is CONSUMED either way - keeping the
     // claim is what stops an endless redelivery loop; releasing it is only

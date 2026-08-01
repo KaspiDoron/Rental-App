@@ -185,6 +185,14 @@ export interface ThreadFields {
   mileageKm?: number; // odometer seen in a photo - bargaining leverage
   conditionNotes?: string; // visible condition (scratches, worn tires...)
   mediaSummary?: string; // everything informative the last photo showed
+  /**
+   * PER-EXTRA VERDICTS. What the shop said about each thing the traveller
+   * asked for (helmets, a phone mount, delivery). The request used to leave
+   * the app in the opening message and never come back, so the booking screen
+   * could show a helmet the shop had refused. Keyed by the traveller's own
+   * wording - see thread/accessories.ts for the merge rules.
+   */
+  accessories?: import("../thread/accessories").AccessoryStatus[];
   // The shop asked WHERE the traveller is staying (for delivery) and we had no
   // shareable address - the agent stops probing and the app prompts the user
   // for their hotel instead of looping the boilerplate delivery question.

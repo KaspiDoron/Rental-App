@@ -110,6 +110,9 @@ export async function GET(req: Request) {
       shopUnavailable?: boolean;
       restockHint?: string;
       vehicleConfirmation?: { status?: string; evidence?: string };
+      // WHAT THE SHOP SAID ABOUT EACH EXTRA. Written by the accessory pass
+      // after each inbound turn; the card renders one chip per requested item.
+      accessories?: import("@/lib/thread/accessories").AccessoryStatus[];
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -289,6 +292,11 @@ export async function GET(req: Request) {
       vehicleStatus,
       vehicleNote: vehicleStatus === "confirmed" ? null : rowGate?.note ?? null,
       auto: r.auto,
+      // WHAT THE SHOP SAID ABOUT EACH EXTRA. The request left the app in the
+      // opening message and never came back, so the card and the booking sheet
+      // could only show what was ASKED. One entry per requested item, each
+      // honestly confirmed / refused / still unknown.
+      accessories: st?.accessories ?? null,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,
       depositType: r.deposit_type ?? null,

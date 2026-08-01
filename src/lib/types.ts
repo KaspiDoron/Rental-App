@@ -109,6 +109,14 @@ export interface Offer {
   depositType?: "cash" | "passport" | "id" | "license" | "other" | "none";
   depositAmount?: number; // when a cash figure was stated
   depositCurrency?: string; // currency of depositAmount (defaults to the offer's)
+  /**
+   * PER-EXTRA VERDICTS. One entry for every accessory the traveller asked for,
+   * carrying what the shop actually said about it. The request used to leave
+   * the app in the opening message and never return, so every surface could
+   * only show what was ASKED - including a booking screen that ticked a helmet
+   * the shop had refused.
+   */
+  accessories?: import("./thread/accessories").AccessoryStatus[] | null;
   // ---- Extra shop-confirmed rental terms (only when explicitly stated) ------
   deliveryFee?: number; // in the offer's currency; 0 = free delivery
   kmLimitPerDay?: number | "unlimited";

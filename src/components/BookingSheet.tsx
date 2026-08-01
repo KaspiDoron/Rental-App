@@ -281,12 +281,35 @@ export function BookingSheet({
                 under {rfq.maxMileageKm.toLocaleString()} km
               </div>
             )}
-            {rfq?.accessories.map((a) => (
-              <div key={a} className="flex items-center gap-1.5">
-                <span aria-hidden className="text-faint">·</span>
-                {a}
-              </div>
-            ))}
+            {rfq?.accessories.map((a) => {
+              // ...and where the shop HAS answered, say so - with their word,
+              // not ours. `unknown` stays a neutral dot: an extra nobody has
+              // discussed is not a promise in either direction.
+              const v = vendor.offer?.accessories?.find(
+                (x) => x.item.trim().toLowerCase() === a.trim().toLowerCase()
+              );
+              const mark =
+                v?.state === "confirmed" ? "✓" : v?.state === "refused" ? "✕" : "·";
+              const tone =
+                v?.state === "confirmed"
+                  ? "text-savings"
+                  : v?.state === "refused"
+                    ? "text-brandred"
+                    : "text-faint";
+              return (
+                <div key={a} className="flex items-center gap-1.5">
+                  <span aria-hidden className={tone}>
+                    {mark}
+                  </span>
+                  <span className={v?.state === "refused" ? "line-through opacity-70" : ""}>{a}</span>
+                  {typeof v?.extraCost === "number" && v.extraCost > 0 && (
+                    <span className="text-[11px] font-bold text-faint">
+                      +{v.extraCost}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={() => setStep("schedule")}
