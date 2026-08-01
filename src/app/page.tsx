@@ -99,6 +99,8 @@ import { moneyLocal, currencySymbol } from "@/lib/currency";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
 import { deviceTimeZone } from "@/lib/rental-window";
+import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
+import { MassBargainPreview } from "@/components/MassBargainPreview";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -185,6 +187,12 @@ export default function Home() {
   const [waReachable, setWaReachable] = useState(true);
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
+  /** The pre-dispatch preview: who the run picked, before anything is sent. */
+  const [massPreview, setMassPreview] = useState<{
+    targets: Vendor[];
+    eligibleCount: number;
+    cap: number;
+  } | null>(null);
   // The premium beta-quality note shown before a mass bargain runs.
   const [massInfoOpen, setMassInfoOpen] = useState(false);
   // Ultra option: let the agents bargain in the shop's LOCAL language. OFF by
@@ -2054,24 +2062,34 @@ export default function Home() {
 
   // Mass bargain: named + stable so the button AND (later) Will's command
   // bridge share the exact same path. Entitlement-gated through can().
+  // STEP ONE: SHOW THE TRAVELLER WHO. This used to fire straight at the wire -
+  // one tap, ten shops, no list and no way back - and the ten were whatever the
+  // vendor list happened to be sorted by at that moment. Nothing is composed or
+  // queued until they confirm the sheet.
   const runMassBargain = useCallbackRef(async () => {
     if (!rfq) return;
     if (!can(session?.plan, "mass-bargain")) {
       setUpgradeOpen(true);
       return;
     }
+    const { targets, eligible, cap } = massBargainTargets(filtered, session?.plan);
+    if (!targets.length) {
+      setMassNote(t("Every shop in this list already has a conversation open."));
+      return;
+    }
+    setMassPreview({ targets, eligibleCount: eligible.length, cap });
+  });
+
+  /** STEP TWO: the traveller confirmed, possibly after dropping some shops. */
+  const dispatchMassBargain = useCallbackRef(async (vendorIds: string[]) => {
+    if (!rfq || !vendorIds.length) return;
+    setMassPreview(null);
     setMassState("running");
     setMassNote(null);
     try {
+      const chosen = new Set(vendorIds);
       const targets = filtered
-        .filter(
-          (v) =>
-            !v.offer &&
-            v.stage !== "rfq-sent" &&
-            v.stage !== "awaiting-response" &&
-            v.stage !== "no-contact"
-        )
-        .slice(0, 10)
+        .filter((v) => chosen.has(v.id))
         .map((v) => ({
           id: v.id,
           name: v.name,
@@ -2093,8 +2111,14 @@ export default function Home() {
       });
       const d = await res.json();
       if (d.capReached) {
+        // THE SERVER'S NUMBER, not a hardcoded ten. Plan-tiered capacity has
+        // allowed 30 (Pro) and 40 (Ultra) since it shipped, and this sentence
+        // told a paying traveller they had hit a 10-shop beta limit - a claim
+        // that is false for two of the three plans and reads as the product
+        // failing rather than the client under-asking.
         setMassNote(
-          t("This hunt already reached its 10-shop beta limit - replies from the contacted shops keep flowing in.")
+          t("This hunt already reached its {cap}-shop limit - replies from the contacted shops keep flowing in.")
+            .replace("{cap}", String(d.cap ?? massBargainCap(session?.plan)))
         );
         return;
       }
@@ -3559,6 +3583,16 @@ export default function Home() {
           searchOrigin={origin?.label || undefined}
           onClose={() => setLocationAskFor(null)}
           onShare={(place) => pickupConsent(locationAskFor, place)}
+        />
+      )}
+
+      {massPreview && (
+        <MassBargainPreview
+          targets={massPreview.targets}
+          eligibleCount={massPreview.eligibleCount}
+          cap={massPreview.cap}
+          onCancel={() => setMassPreview(null)}
+          onConfirm={(ids) => dispatchMassBargain(ids)}
         />
       )}
 
