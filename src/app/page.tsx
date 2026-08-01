@@ -858,6 +858,17 @@ export default function Home() {
           pricePerDay: v.offer?.pricePerDay,
           currency: v.offer?.currency,
           verified: v.offer?.verified,
+          // WHAT WILL COULD NOT SEE. Every one of these already lives on the
+          // vendor the page is holding; the snapshot simply never carried them,
+          // so Will would report a shop as "leading" when it had offered a
+          // different bike, said it had nothing, or had a reply still sitting
+          // in the outbox waiting for opening hours.
+          vehicleStatus: v.offer?.vehicleStatus,
+          alternativeOffered: Boolean(v.offer?.alternativeOffer),
+          outOfStock: v.stage === "out-of-stock",
+          openingPricePerDay: v.offer?.listPricePerDay,
+          queuedUntil: v.queuedUntil,
+          queuedReason: v.queuedReason ?? undefined,
         })),
         offersIn: vendors.filter((v) => v.offer).length,
         // Will treats "still checking" as not-yet-linked (boolean contract).

@@ -11,6 +11,12 @@ import {
 import { composeStatus, composeWhy, composeCompare } from "@/lib/will-answers";
 import { planCapacity } from "@/lib/wa/capacity";
 import { pickVariant, pick } from "@/lib/will-variants";
+import {
+  isActingCommand,
+  willActionsEnabled,
+  guidanceFor,
+  WILL_ACTIONS_KEY,
+} from "@/lib/will-actions-gate";
 
 // Will's brain: natural language in -> ONE typed command + a short spoken
 // confirmation out. The deterministic parser handles the unambiguous cases
@@ -93,6 +99,13 @@ export async function POST(req: Request) {
         pricePerDay: v.pricePerDay,
         currency: v.currency,
         stage: v.stage,
+        // The facts the model was answering WITHOUT: whether the price is even
+        // for the right vehicle, whether the shop has anything, whether a
+        // different bike is on the table, and what they opened at.
+        vehicleStatus: v.vehicleStatus,
+        alternativeOffered: v.alternativeOffered || undefined,
+        outOfStock: v.outOfStock || undefined,
+        openingPricePerDay: v.openingPricePerDay,
       })),
     });
     const out = await chat(
@@ -148,6 +161,30 @@ export async function POST(req: Request) {
       });
     }
     return NextResponse.json({ command: { action: "answer", text: cmpText }, say: cmpText });
+  }
+
+  // THE ACTING HALF IS BEHIND AN OWNER SWITCH.
+  //
+  // A confident "Done - pushing every shop now" that changes nothing is worse
+  // than a refusal: the traveller stops watching. While parts of the action
+  // path are being rebuilt, the owner can turn execution off from the Key
+  // Vault and Will keeps ANSWERING in full - status, why, compare, help and
+  // navigation are never gated - while telling the traveller which control to
+  // use instead. Default ON; turning it back on after a fix is a paste, not a
+  // redeploy.
+  if (isActingCommand(command.action)) {
+    const { getConfig } = await import("@/lib/runtime-config");
+    const raw = await getConfig(WILL_ACTIONS_KEY).catch(() => "");
+    if (!willActionsEnabled(raw)) {
+      const text = guidanceFor(command);
+      return NextResponse.json({
+        command: { action: "answer", text },
+        say: text,
+        // The client renders this as an "under development" note rather than a
+        // plain answer, so the traveller knows it is a temporary state.
+        underDevelopment: true,
+      });
+    }
   }
 
   return NextResponse.json({ command, say: say ?? defaultSay(command, ctx) });

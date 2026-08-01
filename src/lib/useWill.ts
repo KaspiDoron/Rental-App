@@ -13,6 +13,12 @@ export interface WillMsg {
   role: "user" | "will";
   text: string;
   receipt?: string; // short pill describing an executed command
+  /**
+   * The owner has Will's ACTING half switched off (WILL_ACTIONS). The message
+   * is real guidance - it names the control to use - and it is flagged so the
+   * bubble can say "under development" instead of reading like a refusal.
+   */
+  underDevelopment?: boolean;
   at: number;
 }
 
@@ -175,13 +181,20 @@ export function useWill(bridge: WillBridge) {
         });
         const d = await res.json();
         if (d?.command) {
+          // WHEN ACTIONS ARE OFF the server has already turned the command into
+          // an `answer` carrying directions, so executing it is a no-op by
+          // construction - there is no path where the UI acts on something the
+          // switch was meant to stop.
           await execute(d.command as WillCommand);
           setMessages((m) => [
             ...m,
             {
               role: "will",
               text: String(d.say ?? "Done."),
-              receipt: receiptFor(d.command as WillCommand),
+              receipt: d?.underDevelopment
+                ? undefined
+                : receiptFor(d.command as WillCommand),
+              underDevelopment: Boolean(d?.underDevelopment),
               at: Date.now(),
             },
           ]);

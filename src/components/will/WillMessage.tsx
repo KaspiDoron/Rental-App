@@ -19,6 +19,17 @@ export function WillMessage({ msg }: { msg: WillMsg }) {
             </span>
           </div>
         )}
+        {/* The owner has Will's hands-on half switched off. The message itself
+            already names the control to use; this says WHY he is pointing
+            rather than doing, so it reads as a temporary state and not as a
+            refusal or - worse - a silent failure. */}
+        {msg.underDevelopment && (
+          <div className="mt-1.5">
+            <span className="inline-flex items-center gap-1 rounded-full bg-warn-soft px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-warn">
+              🚧 Under development
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

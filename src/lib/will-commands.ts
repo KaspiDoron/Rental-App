@@ -33,6 +33,31 @@ export interface WillVendorSnapshot {
   pricePerDay?: number;
   currency?: string;
   verified?: boolean;
+  /**
+   * WHAT WILL COULD NOT SEE.
+   *
+   * The snapshot carried a name, a stage and a price, so Will's answers were
+   * fluent about the things it had and silent about the things a traveller
+   * actually asks: is this even the bike I asked for, has anyone come DOWN,
+   * why has this shop gone quiet. It would cheerfully report "Sun House leads
+   * at 250/day" about a shop that had offered a different vehicle, was out of
+   * stock, or whose reply was still sitting in the outbox waiting for opening
+   * hours - because none of those facts were in its eyes.
+   *
+   * Every field below already exists on the Vendor the page holds. They were
+   * simply not passed.
+   */
+  /** The vehicle-identity gate's verdict for this price. */
+  vehicleStatus?: "confirmed" | "assumed" | "needs-confirmation" | "wrong-vehicle";
+  /** The shop offered a DIFFERENT vehicle and the traveller has not chosen. */
+  alternativeOffered?: boolean;
+  /** This shop said it has nothing available. */
+  outOfStock?: boolean;
+  /** The shop's first quote, when it has since moved. */
+  openingPricePerDay?: number;
+  /** ISO time a queued message to this shop is due, and why it waits. */
+  queuedUntil?: string;
+  queuedReason?: string;
 }
 
 /** Compact client snapshot sent with every message - Will's eyes. */

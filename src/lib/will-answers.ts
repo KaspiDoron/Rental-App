@@ -32,13 +32,25 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
   ]);
 
   const bits: string[] = [];
-  const priced = ctx.vendors.filter((v) => (v.pricePerDay ?? 0) > 0);
+  // A PRICE FOR A DIFFERENT BIKE IS NOT AN OFFER. The status line reported the
+  // cheapest number on the board as "best so far" without ever checking what it
+  // was FOR - so a shop that had quoted an e-bike against a 125cc request, or
+  // one that had said it has nothing available, led the answer.
+  const priced = ctx.vendors.filter(
+    (v) => (v.pricePerDay ?? 0) > 0 && !v.outOfStock && v.vehicleStatus !== "wrong-vehicle"
+  );
   if (priced.length > 0) {
     const best = priced.sort((a, b) => (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0))[0];
+    // Has anyone actually come DOWN? The single most-asked question, and the
+    // opening quote was in the snapshot all along.
+    const moved =
+      best.openingPricePerDay && best.openingPricePerDay > (best.pricePerDay ?? 0)
+        ? ` (down from ${money(best.openingPricePerDay, best.currency)})`
+        : "";
     bits.push(
       `${priced.length} offer${priced.length === 1 ? "" : "s"} in - best so far is ${
         best.name
-      } at ${money(best.pricePerDay!, best.currency)}/day`
+      } at ${money(best.pricePerDay!, best.currency)}/day${moved}`
     );
   } else if (ctx.vendors.length > 0) {
     bits.push(`no prices yet from the ${ctx.vendors.length} shops I'm working`);
@@ -86,6 +98,31 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
             : "sending is on a protective pause for your number right now"
     );
   }
+  // THE THINGS WAITING ON THE TRAVELLER, which Will never mentioned because the
+  // snapshot did not carry them - so "what's happening?" answered about the
+  // system and never about the decision sitting in front of them.
+  const waitingOnYou = ctx.vendors.filter((v) => v.alternativeOffered);
+  if (waitingOnYou.length > 0) {
+    bits.push(
+      waitingOnYou.length === 1
+        ? `${waitingOnYou[0].name} has offered a DIFFERENT vehicle and I've paused that thread until you say yes or no`
+        : `${waitingOnYou.length} shops have offered a different vehicle - those threads are paused for your call`
+    );
+  }
+  const gone = ctx.vendors.filter((v) => v.outOfStock);
+  if (gone.length > 0) {
+    bits.push(
+      `${gone.length} shop${gone.length === 1 ? " has" : "s have"} nothing available right now`
+    );
+  }
+  const unconfirmed = ctx.vendors.filter(
+    (v) => (v.pricePerDay ?? 0) > 0 && v.vehicleStatus === "needs-confirmation"
+  );
+  if (unconfirmed.length > 0) {
+    bits.push(
+      `${unconfirmed.length} price${unconfirmed.length === 1 ? " is" : "s are"} still waiting on the shop to confirm which vehicle it covers`
+    );
+  }
   if (ctx.paused) bits.push("the session is PAUSED on your orders - say 'resume' and I'm back on it");
   if (bits.length === 0) {
     return ctx.phase === "idle"
@@ -97,7 +134,12 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
 
 /** "Why was this rental selected / why this move?" */
 export async function composeWhy(email: string, ctx: WillContext): Promise<string> {
-  const priced = ctx.vendors.filter((v) => (v.pricePerDay ?? 0) > 0);
+  // Same exclusion as the status line: a price for a vehicle the traveller did
+  // not ask for cannot justify anything, and a shop with nothing in stock is
+  // not leading.
+  const priced = ctx.vendors.filter(
+    (v) => (v.pricePerDay ?? 0) > 0 && !v.outOfStock && v.vehicleStatus !== "wrong-vehicle"
+  );
   const parts: string[] = [];
   if (priced.length > 0) {
     const sorted = [...priced].sort((a, b) => (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0));
@@ -109,6 +151,32 @@ export async function composeWhy(email: string, ctx: WillContext): Promise<strin
           ? ` - ${money((second.pricePerDay ?? 0) - (best.pricePerDay ?? 0), best.currency)}/day cheaper than the next option (${second.name})`
           : "") +
         (best.verified ? ", and the shop confirmed it in writing" : ", though it still needs the shop's written confirmation")
+    );
+    // WHAT THE HAGGLING ACTUALLY ACHIEVED. The opening quote was in the
+    // snapshot and the answer never used it, so "why this one?" could not say
+    // the one thing the product exists to do.
+    if (best.openingPricePerDay && best.openingPricePerDay > (best.pricePerDay ?? 0)) {
+      parts.push(
+        `They opened at ${money(best.openingPricePerDay, best.currency)}/day - I've taken ${money(
+          best.openingPricePerDay - (best.pricePerDay ?? 0),
+          best.currency
+        )} off that`
+      );
+    }
+  }
+  // A CHEAPER NUMBER THAT IS NOT AN ANSWER. When a shop quoted less for a
+  // different vehicle, the old answer either used it or silently dropped it -
+  // both leave the traveller wondering why the obvious cheapest is not winning.
+  const wrongVehicle = ctx.vendors.filter(
+    (v) => v.vehicleStatus === "wrong-vehicle" && (v.pricePerDay ?? 0) > 0
+  );
+  if (wrongVehicle.length > 0) {
+    const cheapest = [...wrongVehicle].sort((a, b) => (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0))[0];
+    parts.push(
+      `I'm NOT counting ${cheapest.name}'s ${money(
+        cheapest.pricePerDay!,
+        cheapest.currency
+      )}/day - that quote is for a different vehicle than you asked for`
     );
   }
   // Latest persisted director reasoning - the real "why" from the live engine.

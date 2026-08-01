@@ -110,6 +110,11 @@ const KEYS: {
   // company meant a code change - the one value in the legal text that names
   // WHO is protected, and the only one that could not be set.
   { name: "OPERATOR_NAME", label: "Legal entity name in the Terms (e.g. 'WheelDeal Ltd.')", scope: "auth", editable: true },
+  // Will's ACTING half. "off" keeps every answer (status, why, compare, help)
+  // and turns his hands-on commands into directions to the real control - for
+  // when part of the action path is mid-rebuild and a confident "Done" that
+  // changes nothing would be worse than a refusal.
+  { name: "WILL_ACTIONS", label: "Will can operate the app ('off' = guidance only, answers still work)", scope: "auth", editable: true },
   { name: "APP_DOMAIN", label: "Public app domain (https://... - drives share links, SEO & sender identity)", scope: "auth", editable: true },
   { name: "TEST_MODE", label: "Test Mode ('on' = flagged testers ride Ultra free + sandbox billing + banner)", scope: "auth", editable: true },
   { name: "SCALE_MODE", label: "Scale Mode ('on' = 3x per-user limits + relaxed polling for high load)", scope: "data", editable: true },
