@@ -294,7 +294,16 @@ async function handlePost(req: Request) {
   // language, not just later bargains (this was the "local language doesn't
   // work" gap - the RFQ always went out in English). Bargain drafts arrive
   // already localized by composeBargain, so only localize agent RFQs here.
-  if (wantsLocal && isAuto && kind === "rfq") {
+  //
+  // AND A MESSAGE THE TRAVELLER TYPED THEMSELVES, TOO (M26). This gate read
+  // `isAuto && kind === "rfq"`, so on a local-language hunt the agent wrote
+  // Thai and the traveller's own hand-typed line went out in English - into
+  // the same thread, from the same number, one message apart. The shop sees
+  // one person switching languages mid-conversation, which is exactly the tell
+  // the thread-language lock above exists to prevent. The gloss comes back
+  // with it, so the card can still show the traveller what was sent for them.
+  const localizeThis = wantsLocal && ((isAuto && kind === "rfq") || kind === "custom");
+  if (localizeThis) {
     const { localizeMessage } = await import("@/lib/agents");
     const { regionForShop } = await import("@/lib/copy/region");
     const localized = await localizeMessage(

@@ -94,3 +94,22 @@ describe("and the switch says so instead of ignoring the tap", () => {
     expect(page).toMatch(/The language is set for this hunt - start a new search to change it\./);
   });
 });
+
+describe("M26: the traveller's own line does not switch language on the shop", () => {
+  it("REPRODUCTION: a custom message is localized too", () => {
+    const route = readCode("src/app/api/outreach/route.ts");
+    // The gate read `isAuto && kind === "rfq"`, so on a local-language hunt the
+    // agent wrote Thai and the traveller's hand-typed line went out in English -
+    // same thread, same number, one message apart.
+    expect(route).toMatch(
+      /const localizeThis = wantsLocal && \(\(isAuto && kind === "rfq"\) \|\| kind === "custom"\);/
+    );
+    expect(route).toMatch(/if \(localizeThis\) \{/);
+  });
+
+  it("...and the composer stops presenting the preview as the exact words", () => {
+    const card = readCode("src/components/VendorCard.tsx");
+    expect(card).toMatch(/Sent in the shop's language - you'll see both versions after it goes\./);
+    expect(card).toMatch(/\{localLang && \(/);
+  });
+});

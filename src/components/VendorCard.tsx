@@ -1034,6 +1034,18 @@ function VendorCardInner({
                 <div className="text-[9.5px] font-extrabold uppercase tracking-wide text-savings">
                   {t("The shop will receive")}
                 </div>
+                {/* ON A LOCAL-LANGUAGE HUNT THIS IS NOT WHAT THEY RECEIVE.
+                    The traveller's own line used to be the ONE message that
+                    went out in English while the agent wrote Thai in the same
+                    thread - one person, two languages, one message apart. It is
+                    translated now, which means the preview above is the
+                    MEANING, not the words. Say so rather than let the panel
+                    quietly become wrong. */}
+                {localLang && (
+                  <div className="mt-0.5 text-[9.5px] font-bold text-brandblue">
+                    🌐 {t("Sent in the shop's language - you'll see both versions after it goes.")}
+                  </div>
+                )}
                 <div className="mt-0.5 whitespace-pre-wrap break-words text-[11.5px] font-semibold text-strong">
                   {draft.trim()}
                 </div>
