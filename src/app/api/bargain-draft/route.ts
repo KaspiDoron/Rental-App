@@ -4,6 +4,7 @@ import { getSession } from "@/lib/session";
 import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { digitsOnly } from "@/lib/phone";
+import { can } from "@/lib/entitlements";
 
 // Adaptive Bargaining Agent: composes the next negotiation message to send.
 // This is the SAME brain the automatic funnel uses - market-floor anchored
@@ -20,7 +21,7 @@ export async function POST(req: Request) {
 
   // Local-language street bargaining is an Ultra perk (management included).
   const wantsLocal = body.language === "local";
-  const isUltra = session.plan === "ultra";
+  const isUltra = can(session.plan, "local-language");
   if (wantsLocal && !isUltra) {
     return NextResponse.json(
       {

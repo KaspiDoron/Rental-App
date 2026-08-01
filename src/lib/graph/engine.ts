@@ -73,6 +73,7 @@ import type {
   WakeupRow,
 } from "./types";
 import { shopAskedQuestion } from "./nodes";
+import { can } from "../entitlements";
 
 // ---------------------------------------------------------------------------
 // Graph spec persistence (app_config key, hot-applied, legacy auto-migration)
@@ -978,7 +979,7 @@ async function runTailGates(args: {
   const shopWroteEnglish =
     input.event.kind !== "tick" && looksEnglish(input.event.shopMessage);
   const useLocalLang =
-    Boolean(input.ctx.localLang) && input.ctx.plan === "ultra" && !shopWroteEnglish;
+    Boolean(input.ctx.localLang) && can(input.ctx.plan, "local-language") && !shopWroteEnglish;
   const isLocalizedBargain = args.nodeKind === "bargain" && useLocalLang;
 
   // ---- style-validator -------------------------------------------------------

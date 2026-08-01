@@ -15,12 +15,15 @@ declare global {
 // automatically once AdSense starts serving.
 export function AdBanner({
   plan,
-  slot = "auto",
+  slot,
 }: {
   plan: string | undefined;
+  /** Override the configured ad unit. Normally omitted - the unit id comes
+   *  from the Key Vault so it can change without a redeploy. */
   slot?: string;
 }) {
   const [client, setClient] = useState<string | null>(null);
+  const [unit, setUnit] = useState<string | null>(null);
   const pushed = useRef(false);
 
   const free = !plan || plan === "free";
@@ -29,9 +32,22 @@ export function AdBanner({
     if (!free) return;
     fetch("/api/config/public")
       .then((r) => r.json())
-      .then((d) => setClient(d.adsenseClient ?? null))
+      .then((d) => {
+        setClient(d.adsenseClient ?? null);
+        setUnit(d.adsenseSlot ?? null);
+      })
       .catch(() => {});
   }, [free]);
+
+  // AN AD UNIT WITH NO UNIT ID CANNOT BE FILLED.
+  //
+  // `data-ad-slot` was rendered only when a caller passed one, and none of the
+  // three call sites ever did - so every banner reserved its space, showed its
+  // placeholder, and Google had no unit to serve into. The surface looked
+  // finished and earned nothing. The id is a Key Vault value, so the owner
+  // creates one display unit in the AdSense console, pastes it in
+  // Admin -> Keys, and the banners start filling with no redeploy.
+  const adSlot = slot ?? unit;
 
   // The SDK is loaded ONCE, site-wide, by the root layout - it has to be, since
   // Google's reviewer fetches pages anonymously and looks for the tag. This
@@ -39,14 +55,14 @@ export function AdBanner({
   // AdSense SDK twice is a policy violation and makes slots fail to fill. All
   // that is left here is claiming the slot.
   useEffect(() => {
-    if (!client || pushed.current) return;
+    if (!client || !adSlot || pushed.current) return;
     try {
       (window.adsbygoogle = window.adsbygoogle || []).push({});
       pushed.current = true;
     } catch {
       /* ad blocked - fine */
     }
-  }, [client]);
+  }, [client, adSlot]);
 
   if (!free) return null;
 
@@ -60,15 +76,19 @@ export function AdBanner({
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 bg-card2/60">
           <span className="text-[12px] font-extrabold text-faint">Ad space</span>
           <span className="text-[10px] text-faint">
-            {client ? "waiting for Google to serve" : "activates after Google review"}
+            {!client
+              ? "activates after Google review"
+              : !adSlot
+                ? "no ad unit configured yet"
+                : "waiting for Google to serve"}
           </span>
         </div>
-        {client && (
+        {client && adSlot && (
           <ins
             className="adsbygoogle relative block"
             style={{ display: "block", minHeight: 100 }}
             data-ad-client={client}
-            data-ad-slot={slot !== "auto" ? slot : undefined}
+            data-ad-slot={adSlot}
             data-ad-format="auto"
             data-full-width-responsive="true"
           />

@@ -52,6 +52,7 @@ const DOC_URLS: Record<string, string> = {
   PAYPAL_WEBHOOK_ID: "https://developer.paypal.com/dashboard/applications/live",
   PAYPAL_ENV: "https://developer.paypal.com/dashboard/applications/live",
   ADSENSE_CLIENT: "https://www.google.com/adsense/",
+  ADSENSE_SLOT: "https://www.google.com/adsense/new/u/0/pub/ads/myads/units",
   TWITTER_HANDLE: "https://x.com/settings/profile",
 };
 
@@ -104,6 +105,11 @@ const KEYS: {
   { name: "PAYPAL_WEBHOOK_ID", label: "PayPal Webhook ID (verifies webhook signatures)", scope: "billing", editable: true },
   { name: "PAYPAL_ENV", label: "PayPal environment ('live' | 'sandbox'; blank = live)", scope: "billing", editable: true },
   { name: "ADSENSE_CLIENT", label: "Google AdSense Client (ca-pub-...)", scope: "billing", editable: true },
+  // WITHOUT THIS, NO BANNER CAN EVER FILL. The client id says whose account
+  // this is; the slot id says which ad unit to serve into. AdBanner rendered
+  // data-ad-slot only when a caller passed one and none ever did, so the free
+  // tier reserved its ad space, showed its placeholder, and earned nothing.
+  { name: "ADSENSE_SLOT", label: "Google AdSense Ad Unit ID (numeric, from a Display unit)", scope: "billing", editable: true },
   { name: "TWITTER_HANDLE", label: "X (Twitter) handle (@wheeldeal)", scope: "auth", editable: true },
   // The legal entity the Terms, the Privacy Policy and every indemnity clause
   // protect. It was a placeholder constant with a TODO on it, so registering a

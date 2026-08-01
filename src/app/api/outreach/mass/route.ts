@@ -132,7 +132,7 @@ export async function POST(req: Request) {
   // then varies it per shop). English fallback if the AI is unavailable.
   let batchMessage = message;
   let englishGloss: string | undefined;
-  if (Boolean(body.localLang) && session.plan === "ultra") {
+  if (Boolean(body.localLang) && can(session.plan, "local-language")) {
     const { localizeMessage } = await import("@/lib/agents");
     const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
     batchMessage = localized.text;
@@ -231,7 +231,7 @@ export async function POST(req: Request) {
       ? (body.rfq as import("@/lib/types").StructuredRFQ)
       : null;
   const compiledRecent: string[] = [];
-  const wantLocalLang = Boolean(body.localLang) && session.plan === "ultra";
+  const wantLocalLang = Boolean(body.localLang) && can(session.plan, "local-language");
   const openerFor = async (vendorId: string, shopDigits: string): Promise<{ text: string; gloss?: string }> => {
     if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
     const { compileOpener } = await import("@/lib/copy/promptCompiler");
@@ -330,7 +330,7 @@ export async function POST(req: Request) {
       rfq: body.rfq ?? null,
       region: String(body.region ?? ""),
       plan: session.plan,
-      localLang: Boolean(body.localLang) && session.plan === "ultra",
+      localLang: Boolean(body.localLang) && can(session.plan, "local-language"),
       batchId,
       batchSize: vendors.length,
       // DISPATCH FACTS RIDE THE ROW. The drain re-guards every parked row;

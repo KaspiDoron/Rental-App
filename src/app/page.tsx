@@ -478,7 +478,7 @@ export default function Home() {
       cancelled = true;
     };
   }, [origin?.label]);
-  const localLangActive = localLang && session?.plan === "ultra";
+  const localLangActive = localLang && can(session?.plan, "local-language");
   // ONCE A HUNT IS UNDER WAY, THE LANGUAGE IS SETTLED.
   //
   // Flipping this switch mid-hunt changed the language of every ALREADY-OPEN

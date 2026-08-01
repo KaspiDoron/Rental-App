@@ -14,6 +14,7 @@ import { digitsOnly } from "@/lib/phone";
 import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
 import { jsonRoute } from "@/lib/http/json-route";
+import { can } from "@/lib/entitlements";
 
 // In-app outreach: the ONLY way messages leave the app. The user never jumps
 // to WhatsApp - we screen the message through the safety agent, resolve the
@@ -242,7 +243,7 @@ async function handlePost(req: Request) {
   // suddenly writes English, then Thai again: the exact bot tell the whole
   // anti-fingerprinting effort exists to avoid. The opener decides; the toggle
   // only governs threads that have not started.
-  const requestedLocal = Boolean(body.localLang) && session.plan === "ultra";
+  const requestedLocal = Boolean(body.localLang) && can(session.plan, "local-language");
   const { threadLanguageMode, resolveThreadLanguage } = await import("@/lib/wa/thread-language");
   const established = await threadLanguageMode(session.email, digits);
   const langChoice = resolveThreadLanguage({ requested: requestedLocal, established });

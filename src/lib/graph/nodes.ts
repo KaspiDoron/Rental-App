@@ -10,6 +10,7 @@ import { computeRoundTarget } from "./math";
 import { ownerDirectives, registerRules, type OrchestratorConfig } from "../orchestrator";
 import { shopAskedLocation } from "../wa/detectors";
 import type { StructuredRFQ, Vendor } from "../types";
+import { can } from "../entitlements";
 import type {
   FulfillmentKind,
   GraphSpec,
@@ -375,7 +376,7 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
         // 0-based: round 0 IS the playbook opener (days leverage, ask the floor).
         round: rounds,
         currency: input.currency,
-        localLanguage: Boolean(input.ctx.localLang) && input.ctx.plan === "ultra",
+        localLanguage: Boolean(input.ctx.localLang) && can(input.ctx.plan, "local-language"),
         targetPricePerDay: args.target,
         floorPricePerDay: input.floorPrice,
         history: input.history,
