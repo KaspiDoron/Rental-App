@@ -10,7 +10,7 @@ import { placeDetails } from "@/lib/google";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
-import { lidKey } from "@/lib/wa/phone-key";
+import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
 import { jsonRoute } from "@/lib/http/json-route";
 
@@ -448,6 +448,7 @@ async function handlePost(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
+          to_key: outboxKey(digits),
           body: guardedMessage,
           not_before: notBefore,
           meta: {

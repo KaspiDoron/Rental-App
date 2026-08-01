@@ -1,4 +1,5 @@
 import { sbInsert, sbDelete, sbSelect } from "../runtime-config";
+import { outboxKey } from "./phone-key";
 
 /**
  * Park an auto-composed WhatsApp message in wa_outbox with STRICT
@@ -77,13 +78,20 @@ export async function parkOutboxOnce(row: {
   notBeforeMs: number;
   meta?: Record<string, unknown>;
 }): Promise<void> {
-  const scope = `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(
-    row.toNumber
+  // SCOPED BY THE SHOP, NOT BY THE SPELLING. This used to match to_number as an
+  // exact string, so a shop stored once as "639661952196" and once as
+  // "09661952196" kept TWO live pending rows - the very duplicate this function
+  // exists to prevent, and the same mistake the unique index was migrated to
+  // fix. The canonical key is what the index keys on; it is what we scope on.
+  const key = outboxKey(row.toNumber);
+  const scope = `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(
+    key
   )}&${PENDING_AUTO}`;
   await sbDelete("wa_outbox", scope).catch(() => {});
   const record = {
     sender_key: row.senderKey,
     to_number: row.toNumber,
+    to_key: key,
     body: row.body,
     not_before: new Date(row.notBeforeMs).toISOString(),
     meta: row.meta ?? {},

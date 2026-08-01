@@ -99,6 +99,24 @@ export function nationalTail(input: string | null | undefined): string {
 }
 
 /**
+ * ONE SHOP, ONE KEY - whatever spelling this particular row happens to carry.
+ *
+ * `wa_outbox.to_key` and its unique index exist so that a shop stored once as
+ * "639661952196" and once as "09661952196" cannot hold TWO live pending rows
+ * that a single drain then sends inside the same second. The column shipped
+ * with the migration; nothing ever wrote it, so the index quietly degraded to
+ * `coalesce(to_key, to_number) = to_number` - exactly the exact-string
+ * behaviour it was built to replace.
+ *
+ * The national tail is the strongest identity we have (it survives country-code
+ * and leading-zero variation); waDigits is the fallback for a number too short
+ * to yield one.
+ */
+export function outboxKey(input: string | null | undefined): string {
+  return nationalTail(input) || waDigits(input);
+}
+
+/**
  * A PostgREST `or=(...)` value matching `column` against every known spelling.
  * Returns null when there is nothing to match (caller should skip the query).
  * Passed as a SEPARATE query param: `&or=${threadNumberOr("to_number", d)}`.

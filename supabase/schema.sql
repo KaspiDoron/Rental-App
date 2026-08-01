@@ -1161,6 +1161,36 @@ create index if not exists wa_thread_locks_exp_idx
   on public.wa_thread_locks (expires_at);
 alter table public.wa_thread_locks enable row level security;
 
+-- ---- STATUS NOTE (added after a live audit) -------------------------------------
+-- THE FOUR OBJECTS BELOW AND ABOVE SHIPPED AHEAD OF THEIR CODE, AND THE CODE
+-- NEVER FOLLOWED. An audit of the live system found them created, indexed,
+-- documented - and referenced by nothing in src/. Written down here because a
+-- migration that looks applied is the least debuggable kind of dead code: the
+-- DDL runs clean, the index exists, and the bug it describes stays fixed only
+-- in the comment.
+--
+--   * wa_outbox.to_key       - NOW WRITTEN. Stamped at every insert site and
+--                              used as parkOutboxOnce's scope (wa/park.ts,
+--                              wa/phone-key.ts outboxKey). This is the one that
+--                              was silently degrading the unique index back to
+--                              exact-string matching.
+--   * whatsapp_messages.dedupe_key - SUPERSEDED, not implemented. The race it
+--                              describes is closed upstream by the atomic
+--                              message-slot claim in wa_send_claims, which is
+--                              taken BEFORE the network send rather than after
+--                              it. A second mechanism keyed on the same event
+--                              would be two sources of truth for one invariant.
+--   * wa_turns               - SUPERSEDED by wa_processed + the thread turn
+--                              claim (wa/turn-lock.ts).
+--   * wa_thread_locks        - SUPERSEDED by the same claim namespace in
+--                              wa_send_claims (turn:/umove:/to:/gap:).
+--   * search_sessions        - already flagged dead above; the live SPTE takes
+--                              a code-only approach.
+--
+-- Nothing is dropped: the columns are harmless, and dropping them is a
+-- destructive migration for zero benefit. But no future reader should mistake
+-- them for live mechanisms.
+
 -- ---- Cause-keyed outbound dedupe (whatsapp_messages.dedupe_key) -----------------
 -- whatsapp_messages has no unique constraint of any kind, and the outbound row
 -- is written only AFTER the network send - so the guard's own dedup preflight

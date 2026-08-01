@@ -1,3 +1,4 @@
+import { outboxKey } from "../wa/phone-key";
 // The digraph execution engine - one serverless invocation per event.
 //
 //   sense (transcribe -> extract -> coherence -> comparator)
@@ -1601,6 +1602,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           {
             sender_key: senderKey,
             to_number: toNumber,
+            to_key: outboxKey(toNumber),
             body: verdict.text,
             not_before: notBefore,
             meta: { ...meta, reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry" },

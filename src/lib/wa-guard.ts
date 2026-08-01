@@ -34,7 +34,7 @@ import {
 } from "./wa/business-hours";
 import { jitteredHold, HARD_MIN_GAP_SEC, RECIPIENT_LOCK_SEC } from "./wa/pacing";
 import { digitsOnly } from "./phone";
-import { numberFilter, waDigits, lidKey } from "./wa/phone-key";
+import { numberFilter, waDigits, lidKey, outboxKey } from "./wa/phone-key";
 import {
   claimOutboxRow,
   releaseOutboxRow,
@@ -1098,6 +1098,7 @@ export async function guardOutbound(rawOpts: {
         {
           sender_key: opts.senderKey,
           to_number: opts.toDigits,
+          to_key: outboxKey(opts.toDigits),
           body: text,
           not_before: notBefore,
           // Keep the human reason with the row so the queue viewer explains why.

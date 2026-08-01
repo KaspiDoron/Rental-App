@@ -13,7 +13,7 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
-import { lidKey } from "@/lib/wa/phone-key";
+import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
@@ -367,6 +367,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
+          to_key: outboxKey(digits),
           body: opener.text,
           not_before: notBefore,
           meta: { ...meta, reason: "introductions full - refreshes soon" },
@@ -402,6 +403,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
+          to_key: outboxKey(digits),
           body: opener.text,
           not_before: notBefore,
           meta: { ...meta, reason: "batch-spacing" },
@@ -451,6 +453,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
+          to_key: outboxKey(digits),
           body: guard.text,
           not_before: notBefore,
           meta: { ...meta, reason: claim.kind === "duplicate" ? "batch-spacing" : "human pacing gap" },
