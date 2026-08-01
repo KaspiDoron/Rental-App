@@ -197,6 +197,79 @@ Adoption is measurable via the new `billing_events.funding_source` column.
 
 ---
 
+## 8. Turn on ads for the free tier (Google AdSense)
+
+Paid plans are 100% ad-free; the free tier shows one banner in three places
+(below the results list, further down the list, and on the profile page). The
+space is reserved whether or not an ad fills it, so turning this on never
+shifts the layout.
+
+**Two ids, and the second one is the one people forget.** The Publisher ID
+says whose account this is. The **Ad Unit ID** says which unit to serve into.
+Without the unit id nothing can ever fill, and the banner looks exactly like a
+site still awaiting review - so if the placeholder says "no ad unit configured
+yet", this is the step you have not done.
+
+1. **Publisher ID** - already built in: `ca-pub-4965894186804157`. It is emitted
+   as the `google-adsense-account` meta tag and used to load the SDK, so there
+   is nothing to paste unless you move accounts (then set `ADSENSE_CLIENT` in
+   Admin -> Keys).
+2. **ads.txt** - already served at `https://<your-domain>/ads.txt` as
+   `google.com, pub-4965894186804157, DIRECT, f08c47fec0942fa0`. In AdSense ->
+   Sites, confirm it is found. (This file is how Google knows you are authorised
+   to sell inventory on the domain; an unfound ads.txt suppresses fill.)
+3. **Add the site** - AdSense -> Sites -> Add site -> `wheeldeal.pro`, then
+   request review. The verification snippet is already on every page.
+4. **Create ONE ad unit** - AdSense -> Ads -> By ad unit -> **Display ads**,
+   responsive, any name. Copy the numeric **Ad Unit ID** it gives you (it is the
+   `data-ad-slot` value in the sample code, not the `ca-pub-` line).
+5. **Paste it** - Admin -> Keys -> `ADSENSE_SLOT`. It applies immediately, no
+   redeploy. All three banners use the same unit.
+
+Nothing here is required for the app to run: with no unit configured the banner
+renders a labelled placeholder and everything else works normally.
+
+---
+
+## 9. First deploy after a long gap - the order that matters
+
+Run this whenever the live site is several commits behind. Doing step 2 after
+the merge instead of before is the one sequence that can half-land.
+
+1. **Snapshot the database** (Supabase -> Database -> Backups). Re-running
+   `schema.sql` deletes duplicate *pending* `wa_outbox` rows and recreates an
+   index - expected, but it touches data, so do it at a quiet moment.
+2. **Run `supabase/schema.sql`** in the Supabase SQL editor, whole file. There
+   is no in-app way to do this; PostgREST cannot run DDL.
+3. **Check the backlog before you wake the drain:**
+   `select count(*), min(not_before) from wa_outbox where not_before <= now();`
+   Anything older than a few hours would have been sent the moment the new
+   scheduler starts. The app now bins rows older than 6h rather than sending
+   them, but it is worth knowing what you are about to discard.
+4. **Confirm the repo secret `APP_DOMAIN` or `CLOUD_RUN_URL` exists** - without
+   one the GitHub Actions heartbeat exits green and pings nothing.
+5. **Merge to master.** The deploy job runs only from `main` / `master`, and
+   GitHub `schedule:` triggers fire only from the default branch - which is why
+   a fix sitting on a feature branch is not live and its heartbeat never runs.
+6. **Verify from your phone**, Admin -> the deploy-info card:
+   - **Build** shows the commit you just merged (not "unknown").
+   - **Schema** - all probes present. These can genuinely go red now.
+   - **Heartbeat** - "live", under 3 minutes old, within ~5 minutes of deploy.
+7. **If the heartbeat still says "never" after 5 minutes**, the deploy's
+   scheduler step could not create the job. It prints an ACTION REQUIRED block
+   with the exact command. Grant the deploying service account
+   `roles/cloudscheduler.admin` and `roles/serviceusage.serviceUsageAdmin` and
+   re-run the deploy, or run the printed `gcloud scheduler jobs create http`
+   yourself.
+8. **Sign in, accept the terms modal, then hard-reload.** It must not come back.
+   If it does, `app_users.terms_version` is not being written - re-check step 2.
+
+**Rolling back** is a traffic switch, not a git operation:
+`gcloud run services update-traffic $SERVICE --to-revisions=<previous>=100
+--region $REGION`. The schema additions are safe to leave in place.
+
+---
+
 ## Quick reference: where each key goes
 
 - **GCP Secret Manager env vars (once):** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
@@ -206,7 +279,8 @@ Adoption is measurable via the new `billing_events.funding_source` column.
   `GOOGLE_OAUTH_CLIENT_ID`, all `GROQ/GEMINI/OPENROUTER/CEREBRAS` tokens,
   `AI_PROVIDER`, all `WHATSAPP_*`, `RESEND_API_KEY`, `FEEDBACK_FROM_EMAIL`,
   `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_PLAN_PRO`,
-  `PAYPAL_PLAN_ULTRA`, `PAYPAL_WEBHOOK_ID`.
+  `PAYPAL_PLAN_ULTRA`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_ENV`, `ADSENSE_SLOT`
+  (and `ADSENSE_CLIENT` only if you move AdSense accounts).
 
 Always use freshly rotated keys - never ones that were shared in plain text.
 
