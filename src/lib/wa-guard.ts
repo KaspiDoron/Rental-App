@@ -2246,7 +2246,15 @@ export async function drainOutbox(
     }
   }
   // Housekeeping: stale claim rows expire after 24h (cheap ranged delete).
-  if (candidates.length > 0) await gcSendClaims();
+  // GC RUNS ON EVERY DRAIN, INCLUDING THE QUIET ONES.
+  //
+  // This was gated on `candidates.length > 0`, so the claims table was only
+  // ever collected while there was something to send - and a quiet period is
+  // exactly when nothing else exercises the table and the expired rows have
+  // most time to pile up. The GC is two ranged deletes with no rows to transfer;
+  // running it on an empty drain costs nothing and closes the window where the
+  // only thing keeping the table bounded is the traffic that fills it.
+  await gcSendClaims();
   return sent;
 }
 

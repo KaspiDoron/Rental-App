@@ -137,10 +137,26 @@ export async function completeOutboxRow(id: number): Promise<void> {
 }
 
 /**
- * Rows whose claim has lapsed without completing - a drainer died mid-send.
- * Nothing calls this to "fix" them: the lease IS the fix, because a lapsed row
- * is due again by definition. This exists so the WhatsApp doctor can SHOW the
- * owner that a send was interrupted rather than leaving it as folklore.
+ * ONE DEFINITION OF "THIS SEND WAS INTERRUPTED".
+ *
+ * A claim that never completed means a drainer died mid-send. The lease is its
+ * own fix - the row is due again by definition - but the owner still needs to
+ * SEE it, or an interrupted send stays folklore.
+ *
+ * Pure, and shared. The engine inspector had its own copy of this arithmetic
+ * inline while `lapsedClaims` below held the other, so the rule that decides
+ * whether the ops panel says "interrupted" existed twice and could disagree
+ * with itself. Both now ask this.
+ */
+export function isLapsedClaim(meta: OutboxMeta | null | undefined, nowMs: number): boolean {
+  const at = Number(meta?.claimedAt);
+  return Number.isFinite(at) && nowMs - at >= CLAIM_LEASE_MS;
+}
+
+/**
+ * Rows for ONE sender whose claim has lapsed - the per-thread answer to "where
+ * is this message held", scoped so a user's ops view never reaches across
+ * accounts. The inspector's global view filters with `isLapsedClaim` directly.
  */
 export async function lapsedClaims(senderKey: string, nowMs: number): Promise<OutboxRow[]> {
   const rows = await sbSelect<OutboxRow>(
@@ -149,8 +165,5 @@ export async function lapsedClaims(senderKey: string, nowMs: number): Promise<Ou
       senderKey
     )}&meta->>claimedAt=not.is.null&limit=50`
   ).catch(() => [] as OutboxRow[]);
-  return rows.filter((r) => {
-    const at = Number(r.meta?.claimedAt);
-    return Number.isFinite(at) && nowMs - at >= CLAIM_LEASE_MS;
-  });
+  return rows.filter((r) => isLapsedClaim(r.meta, nowMs));
 }

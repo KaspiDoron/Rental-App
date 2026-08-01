@@ -98,8 +98,27 @@ export async function POST(req: Request) {
       }
     }
     if (learned) {
-      // Persist the growing dictionary (best effort - works without Supabase too).
-      await setConfig(cacheKey, JSON.stringify(cached));
+      // LAST WRITE WINS, AND EVERY OTHER WRITE IS LOST.
+      //
+      // The client fires its batches in parallel (i18n.tsx: one Promise.all over
+      // 42-string chunks), and every one of them lands here. Each read the SAME
+      // snapshot of the dictionary at the top of this handler, spent seconds in
+      // the LLM, then wrote the whole object back - so N concurrent batches kept
+      // only the translations of whichever finished last. The rest were paid for
+      // and discarded, and the next user in that language paid for them again,
+      // round after round, until the dictionary happened to converge.
+      //
+      // Re-read and merge immediately before the write. The window shrinks from
+      // "the length of an LLM call" to "the length of one Supabase round trip",
+      // and OURS wins on conflict for the keys we actually translated - a key
+      // another batch wrote in the meantime is kept, not clobbered.
+      let latest: Record<string, string> = {};
+      try {
+        latest = JSON.parse((await getConfig(cacheKey)) ?? "{}");
+      } catch {
+        /* an unreadable cache is an empty one; we still have our own work */
+      }
+      await setConfig(cacheKey, JSON.stringify({ ...latest, ...cached }));
     }
     // Count this LLM sweep against the daily cap (a cache hit costs nothing).
     const { recordApi } = await import("@/lib/usage");

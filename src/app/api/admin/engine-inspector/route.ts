@@ -123,15 +123,15 @@ export async function GET() {
   const now = Date.now();
   const dueNow = queue.filter((q) => Date.parse(q.not_before) <= now).length;
   const nextAt = queue[0]?.not_before ?? null;
-  const { outboxState, CLAIM_LEASE_MS } = await import("@/lib/wa/outbox-lifecycle");
+  const { outboxState, isLapsedClaim } = await import("@/lib/wa/outbox-lifecycle");
   const { classifyQueueReason, queueReasonLabel } = await import("@/lib/queue-reason");
   const held = queue.slice(0, 40).map((r) => {
-    const claimedAt = Number(r.meta?.claimedAt);
-    // A LAPSED CLAIM is a drainer that died mid-send. The lease is its own
-    // fix - the row is due again by definition - but until now nothing SHOWED
-    // it, so an interrupted send was folklore. (outbox-lifecycle exports
-    // `lapsedClaims` for exactly this and has never had a caller.)
-    const lapsed = Number.isFinite(claimedAt) && now - claimedAt >= CLAIM_LEASE_MS;
+    // A LAPSED CLAIM is a drainer that died mid-send. The lease is its own fix -
+    // the row is due again by definition - but nothing SHOWED it, so an
+    // interrupted send was folklore. This arithmetic used to live here AND in
+    // outbox-lifecycle's `lapsedClaims`, two copies of the rule that decides
+    // whether this panel says "interrupted". One definition now.
+    const lapsed = isLapsedClaim(r.meta, now);
     return {
       id: r.id,
       vendorName: r.meta?.vendorName ?? null,

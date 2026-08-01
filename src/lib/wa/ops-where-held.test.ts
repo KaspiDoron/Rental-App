@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 import { readFileSync } from "fs";
 import { join } from "path";
-import { outboxState, CLAIM_LEASE_MS } from "./outbox-lifecycle";
+import { outboxState, CLAIM_LEASE_MS, isLapsedClaim } from "./outbox-lifecycle";
 import { classifyQueueReason, queueReasonLabel } from "../queue-reason";
 
 const readCode = (p: string) =>
@@ -58,8 +58,24 @@ describe("a held row can now say what it is doing", () => {
   it("A LAPSED CLAIM is finally visible - a drainer died mid-send", () => {
     // `lapsedClaims` was written for exactly this and never had a caller, so an
     // interrupted send was folklore.
-    expect(inspector).toMatch(/const lapsed = Number\.isFinite\(claimedAt\) && now - claimedAt >= CLAIM_LEASE_MS/);
+    expect(inspector).toMatch(/const lapsed = isLapsedClaim\(r\.meta, now\);/);
     expect(ui).toMatch(/interrupted mid-send/);
+  });
+
+  it("...and ONE definition decides it, not two that can disagree", () => {
+    // The inspector had this arithmetic inline while outbox-lifecycle held a
+    // second copy inside `lapsedClaims`. Two implementations of the rule that
+    // decides whether the ops panel says "interrupted". Now both call the
+    // shared predicate - so this is an executed test, not a source pin.
+    const now = 1_700_000_000_000;
+    expect(isLapsedClaim({ claimedAt: now - CLAIM_LEASE_MS - 1 }, now)).toBe(true);
+    expect(isLapsedClaim({ claimedAt: now - 1000 }, now)).toBe(false);
+    // Never claimed at all is not "interrupted" - it is simply waiting.
+    expect(isLapsedClaim({}, now)).toBe(false);
+    expect(isLapsedClaim(null, now)).toBe(false);
+    expect(isLapsedClaim({ claimedAt: Number.NaN }, now)).toBe(false);
+    const life = readCode("src/lib/wa/outbox-lifecycle.ts");
+    expect(life).toMatch(/return rows\.filter\(\(r\) => isLapsedClaim\(r\.meta, nowMs\)\);/);
   });
 
   it("the panel shows it, and shows nothing when there is nothing held", () => {
