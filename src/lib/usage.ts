@@ -6,7 +6,13 @@
 // Admin -> Limits), and a global KILL SWITCH that halts all paid services.
 
 import "server-only";
-import { getConfig, sbInsert, sbSelect } from "./runtime-config";
+import {
+  getConfig,
+  getConfigStrict,
+  sbInsert,
+  sbSelect,
+  sbSelectStrict,
+} from "./runtime-config";
 import { boundedSet } from "./bounded-map";
 
 // Free monthly quotas we track against (shown in the cost tracker).
@@ -19,8 +25,28 @@ export const QUOTAS: Record<string, { free: number; label: string; unitCost: num
 
 // ---- kill switch ---------------------------------------------------------------
 
+/**
+ * THE SWITCH THAT TURNED ITSELF OFF.
+ *
+ * This was `(await getConfig("KILL_SWITCH")) === "1"`. During a Supabase
+ * brownout loadOverrides returns {} and KILL_SWITCH is not in the deploy env
+ * list, so the expression is `undefined === "1"` -> **false**: the emergency
+ * stop disengaged itself precisely when the system was least healthy. The same
+ * wobble simultaneously zeroed the daily caps and both anti-ban budgets (see
+ * below and evolution.ts), so the convergent state was every safety system off
+ * at once - the configuration that gets a traveller's personal number banned.
+ *
+ * So: unreadable means KILLED. A false stop costs a paused search; a false
+ * "running" costs someone their WhatsApp account.
+ *
+ * `error: "missing"` is NOT reachable here - getConfigStrict escalates only when
+ * the vault genuinely could not be read, never when Supabase is simply not
+ * configured (demo mode) or the key is honestly unset.
+ */
 export async function killSwitchOn(): Promise<boolean> {
-  return (await getConfig("KILL_SWITCH")) === "1";
+  const r = await getConfigStrict("KILL_SWITCH");
+  if ("error" in r) return true;
+  return r.value === "1";
 }
 
 // ---- durable usage log -----------------------------------------------------------
@@ -96,7 +122,7 @@ export async function checkDailyLimit(
   kind: string,
   who: string,
   limitName: keyof typeof LIMIT_DEFAULTS
-): Promise<{ allowed: boolean; used: number; limit: number }> {
+): Promise<{ allowed: boolean; used: number; limit: number; reason?: string }> {
   const limit = await limitFor(limitName);
   const today = new Date().toISOString().slice(0, 10);
   const key = `${kind}:${who}`;
@@ -104,12 +130,29 @@ export async function checkDailyLimit(
   if (mem?.day === today && mem.n >= limit) {
     return { allowed: false, used: mem.n, limit };
   }
-  const rows = await sbSelect<{ count: number }>(
+  // FAIL CLOSED ON UNREADABLE, FAIL OPEN ON NOT-MIGRATED.
+  //
+  // This was sbSelect, which collapses every failure to [] - so `used` reduced
+  // to 0 and EVERY per-user daily cap allowed for the whole duration of a
+  // Supabase wobble. The two error shapes point in opposite directions: a table
+  // that has never existed is vacuously empty and must not brick a fresh
+  // install, while a table that could not be read means the count is UNKNOWN
+  // and spending someone's paid quota on a guess is not ours to do.
+  const read = await sbSelectStrict<{ count: number }>(
     "api_usage",
     `select=count&kind=eq.${encodeURIComponent(kind)}&user_email=eq.${encodeURIComponent(
       who
     )}&created_at=gte.${encodeURIComponent(today)}&limit=1000`
   );
+  if ("error" in read && read.error === "unavailable") {
+    return {
+      allowed: false,
+      used: 0,
+      limit,
+      reason: "unreadable",
+    };
+  }
+  const rows = "rows" in read ? read.rows : [];
   const used = rows.reduce((s, r) => s + (r.count ?? 1), 0);
   // Bounded (like the sibling apiCache) so the map can't grow one entry per
   // distinct user*kind forever on a long-lived process.

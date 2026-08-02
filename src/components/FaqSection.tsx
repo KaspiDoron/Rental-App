@@ -12,7 +12,7 @@ interface FaqItem {
 // Popular questions, shown to travellers as an expandable accordion. Content is
 // managed (and AI-written) by the owner in Admin; this just reads it.
 export function FaqSection() {
-  const { t } = useI18n();
+  const { t, tShared } = useI18n();
   const [items, setItems] = useState<FaqItem[]>([]);
   const [open, setOpen] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -43,11 +43,11 @@ export function FaqSection() {
                 aria-expanded={isOpen}
               >
                 <span className="text-[11px] text-faint">{isOpen ? "▼" : "▶"}</span>
-                <span className="flex-1 text-[13px] font-bold text-strong">{t(it.q)}</span>
+                <span className="flex-1 text-[13px] font-bold text-strong">{tShared(it.q)}</span>
               </button>
               {isOpen && (
                 <p className="border-t border-line px-3 py-2.5 text-[12px] leading-relaxed text-soft">
-                  {t(it.a)}
+                  {tShared(it.a)}
                 </p>
               )}
             </div>

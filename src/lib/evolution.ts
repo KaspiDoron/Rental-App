@@ -111,8 +111,22 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
   }
 
   // Durable hourly/daily counts (webhook + other instances included).
+  //
+  // THIS IS THE ANTI-BAN BUDGET, AND IT USED TO READ ZERO ON FAILURE.
+  //
+  // sbSelect returns [] for a 500, a timeout, a DNS blip - anything. Both
+  // counters are `.length` over that array, so a Supabase wobble made lastHour
+  // and lastDay read 0 and BOTH caps allow. Combined with the kill switch and
+  // the daily limits (usage.ts), which failed open through the same helper, one
+  // dependency hiccup turned off every send-rate protection the app has, on a
+  // traveller's PERSONAL WhatsApp number. Nothing in the system would have said
+  // anything until the ban arrived.
+  //
+  // Unreadable now means at-limit: hold the send until the count can be
+  // trusted. A table that does not exist yet stays fail-open, because a fresh
+  // install has genuinely sent nothing.
   const hourIso = new Date(now - 3600_000).toISOString();
-  const rows = await sbSelect<{ id: number; received_at: string }>(
+  const read = await sbSelectStrict<{ id: number; received_at: string }>(
     "whatsapp_messages",
     `select=id,received_at&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       email
@@ -120,6 +134,15 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
       new Date(now - 24 * 3600_000).toISOString()
     )}&limit=200`
   );
+  if ("error" in read && read.error === "unavailable") {
+    return {
+      allowed: false,
+      reason:
+        "Send history is temporarily unreadable, so we cannot confirm your safety budget. Holding the message rather than risking your number.",
+      waitSeconds: 120,
+    };
+  }
+  const rows = "rows" in read ? read.rows : [];
   const lastHour = rows.filter((r) => r.received_at >= hourIso).length;
   const lastDay = rows.length;
 

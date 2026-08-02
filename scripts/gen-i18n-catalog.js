@@ -15,9 +15,17 @@ const out = execSync(
 // only then passed to `t()` - `t(transportMessage(r))` - so there is no literal
 // for the grep to find and those lines shipped untranslated. src/lib/i18n-extras
 // declares them; see the comment at the top of that file.
-const extras = (fs.readFileSync("src/lib/i18n-extras.ts", "utf8").match(
-  /^\s{2}"(?:[^"\\]|\\.)*",$/gm
-) ?? []).map((l) => JSON.parse(l.trim().replace(/,$/, "")));
+//
+// A DELETED FILE MUST NOT BE A CRASH. i18n-extras.ts was removed by a dead-code
+// sweep once (nothing imports it - the generator only READS it), and this line
+// threw ENOENT, so the catalogue could not be regenerated at all until someone
+// noticed. Missing extras is a degraded catalogue, not a broken toolchain.
+const extrasSrc = fs.existsSync("src/lib/i18n-extras.ts")
+  ? fs.readFileSync("src/lib/i18n-extras.ts", "utf8")
+  : (console.warn("WARNING: src/lib/i18n-extras.ts is missing - computed copy will not be translated"), "");
+const extras = (extrasSrc.match(/^\s{2}"(?:[^"\\]|\\.)*",$/gm) ?? []).map((l) =>
+  JSON.parse(l.trim().replace(/,$/, ""))
+);
 const strings = [...new Set([
   ...out.split("\n").filter(Boolean).map((l) => l.replace(/^t\("/, "").replace(/"\)$/, "")),
   ...extras,

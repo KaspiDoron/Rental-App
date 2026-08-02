@@ -82,9 +82,16 @@ describe("the provider actually uses all of it", () => {
   const i18n = readCode("src/lib/i18n.tsx");
 
   it("REPRODUCTION: the interval no longer asks about failed strings", () => {
-    expect(i18n).toMatch(/const failed = new Set<string>\(\);/);
+    // `pending` and `failed` moved into src/lib/i18n-gate.ts when t() stopped
+    // uploading arbitrary user text (the sets and the admission rule belong
+    // together). The provider still drives the sweep from them...
     expect(i18n).toMatch(/const batch = retriable\(pending, failed\);/);
-    expect(i18n).toMatch(/if \(!failed\.has\(s\)\) pending\.add\(s\);/);
+    expect(i18n).toMatch(/from "\.\/i18n-gate"/);
+    // ...and the "declined once, never asked again" rule is now EXECUTED in
+    // i18n-leak.test.ts against queueForTranslation, not pinned as source.
+    const gate = readCode("src/lib/i18n-gate.ts");
+    expect(gate).toMatch(/export const failed = new Set<string>\(\);/);
+    expect(gate).toMatch(/if \(failed\.has\(s\)\) return false;/);
   });
 
   it("a terminal answer stops the sweep for the session", () => {

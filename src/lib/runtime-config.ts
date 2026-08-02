@@ -643,10 +643,34 @@ function decrypt(blob: string): string | null {
  */
 const VAULT_SELECT = "select=key,value&key=not.like.I18N_*";
 
+/**
+ * WAS THE LAST VAULT READ REAL?
+ *
+ * loadOverrides swallows every failure and returns {} (now a short-lived
+ * negative cache). That is right for the 140 call sites that want a value or a
+ * default - and catastrophic for the handful that are SAFETY GATES, because
+ * "the key is absent" and "I could not read the table" arrive as the same empty
+ * object. `KILL_SWITCH` reads OFF during a Supabase brownout for exactly that
+ * reason. This records which of the two actually happened.
+ *
+ * "unconfigured" is deliberately distinct from "unavailable": with no Supabase
+ * connection at all the app is in env-only/demo mode, which is a supported
+ * state and must not trip a fail-closed branch.
+ */
+type VaultReadState = "ok" | "unconfigured" | "unavailable";
+let lastVaultRead: VaultReadState = "unconfigured";
+
+export function vaultReadState(): VaultReadState {
+  return lastVaultRead;
+}
+
 async function loadOverrides(): Promise<Record<string, string>> {
   const s = state();
   const conn = supabase();
-  if (!conn) return s.mem;
+  if (!conn) {
+    lastVaultRead = "unconfigured";
+    return s.mem;
+  }
 
   if (s.cache && s.cache.exp > Date.now()) return { ...s.cache.data, ...s.mem };
 
@@ -709,6 +733,7 @@ async function fetchOverrides(
       );
     }
     s.cache = { data, exp: Date.now() + CACHE_TTL_MS };
+    lastVaultRead = "ok";
     // In-memory overrides (e.g. saved while Supabase was unreachable) win.
     return { ...data, ...s.mem };
   } catch {
@@ -721,6 +746,7 @@ async function fetchOverrides(
     // window turns an unbounded amplification into one retry per window.
     const fallback = s.cache?.data ?? {};
     s.cache = { data: fallback, exp: Date.now() + NEGATIVE_TTL_MS };
+    lastVaultRead = "unavailable";
     return { ...fallback, ...s.mem };
   }
 }
@@ -737,6 +763,29 @@ export function vaultDecryptHealth(): { count: number; of: number; at: number } 
 export async function getConfig(name: string): Promise<string | undefined> {
   const overrides = await loadOverrides();
   return overrides[name] ?? process.env[name];
+}
+
+/**
+ * STRICT variant of getConfig for SAFETY GATES, where "not set" and "could not
+ * be read" must lead to opposite decisions.
+ *
+ * getConfig cannot tell them apart: a brownout makes loadOverrides return {},
+ * and if the key is not in process.env either (KILL_SWITCH is not in the deploy
+ * env list) the caller sees `undefined` and concludes the switch is off. The
+ * kill switch turning ITSELF off during a dependency wobble is the single worst
+ * failure mode in this file.
+ *
+ * A value found in process.env is still authoritative during an outage - the
+ * environment does not go unreadable - so only a genuine miss escalates.
+ */
+export async function getConfigStrict(
+  name: string
+): Promise<{ value: string | undefined } | { error: "unavailable" }> {
+  const overrides = await loadOverrides();
+  const hit = overrides[name] ?? process.env[name];
+  if (hit !== undefined) return { value: hit };
+  if (vaultReadState() === "unavailable") return { error: "unavailable" };
+  return { value: undefined };
 }
 
 /**

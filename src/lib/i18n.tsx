@@ -58,6 +58,22 @@ interface I18nValue {
   lang: string;
   setLang: (code: string) => void;
   t: (s: string) => string;
+  /**
+   * THE ONE ESCAPE HATCH FROM THE CATALOGUE GATE - AND THE RULE FOR USING IT.
+   *
+   * `t()` refuses anything outside the catalogue because a translated string is
+   * uploaded to `app_config.I18N_<lang>`, a row every user of that language
+   * reads. `tShared()` skips that check, so it is correct ONLY for text that is
+   * already global: the same for every traveller, authored by the operator, and
+   * carrying nothing about the person on the screen.
+   *
+   * Today that is exactly one thing - the owner-written FAQ from /api/faq.
+   *
+   * NEVER hand it a shop name, a WhatsApp message, a price, a search query, a
+   * queue reason with numbers in it, or anything else derived from one user's
+   * session. That is the leak this gate exists to close.
+   */
+  tShared: (s: string) => string;
   busy: boolean;
   error: string | null;
   /**
@@ -75,25 +91,18 @@ const I18nContext = createContext<I18nValue>({
   lang: "en",
   setLang: () => {},
   t: (s) => s,
+  tShared: (s) => s,
   busy: false,
   error: null,
   unavailable: null,
 });
 
-import { I18N_CATALOG } from "./i18n-catalog";
 import { translateOutcome, unavailableNote, retriable, missedFrom } from "./i18n-retry";
-
-// Strings seen by t() that still need a translation (swept in batches).
-const pending = new Set<string>();
-// Strings the server has already declined to translate. WITHOUT THIS SET the
-// sweep is a loop: t() re-adds every untranslated string on the next render,
-// the sweep asks again 1.5s later, and nothing ever changes the answer.
-const failed = new Set<string>();
-// The FULL app catalogue (generated at build time from every t("...") in the
-// codebase) plus anything t() sees at runtime. Seeding with the catalogue is
-// what makes a language switch translate EVERY page - tags, buttons, admin,
-// profile - not only the screens that happen to be mounted right now.
-const registry = new Set<string>(I18N_CATALOG);
+// The egress gate: which strings may be sent to the translator at all. It lives
+// in its own module because this one is "use client" and the rule it enforces -
+// no user text in the globally shared I18N_<lang> row - has to be executable in
+// a plain test, not merely read.
+import { pending, failed, catalogue, queueForTranslation, queueSharedText } from "./i18n-gate";
 
 function cacheGet(lang: string): Dict {
   try {
@@ -228,7 +237,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       }
       const cached = cacheGet(code);
       setDict(cached);
-      const missing = [...registry].filter((s) => !cached[s]);
+      const missing = catalogue().filter((s) => !cached[s]);
       fetchTranslations(code, missing);
     },
     [applyDirection, fetchTranslations]
@@ -245,7 +254,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
         setDict(cached);
         // Complete coverage for THIS page too: anything in the app catalogue
         // that is not yet cached gets translated right away.
-        const missing = [...registry].filter((s) => !cached[s]);
+        const missing = catalogue().filter((s) => !cached[s]);
         if (missing.length) fetchTranslations(saved, missing);
       }
     } catch {}
@@ -268,12 +277,23 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   const t = useCallback(
     (s: string): string => {
-      registry.add(s);
+      // Outside the catalogue, queueForTranslation refuses: the string renders
+      // unchanged and never leaves the device. See src/lib/i18n-gate.ts.
       if (lang === "en") return s;
       const hit = dict[s];
       if (hit) return hit;
-      // A string the server has already declined is never queued again.
-      if (!failed.has(s)) pending.add(s);
+      queueForTranslation(s);
+      return s;
+    },
+    [lang, dict]
+  );
+
+  const tShared = useCallback(
+    (s: string): string => {
+      if (lang === "en" || !s) return s;
+      const hit = dict[s];
+      if (hit) return hit;
+      queueSharedText(s);
       return s;
     },
     [lang, dict]
@@ -283,8 +303,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   // re-render) does not hand every useI18n consumer in the tree a brand-new
   // object and force a full-app re-render on each translate sweep.
   const value = useMemo(
-    () => ({ lang, setLang, t, busy, error, unavailable }),
-    [lang, setLang, t, busy, error, unavailable]
+    () => ({ lang, setLang, t, tShared, busy, error, unavailable }),
+    [lang, setLang, t, tShared, busy, error, unavailable]
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
