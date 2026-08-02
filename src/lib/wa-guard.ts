@@ -1276,6 +1276,29 @@ export async function guardOutbound(rawOpts: {
   );
   const isNewContact = priorRecipient.length === 0;
 
+  // 0.0 THE OWNER'S KILL SWITCH, ENFORCED WHERE SENDS ACTUALLY HAPPEN.
+  //
+  //     KILL_SWITCH was checked in six API routes - vendors, geocode, outreach,
+  //     mass outreach, recheck, checkout - and in NONE of the paths that
+  //     actually put a message on WhatsApp. So flipping it stopped new searches
+  //     while every already-queued introduction and every agent reply kept
+  //     going out: the one control the owner has for "stop, something is
+  //     wrong" did not stop the thing most worth stopping.
+  //
+  //     Automated sends PARK rather than fail, so nothing is lost - the queue
+  //     drains by itself once the switch goes back off. A human's own typed
+  //     message is deliberately still allowed: the switch halts the agents, and
+  //     a person deciding to message a shop themselves is not the agents.
+  //
+  //     killSwitchOn() now fails CLOSED on an unreadable vault (see usage.ts),
+  //     which is why this parks with a short re-check rather than a long hold.
+  if (opts.auto) {
+    const { killSwitchOn } = await import("./usage");
+    if (await killSwitchOn()) {
+      return await queue(jitteredHold(now, 6, 4), "paused by the operator (kill switch)");
+    }
+  }
+
   // 0. GLOBAL ACCOUNT PAUSE - a number the risk engine (or a real WhatsApp
   //    restriction) has quarantined sends nothing until the pause expires.
   //    This is the graduated ban-recovery guard from the research.

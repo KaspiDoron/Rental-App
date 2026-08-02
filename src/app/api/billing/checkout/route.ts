@@ -42,7 +42,14 @@ export async function POST(req: Request) {
       const plan = PLANS.find((p) => p.id === planId && p.amount > 0);
       if (!plan) return NextResponse.json({ error: "Choose a paid plan." }, { status: 400 });
       const { setPlan } = await import("@/lib/access");
-      await setPlan(session.email, plan.id);
+      // A grant that did not persist must not be reported as applied - the
+      // tester would be shown Ultra features they do not have.
+      if (!(await setPlan(session.email, plan.id))) {
+        return NextResponse.json(
+          { error: "Could not apply the plan right now - please try again in a moment." },
+          { status: 503 }
+        );
+      }
       return NextResponse.json({
         sandbox: true,
         provider: "test-mode",

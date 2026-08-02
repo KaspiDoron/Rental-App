@@ -88,7 +88,12 @@ export async function confirmPaypalSubscription(input: {
   }
 
   const { setPlan } = await import("../access");
-  await setPlan(email, tier);
+  // A GRANT THAT DID NOT PERSIST IS NOT A GRANT. setPlan returned void and
+  // swallowed mirror()'s boolean, so a failed write to app_users looked exactly
+  // like success: the traveller was charged, told "You are on Ultra", and the
+  // account stayed free with no record anywhere of the discrepancy. Report it,
+  // so the caller can say something true and the owner has an event to find.
+  const granted = await setPlan(email, tier);
 
   const { sbInsert } = await import("../runtime-config");
   const { ACTIVATION_KIND } = await import("./subscription-link");
@@ -106,9 +111,23 @@ export async function confirmPaypalSubscription(input: {
         nextBillingAt: sub.nextBillingAt,
         intendedPlan: input.intendedPlan ?? null,
         source: input.source,
+        granted,
       }).slice(0, 800),
     },
   ]).catch(() => {});
+
+  // The subscription IS real and verified - that part is settled and the event
+  // above records it, so a later retry (webhook, another redirect) can finish
+  // the job. What failed is our own write, and the traveller must not be told
+  // their plan is live when it is not.
+  if (!granted) {
+    return {
+      ok: false,
+      status: 503,
+      error:
+        "Your payment went through, but we could not apply the plan just now. It will be applied automatically - no need to pay again.",
+    };
+  }
 
   return { ok: true, plan: tier, subscriptionId: sub.id };
 }

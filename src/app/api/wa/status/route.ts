@@ -39,7 +39,17 @@ export async function GET(req: Request) {
   // outbox to drain, and firing two full drains per poll turned a cheap status
   // read into the most expensive request in the app right when latency matters
   // most. The client sets ?pairing=1 for those polls.
-  const pairing = new URL(req.url).searchParams.get("pairing") === "1";
+  //
+  // `drain=0` is the same request from the other direction: any caller whose
+  // ABORT IS SHORTER THAN OUR DRAIN BUDGET must be able to say so. The two
+  // drains below are bounded at 8s EACH and run before the response, so the
+  // worst case was 4s (socket probe) + 16s = ~20s - while every client that
+  // asks this question aborts at 8s. Under any backlog the read could not
+  // succeed AT ALL, and the failure was not neutral: /login read the timeout as
+  // "no need to link" and sent brand-new accounts straight past WhatsApp
+  // linking, which is the one thing signup exists to set up.
+  const params = new URL(req.url).searchParams;
+  const pairing = params.get("pairing") === "1" || params.get("drain") === "0";
 
   // ANSWER FAST, EVEN WHEN EVOLUTION IS ASLEEP.
   //

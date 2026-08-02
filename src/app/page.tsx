@@ -1498,10 +1498,21 @@ export default function Home() {
     // Stale-run guard: an unmounted/reconfigured effect must never apply its
     // in-flight response to fresh state (the epoch may have changed).
     let cancelled = false;
+    // ONE POLL AT A TIME.
+    //
+    // /api/replies does real work on the server - it flushes this traveller's
+    // due WhatsApp sends and runs their due agent turns - so it can take longer
+    // than the interval that fires it. With no guard, a slow request simply had
+    // the next one launched on top of it, and on a bad host that stacks
+    // indefinitely: N concurrent drains of the same queue, all contending for
+    // the same claims, on a phone that has stopped showing anything new.
+    let inFlight = false;
     const tick = async () => {
       // Pause in a hidden tab (parity with the activity poll) - no wasted
       // /api/replies requests while backgrounded; resumes on focus.
       if (typeof document !== "undefined" && document.hidden) return;
+      if (inFlight) return;
+      inFlight = true;
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.
@@ -1631,7 +1642,10 @@ export default function Home() {
             )
           );
         }
-      } catch {}
+      } catch {
+      } finally {
+        inFlight = false;
+      }
     };
     tick();
     const id = setInterval(tick, pollCfg.repliesMs);

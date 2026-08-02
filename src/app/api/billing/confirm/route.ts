@@ -20,11 +20,25 @@ export async function POST(req: Request) {
 
   const sandbox = await isTestUser(session.email).catch(() => false);
   if (sandbox) {
-    await setPlan(session.email, String(plan) === "pro" ? "pro" : "ultra");
+    const applied = String(plan) === "pro" ? "pro" : "ultra";
+    // setPlan reports whether the grant PERSISTED. It used to return void, so a
+    // failed write answered ok:true and the tester was told they were on Ultra
+    // while the account stayed free.
+    const granted = await setPlan(session.email, applied);
     await sbInsert("billing_events", [
-      { type: `plan_activated_${plan}_sandbox`, verified: false, provider_event_id: null },
+      {
+        type: granted ? `plan_activated_${plan}_sandbox` : `plan_grant_failed_${plan}_sandbox`,
+        verified: false,
+        provider_event_id: null,
+      },
     ]);
-    return NextResponse.json({ ok: true, sandbox: true, applied: String(plan) === "pro" ? "pro" : "ultra" });
+    if (!granted) {
+      return NextResponse.json(
+        { error: "Could not apply the plan right now - please try again in a moment." },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ ok: true, sandbox: true, applied });
   }
 
   await sbInsert("billing_events", [

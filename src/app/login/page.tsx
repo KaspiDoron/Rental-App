@@ -15,6 +15,7 @@ import { Icon } from "@/components/icons";
 import { TrustPanel } from "@/components/landing/TrustPanel";
 import { useI18n } from "@/lib/i18n";
 import { digitsOnly } from "@/lib/phone";
+import { probeWaStatus } from "@/lib/wa-status";
 import { fetchJson } from "@/lib/client/fetch-json";
 import { AuthMethodList } from "@/components/auth/AuthMethodList";
 import { useAuthMethods } from "@/components/auth/useAuthMethods";
@@ -89,13 +90,26 @@ export default function LoginPage() {
     }
     if (isNew && data.session?.role === "user") {
       // WhatsApp is part of signing up: without it the agents cannot bargain.
-      // Bounded: an unanswered status probe must not park a brand-new account on
-      // a frozen screen - falling through to plans is the safe default.
-      const wa = await fetchJson<{ available?: boolean; connected?: boolean }>(
-        "/api/wa/status",
-        { timeoutMs: 8000 }
-      );
-      if (wa.ok && wa.data?.available && !wa.data.connected) {
+      //
+      // THE TIMEOUT USED TO MEAN "NO NEED TO LINK". This was a raw fetch with an
+      // 8s abort against an endpoint whose own worst case was ~20s (a 4s socket
+      // probe plus two 8s outbox drains, all ahead of the response). `wa.ok` was
+      // then false, the condition fell through, and a brand-new account was sent
+      // straight to plans having never been offered WhatsApp linking - silently,
+      // with nothing on screen suggesting a step had been skipped. The one thing
+      // signup exists to set up was the thing a slow backend removed.
+      //
+      // Now: the shared probe, which is bounded, retried, never cached and asks
+      // the endpoint to skip the drains (a brand-new account has an empty outbox
+      // by definition, so there is nothing to drain anyway).
+      //
+      // And an unanswered probe is UNKNOWN, not "no". Showing the linking step
+      // to somebody already linked costs them one tap on a step they can skip;
+      // hiding it from somebody unlinked costs them the product. Only a definite
+      // `available === false` (Evolution is not configured at all, which the
+      // endpoint answers instantly and never times out on) skips it.
+      const wa = await probeWaStatus({ pairing: true, attempts: 2 });
+      if (wa.available !== false && !wa.connected) {
         setStep("whatsapp");
         return;
       }

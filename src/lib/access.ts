@@ -338,11 +338,23 @@ export async function deleteUser(email: string): Promise<boolean> {
   return sbDelete("app_users", `email=eq.${encodeURIComponent(key)}`);
 }
 
-export async function setPlan(email: string, plan: PlanId): Promise<void> {
+/**
+ * Grant a plan. Returns whether the grant actually PERSISTED.
+ *
+ * This used to be `Promise<void>`, and mirror()'s boolean was thrown away. So
+ * the two ways a paid upgrade can be lost - the user row cannot be read, or the
+ * write to app_users fails - both looked identical to success at every call
+ * site. The traveller paid, PayPal captured, the confirm route answered
+ * `{ok:true}`, and the account stayed on `free` with nothing anywhere recording
+ * that it had not worked.
+ *
+ * Callers that took money MUST check this and tell the person the truth.
+ */
+export async function setPlan(email: string, plan: PlanId): Promise<boolean> {
   const rec = await getUser(email, { fresh: true });
-  if (!rec) return;
+  if (!rec) return false;
   rec.plan = plan;
-  await mirror(rec);
+  return await mirror(rec);
 }
 
 export async function touchUser(email: string): Promise<void> {

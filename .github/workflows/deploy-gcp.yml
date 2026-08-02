@@ -19,6 +19,16 @@
 #   SESSION_SECRET
 #   ADMIN_EMAILS
 #   Optional: EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_HOSTS, APP_DOMAIN
+#   Optional: SESSION_SECRET_PREVIOUS - the recovery path for a ROTATED
+#                                    SESSION_SECRET. That one secret is BOTH the
+#                                    cookie signing key and the Key Vault's
+#                                    encryption key, so changing it makes every
+#                                    stored integration key undecryptable at
+#                                    once: the app comes up healthy with every
+#                                    integration blank. runtime-config already
+#                                    tries this old value when decrypting, and
+#                                    it had NO WAY TO REACH THE SERVICE - the
+#                                    documented recovery was documented only.
 #
 # Every other integration key (LLM providers, PayPal, Resend, Maps...) lives in
 # the Supabase-backed admin Key Vault and needs NO redeploy - only the bootstrap
@@ -176,6 +186,7 @@ jobs:
           EVOLUTION_API_KEY: ${{ secrets.EVOLUTION_API_KEY }}
           EVOLUTION_HOSTS: ${{ secrets.EVOLUTION_HOSTS }}
           APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+          SESSION_SECRET_PREVIOUS: ${{ secrets.SESSION_SECRET_PREVIOUS }}
         run: |
           set -euo pipefail
           IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE"
@@ -191,7 +202,7 @@ jobs:
           ENV_VARS="$ENV_VARS##NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY"
           ENV_VARS="$ENV_VARS##SESSION_SECRET=$SESSION_SECRET"
           ENV_VARS="$ENV_VARS##ADMIN_EMAILS=$ADMIN_EMAILS"
-          for OPTIONAL in EVOLUTION_API_URL EVOLUTION_API_KEY EVOLUTION_HOSTS APP_DOMAIN; do
+          for OPTIONAL in EVOLUTION_API_URL EVOLUTION_API_KEY EVOLUTION_HOSTS APP_DOMAIN SESSION_SECRET_PREVIOUS; do
             VALUE="${!OPTIONAL:-}"
             if [ -n "$VALUE" ]; then
               ENV_VARS="$ENV_VARS##$OPTIONAL=$VALUE"

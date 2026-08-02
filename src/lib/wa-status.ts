@@ -40,8 +40,17 @@ async function once(pairing: boolean, timeoutMs: number): Promise<WaStatus | nul
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
+    // `drain=0` ALWAYS. This function answers ONE question - is this number
+    // linked? - and every caller of it is a UI truth read that aborts at
+    // ATTEMPT_TIMEOUT_MS. The endpoint also doubles as an opportunistic outbox
+    // worker, and that work is bounded at 8s PER DRAIN, twice, ahead of the
+    // response: a ~20s worst case behind an 8s abort, so the answer this
+    // function exists to get could not arrive at all while a queue was busy.
+    // The drains still run - from the polls that are actually acting as worker
+    // ticks (/api/activity, /api/replies) and from the heartbeat, none of which
+    // are blocking a person on a lock screen.
     const res = await fetch(
-      `/api/wa/status?${pairing ? "pairing=1&" : ""}t=${Date.now()}`,
+      `/api/wa/status?drain=0&${pairing ? "pairing=1&" : ""}t=${Date.now()}`,
       { cache: "no-store", signal: ctrl.signal }
     );
     if (!res.ok) return null;

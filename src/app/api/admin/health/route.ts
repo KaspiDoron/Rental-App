@@ -305,6 +305,17 @@ export async function GET() {
     turnLatencyMs: turnLatency(turns60),
     providerErrors: providerErrors(turns60),
     push24h: pushBreadcrumbs(pushes24),
+    // A ROTATED SESSION_SECRET IS INVISIBLE WITHOUT THIS.
+    //
+    // SESSION_SECRET is both the cookie signing key and the Key Vault's
+    // encryption key, so rotating it makes every stored integration key
+    // undecryptable - and loadOverrides simply dropped those rows. The owner
+    // saw a fully healthy app with every integration blank and nothing
+    // anywhere saying why. `count` is how many rows failed to decrypt on the
+    // last real vault read; anything above zero means set
+    // SESSION_SECRET_PREVIOUS to the old value (it now has a delivery path in
+    // .github/workflows/deploy-gcp.yml) and the vault re-reads itself.
+    vaultDecrypt: (await import("@/lib/runtime-config")).vaultDecryptHealth(),
     checkedAt: new Date().toISOString(),
   });
 }

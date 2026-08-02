@@ -42,14 +42,43 @@ export async function GET(req: Request) {
     /* the DB feed below still answers */
   }
   // Any user activity also flushes due queued messages (no dedicated worker).
+  //
+  // SCOPED TO THIS TRAVELLER, AND BOUNDED. This is the 8-SECOND poll - the
+  // most frequent request the app makes - and both drains ran GLOBALLY with no
+  // time budget: `drainOutbox()` with no sender filter executed OTHER USERS'
+  // real WhatsApp sends, and `drainGraphWakeups()` ran up to 24 other users'
+  // multi-agent LLM composes, inside one traveller's poll. The two sibling
+  // routes that do the same job (/api/activity, /api/wa/status) have bounded
+  // theirs at 8s for exactly this reason; this one was missed.
+  //
+  // The consequences compound: work that outran the 8s interval stacked poll on
+  // poll, one user's slow Evolution host stalled a stranger's feed, and the
+  // per-user pacing state was being advanced by a request that had nothing to
+  // do with that user. Scope, then bound - a slow host can now only delay the
+  // person it belongs to, and only for one interval.
+  //
+  // Rows belonging to signed-out users are not orphaned by this: the heartbeat
+  // (Cloud Scheduler -> /api/wa/ping) drains globally, which is the job of a
+  // worker rather than of somebody else's poll.
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
-    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    const DRAIN_BUDGET_MS = 8_000;
+    const bounded = <T,>(p: Promise<T>) =>
+      Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
+    await bounded(
+      drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true), {
+        senderKey: session.email,
+      }).catch((e) => console.error("[drain:outbox]", e instanceof Error ? e.message : e))
+    );
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
-  } catch {
-    /* best-effort */
+    await bounded(
+      drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true), {
+        userEmail: session.email,
+      }).catch((e) => console.error("[drain:wakeups]", e instanceof Error ? e.message : e))
+    );
+  } catch (e) {
+    console.error("[drain:init]", e instanceof Error ? e.message : e);
   }
 
   interface ReplyRow {

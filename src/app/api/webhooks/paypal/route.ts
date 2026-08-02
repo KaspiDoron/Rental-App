@@ -99,7 +99,18 @@ export async function POST(req: Request) {
 
   // Only grant from a VERIFIED event (the sole trusted grant path).
   if (verified && email && activates && tier) {
-    await setPlan(email, tier).catch(() => {});
+    // A WEBHOOK IS THE LAST LINE - NOBODY IS WATCHING IT. There is no traveller
+    // on the other end of this request to notice that the grant did not land,
+    // so a failed write has to leave a trace the owner can actually find.
+    // PayPal retries a non-2xx delivery, which is the recovery we want here.
+    const granted = await setPlan(email, tier).catch(() => false);
+    if (!granted) {
+      await sbInsert("billing_events", [
+        { type: `plan_grant_failed_${tier}`, verified: true, provider_event_id: String(body?.id ?? "") || null },
+      ]).catch(() => {});
+      console.error(`[paypal] setPlan failed for ${email} -> ${tier}; asking PayPal to retry`);
+      return NextResponse.json({ error: "grant failed" }, { status: 503 });
+    }
     // Payment recovered - end any open grace window so a LATER suspension
     // starts its own clock instead of inheriting an expired one.
     if (subscriptionId && clearsSuspension(event)) {
@@ -117,7 +128,11 @@ export async function POST(req: Request) {
       : null;
     const effect = effectForEvent(event, { suspendedSince, now: Date.now() });
     if (effect === "downgrade") {
-      await setPlan(email, "free").catch(() => {});
+      const downgraded = await setPlan(email, "free").catch(() => false);
+      if (!downgraded) {
+        console.error(`[paypal] downgrade to free failed for ${email}; asking PayPal to retry`);
+        return NextResponse.json({ error: "downgrade failed" }, { status: 503 });
+      }
     } else if (effect === "grace" && subscriptionId && !suspendedSince) {
       // First sight: start the clock, keep the tier. A repeat SUSPENDED event
       // must not restart it, which is why the record is only written when there

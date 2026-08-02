@@ -1741,6 +1741,14 @@ interface WakeupRowDb {
   payload: Record<string, unknown> | null;
 }
 
+export type DrainWakeupOptions = {
+  /**
+   * Run only this user's wakeups. Set by request-scoped callers (a poll owns
+   * one traveller's time, not everybody's); the heartbeat leaves it unset.
+   */
+  userEmail?: string;
+};
+
 /**
  * Claim and run every due wakeup. Called opportunistically wherever
  * drainOutbox already runs (webhook, wa/status 3s poll, replies 15s poll,
@@ -1748,14 +1756,32 @@ interface WakeupRowDb {
  * delete-returning claims mean a wakeup runs exactly once even when several
  * drainers race.
  */
-export async function drainGraphWakeups(send: LiveSend): Promise<number> {
+export async function drainGraphWakeups(
+  send: LiveSend,
+  opts?: DrainWakeupOptions
+): Promise<number> {
   let ran = 0;
   try {
+    // SCOPED, WHEN THE CALLER OWNS ONLY ONE USER'S TIME.
+    //
+    // Unscoped, one traveller's 8s poll ran up to 24 OTHER users' wakeups -
+    // each a full multi-agent LLM compose - inside their own request. Filtering
+    // on thread_key rather than on the user_email column is deliberate:
+    // user_email is stamped best-effort (there is a schema-graceful insert
+    // without it), so rows written before that migration have it null and would
+    // silently vanish from every scoped drain. thread_key is `<email>:<vendor>`
+    // and has always been populated.
+    //
+    // The heartbeat still calls this with no scope - draining everyone is a
+    // worker's job, not a poll's.
+    const ownerFilter = opts?.userEmail
+      ? `&thread_key=like.${encodeURIComponent(`${opts.userEmail}:*`)}`
+      : "";
     const due = await sbSelect<WakeupRowDb>(
       "graph_wakeups",
       `select=id,kind,thread_key,not_before,payload&not_before=lte.${encodeURIComponent(
         new Date().toISOString()
-      )}&order=not_before.asc&limit=24`
+      )}${ownerFilter}&order=not_before.asc&limit=24`
     );
     if (due.length === 0) return 0;
     const { sbDeleteReturning } = await import("../runtime-config");
