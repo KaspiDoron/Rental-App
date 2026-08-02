@@ -48,9 +48,25 @@ describe("nothing does React work per scroll event", () => {
     expect(w).toMatch(/if \(same\) return;/);
   });
 
-  it("the translator cannot re-trigger its own observer", () => {
-    const d = readCode("src/components/DomTranslator.tsx");
-    expect(d).toMatch(/if \(node\.nodeValue !== next\) node\.nodeValue = next;/);
+  it("REPRODUCTION: the whole-DOM translator is gone, not merely throttled", () => {
+    // This test used to pin a guard INSIDE DomTranslator: don't write nodeValue
+    // unless it changed, so the observer cannot re-trigger itself. That guard
+    // was real and it fixed the 400ms scroll loop.
+    //
+    // But the component was unsalvageable for a different reason. It walked the
+    // entire document.body and POSTed every text node to /api/translate, which
+    // caches into app_config.I18N_<lang> - ONE GLOBALLY SHARED ROW. Its only
+    // safety mechanism, `data-no-translate`, was applied to ZERO elements in the
+    // app (the attribute appeared 3 times, all inside DomTranslator's own
+    // source), so WhatsApp transcripts and shop names from one traveller were
+    // uploaded and then served to every other user in that language.
+    //
+    // A component that cannot be made safe by configuration is deleted, not
+    // tuned. I18N_CATALOG already covers every t() string, so the static UI is
+    // translated without it.
+    expect(existsSync(join(process.cwd(), "src/components/DomTranslator.tsx"))).toBe(false);
+    const layout = readCode("src/app/layout.tsx");
+    expect(layout).not.toMatch(/DomTranslator/);
   });
 
   it("scroll listeners that remain are passive", () => {

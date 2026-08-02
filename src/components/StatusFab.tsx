@@ -72,11 +72,22 @@ export function StatusFab({
         el?.scrollIntoView({ behavior: "smooth", block: "center" });
       }}
       aria-label={label}
-      // SAFE AREA, AND ABOVE THE TAB BAR. `bottom-[calc(...)]` keeps it clear of
-      // the home indicator on a notched phone and of the navigation that owns
-      // the bottom of every screen.
-      className="wd-status-fab layer-chrome fixed left-1/2 -translate-x-1/2 rounded-full px-4 py-2.5 text-[12px] font-extrabold text-strong shadow-lg pop-in"
-      style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5.25rem)" }}
+      // BOTTOM-RIGHT, AND ANCHORED WITHOUT A TRANSFORM.
+      //
+      // This used to be a bottom-CENTRE pill positioned with
+      // `left-1/2 -translate-x-1/2`, which put it directly over the middle of
+      // the tab bar - and the `pop-in` animation then overwrote the centring
+      // transform outright (see globals.css), so it rendered with its left edge
+      // on the viewport centre line. Anchoring to `right` needs no transform at
+      // all, so no animation can ever displace it again.
+      //
+      // `bottom` keeps it clear of the home indicator on a notched phone and of
+      // the navigation that owns the bottom of every screen.
+      className="wd-status-fab layer-chrome fixed rounded-full px-4 py-2.5 text-[12px] font-extrabold text-strong shadow-lg pop-in"
+      style={{
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 5.25rem)",
+        right: "calc(env(safe-area-inset-right, 0px) + 1rem)",
+      }}
     >
       <span aria-hidden className="mr-1">↑</span>
       {label}

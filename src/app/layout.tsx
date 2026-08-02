@@ -3,7 +3,6 @@ import { Baloo_2, Nunito } from "next/font/google";
 import { I18nProvider } from "@/lib/i18n";
 import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
-import { DomTranslator } from "@/components/DomTranslator";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
@@ -184,7 +183,6 @@ export default function RootLayout({
                 opacity-only for exactly that reason. */}
             <div className="app-canvas page-fade">{children}</div>
             <NavVeil />
-            <DomTranslator />
             <OfflineBanner />
             <TestModeBanner />
             {/* MANDATORY FIRST TOUCH. Not dismissable, no backdrop tap: the app

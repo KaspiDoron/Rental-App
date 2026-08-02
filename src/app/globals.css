@@ -721,12 +721,31 @@ html.dark .skeleton::after {
 }
 .soft-pulse { animation: soft-pulse 2.2s ease-in-out infinite; }
 
-/* Fade+scale in for modals content / sections */
+/* Fade+scale in for modals content / sections.
+ *
+ * AN ANIMATION THAT SILENTLY DELETED A LAYOUT UTILITY.
+ *
+ * This animated the `transform` SHORTHAND with `animation-fill-mode: both`.
+ * Per the cascade, an animation origin outranks a normal author declaration,
+ * and `both` includes `forwards` - so the 100% keyframe's `transform: scale(1)`
+ * was RETAINED FOREVER after the 300ms run, permanently replacing any transform
+ * the element also carried. StatusFab combined this with Tailwind's
+ * `-translate-x-1/2`, so its centring was destroyed: `left: 50%` applied with
+ * no compensating shift and the pill's LEFT EDGE sat on the viewport centre
+ * line, which is the "floating weirdly in the middle" the owner reported.
+ *
+ * `scale` is an INDEPENDENT animatable property. It composes with `transform`
+ * instead of overwriting it, so translate utilities survive. And `backwards`
+ * rather than `both` retains nothing after the run - the end state here is
+ * already the element's natural state, so there is nothing to keep, and no
+ * element is left holding a permanent transform (which would also make it a
+ * containing block for any fixed descendant).
+ */
 @keyframes pop-in {
-  0% { opacity: 0; transform: scale(0.96); }
-  100% { opacity: 1; transform: scale(1); }
+  0% { opacity: 0; scale: 0.96; }
+  100% { opacity: 1; scale: 1; }
 }
-.pop-in { animation: pop-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.pop-in { animation: pop-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
 
 /* Orbiting-dots loader (OrbitDots component): three dots ride a shared circular
    track, each phase-delayed, giving a premium "the system is thinking" feel

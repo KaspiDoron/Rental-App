@@ -267,7 +267,18 @@ async function recordUsage(provider: string, tokens: number, failed = false) {
   s[provider].tokens += tokens;
   if (failed) s[provider].failures += 1;
   const { sbInsert } = await import("./runtime-config");
-  sbInsert("ai_usage", [{ provider, tokens, failed }]).catch(() => {});
+  // AWAITED, WHICH IS WHY THE PROVIDERS PAGE READ ZERO.
+  //
+  // This insert was started and not awaited. On Cloud Run the CPU is throttled
+  // to ~0 the instant the response flushes, so a detached insert stops wherever
+  // it happens to be and the row never lands - which is exactly why every brain
+  // showed "0 tokens / 0 calls" no matter how heavily the app was used.
+  //
+  // Deliberately NOT wrapped in finishBeforeResponse: recordUsage is called
+  // from the GCE worker loop as well as from Cloud Run request paths, and the
+  // budget race there would add latency inside the provider failover chain on
+  // every LLM call while cancelling nothing.
+  await sbInsert("ai_usage", [{ provider, tokens, failed }]).catch(() => false);
 }
 
 /** Live status of every AI provider: configured, our usage, remote quota. */

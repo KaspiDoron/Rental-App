@@ -23,19 +23,31 @@ import {
 
 const CACHE_TTL_MS = 30_000;
 
+/** How long a FAILED vault read is trusted. Short, because the outage may be
+ *  brief - but non-zero, because zero is what turned a slow Supabase into a
+ *  fetch storm across all 140 getConfig call sites. */
+const NEGATIVE_TTL_MS = 5_000;
+
 declare global {
   // eslint-disable-next-line no-var
   var __wheeldeal_cfg__:
     | {
         cache: { data: Record<string, string>; exp: number } | null;
         mem: Record<string, string>;
+        /** The in-flight vault read, shared by every concurrent caller. */
+        inflight: Promise<Record<string, string>> | null;
       }
     | undefined;
 }
 
 function state() {
   if (!globalThis.__wheeldeal_cfg__) {
-    globalThis.__wheeldeal_cfg__ = { cache: null, mem: {} };
+    globalThis.__wheeldeal_cfg__ = { cache: null, mem: {}, inflight: null };
+  }
+  // Older instances of this global (hot reload, or a module loaded before this
+  // field existed) will not have `inflight`.
+  if (globalThis.__wheeldeal_cfg__.inflight === undefined) {
+    globalThis.__wheeldeal_cfg__.inflight = null;
   }
   return globalThis.__wheeldeal_cfg__;
 }
@@ -511,8 +523,35 @@ export async function sbUpdate(
 
 // ---- encryption (AES-256-GCM, key derived from SESSION_SECRET) --------------
 
+// A 71-MILLISECOND SYNCHRONOUS BLOCK, ONCE PER ROW, ON EVERY VAULT READ.
+//
+// scryptSync is deliberately expensive - that is the point of a KDF - and it is
+// SYNCHRONOUS, so it does not merely take time, it blocks the entire Node event
+// loop. This function was called once per row inside decrypt(), and
+// loadOverrides() decrypts the whole table, so a single vault read cost
+// (rows x 71ms) of dead server. With ~19 concurrent misses on a cold /profile
+// that measured around 27 seconds during which NO route could be answered.
+//
+// The derivation is a pure function of the secret, and the secret set is
+// bounded and tiny (SESSION_SECRET + SESSION_SECRET_PREVIOUS). Memoizing it is
+// therefore both safe and complete: the cache can never grow beyond the number
+// of secrets the operator has configured, and it removes the scrypt from
+// encrypt() and from encryptString/decryptString on the signup path too.
+const KEY_CACHE = new Map<string, Buffer>();
+
 function cryptoKeyFrom(secret: string): Buffer {
-  return scryptSync(secret || "dev-insecure-secret-change-me", "wheeldeal-config-v1", 32);
+  const s = secret || "dev-insecure-secret-change-me";
+  let k = KEY_CACHE.get(s);
+  if (!k) {
+    k = scryptSync(s, "wheeldeal-config-v1", 32);
+    KEY_CACHE.set(s, k);
+  }
+  return k;
+}
+
+/** Test seam - the memo is a module singleton. */
+export function _resetKeyCache(): void {
+  KEY_CACHE.clear();
 }
 
 // The CURRENT secret - new writes (encrypt) always use this one.
@@ -584,15 +623,60 @@ function decrypt(blob: string): string | null {
 
 // ---- Supabase REST ----------------------------------------------------------
 
+/**
+ * THE VAULT IS NOT THE ONLY THING IN THIS TABLE.
+ *
+ * `/api/translate` caches its dictionaries into `app_config` under `I18N_<lang>`
+ * via setConfig, which AES-encrypts them. This read had no key filter, so every
+ * cold start downloaded and decrypted THE ENTIRE TRANSLATION CORPUS FOR ALL 20
+ * LANGUAGES before it could answer "what is OPERATOR_NAME".
+ *
+ * That made the cold-start cost a monotonically increasing function of how much
+ * text the app had ever translated - permanently, for everyone. And it had a
+ * terminal state: once the corpus exceeded what transfers inside timedFetch's 8s
+ * deadline, this threw, the catch returned {}, and getConfig silently fell
+ * through to process.env for every key - where most of them are not declared.
+ * The app would lose every integration key with no error anywhere.
+ *
+ * PostgREST `not.like` keeps the big rows server-side. They are still readable
+ * by their own reader, which asks for them by exact key.
+ */
+const VAULT_SELECT = "select=key,value&key=not.like.I18N_*";
+
 async function loadOverrides(): Promise<Record<string, string>> {
   const s = state();
   const conn = supabase();
   if (!conn) return s.mem;
 
   if (s.cache && s.cache.exp > Date.now()) return { ...s.cache.data, ...s.mem };
+
+  // ONE FETCH FOR N CONCURRENT CALLERS.
+  //
+  // The cache was only consulted before the await and only written after it, so
+  // every caller that arrived during an in-flight read missed and started its
+  // own - each paying the full download + decrypt. getSession() calls getConfig,
+  // and every route calls getSession(), so a cold instance fanned this out
+  // across every request in the burst. Sharing the pending promise collapses
+  // that back to one.
+  if (s.inflight) return s.inflight;
+  const run = (async () => {
+    try {
+      return await fetchOverrides(conn, s);
+    } finally {
+      s.inflight = null;
+    }
+  })();
+  s.inflight = run;
+  return run;
+}
+
+async function fetchOverrides(
+  conn: { url: string; key: string },
+  s: ReturnType<typeof state>
+): Promise<Record<string, string>> {
   try {
     const res = await timedFetch(
-      `${conn.url}/rest/v1/app_config?select=key,value`,
+      `${conn.url}/rest/v1/app_config?${VAULT_SELECT}`,
       {
         headers: {
           apikey: conn.key,
@@ -604,22 +688,73 @@ async function loadOverrides(): Promise<Record<string, string>> {
     if (!res.ok) throw new Error(`supabase ${res.status}`);
     const rows = (await res.json()) as { key: string; value: string }[];
     const data: Record<string, string> = {};
+    let undecryptable = 0;
     for (const row of rows) {
       const plain = decrypt(row.value);
       if (plain) data[row.key] = plain;
+      // A ROW THAT WILL NOT DECRYPT IS A KEY THE APP HAS SILENTLY LOST.
+      //
+      // SESSION_SECRET is BOTH the cookie signing key and the vault encryption
+      // key, so rotating it makes every stored key undecryptable. That was
+      // handled by dropping the row with no counter, no log and no diagnostic:
+      // the owner saw a working app with every integration blank and nothing
+      // anywhere saying why. Count it, so the health surface can say
+      // "N of M keys failed to decrypt - set SESSION_SECRET_PREVIOUS".
+      else undecryptable += 1;
+    }
+    lastUndecryptable = { count: undecryptable, of: rows.length, at: Date.now() };
+    if (undecryptable > 0) {
+      console.error(
+        `[vault] ${undecryptable}/${rows.length} rows failed to decrypt - SESSION_SECRET was probably rotated. Set SESSION_SECRET_PREVIOUS to the old value.`
+      );
     }
     s.cache = { data, exp: Date.now() + CACHE_TTL_MS };
     // In-memory overrides (e.g. saved while Supabase was unreachable) win.
     return { ...data, ...s.mem };
   } catch {
-    return { ...(s.cache?.data ?? {}), ...s.mem };
+    // NEGATIVE CACHING: A SLOW SUPABASE MUST NOT BECOME A FETCH STORM.
+    //
+    // The cache was written only on the success path, so while Supabase was
+    // unhealthy there was effectively NO cache: all 140 getConfig call sites
+    // issued a fresh request with an 8s abort, on every call, for as long as
+    // the outage lasted. Caching the (possibly empty) fallback for a short
+    // window turns an unbounded amplification into one retry per window.
+    const fallback = s.cache?.data ?? {};
+    s.cache = { data: fallback, exp: Date.now() + NEGATIVE_TTL_MS };
+    return { ...fallback, ...s.mem };
   }
+}
+
+/** How many vault rows could not be decrypted on the last successful read.
+ *  Surfaced by the health route so a rotated secret is visible, not silent. */
+let lastUndecryptable: { count: number; of: number; at: number } | null = null;
+
+export function vaultDecryptHealth(): { count: number; of: number; at: number } | null {
+  return lastUndecryptable;
 }
 
 /** Effective value for a key: Supabase override first, then process.env. */
 export async function getConfig(name: string): Promise<string | undefined> {
   const overrides = await loadOverrides();
   return overrides[name] ?? process.env[name];
+}
+
+/**
+ * MANY KEYS, ONE VAULT READ.
+ *
+ * `Promise.all(names.map(getConfig))` looks equivalent and is not: before the
+ * in-flight dedupe above, revealKeys() fanned 52 keys into 52 simultaneous
+ * full-table downloads, and /api/config/public did the same with 6. The dedupe
+ * fixes the worst of that, but this makes the intent explicit at the call site
+ * and is correct regardless of how the cache is behaving.
+ */
+export async function getConfigMany(
+  names: readonly string[]
+): Promise<Record<string, string | undefined>> {
+  const overrides = await loadOverrides();
+  const out: Record<string, string | undefined> = {};
+  for (const n of names) out[n] = overrides[n] ?? process.env[n];
+  return out;
 }
 
 /**

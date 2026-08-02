@@ -7,7 +7,7 @@
 // take effect at the next request without a redeploy.
 
 import "server-only";
-import { getConfig, setConfig, supabaseConfigured } from "./runtime-config";
+import { getConfig, getConfigMany, setConfig, supabaseConfigured } from "./runtime-config";
 
 export interface KeyInfo {
   name: string;
@@ -181,15 +181,20 @@ export async function setKey(
   };
 }
 
-/** OWNER ONLY: raw values for every managed key, ready to view and copy. */
+/** OWNER ONLY: raw values for every managed key, ready to view and copy.
+ *
+ *  This was `Promise.all` over 52 individual `getConfig` calls, i.e. 52
+ *  simultaneous full-vault reads - each of which decrypted every row with a
+ *  synchronous scrypt per row. It was the single largest contributor to the
+ *  cold-load stall, and it fired on the Profile page for EVERY user, not just
+ *  owners. One read now. */
 export async function revealKeys(): Promise<
   { name: string; label: string; value: string }[]
 > {
-  return Promise.all(
-    KEYS.map(async (k) => ({
-      name: k.name,
-      label: k.label,
-      value: (await getConfig(k.name)) ?? "",
-    }))
-  );
+  const values = await getConfigMany(KEYS.map((k) => k.name));
+  return KEYS.map((k) => ({
+    name: k.name,
+    label: k.label,
+    value: values[k.name] ?? "",
+  }));
 }
