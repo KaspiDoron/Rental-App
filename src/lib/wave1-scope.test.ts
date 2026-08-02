@@ -180,3 +180,31 @@ describe("a rotated SESSION_SECRET is recoverable and visible", () => {
     );
   });
 });
+
+describe("a deploy cannot silently blank the live service's configuration", () => {
+  it("REPRODUCTION: an empty required secret fails the deploy by name", () => {
+    // --set-env-vars REPLACES the environment, and these five were appended
+    // unconditionally - so an unset repo secret OVERWROTE the live value with
+    // "". The 2026-08-02 run shows ADMIN_EMAILS arriving blank, and
+    // ADMIN_EMAILS is the ONLY source of getSession().isAdmin: a SUCCESSFUL
+    // deploy would have locked the owner out of /admin and every
+    // /api/admin/* route, with a green checkmark on the run.
+    const wf = read(".github/workflows/deploy-gcp.yml");
+    expect(wf).toMatch(
+      /for REQUIRED in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY NEXT_PUBLIC_SUPABASE_ANON_KEY SESSION_SECRET ADMIN_EMAILS; do/
+    );
+    expect(wf).toMatch(/if \[ -z "\$\{!REQUIRED:-\}" \]; then/);
+    expect(wf).toMatch(/::error::Missing required repo secret\(s\)/);
+    // The guard must run BEFORE the deploy command. Anchored on the actual
+    // invocation, not on the phrase - the retry rationale above it explains the
+    // ABORTED race and names `gcloud run deploy` in prose first.
+    expect(wf.indexOf("Missing required repo secret")).toBeLessThan(
+      wf.indexOf('OUT="$(gcloud run deploy')
+    );
+  });
+
+  it("optional vars are still skipped rather than blanked", () => {
+    const wf = read(".github/workflows/deploy-gcp.yml");
+    expect(wf).toMatch(/VALUE="\$\{!OPTIONAL:-\}"\n\s+if \[ -n "\$VALUE" \]; then/);
+  });
+});

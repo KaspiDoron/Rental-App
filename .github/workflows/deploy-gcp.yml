@@ -195,6 +195,35 @@ jobs:
           # WHAT IS ACTUALLY SERVING. Stamped into the running service so
           # /api/admin/deploy-info can answer "is the fix I just shipped live?"
           # from the owner's phone, instead of it being an act of faith.
+          # AN EMPTY SECRET IS A WIPE, NOT A NO-OP.
+          #
+          # --set-env-vars REPLACES the service's entire environment, and these
+          # five were appended unconditionally - so a repo secret that is unset
+          # or empty did not "leave the old value alone", it OVERWROTE the live
+          # value with "". The 2026-08-02 run proves it: ADMIN_EMAILS came
+          # through blank, and ADMIN_EMAILS is the ONLY source of
+          # getSession().isAdmin - a successful deploy would have silently
+          # locked the owner out of /admin, every /api/admin/* route and the
+          # billing routes, with a green checkmark on the run.
+          #
+          # So: check first, fail by NAME, and never ship a service configured
+          # by an accident. This runs before the deploy command, so the failure
+          # costs seconds and says exactly which secret to set.
+          MISSING=""
+          for REQUIRED in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY NEXT_PUBLIC_SUPABASE_ANON_KEY SESSION_SECRET ADMIN_EMAILS; do
+            if [ -z "${!REQUIRED:-}" ]; then
+              MISSING="$MISSING $REQUIRED"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required repo secret(s):$MISSING"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            echo "Deploying without them would OVERWRITE the live service's values with empty strings."
+            echo "ADMIN_EMAILS in particular is the only thing that makes anyone an admin -"
+            echo "an empty value locks the owner out of /admin and every /api/admin/* route."
+            exit 1
+          fi
+
           ENV_VARS="WD_BUILD_SHA=$IMAGE_TAG"
           ENV_VARS="$ENV_VARS##WD_BUILD_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ENV_VARS="$ENV_VARS##SUPABASE_URL=$SUPABASE_URL"
