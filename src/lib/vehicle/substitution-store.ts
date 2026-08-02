@@ -14,20 +14,41 @@ import type { AlternativeOffer } from "./substitution";
 // the accessory verdicts use for the same reason.
 
 interface ThreadRow {
-  id: number;
+  thread_key: string;
   fields: (Record<string, unknown> & { alternativeOffer?: AlternativeOffer | null }) | null;
 }
 
-async function loadThread(email: string, vendorId: string): Promise<ThreadRow | null> {
-  const { sbSelect } = await import("../runtime-config");
-  const rows = await sbSelect<ThreadRow>(
+// THE COLUMN THIS ASKED FOR HAS NEVER EXISTED.
+//
+// `negotiation_threads` is keyed by `thread_key` (schema.sql: "thread_key text
+// primary key") - there is no `id`. PostgREST answers `select=id` on such a
+// table with 400/42703, sbSelect collapses every failure to [], so this
+// returned null on EVERY call since it was written: persistAlternativeOffer has
+// never stored a single offer, and resolveAlternativeOffer has never found one.
+//
+// That is the whole of "M12 is BROKEN". The accept UI in VendorCard is wired
+// correctly end to end - /api/replies already returns `alternativeOffer` from
+// these very fields and the card renders it - it has simply never had anything
+// to show. One wrong column name, one dead feature.
+//
+// sbSelectStrict, not sbSelect: turning a schema error into "no such thread" is
+// what let this survive a full audit round.
+async function loadThread(
+  email: string,
+  vendorId: string
+): Promise<{ row: ThreadRow | null } | { error: "missing" | "unavailable" }> {
+  const { sbSelectStrict } = await import("../runtime-config");
+  const read = await sbSelectStrict<ThreadRow>(
     "negotiation_threads",
-    `select=id,fields&user_email=eq.${encodeURIComponent(email)}&vendor_id=eq.${encodeURIComponent(
-      vendorId
-    )}&order=updated_at.desc&limit=1`
+    `select=thread_key,fields&user_email=eq.${encodeURIComponent(
+      email
+    )}&vendor_id=eq.${encodeURIComponent(vendorId)}&order=updated_at.desc&limit=1`
   );
-  return rows[0] ?? null;
+  if ("error" in read) return read;
+  return { row: read.rows[0] ?? null };
 }
+
+const byKey = (threadKey: string) => `thread_key=eq.${encodeURIComponent(threadKey)}`;
 
 /** Park a choice for the traveller. Never overwrites one they have not seen. */
 export async function persistAlternativeOffer(args: {
@@ -37,14 +58,18 @@ export async function persistAlternativeOffer(args: {
   offer: AlternativeOffer;
 }): Promise<boolean> {
   try {
-    const row = await loadThread(args.email, args.vendorId);
+    const found = await loadThread(args.email, args.vendorId);
+    // Unreadable is NOT "no thread". Returning false there is correct - we did
+    // not park the offer - but it must not be mistaken for "already asked".
+    if ("error" in found) return false;
+    const row = found.row;
     if (!row) return false;
     // ASK ONCE. A shop that repeats itself, or a webhook redelivery, must not
     // replace a choice the traveller is already looking at - the price on the
     // card would change under their thumb.
     if (row.fields?.alternativeOffer) return false;
     const { sbUpdate } = await import("../runtime-config");
-    await sbUpdate("negotiation_threads", `id=eq.${row.id}`, {
+    await sbUpdate("negotiation_threads", byKey(row.thread_key), {
       fields: { ...(row.fields ?? {}), alternativeOffer: args.offer },
     });
     return true;
@@ -60,7 +85,9 @@ export async function resolveAlternativeOffer(args: {
   accept: boolean;
 }): Promise<{ ok: boolean; offer: AlternativeOffer | null }> {
   try {
-    const row = await loadThread(args.email, args.vendorId);
+    const found = await loadThread(args.email, args.vendorId);
+    if ("error" in found) return { ok: false, offer: null };
+    const row = found.row;
     const offer = row?.fields?.alternativeOffer ?? null;
     if (!row || !offer) return { ok: false, offer: null };
     const { sbUpdate } = await import("../runtime-config");
@@ -82,7 +109,7 @@ export async function resolveAlternativeOffer(args: {
       // vehicle nobody wants.
       next.declined = true;
     }
-    await sbUpdate("negotiation_threads", `id=eq.${row.id}`, { fields: next });
+    await sbUpdate("negotiation_threads", byKey(row.thread_key), { fields: next });
     return { ok: true, offer };
   } catch {
     return { ok: false, offer: null };

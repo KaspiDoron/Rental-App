@@ -93,7 +93,8 @@ export async function POST(req: Request) {
     });
   }
   const { sendFromUser } = await import("@/lib/evolution");
-  const r = await sendFromUser(session.email, digits, guard.text, true);
+  // A person is watching this run - the owner testing the pipeline by hand.
+  const r = await sendFromUser(session.email, digits, guard.text, true, { skipJitter: true });
   if (!r.ok) {
     return NextResponse.json({
       sent: false,

@@ -270,7 +270,10 @@ describe("no send path walks around the lock", () => {
   it("so does the owner's live drill", () => {
     const drill = readCode("src/app/api/admin/drill/route.ts");
     const claimAt = drill.indexOf("claimForSend(session.email, digits, guard.text");
-    const sendAt = drill.indexOf("sendFromUser(session.email, digits, guard.text, true)");
+    // Matched on the prefix: the call gained a `{ skipJitter: true }` argument
+    // (the owner is watching this drill run), and pinning the exact closing
+    // paren made an unrelated argument change look like a lock regression.
+    const sendAt = drill.indexOf("sendFromUser(session.email, digits, guard.text, true");
     expect(claimAt).toBeGreaterThan(0);
     expect(claimAt).toBeLessThan(sendAt);
   });

@@ -2733,6 +2733,10 @@ export default function Home() {
                   // carried over from the previous request.
                   key={searchEpoch}
                   busy={phase === "profiling" || phase === "running"}
+                  // The date picker's ceiling is plan-tiered (free books
+                  // same-day only). The server clamps regardless; this stops
+                  // the picker offering a date it knows will be moved.
+                  plan={session?.plan}
                   onFieldsChange={setBuilderFields}
                 />
               </div>

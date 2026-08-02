@@ -1192,7 +1192,20 @@ export async function connectInstance(
         qrcode: true,
         ...(digits ? { number: digits } : {}),
         webhook: webhookUrl,
-        events: ["MESSAGES_UPSERT"],
+        // THE SAME EVENT SET AS EVERY OTHER PATH.
+        //
+        // This literal said `["MESSAGES_UPSERT"]` while the three modern paths
+        // used WEBHOOK_EVENTS - so anyone who paired through this legacy
+        // fallback got no CALL (their ring is never answered), no
+        // MESSAGES_UPDATE (no delivery receipts, so the ghost-send guard has
+        // nothing to confirm against) and no CONNECTION_UPDATE (the app never
+        // learns their socket dropped, and shows them connected while nothing
+        // sends). Silent, per-user, and invisible to anyone who paired the
+        // normal way.
+        //
+        // It is spread rather than referenced so the hardening-invariants test
+        // can still pin a literal set at each create site.
+        events: [...WEBHOOK_EVENTS],
         // NOTE: the fingerprint fields (browser/mobile) are DELIBERATELY omitted
         // here. This retry is the LAST-RESORT minimal body: it fires when the
         // main create failed with a non-403/409 status, which on a strict build
@@ -1884,7 +1897,19 @@ export async function sendFromUser(
   email: string,
   to: string,
   message: string,
-  fast = false
+  /**
+   * Skip the multi-second PRESENCE simulation (typing/paused/typing). Every
+   * drain sets this: the simulation costs 4-12s per row and the drains run
+   * inside an 8s budget, so leaving it on meant one message per poll.
+   */
+  fast = false,
+  opts?: {
+    /**
+     * Skip the sub-3s Poisson inter-arrival gap as well. TRUE ONLY where a
+     * person is watching a spinner - see the comment at the gap itself.
+     */
+    skipJitter?: boolean;
+  }
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -1959,10 +1984,23 @@ export async function sendFromUser(
   // occasionally long. This draw sits immediately before the API call, so it is
   // the inter-arrival time an observer on the other side actually measures.
   //
-  // BACKGROUND ONLY. `fast` is an interactive send with a person watching the
-  // screen; adding up to 2.4s there would buy a distribution nobody is
-  // measuring at the cost of the one thing the user does notice.
-  if (!fast) {
+  // AND IT USED TO RUN ON ALMOST NOTHING.
+  //
+  // This was gated on `!fast`, and `fast` is set by EVERY drain caller -
+  // including /api/wa/ping (the heartbeat) and /api/wa/tick, which are the
+  // least interactive paths in the entire system. So the one pause with the
+  // right distribution was skipped on essentially every real send, and what
+  // reached the wire was the uniform noise this exists to replace.
+  //
+  // `fast` conflates two unrelated things. Skipping the 4-12s PRESENCE
+  // simulation is genuinely necessary in a drain (it would consume the whole 8s
+  // budget on one row). Skipping a 0.8-2.4s gap is not: MIN_GAP_MS is 20s per
+  // user and HARD_MIN_GAP_SEC is 8, so a ~1.3s mean draw is lost in the noise
+  // of pacing that already exists. They are separate flags now.
+  //
+  // `skipJitter` is for the three paths where a person is watching a spinner -
+  // the admin drill, the admin queue force-send, and a single tapped outreach.
+  if (!opts?.skipJitter) {
     const { poissonPause } = await import("./wa/jitter");
     await poissonPause();
   }

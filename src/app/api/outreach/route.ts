@@ -536,7 +536,11 @@ async function handlePost(req: Request) {
   // because a bookkeeping row is missing.
   if (await evolutionConfigured()) {
     configured = (await wasEverConnected(session.email)) || false;
-    const r = await sendFromUser(session.email, digits, guardedMessage, true);
+    // One tapped send with the traveller on the card - the jitter would only
+    // be latency they can see.
+    const r = await sendFromUser(session.email, digits, guardedMessage, true, {
+      skipJitter: true,
+    });
     if (r.ok || r.error === "reconnecting" || r.rateLimited) configured = true;
     result = {
       channel: "personal-wa",

@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { StructuredRFQ, VehicleClass, Transmission } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
+import { resolveWindow } from "@/lib/rental-window";
 import { Icon } from "./icons";
 
 const SCOOTER_CC = [110, 125, 150, 160] as const;
@@ -134,15 +135,55 @@ function DurationField({ value, onChange, t }: { value: number; onChange: (n: nu
   );
 }
 
+// A NATIVE DATE INPUT, BOUNDED BY THE PLAN.
+//
+// `min`/`max` are the plan window (rental-window.ts: free books today only, Pro
+// 30 days ahead, Ultra 180). The server clamps too - clampRfqWindow is the
+// authority and stays so - but a picker that lets someone choose a date the
+// server will silently move is a picker that lies. Native `date` because it is
+// the one control every phone already knows how to drive, in every locale.
+function StartDateField({
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  value: string;
+  min: string;
+  max: string;
+  onChange: (d: string) => void;
+}) {
+  return (
+    <input
+      type="date"
+      value={value}
+      min={min}
+      max={max}
+      onChange={(e) => {
+        const d = e.target.value;
+        // An empty or out-of-range value falls back to the soonest bookable
+        // day rather than travelling to the server as undefined.
+        if (!d) return onChange(min);
+        onChange(d < min ? min : d > max ? max : d);
+      }}
+      // >= 16px so iOS does not zoom the whole page on focus.
+      className="rounded-2xl border-2 border-line bg-card px-3 py-1.5 text-[16px] font-extrabold text-strong outline-none"
+    />
+  );
+}
+
 export function RequestBuilder({
   onFieldsChange,
   busy,
+  plan,
 }: {
   /** Live report of the current structured selections (null until a vehicle is
    *  picked). The page's single bottom "Find my deal" button consumes this -
    *  the builder itself has NO search button (one unified CTA, owner directive). */
   onFieldsChange: (fields: Partial<StructuredRFQ> | null) => void;
   busy?: boolean;
+  /** Drives how far ahead the date picker allows. Falls back to the free window. */
+  plan?: string | null;
 }) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
@@ -151,6 +192,15 @@ export function RequestBuilder({
   const [cc, setCc] = useState<number | null>(null);
   const [carType, setCarType] = useState<(typeof CAR_TYPES)[number] | null>(null);
   const [days, setDays] = useState(4);
+  // The plan window, computed once per mount. `resolveWindow` with no
+  // `requested` answers "today" plus the plan's ceiling, which is exactly the
+  // bounds the picker needs.
+  const { today, maxStartDate } = useMemo(() => {
+    const w = resolveWindow({ plan, nowMs: Date.now() });
+    return { today: w.startDate, maxStartDate: w.maxStartDate };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan]);
+  const [startDate, setStartDate] = useState(today);
   const [helmets, setHelmets] = useState(0);
   const [maxMileage, setMaxMileage] = useState<number | null>(null);
   const [storageBox, setStorageBox] = useState(false);
@@ -189,6 +239,10 @@ export function RequestBuilder({
     const fields: Partial<StructuredRFQ> = {
       vehicleClass,
       durationDays: days,
+      // The date the whole downstream has been waiting for. Sent always (it
+      // defaults to today), so the opener can say WHEN rather than only for
+      // how long.
+      startDate,
       transmission,
       // EXTRAS ARE ACCESSORIES, NOT NOTES. This was hard-coded `[]` while the
       // top-box toggle and the free-text field were folded into `notes` - and
@@ -211,7 +265,7 @@ export function RequestBuilder({
     onFieldsChange(fields);
     // onFieldsChange is a stable setter from the parent - the selections drive it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehicle, transmission, cc, carType, days, helmets, maxMileage, storageBox, delivery, custom]);
+  }, [vehicle, transmission, cc, carType, days, startDate, helmets, maxMileage, storageBox, delivery, custom]);
 
   const ccOptions = vehicle === "motorbike" ? MOTORBIKE_CC : SCOOTER_CC;
   const TITLES: Record<StepName, string> = {
@@ -285,6 +339,34 @@ export function RequestBuilder({
                 </div>
               </>
             )}
+            {/* WHEN, NOT JUST HOW LONG.
+                The builder collected a day COUNT and nothing else, so
+                `startDate` was undefined on every request ever made and no
+                rental DATE has ever reached a shop - the agents asked "for 4
+                days" with no beginning. Everything downstream was already
+                built and waiting: the opener interpolates the date
+                (agents.ts), the period phrase reads it, and the traveller
+                disclosure policy reads it twice.
+                Beside the duration rather than in a step of its own: "when"
+                and "how long" are one thought, and the carousel was
+                deliberately slimmed once already. */}
+            <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
+              <span className="text-[13px] font-extrabold text-strong">{t("Starting when?")}</span>
+              <StartDateField
+                value={startDate}
+                min={today}
+                max={maxStartDate}
+                onChange={setStartDate}
+              />
+            </div>
+            {/* The free plan arranges same-day rentals only. Saying so at the
+                picker beats a silent server-side clamp that moves the date
+                after they have already pressed search. */}
+            {maxStartDate === today && (
+              <p className="px-1 text-[11px] font-bold text-faint">
+                {t("Your plan arranges same-day rentals - Pro and Ultra book ahead.")}
+              </p>
+            )}
             <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
               <span className="text-[13px] font-extrabold text-strong">{t("For how many days?")}</span>
               <DurationField value={days} onChange={setDays} t={t} />
@@ -346,6 +428,7 @@ export function RequestBuilder({
               {isTwoWheel && cc && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{cc}cc</span>}
               {vehicle === "car" && carType && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t(carType)}</span>}
               <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{days} {t("days")}</span>
+              <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t("from")} {startDate}</span>
               {helmets > 0 && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{helmets} 🪖</span>}
               {/* FORMATTED, like every other number the traveller sees. "<30000km"
                   is not a quantity anybody reads at a glance. */}

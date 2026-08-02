@@ -63,17 +63,37 @@ export async function persistAccessoryStatus(args: {
   now?: number;
 }): Promise<AccessoryStatus[] | null> {
   try {
-    const { sbSelect, sbUpdate } = await import("../runtime-config");
+    const { sbSelectStrict, sbUpdate } = await import("../runtime-config");
     const enc = encodeURIComponent(args.email);
     const vid = encodeURIComponent(args.vendorId);
-    const rows = await sbSelect<{
-      id: number;
+    // THE COLUMN THIS ASKED FOR HAS NEVER EXISTED.
+    //
+    // `negotiation_threads` is keyed by `thread_key` (schema.sql: "thread_key
+    // text primary key") - there is no `id`. PostgREST answers `select=id` on
+    // such a table with 400/42703, sbSelect collapses every failure to [], and
+    // so this function returned null on EVERY call, for EVERY user, since it
+    // was written. `vendor.offer.accessories` was undefined for every vendor in
+    // every session, which is why the verdict chips have never once rendered.
+    //
+    // sbSelectStrict rather than sbSelect for the read: swallowing the schema
+    // error into "no such thread" is exactly what hid this for a whole audit
+    // round. "missing" (no table yet, fresh install) is a real empty; only a
+    // genuine read failure is now indistinguishable from it, and neither is
+    // silently reported as success.
+    const read = await sbSelectStrict<{
+      thread_key: string;
       fields: (Record<string, unknown> & { accessories?: AccessoryStatus[] }) | null;
     }>(
       "negotiation_threads",
-      `select=id,fields&user_email=eq.${enc}&vendor_id=eq.${vid}&order=updated_at.desc&limit=1`
+      `select=thread_key,fields&user_email=eq.${enc}&vendor_id=eq.${vid}&order=updated_at.desc&limit=1`
     );
-    const row = rows[0];
+    if ("error" in read) {
+      if (read.error === "unavailable") {
+        console.error("[accessories] negotiation_threads unreadable - verdicts not persisted");
+      }
+      return null;
+    }
+    const row = read.rows[0];
     if (!row) return null;
     // MERGE AGAINST WHAT WE JUST READ, not against a copy taken before the
     // turn. A shop that confirmed helmets three messages ago must not be
@@ -82,9 +102,11 @@ export async function persistAccessoryStatus(args: {
       requested: args.requested,
       at: args.now ?? Date.now(),
     });
-    await sbUpdate("negotiation_threads", `id=eq.${row.id}`, {
-      fields: { ...(row.fields ?? {}), accessories: status },
-    });
+    await sbUpdate(
+      "negotiation_threads",
+      `thread_key=eq.${encodeURIComponent(row.thread_key)}`,
+      { fields: { ...(row.fields ?? {}), accessories: status } }
+    );
     return status;
   } catch {
     // Bookkeeping never breaks a turn. The next inbound message re-reads the

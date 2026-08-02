@@ -70,7 +70,8 @@ export async function POST(req: Request) {
   if (body.action === "flush") {
     // Send every DUE queued message right now, respecting the anti-ban gate.
     const sent = await drainOutbox(async (senderKey, to, text) => {
-      const r = await sendFromUser(senderKey, to, text, true);
+      // Owner pressed "send now" and is looking at the row.
+      const r = await sendFromUser(senderKey, to, text, true, { skipJitter: true });
       return { ok: r.ok };
     });
     return NextResponse.json({ ok: true, sent });

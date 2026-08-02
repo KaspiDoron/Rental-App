@@ -79,6 +79,14 @@ describe("it is on the send path, and only the background one", () => {
   });
 
   it("an interactive send is never delayed by it", () => {
-    expect(evolution).toMatch(/if \(!fast\) \{\s*const \{ poissonPause \} = await import\("\.\/wa\/jitter"\);/);
+    // MOVED OFF `fast`, DELIBERATELY. `fast` is set by every DRAIN - including
+    // the heartbeat and the tick - so gating the gap on it meant the anti-ban
+    // centrepiece ran on approximately no real sends. `fast` still skips the
+    // 4-12s presence simulation, which a drain genuinely needs; `skipJitter` is
+    // the separate, much narrower opt-out for a send with a person watching.
+    // See src/lib/jitter-reach.test.ts, which enumerates who opts out.
+    expect(evolution).toMatch(
+      /if \(!opts\?\.skipJitter\) \{\s*const \{ poissonPause \} = await import\("\.\/wa\/jitter"\);/
+    );
   });
 });
