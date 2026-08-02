@@ -2,7 +2,7 @@
   "name": "wheeldeal",
   "version": "1.0.0",
   "private": true,
-  "description": "WheelDeal — hyper-local vehicle rental savings & negotiation engine",
+  "description": "WheelDeal \u2014 hyper-local vehicle rental savings & negotiation engine",
   "workspaces": [
     "packages/*",
     "apps/gateway",
@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:e2e": "TEST_REDIS_URL=${TEST_REDIS_URL:-redis://127.0.0.1:6399} vitest run packages/testing/e2e.test.ts",
     "gateway": "tsx --tsconfig apps/gateway/tsconfig.json apps/gateway/src/server.ts",
-    "workers": "tsx --tsconfig services/workers/tsconfig.json services/workers/src/index.ts"
+    "workers": "tsx --tsconfig services/workers/tsconfig.json services/workers/src/index.ts",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "@paypal/react-paypal-js": "^10.1.2",

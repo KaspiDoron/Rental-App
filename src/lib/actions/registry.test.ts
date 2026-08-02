@@ -10,7 +10,10 @@ import {
 } from "./registry";
 import { can } from "../entitlements";
 
-const check = (o: Parameters<typeof checkAction>[0]) => checkAction({ can, ...o });
+// The helper SUPPLIES `can`, so callers must not be required to pass it -
+// typing the parameter as the full argument made every call site an error the
+// moment tests were first type-checked.
+const check = (o: Omit<Parameters<typeof checkAction>[0], "can">) => checkAction({ can, ...o });
 
 describe("the app has a vocabulary for what it can DO", () => {
   it("'push harder' is an action that reaches a shop, not a panel", () => {

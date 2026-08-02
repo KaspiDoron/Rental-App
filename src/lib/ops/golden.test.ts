@@ -157,7 +157,11 @@ describe("golden replay harness", () => {
         expects: [
           {
             move: "option-probe",
-            moveNot: ["redirect-close", "close", "silent"],
+            // `close` was RENAMED to `farewell` (spte/types.ts explains why: the
+// model read the English word "close" as close-the-deal and agreed a
+// price with a shop that had just withdrawn). This assertion was
+// naming a move that can no longer occur - i.e. asserting nothing.
+            moveNot: ["redirect-close", "farewell", "silent"],
             // It must not ask for the price it was just given twice.
             noMessageContains: ["send it as text"],
           },

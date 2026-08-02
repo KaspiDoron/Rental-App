@@ -1,0 +1,25 @@
+{
+  // THE 216 FILES NOBODY WAS TYPE-CHECKING.
+  //
+  // The root tsconfig EXCLUDES **/*.test.ts(x) - it has to, because `next
+  // build` would otherwise try to compile them into the app. The effect was
+  // that the entire test suite, which is the thing standing between this
+  // codebase and the field, was the only code in the repo outside the type
+  // checker. A test could reference a function that no longer exists, or pass
+  // the wrong shape to one, and the only signal was a runtime failure inside
+  // whichever `it()` happened to touch it - or no signal at all, if the
+  // assertion sat behind a branch that never ran.
+  //
+  // This config type-checks exactly those files, with the same strictness. It
+  // is a separate entry point rather than a change to the root config so that
+  // `next build` is untouched.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Its own build-info file: sharing the root's would make the two runs
+    // invalidate each other's incremental cache on every alternation.
+    "tsBuildInfoFile": "./node_modules/.cache/tsconfig.tests.tsbuildinfo",
+    "types": ["vitest/globals", "node"]
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", ".next", "apps", "services", "packages", "infra"]
+}

@@ -54,7 +54,9 @@ describe("a kick has to actually leave the instance", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(done).toBe(false);
 
-    resolveFetch?.();
+    // Annotated at the call site: TS narrows `resolveFetch` to `never` here
+    // because the only assignment is inside a callback it cannot order.
+    (resolveFetch as (() => void) | null)?.();
     await p;
     expect(done).toBe(true);
   });

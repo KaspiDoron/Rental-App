@@ -75,7 +75,12 @@ describe("grouping: the newest row per shop out of one descending read", () => {
   });
 
   it("a row with no vendorId is skipped, never bucketed under undefined", () => {
-    const rows = [{ ...out("", "6681", "x", "2026-08-01T12:00:00Z"), raw: null }];
+    // Annotated: `raw: null` narrowed the element to `never`, so `r.raw?.vendorId`
+    // was not type-checkable - and the assertion was testing nothing about the
+    // real row shape.
+    const rows: Array<ReturnType<typeof out> & { raw: { vendorId?: string } | null }> = [
+      { ...out("", "6681", "x", "2026-08-01T12:00:00Z"), raw: null },
+    ];
     expect(firstByVendor(rows, (r) => r.raw?.vendorId).size).toBe(0);
   });
 });

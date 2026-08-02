@@ -186,7 +186,7 @@ describe("REPRODUCTION: both stores addressed a column that does not exist", () 
       ...THREAD,
       fields: {
         ...THREAD.fields,
-        accessories: [{ item: "helmet", status: "confirmed", at: 1 }],
+        accessories: [{ item: "helmet", verdict: "confirmed", at: 1 }],
       },
     };
     const { accessories, calls } = await harness(() => json([withPrior]));
@@ -194,7 +194,7 @@ describe("REPRODUCTION: both stores addressed a column that does not exist", () 
       email: "traveller@example.com",
       vendorId: "v1",
       requested: ["helmet", "phone mount"],
-      verdicts: [{ item: "phone mount", status: "confirmed" }],
+      verdicts: [{ item: "phone mount", verdict: "confirmed" as const }],
       now: 2,
     });
     // Against the old code this was null, always - which is exactly why

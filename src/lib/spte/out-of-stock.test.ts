@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { claimsIn } from "../thread/claims";
+import { claimsIn, type Claim } from "../thread/claims";
 import { stockState } from "../thread/ledger";
 import { moveGlossary, normalizeMove } from "./moves";
 
@@ -24,7 +24,7 @@ import { moveGlossary, normalizeMove } from "./moves";
 // Each is fixed at its own layer, and each is pinned here.
 
 const availability = (text: string) =>
-  claimsIn(text, "shop", "2026-07-31T05:38:00.000Z", { force: "assert" }).filter(
+  claimsIn(text, "shop", 0, { force: "assert" }).filter(
     (c) => c.subject === "availability"
   );
 
@@ -74,13 +74,25 @@ describe("the sentence that started it is now read", () => {
 });
 
 describe("one message, two claims: the denial decides", () => {
-  const at = "2026-07-31T05:38:00.000Z";
-  const claim = (polarity: "affirmed" | "denied") => ({
+  // `Claim.at` is the POSITION in the actor's own message list, not a clock -
+  // "the pure layer's when" (thread/claims.ts). The old literals here were ISO
+  // strings, so every ordering assertion below was comparing dates by accident
+  // and testing nothing about the index the code actually reads.
+  const at = 0;
+  // A full Claim, not a partial one. The shortened literal type-checked
+  // nowhere (tests were outside tsc) and silently failed to match the shape
+  // stockState actually reads.
+  const claim = (polarity: "affirmed" | "denied"): Claim => ({
     subject: "availability" as const,
     actor: "shop" as const,
     polarity,
     force: "assert" as const,
     details: [],
+    parts: [],
+    combinator: "and" as const,
+    timing: "unstated" as const,
+    target: "unstated" as const,
+    clauseIndex: 0,
     evidence: polarity,
     at,
   });
@@ -100,7 +112,9 @@ describe("one message, two claims: the denial decides", () => {
   });
 
   it("a genuinely LATER restock still un-sticks the state", () => {
-    const later = { ...claim("affirmed"), at: "2026-07-31T06:00:00.000Z" };
+    // A LATER position in the shop's own message list - which is what "later"
+    // means to the ledger.
+    const later: Claim = { ...claim("affirmed"), at: 1 };
     expect(
       stockState({ claims: [claim("denied"), later], known: [], outstanding: [], owed: [] }).state
     ).toBe("in-stock");

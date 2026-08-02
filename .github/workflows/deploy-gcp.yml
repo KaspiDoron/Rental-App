@@ -90,8 +90,27 @@ jobs:
         run: npm run typecheck
       - name: Typecheck (gateway + workers)
         run: npm run typecheck:services
+      # THE TESTS WERE THE ONLY CODE OUTSIDE THE TYPE CHECKER.
+      #
+      # The root tsconfig excludes **/*.test.ts (it must - `next build` would
+      # otherwise compile them into the app), so 216 files, the ones standing
+      # between this codebase and the field, were never checked. The first run
+      # found 20 real errors: tests passing shapes the function does not accept,
+      # asserting on a move that had been renamed away, and treating a message
+      # INDEX as a timestamp.
+      - name: Typecheck (tests)
+        run: npm run typecheck:tests
       - name: Unit + integration tests
         run: npx vitest run
+      # THE FOURTH PART OF A GATE THAT CLAIMED TO HAVE FOUR.
+      #
+      # CLAUDE.md says to validate with `npm run typecheck && npm run build`,
+      # and the build was never in CI - so a change that type-checked and
+      # tested green could still fail to build, and the first anyone knew was
+      # the deploy job minutes later, after the image had already been built
+      # once. It runs here, before anything is pushed anywhere.
+      - name: Build
+        run: npm run build
 
   deploy:
     needs: verify

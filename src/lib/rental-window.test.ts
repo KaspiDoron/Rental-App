@@ -75,7 +75,10 @@ describe("the RFQ is clamped BEFORE twenty shops hear about it", () => {
   });
 
   it("leaves a request with no date alone", () => {
-    const { rfq, adjusted } = clampRfqWindow({}, { plan: "free", nowMs: NOW });
+    const { rfq, adjusted } = clampRfqWindow(
+      {} as { startDate?: string; returnDate?: string },
+      { plan: "free", nowMs: NOW }
+    );
     expect(adjusted).toBe(false);
     expect(rfq.startDate).toBeUndefined();
   });
