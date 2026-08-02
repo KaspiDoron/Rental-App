@@ -1185,6 +1185,43 @@ async function runTailGates(args: {
         englishGloss = undefined; // a corrected duration invalidates the gloss
       }
     }
+    // (0.9) THE COMMITMENT RAIL - the same one SPTE runs, from one definition.
+    //
+    // The graph engine is the live FALLBACK and the sole engine on both
+    // user-action routes, and it had no commitment rail at all: only SPTE
+    // carried one, inside runPostRails, which needs a TurnContext this engine
+    // does not have. So on precisely the paths where a traveller has just
+    // tapped something, a composed message could book, reserve or accept on
+    // their behalf - and a shop that holds a bike on that promise is a real
+    // person losing a real rental when the traveller picks a cheaper shop.
+    //
+    // `closing-message` is the one node allowed through, because it exists only
+    // after the traveller pressed Lock This Deal.
+    //
+    // A rejection here is NOT a dropped turn: it falls back to the safe
+    // deterministic ask below, exactly as a numeric-guard rejection does.
+    {
+      const { checkCommitment, stripCommitment } = await import("../spte/rails");
+      const committed = checkCommitment(text, args.nodeKind);
+      if (committed) {
+        push({
+          stage: "safety",
+          nodeId: "safety",
+          input: text,
+          reasoning: `commitment guard: ${committed.detail}`,
+          output: "(rewritten)",
+          verdict: "revised",
+        });
+        // Strip the committing sentence rather than the whole draft: the rest
+        // of the turn is usually a legitimate question the shop is waiting on.
+        text = stripCommitment(text);
+        englishGloss = undefined;
+        if (!text.trim()) {
+          return { delivered: "blocked", detail: "commitment guard: nothing left to send" };
+        }
+      }
+    }
+
     // The numeric + hard-constraint guards key on the node's KIND, never its id:
     // an owner-edited graph spec can rename a bargain node's id, and keying on id
     // would let the renamed node ship a fabricated rival past the guard.

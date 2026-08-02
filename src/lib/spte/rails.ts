@@ -31,14 +31,66 @@ const TIME_DEFER_LINE = " I'll confirm the exact time with you directly.";
 // good" while haggling is register, not a booking; "I'll take it" is a booking.
 // The soft-approval words stay confined to the farewell rail, where a goodbye
 // has no business carrying any of them.
+//
+// The `(?!\s+(?:that|with))` after accept/agree/confirm is a real false
+// positive found by the paired near-miss tests: "I agree THAT 300 is a fair
+// list price, but can you move on it?" is the CORE bargaining move, and the
+// bare pattern rejected it - so the rail was quietly replacing good counters
+// with a template. Bare "I agree." still commits; "I agree that/with ..." is
+// conversation.
 const COMMIT_RX =
-  /\b(?:i'?ll|i will|we'?ll|we will)\s+(?:take|book|reserve|have)\s+(?:it|that|the\s+\w+)\b|\b(?:it'?s a deal|we have a deal|deal!)|\bbook (?:it|that|me)\b|\b(?:please )?(?:reserve|hold|keep) (?:it|that|one) for (?:me|us)\b|\bput (?:my|our) name\b|\bi (?:accept|agree|confirm)\b|\bwe (?:accept|agree|confirm)\b|\blet'?s do it\b|\bi'?m (?:coming|on my way)\b|\bi'?ll come (?:pick|and pick|get)\b/i;
+  /\b(?:i'?ll|i will|we'?ll|we will)\s+(?:take|book|reserve|have)\s+(?:it|that|the\s+\w+)\b|\b(?:it'?s a deal|we have a deal|deal!)|\bbook (?:it|that|me)\b|\b(?:please )?(?:reserve|hold|keep) (?:it|that|one) for (?:me|us)\b|\bput (?:my|our) name\b|\bi (?:accept|agree|confirm)\b(?!\s+(?:that|with))|\bwe (?:accept|agree|confirm)\b(?!\s+(?:that|with))|\blet'?s do it\b|\bi'?m (?:coming|on my way)\b|\bi'?ll come (?:pick|and pick|get)\b|\b(?:i'?ll|we'?ll|i will|we will)\s+(?:go|come)\s+(?:with|for)\s+(?:it|that|the\s+\w+)\b|\bcount me in\b|\bsign me up\b|\b(?:i'?m|we'?re|i am|we are)\s+in\b|\bwe'?ll take (?:it|that)\b|\b(?:that|this)\s+works?\s+for\s+(?:me|us)\s*[-,]?\s*(?:book|reserve|hold)\b|\b(?:confirmed|confirming)\s+(?:the\s+)?(?:booking|reservation|rental)\b|\bi'?ll pay\b|\bwe'?ll pay\b|\b(?:see you|meet you)\s+(?:tomorrow|today|then|at)\b/i;
 
 // The ONE move that is allowed to commit, because it exists only after the
 // traveller tapped Lock This Deal (graph/types.ts: "the traveller locked the
 // deal - tell the shop"; it is emitted by /api/negotiate/close-deal and is
 // never in the legal set a normal turn chooses from).
 const COMMIT_ALLOWED_MOVE = "closing-message";
+
+/**
+ * Remove the sentence that committed, keeping the rest of the turn.
+ *
+ * Dropping the whole draft would usually throw away a legitimate question the
+ * shop is waiting on, and replacing it wholesale with a template is how the
+ * agent started repeating itself in the field. Sentence-level is the smallest
+ * edit that removes the promise.
+ */
+export function stripCommitment(text: string): string {
+  return text
+    .split(/(?<=[.!?\n])\s+/)
+    .filter((sentence) => !COMMIT_RX.test(sentence))
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * THE COMMITMENT RAIL, USABLE BY BOTH ENGINES.
+ *
+ * It lived inside runPostRails, which needs a full SPTE TurnContext - a session
+ * snapshot, rivals, guards, a verified extraction. The GRAPH engine has none of
+ * those, and the graph engine is the live fallback AND the sole engine on both
+ * user-action routes. So on exactly the paths where a traveller has just tapped
+ * something, nothing stopped a composed message from booking on their behalf.
+ *
+ * This rail needs two things: the text, and which move produced it. Nothing
+ * else. Pulling it out means one definition of "what counts as committing"
+ * rather than a second, drifting copy in the other engine.
+ *
+ * Returns the rejection, or null when the text is clean.
+ */
+export function checkCommitment(
+  text: string,
+  move: string
+): { rule: "commitment"; detail: string } | null {
+  if (move === COMMIT_ALLOWED_MOVE) return null;
+  const committed = COMMIT_RX.exec(text);
+  if (!committed) return null;
+  return {
+    rule: "commitment",
+    detail: `a ${move} committed on the traveller's behalf ("${committed[0].trim()}") - only Lock This Deal may do that`,
+  };
+}
 
 /**
  * Run all post-rails on a composed artifact. Returns the final wire text, or a
@@ -195,18 +247,8 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   // Information gathering is untouched by design (the owner's ruling): asking
   // what deposit they take or whether they deliver is a question, and questions
   // are how the traveller learns enough to decide.
-  if (artifact.move !== COMMIT_ALLOWED_MOVE) {
-    const committed = COMMIT_RX.exec(text);
-    if (committed) {
-      return {
-        ok: false,
-        rejected: {
-          rule: "commitment",
-          detail: `a ${artifact.move} committed on the traveller's behalf ("${committed[0].trim()}") - only Lock This Deal may do that`,
-        },
-      };
-    }
-  }
+  const commit = checkCommitment(text, artifact.move);
+  if (commit) return { ok: false, rejected: commit };
 
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.
   text = correctDuration(text, ctx.session.rfq.durationDays).text;
