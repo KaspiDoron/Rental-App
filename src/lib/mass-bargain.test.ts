@@ -22,18 +22,22 @@ const shop = (o: Partial<Vendor> & { id: string }): Vendor =>
   }) as Vendor;
 
 describe("the cap follows the plan, not a constant", () => {
-  it("free is held at its own capacity, paid plans reach the owner's ceiling", () => {
-    // free allows 10 new contacts per window; pro 30; ultra 40. The run may
-    // never exceed 15 in one go, which is the owner's number.
-    expect(massBargainCap("free")).toBe(10);
-    expect(massBargainCap("pro")).toBe(MASS_BARGAIN_MAX);
-    expect(massBargainCap("ultra")).toBe(MASS_BARGAIN_MAX);
-    expect(MASS_BARGAIN_MAX).toBe(15);
+  // REWRITTEN DELIBERATELY. The old pins encoded MASS_BARGAIN_MAX = 15 and
+  // PLAN_CAPACITY pro 30 / ultra 40 - numbers that could not be delivered,
+  // because the one send path metered both lanes against 15 an hour. The cap is
+  // now 24 (the agreed day-one ceiling) and each tier sits at or below the
+  // intro lane's real hourly allowance.
+  it("the cap is the LOWER of the run ceiling and the plan's own window budget", () => {
+    expect(massBargainCap("free")).toBe(10); // plan budget binds
+    expect(massBargainCap("pro")).toBe(20); // plan budget binds
+    expect(massBargainCap("ultra")).toBe(24); // run ceiling binds
+    expect(MASS_BARGAIN_MAX).toBe(24);
   });
 
-  it("REPRODUCTION: a Pro traveller is no longer capped at ten", () => {
+  it("REPRODUCTION: a paid traveller is no longer capped at ten, nor at fifteen", () => {
     const shops = Array.from({ length: 30 }, (_, i) => shop({ id: `v${i}`, rating: 4.5, reviews: 100 }));
-    expect(massBargainTargets(shops, "pro").targets.length).toBe(15);
+    expect(massBargainTargets(shops, "ultra").targets.length).toBe(24);
+    expect(massBargainTargets(shops, "pro").targets.length).toBe(20);
     expect(massBargainTargets(shops, "free").targets.length).toBe(10);
   });
 });
@@ -98,7 +102,7 @@ describe("REPRODUCTION: the run picked whatever the list was sorted by", () => {
   it("the FULL eligible count comes back too, so '15 of 32' can be honest", () => {
     const shops = Array.from({ length: 32 }, (_, i) => shop({ id: `v${i}` }));
     const { targets, eligible } = massBargainTargets(shops, "pro");
-    expect(targets.length).toBe(15);
+    expect(targets.length).toBe(20);
     expect(eligible.length).toBe(32);
   });
 });

@@ -27,9 +27,9 @@ export async function GET(req: Request) {
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
-    drained = await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    drained = await drainOutbox((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }));
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true, { lane: "reply" })).catch(
       () => {}
     );
   } catch {

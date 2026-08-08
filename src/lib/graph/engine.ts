@@ -1435,7 +1435,16 @@ async function runTailGates(args: {
 export type LiveSend = (
   senderKey: string,
   to: string,
-  text: string
+  text: string,
+  /**
+   * Which send budget this draws from. A graph wakeup is by definition a turn
+   * in a conversation that is already running - and after the engagement halt
+   * change, a wakeup aimed at a shop that never replied is terminally dropped
+   * before it reaches here. So everything that survives to this point is reply
+   * traffic, and metering it against the cold-intro budget is what let a big
+   * batch starve its own negotiation.
+   */
+  lane?: "intro" | "reply"
 ) => Promise<{ ok: boolean; error?: string; unconfirmed?: boolean }>;
 
 export function liveGraphIO(send: LiveSend): GraphIO {

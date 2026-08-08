@@ -1978,7 +1978,12 @@ export async function drainOutbox(
   send: (
     senderKey: string,
     to: string,
-    text: string
+    text: string,
+    // WHICH BUDGET THIS ROW DRAWS FROM. The drain already knows - `isCold`
+    // reads meta.kind - and used to throw the fact away, so every send was
+    // metered against one shared pool and a full batch starved its own
+    // replies. Passing it is the whole fix.
+    lane?: "intro" | "reply"
   ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string }>,
   opts?: DrainOptions
 ): Promise<number> {
@@ -2279,7 +2284,7 @@ export async function drainOutbox(
       chatJid?: string;
     };
     try {
-      r = await send(row.sender_key, row.to_number, verdict.text);
+      r = await send(row.sender_key, row.to_number, verdict.text, isCold(row) ? "intro" : "reply");
     } catch (e) {
       r = { ok: false, error: e instanceof Error ? e.message : "send threw" };
     }

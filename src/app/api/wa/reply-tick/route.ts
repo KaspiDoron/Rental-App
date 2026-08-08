@@ -76,7 +76,7 @@ export async function GET(req: Request) {
     try {
       const { drainOutbox } = await import("@/lib/wa-guard");
       drained += await drainOutbox(
-        (k, to, text) => sendFromUser(k, to, text, true),
+        (k, to, text, lane) => sendFromUser(k, to, text, true, { lane }),
         { replyOnly: true, senderKey: sender }
       );
     } catch (e) {

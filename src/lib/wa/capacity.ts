@@ -50,9 +50,20 @@ export interface PlanCapacity {
 // ~10-15 min) plus the reply-rate circuit breaker + daily ceiling, which halt a
 // number that is actually behaving like a spammer.
 export const PLAN_CAPACITY: Record<CapacityPlan, PlanCapacity> = {
+  // THREE NUMBERS USED TO DISAGREE, AND THE WIRE ALWAYS WON.
+  //
+  // PLAN_CAPACITY promised pro 30 / ultra 40 per window, usage.ts enforced 15
+  // an hour across BOTH lanes, and newContactBudget's own docstring said 15. So
+  // the app advertised a budget the transport refused, and the traveller saw a
+  // batch stall with no explanation any surface could give.
+  //
+  // These now sit at or below the intro lane's real hourly ceiling
+  // (LIMIT_WA_INTRO_PER_HOUR = 24), so a plan can never promise more than the
+  // wire will carry. Free stays at 10 - it is already the safe day-one number,
+  // and it is what the forced free-tier warm-up is built around.
   free: { newContacts: 10, windowHours: 6, hourCap: 10, concurrentCampaigns: 1 },
-  pro: { newContacts: 30, windowHours: 4, hourCap: 30, concurrentCampaigns: 2 },
-  ultra: { newContacts: 40, windowHours: 3, hourCap: 40, concurrentCampaigns: 3 },
+  pro: { newContacts: 20, windowHours: 4, hourCap: 20, concurrentCampaigns: 2 },
+  ultra: { newContacts: 24, windowHours: 3, hourCap: 24, concurrentCampaigns: 3 },
 };
 
 /**

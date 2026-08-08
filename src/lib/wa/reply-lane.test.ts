@@ -171,11 +171,15 @@ describe("6. the turn itself stopped paying for a slow provider", () => {
   it("every app-path drain skips the presence simulation", () => {
     // 4-12s per row, and the activity poll's whole drain budget is 8s: one row
     // could consume it, so the poll sent a single message and timed out.
-    expect(ingest).toMatch(/sendFromUser\(senderKey, to, text, true\)/);
+    // fast=true is still the third positional argument everywhere. The drains
+    // now ALSO forward a lane, so the assertion matches the prefix rather than
+    // the closing paren - the property under test is "presence simulation
+    // skipped", not the arity of the call.
+    expect(ingest).toMatch(/sendFromUser\(senderKey, to, text, true/);
     expect(readCode("src/app/api/wa/status/route.ts")).toMatch(
-      /sendFromUser\(senderKey, to, text, true\)/
+      /sendFromUser\(senderKey, to, text, true/
     );
-    expect(readCode("src/app/api/activity/route.ts")).toMatch(/sendFromUser\(k, to, text, true\)/);
+    expect(readCode("src/app/api/activity/route.ts")).toMatch(/sendFromUser\(k, to, text, true/);
   });
 
   it("the offer extractor is budgeted like every other reply-path call", () => {

@@ -121,12 +121,12 @@ export async function GET(req: Request) {
     // the poll sent ONE message and timed out. The anti-ban floors are the
     // guard and the pacing claims, and both still run per row.
     await bounded(
-      drainOutbox((k, to, text) => sendFromUser(k, to, text, true)).catch((e) =>
+      drainOutbox((k, to, text, lane) => sendFromUser(k, to, text, true, { lane })).catch((e) =>
         console.error("[drain:outbox]", e instanceof Error ? e.message : e)
       )
     );
     await bounded(
-      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true)).catch((e) =>
+      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true, { lane: "reply" })).catch((e) =>
         console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
       )
     );

@@ -27,7 +27,6 @@ import { readOrientationFromBase64 } from "./media/orientation";
 import type { InboundImage } from "./media/orientation";
 
 // ---- anti-ban limits (human-like behaviour; owner-adjustable in Admin) --------
-const MIN_GAP_MS = 20_000; // never two messages within 20s per user
 
 // PAIRING-LAYER anti-ban: the client fingerprint presented at socket connect.
 // Baileys' default fingerprint (a generic "Evolution API" / library string) reads
@@ -94,21 +93,55 @@ export interface RateVerdict {
   allowed: boolean;
   reason?: string;
   waitSeconds?: number;
+  /** True when a CAP refused this, not a host fault. The drain must not
+   *  misclassify it as an Evolution outage and re-park by the wrong backoff. */
+  rateLimited?: boolean;
+  /** Which budget refused it. */
+  lane?: SendLane;
 }
 
 /** Human-like send budget per user. Durable check + in-memory fast path. */
-export async function checkRateLimit(email: string): Promise<RateVerdict> {
+/**
+ * Which budget a send draws from.
+ *
+ *   intro - a first contact with a shop that has never written back. This is
+ *           the risk-bearing lane: unanswered new chats are the quantity
+ *           WhatsApp actually meters.
+ *   reply - a message inside a thread the shop already answered. Reciprocal
+ *           traffic, and the SAFE lane on the documented axis.
+ */
+export type SendLane = "intro" | "reply";
+
+/** PostgREST filter selecting one lane's rows out of whatsapp_messages. */
+const LANE_FILTER: Record<SendLane, string> = {
+  // `raw` is spread from the outbox row's `meta`, so meta.kind lands as
+  // raw.kind on every drain-sent row.
+  intro: "&raw->>kind=eq.rfq",
+  reply: "&raw->>kind=not.in.(rfq,custom,human-manual)",
+};
+
+export async function checkRateLimit(
+  email: string,
+  lane: SendLane = "intro"
+): Promise<RateVerdict> {
   const now = Date.now();
   const mem = rateStore().get(email) ?? [];
   const recent = mem.filter((t) => now - t < 24 * 3600_000);
 
-  if (recent.length && now - recent[recent.length - 1] < MIN_GAP_MS) {
-    return {
-      allowed: false,
-      reason: "Sending too fast - a human never fires messages back-to-back.",
-      waitSeconds: Math.ceil((MIN_GAP_MS - (now - recent[recent.length - 1])) / 1000),
-    };
-  }
+  // THE 20s IN-MEMORY GAP IS GONE, and not because pacing stopped mattering.
+  //
+  // MIN_GAP_MS was enforced only against `globalThis`, which on Cloud Run is
+  // per-INSTANCE and empty after every cold start. So it fired on a warm
+  // container and missed entirely on a cold one: whether a message was refused
+  // depended on which container happened to answer. Nondeterministic pacing is
+  // worse than either having the floor or not having it, because nothing
+  // downstream can reason about it.
+  //
+  // guardOutbound's jittered gap and the atomic wa_send_claims slot are both
+  // DURABLE and cross-instance, and they are now the single pacing authority.
+  // The in-memory counts below survive only as a CONSERVATIVE supplement -
+  // they can push a count higher, never lower, so a cold start cannot loosen
+  // a budget.
 
   // Durable hourly/daily counts (webhook + other instances included).
   //
@@ -132,7 +165,7 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
       email
     )}&received_at=gte.${encodeURIComponent(
       new Date(now - 24 * 3600_000).toISOString()
-    )}&limit=200`
+    )}${LANE_FILTER[lane]}&limit=300`
   );
   if ("error" in read && read.error === "unavailable") {
     return {
@@ -147,20 +180,41 @@ export async function checkRateLimit(email: string): Promise<RateVerdict> {
   const lastDay = rows.length;
 
   const { limitFor } = await import("./usage");
-  const maxHour = await limitFor("LIMIT_WA_PER_HOUR");
-  const maxDay = await limitFor("LIMIT_WA_PER_DAY");
+  const maxHour = await limitFor(
+    lane === "reply" ? "LIMIT_WA_REPLY_PER_HOUR" : "LIMIT_WA_INTRO_PER_HOUR"
+  );
+  const maxDay = await limitFor(
+    lane === "reply" ? "LIMIT_WA_REPLY_PER_DAY" : "LIMIT_WA_INTRO_PER_DAY"
+  );
 
-  if (lastHour + recent.filter((t) => now - t < 3600_000).length >= maxHour) {
+  // The in-memory supplement is NOT lane-aware (it is just timestamps), so it
+  // is applied only to the intro lane. Adding it to the reply lane would let
+  // a burst of introductions eat reply headroom through the back door - which
+  // is the exact starvation this split exists to end.
+  const memHour = lane === "intro" ? recent.filter((t) => now - t < 3600_000).length : 0;
+  const memDay = lane === "intro" ? recent.length : 0;
+
+  if (lastHour + memHour >= maxHour) {
     return {
       allowed: false,
-      reason: `Hourly safety cap reached (${maxHour}/h). This protects your WhatsApp number from being flagged.`,
+      rateLimited: true,
+      lane,
+      reason:
+        lane === "reply"
+          ? `Reply cap reached (${maxHour}/h). Answers resume shortly.`
+          : `Hourly cap on NEW conversations reached (${maxHour}/h). Replies to shops already talking to you are unaffected.`,
       waitSeconds: 900,
     };
   }
-  if (lastDay + recent.length >= maxDay) {
+  if (lastDay + memDay >= maxDay) {
     return {
       allowed: false,
-      reason: `Daily safety cap reached (${maxDay}/day). Try again tomorrow - this protects your number.`,
+      rateLimited: true,
+      lane,
+      reason:
+        lane === "reply"
+          ? `Daily reply cap reached (${maxDay}/day).`
+          : `Daily cap on new conversations reached (${maxDay}/day). Sending resumes tomorrow.`,
     };
   }
   return { allowed: true };
@@ -1935,6 +1989,12 @@ export async function sendFromUser(
      * person is watching a spinner - see the comment at the gap itself.
      */
     skipJitter?: boolean;
+    /**
+     * Which budget this send draws from. Defaults to "intro" - the tighter of
+     * the two - so a caller that forgets to say is metered CONSERVATIVELY
+     * rather than handed the roomier reply allowance by accident.
+     */
+    lane?: SendLane;
   }
 ): Promise<{
   ok: boolean;
@@ -1948,7 +2008,7 @@ export async function sendFromUser(
    * reply (see wa/lid-alias: outbound rows stamp raw.lid from this). */
   chatJid?: string;
 }> {
-  const rate = await checkRateLimit(email);
+  const rate = await checkRateLimit(email, opts?.lane ?? "intro");
   if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
 
   const instance = instanceNameFor(email);

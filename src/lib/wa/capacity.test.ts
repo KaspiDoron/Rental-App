@@ -19,29 +19,53 @@ describe("plan capacity tiers", () => {
     expect(normalizeCapacityPlan("nonsense")).toBe("free");
   });
 
-  it("meets the owner's capacity targets", () => {
+  // DELIBERATELY REWRITTEN, not quietly deleted.
+  //
+  // This test used to pin pro 30 / ultra 40. Those numbers were never
+  // deliverable: usage.ts enforced 15 an hour across BOTH lanes on the one send
+  // path, so the app advertised a budget the wire refused and a batch stalled
+  // at shop 15 with no surface able to explain why.
+  //
+  // The tiers now sit at or below the intro lane's real ceiling
+  // (LIMIT_WA_INTRO_PER_HOUR = 24), so a plan cannot promise more than the
+  // transport will carry. Free stays at 10 - already the safe day-one number.
+  it("no tier promises more than the intro lane can actually carry", () => {
     expect(PLAN_CAPACITY.free).toMatchObject({ newContacts: 10, windowHours: 6 });
-    expect(PLAN_CAPACITY.pro).toMatchObject({ newContacts: 30, windowHours: 4 });
-    expect(PLAN_CAPACITY.ultra).toMatchObject({ newContacts: 40, windowHours: 3 });
+    expect(PLAN_CAPACITY.pro).toMatchObject({ newContacts: 20, windowHours: 4 });
+    expect(PLAN_CAPACITY.ultra).toMatchObject({ newContacts: 24, windowHours: 3 });
+  });
+
+  it("REGRESSION: every tier is <= the hourly intro cap, so the wire never refuses a promised send", () => {
+    const INTRO_HOUR_CAP = 24; // usage.ts LIMIT_WA_INTRO_PER_HOUR
+    for (const tier of ["free", "pro", "ultra"] as const) {
+      expect(PLAN_CAPACITY[tier].newContacts).toBeLessThanOrEqual(INTRO_HOUR_CAP);
+      // hourCap === newContacts is load-bearing elsewhere (effectiveHourCap
+      // floors on it), so keep them in step.
+      expect(PLAN_CAPACITY[tier].hourCap).toBe(PLAN_CAPACITY[tier].newContacts);
+    }
   });
 
   it("planCapacity is total (never throws, always a tier)", () => {
-    expect(planCapacity("ULTRA").newContacts).toBe(40);
+    expect(planCapacity("ULTRA").newContacts).toBe(24);
     expect(planCapacity(null).newContacts).toBe(10);
   });
 });
 
 describe("full-budget-day-0 conversation cap", () => {
   it("gives a BRAND-NEW number its FULL plan budget of conversations - no warm-up crush", () => {
-    // The owner's requirement: a fresh ultra user can start all 40 conversations
-    // on day 0, within minutes. Warm-up must never reduce the COUNT.
-    expect(effectiveNewContactCap("ultra", 0, 7)).toBe(40);
-    expect(effectiveNewContactCap("pro", 0, 7)).toBe(30);
+    // STILL THE OWNER'S REQUIREMENT, and still enforced: warm-up must never
+    // reduce the COUNT of conversations a user may start. Reinstating an
+    // age ramp here would violate it - the warm-up that DOES ship lives in the
+    // monetization gate (a new user stays on the free tier, whose budget is 10,
+    // until their number is warm) rather than in a hidden throttle on a tier
+    // they already paid for.
+    expect(effectiveNewContactCap("ultra", 0, 7)).toBe(24);
+    expect(effectiveNewContactCap("pro", 0, 7)).toBe(20);
     expect(effectiveNewContactCap("free", 0, 7)).toBe(10);
   });
 
   it("stays at the full budget as the number ages", () => {
-    expect(effectiveNewContactCap("ultra", 7, 7)).toBe(40);
+    expect(effectiveNewContactCap("ultra", 7, 7)).toBe(24);
     expect(effectiveNewContactCap("free", 30, 7)).toBe(10);
   });
 });
@@ -61,8 +85,8 @@ describe("effectiveHourCap - never below the conversation budget", () => {
   it("floors at the plan's newContacts so a within-budget batch never splits hours", () => {
     // Even a brand-new low-trust ultra number gets an hourly cap >= 40, so the
     // 40-conversation burst is never stamped an hour apart.
-    expect(effectiveHourCap("ultra", 6, 0, 7)).toBe(40);
-    expect(effectiveHourCap("pro", 6, 0, 7)).toBe(30);
+    expect(effectiveHourCap("ultra", 6, 0, 7)).toBe(24);
+    expect(effectiveHourCap("pro", 6, 0, 7)).toBe(20);
     expect(effectiveHourCap("free", 6, 0, 7)).toBe(10);
   });
 

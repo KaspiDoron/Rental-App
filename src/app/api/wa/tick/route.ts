@@ -80,9 +80,9 @@ export async function GET(req: Request) {
       // fast=true: skip the long typing simulation - these rows already served
       // their stagger, and the guard (not presence cosmetics) enforces gaps.
       // Keeps a 5-row drain safely inside the 60s invocation ceiling.
-      drained += await drainOutbox((k, to, text) => sendFromUser(k, to, text, true));
+      drained += await drainOutbox((k, to, text, lane) => sendFromUser(k, to, text, true, { lane }));
       const { drainGraphWakeups } = await import("@/lib/graph/engine");
-      drained += await drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true));
+      drained += await drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true, { lane: "reply" }));
     } catch (e) {
       console.error("[wa:tick]", e instanceof Error ? e.message : e);
     }

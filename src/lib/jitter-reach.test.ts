@@ -103,9 +103,15 @@ describe("the draw itself still has the shape the file argues for", () => {
   it("the mean is small enough that pacing, not jitter, sets throughput", () => {
     const draws = Array.from({ length: 1000 }, (_, i) => poissonDelayMs(() => (i + 0.5) / 1000));
     const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
-    // Against MIN_GAP_MS = 20_000 and HARD_MIN_GAP_SEC = 8 this is noise.
+    // Against the DURABLE gaps this is noise, and the point of the assertion is
+    // that jitter shapes arrival TIMES without setting throughput.
     expect(mean).toBeLessThan(2_000);
-    expect(readCode("src/lib/evolution.ts")).toMatch(/const MIN_GAP_MS = 20_000;/);
+    // MIN_GAP_MS is deliberately gone: it lived in an in-memory globalThis map
+    // that is per-instance on Cloud Run and empty after every cold start, so it
+    // fired on a warm container and missed on a cold one. Nondeterministic
+    // pacing is worse than either setting, and guardOutbound's jittered gap
+    // plus the atomic wa_send_claims slot are both cross-instance.
+    expect(readCode("src/lib/evolution.ts")).not.toMatch(/const MIN_GAP_MS = 20_000;/);
     expect(readCode("src/lib/wa/pacing.ts")).toMatch(/HARD_MIN_GAP_SEC = 8/);
   });
 });

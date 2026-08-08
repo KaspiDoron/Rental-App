@@ -19,8 +19,19 @@ import { planCapacity } from "./wa/capacity";
 // daily contact budget and puts the traveller's own number in front of every
 // shop it picks. It should pick the ones worth talking to.
 
-/** The ceiling the owner set for one run, whatever the plan allows in a window. */
-export const MASS_BARGAIN_MAX = 15;
+/**
+ * The ceiling for ONE mass run.
+ *
+ * This was 15, which meant the owner's 24-shop day-one target could not even be
+ * REQUESTED - the constraint on day-one breadth was ours, not WhatsApp's. 24 is
+ * the agreed ceiling: at a reply rate of 0.35 a 24-shop batch settles to roughly
+ * 15 open unanswered threads, which is the quantity that actually carries risk,
+ * and comfortably under the 30-shop batch earlier rounds argued about.
+ *
+ * The real pacing governor is the wave schedule (5-8 shops per ~20 minutes),
+ * not this number. This only stops a run being LARGER than a day's budget.
+ */
+export const MASS_BARGAIN_MAX = 24;
 
 /** How many shops one run may contact for this plan. */
 export function massBargainCap(plan?: string | null): number {

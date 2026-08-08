@@ -109,13 +109,13 @@ export async function GET(req: Request) {
       const bounded = <T,>(p: Promise<T>) =>
         Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
       await bounded(
-        drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+        drainOutbox((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane })).catch(
           () => {}
         )
       );
       const { drainGraphWakeups } = await import("@/lib/graph/engine");
       await bounded(
-        drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true)).catch(
+        drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true, { lane: "reply" })).catch(
           () => {}
         )
       );

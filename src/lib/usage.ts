@@ -73,7 +73,7 @@ export async function monthlyUsage(): Promise<Record<string, number>> {
 
 // ---- per-user daily limits (owner-configurable) -----------------------------------
 
-const LIMIT_DEFAULTS: Record<string, number> = {
+export const LIMIT_DEFAULTS: Record<string, number> = {
   LIMIT_SEARCHES_PER_DAY: 15, // vendor discovery (Places searches)
   // Address lookups: every debounced keystroke pause is one call, so 40/day
   // made the dropdown go silently empty mid-trip. Autocomplete + session
@@ -81,7 +81,32 @@ const LIMIT_DEFAULTS: Record<string, number> = {
   LIMIT_GEOCODE_PER_DAY: 300,
   LIMIT_AI_PER_DAY: 120, // AI calls (extraction, drafts, translate sweeps)
   LIMIT_TRANSLATE_PER_DAY: 60, // UI translate sweeps (cache means most are free)
-  LIMIT_WA_PER_HOUR: 15, // personal WhatsApp sends
+  // TWO LANES, NOT ONE POOL.
+  //
+  // LIMIT_WA_PER_HOUR = 15 was a SINGLE pool shared by cold introductions and
+  // negotiation replies, enforced on the one send path with no kind filter. A
+  // 24-shop batch therefore consumed the entire hourly allowance at shop 15,
+  // and every agent reply to a shop that answered inside that hour was refused
+  // with "Hourly safety cap reached". The batch starved its own negotiation,
+  // which is self-defeating: a reply is the one thing that clears the
+  // unanswered-thread counter WhatsApp actually meters.
+  //
+  // The intro lane is the risk-bearing one and stays tight. The reply lane is
+  // reciprocal traffic - the SAFE side of the documented axis - and is sized so
+  // a full batch's answers can never be blocked by the batch that caused them.
+  //
+  // The daily intro ceiling is deliberately NOT raised to 220. That would be
+  // ~6,600 a month against the only monthly ceiling anyone has reported
+  // (~1,000), which is not a ceiling at all.
+  LIMIT_WA_INTRO_PER_HOUR: 24, // matches the 24-shop day-one ceiling
+  LIMIT_WA_INTRO_PER_DAY: 80,
+  LIMIT_WA_REPLY_PER_HOUR: 40,
+  LIMIT_WA_REPLY_PER_DAY: 200,
+
+  // Legacy names, kept so an existing Key Vault override does not silently
+  // vanish. Nothing reads them any more - the two lanes above are the
+  // authority - but a value pasted here should still be visible to the owner.
+  LIMIT_WA_PER_HOUR: 15,
   LIMIT_WA_PER_DAY: 60,
 };
 
