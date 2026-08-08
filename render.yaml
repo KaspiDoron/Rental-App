@@ -135,8 +135,21 @@ services:
         value: "false"
       - key: CACHE_LOCAL_ENABLED
         value: "false"
+      # DEVICE FINGERPRINT - do NOT put the product name here.
+      #
+      # Evolution passes this straight into makeWASocket as browser[0], so it is
+      # the label Meta sees for every linked companion device. It used to read
+      # "WheelDeal", which meant every traveller using this service advertised
+      # the same product name: a perfect clustering key, on the enforcement axis
+      # whose penalty is a FULL ban rather than a scoped restriction. One rule
+      # keyed on that string would catch the entire fleet at once.
+      #
+      # "Mac OS" + "Chrome" is what ANTI-BAN.md always said to use, and it is
+      # also what Baileys' own default (Browsers.macOS('Chrome')) produces - so
+      # pairing-code links, which ignore these vars entirely, now present the
+      # same fingerprint as QR links instead of a second distinguishable dialect.
       - key: CONFIG_SESSION_PHONE_CLIENT
-        value: WheelDeal
+        value: Mac OS
       - key: CONFIG_SESSION_PHONE_NAME
         value: Chrome
       # ---- Throughput / load tuning (handle many concurrent sessions) --------

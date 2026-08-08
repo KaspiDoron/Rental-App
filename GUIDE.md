@@ -345,7 +345,7 @@ DATABASE_SAVE_DATA_CONTACTS     = true
 DATABASE_SAVE_DATA_CHATS        = true
 CACHE_LOCAL_ENABLED      = true
 CACHE_REDIS_ENABLED      = false
-CONFIG_SESSION_PHONE_CLIENT = WheelDeal
+CONFIG_SESSION_PHONE_CLIENT = Mac OS
 CONFIG_SESSION_PHONE_NAME   = Chrome
 ```
 
@@ -402,7 +402,7 @@ runcmd:
   - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8080 -j ACCEPT
   - netfilter-persistent save
   - sleep 5
-  - docker run -d --name evolution --restart always -p 8080:8080 -e AUTHENTICATION_API_KEY="wd-pool-KEY" -e DATABASE_ENABLED="true" -e DATABASE_PROVIDER="postgresql" -e DATABASE_CONNECTION_URI="postgresql://postgres.<ref>:YOUR-DB-PASSWORD@aws-1-<region>.pooler.supabase.com:5432/postgres" -e DATABASE_SAVE_DATA_INSTANCE="true" -e DATABASE_SAVE_DATA_NEW_MESSAGE="true" -e DATABASE_SAVE_DATA_MESSAGE_UPDATE="true" -e DATABASE_SAVE_DATA_CONTACTS="true" -e DATABASE_SAVE_DATA_CHATS="true" -e CACHE_LOCAL_ENABLED="true" -e CACHE_REDIS_ENABLED="false" -e CONFIG_SESSION_PHONE_CLIENT="WheelDeal" -e CONFIG_SESSION_PHONE_NAME="Chrome" evoapicloud/evolution-api:v2.3.7
+  - docker run -d --name evolution --restart always -p 8080:8080 -e AUTHENTICATION_API_KEY="wd-pool-KEY" -e DATABASE_ENABLED="true" -e DATABASE_PROVIDER="postgresql" -e DATABASE_CONNECTION_URI="postgresql://postgres.<ref>:YOUR-DB-PASSWORD@aws-1-<region>.pooler.supabase.com:5432/postgres" -e DATABASE_SAVE_DATA_INSTANCE="true" -e DATABASE_SAVE_DATA_NEW_MESSAGE="true" -e DATABASE_SAVE_DATA_MESSAGE_UPDATE="true" -e DATABASE_SAVE_DATA_CONTACTS="true" -e DATABASE_SAVE_DATA_CHATS="true" -e CACHE_LOCAL_ENABLED="true" -e CACHE_REDIS_ENABLED="false" -e CONFIG_SESSION_PHONE_CLIENT="Mac OS" -e CONFIG_SESSION_PHONE_NAME="Chrome" evoapicloud/evolution-api:v2.3.7
 ```
 
 Shape choice (smooth WhatsApp, $0): the ARM VM.Standard.A1.Flex (up to 4 OCPU +
