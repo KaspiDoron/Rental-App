@@ -1241,3 +1241,19 @@ create index if not exists consent_events_email_idx
 create index if not exists consent_events_kind_idx
   on public.consent_events (kind, accepted_at desc);
 alter table public.consent_events enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- OUTBOUND ERROR ACKS AND THE COLD HOLD (Tier 0.2)
+--
+-- WhatsApp's new-chat restriction arrives as a messages.update carrying
+-- status:"ERROR" on a fromMe key. That signal was reaching our webhook and
+-- being discarded, because the ingest only ever read READ and DELIVERY.
+--
+-- last_error_at records the refusal per recipient. cold_hold_until parks the
+-- COLD lane only - replies keep flowing, because a reply is the one thing that
+-- clears the unanswered-thread counter the restriction actually meters, and
+-- halting it would deepen the exact condition being punished.
+alter table public.wa_recipient_state
+  add column if not exists last_error_at timestamptz;
+alter table public.whatsapp_number_reputation
+  add column if not exists cold_hold_until timestamptz;

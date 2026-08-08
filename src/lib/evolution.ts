@@ -893,6 +893,32 @@ export async function markOpen(email: string) {
 }
 
 /**
+ * NOTHING IN THIS CODEBASE EVER WROTE "close".
+ *
+ * `wa_sessions.status` only ever went to "open" or "connecting", so a link that
+ * WhatsApp had severed still read as connected: `isLinkedForUi` said linked,
+ * `/api/wa/status` said CONNECTED, `classifySafety`'s one red branch was
+ * unreachable, and the outbox kept retrying into a dead session for 24 hours
+ * before dropping the messages silently. The traveller was told everything was
+ * fine while nothing they sent could arrive.
+ *
+ * Only call this for a cause classified `sessionDead` - see
+ * `wa/disconnect-reason.ts`. A transient close (428/440/515, or a 401 inside
+ * the pairing handshake) must NOT land here, or we would log people out mid-link.
+ */
+export async function markClosed(email: string, reason: string) {
+  await saveSession(email, instanceNameFor(email), "close");
+  await sbInsert("agent_events", [
+    {
+      kind: "wa-session-closed",
+      detail:
+        `${email}: WhatsApp link closed (${reason}). The session is dead until ` +
+        `the user re-links - queued messages park instead of retrying into it.`,
+    },
+  ]).catch(() => {});
+}
+
+/**
  * Make sure the session is live, resuming from saved credentials if the
  * connection dropped (Render free tier sleeps/restarts). Returns quickly if
  * already open; otherwise kicks a reconnect and polls within a small budget.

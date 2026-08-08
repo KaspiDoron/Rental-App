@@ -48,6 +48,35 @@ async function regionForThread(fromDigits: string, ownerEmail: string): Promise<
   return typeof r === "string" && r ? r : undefined;
 }
 
+/**
+ * When this user was last handed a pairing code, or null.
+ *
+ * This is the discriminator for a 401 close. Evolution emits 401 both for a
+ * genuine logout (the link is gone) and as a normal beat of the pairing-code
+ * handshake (the socket is about to restart with real credentials). Without
+ * this stamp we would either miss every real ban or pause every number the
+ * instant it links - and the second failure is the worse one.
+ */
+async function pairingStampFor(email: string): Promise<string | null> {
+  try {
+    const rows = await sbSelect<{
+      pairing_code_issued_at: string | null;
+      updated_at: string | null;
+    }>(
+      "wa_sessions",
+      `select=pairing_code_issued_at,updated_at&email=eq.${encodeURIComponent(
+        email.trim().toLowerCase()
+      )}&limit=1`
+    );
+    return rows[0]?.pairing_code_issued_at ?? rows[0]?.updated_at ?? null;
+  } catch {
+    // Unreadable stamp: assume NOT pairing, so a genuine logout is still
+    // caught. The cost of being wrong here is a session marked closed during a
+    // handshake, which the next `open` event immediately repairs.
+    return null;
+  }
+}
+
 function unwrap(data: any): any {
   return data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
 }
@@ -189,7 +218,8 @@ export async function processEvolutionWebhook(
         const email = await emailForInstance(instance);
         if (email) {
           const items = Array.isArray(body.data) ? body.data : [body.data];
-          const { recordReadReceipt, recordDelivery } = await import("@/lib/wa-guard");
+          const { recordReadReceipt, recordDelivery, recordSendError, hasInboundFrom } =
+            await import("@/lib/wa-guard");
           for (const d of items.slice(0, 20)) {
             const jid = String(d?.key?.remoteJid ?? "");
             if (!d?.key?.fromMe || !jid.endsWith("@s.whatsapp.net")) continue;
@@ -199,6 +229,16 @@ export async function processEvolutionWebhook(
               await recordReadReceipt(email, to);
             } else if (status.includes("DELIVERY") || status === "3") {
               await recordDelivery(email, to);
+            } else if (status.includes("ERROR") || status === "0") {
+              // THE RESTRICTION SIGNAL. This branch did not exist: the loop read
+              // READ and DELIVERY and returned, so the only ground-truth
+              // evidence that WhatsApp is refusing this number's outbound was
+              // discarded on arrival.
+              const established = await hasInboundFrom(email, to);
+              await recordSendError(email, to, {
+                firstContact: !established,
+                status: status || "ERROR",
+              });
             }
           }
         }
@@ -240,23 +280,37 @@ export async function processEvolutionWebhook(
       try {
         const data = Array.isArray(body.data) ? body.data[0] : body.data;
         const state = String(data?.state ?? data?.connection ?? "").toLowerCase();
-        const reason = String(
-          data?.statusReason ??
-            data?.lastDisconnect?.error?.output?.payload?.error ??
-            data?.lastDisconnect?.error?.message ??
-            ""
-        ).toLowerCase();
         const email = await emailForInstance(instance);
         if (state === "open" && email) {
           const { markOpen } = await import("@/lib/evolution");
           markOpen(email).catch(() => {});
-        } else if (
-          state === "close" &&
-          email &&
-          /logged.?out|conflict|banned|forbidden|multidevice.?mismatch/.test(reason)
-        ) {
-          const { enterBanRecovery } = await import("@/lib/wa-guard");
-          await enterBanRecovery(email, 24);
+        } else if (state === "close" && email) {
+          // THE CAUSE IS A NUMBER, NOT A WORD. The old predicate regex-matched
+          // `statusReason` against "logged out"/"banned"/... while Evolution
+          // sends 401/403/411/440, so `String(401)` matched nothing and this
+          // branch had never once fired in production.
+          const { classifyDisconnect, disconnectReasonFrom } = await import(
+            "./disconnect-reason"
+          );
+          const pairingIssuedAt = await pairingStampFor(email);
+          const verdict = classifyDisconnect(disconnectReasonFrom(data), {
+            pairingIssuedAt,
+          });
+
+          if (!verdict.sessionDead) {
+            // Transient close, or a 401 inside the pairing handshake. Leave the
+            // session alone - tearing it down here is what produced "my
+            // WhatsApp disconnected by itself" and an endless re-pair loop.
+            return { retryable };
+          }
+
+          const { markClosed } = await import("@/lib/evolution");
+          await markClosed(email, `${verdict.code ?? "?"} ${verdict.label}`);
+
+          if (verdict.banRisk) {
+            const { enterBanRecovery } = await import("@/lib/wa-guard");
+            await enterBanRecovery(email, 24);
+          }
           // THE AGENT IS BLOCKED, and only they can unblock it.
           //
           // Every push this app sent described PROGRESS - a reply, a price, a

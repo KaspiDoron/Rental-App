@@ -255,13 +255,15 @@ export interface Reputation {
   new_contacts_date?: string | null;
   last_reply_at?: string | null;
   paused_until?: string | null;
+  /** Cold-intro lane held after a WhatsApp error ack on a first contact. */
+  cold_hold_until?: string | null;
   risk_score?: number;
 }
 
 const REP_COLS =
   "id,sender_key,trust_score,sent_total,replies_total,last_send_at,created_at," +
   "blocks_total,fails_total,reads_total,delivered_total,new_contacts_today," +
-  "new_contacts_date,last_reply_at,paused_until,risk_score";
+  "new_contacts_date,last_reply_at,paused_until,cold_hold_until,risk_score";
 
 /**
  * STRICT reputation read for the guard: null means the truth is UNKNOWN
@@ -530,6 +532,84 @@ export async function recordDelivery(
     await upsertRecipient(senderKey, toNumber, { delivered: true });
   } catch {
     /* best-effort */
+  }
+}
+
+/**
+ * WHATSAPP REFUSED AN OUTBOUND MESSAGE, AND IT HAS BEEN TELLING US ALL ALONG.
+ *
+ * The new-chat restriction surfaces as an Evolution `messages.update` carrying
+ * `status: "ERROR"` on a `fromMe` key. The ingest only ever looked for READ and
+ * DELIVERY and returned, so the single ground-truth signal that this number is
+ * being refused was dropped on the floor - every prior round concluded we had
+ * no restriction detector and would have to build one.
+ *
+ * The lane distinction is the whole diagnostic. An error on a FIRST CONTACT
+ * while replies to established threads still deliver is the precise fingerprint
+ * of the scoped restriction ("you may reply, you may not start new chats").
+ * Errors spread evenly across both lanes are an infrastructure fault instead.
+ *
+ * LIMITATION, recorded rather than hidden: Evolution drops
+ * `messageStubParameters`, so we can see THAT an outbound errored, not that the
+ * cause was specifically a 463. The lane split is what carries the meaning.
+ */
+export async function recordSendError(
+  senderKey: string,
+  toNumber: string,
+  opts: { firstContact: boolean; status: string }
+): Promise<void> {
+  try {
+    await sbInsert("agent_events", [
+      {
+        kind: opts.firstContact ? "wa-send-error-cold" : "wa-send-error-reply",
+        detail:
+          `${senderKey} -> ${toNumber}: WhatsApp returned ${opts.status} on an ` +
+          `outbound ${opts.firstContact ? "FIRST CONTACT" : "reply in an established thread"}.` +
+          (opts.firstContact
+            ? " Cold introductions are held; replies continue."
+            : ""),
+      },
+    ]);
+    await upsertRecipient(senderKey, toNumber, {
+      last_error_at: new Date().toISOString(),
+    }).catch(() => {});
+
+    // Only the cold lane pauses. Halting replies would starve the one activity
+    // that clears the unanswered-thread counter, which is what the restriction
+    // meters in the first place.
+    if (opts.firstContact) {
+      await sbUpdate(
+        "whatsapp_number_reputation",
+        `sender_key=eq.${encodeURIComponent(senderKey)}`,
+        { cold_hold_until: new Date(Date.now() + 6 * 3600_000).toISOString() }
+      ).catch(() => {});
+    }
+  } catch {
+    /* telemetry can never break the webhook */
+  }
+}
+
+/**
+ * Has this recipient ever written to us? Distinguishes a cold first contact
+ * from a reply inside an established thread - the lane split `recordSendError`
+ * depends on.
+ */
+export async function hasInboundFrom(
+  senderKey: string,
+  toNumber: string
+): Promise<boolean> {
+  try {
+    const rows = await sbSelect<{ id: number }>(
+      "wa_recipient_state",
+      `select=id&sender_key=eq.${encodeURIComponent(senderKey)}` +
+        `&to_number=eq.${encodeURIComponent(toNumber)}` +
+        `&last_reply_at=not.is.null&limit=1`
+    );
+    return Boolean(rows[0]?.id);
+  } catch {
+    // Unknown lane. Treat as ESTABLISHED so an unreadable database cannot
+    // manufacture a cold-lane hold out of nothing.
+    return true;
   }
 }
 
@@ -1305,6 +1385,26 @@ export async function guardOutbound(rawOpts: {
   if (rep.paused_until && Date.parse(rep.paused_until) > now) {
     if (opts.auto) return await queue(rep.paused_until, "number paused (ban-risk recovery)");
     return { allow: false, reason: "This number is paused for safety recovery.", text };
+  }
+
+  // 0.05 COLD-LANE HOLD - WhatsApp returned an error ack on a FIRST CONTACT
+  //      (see recordSendError). That is the observable fingerprint of the
+  //      scoped new-chat restriction, so we stop opening new conversations.
+  //
+  //      Deliberately NOT a global pause: replies to shops that already wrote
+  //      back keep flowing. A reply is the one thing that clears the
+  //      unanswered-thread counter this restriction meters, so halting the
+  //      reply lane would deepen the exact condition being punished.
+  if (
+    opts.auto &&
+    opts.meta?.kind === "rfq" &&
+    rep.cold_hold_until &&
+    Date.parse(rep.cold_hold_until) > now
+  ) {
+    return await queue(
+      rep.cold_hold_until,
+      "waiting on replies before opening more conversations"
+    );
   }
 
   // 0.1 USER SESSION PAUSE - "Will, hold everything". Automated sends queue
