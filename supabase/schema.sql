@@ -1257,3 +1257,23 @@ alter table public.wa_recipient_state
   add column if not exists last_error_at timestamptz;
 alter table public.whatsapp_number_reputation
   add column if not exists cold_hold_until timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- BLOCKS THAT ARE ACTUALLY BLOCKS, AND RECEIPT LIVENESS (Tier 0.75)
+--
+-- recordSendFailure classified "this number is not on WhatsApp" as a recipient
+-- BLOCK. blocks_total scores +12 each toward a +30 ceiling on a 100-point risk
+-- score that auto-pauses the account at 70, so three stale scraped numbers in
+-- one batch could pause a perfectly healthy traveller's number for something no
+-- recipient ever did. invalid_numbers_total gives that outcome its own home.
+--
+-- The receipt timestamps exist because delivered_total is a monotonic scalar
+-- with no clock: 0 conflated "the MESSAGES_UPDATE webhook is dead" with "this
+-- account is idle", so the meter could not go dark through the exact outage it
+-- exists to catch.
+alter table public.whatsapp_number_reputation
+  add column if not exists invalid_numbers_total integer not null default 0;
+alter table public.whatsapp_number_reputation
+  add column if not exists last_delivery_receipt_at timestamptz;
+alter table public.whatsapp_number_reputation
+  add column if not exists last_read_receipt_at timestamptz;

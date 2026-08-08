@@ -26,45 +26,87 @@ export async function GET() {
       sbSelect<{ id: number; severity: string; summary: string; created_at: string }>(
         "feedback",
         `select=id,severity,summary,created_at&is_real_issue=eq.true&or=(status.is.null,status.eq.open,status.eq.in-progress)&order=created_at.desc&limit=20`
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ id: number; not_before: string }>(
         "wa_outbox",
         "select=id,not_before&order=not_before.asc&limit=50"
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ sender_key: string; trust_score: number; paused_until?: string; risk_score?: number }>(
         "whatsapp_number_reputation",
         "select=sender_key,trust_score,paused_until,risk_score&or=(trust_score.lt.15,risk_score.gte.40,paused_until.not.is.null)&limit=30"
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ email: string; status: string }>(
         "wa_sessions",
         "select=email,status&limit=100"
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ id: number; kind: string; created_at: string }>(
         "billing_events",
         `select=id,kind,created_at&created_at=gte.${encodeURIComponent(dayAgo)}&limit=50`
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ id: number }>(
         "vendor_replies",
         `select=id&created_at=gte.${encodeURIComponent(dayAgo)}&limit=200`
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ id: number }>(
         "offers",
         `select=id&created_at=gte.${encodeURIComponent(dayAgo)}&limit=200`
-      ).catch(() => []),
+      ).catch(() => null),
       // NOTE: the column is `failed` (not `ok`) - the old query silently
       // returned [] and AI-failure alerts never fired.
       sbSelect<{ id: number; provider: string; failed: boolean; created_at: string }>(
         "ai_usage",
         `select=id,provider,failed,created_at&failed=eq.true&created_at=gte.${encodeURIComponent(dayAgo)}&limit=100`
-      ).catch(() => []),
+      ).catch(() => null),
       sbSelect<{ id: number; kind: string; vendor_name: string; detail: string }>(
         "agent_events",
         `select=id,kind,vendor_name,detail&handled=eq.false&created_at=gte.${encodeURIComponent(weekAgo)}&order=created_at.desc&limit=30`
-      ).catch(() => []),
+      ).catch(() => null),
     ]);
 
+  // EVERY READ ABOVE USED TO END `.catch(() => [])`.
+  //
+  // An empty array is indistinguishable from "nothing wrong", so an unreachable
+  // Supabase produced ZERO alerts and a fully green Command Center - the one
+  // surface whose entire job is to say "something is broken" reported "nothing
+  // is broken" as its failure mode. They now resolve to `null`, and a null is
+  // named here rather than silently coerced.
+  //
+  // `degraded` is what the panel renders as a dark strip. The rule from
+  // wa/risk-verdict.ts applies: a metric whose source read failed is NOT zero.
+  const degraded: string[] = [];
+  const readOr = <T,>(rows: readonly T[] | null, label: string): readonly T[] => {
+    if (rows === null) {
+      degraded.push(label);
+      return [];
+    }
+    return rows;
+  };
+
+  const feedbackRows = readOr(feedback, "feedback");
+  const outboxRows = readOr(outbox, "queued messages");
+  const reputationRows = readOr(reputation, "number reputation");
+  const sessionRows = readOr(sessions, "WhatsApp sessions");
+  const billingRows = readOr(billing, "billing events");
+  const replyRows = readOr(replies, "shop replies");
+  const offerRows = readOr(offers, "offers");
+  const aiErrorRows = readOr(aiErrors, "AI usage");
+  const agentEventRows = readOr(agentEvents, "agent events");
+
+  // A read that failed is itself the most urgent thing on the page: every
+  // figure below it is now computed over a subset we cannot describe.
+  if (degraded.length) {
+    alerts.push({
+      level: "critical",
+      title: `${degraded.length} data source${degraded.length > 1 ? "s" : ""} unreadable`,
+      detail:
+        `Could not read: ${degraded.join(", ")}. Figures below are incomplete - ` +
+        `they are not zero, they are unknown. Check the Supabase connection.`,
+      href: "keys",
+    });
+  }
+
   // Bugs first - real triaged issues are the owner's top priority.
-  const highBugs = feedback.filter((f) => f.severity === "high");
+  const highBugs = feedbackRows.filter((f) => f.severity === "high");
   if (highBugs.length) {
     alerts.push({
       level: "critical",
@@ -75,17 +117,17 @@ export async function GET() {
         .join(" · "),
       href: "feedback",
     });
-  } else if (feedback.length) {
+  } else if (feedbackRows.length) {
     alerts.push({
       level: "warning",
-      title: `${feedback.length} open feedback issue${feedback.length > 1 ? "s" : ""}`,
-      detail: feedback.slice(0, 3).map((b) => b.summary).join(" · "),
+      title: `${feedbackRows.length} open feedback issue${feedbackRows.length > 1 ? "s" : ""}`,
+      detail: feedbackRows.slice(0, 3).map((b) => b.summary).join(" · "),
       href: "feedback",
     });
   }
 
   // Stuck outbox: messages queued far in the past mean the drain is not firing.
-  const overdue = outbox.filter(
+  const overdue = outboxRows.filter(
     (o) => Date.parse(o.not_before) < Date.now() - 30 * 60_000
   );
   if (overdue.length) {
@@ -95,10 +137,10 @@ export async function GET() {
       detail: "The outbox drain has not run for 30+ minutes - check the Evolution hosts.",
       href: "keys",
     });
-  } else if (outbox.length) {
+  } else if (outboxRows.length) {
     alerts.push({
       level: "info",
-      title: `${outbox.length} message${outbox.length > 1 ? "s" : ""} queued for shop opening hours`,
+      title: `${outboxRows.length} message${outboxRows.length > 1 ? "s" : ""} queued for shop opening hours`,
       detail: "The anti-ban engine is pacing sends - all normal.",
       href: "keys",
     });
@@ -106,7 +148,7 @@ export async function GET() {
 
   // Funnel gaps: shops that dodged the price question with a vague answer -
   // each one is a candidate for a new branch in the negotiation funnel.
-  const vagueReplies = agentEvents.filter((e) => e.kind === "vague-reply");
+  const vagueReplies = agentEventRows.filter((e) => e.kind === "vague-reply");
   if (vagueReplies.length) {
     alerts.push({
       level: "warning",
@@ -121,7 +163,7 @@ export async function GET() {
   }
 
   // Numbers auto-paused by the ban-risk engine (most urgent).
-  const paused = reputation.filter(
+  const paused = reputationRows.filter(
     (r) => (r as { paused_until?: string }).paused_until &&
       Date.parse((r as { paused_until?: string }).paused_until as string) > Date.now()
   );
@@ -134,7 +176,7 @@ export async function GET() {
         paused.slice(0, 3).map((r) => r.sender_key).join(", ") +
         ". The per-number detail is on this screen, below.",
       // THE MOST URGENT ALERT IN THE APP POINTED AT THE WRONG SCREEN. Number
-      // reputation - trust score, pause state, block and read rates - is
+      // reputationRows - trust score, pause state, block and read rates - is
       // rendered on the Command tab; the Agents tab is the orchestrator and has
       // nothing about WhatsApp numbers at all. So the one tap the owner makes
       // when a number is auto-paused took them somewhere that could not answer.
@@ -142,7 +184,7 @@ export async function GET() {
     });
   }
   // Numbers trending toward risk (low trust) but not yet paused.
-  const lowTrust = reputation.filter((r) => r.trust_score < 15 && !paused.includes(r));
+  const lowTrust = reputationRows.filter((r) => r.trust_score < 15 && !paused.includes(r));
   if (lowTrust.length) {
     alerts.push({
       level: "warning",
@@ -154,7 +196,7 @@ export async function GET() {
     });
   }
   // Explicit ban-risk events raised by the engine.
-  const banEvents = agentEvents.filter((e) => e.kind === "wa-ban-risk");
+  const banEvents = agentEventRows.filter((e) => e.kind === "wa-ban-risk");
   if (banEvents.length) {
     alerts.push({
       level: "critical",
@@ -165,35 +207,44 @@ export async function GET() {
   }
 
   // AI provider failures.
-  if (aiErrors.length >= 5) {
+  if (aiErrorRows.length >= 5) {
     const byProvider = new Map<string, number>();
-    aiErrors.forEach((e) => byProvider.set(e.provider, (byProvider.get(e.provider) ?? 0) + 1));
+    aiErrorRows.forEach((e) => byProvider.set(e.provider, (byProvider.get(e.provider) ?? 0) + 1));
     alerts.push({
       level: "warning",
-      title: `${aiErrors.length} AI calls failed in the last 24h`,
+      title: `${aiErrorRows.length} AI calls failed in the last 24h`,
       detail: [...byProvider.entries()].map(([p, n]) => `${p}: ${n}`).join(", "),
       href: "keys",
     });
   }
 
   // Money.
-  if (billing.length) {
+  if (billingRows.length) {
     alerts.push({
       level: "info",
-      title: `${billing.length} billing event${billing.length > 1 ? "s" : ""} in the last 24h`,
-      detail: billing.slice(0, 4).map((b) => b.kind).join(" · "),
+      title: `${billingRows.length} billing event${billingRows.length > 1 ? "s" : ""} in the last 24h`,
+      detail: billingRows.slice(0, 4).map((b) => b.kind).join(" · "),
       href: "users",
     });
   }
 
+  // A STAT FROM A DARK SOURCE IS NULL, NOT 0.
+  //
+  // This is the same rule as the alerts, applied to the numbers the panel puts
+  // in large type. "0 replies today" and "we could not read replies today" look
+  // identical as a zero and mean opposite things - the first is a quiet day,
+  // the second is an outage. `null` forces the UI to render a dash.
+  const stat = (rows: readonly unknown[] | null, n: () => number) => (rows === null ? null : n());
+
   return NextResponse.json({
     alerts,
+    degraded,
     stats: {
-      waSessions: sessions.filter((s) => s.status === "open").length,
-      repliesToday: replies.length,
-      offersToday: offers.length,
-      queuedMessages: outbox.length,
-      openIssues: feedback.length,
+      waSessions: stat(sessions, () => sessionRows.filter((s) => s.status === "open").length),
+      repliesToday: stat(replies, () => replyRows.length),
+      offersToday: stat(offers, () => offerRows.length),
+      queuedMessages: stat(outbox, () => outboxRows.length),
+      openIssues: stat(feedback, () => feedbackRows.length),
     },
   });
 }

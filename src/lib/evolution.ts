@@ -2120,8 +2120,27 @@ export async function sendFromUser(
   // number's ban-risk score reflects it.
   try {
     const { recordSendFailure, noteSendOutcome } = await import("./wa-guard");
-    const blocked = /not.*whatsapp|invalid|exist|blocked|forbidden/i.test(String(errText));
-    await recordSendFailure(email, number, blocked ? "block" : "fail");
+    // THREE OUTCOMES, NOT TWO.
+    //
+    // This regex used to be one alternation that lumped "the number is not on
+    // WhatsApp" together with "the recipient blocked us" and called both a
+    // BLOCK. They are completely different facts: the first is a data-quality
+    // problem with a scraped listing, the second is a human deciding they do
+    // not want to hear from this traveller.
+    //
+    // It mattered because blocks_total scores +12 each toward a +30 ceiling on
+    // a 100-point risk score that AUTO-PAUSES the account at 70. Three stale
+    // numbers in one batch - routine for scraped shop listings - could
+    // therefore pause a perfectly healthy number and stop a traveller's whole
+    // search, for something no recipient ever did.
+    const text = String(errText);
+    const notOnWhatsApp = /not.*(?:on\s*)?whatsapp|does ?n[o']?t exist|invalid.*number|no.*account/i.test(text);
+    const trueBlock = /\bblocked\b|forbidden/i.test(text);
+    await recordSendFailure(
+      email,
+      number,
+      notOnWhatsApp ? "invalid" : trueBlock ? "block" : "fail"
+    );
     // STOP-LOSS classification (distinct from the per-recipient risk above):
     // "hard" = an ACCOUNT-level restriction signal ONLY - an auth/rate HTTP
     // status (401/403/429) or text that reads as a restriction/ban/rate limit.

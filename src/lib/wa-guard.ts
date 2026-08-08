@@ -257,13 +257,19 @@ export interface Reputation {
   paused_until?: string | null;
   /** Cold-intro lane held after a WhatsApp error ack on a first contact. */
   cold_hold_until?: string | null;
+  /** Numbers that are not on WhatsApp. A listing-quality fact, NOT a block. */
+  invalid_numbers_total?: number;
+  /** Receipt liveness: distinguishes "idle" from "the receipt pipeline died". */
+  last_delivery_receipt_at?: string | null;
+  last_read_receipt_at?: string | null;
   risk_score?: number;
 }
 
 const REP_COLS =
   "id,sender_key,trust_score,sent_total,replies_total,last_send_at,created_at," +
   "blocks_total,fails_total,reads_total,delivered_total,new_contacts_today," +
-  "new_contacts_date,last_reply_at,paused_until,cold_hold_until,risk_score";
+  "new_contacts_date,last_reply_at,paused_until,cold_hold_until,risk_score," +
+  "invalid_numbers_total,last_delivery_receipt_at,last_read_receipt_at";
 
 /**
  * STRICT reputation read for the guard: null means the truth is UNKNOWN
@@ -505,9 +511,22 @@ export async function recordReadReceipt(
 ): Promise<void> {
   try {
     const rep = await getReputation(senderKey);
+    // NO SYNTHESIZED DELIVERIES.
+    //
+    // This used to raise delivered_total to `max(delivered, reads + 1)`, on the
+    // reasoning that a read implies a delivery. The effect ran the opposite way
+    // from what that intends: when a READ arrives with no DELIVERY event -
+    // exactly the case where the delivery webhook is broken - delivered_total
+    // was INVENTED, which inflates delivRate at the engagement breaker and
+    // makes it fire LESS often. A meter that heals itself on paper is how the
+    // breaker stayed unarmed through both restrictions.
+    //
+    // Deliveries are now only ever counted from real delivery events, and
+    // last_read_receipt_at gives the dashboard a way to tell "no receipts
+    // because idle" from "no receipts because the pipeline is dead".
     await saveReputation(senderKey, {
       reads_total: (rep.reads_total || 0) + 1,
-      delivered_total: Math.max((rep.delivered_total || 0), (rep.reads_total || 0) + 1),
+      last_read_receipt_at: new Date().toISOString(),
     });
     await upsertRecipient(senderKey, toNumber, {
       read: true,
@@ -528,6 +547,7 @@ export async function recordDelivery(
     const rep = await getReputation(senderKey);
     await saveReputation(senderKey, {
       delivered_total: (rep.delivered_total || 0) + 1,
+      last_delivery_receipt_at: new Date().toISOString(),
     });
     await upsertRecipient(senderKey, toNumber, { delivered: true });
   } catch {
@@ -617,13 +637,23 @@ export async function hasInboundFrom(
 export async function recordSendFailure(
   senderKey: string,
   toNumber: string,
-  kind: "fail" | "block" = "fail"
+  kind: "fail" | "block" | "invalid" = "fail"
 ): Promise<void> {
   try {
     const rep = await getReputation(senderKey);
     if (kind === "block") {
+      // A REAL block: a human decided they do not want to hear from this
+      // traveller. This is the only failure that belongs in blocks_total,
+      // because it is the only one that reflects on the sender.
       await saveReputation(senderKey, { blocks_total: (rep.blocks_total || 0) + 1 });
       await upsertRecipient(senderKey, toNumber, { blocked: true });
+    } else if (kind === "invalid") {
+      // The number is not on WhatsApp. That is a fact about a stale scraped
+      // listing, not about the sender, and counting it as a block let three
+      // dead numbers in one batch auto-pause a healthy account.
+      await saveReputation(senderKey, {
+        invalid_numbers_total: (rep.invalid_numbers_total || 0) + 1,
+      });
     } else {
       await saveReputation(senderKey, { fails_total: (rep.fails_total || 0) + 1 });
     }

@@ -182,7 +182,11 @@ export default function AdminPage() {
   // Command center + agent studio data
   const [command, setCommand] = useState<{
     alerts: { level: string; title: string; detail: string; href?: string }[];
-    stats: Record<string, number>;
+    // `number | null`, not `number`: null means the source read FAILED, which
+    // is a different fact from 0 and must not be collapsed into it.
+    stats: Record<string, number | null>;
+    /** Sources that could not be read on this request. */
+    degraded?: string[];
   } | null>(null);
   const [floors, setFloors] = useState<
     { id: number; region_key: string; vehicle_key: string; currency: string; floor_per_day: number; typical_per_day: number | null; source: string }[]
@@ -808,12 +812,42 @@ export default function AdminPage() {
                 ].map((s) => (
                   <div key={s.k} title={s.hint} className="surface rounded-2xl p-3 text-center">
                     <div className="text-xl font-extrabold text-strong">
-                      {s.emoji} {command.stats[s.k] ?? 0}
+                      {/* `?? 0` WAS THE SAME LIE ONE LAYER UP. The route now
+                          returns null for a stat whose source read failed, and
+                          coercing that to 0 here would put "0 shop replies" in
+                          large type during a total outage - which is exactly
+                          what the fail-dark work exists to prevent. A dash
+                          means "we do not know", and that is the truth. */}
+                      {s.emoji}{" "}
+                      {command.stats[s.k] === null || command.stats[s.k] === undefined ? (
+                        <span className="text-faint" title="Could not be read">
+                          -
+                        </span>
+                      ) : (
+                        command.stats[s.k]
+                      )}
                     </div>
                     <div className="text-[10px] font-bold text-faint">{s.label} ⓘ</div>
                   </div>
                 ))}
               </div>
+
+              {/* A read that failed is the most urgent thing on this page:
+                  every figure above it is computed over a subset we cannot
+                  describe. Rendered as its own strip so it cannot be mistaken
+                  for one more alert among many. */}
+              {command.degraded && command.degraded.length > 0 && (
+                <div className="surface rounded-2xl border border-brandred/40 p-3">
+                  <div className="text-xs font-extrabold text-strong">
+                    ⚠ {command.degraded.length} data source
+                    {command.degraded.length > 1 ? "s" : ""} unreadable
+                  </div>
+                  <div className="mt-1 text-[11px] text-faint">
+                    {command.degraded.join(", ")} - the figures above are incomplete. They are
+                    not zero, they are unknown.
+                  </div>
+                </div>
+              )}
 
               {/* Queued messages now live in the user-facing find-deals page
                   (item #2) - every traveller manages their own queue there. */}
