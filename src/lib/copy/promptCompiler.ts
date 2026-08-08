@@ -41,6 +41,54 @@ export function extrasClause(rfq: StructuredRFQ): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+
+/**
+ * "2026-08-12" -> "12 Aug". Returns "" for anything unparseable.
+ *
+ * NEVER numeric. In the target region 8/12 reads as 12 August to some shops and
+ * 8 December to others, and a confidently wrong date is worse than no date -
+ * the traveller turns up to a bike that was reserved for the wrong week.
+ *
+ * Parsed as a plain calendar triple rather than through Date's timezone
+ * handling: `new Date("2026-08-12")` is midnight UTC, which is 11 Aug in every
+ * timezone west of Greenwich. The rental date is a wall-clock fact about the
+ * shop's calendar, not an instant.
+ */
+export function formatRentalDate(iso?: string): string {
+  if (!iso) return "";
+  const m = String(iso).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "";
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  return `${day} ${MONTHS[month - 1]}`;
+}
+
+/**
+ * The dates clause: a range when both ends are known, otherwise the start
+ * alone, otherwise nothing at all. Never invents a return date - deriving one
+ * from durationDays and stating it as fact is how a shop ends up holding a
+ * vehicle for a day the traveller never asked for.
+ */
+function datesClause(
+  rfq: StructuredRFQ,
+  s: { datePhrase: (f: string) => string; dateRangePhrase: (f: string, t: string) => string }
+): { text: string; supersedesDuration: boolean } {
+  const from = formatRentalDate(rfq.startDate);
+  if (!from) return { text: "", supersedesDuration: false };
+  const to = formatRentalDate(rfq.returnDate);
+  // A RANGE ALREADY SAYS HOW LONG. Rendering both produced "12 Aug to 15 Aug
+  // 3 days total" - the same fact twice, in the clumsy register of a form
+  // letter rather than a person texting. When both ends are known the range
+  // stands alone; when only the start is known the duration supplies the rest.
+  if (to && to !== from) return { text: s.dateRangePhrase(from, to), supersedesDuration: true };
+  return { text: s.datePhrase(from), supersedesDuration: false };
+}
+
 function applyContraction(text: string, style: "contracted" | "plain" | "mixed"): string {
   if (style === "contracted") {
     return text
@@ -82,8 +130,22 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   // The subject travels with the phrasing (matrix.ts) because "I'm after" and
   // "I need" do not take the same one - which is exactly why a single
   // hard-coded prefix could not have fixed this.
-  const standalone = `${s.vehicleSubject} ${vehicle} ${duration}.`;
-  const intro = s.selfIntro ? `${s.selfIntro} ${vehicle} ${duration}.` : standalone;
+  // THE DATES GO WITH THE DURATION, NOT AFTER THE ASK.
+  //
+  // "I need a scooter from 12 Aug for 3 days. What's your best daily rate?" is
+  // a question a shop can answer in one line. The same message without the
+  // date is not a question at all - it is a rate-card request, which is what a
+  // reseller sends, and it is the single biggest reason our openers went
+  // unanswered. Unanswered new chats are the exact quantity WhatsApp meters.
+  const dates = datesClause(rfq, s);
+  const when = !dates.text
+    ? duration
+    : dates.supersedesDuration
+      ? dates.text
+      : `${dates.text} ${duration}`;
+
+  const standalone = `${s.vehicleSubject} ${vehicle} ${when}.`;
+  const intro = s.selfIntro ? `${s.selfIntro} ${vehicle} ${when}.` : standalone;
 
   let body: string;
   if (s.order === "greet-intro-ask") {

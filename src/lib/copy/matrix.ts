@@ -107,12 +107,44 @@ export const VEHICLE_PHRASINGS = [
   { subject: "I'm", phrase: (v: string) => `looking for ${article(v)} ${v} to rent` },
 ] as const;
 
+// "for 1 days" shipped to every one-day rental. A shop reading that knows it
+// came from a template, which is the one impression a cold first contact cannot
+// afford. `day(d)` is the only place the plural is decided.
+const day = (d: number) => (d === 1 ? "day" : "days");
+
 export const DURATION_PHRASINGS = [
-  (d: number) => `for ${d} days`,
-  (d: number) => `for about ${d} days`,
-  (d: number) => `${d} days total`,
-  (d: number) => `for the next ${d} days`,
-  (d: number) => `for ${d} days straight`,
+  (d: number) => `for ${d} ${day(d)}`,
+  (d: number) => (d === 1 ? "for a single day" : `for about ${d} days`),
+  (d: number) => `${d} ${day(d)} total`,
+  (d: number) => (d === 1 ? "for one day" : `for the next ${d} days`),
+  (d: number) => (d === 1 ? "for the one day" : `for ${d} days straight`),
+] as const;
+
+/**
+ * WHEN THE RENTAL STARTS - the field that made the whole message answerable.
+ *
+ * `compileOpener` never referenced `rfq.startDate`. The opener asked a price
+ * and gave no dates, so a shop owner literally could not quote it: availability
+ * without a date is not a question, it is a rate-card request, which is exactly
+ * what a reseller sends. The honest reading from the other end was "spam", and
+ * on the enforcement axis that meters UNANSWERED new chats, a message nobody
+ * can answer is the most expensive kind to send.
+ *
+ * Format is "12 Aug", never numeric: 8/12 reads as 12 August in most of the
+ * target region and 8 December in the rest, and a wrong date is worse than no
+ * date.
+ */
+export const DATE_PHRASINGS = [
+  (from: string) => `from ${from}`,
+  (from: string) => `starting ${from}`,
+  (from: string) => `picking up ${from}`,
+  (from: string) => `from around ${from}`,
+] as const;
+
+export const DATE_RANGE_PHRASINGS = [
+  (from: string, to: string) => `${from} to ${to}`,
+  (from: string, to: string) => `from ${from} until ${to}`,
+  (from: string, to: string) => `${from} - ${to}`,
 ] as const;
 
 export const ASK_PHRASINGS = [
@@ -226,6 +258,10 @@ export interface StyleChoice {
   /** The subject that turns `vehiclePhrase` into a standalone sentence. */
   vehicleSubject: string;
   durationPhrase: (d: number) => string;
+  /** "from 12 Aug" - the field that makes the opener answerable at all. */
+  datePhrase: (from: string) => string;
+  /** "12 Aug to 19 Aug" - used when the return date is known too. */
+  dateRangePhrase: (from: string, to: string) => string;
   ask: string;
   /** How the traveller's extras are asked for, when there are any. */
   extrasPhrase: (x: string) => string;
@@ -284,6 +320,8 @@ export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
     vehiclePhrase: vehicle.phrase,
     vehicleSubject: vehicle.subject,
     durationPhrase: seededPick(rng, DURATION_PHRASINGS),
+    datePhrase: seededPick(rng, DATE_PHRASINGS),
+    dateRangePhrase: seededPick(rng, DATE_RANGE_PHRASINGS),
     ask: seededPick(rng, plain ? PLAIN_ASKS : ASK_PHRASINGS),
     extrasPhrase: seededPick(rng, EXTRAS_PHRASINGS),
     signOff: seededPick(rng, SIGN_OFFS),

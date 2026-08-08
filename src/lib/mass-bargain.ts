@@ -43,6 +43,23 @@ export function isMassEligible(v: Vendor): boolean {
  * ties: all else equal, nearer is genuinely better for a walk-in pickup.
  */
 export function rankForMassBargain(a: Vendor, b: Vendor): number {
+  // OPEN SHOPS FIRST. `openNow` has been on the Vendor since Places populated
+  // it and no ranking has ever read it, while `fast_dispatch` defaults ON and
+  // lifts the closed-now park entirely - so a shop Google reports CLOSED was
+  // exactly as likely to be message #1 as an open one. That is the worst
+  // possible order: a closed shop cannot reply, and an unanswered thread is
+  // precisely the quantity WhatsApp meters.
+  //
+  // This is SEQUENCING, not selection. Every eligible shop still gets an
+  // outbox row and every shop the traveller chose is still contacted - closed
+  // ones simply go later in the batch, by which time many have opened.
+  // Unknown sits between open and closed: absent hours are common for small
+  // shops and must not be treated as evidence of being shut.
+  const openRank = (v: Vendor) => (v.openNow === true ? 0 : v.openNow === false ? 2 : 1);
+  const oa = openRank(a);
+  const ob = openRank(b);
+  if (oa !== ob) return oa - ob;
+
   const ratingOf = (v: Vendor) => (v.rating > 0 ? v.rating : 0);
   const reviewsOf = (v: Vendor) => (typeof v.reviews === "number" ? v.reviews : 0);
   // Bucket the rating to one decimal so 4.71 and 4.68 are treated as the same
