@@ -1,78 +1,134 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { readFileSync, readdirSync, statSync } from "fs";
+import { join } from "path";
 import { routableOrigin, requestOrigin, publicRequestOrigin } from "./request-origin";
 
-const mkReq = (url: string, headers: Record<string, string> = {}) =>
-  new Request(url, { headers });
+vi.mock("server-only", () => ({}));
 
-describe("routableOrigin", () => {
-  it("accepts real public hosts and normalizes to an origin", () => {
-    expect(routableOrigin("https://wheeldeal-390884710631.asia-southeast1.run.app/x?y=1")).toBe(
-      "https://wheeldeal-390884710631.asia-southeast1.run.app"
-    );
-    expect(routableOrigin("wheeldeal.app")).toBe("https://wheeldeal.app");
+// I-1: EVERY DISPATCHER SELF-KICK WAS ADDRESSED TO 0.0.0.0.
+//
+// The reply lane is driven by an HTTP call the app makes to itself. Six routes
+// built that URL from `new URL(req.url).origin`, which on Cloud Run is the BIND
+// address - Dockerfile sets HOSTNAME=0.0.0.0 and PORT=8080, and the Next
+// standalone server derives req.url from it rather than from the proxy's Host
+// header. `kickDispatcher` swallows the resulting failure by design, so the
+// dispatcher was never started and nothing was logged: shops replied, agents
+// composed answers, and the answers sat in the outbox.
+//
+// This file pins the invariant repo-wide, because the defect's whole character
+// is that it spreads by copy-paste and fails silently.
+
+const REPO = process.cwd();
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (full.endsWith(".ts") || full.endsWith(".tsx")) out.push(full);
+  }
+  return out;
+}
+
+const stripComments = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+describe("no route builds a self-directed URL from req.url", () => {
+  const routeFiles = walk(join(REPO, "src/app/api")).filter((f) => !f.endsWith(".test.ts"));
+
+  it("finds the API routes at all (guards against a silent empty sweep)", () => {
+    expect(routeFiles.length).toBeGreaterThan(20);
   });
 
-  it("rejects bind/loopback/link-local/internal hosts", () => {
-    for (const bad of [
-      "https://0.0.0.0:8080",
-      "http://localhost:3000",
-      "https://127.0.0.1",
-      "https://127.5.5.5:9999",
-      "https://[::1]:8080",
-      "https://169.254.10.10",
-      "https://metadata.google.internal",
-      "https://myhost.local",
-    ]) {
-      expect(routableOrigin(bad)).toBeNull();
+  // The exact shapes that shipped the bug: an origin taken off the request and
+  // then interpolated into a URL string.
+  it.each(routeFiles.map((f) => [f.slice(REPO.length + 1), f] as const))(
+    "%s",
+    (_rel, full) => {
+      const code = stripComments(readFileSync(full, "utf8"));
+      expect(code).not.toMatch(/\$\{\s*new URL\(req\.url\)\.origin\s*\}/);
+      expect(code).not.toMatch(/\$\{\s*url\.origin\s*\}/);
+      // `const origin = new URL(req.url).origin` - the indirection that let the
+      // bug survive a grep for the interpolated form.
+      expect(code).not.toMatch(
+        /\b(?:const|let|var)\s+origin\s*=\s*new URL\(req\.url\)\.origin/
+      );
+      // `{ origin: url.origin }` - how the P0 site actually shipped it. The
+      // origin was passed into the ingest as an argument and interpolated
+      // there, so none of the patterns above would have caught the one line
+      // that broke the reply lane.
+      expect(code).not.toMatch(
+        /\borigin\s*:\s*(?:url\.origin|new URL\(req\.url\)\.origin)/
+      );
     }
+  );
+});
+
+describe("routableOrigin rejects everything a self-kick could not reach", () => {
+  it.each([
+    "http://0.0.0.0:8080",
+    "https://0.0.0.0",
+    "http://localhost:3000",
+    "http://127.0.0.1:8080",
+    "http://[::1]",
+    "http://169.254.169.254",
+    "https://wd-web.local",
+    "https://worker.internal",
+    // Dotless container hostnames - the shape Cloud Run and Docker both produce.
+    "https://wd-web",
+  ])("%s -> null", (input) => {
+    expect(routableOrigin(input)).toBeNull();
   });
 
-  it("rejects empty/garbage", () => {
+  it.each([
+    ["https://wheeldeal.pro", "https://wheeldeal.pro"],
+    ["wheeldeal.pro", "https://wheeldeal.pro"],
+    ["https://wd-web-abc123-uc.a.run.app", "https://wd-web-abc123-uc.a.run.app"],
+  ])("%s -> %s", (input, expected) => {
+    expect(routableOrigin(input)).toBe(expected);
+  });
+
+  it("returns null rather than throwing on junk", () => {
     expect(routableOrigin("")).toBeNull();
     expect(routableOrigin(null)).toBeNull();
-    expect(routableOrigin("ht!tp://???")).toBeNull();
+    expect(routableOrigin("http://")).toBeNull();
   });
 });
 
-describe("requestOrigin", () => {
-  it("prefers x-forwarded-host + proto (the Cloud Run shape)", () => {
-    const req = mkReq("https://0.0.0.0:8080/api/admin/ping-url", {
-      "x-forwarded-host": "wheeldeal-390884710631.asia-southeast1.run.app",
-      "x-forwarded-proto": "https",
-    });
-    expect(requestOrigin(req)).toBe("https://wheeldeal-390884710631.asia-southeast1.run.app");
+describe("requestOrigin prefers the forwarded identity over the bind address", () => {
+  const reqWith = (headers: Record<string, string>, url = "http://0.0.0.0:8080/api/wa/tick") =>
+    new Request(url, { headers });
+
+  it("REPRODUCTION: with no forwarded headers it yields the unroutable bind origin", () => {
+    // This is exactly what every self-kick used to send its fetch to.
+    expect(requestOrigin(reqWith({}))).toBe("http://0.0.0.0:8080");
+    expect(publicRequestOrigin(reqWith({}))).toBeNull();
   });
 
-  it("takes the FIRST forwarded value when proxies appended a chain", () => {
-    const req = mkReq("https://0.0.0.0:8080/x", {
-      "x-forwarded-host": "wheeldeal.app, internal-lb.internal",
+  it("uses x-forwarded-host + proto when the proxy sets them", () => {
+    const req = reqWith({
+      "x-forwarded-host": "wheeldeal.pro",
+      "x-forwarded-proto": "https",
+    });
+    expect(requestOrigin(req)).toBe("https://wheeldeal.pro");
+    expect(publicRequestOrigin(req)).toBe("https://wheeldeal.pro");
+  });
+
+  it("takes the FIRST value when a proxy chain appends", () => {
+    const req = reqWith({
+      "x-forwarded-host": "wheeldeal.pro, internal-lb",
       "x-forwarded-proto": "https, http",
     });
-    expect(requestOrigin(req)).toBe("https://wheeldeal.app");
+    expect(requestOrigin(req)).toBe("https://wheeldeal.pro");
   });
 
-  it("defaults forwarded proto to https when only the host is forwarded", () => {
-    const req = mkReq("http://0.0.0.0:8080/x", { "x-forwarded-host": "wheeldeal.app" });
-    expect(requestOrigin(req)).toBe("https://wheeldeal.app");
-  });
-
-  it("falls back to the raw request URL (local dev stays valid)", () => {
-    expect(requestOrigin(mkReq("http://localhost:3000/api/x"))).toBe("http://localhost:3000");
-  });
-});
-
-describe("publicRequestOrigin", () => {
-  it("is null when only the bind address is known (the 0.0.0.0 bug shape)", () => {
-    expect(publicRequestOrigin(mkReq("https://0.0.0.0:8080/api/x"))).toBeNull();
-  });
-
-  it("resolves the forwarded public host", () => {
-    const req = mkReq("https://0.0.0.0:8080/api/x", {
-      "x-forwarded-host": "wheeldeal-390884710631.asia-southeast1.run.app",
-      "x-forwarded-proto": "https",
-    });
-    expect(publicRequestOrigin(req)).toBe(
-      "https://wheeldeal-390884710631.asia-southeast1.run.app"
+  it("defaults the scheme to https when only the host is forwarded", () => {
+    expect(requestOrigin(reqWith({ "x-forwarded-host": "wheeldeal.pro" }))).toBe(
+      "https://wheeldeal.pro"
     );
+  });
+
+  it("a forwarded host that is itself unroutable still fails the public check", () => {
+    const req = reqWith({ "x-forwarded-host": "localhost:3000" });
+    expect(publicRequestOrigin(req)).toBeNull();
   });
 });

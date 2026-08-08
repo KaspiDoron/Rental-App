@@ -72,3 +72,30 @@ export function requestOrigin(req: Request): string {
 export function publicRequestOrigin(req: Request): string | null {
   return routableOrigin(requestOrigin(req));
 }
+
+/**
+ * The origin to use when this app calls ITSELF - the dispatcher self-kicks that
+ * drive the reply lane and the tick chain.
+ *
+ * THIS IS THE ONE THAT WAS BROKEN. Every self-kick used to build its URL from
+ * `new URL(req.url).origin`, which on Cloud Run resolves to the bind address
+ * `http://0.0.0.0:8080` (Dockerfile sets HOSTNAME=0.0.0.0, PORT=8080). The
+ * fetch then failed against an unroutable host, `kickDispatcher` swallowed it
+ * by design, and the dispatcher was never started - so composed replies sat in
+ * the outbox and shops got silence. It was the common ancestor of a long line
+ * of "queue stuck" incidents.
+ *
+ * Resolution order, and each step matters:
+ *   1. the forwarded identity (what the outside world called us), rejected if
+ *      it is a bind/loopback/link-local address no fetch could reach;
+ *   2. the owner-set APP_DOMAIN / env origin, which is always routable.
+ *
+ * Every self-directed URL in this codebase MUST come from here. There is a test
+ * asserting no route builds one from `req.url` directly.
+ */
+export async function selfKickOrigin(req: Request): Promise<string> {
+  const fromRequest = publicRequestOrigin(req);
+  if (fromRequest) return fromRequest;
+  const { resolveSiteOrigin } = await import("@/lib/site");
+  return resolveSiteOrigin();
+}

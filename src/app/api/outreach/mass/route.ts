@@ -526,8 +526,9 @@ export async function POST(req: Request) {
   // forget; the activity polls and the ping cron remain the backstops).
   try {
     const { webhookToken } = await import("@/lib/evolution");
+    const { selfKickOrigin } = await import("@/lib/request-origin");
     const token = await webhookToken();
-    const origin = new URL(req.url).origin;
+    const origin = await selfKickOrigin(req);
     if (token) {
       fetch(`${origin}/api/wa/tick?token=${encodeURIComponent(token)}&hop=0`).catch(() => {});
     }

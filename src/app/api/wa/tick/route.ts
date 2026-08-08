@@ -132,8 +132,12 @@ export async function GET(req: Request) {
   // Continue the chain in a fresh invocation while near-term work remains.
   const due = await nextDueMs();
   if (due !== null && due < CHAIN_HORIZON_MS && hop < MAX_HOPS) {
+    // The hop chain used to re-derive url.origin, so even a correctly-started
+    // tick could not continue past hop 0 on Cloud Run.
+    const { selfKickOrigin } = await import("@/lib/request-origin");
+    const origin = await selfKickOrigin(req);
     fetch(
-      `${url.origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=${hop + 1}`
+      `${origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=${hop + 1}`
     ).catch(() => {});
     // Give the outgoing request a moment to actually leave this instance.
     await new Promise((r) => setTimeout(r, 350));

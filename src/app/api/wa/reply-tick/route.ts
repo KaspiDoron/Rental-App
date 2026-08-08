@@ -118,8 +118,10 @@ export async function GET(req: Request) {
       "wa_send_claims",
       `sender_key=eq.__reply__&slot_key=eq.${encodeURIComponent(slot)}`
     ).catch(() => {});
+    const { selfKickOrigin } = await import("@/lib/request-origin");
+    const origin = await selfKickOrigin(req);
     fetch(
-      `${url.origin}/api/wa/reply-tick?token=${encodeURIComponent(expected)}` +
+      `${origin}/api/wa/reply-tick?token=${encodeURIComponent(expected)}` +
         `&sender=${encodeURIComponent(sender)}&hop=${hop + 1}`
     ).catch(() => {});
     await new Promise((r) => setTimeout(r, 350));

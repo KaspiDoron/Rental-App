@@ -62,8 +62,10 @@ export async function GET(req: Request) {
   // detached fetch here is exactly the call Cloud Run freezes (see wa/kick.ts).
   if (expected) {
     const { kickDispatcher } = await import("@/lib/wa/kick");
+    const { selfKickOrigin } = await import("@/lib/request-origin");
+    const origin = await selfKickOrigin(req);
     await kickDispatcher(
-      `${new URL(req.url).origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=0`
+      `${origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=0`
     );
   }
 

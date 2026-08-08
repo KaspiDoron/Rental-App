@@ -304,7 +304,8 @@ export async function POST(req: Request) {
     try {
       const { webhookToken } = await import("@/lib/evolution");
       const tok = await webhookToken();
-      const origin = new URL(req.url).origin;
+      const { selfKickOrigin } = await import("@/lib/request-origin");
+      const origin = await selfKickOrigin(req);
       if (tok) {
         const { kickDispatcher } = await import("@/lib/wa/kick");
         const token = encodeURIComponent(tok);

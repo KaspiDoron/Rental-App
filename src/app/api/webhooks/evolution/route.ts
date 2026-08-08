@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { webhookToken } from "@/lib/evolution";
 import { processEvolutionWebhook } from "@/lib/wa/ingest";
 import { noteWebhookAccepted, noteWebhook403 } from "@/lib/wa/webhook-trace";
+import { selfKickOrigin } from "@/lib/request-origin";
 
 export async function POST(req: Request) {
   const url = new URL(req.url);
@@ -33,7 +34,11 @@ export async function POST(req: Request) {
   // Durable "last inbound accepted at" (throttled per instance).
   void noteWebhookAccepted(String((body as { instance?: string; instanceName?: string })?.instance ?? (body as { instanceName?: string })?.instanceName ?? "") || undefined, String((body as { event?: string })?.event ?? "") || undefined);
 
-  const outcome = await processEvolutionWebhook(body, { origin: url.origin, token: expected });
+  // NOT url.origin: on Cloud Run that is the bind address (0.0.0.0:8080), and
+  // the self-kicks built from it silently failed - which is why composed
+  // replies never reached WhatsApp.
+  const origin = await selfKickOrigin(req);
+  const outcome = await processEvolutionWebhook(body, { origin, token: expected });
 
   // FAIL LOUD ON OUR OWN OUTAGE. When a message could not be ingested because
   // our storage was unreachable (not because it was judged not-ours), a 200
