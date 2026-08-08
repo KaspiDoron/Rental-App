@@ -84,9 +84,14 @@ export default function PricingPage() {
               );
             })}
           </div>
+          {/* "never put at risk" was an ABSOLUTE GUARANTEE, on the page where
+              money changes hands, of an outcome we do not control - and the
+              app's own Terms deny it in as many words. Every plan gets the same
+              safeguards; none of them is a promise about what WhatsApp will do. */}
           <p className="mt-2 text-center text-[10px] text-faint">
-            Every send is protected by the same anti-ban pacing on all plans - your WhatsApp
-            number is never put at risk.
+            Every plan sends at the same careful pace - human timing, daily caps, and one
+            introduction per shop. Safeguards, not a guarantee: WhatsApp decides what happens
+            to your number.
           </p>
         </div>
       </section>

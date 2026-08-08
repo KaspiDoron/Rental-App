@@ -18,7 +18,11 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Is my WhatsApp safe?",
-    a: "Messages go out at a natural, human pace, during shop hours, and sending takes an automatic break at the first sign of anything unusual. We only ever see the rental-shop threads opened through WheelDeal - never your personal chats. You can disconnect with one tap.",
+    // The old answer claimed sending "takes an automatic break at the first
+    // sign of anything unusual" - a detector that, at the time, matched words
+    // against a numeric status code and had never fired once. A question this
+    // direct deserves the real answer, including the part we do not control.
+    a: "Your agent sends at a human pace, with daily caps, and only ever opens one conversation per shop - after that it writes again only if the shop has replied. If WhatsApp pushes back on new conversations, it stops opening them and keeps answering the shops already talking to you. What we cannot promise is the outcome: WhatsApp decides what happens to a number, and messaging many new shops who never reply is what gets personal numbers restricted. Link a number you could manage without. We only ever see the rental-shop threads opened through WheelDeal - never your personal chats - and you can disconnect with one tap.",
   },
   {
     q: "Do I have to accept what Will negotiates?",

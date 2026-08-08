@@ -95,7 +95,7 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
             </p>
           )}
           <p className="mt-1.5 text-[10px] text-faint">
-            {t("Short waits are deliberate - they keep your messages feeling personal, never spammy.")}
+            {t("Short waits are deliberate - they keep each message personal and give shops time to answer.")}
           </p>
         </div>
       )}

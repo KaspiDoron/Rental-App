@@ -9,14 +9,35 @@ import { useState } from "react";
 import { Icon } from "../icons";
 import { useI18n } from "@/lib/i18n";
 
+// EVERY LINE HERE MUST BE TRUE OF THE CODE AS IT SHIPS TODAY.
+//
+// Six of these described a system nobody had built. "Warmed up gently" while
+// effectiveNewContactCap discards its age arguments by design; "never at 3am"
+// while FAST_DISPATCH defaults ON and lifts the clock gate; "at the first sign
+// of risk all sending stops" while the restriction detector matched words
+// against a numeric status code and had never fired; "one conversation per shop
+// per day" while a blue tick unlocked a follow-up.
+//
+// A disclaimer elsewhere does not cure an affirmative misstatement of present
+// fact made on the screen that induces the user to link their personal number.
+// So the rule for this array is narrow and absolute: if the code does not do it
+// today, it does not go here - and nothing in it may promise an outcome that
+// WhatsApp, not us, decides.
 const MECHANICS = [
-  "A trust score per number: sending capacity grows slowly as your number proves healthy - brand-new numbers are warmed up gently.",
-  "Human pacing: randomised gaps between messages, typing indicators, and a hard hourly + daily send budget.",
-  "Business-hours queueing: shops are messaged when they are open, never at 3am.",
-  "Every message is uniquely worded - no two shops ever receive the same text.",
-  "Automatic safety pause: at the first sign of risk (failed sends, low reply rates) all sending stops on its own.",
-  "One conversation per shop per day - your agents never spam a thread.",
+  "Human pacing: randomised gaps between messages, a per-shop send lock, and a hard hourly and daily budget.",
+  "Business-hours awareness: we know each shop's local hours and message the open ones first. A closed shop still gets your message - it simply waits unread until they open.",
+  "Every message is uniquely worded - no two shops receive the same text, and your dates are always included so a shop can actually answer.",
+  "One introduction per shop. After that your agent only writes again once the shop has actually written back.",
+  "If WhatsApp pushes back on a new conversation, your agent stops opening new ones and keeps answering the shops already talking to you.",
 ];
+
+/**
+ * The line that is NOT a feature. It sits apart from the mechanics because it
+ * is the one thing on this panel we do not control, and burying it in a list of
+ * reassurances is how it stops being read.
+ */
+const CANNOT_PROMISE =
+  "What we cannot promise: WhatsApp decides what happens to your number. Messaging many new shops who never reply is what gets personal numbers restricted, and no amount of pacing rules that out. Link a number you could manage without.";
 
 export function TrustPanel({
   compact = false,
@@ -38,7 +59,10 @@ export function TrustPanel({
     {
       icon: "shieldCheck",
       title: t("Your number is treated with care"),
-      body: t("Human rhythm, sensible daily amounts, and automatic breaks whenever caution is wise."),
+      // "automatic breaks whenever caution is wise" implied a system that knew
+      // when caution was wise. Safeguards, stated as safeguards - not as a
+      // guarantee of an outcome WhatsApp controls.
+      body: t("Human rhythm, sensible daily amounts, and one introduction per shop. Safeguards, not a guarantee."),
     },
     {
       icon: "eyeOff",
@@ -80,6 +104,11 @@ export function TrustPanel({
                   {t(m)}
                 </li>
               ))}
+              {/* Deliberately last, deliberately not a check mark, deliberately
+                  not phrased as another reassurance. */}
+              <li className="mt-2 flex items-start gap-1.5 border-t border-line pt-2 text-[11px] font-bold leading-relaxed text-soft">
+                {t(CANNOT_PROMISE)}
+              </li>
             </ul>
           )}
         </div>

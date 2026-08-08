@@ -1511,22 +1511,34 @@ export async function guardOutbound(rawOpts: {
           opts.senderKey
         )}&to_number=eq.${encodeURIComponent(opts.toDigits)}&limit=1`
       );
-      const engaged =
-        inboundSince.length > 0 || state[0]?.read || Boolean(state[0]?.last_reply_at);
+      // A READ RECEIPT IS NOT ENGAGEMENT - it is the opposite.
+      //
+      // `state[0]?.read` used to satisfy this test, so a blue tick unlocked a
+      // second automated message. But a read receipt means the shop opened the
+      // chat and chose NOT to answer. On the axis that meters unanswered new
+      // chats, that thread is still unanswered, and following up on someone who
+      // deliberately declined to reply is a stronger spam signal than following
+      // up on someone who never saw the message at all.
+      //
+      // It also made the UI copy false: we told travellers "one conversation
+      // per shop per day" while a blue tick quietly authorised another. Only a
+      // real inbound reply counts now - either a stamped message row, or
+      // last_reply_at for legacy rows that predate the receiver stamp.
+      const engaged = inboundSince.length > 0 || Boolean(state[0]?.last_reply_at);
       if (!engaged) {
         // TERMINAL drop, not a re-park. A 2nd automated message to a shop that
-        // has not replied/read is the #1 spam signal, so we do not send it - and
+        // has not REPLIED is the #1 spam signal, so we do not send it - and
         // we must not leave it perpetually re-parking in the queue either (that
         // is what kept a duplicate follow-up visible forever and burned drain
         // cycles). If the shop later engages, a fresh turn composes a new
         // message that passes this halt. The drop leaves a durable trace -
         // this branch used to write NOTHING, making it indistinguishable from
         // a user removal after the fact.
-        void recordSendDropped(opts.senderKey, opts.toDigits, "engagement-halt: no reply or read receipt yet", opts.meta);
+        void recordSendDropped(opts.senderKey, opts.toDigits, "engagement-halt: the shop has not replied yet", opts.meta);
         return {
           allow: false,
           terminal: true,
-          reason: "engagement-halt: no reply or read receipt yet",
+          reason: "engagement-halt: the shop has not replied yet",
           text,
         };
       }

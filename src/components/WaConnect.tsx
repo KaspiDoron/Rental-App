@@ -379,10 +379,18 @@ export function WaConnect({
               </div>
               {/* The four promises that make people comfortable linking */}
               <ul className="mb-2 space-y-1 rounded-2xl bg-savings-soft p-2.5 text-[11px] font-bold text-savings">
+                {/* Three of these four described things the code does not do.
+                    "Goes back to sleep - no activity, nothing sent" while
+                    pauseIdleSessions only sets presence unavailable and the
+                    socket stays open with keepalives running; "built to keep
+                    your number safe" as an outcome promise; and "every trace of
+                    the link is erased" while whatsapp_messages rows survive a
+                    disconnect - proven by the separate "Clear imported
+                    conversations" button thirty lines above this one. */}
                 <li>🔒 {t("Private: we only ever see chats with shops the app messaged - never friends or family.")}</li>
-                <li>😴 {t("Quiet: when you are not using the app, your WhatsApp goes back to sleep - no activity, nothing sent.")}</li>
-                <li>🛡 {t("Protected: human-pace sending, daily safety caps and shop business-hours only - built to keep your number safe.")}</li>
-                <li>✌️ {t("Yours: disconnect any time with one tap and every trace of the link is erased.")}</li>
+                <li>😴 {t("Quiet: while you are away your agent stops sending - nothing new goes out until you are back.")}</li>
+                <li>🛡 {t("Careful: human-pace sending, daily send caps, and one introduction per shop. Safeguards, not a guarantee - WhatsApp decides what happens to your number.")}</li>
+                <li>✌️ {t("Yours: disconnect any time with one tap, and you can clear your stored shop conversations in the same place.")}</li>
               </ul>
               {/* The full protection story - same panel as the landing page,
                   incl. the expandable list of real anti-ban mechanics. */}
@@ -414,8 +422,20 @@ export function WaConnect({
               >
                 {t("WhatsApp Linking Terms")}
               </button>
+              {/* THE SINGLE MOST IMPORTANT STRING IN THE APP.
+                  The only plain statement of account-loss risk lived in clause
+                  3 of the terms modal, behind a link - and this line, presented
+                  as "the short version" of that document, summarised away its
+                  one material term. A summary that omits the sole material risk
+                  is worse than no summary.
+                  This is also the one surface where naming the risk plainly is
+                  REQUIRED rather than avoided: everywhere else the app talks
+                  about pacing in quality-control terms, but consent has to be
+                  informed to be consent. */}
               <span className="mt-0.5 block text-[11px] text-faint">
-                {t("The short version: your number, your control - disconnect any time.")}
+                {t(
+                  "The short version: you are linking your own WhatsApp, this uses an unofficial connection, and WhatsApp can restrict or ban a number for it. Disconnect any time. Use a number you could manage without."
+                )}
               </span>
             </span>
           </label>

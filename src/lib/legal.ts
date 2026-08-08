@@ -6,7 +6,12 @@
 // NOTE FOR THE OWNER: `OPERATOR_NAME` is the only place to insert a real legal
 // entity (e.g. "WheelDeal Ltd."). Until then it reads as "the Operator".
 
-export const TERMS_VERSION = "2026-07-15";
+// Bumped when the WhatsApp linking consent copy changed: the visible "short
+// version" used to summarise away the one material term in the document it
+// summarised (that WhatsApp can restrict or ban a number for using an
+// unofficial connection). Existing linked users are re-prompted, because the
+// thing they agreed to was not what the document said.
+export const TERMS_VERSION = "2026-08-08";
 export const OPERATOR_NAME = "the Operator"; // TODO: replace with the legal entity name
 export const GOVERNING_LAW = "the State of Israel";
 export const JURISDICTION = "the competent courts of Tel Aviv, Israel";
