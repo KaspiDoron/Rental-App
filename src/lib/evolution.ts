@@ -2000,6 +2000,8 @@ export async function sendFromUser(
   ok: boolean;
   error?: string;
   rateLimited?: boolean;
+  /** How long the CAP says to wait. Absent for every non-cap failure. */
+  retryAfterSeconds?: number;
   messageId?: string;
   unconfirmed?: boolean;
   /** The provider's own record of WHICH chat this landed in. For a
@@ -2009,7 +2011,17 @@ export async function sendFromUser(
   chatJid?: string;
 }> {
   const rate = await checkRateLimit(email, opts?.lane ?? "intro");
-  if (!rate.allowed) return { ok: false, rateLimited: true, error: rate.reason };
+  if (!rate.allowed) {
+    // Carry the limiter's OWN wait forward. Without it the drain had no way to
+    // tell a cap refusal from a dead host, so it re-parked by the transient
+    // backoff and told the owner Evolution was unreachable.
+    return {
+      ok: false,
+      rateLimited: true,
+      retryAfterSeconds: rate.waitSeconds,
+      error: rate.reason,
+    };
+  }
 
   const instance = instanceNameFor(email);
   const number = digitsOnly(to);

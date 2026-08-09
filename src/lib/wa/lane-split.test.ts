@@ -158,3 +158,104 @@ describe("the in-memory gap is gone, and nothing loosened", () => {
     expect(readCode("src/lib/wa-guard.ts")).toMatch(/claimSendSlots|wa_send_claims/);
   });
 });
+
+describe("a cap refusal is not an outage", () => {
+  const guard = readCode("src/lib/wa-guard.ts");
+  const evo = readCode("src/lib/evolution.ts");
+
+  it("REPRODUCTION: the old classifier had no third state", () => {
+    // `transient = !recipientFail` is still there and still correct for what it
+    // covers - but it used to be reached by EVERY non-recipient failure,
+    // including a budget refusal. The row was then re-parked by the 45-120s
+    // transient bounce with the reason "reconnecting - resumes automatically",
+    // telling the owner Evolution was unreachable when it was perfectly fine.
+    expect(guard).toMatch(/const transient = !recipientFail/);
+    // ...and the cap is now tested BEFORE it.
+    const capIdx = guard.indexOf("if (r.rateLimited)");
+    const transientIdx = guard.indexOf("if (transient)");
+    expect(capIdx).toBeGreaterThan(-1);
+    expect(capIdx).toBeLessThan(transientIdx);
+  });
+
+  it("re-parks by the limiter's own wait, not an invented backoff", () => {
+    expect(evo).toMatch(/retryAfterSeconds: rate\.waitSeconds/);
+    expect(guard).toMatch(/r\.retryAfterSeconds \?\? 900/);
+  });
+
+  it("the wait is clamped to something a human would accept", () => {
+    expect(guard).toMatch(/Math\.max\(60, Math\.min\(6 \* 3600/);
+  });
+
+  it("a cap refusal never burns the unreachable-host give-up budget", () => {
+    // 24h at cap is normal. Counting it as transientAttempts would eventually
+    // DROP the message as if the host had been dead for a day.
+    const start = guard.indexOf("if (r.rateLimited)");
+    // Scope to the block itself - its own `continue;` - rather than a fixed
+    // character window, which overran into the transient branch below.
+    const branch = guard.slice(start, guard.indexOf("continue;", start));
+    expect(branch).not.toMatch(/transientAttempts/);
+    expect(branch).not.toMatch(/attempts:/);
+  });
+
+  it("the reason says what actually happened", () => {
+    expect(guard).toMatch(/daily message allowance reached/);
+    expect(guard).not.toMatch(/rateLimited[\s\S]{0,400}reconnecting/);
+  });
+});
+
+describe("the introduction budget fails CLOSED, the breaker fails OPEN", () => {
+  const guard = readCode("src/lib/wa-guard.ts");
+
+  // These two consume the same read and must fail in OPPOSITE directions,
+  // which is easy to "simplify" into a single wrong behaviour later.
+  //
+  //   budget  - grants permission to send. Silence must DENY, or a Supabase
+  //             wobble reads as "zero introductions used" and opens the whole
+  //             cold budget on a personal number at the worst possible moment.
+  //   breaker - halts a batch that is going unanswered. Silence must STAND
+  //             DOWN, or the same wobble freezes cold outreach on no evidence.
+
+  it("REPRODUCTION: the count no longer comes from the permissive helper", () => {
+    // sbSelect collapses a 500, a timeout and a DNS blip all to [], and the
+    // count was `.length` over that array.
+    const fn = guard.slice(
+      guard.indexOf("export async function introductionsInWindow"),
+      guard.indexOf("export interface IntroBudget")
+    );
+    expect(fn).toMatch(/sbSelectStrict/);
+    expect(fn).not.toMatch(/await sbSelect</);
+  });
+
+  it("an unavailable read spends the budget rather than granting it", () => {
+    const fn = guard.slice(
+      guard.indexOf("export async function introductionsInWindow"),
+      guard.indexOf("export interface IntroBudget")
+    );
+    expect(fn).toMatch(/read\.error === "unavailable"/);
+    expect(fn).toMatch(/count: Number\.POSITIVE_INFINITY/);
+    expect(fn).toMatch(/unreadable: true/);
+  });
+
+  it("a MISSING table still fails open - a fresh install has genuinely sent nothing", () => {
+    const fn = guard.slice(
+      guard.indexOf("export async function introductionsInWindow"),
+      guard.indexOf("export interface IntroBudget")
+    );
+    // Only "unavailable" short-circuits; "missing" falls through to rows = [].
+    expect(fn).toMatch(/"rows" in read \? read\.rows : \[\]/);
+  });
+
+  it("an unreadable budget re-checks in minutes, not an hour", () => {
+    // The budget is not spent - we just cannot see it - so parking the batch
+    // for a full window would be its own kind of lie.
+    expect(guard).toMatch(/if \(unreadable\) \{[\s\S]{0,120}3 \* 60_000/);
+  });
+
+  it("the breaker stands DOWN on the same unreadable read", () => {
+    const fn = guard.slice(
+      guard.indexOf("export async function coldEngagementWindow"),
+      guard.indexOf("export async function coldEngagementWindow") + 2000
+    );
+    expect(fn).toMatch(/if \(win\.unreadable\) return null;/);
+  });
+});

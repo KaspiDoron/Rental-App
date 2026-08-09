@@ -18,7 +18,21 @@ vi.mock("../runtime-config", () => ({
     if (table === "wa_recipient_state") return state.recip;
     return [];
   },
-  sbSelectStrict: async () => ({ error: "missing" }),
+  // introductionsInWindow moved from the permissive sbSelect to sbSelectStrict
+  // so an unreadable count fails CLOSED (it used to read as "zero used" and
+  // open the whole introduction budget during a Supabase wobble). The mock has
+  // to answer on the same helper or every intro read comes back empty.
+  sbSelectStrict: async (table: string, q: string) => {
+    if (state.fail) return { error: "unavailable" as const };
+    if (table === "whatsapp_messages" && q.includes("direction=eq.outbound")) {
+      return { rows: state.intros };
+    }
+    if (table === "whatsapp_messages" && q.includes("direction=eq.inbound")) {
+      return { rows: state.inbound };
+    }
+    if (table === "wa_recipient_state") return { rows: state.recip };
+    return { error: "missing" as const };
+  },
   sbInsert: async () => true,
   sbUpdate: async () => true,
   sbDelete: async () => true,

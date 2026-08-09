@@ -718,14 +718,38 @@ export { recipientLocalHour };
 export async function introductionsInWindow(
   senderKey: string,
   windowHours: number
-): Promise<{ count: number; oldestAsc: string[]; entries: { toNumber: string; atMs: number }[] }> {
+): Promise<{
+  count: number;
+  oldestAsc: string[];
+  entries: { toNumber: string; atMs: number }[];
+  /** True when the count could not be read and the cap must be treated as SPENT. */
+  unreadable?: boolean;
+}> {
   const sinceIso = new Date(Date.now() - windowHours * 3600_000).toISOString();
-  const rows = await sbSelect<{ to_number: string; received_at: string }>(
+  // THIS BUDGET USED TO FAIL OPEN, which is the worst direction for it.
+  //
+  // The permissive sbSelect collapses every failure - a 500, a timeout, a DNS
+  // blip - to []. `count` is derived from that array, so a Supabase wobble read
+  // as "zero introductions used" and the introduction budget opened COMPLETELY,
+  // on a traveller's personal number, at exactly the moment the rest of the
+  // system was least healthy. Nothing anywhere would have said a word until the
+  // restriction arrived.
+  //
+  // Unreadable now means AT CAP. The cost of being wrong that way is a batch
+  // that waits a couple of minutes; the cost of being wrong the other way is
+  // someone's WhatsApp account.
+  const read = await sbSelectStrict<{ to_number: string; received_at: string }>(
     "whatsapp_messages",
     `select=to_number,received_at&direction=eq.outbound&raw->>kind=eq.rfq&to_number=not.in.(session,takeover,cancel)&raw->>sender=eq.${encodeURIComponent(
       senderKey
     )}&received_at=gte.${encodeURIComponent(sinceIso)}&order=received_at.asc&limit=200`
   );
+  if ("error" in read && read.error === "unavailable") {
+    return { count: Number.POSITIVE_INFINITY, oldestAsc: [], entries: [], unreadable: true };
+  }
+  // `error: "missing"` is a table that has never existed - a fresh install has
+  // genuinely sent nothing, so that stays fail-open.
+  const rows = "rows" in read ? read.rows : [];
   const firstSeen = new Map<string, string>();
   for (const r of rows) if (!firstSeen.has(r.to_number)) firstSeen.set(r.to_number, r.received_at);
   const oldestAsc = [...firstSeen.values()].sort();
@@ -744,6 +768,12 @@ export interface IntroBudget {
   windowHours: number;
   /** ISO instant the next introduction slot frees (now, if already free). */
   nextFreeAt: string;
+  /**
+   * The count could not be READ, so `remaining` is 0 defensively rather than
+   * because the budget is spent. Callers should say "checking", not "you have
+   * used your allowance" - and should re-check in minutes.
+   */
+  unreadable?: boolean;
 }
 
 /**
@@ -761,12 +791,16 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
   const cap = newContactCap(rep, p, resolvedPlan);
   let count = 0;
   let oldestAsc: string[] = [];
+  let unreadable = false;
   try {
     const win = await introductionsInWindow(senderKey, windowHours);
     count = win.count;
     oldestAsc = win.oldestAsc;
+    unreadable = Boolean(win.unreadable);
   } catch {
-    // Degrade to the legacy UTC-day counter if the window read fails.
+    // Degrade to the legacy UTC-day counter if the window read THREW. A read
+    // that merely came back unavailable is handled above and arrives here as
+    // count = Infinity, which spends the budget rather than opening it.
     const today = new Date().toISOString().slice(0, 10);
     count = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
   }
@@ -779,7 +813,14 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
   if (remaining <= 0 && Date.parse(nextFreeAt) <= Date.now() + 1000) {
     nextFreeAt = new Date(Date.now() + Math.min(windowHours, 1) * 3600_000).toISOString();
   }
-  return { remaining, cap, windowHours, nextFreeAt };
+  // An unreadable count re-checks in MINUTES, not an hour. The budget is not
+  // actually spent - we simply cannot see it - so the right behaviour is to
+  // hold briefly and look again, rather than to park the batch as if the user
+  // had used their whole window.
+  if (unreadable) {
+    nextFreeAt = new Date(Date.now() + 3 * 60_000).toISOString();
+  }
+  return { remaining, cap, windowHours, nextFreeAt, unreadable };
 }
 
 /**
@@ -836,7 +877,20 @@ export async function coldEngagementWindow(
 ): Promise<{ intros: number; engaged: number } | null> {
   try {
     const sinceIso = new Date(Date.now() - BREAKER_WINDOW_HOURS * 3600_000).toISOString();
-    const { entries } = await introductionsInWindow(senderKey, BREAKER_WINDOW_HOURS);
+    const win = await introductionsInWindow(senderKey, BREAKER_WINDOW_HOURS);
+    // UNREADABLE IS NOT ZERO INTROS, and here that distinction flips the other
+    // way from the budget. introductionsInWindow used to THROW on a failed
+    // read and this catch turned it into null - "the breaker stands down
+    // instead of freezing on blindness". Now it returns a value, so the null
+    // has to be produced explicitly or a blind read would look like a healthy
+    // window with no introductions in it.
+    //
+    // Standing down is right HERE because the breaker's job is to halt a batch
+    // that is going unanswered; halting on no evidence would freeze cold
+    // outreach on a database wobble. The budget above fails the opposite way
+    // for the opposite reason - it grants permission, so silence must deny.
+    if (win.unreadable) return null;
+    const entries = win.entries;
     if (entries.length === 0) return { intros: 0, engaged: 0 };
     const introDigits = new Set(entries.map((e) => digitsOnly(e.toNumber)).filter(Boolean));
     const engaged = new Set<string>();
@@ -1984,7 +2038,15 @@ export async function drainOutbox(
     // metered against one shared pool and a full batch starved its own
     // replies. Passing it is the whole fix.
     lane?: "intro" | "reply"
-  ) => Promise<{ ok: boolean; error?: string; rateLimited?: boolean; unconfirmed?: boolean; messageId?: string }>,
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    rateLimited?: boolean;
+    /** The limiter's own wait. Present only on a cap refusal. */
+    retryAfterSeconds?: number;
+    unconfirmed?: boolean;
+    messageId?: string;
+  }>,
   opts?: DrainOptions
 ): Promise<number> {
   const due = encodeURIComponent(new Date().toISOString());
@@ -2279,6 +2341,8 @@ export async function drainOutbox(
       ok: boolean;
       error?: string;
       rateLimited?: boolean;
+      /** The limiter's own wait. Present only on a cap refusal. */
+      retryAfterSeconds?: number;
       unconfirmed?: boolean;
       messageId?: string;
       chatJid?: string;
@@ -2369,6 +2433,32 @@ export async function drainOutbox(
             detail,
           },
         ]).catch(() => {});
+
+      // A CAP IS NOT A FAULT, AND IT MUST BE TESTED FIRST.
+      //
+      // A rate-limit refusal is neither a recipient failure nor a host failure,
+      // so `transient = !recipientFail` swept it into the infrastructure
+      // branch: the row was re-parked by the 45-120s transient bounce and the
+      // owner was told "reconnecting - resumes automatically", i.e. that
+      // Evolution was unreachable. It was not. The budget simply said no, and
+      // the owner would have spent a day chasing a host that was fine.
+      //
+      // The limiter knows exactly how long to wait, so use its number rather
+      // than a backoff invented here, and say the true thing.
+      if (r.rateLimited) {
+        const waitSec = Math.max(60, Math.min(6 * 3600, r.retryAfterSeconds ?? 900));
+        const resumesAt = new Date(Date.now() + waitSec * 1000);
+        await release(waitSec * 1000, {
+          // NOT `transientAttempts`: a cap refusal must never count toward the
+          // give-up budget for an unreachable host. Nothing was wrong with the
+          // send, and 24h of being at cap is normal, not a dead host.
+          reason: `held - daily message allowance reached, resumes ${resumesAt
+            .toISOString()
+            .slice(11, 16)}`,
+        });
+        continue;
+      }
+
       if (transient) {
         // Retry SOON with no per-failure attempt burn - the batch resumes within
         // ~a minute of the host recovering. Bounded lifetime lives in the pure
