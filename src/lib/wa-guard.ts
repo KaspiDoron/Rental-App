@@ -34,7 +34,7 @@ import {
 } from "./wa/business-hours";
 import { jitteredHold, HARD_MIN_GAP_SEC, RECIPIENT_LOCK_SEC } from "./wa/pacing";
 import { digitsOnly } from "./phone";
-import { numberFilter, waDigits, lidKey, outboxKey } from "./wa/phone-key";
+import { numberFilter, waDigits, lidKey, outboxKey, nationalTail } from "./wa/phone-key";
 import {
   claimOutboxRow,
   releaseOutboxRow,
@@ -424,23 +424,89 @@ export function computeRisk(rep: Reputation, p: SecurityPolicies): RiskBreakdown
   return { score: Math.max(0, Math.min(100, risk)), reasons };
 }
 
+/**
+ * ONE ROW PER SHOP, WHATEVER SPELLING ARRIVED.
+ *
+ * This looked up `to_number=eq.<exact>`, and the two sides of a conversation do
+ * not agree on that string: our send carries discovery's spelling, the shop's
+ * reply carries WhatsApp's. So a reply routinely created a SECOND row rather
+ * than updating the one the introduction wrote - and every reply-clearing rule
+ * downstream was writing to a row nobody would ever read.
+ *
+ * `nationalTail` is the same tolerance the read-side `numberFilter` already
+ * uses: country code and trunk prefix stripped, last 9 subscriber digits. Two
+ * spellings of one shop always agree on it.
+ *
+ * The exact-match read stays as a FALLBACK so rows written before the tail
+ * column existed are still found and adopted rather than duplicated.
+ */
 async function upsertRecipient(
   senderKey: string,
   toNumber: string,
   patch: Record<string, unknown>
 ): Promise<void> {
-  const rows = await sbSelect<{ id: number }>(
-    "wa_recipient_state",
-    `select=id&sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(
-      toNumber
-    )}&limit=1`
-  );
-  if (rows[0]?.id) {
-    await sbUpdate("wa_recipient_state", `id=eq.${rows[0].id}`, patch);
+  const tail = nationalTail(toNumber);
+  const sender = encodeURIComponent(senderKey);
+
+  let existing: { id: number } | undefined;
+  if (tail) {
+    const byTail = await sbSelect<{ id: number }>(
+      "wa_recipient_state",
+      `select=id&sender_key=eq.${sender}&to_tail=eq.${encodeURIComponent(tail)}&limit=1`
+    );
+    existing = byTail[0];
+  }
+  if (!existing) {
+    const byExact = await sbSelect<{ id: number }>(
+      "wa_recipient_state",
+      `select=id&sender_key=eq.${sender}&to_number=eq.${encodeURIComponent(toNumber)}&limit=1`
+    );
+    existing = byExact[0];
+  }
+
+  if (existing?.id) {
+    // Backfill the tail on the legacy row we just adopted, so the next write
+    // finds it by tail and the duplicate never appears.
+    await sbUpdate("wa_recipient_state", `id=eq.${existing.id}`, {
+      ...(tail ? { to_tail: tail } : {}),
+      ...patch,
+    });
   } else {
     await sbInsert("wa_recipient_state", [
-      { sender_key: senderKey, to_number: toNumber, ...patch },
+      { sender_key: senderKey, to_number: toNumber, ...(tail ? { to_tail: tail } : {}), ...patch },
     ]);
+  }
+}
+
+/**
+ * Stamp a conversation milestone WITHOUT overwriting it.
+ *
+ * `first_intro_at` and `first_reply_at` are the denominator the introduction
+ * budget should always have used - WhatsApp meters introductions that never got
+ * an answer, not introductions sent. They are write-once by definition: the
+ * second reply does not move the first, and re-stamping would silently reset
+ * the age of an open thread.
+ */
+async function stampRecipientFirst(
+  senderKey: string,
+  toNumber: string,
+  field: "first_intro_at" | "first_reply_at"
+): Promise<void> {
+  try {
+    const tail = nationalTail(toNumber);
+    const sender = encodeURIComponent(senderKey);
+    const where = tail
+      ? `sender_key=eq.${sender}&to_tail=eq.${encodeURIComponent(tail)}`
+      : `sender_key=eq.${sender}&to_number=eq.${encodeURIComponent(toNumber)}`;
+    const rows = await sbSelect<{ id: number; first_intro_at: string | null; first_reply_at: string | null }>(
+      "wa_recipient_state",
+      `select=id,first_intro_at,first_reply_at&${where}&limit=1`
+    );
+    const row = rows[0];
+    if (row?.[field]) return; // already stamped - never move it
+    await upsertRecipient(senderKey, toNumber, { [field]: new Date().toISOString() });
+  } catch {
+    /* a milestone is telemetry - it can never block a send or an ingest */
   }
 }
 
@@ -498,6 +564,15 @@ export async function recordInboundEngagement(
         read: true,
         delivered: true,
       });
+      // THE MOMENT AN OPEN THREAD CLOSES. This is what makes "unanswered" a
+      // fact instead of a derivation, and it is the quantity WhatsApp actually
+      // meters - introductions that never got a reply, not introductions sent.
+      //
+      // It only works because upsertRecipient is now tail-keyed: the shop's
+      // reply carries WhatsApp's spelling of the number while our introduction
+      // carried discovery's, so before that fix this stamp would have landed on
+      // a different row than the one holding first_intro_at.
+      await stampRecipientFirst(senderKey, fromNumber, "first_reply_at");
     }
   } catch {
     /* reputation is best-effort - never block the reply pipeline */
@@ -671,14 +746,24 @@ async function recordOutboundSend(senderKey: string, toNumber?: string): Promise
     // Was this a brand-new cold contact (no prior recipient state)?
     let newContact = false;
     if (toNumber) {
+      // TAIL-KEYED, like every other read of this table now. The exact-match
+      // form counted a shop as BRAND NEW whenever the reply had been stored
+      // under WhatsApp's spelling rather than discovery's - so a thread that
+      // was already running could burn a fresh new-contact slot.
+      const tail = nationalTail(toNumber);
+      const sender = encodeURIComponent(senderKey);
       const prior = await sbSelect<{ id: number }>(
         "wa_recipient_state",
-        `select=id&sender_key=eq.${encodeURIComponent(senderKey)}&to_number=eq.${encodeURIComponent(
-          toNumber
-        )}&limit=1`
+        tail
+          ? `select=id&sender_key=eq.${sender}&to_tail=eq.${encodeURIComponent(tail)}&limit=1`
+          : `select=id&sender_key=eq.${sender}&to_number=eq.${encodeURIComponent(toNumber)}&limit=1`
       );
       newContact = prior.length === 0;
       await upsertRecipient(senderKey, toNumber, { last_sent_at: new Date().toISOString() });
+      // The first send to a shop IS the introduction. Stamped write-once, so it
+      // anchors how long this thread has been open regardless of how many
+      // follow-ups happen later.
+      if (newContact) await stampRecipientFirst(senderKey, toNumber, "first_intro_at");
     }
     await saveReputation(senderKey, {
       trust_score: Math.max(0, rep.trust_score - p.trust_send_decay),
@@ -762,6 +847,92 @@ export async function introductionsInWindow(
   return { count: firstSeen.size, oldestAsc, entries };
 }
 
+/**
+ * THE TWO-METER BUDGET, and why there are two.
+ *
+ * WhatsApp meters introductions that never got a reply. What is NOT known - and
+ * could not be established across six research rounds, because both sides were
+ * arguing from a type definition nobody can observe on the pinned stack - is
+ * whether a reply RETURNS a spent slot or whether the count simply accumulates
+ * over a cycle.
+ *
+ * So the budget is built to be correct under BOTH models rather than betting on
+ * one:
+ *
+ *   Meter A - unanswered introductions in a rolling 7-day window. Correct under
+ *             the refund model, and never LOOSER than a plain sent-count under
+ *             the accumulator model, because unanswered is a subset of sent.
+ *   Meter B - cumulative messages this calendar month to shops that never
+ *             replied. Correct under the accumulator model, harmless under the
+ *             refund model.
+ *
+ * Admission is the MINIMUM. Whichever model is true, one of them binds.
+ *
+ * The window on Meter A is load-bearing, not decoration. An unwindowed
+ * "unanswered ever" cap SATURATES: non-repliers never clear, so at q=0.35 and
+ * 24 intros/day the open pool grows ~15/day and by day three the traveller is
+ * pinned at zero capacity forever - strictly worse than the sent-count it
+ * replaces. Seven days is also principled rather than invented: it matches the
+ * tctoken lifetime WhatsApp itself uses for established-chat tokens.
+ */
+export const UNANSWERED_WINDOW_DAYS = 7;
+
+export interface UnansweredMeters {
+  /** Open unanswered introductions inside the rolling window. */
+  openInWindow: number;
+  /** Messages this calendar month to shops that never replied. */
+  monthlyToNonRepliers: number;
+  /** True when either read failed - the caller must fail CLOSED. */
+  unreadable: boolean;
+}
+
+/**
+ * Both meters, read conservatively.
+ *
+ * Every unreadable input contributes its CONSERVATIVE value - never infinity
+ * (which would freeze a healthy account on one blip) and never zero (which is
+ * how the old sent-count budget opened itself during a Supabase wobble). The
+ * caller decides what to do with `unreadable`; the numbers themselves stay
+ * honest.
+ */
+export async function unansweredMeters(senderKey: string): Promise<UnansweredMeters> {
+  const sender = encodeURIComponent(senderKey);
+  const windowStart = new Date(
+    Date.now() - UNANSWERED_WINDOW_DAYS * 24 * 3600_000
+  ).toISOString();
+  const monthStart = new Date(new Date().toISOString().slice(0, 7) + "-01T00:00:00.000Z").toISOString();
+
+  // METER A - open threads whose introduction is inside the window.
+  const openRead = await sbSelectStrict<{ id: number }>(
+    "wa_recipient_state",
+    `select=id&sender_key=eq.${sender}&first_reply_at=is.null` +
+      `&first_intro_at=gte.${encodeURIComponent(windowStart)}&limit=500`
+  );
+
+  // METER B - this month's outbound to shops that have never written back.
+  // Derived from the recipient ledger rather than a JSON scan of
+  // whatsapp_messages, so it survives the 13 call sites that write outbound
+  // rows without the convention this used to depend on.
+  const monthRead = await sbSelectStrict<{ id: number }>(
+    "wa_recipient_state",
+    `select=id&sender_key=eq.${sender}&first_reply_at=is.null` +
+      `&last_sent_at=gte.${encodeURIComponent(monthStart)}&limit=1000`
+  );
+
+  const openUnreadable = "error" in openRead && openRead.error === "unavailable";
+  const monthUnreadable = "error" in monthRead && monthRead.error === "unavailable";
+
+  return {
+    openInWindow: "rows" in openRead ? openRead.rows.length : 0,
+    monthlyToNonRepliers: "rows" in monthRead ? monthRead.rows.length : 0,
+    unreadable: openUnreadable || monthUnreadable,
+  };
+}
+
+/** Owner alert thresholds on the monthly accumulator. */
+export const MONTHLY_NON_REPLIER_WARN = 400;
+export const MONTHLY_NON_REPLIER_ALERT = 700;
+
 export interface IntroBudget {
   remaining: number;
   cap: number;
@@ -774,6 +945,10 @@ export interface IntroBudget {
    * used your allowance" - and should re-check in minutes.
    */
   unreadable?: boolean;
+  /** Meter A: open unanswered introductions inside the rolling window. */
+  openUnanswered?: number;
+  /** Meter B: this month's messages to shops that never replied. */
+  monthlyToNonRepliers?: number;
 }
 
 /**
@@ -804,7 +979,24 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
     const today = new Date().toISOString().slice(0, 10);
     count = rep.new_contacts_date === today ? rep.new_contacts_today || 0 : 0;
   }
-  const remaining = Math.max(0, cap - count);
+  // ADMISSION IS THE MINIMUM OF THREE, and the third is the one that actually
+  // tracks risk. `cap - count` bounds introductions SENT in the plan window;
+  // the meters bound introductions still UNANSWERED, which is what WhatsApp
+  // meters. A traveller whose shops all replied has spent nothing risk-bearing
+  // and should keep going; one with 20 open silent threads should not.
+  const meters = await unansweredMeters(senderKey).catch(() => null);
+  const openHeadroom = meters
+    ? Math.max(0, cap - meters.openInWindow)
+    : Number.POSITIVE_INFINITY;
+  const monthHeadroom = meters
+    ? Math.max(0, MONTHLY_NON_REPLIER_ALERT - meters.monthlyToNonRepliers)
+    : Number.POSITIVE_INFINITY;
+
+  const remaining = Math.min(
+    Math.max(0, cap - count),
+    openHeadroom,
+    monthHeadroom
+  );
   let nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
   // Guard the fallback/edge case: budget spent but no window timestamps to
   // anchor to (the legacy-counter degrade path, or a count with no oldestAsc).
@@ -817,10 +1009,18 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
   // actually spent - we simply cannot see it - so the right behaviour is to
   // hold briefly and look again, rather than to park the batch as if the user
   // had used their whole window.
-  if (unreadable) {
+  if (unreadable || meters?.unreadable) {
     nextFreeAt = new Date(Date.now() + 3 * 60_000).toISOString();
   }
-  return { remaining, cap, windowHours, nextFreeAt, unreadable };
+  return {
+    remaining,
+    cap,
+    windowHours,
+    nextFreeAt,
+    unreadable: unreadable || Boolean(meters?.unreadable),
+    openUnanswered: meters?.openInWindow,
+    monthlyToNonRepliers: meters?.monthlyToNonRepliers,
+  };
 }
 
 /**

@@ -248,7 +248,7 @@ describe("the introduction budget fails CLOSED, the breaker fails OPEN", () => {
   it("an unreadable budget re-checks in minutes, not an hour", () => {
     // The budget is not spent - we just cannot see it - so parking the batch
     // for a full window would be its own kind of lie.
-    expect(guard).toMatch(/if \(unreadable\) \{[\s\S]{0,120}3 \* 60_000/);
+    expect(guard).toMatch(/if \(unreadable \|\| meters\?\.unreadable\) \{[\s\S]{0,120}3 \* 60_000/);
   });
 
   it("the breaker stands DOWN on the same unreadable read", () => {

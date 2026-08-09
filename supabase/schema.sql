@@ -1277,3 +1277,37 @@ alter table public.whatsapp_number_reputation
   add column if not exists last_delivery_receipt_at timestamptz;
 alter table public.whatsapp_number_reputation
   add column if not exists last_read_receipt_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- ONE ROW PER SHOP, WHATEVER SPELLING IT ARRIVES IN (Tier 1.0)
+--
+-- wa_recipient_state was keyed on the raw `to_number`, but the two sides of a
+-- conversation spell the same shop differently: our send carries discovery's
+-- form ("+66 81 234 5678" -> 66812345678) while the shop's reply carries
+-- WhatsApp's. So a reply frequently landed on a DIFFERENT row than the send it
+-- answered, and every reply-clearing rule wrote to a row nobody read.
+--
+-- `to_tail` is nationalTail() - country code and trunk prefix stripped, last 9
+-- subscriber digits. Two spellings of one shop always agree on it; two
+-- different shops effectively never do inside one traveller's threads. Same key
+-- the tolerant numberFilter() already uses for reads.
+alter table public.wa_recipient_state
+  add column if not exists to_tail text;
+create index if not exists wa_recipient_state_tail_idx
+  on public.wa_recipient_state (sender_key, to_tail);
+
+-- WRITE-ONCE conversation milestones. These are what make "unanswered" a fact
+-- rather than a derivation over an unindexed JSON scan of whatsapp_messages,
+-- and they are the denominator the introduction budget should have been using
+-- all along: WhatsApp meters introductions that never got a reply, not
+-- introductions sent.
+alter table public.wa_recipient_state
+  add column if not exists first_intro_at timestamptz;
+alter table public.wa_recipient_state
+  add column if not exists first_reply_at timestamptz;
+
+-- The open-thread query: this sender's introductions that have not been
+-- answered. Partial, so it stays small no matter how much history accrues.
+create index if not exists wa_recipient_state_unanswered_idx
+  on public.wa_recipient_state (sender_key, first_intro_at desc)
+  where first_reply_at is null;
