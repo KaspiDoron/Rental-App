@@ -248,7 +248,11 @@ export interface Host {
   key: string;
 }
 
-async function getHosts(): Promise<Host[]> {
+// Exported for `wa/fleet-truth`, which needs the same host list this module
+// routes on. A second parser would be a second source of truth about which
+// hosts exist, which is exactly the class of drift the dual-socket detector is
+// there to catch.
+export async function getHosts(): Promise<Host[]> {
   const multi = (await getConfig("EVOLUTION_HOSTS")) ?? "";
   const parsed = multi
     .split(/[\n,]+/)
