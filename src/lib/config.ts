@@ -75,6 +75,21 @@ const KEYS: {
   { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
   { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
   { name: "GRAPH_ENGINE", label: "Negotiation engine ('off' = legacy pipeline)", scope: "ai", editable: true },
+  // ---- Monetization: the warm-up gate and its measurement holdout ----------
+  //
+  // The thresholds are here rather than hardcoded so the gate can be loosened or
+  // tightened against real cohort data without a redeploy. The number that says
+  // whether they are right is p90 time-to-unlock on Admin -> money; if that
+  // exceeds a typical trip, the gate is too tight.
+  { name: "WARMUP_GATE", label: "Warm-up gate ('off' = anyone may buy immediately; default on)", scope: "billing", editable: true },
+  { name: "WARMUP_MIN_SEARCHES", label: "Warm-up: searches required (default 1)", scope: "billing", editable: true },
+  { name: "WARMUP_MIN_ENGAGED", label: "Warm-up: distinct shops reached (default 3)", scope: "billing", editable: true },
+  { name: "WARMUP_MIN_REPLIES", label: "Warm-up: shops that replied (default 1)", scope: "billing", editable: true },
+  // The holdout is a MEASUREMENT INSTRUMENT. Without a slice that can buy
+  // immediately, "the gate improves conversion" is unfalsifiable forever.
+  // Ships at 0 - turn it on deliberately when you want the comparison.
+  { name: "WARMUP_HOLDOUT_PCT", label: "Warm-up holdout % (0-100) - this slice may buy without warming up", scope: "billing", editable: true },
+  { name: "WARMUP_HOLDOUT_LIST", label: "Warm-up holdout: specific emails (comma or newline separated)", scope: "billing", editable: true },
   { name: "HUMAN_TAKEOVER", label: "Human takeover detection ('off' = ignore user-typed WhatsApp messages)", scope: "messaging", editable: true },
   { name: "FAST_DISPATCH", label: "Fast dispatch ('off' = cold intros wait for shop opening hours; default on - batches fire within their 15-min window)", scope: "messaging", editable: true },
   { name: "CANCEL_GUARD", label: "Cancellation enforcement ('off' = removed shops may be messaged again; default on)", scope: "messaging", editable: true },
@@ -84,6 +99,29 @@ const KEYS: {
   { name: "EVOLUTION_PROXY_POOL", label: "Residential proxy POOL (one URL per line - each user pinned to one)", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_URL", label: "Evolution API URL (single-host fallback)", scope: "messaging", editable: true },
   { name: "EVOLUTION_API_KEY", label: "Evolution API Key (single-host fallback)", scope: "messaging", editable: true },
+  // ---- The business-number handoff (plan Part 12) --------------------------
+  //
+  // OFF until every one of these is set AND WABA_ENABLED is flipped on. With the
+  // flag off, no new code path runs and no new request leaves the process - the
+  // existing engine, where the traveller's own number makes first contact,
+  // stays the live path exactly as it is today.
+  //
+  // WABA_DRY_RUN ships ON: the whole pipeline renders the exact wire text and
+  // sends nothing, so the template and its button can be verified without
+  // spending quality rating on a rented account.
+  { name: "WABA_ENABLED", label: "Business-number handoff ('on' = our official number makes first contact; default OFF)", scope: "messaging", editable: true },
+  { name: "WABA_DRY_RUN", label: "Business-number DRY RUN ('off' = really send; default ON - renders text, sends nothing)", scope: "messaging", editable: true },
+  { name: "WABA_PROVIDER", label: "Business API provider ('meta' direct or 'reseller')", scope: "messaging", editable: true },
+  { name: "WABA_BASE_URL", label: "Business API base URL (provider host, no trailing slash)", scope: "messaging", editable: true },
+  { name: "WABA_API_KEY", label: "Business API key", scope: "messaging", editable: true },
+  { name: "WABA_SENDER_ID", label: "Business API sender / phone-number id", scope: "messaging", editable: true },
+  { name: "WABA_WEBHOOK_SECRET", label: "Business API webhook shared secret (resellers usually do not sign)", scope: "messaging", editable: true },
+  { name: "WABA_TEMPLATE_FIRST_CONTACT", label: "Approved first-contact template name", scope: "messaging", editable: true },
+  { name: "WABA_TEMPLATE_REENGAGE", label: "Approved re-engagement template name (agency quiet past 24h)", scope: "messaging", editable: true },
+  { name: "WABA_LINK_BASE", label: "Handoff link base - MUST match the approved template button URL", scope: "messaging", editable: true },
+  { name: "WABA_AGENCY_COOLDOWN_HOURS", label: "Min hours between templates to one agency (default 24 - error 131049 guard)", scope: "messaging", editable: true },
+  { name: "WABA_HOLD_TIMEOUT_MINUTES", label: "How long a lead waits for the agency to open the window (default 25)", scope: "messaging", editable: true },
+  { name: "WABA_DAILY_SPEND_CEILING_USD", label: "Daily spend ceiling on the official number", scope: "messaging", editable: true },
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token (optional)", scope: "messaging", editable: true },
   { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID (optional)", scope: "messaging", editable: true },
   { name: "WHATSAPP_VERIFY_TOKEN", label: "WhatsApp Webhook Verify Token (optional)", scope: "messaging", editable: true },

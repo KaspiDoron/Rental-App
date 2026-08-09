@@ -27,6 +27,7 @@ const status = (terms: WarmupTerm[]): WarmupStatus => ({
   remaining: terms.filter((t) => !t.done).length,
   unreadable: false,
   exempt: false,
+  holdout: false,
 });
 
 // THE UNIT IS USAGE DEPTH, NOT CALENDAR DAYS, AND THAT IS THE WHOLE FEATURE.

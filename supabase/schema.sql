@@ -1334,3 +1334,83 @@ alter table public.app_users add column if not exists warmup_snapshot jsonb;
 create index if not exists app_users_warmed_idx
   on public.app_users (warmed_up_at desc)
   where warmed_up_at is not null;
+
+-- ---- The business-number handoff (plan Part 12) -----------------------------
+-- Our official WhatsApp Business number sends the FIRST message to an agency;
+-- the agency then messages the traveller directly; our ingest detects that
+-- inbound and the AI agents take over from the traveller's own number.
+--
+-- Nothing below is read while WABA_ENABLED is off, which is the default. These
+-- tables exist so the pipeline is buildable and testable ahead of credentials.
+
+-- One row per handoff attempt: the state machine, both parties, and every
+-- timestamp the console renders. `link_tapped_at` is the most valuable column
+-- here - it is the only per-agency engagement signal in the whole product that
+-- does not depend on someone replying.
+create table if not exists public.waba_leads (
+  id             bigint generated always as identity primary key,
+  state          text not null default 'draft',
+  user_email     text not null,
+  agency_tail    text not null,          -- nationalTail(), same key as wa_recipient_state
+  agency_number  text not null,
+  agency_name    text,
+  session_id     uuid,
+  lane           text,                   -- template | freeform
+  template_name  text,
+  link_token     text unique,
+  created_at     timestamptz not null default now(),
+  sent_at        timestamptz,
+  delivered_at   timestamptz,
+  read_at        timestamptz,
+  link_tapped_at timestamptz,
+  agency_replied_at   timestamptz,       -- to US, on the business number
+  traveller_inbound_at timestamptz,      -- the agency messaged the TRAVELLER
+  handed_off_at  timestamptz,            -- terminal: agents take over
+  terminal_reason text,
+  error_code     int,
+  preview        text                    -- exact wire text, for diagnosis later
+);
+create index if not exists waba_leads_user_idx on public.waba_leads (user_email, created_at desc);
+create index if not exists waba_leads_agency_idx on public.waba_leads (agency_tail, created_at desc);
+-- The hold queue: leads waiting for an agency to open its service window.
+create index if not exists waba_leads_open_idx on public.waba_leads (state, created_at)
+  where handed_off_at is null;
+alter table public.waba_leads enable row level security;
+
+-- Per-agency messaging state. KEYED ON THE PHONE TAIL, reusing nationalTail() -
+-- re-splitting rows across phone spellings here would reproduce the exact bug
+-- the recipient ledger was just fixed for, and the cooldown below is the single
+-- most load-bearing value in the design: error 131049 caps a recipient at ~2
+-- marketing templates per 24h across ALL businesses, and our ranking sends every
+-- traveller in a district to the same top agencies.
+create table if not exists public.waba_agencies (
+  agency_tail          text primary key,
+  agency_number        text,
+  agency_name          text,
+  window_expires_at    timestamptz,      -- service window: free-form until this
+  template_capped_until timestamptz,     -- set on 131049; do NOT retry before
+  last_template_at     timestamptz,
+  sent_total           int not null default 0,
+  delivered_total      int not null default 0,
+  read_total           int not null default 0,
+  tapped_total         int not null default 0,
+  replied_total        int not null default 0,
+  updated_at           timestamptz not null default now()
+);
+create index if not exists waba_agencies_window_idx on public.waba_agencies (window_expires_at desc);
+alter table public.waba_agencies enable row level security;
+
+-- Append-only wire log. This is what makes a failed handoff diagnosable a week
+-- later, when the only question anyone asks is "what did we actually send them".
+create table if not exists public.waba_events (
+  id          bigint generated always as identity primary key,
+  at          timestamptz not null default now(),
+  lead_id     bigint,
+  agency_tail text,
+  kind        text not null,             -- send | delivery | read | tap | inbound | error
+  error_code  int,
+  raw         jsonb
+);
+create index if not exists waba_events_lead_idx on public.waba_events (lead_id, at desc);
+create index if not exists waba_events_at_idx on public.waba_events (at desc);
+alter table public.waba_events enable row level security;

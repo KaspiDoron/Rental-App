@@ -33,6 +33,12 @@ const OpsCenterPanel = dynamic(
   () => import("@/components/ops/OpsCenter").then((m) => m.OpsCenter),
   { ssr: false, loading: () => <LoadingDots label="Loading the Ops Center" /> }
 );
+// Monetization + lifecycle: the funnel, time-to-unlock, where people stall, and
+// the gate-vs-holdout comparison. Lazy like every other heavy tab.
+const LifecyclePanel = dynamic(
+  () => import("@/components/admin/LifecyclePanel").then((m) => m.LifecyclePanel),
+  { ssr: false, loading: () => <LoadingDots label="Reading the lifecycle" /> }
+);
 // The live ENGINE_V3 transparency view that replaces the retired graph debug tabs.
 const EngineInspectorPanel = dynamic(
   () => import("@/components/admin/EngineInspector").then((m) => m.EngineInspector),
@@ -169,7 +175,17 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<
-    "command" | "analytics" | "engine" | "agents" | "ops" | "keys" | "users" | "feedback" | "billing" | "data"
+    | "command"
+    | "analytics"
+    | "engine"
+    | "agents"
+    | "ops"
+    | "money"
+    | "keys"
+    | "users"
+    | "feedback"
+    | "billing"
+    | "data"
   >("command");
   // Keys page: collapse each scope group so the long page is easy to walk.
   const [collapsedScopes, setCollapsedScopes] = useState<Record<string, boolean>>({
@@ -777,7 +793,7 @@ export default function AdminPage() {
             single-pass engine now, so the old graph-pipeline surfaces are no
             longer shown. Their code remains for data/learning continuity but is
             not reachable from the UI. */}
-        {(["command", "analytics", "engine", "keys", "users", "feedback", "billing", "data"] as const)
+        {(["command", "analytics", "money", "engine", "keys", "users", "feedback", "billing", "data"] as const)
           .map((t) => (
           <button
             key={t}
@@ -786,7 +802,13 @@ export default function AdminPage() {
               tab === t ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
             }`}
           >
-            {t === "command" ? "🎯 command" : t === "engine" ? "🧠 engine" : t}
+            {t === "command"
+              ? "🎯 command"
+              : t === "engine"
+                ? "🧠 engine"
+                : t === "money"
+                  ? "💸 money"
+                  : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -974,6 +996,8 @@ export default function AdminPage() {
       )}
 
       {loaded && tab === "engine" && <EngineInspectorPanel />}
+
+      {loaded && tab === "money" && <LifecyclePanel />}
 
       {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 

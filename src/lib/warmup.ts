@@ -57,6 +57,14 @@ export interface WarmupStatus {
   unreadable: boolean;
   /** Exempt from the gate entirely (test mode, owner). */
   exempt: boolean;
+  /**
+   * In the measurement holdout - allowed to buy without warming up.
+   *
+   * Reported to the SERVER so the funnel can segment on it. It must never reach
+   * a user-facing string: a control group that knows it is a control group is
+   * not a control group.
+   */
+  holdout: boolean;
 }
 
 // Thresholds are owner-tunable from Admin -> Keys so the gate can be loosened
@@ -174,6 +182,7 @@ export async function warmupStatus(email: string): Promise<WarmupStatus> {
     remaining: 0,
     unreadable: false,
     exempt: false,
+    holdout: false,
     ...reason,
   });
 
@@ -187,6 +196,18 @@ export async function warmupStatus(email: string): Promise<WarmupStatus> {
   } catch {
     /* allowlist unavailable - fall through to the predicate */
   }
+
+  // THE HOLDOUT. Without a population that can buy immediately, "the gate
+  // improves conversion" is unfalsifiable forever - every number you read
+  // afterwards is equally consistent with the gate helping, hurting, or doing
+  // nothing. Ships at 0%; the owner turns it on to measure.
+  //
+  // `exempt` stays FALSE here on purpose. Exempt means "the gate does not apply
+  // to this account" (testers, owner) and those rows must be excluded from the
+  // funnel entirely. A holdout user is a real customer on the control arm and
+  // has to stay in the denominator.
+  const { inWarmupHoldout } = await import("./cohort");
+  if (await inWarmupHoldout(email)) return allWarm({ holdout: true });
 
   const already = await readStamp(email);
   if (already) return allWarm({ warmedAt: already });
@@ -242,12 +263,20 @@ export async function warmupStatus(email: string): Promise<WarmupStatus> {
   if (unreadable) {
     // Admit on the doubt - see the fail-direction note at the top. Do NOT stamp:
     // a guess must not become a permanent record.
-    return { warmed: true, terms, remaining, unreadable: true, exempt: false };
+    return { warmed: true, terms, remaining, unreadable: true, exempt: false, holdout: false };
   }
 
   const warmed = remaining === 0;
   if (warmed) await stamp(email, terms);
-  return { warmed, warmedAt: warmed ? Date.now() : undefined, terms, remaining, unreadable: false, exempt: false };
+  return {
+    warmed,
+    warmedAt: warmed ? Date.now() : undefined,
+    terms,
+    remaining,
+    unreadable: false,
+    exempt: false,
+    holdout: false,
+  };
 }
 
 /**
