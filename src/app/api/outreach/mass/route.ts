@@ -209,7 +209,54 @@ export async function POST(req: Request) {
     windowMs: batchWindowMs(),
     rand: gaussianUnit,
   });
-  const offsets = schedule.offsets;
+
+  // WAVE PACING - the enqueue-time HALF of it (plan Part 11 F1).
+  //
+  // `batchStagger` above spreads the batch evenly across one window. Waves
+  // replace that shape with short bursts separated by real silence, which is
+  // what a person looks like: 5-8 shops, then 18-22 minutes of nothing.
+  //
+  // batchStagger is NOT replaced - it runs unchanged INSIDE each burst, over a
+  // window of ~60% of the wave gap. A second scheduler that ignored it is how
+  // HARD_MIN_GAP_SEC quietly stops being enforced.
+  //
+  // AND THIS IS ONLY HALF THE JOB. `not_before` is an initial floor; the
+  // authoritative pacer for cold intros is the DRAIN, which selects on
+  // `not_before <= now` and applies its own per-sender ceiling. A wave schedule
+  // written only here is reshaped by the drain on first contact - so the drain
+  // carries a matching admission rule, and the two must be changed together.
+  //
+  // Behind WA_WAVE_PACING, default OFF: this changes the shape of every batch,
+  // so it ships as a switch rather than as a surprise.
+  const { planWaves, waveEndsAtFor, WAVE_BURST_FRACTION } = await import("@/lib/wa/waves");
+  const { inCohort } = await import("@/lib/cohort");
+  const wavesOn = await inCohort("WA_WAVE_PACING", session.email).catch(() => false);
+  let offsets = schedule.offsets;
+  // Held outside the branch because the ENQUEUE HALF IS ONLY HALF THE FEATURE.
+  // `not_before` is a floor; the drain is the authoritative pacer and re-stamps
+  // rows it cannot send this invocation. Without the wave's end time riding the
+  // row, those re-stamps walk a burst straight through its own silence and the
+  // schedule degrades back to a continuous trickle - see `clampRestampToWave`.
+  let wavePlan: import("@/lib/wa/waves").WavePlan | null = null;
+  if (wavesOn) {
+    wavePlan = planWaves({ total: vendors.length, ceiling: vendors.length });
+    const waveOffsets: number[] = [];
+    for (const w of wavePlan.waves) {
+      // Inside the burst, the SAME stagger primitive, so the hard floor and the
+      // gaussian shaping both still apply.
+      const inner = batchStagger({
+        count: w.size,
+        hourCap,
+        gapSec,
+        windowMs: Math.max(1, Math.round(w.spanMs * WAVE_BURST_FRACTION)),
+        rand: gaussianUnit,
+      });
+      for (let i = 0; i < w.size; i++) {
+        waveOffsets.push(w.startOffsetMs + (inner.offsets[i] ?? 0));
+      }
+    }
+    offsets = waveOffsets;
+  }
   const batchStart = Date.now();
   // The stagger index counts only shops that ACTUALLY enter the send stream -
   // never the ones skipped for no-phone, dedupe or tomorrow-deferral. So the
@@ -389,6 +436,12 @@ export async function POST(req: Request) {
     // This shop is entering the send stream - claim its stagger slot. The
     // first eligible shop (slot 0) sends immediately; the rest are parked.
     const slot = sendIndex++;
+    // THE DRAIN'S HALF OF THE WAVE SCHEDULE, written onto the row itself.
+    // Re-deriving it at drain time would need the same seed to survive a
+    // redeploy, and a schedule that changes shape on deploy is not a schedule.
+    // Null when waves are off, and every consumer treats null as "legacy row".
+    const waveEndsAt = wavePlan ? waveEndsAtFor(batchStart, wavePlan.waves, slot) : null;
+    const rowMeta = waveEndsAt ? { ...meta, waveEndsAt } : meta;
     // Shops after the first: park with the stagger - the guard runs at drain.
     if (slot > 0) {
       // Floor at now + the hard gap: the per-shop opener work above (Places
@@ -406,7 +459,7 @@ export async function POST(req: Request) {
           to_key: outboxKey(digits),
           body: opener.text,
           not_before: notBefore,
-          meta: { ...meta, reason: "batch-spacing" },
+          meta: { ...rowMeta, reason: "batch-spacing" },
         },
       ]);
       results.push({
@@ -431,7 +484,7 @@ export async function POST(req: Request) {
       // Google truth first: an open shop is NEVER queued as "closed". Only
       // when openNow is unknown does the local-clock window apply.
       shopOpenNow: typeof v.openNow === "boolean" ? v.openNow : undefined,
-      meta,
+      meta: rowMeta,
     });
     if (!guard.allow) {
       results.push({
@@ -456,7 +509,7 @@ export async function POST(req: Request) {
           to_key: outboxKey(digits),
           body: guard.text,
           not_before: notBefore,
-          meta: { ...meta, reason: claim.kind === "duplicate" ? "batch-spacing" : "human pacing gap" },
+          meta: { ...rowMeta, reason: claim.kind === "duplicate" ? "batch-spacing" : "human pacing gap" },
         },
       ]).catch(() => {});
       results.push({

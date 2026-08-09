@@ -51,6 +51,14 @@ export interface OutboxMeta {
   claimedAt?: number;
   /** Consecutive drains blocked by a live idempotency claim. */
   dupHolds?: number;
+  /**
+   * Epoch ms at which this row's WAVE closes (plan Part 11 F1).
+   *
+   * Stamped at enqueue by the mass route so the drain can clamp its re-stamps
+   * without re-deriving a schedule it never saw. Absent on every legacy row,
+   * and absence must keep behaving exactly as it does today.
+   */
+  waveEndsAt?: number;
   [k: string]: unknown;
 }
 

@@ -268,10 +268,16 @@ describe("the handoff exception is narrow, and provably so", () => {
     const { wabaExpectsInbound } = await import("./expectation");
     config.WABA_ENABLED = "on";
     selectResult = { rows: [{ id: 1 }] };
+    // The TTL cutoff is stamped from the wall clock, so the two calls differ by
+    // a millisecond. That is not what this test is about - blank it out rather
+    // than let a real invariant fail on a clock tick.
+    const stable = (q: string) => q.replace(/created_at=gte\.[^&]*/, "created_at=gte.<t>");
     await wabaExpectsInbound("66812345678", "a@b.com");
-    const first = selects[0].query;
+    const first = stable(selects[0].query);
+    expect(first).toMatch(/agency_tail=eq\.812345678/);
+    expect(first).toMatch(/created_at=gte\.<t>/);
     selects.length = 0;
     await wabaExpectsInbound("0812345678", "a@b.com");
-    expect(selects[0].query).toBe(first);
+    expect(stable(selects[0].query)).toBe(first);
   });
 });

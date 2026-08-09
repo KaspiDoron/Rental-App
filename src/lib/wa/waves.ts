@@ -150,6 +150,52 @@ export function estimateBatchCompletion(plan: WavePlan): number {
 }
 
 /**
+ * THE DRAIN-SIDE HALF, and without it the enqueue schedule is decorative.
+ *
+ * The drain sends at most a couple of cold rows per invocation and re-stamps the
+ * rest a few minutes out. Inside a 20-minute wave that is harmless - but a wave
+ * of 8 needs several invocations to clear, and each re-stamp pushes rows later.
+ * Left alone, a burst bleeds across its own silence and into the next wave,
+ * which is precisely the shape waves exist to avoid: the schedule ends up a
+ * continuous trickle again, just with extra steps.
+ *
+ * So a cold row's re-stamp is CLAMPED to its own wave's end. It may be delayed
+ * within the burst, and it may overflow to the wave boundary, but it can never
+ * land in the quiet gap.
+ *
+ * Returns the timestamp the drain should actually park the row at.
+ *
+ * A row with no wave metadata is returned unchanged. That is the legacy path -
+ * every row enqueued before waves were switched on - and it must keep behaving
+ * exactly as it does today.
+ */
+export function clampRestampToWave(
+  proposedAt: number,
+  waveEndsAt: number | null | undefined
+): number {
+  if (!waveEndsAt || !Number.isFinite(waveEndsAt)) return proposedAt;
+  return Math.min(proposedAt, waveEndsAt);
+}
+
+/**
+ * When does the wave containing this position end, in absolute time?
+ *
+ * Stamped onto the outbox row at enqueue so the drain does not have to re-derive
+ * a schedule it never saw. Re-deriving would need the same seed, and a schedule
+ * that depends on a seed surviving a redeploy is a schedule that silently
+ * changes shape on every deploy.
+ */
+export function waveEndsAtFor(
+  batchStartMs: number,
+  waves: Wave[],
+  position: number
+): number | null {
+  const w = waveOfIndex(waves, position);
+  if (!w) return null;
+  return batchStartMs + w.startOffsetMs + w.spanMs;
+}
+
+/**
  * The honest promise, in one sentence.
  *
  * If dispatch ends at t+60 the last shop cannot reply AND negotiate inside the

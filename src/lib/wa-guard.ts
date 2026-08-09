@@ -33,6 +33,7 @@ import {
   recipientLocalHour,
 } from "./wa/business-hours";
 import { jitteredHold, HARD_MIN_GAP_SEC, RECIPIENT_LOCK_SEC } from "./wa/pacing";
+import { clampRestampToWave } from "./wa/waves";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits, lidKey, outboxKey, nationalTail } from "./wa/phone-key";
 import {
@@ -2374,10 +2375,34 @@ export async function drainOutbox(
     if (!(await claimOutboxRow(cand.id, cand.meta as OutboxMeta | null, claimedAt))) continue;
     const row: OutboxRow = { ...cand, meta: { ...(cand.meta ?? {}), claimedAt } };
     /** Hand this row back to the queue at a new time, with an honest reason. */
+    // WAVE-AWARE RE-STAMP - the drain-side half of Part 11 F1.
+    //
+    // The enqueue-time `not_before` sets a wave's floor, but THIS is the
+    // authoritative pacer: the drain sends a couple of cold rows per invocation
+    // and re-parks the rest minutes later. A wave of 8 needs several invocations
+    // to clear, so unclamped re-stamps bleed a burst across its own silence and
+    // into the next wave - turning the schedule back into a continuous trickle
+    // with extra steps, which is exactly what waves exist to prevent.
+    //
+    // A cold row may therefore be delayed WITHIN its burst, and may pile up at
+    // the wave boundary, but can never be pushed into the quiet gap. Rows with
+    // no wave metadata (every row enqueued before waves were switched on) are
+    // returned unchanged, so the legacy path is untouched.
+    //
+    // DELIBERATELY NOT APPLIED to `guardOutbound`'s own re-park (its `queue()`
+    // helper, which patches the row when a drained send is re-timed). That path
+    // carries SAFETY holds too - pause, ban recovery, fail-closed sync retries,
+    // breakers, the min-gap floor - and this clamp only ever moves a time
+    // EARLIER. Clamping a safety hold to a wave boundary would release a paused
+    // account sooner, which is the opposite of what the hold is for. Pacing
+    // re-times on that path are already bounded by `boundToBatch`.
+    const waveEndsAt = Number((cand.meta as { waveEndsAt?: unknown } | null)?.waveEndsAt) || null;
     const release = (delayMs: number, patch: Record<string, unknown>) =>
       releaseOutboxRow(
         row.id,
-        new Date(Date.now() + Math.max(0, delayMs)).toISOString(),
+        new Date(
+          clampRestampToWave(Date.now() + Math.max(0, delayMs), waveEndsAt)
+        ).toISOString(),
         { ...(cand.meta ?? {}), ...patch } as OutboxMeta
       );
     // Re-check the gate (caps/hours may have changed while queued). Preserve the
