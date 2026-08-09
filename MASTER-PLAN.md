@@ -27,9 +27,19 @@
 > authenticated provider webhook, and the one-tap handoff link with its tap
 > ledger. All behind the flag, all dry-run by default.
 >
-> **Not started:** Tier 2 (amended - see Part 8), Tier 3 observability, Tier 4
-> legal, Wave C, Part 11's five features, and Part 12 **W5-W7** - the Business
-> Platform console, the consent plus lane-aware copy, and live validation.
+> **Part 12 W4-W6 and Tier 4 shipped:** the four-budget governor with the
+> emergency stop, the Business Platform console (Admin -> wa business), the
+> fourth consent for sharing the traveller's number, the blocking `wa_link`
+> consent write that now refuses to issue a pairing code it cannot record, and
+> the severable liability cap replacing the "zero (nil)" exclusion.
+>
+> **Part 11 F1 shipped** (`wa/waves.ts`): the wave scheduler, with the finding
+> that a full 24-shop batch runs 55-105 minutes rather than "about an hour".
+>
+> **Not started:** Tier 2 (amended - see Part 8), Tier 3 observability, Wave C,
+> Part 11 **F2/F4** (agency scanner, progress bar), wiring F1 into the enqueue
+> floor and drain admission, and Part 12 **W7** (live validation - blocked on
+> real provider credentials).
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
 > Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those
