@@ -1,10 +1,10 @@
 > # STATUS: TIERS 0 AND 1 SHIPPED - PART 12 IS THE NEW WORK
 >
 > Published to the repo root as `MASTER-PLAN.md`, branch
-> `claude/rental-agents-legal-setup-o7rgcv`. **The repo copy is stale** - it
-> predates Parts 11 and 12 and must be re-published (Part 10).
+> `claude/rental-agents-legal-setup-o7rgcv`, and re-published with this header
+> (Part 10).
 >
-> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,182
+> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,488
 > tests): all of **Tier 0** (0.0-0.75) and all of **Tier 1** (1.0-1.6) from Part
 > 9.10 - the device fingerprint, the origin resolver, the restriction and
 > dead-session detectors, the answerable opener and `openNow` ordering, the
@@ -33,13 +33,34 @@
 > consent write that now refuses to issue a pairing code it cannot record, and
 > the severable liability cap replacing the "zero (nil)" exclusion.
 >
-> **Part 11 F1 shipped** (`wa/waves.ts`): the wave scheduler, with the finding
-> that a full 24-shop batch runs 55-105 minutes rather than "about an hour".
+> **Part 11 F1 shipped and WIRED** (`wa/waves.ts`): the wave scheduler, with the
+> finding that a full 24-shop batch runs 55-105 minutes rather than "about an
+> hour" - and both halves of the schedule are now expressed. `waveEndsAt` is
+> stamped onto every outbox row the mass route writes, and the drain clamps
+> every re-stamp to it through one closure, so a burst can no longer bleed
+> across its own silence. Deliberately NOT applied to `guardOutbound`'s own
+> re-park: the clamp only ever moves a time earlier, and that path carries
+> safety holds that must never be released sooner.
 >
-> **Not started:** Tier 2 (amended - see Part 8), Tier 3 observability, Wave C,
-> Part 11 **F2/F4** (agency scanner, progress bar), wiring F1 into the enqueue
-> floor and drain admission, and Part 12 **W7** (live validation - blocked on
-> real provider credentials).
+> **Part 11 F4 shipped** (`lib/progress.ts` + `BatchProgressBar`): the
+> two-segment bar, derived ONCE on the server from the same authoritative rung
+> every card reads, with three honest stop states and a bar that can never read
+> 100% while a negotiation is live. Segment 2 resolves against shops *reached*,
+> not shops selected.
+>
+> **Tier 3 observability shipped:** `wa_risk_events` (22 kinds, two axes kept
+> apart from the first write, `noteRisk` that cannot throw), the eight hooks that
+> fill it, `fleetTruth()` (six answers out of one response per host, including
+> dual-socket and deaf-session detection), the hourly rollup with dark buckets,
+> the **Ban Risk panel** (Admin -> risk) with meter integrity rendering first,
+> and `wa_policy_versions` so every anti-ban knob change carries an author and
+> its previous value.
+>
+> **Not started:** Tier 2 (amended - see Part 8), Wave C, Part 11 **F2** (agency
+> scanner - blocked on a data-collection window at n>=8 per shop), the Tier 3
+> transport tiles (blocked behind the proxy work, or every tile honestly reads
+> "not configured"), and Part 12 **W7** (live validation - blocked on real
+> provider credentials).
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
 > Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those
