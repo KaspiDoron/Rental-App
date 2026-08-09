@@ -41,6 +41,15 @@ import { fetchJson } from "@/lib/client/fetch-json";
 import { reconcileList, reconcileRecord, staggerIndex } from "@/lib/client/reconcile";
 import { dismissalKey, loadDismissals, saveDismissals } from "@/lib/client/dismissals";
 import { sendProgress } from "@/lib/batch-progress";
+// F4's funnel bar and its type. NOTE the division of labour, because merging
+// these two would recreate the defect F4 exists to avoid: `sendProgress`
+// answers "what is still waiting and when does it leave" (dispatch timing, from
+// the queue rows); `BatchProgress` answers "how far through reaching shops and
+// collecting quotes am I" (the funnel, derived once on the server). Different
+// questions, different denominators, and neither is allowed to restate the
+// other's number.
+import BatchProgressBar from "@/components/BatchProgressBar";
+import type { BatchProgress } from "@/lib/progress";
 import { formatClock } from "@/lib/clock";
 
 // W2: honest queue ETA label. A due row never shows a past clock time - it
@@ -402,6 +411,12 @@ export default function Home() {
     windowHours: number;
     nextFreeAt: string;
   } | null>(null);
+  // F4: the two-segment funnel bar, computed SERVER-SIDE on the authoritative
+  // per-shop rung and rendered verbatim. Held as one opaque object on purpose -
+  // there is nothing here for the client to recompute, and the moment it starts
+  // deriving a percentage of its own this becomes the fifth disagreeing number
+  // on the most-watched surface in the app.
+  const [progress, setProgress] = useState<BatchProgress | null>(null);
   // CLIENT TOMBSTONES for queue removals: keys ("id:<n>" / "v:<vendorId>")
   // mapped to the time they were tombstoned. Any poll that raced the server
   // delete still holds pre-delete rows - without this filter it would
@@ -1082,6 +1097,7 @@ export default function Home() {
         setQueueItems(deduped);
       }
       setIntroBudget(d.introBudget ?? null);
+      setProgress((d.progress as BatchProgress | undefined) ?? null);
       // Tombstoned shops WITH the actor behind each tombstone. Only
       // "user-removed" may ever render as "Removed by you" - the system's
       // own session-close/deal-close sweeps are its actions, not the
@@ -3006,6 +3022,16 @@ export default function Home() {
                 <span className="ml-auto text-[10px] text-faint">{statusOpen ? "▲" : "▼"}</span>
               )}
             </button>
+
+            {/* F4: the two-segment bar, at eye level and OUTSIDE the expander -
+                the whole point of a progress bar is that it answers "how far
+                along am I" without a tap. It renders only once the session has
+                actually started; a 0% bar over an untouched search is noise. */}
+            {progress && progress.selected > 0 && (
+              <div className="px-3 pb-2">
+                <BatchProgressBar progress={progress} t={t} formatClock={formatClock} />
+              </div>
+            )}
 
             {statusOpen && (stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers > 0) && (
               <div className="space-y-2 border-t border-line px-3 py-2.5">

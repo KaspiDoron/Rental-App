@@ -650,6 +650,48 @@ export async function GET(req: Request) {
   // the ACTOR decides the copy ("Removed by you" only for user-removed).
   const cancelled = cancelledShops.map((c) => c.digits);
 
+  // ---- F4: THE TWO-SEGMENT PROGRESS BAR, DERIVED ONCE, HERE ----------------
+  //
+  // Computed server-side deliberately. Part 5.5 found four live derivations of
+  // "how many shops have been contacted" plus a fifth dead one, with the client
+  // rendering Math.max() of two of them. A bar computed in the browser from an
+  // already-truncated feed would be the fifth disagreeing number, on the
+  // most-watched surface in the product. So it is built from `vendorStates` -
+  // the same authoritative rung every card and counter reads - and shipped as
+  // one field the client only renders.
+  //
+  // "Selected" is shops still in play: those the rung has seen plus those with
+  // an intro still queued. Tombstoned shops are already excluded from `queue`
+  // and never entered the rung, so a removed shop cannot hold the bar down.
+  const { batchProgress } = await import("@/lib/progress");
+  const inPlay = new Set<string>(Object.keys(vendorStates));
+  for (const q of queue) if (q.vendorId) inPlay.add(q.vendorId);
+  const queuedVendorIds = new Set(queue.map((q) => q.vendorId).filter(Boolean) as string[]);
+  let reachedCount = 0;
+  let quotedCount = 0;
+  let negotiatingCount = 0;
+  for (const id of inPlay) {
+    const s = vendorStates[id];
+    if (!s) continue; // queued but not yet reached
+    reachedCount++;
+    if (s === "offer") quotedCount++;
+    else if (s === "active") negotiatingCount++;
+  }
+  const progress = batchProgress({
+    selected: inPlay.size,
+    reached: reachedCount,
+    quoted: quotedCount,
+    negotiating: negotiatingCount,
+    queued: queuedVendorIds.size,
+    introRemaining: introBudget ? introBudget.remaining : null,
+    health: waHealth?.state ?? null,
+    // The honest completion time the queue simulator produced from the real
+    // schedule. Never a constant - a full batch runs 55-105 minutes and a free
+    // one about 22, so one hardcoded hour is wrong in both directions.
+    etaDoneBy: queueEtaDoneBy,
+    introNextFreeAt: introBudget?.nextFreeAt ?? null,
+  });
+
   // "(unverified)" PURGE: historical rows stamped the legacy drill suffix into
   // vendor names - strip it from every feed item so it never renders again.
   for (const it of items) {
@@ -665,6 +707,7 @@ export async function GET(req: Request) {
     whyByVendor,
     vendorStates,
     countered, // J: vendorIds where the agent countered a shop quote
+    progress, // F4: the ONE two-segment bar derivation - the client renders it
     queueEtaDoneBy, // W2: honest "all done by" (max etaTo across the queue)
     lastByVendor, // F4: {vendorId: {lastInboundText/At, lastOutboundText/At}}
     sessionPaused, // live kill-switch state, so the panel cannot contradict the queue
