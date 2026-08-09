@@ -47,6 +47,12 @@ const LifecyclePanel = dynamic(
   { ssr: false, loading: () => <LoadingDots label="Reading the lifecycle" /> }
 );
 // The live ENGINE_V3 transparency view that replaces the retired graph debug tabs.
+// Ban risk: meter integrity first, then the two enforcement axes kept apart,
+// then what the Evolution hosts actually report. Owner-facing, never polled.
+const BanRiskPanel = dynamic(() => import("@/components/admin/BanRiskPanel"), {
+  ssr: false,
+  loading: () => <LoadingDots label="Reading the risk ledger" />,
+});
 const EngineInspectorPanel = dynamic(
   () => import("@/components/admin/EngineInspector").then((m) => m.EngineInspector),
   { ssr: false, loading: () => <LoadingDots label="Reading the live blackboard" /> }
@@ -189,6 +195,7 @@ export default function AdminPage() {
     | "ops"
     | "money"
     | "waba"
+    | "risk"
     | "keys"
     | "users"
     | "feedback"
@@ -801,7 +808,7 @@ export default function AdminPage() {
             single-pass engine now, so the old graph-pipeline surfaces are no
             longer shown. Their code remains for data/learning continuity but is
             not reachable from the UI. */}
-        {(["command", "analytics", "money", "waba", "engine", "keys", "users", "feedback", "billing", "data"] as const)
+        {(["command", "analytics", "money", "waba", "risk", "engine", "keys", "users", "feedback", "billing", "data"] as const)
           .map((t) => (
           <button
             key={t}
@@ -818,7 +825,9 @@ export default function AdminPage() {
                   ? "💸 money"
                   : t === "waba"
                     ? "📲 wa business"
-                    : t}
+                    : t === "risk"
+                      ? "🛡 risk"
+                      : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -1010,6 +1019,7 @@ export default function AdminPage() {
       {loaded && tab === "money" && <LifecyclePanel />}
 
       {loaded && tab === "waba" && <WabaConsolePanel />}
+      {loaded && tab === "risk" && <BanRiskPanel />}
 
       {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 
