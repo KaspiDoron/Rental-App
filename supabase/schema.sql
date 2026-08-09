@@ -1370,6 +1370,9 @@ create table if not exists public.waba_leads (
   error_code     int,
   preview        text                    -- exact wire text, for diagnosis later
 );
+-- The provider's message id, so a delivery/read/failed status can find its lead.
+alter table public.waba_leads add column if not exists provider_message_id text;
+create index if not exists waba_leads_msgid_idx on public.waba_leads (provider_message_id);
 create index if not exists waba_leads_user_idx on public.waba_leads (user_email, created_at desc);
 create index if not exists waba_leads_agency_idx on public.waba_leads (agency_tail, created_at desc);
 -- The hold queue: leads waiting for an agency to open its service window.

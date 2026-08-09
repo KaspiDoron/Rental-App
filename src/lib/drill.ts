@@ -59,5 +59,32 @@ export async function isVendorThread(
   // "missing" (no table) can only mean a fresh deployment with no history -
   // honestly not a thread; "unavailable" is OUR outage - unknown, fail loud.
   if (!("rows" in res)) return res.error === "missing" ? false : null;
-  return classifyIngest(res.rows, Date.now());
+  const verdict = classifyIngest(res.rows, Date.now());
+  if (verdict !== false) return verdict;
+
+  // THE HANDOFF EXCEPTION - reached ONLY after the gate above has already said
+  // no, and only ever able to turn that no into a yes.
+  //
+  // The rules above are correct and stay exactly as they are. They assume the
+  // traveller's own agent spoke first, which is true on every path except one:
+  // under the business-number handoff (plan Part 12) OUR official number asks
+  // the agency to message the traveller, so the first message in that thread is
+  // inbound from a number they have never written to. There is no RFQ anchor to
+  // find, and there was never going to be.
+  //
+  // The authorisation is the lead row we wrote when we dispatched that handoff -
+  // scoped to one (traveller, agency) pair, expiring, and only for leads we
+  // actually sent. With WABA_ENABLED off it short-circuits before any read, so
+  // this is a no-op on the live path today.
+  //
+  // Placed HERE, after the verdict, rather than inside the predicate: the
+  // original gate keeps its semantics untouched and this stays separately
+  // auditable. Do not merge them.
+  const { wabaExpectsInbound } = await import("./waba/expectation");
+  const expected = await wabaExpectsInbound(fromDigits, ownerEmail);
+  // null = could not read. Mirror the gate's own contract: unknown is retryable,
+  // never "not a shop" - a genuine handoff reply eaten by our own outage is a
+  // permanent loss, because the webhook's 200 stops the provider redelivering.
+  if (expected === null) return null;
+  return expected ? true : false;
 }

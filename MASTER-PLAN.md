@@ -20,10 +20,16 @@
 > adapter boundary and dry-run mode - shipping OFF, with the "nothing changes
 > while the flag is off" invariant pinned by test.
 >
+> **Part 12 W1-W3 shipped too:** the lead ledger and state machine
+> (`waba/leads.ts`), the admission decision and fallback ladder
+> (`waba/dispatch.ts`), the **inbound expectation gate** (`waba/expectation.ts`)
+> that resolves conflict 12.9(1) without loosening the privacy gate, the
+> authenticated provider webhook, and the one-tap handoff link with its tap
+> ledger. All behind the flag, all dry-run by default.
+>
 > **Not started:** Tier 2 (amended - see Part 8), Tier 3 observability, Tier 4
-> legal, Wave C, Part 11's five features, and Part 12 **W1-W7** - the lead
-> ledger, the inbound expectation gate, the governor, the console, the consent
-> and lane-aware copy, and live validation.
+> legal, Wave C, Part 11's five features, and Part 12 **W5-W7** - the Business
+> Platform console, the consent plus lane-aware copy, and live validation.
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
 > Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those

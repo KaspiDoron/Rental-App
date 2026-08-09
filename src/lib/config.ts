@@ -121,6 +121,7 @@ const KEYS: {
   { name: "WABA_LINK_BASE", label: "Handoff link base - MUST match the approved template button URL", scope: "messaging", editable: true },
   { name: "WABA_AGENCY_COOLDOWN_HOURS", label: "Min hours between templates to one agency (default 24 - error 131049 guard)", scope: "messaging", editable: true },
   { name: "WABA_HOLD_TIMEOUT_MINUTES", label: "How long a lead waits for the agency to open the window (default 25)", scope: "messaging", editable: true },
+  { name: "WABA_EXPECTATION_TTL_HOURS", label: "How long a dispatched handoff authorises inbound from that agency (default 72)", scope: "messaging", editable: true },
   { name: "WABA_DAILY_SPEND_CEILING_USD", label: "Daily spend ceiling on the official number", scope: "messaging", editable: true },
   { name: "WHATSAPP_ACCESS_TOKEN", label: "WhatsApp Cloud API Token (optional)", scope: "messaging", editable: true },
   { name: "WHATSAPP_PHONE_NUMBER_ID", label: "WhatsApp Phone Number ID (optional)", scope: "messaging", editable: true },
