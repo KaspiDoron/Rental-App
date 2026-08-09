@@ -227,6 +227,11 @@ export async function POST(req: Request) {
       );
     }
   }
-  await setPolicy(key, verdict.normalized);
+  // THE AUTHOR TRAVELS WITH THE CHANGE. An anti-ban knob whose worst case is a
+  // traveller losing their WhatsApp had, until now, less audit trail than the
+  // negotiation policy next door - whose worst case is a bad haggle. The email
+  // comes from the SERVER session, never from the body: a client naming its own
+  // author would make the one field the record exists to establish untrusted.
+  await setPolicy(key, verdict.normalized, session.email, typeof body.note === "string" ? body.note : undefined);
   return NextResponse.json({ ok: true, policies: await getPolicies() });
 }

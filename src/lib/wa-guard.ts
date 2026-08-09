@@ -226,17 +226,45 @@ export async function deletePolicy(key: string): Promise<void> {
   globalThis.__wd_wa_policies__ = undefined;
 }
 
-export async function setPolicy(key: string, value: string): Promise<void> {
-  const rows = await sbSelect<{ id: number }>(
+/**
+ * Write an anti-ban knob, and RECORD THAT IT MOVED.
+ *
+ * This used to be a bare upsert with no version, no author, no previous value
+ * and no undo - while negotiation policy next door is versioned, golden-replay
+ * gated and one-click rollbackable. The rigour was on the decision whose worst
+ * case is a bad haggle, and absent from the decision whose worst case is a
+ * traveller losing their personal WhatsApp (plan Part 5.9).
+ *
+ * `author` is optional so the signature stays compatible with every existing
+ * caller; an unattributed change still records, because a change with no name
+ * on it is still infinitely more useful than no record at all.
+ */
+export async function setPolicy(
+  key: string,
+  value: string,
+  author?: string | null,
+  note?: string
+): Promise<void> {
+  // Read the CURRENT value before overwriting it. Without `from`, the audit row
+  // says what the knob became and not what it was, which is the half that makes
+  // a revert possible and a before/after comparison meaningful.
+  const rows = await sbSelect<{ id: number; value: string }>(
     "whatsapp_security_policies",
-    `select=id&key=eq.${encodeURIComponent(key)}&limit=1`
+    `select=id,value&key=eq.${encodeURIComponent(key)}&limit=1`
   );
+  const previous = rows[0]?.value ?? null;
   if (rows[0]?.id) {
     await sbUpdate("whatsapp_security_policies", `id=eq.${rows[0].id}`, { value });
   } else {
     await sbInsert("whatsapp_security_policies", [{ key, value }]);
   }
   globalThis.__wd_wa_policies__ = undefined;
+  if (previous !== value) {
+    const { recordPolicyChange, isSafetyPolicy } = await import("./wa/policy-versions");
+    if (isSafetyPolicy(key)) {
+      await recordPolicyChange({ key, from: previous, to: value }, author ?? null, note);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
