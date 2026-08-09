@@ -1,24 +1,34 @@
-<!--
-  Published copy of the living master plan. The working copy lives in the agent
-  plan directory; edit there, then re-copy here.
--->
-
-> **Status: PLAN ONLY - nothing in here has been implemented yet.**
+> # STATUS: TIERS 0 AND 1 SHIPPED - PART 12 IS THE NEW WORK
 >
-> This is the WheelDeal master execution plan as of 2026-08-08, produced across
-> six research rounds (~275 sub-agents, ~14M tokens), each round adversarially
-> challenged. Roughly two thirds of every round's findings were refuted by the
-> challenge pass; what remains below is what survived, and refuted claims are
-> recorded rather than deleted so they are not re-litigated later.
+> Published to the repo root as `MASTER-PLAN.md`, branch
+> `claude/rental-agents-legal-setup-o7rgcv`. **The repo copy is stale** - it
+> predates Parts 11 and 12 and must be re-published (Part 10).
 >
-> Where this document and `ANTI-BAN.md` disagree, **this document is correct**.
-> Part 0.37 establishes that `ANTI-BAN.md` describes at least one defence that is
-> inert at runtime (`CONNECT_FINGERPRINT`) and attributes the WhatsApp restriction
-> to the wrong cause.
+> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,182
+> tests): all of **Tier 0** (0.0-0.75) and all of **Tier 1** (1.0-1.6) from Part
+> 9.10 - the device fingerprint, the origin resolver, the restriction and
+> dead-session detectors, the answerable opener and `openNow` ordering, the
+> fail-dark contract, the false-safety-string deletion, the intro/reply lane
+> split, the reconciled capacity numbers, the tail-canonicalised recipient ledger
+> and the two-meter unanswered budget.
 >
-> Start with **Part 9.10** for the execution path, **Part 0.9** for the full
-> ordering, and **Part 9.11** for the honest caveat that governs all of it.
-> Config keys are named throughout; no secrets, values or credentials appear here.
+> **Also shipped since the pivot:** C.0.1 (the discount is gone, one price
+> source - which uncovered that `plans.ts` had been under-reporting the real
+> charge by ~3x), **Part 12.3** the warm-up gate end to end, **Part 9.4** the
+> cohort primitive with the warm-up holdout, **Part 12.4.1** the monetization
+> and lifecycle dashboard (Admin -> money), and **Part 12.10 W0** the WABA flag,
+> adapter boundary and dry-run mode - shipping OFF, with the "nothing changes
+> while the flag is off" invariant pinned by test.
+>
+> **Not started:** Tier 2 (amended - see Part 8), Tier 3 observability, Tier 4
+> legal, Wave C, Part 11's five features, and Part 12 **W1-W7** - the lead
+> ledger, the inbound expectation gate, the governor, the console, the consent
+> and lane-aware copy, and live validation.
+>
+> **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
+> Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those
+> carries an in-place correction marker pointing to it, as do Part 0.37's
+> "official platform is closed" verdict and Part 7.9's roster mechanism.
 
 ---
 
@@ -737,6 +747,29 @@ quantity that is actually metered.
 
 ### The official WhatsApp Business Platform is closed - and not on price
 
+> **CORRECTED BY PART 12 - read this box before acting on the section below.**
+> Owner decision has reopened the official platform, and the three blockers below
+> resolve differently than written once the *sender* changes from the traveller's
+> number to ours:
+>
+> - **131049 and the tier limits still bite** and are engineered around by the
+>   governor in Part 12.2 - the per-agency cooldown, the service-window flush and
+>   the fallback ladder exist specifically for this.
+> - **The tier limit is much weaker than assumed here.** It meters *unique
+>   recipients contacted outside a service window*, and agencies are a small
+>   shared set that a district exhausts in the tens - not one recipient per
+>   traveller. The "6 ultra searches per day company-wide" figure below is wrong
+>   because it counted travellers, not agencies.
+> - **"A number lives on exactly one platform" is no longer an objection** - it
+>   is the design. Our number is the WABA sender; the traveller's number is never
+>   the sender and stays on Baileys for the negotiation.
+> - **The missing template support in `whatsapp.ts` is confirmed and is now a
+>   build item**, not a reason to abandon the path (Part 12.10 W3).
+>
+> What does *not* change: opt-in. Scraped numbers have none, the owner has
+> accepted that exposure explicitly, and Part 12.2.4 is how the account survives
+> it rather than a claim that it is fine.
+
 Steelmanned with numbers. Cost is fine (~$0.10-$2.50 per traveller search). The
 blockers are structural:
 
@@ -928,8 +961,20 @@ sequence.
 
 **Not being built** (each with reasoning above): TLS/JA3 masking, IPv6 /64
 binding, contacts writing, a native shell, on-device UI automation,
-phone-as-exit-node, zero-width injection, the official Cloud API for cold
-contact, and the hybrid official/Baileys split.
+phone-as-exit-node, and zero-width injection.
+
+> **Two entries were removed from that list by owner decision - see Part 12.**
+> "The official Cloud API for cold contact" and "the hybrid official/Baileys
+> split" are now **the plan**, in the specific form where *our* number is the
+> sender and the traveller's number is reply-only. The objection that killed both
+> - that a number lives on exactly one platform, so the traveller's number could
+> never be the WABA sender - was correct, and is answered by not trying to make
+> it the sender. Two of the three original blockers (131049, no opt-in) remain
+> real and are engineered around rather than argued away.
+>
+> **Also added, and it ships before any of the messaging work because it needs no
+> credentials and no provider:** the warm-up gate and its monetization dashboard
+> (Part 12.3, 12.4.1), which replace the cancelled 50% introductory discount.
 
 **Deferred to a decision, not a wave:** shop-side partner onboarding is the only
 enumerated mechanism that reaches true inbound-first. It is supply-side business
@@ -1013,7 +1058,7 @@ handing off (`reply-tick.ts:101-108`).
 ## I-2 [P0] The WhatsApp restriction - root-caused, see Part 0.
 
 ## I-3 [P0 -> P1] WA Doctor's total-failure chain was a false alarm - root-caused
-The email typed into the doctor was `<owner-address>@gmail.con` - `.con`.
+The email typed into the doctor was `kaspidoron@gmail.con` - `.con`.
 `src/app/api/admin/wa-doctor/route.ts:30` takes it verbatim
 (`trim().toLowerCase()`) and **never checks the user exists**. Every red line
 follows mechanically from looking up a user who is not there:
@@ -1193,8 +1238,9 @@ wrong. Unifying to one source is a prerequisite for touching pricing at all.
 | # | Work |
 |---|---|
 | **C.0.1** Kill the launch discount | Delete `LAUNCH_DISCOUNT`, `listAmount` and `discountPct` from `src/lib/plans.ts`; ₪16.50 / ₪88 quarterly become the permanent base price and `plans.ts` becomes the single source. Remove the `line-through` list price (`UpgradeSheet.tsx:114`), the `{plan.discountPct}% off` chip (`:154`), the "Launch pricing: 80% off" line (`:249`), the admin copy (`admin/page.tsx:2339`) and "80% off launch" from the social card (`opengraph-image.tsx:62`). Delete the hardcoded `ILS_PRICES` map so there is one price in the codebase, not two. |
-| **C.0.2** Warm-up pricing | First quarter 50% off Pro and Ultra (₪8.25 / ₪44, then full price). Implemented as a **PayPal introductory billing cycle** - one new billing plan per tier, its id pasted into the existing `PAYPAL_PLAN_PRO` / `PAYPAL_PLAN_ULTRA` Key Vault slots. **Zero new billing code**: our checkout already just forwards a `plan_id` (`paypal.ts:104`). With no existing subscribers, the old plan ids can simply be replaced. |
-| **C.0.3** Say why, humanely | The discount is explained, not just applied: the first quarter is a WhatsApp learning and warm-up phase in which the agent deliberately works below full capacity to protect the traveller's personal number from Meta's spam filters. Copy states the mechanism plainly and **never claims 100% protection** - if we promise that and a user is still restricted, the promise is the damage. |
+| **C.0.2** ~~Warm-up pricing~~ **CANCELLED - replaced by the warm-up GATE** | The 50% introductory quarter is withdrawn by owner decision. There is no discount of any kind: ₪16.50 / ₪88 quarterly is the price from the first day, and no PayPal introductory billing cycle is created. **What replaces it is not a price change but an access change** - see C.0.6 and Part 12.3. The reasoning is better than the discount's was: a discount pays people to tolerate a warm-up, whereas a gate makes the warm-up the thing they want to finish. Delete every remaining reference to an introductory rate along with the `LAUNCH_DISCOUNT` sweep in C.0.1 - one pass, not two. |
+| **C.0.3** Say why, humanely | Applies now to the **gate**, not to a discount. The warm-up is explained, never merely enforced, and the explanation is about the user's own benefit rather than our risk model. Copy states what unlocks it and how close they are, and **never claims 100% protection** - if we promise that and a user is still restricted, the promise is the damage. Exact strings in Part 12.3. |
+| **C.0.6** The warm-up gate | Paid plans cannot be **purchased** until the account is warmed up. Owner decision: warm-up is measured in **usage depth, not calendar days** - a committed traveller can unlock inside an hour, a tyre-kicker never does. This is a monetization and qualification device first; the account-safety benefit is real but secondary. Full spec, unlock predicate, copy, enforcement points and admin surface in **Part 12.3**. Supersedes Part 11 F3's days-based rule. |
 | **C.0.4** Limits visible everywhere | Day-0 capacity (10 introductions, ramping to the plan budget over ~10 days) shown wherever capacity is shown today: the plan meters, the introductions budget in the queued panel, the Mass Bargain cap modal, the vendor-selection counter, and the `CAPACITY` table in `UpgradeSheet.tsx:38-44` which currently advertises the *uncapped* 10/30/40. |
 | **C.0.5** Graceful throttle explanation | When a traveller selects 40 shops and the system will contact 10, say so in context, at the moment of the choice, with the reason and the unlock date - never a silent trim. This depends on M17: the mass route currently emits **no result row** for shops dropped before its loop, so those shops are counted nowhere and cannot be explained. Fix the ledger first, then the copy has something true to render. |
 
@@ -1311,6 +1357,18 @@ Specific to this plan:
 | M23 Translation engine + RTL | Wave C |
 | M24 Prominent search summary header | Wave C |
 | M25 Full audit + master merge | Wave D |
+| **Pivot: cancel the 50% discount, regular pricing** | Wave C.0.2 (cancelled in place) + Part 12.3.1 |
+| **Pivot: warm-up gate blocks purchase until enough usage** | Part 12.3 - predicate, four enforcement points, copy |
+| **Pivot: monetization / lifecycle / segmentation dashboard** | Part 12.4.1, including the holdout cohort and time-to-warm |
+| **Pivot: official business number sends the first message** | Part 12.1 - template, dynamic URL button, state machine |
+| **Pivot: handle hundreds of concurrent users** | Part 12.2 - four budgets, service-window flush, fallback ladder |
+| **Pivot: no conflicts with the current implementation** | Part 12.9 - ten named conflicts, each resolved; 12.8 flag contract |
+| **Pivot: 100% clear to the user** | Part 12.9 items 9 and 10 - new consent, privacy section, lane-aware copy |
+| **Pivot: humanizing / profile cycling research** | Part 12.5 - what is impossible and why, what is available instead |
+| **Pivot: dedicated Business API management dashboard** | Part 12.4.2 - ledger, funnel, per-agency, live config, dry run |
+| **Pivot: Infobip / provider prerequisites** | Part 12.6 - keys, webhooks, infrastructure, the rented-WABA caveat |
+| **Pivot: drop proxies** | Part 8 Tier 2 (amended: paid items cut, $0 items kept) |
+| **Pivot: be highly critical, name the bottlenecks** | Part 12.0 (three claims corrected), 12.2.1 (the real bottleneck), 12.5 |
 
 ---
 
@@ -2340,8 +2398,10 @@ identifies inside the Noise tunnel with hardcoded constants), IPv6 /64 binding
 device contacts (Meta cannot read them - IPLS), on-device automation (no iOS API;
 Play prohibits the Android route), phone-as-exit-node (iOS suspends background
 sockets), zero-width injection (bodies are E2E encrypted before Meta sees them),
-the official Cloud API (a number lives on one platform only), and fingerprint
-forgery (declined, and self-defeating).
+the official Cloud API (a number lives on one platform only - **now superseded by
+Part 12**: that objection assumed the traveller's number had to be the sender,
+and under the handoff design ours is), and fingerprint forgery (declined, and
+self-defeating).
 
 They all fail for **one shared reason**: they change how the message *travels*,
 and Meta meters what the message *is* - an unsolicited first contact to someone
@@ -2427,6 +2487,18 @@ fraction the traveller's number **does not send at all** - so their exposure on
 those shops is **zero**, not "reduced". The traveller's own number joins the
 thread only after the shop replies, which is inbound and permitted.
 
+> **This paragraph is what the owner has now directed us to build - see Part 12,
+> which is its full specification.** One difference, and it is deliberate: the
+> owner has chosen to run it **without the pre-recruited roster**, sending a
+> pre-approved template per lead to numbers as they are discovered. That removes
+> the months of supply-side work and preserves absolute shop choice on day one.
+> What it does not remove is the opt-in problem named below - Part 12.2 is the
+> engineering that makes the account survive it, and Part 12.0 states plainly
+> what it does and does not buy. Note also the correction that still stands from
+> this section: on the *covered* fraction the traveller's exposure to the velocity
+> axis is zero, but their exposure to the **unofficial-client axis is unchanged**,
+> because they still run Baileys for the negotiation.
+
 This also revives the official Cloud API question: rostered shops **have** opted
 in, which was one of the three grounds it was ruled out on. That is now worth
 re-costing rather than assuming closed.
@@ -2510,7 +2582,25 @@ infrastructure, no spend, no UX change.
 | 1.5 | Canonicalise `wa_recipient_state` on the phone tail | Rows split across phone spellings, so replies land on a different row than sends. 1.4 is unimplementable until this lands |
 | 1.6 | `introductionsInWindow` fails **closed** | It uses permissive `sbSelect`, so a Supabase blip reads as "zero used" and the budget gate opens completely |
 
-## Tier 2 - the $300, spent in this order
+## Tier 2 - the $300 - **REVISED BY OWNER DECISION: the paid proxy items are dropped**
+
+> The owner has withdrawn the proxy strategy in favour of the official
+> business-number handoff (**Part 12**). That is accepted, with one amendment
+> that costs nothing: **2.1-2.4 are $0 and stay; 2.5 and 2.6 are cut.**
+>
+> The reasoning matters, because "we dropped proxies" and "proxies were
+> pointless" are different statements and only the first is true. Proxying was
+> blast-radius containment for the **traveller's Baileys session**, and Part 12
+> does not remove that session - it only removes the cold outbound from it. The
+> unofficial-client axis, whose penalty is a full ban and which fires on
+> reply-only accounts, is untouched by the pivot. So the exposure the proxy
+> addressed still exists; it is simply smaller, and no longer worth $255 when the
+> same money buys message volume on the new path. The free items still buy real
+> containment for free, and cutting them would be a loss with no saving.
+>
+> `EVOLUTION_PROXY_REQUIRED` stays **off**, so none of this gates linking.
+
+## Tier 2 - as originally written, for reference
 
 | # | Item | Cost | Note |
 |---|---|---|---|
@@ -2992,15 +3082,25 @@ and make `drainOutbox` test `r.rateLimited` and re-park by the limiter's own
 copy with *"Held: your number reached its daily message allowance. Sending resumes at
 {time}."*
 
-**Tier 2 - the money, gated**
+**Tier 2 - the money, gated - REVISED, see Part 8 and Part 12**
 
-**C.0.1 first** (kill `LAUNCH_DISCOUNT`; ₪16.50 / ₪88 permanent) - it is what makes
-2.6 affordable (9.5). Then 2.1 `PROXY_HOST` fleet default ($0, **not** fail-closed) ·
+**C.0.1 first** (kill `LAUNCH_DISCOUNT`; ₪16.50 / ₪88 permanent). Its
+justification has changed and strengthened: it was "what makes 2.6 affordable",
+and 2.6 is now cut - but it is also the prerequisite for the **warm-up gate**
+(Part 12.3), which replaces the cancelled 50% introductory quarter. A gate on a
+discounted price is incoherent; a gate on the real price is the product.
+
+Then the **$0 items only**: 2.1 `PROXY_HOST` fleet default (**not** fail-closed) ·
 2.2 `/proxy/set` 201 as a verification gate (P2, not a P0) · 2.3 persisted
 `proxy_session_id` retiring the mod-hash pin · 2.4 preserve the proxy row across
-`opts.fresh` · 2.5 second Evolution host (~$10-25/mo) · 2.6 residential traffic
-**pilot** (~$255) **with the two-week measurement gate** · plus $40-80 for the burner
-SIM + staging container to probe the quota queries.
+`opts.fresh`.
+
+**Cut by owner decision:** 2.5 second Evolution host and 2.6 residential traffic.
+The budget moves to WABA message volume. The four free items stay because the
+unofficial-client axis they contain is the one Part 12 does **not** address.
+
+**New in this tier:** Part 12's W0-W7, which is where the money now goes, and
+which ships behind a flag that defaults off.
 
 **Tier 3 - observability:** `fleetTruth()` (~a day, 9.7) → `wa_risk_events` →
 `wa_risk_snapshots` + rollup → `BanRiskPanel` → `wa_policy_versions` → transport
@@ -3041,3 +3141,1035 @@ and copied from GitHub rather than only from the agent's plan directory.
   typecheck or build gate applies. No pull request unless asked.
 - **Keep in sync:** future rounds edit the plan file, then re-copy. The repo copy is
   the published artifact, not the working one.
+
+---
+
+# PART 11 - FIVE OWNER FEATURES, INTEGRATED
+
+**Context.** The owner specified five additions: wave-paced initial outreach, a
+global agency response scanner that prunes non-responders, a forced free-tier
+warm-up before any paid upgrade, a premium progress bar, and a sanity pass over
+all of it. Three of the five collide with constraints locked in earlier rounds.
+This part resolves each collision, and one of the features turns out to fix a
+contradiction the plan has been carrying since Part 0.
+
+**Four decisions taken by the owner** (asked because the arithmetic forced a
+choice, not because the intent was unclear):
+
+| # | Decision |
+|---|---|
+| 1 | **5-8 shops per 20 min, day-one ceiling 24** - the pacing spec wins, the 30-shop mandate is revised down |
+| 2 | **Reversible suppression + re-test trickle**, not permanent deletion |
+| 3 | ~~Days linked AND a clean safety signal~~ → **REVISED: usage depth, same-day achievable** (Part 12.3). A calendar-day floor would have hidden the paywall behind a window longer than the average trip |
+| 4 | **Two-segment progress bar** - reaching, then collecting |
+
+## 11.1 F1 - Wave-paced initial outreach
+
+**This supersedes Vector 1's 5-8 per 8-12 min** (Part 0.2) and the SLA table in
+Part 0.3. Both must be edited when this ships, or the plan contradicts itself.
+
+```
+planWaves({ total, plan, rand }) -> Wave[]
+  size drawn 5-8 (gaussianUnit, not flat)
+  gap  drawn 18-22 min around a 20 min centre
+  ceiling: 3 waves / 24 shops on day one
+```
+
+The owner's spec is **2.5x slower than the existing Vector 1 design** and slower
+than anything the last five rounds proposed. That is a real safety gain, and it
+costs 6 shops off the day-one ceiling. At q=0.35 a 24-shop batch settles to ~15
+open unanswered threads against ~19-21 for 30 - so this lands meaningfully below
+the exposure the two-meter budget (9.3) was sized for.
+
+**Five integration points, all of which change other code:**
+
+1. **`BATCH_WINDOW_MINUTES = 15` (`capacity.ts:77`) changes meaning** from "the
+   whole batch" to "wave 1", and every reader changes with it - including ETA copy
+   and F4's bar.
+2. **The wave must be expressed twice**, at the enqueue-time `not_before` floor
+   **and** as a wave-aware admission rule in the drain. Part 0.2 already
+   establishes that the drain is the authoritative pacer and would otherwise
+   reshape the schedule on first contact.
+3. **The drain's 2-cold-rows-per-invocation budget** re-stamps the rest by 2-4 min.
+   Inside a 20-min wave that is harmless, but a wave of 8 needs 4 drain
+   invocations to clear. Wave size and drain budget must be reconciled explicitly
+   rather than left to fight.
+4. **`fast_dispatch` must be off for cold intros**, or the 20-min schedule is
+   decorative - it lifts the clock gate and fires everything immediately.
+   Already in the plan (Tier 0/Vector 4); F1 makes it load-bearing.
+5. **`HARD_MIN_GAP_SEC = 8` (`pacing.ts:71`) is unaffected** - `batchStagger` runs
+   unchanged *inside* each wave with `windowMs` at roughly 60% of the wave gap, so
+   each wave is a short burst followed by real silence.
+
+**Per-tier duration is NOT one hour.** Free tier is 10 shops = 2 waves ≈ 20-25
+min. Only a full 24-shop batch approaches 60 min. **F4's bar must be driven by the
+computed schedule, never a hardcoded 60 minutes.**
+
+**The 1-hour SLA framing must change, and Part 5.10 already established why.** If
+dispatch ends at t+60, the last shop cannot reply *and* negotiate inside the hour.
+The honest promise is **"your first real quotes within the hour"** - wave 1 replies
+land around t+5-8 - not "the best local price within the hour."
+
+## 11.2 F2 - Agency health scanner and suppression
+
+**This is the strongest ban-safety feature in the set, and that is not why it was
+requested.** Unanswered introductions are the quantity Meta meters (Part 0.37).
+Removing shops that never answer *directly reduces the metered quantity* - it is
+the only proposal in eleven parts that raises revenue quality and lowers ban risk
+with the same mechanism.
+
+It also compounds with F1: **suppression raises q, higher q means fewer open
+unanswered threads, and the two-meter budget (9.3) then grants more headroom.
+F2 is how the day-one ceiling gets back from 24 to 30 honestly** - earned from
+measured reply data rather than asserted.
+
+**Three-state model, per shop, global across users:**
+
+```
+live       default
+watch      failing, still shown, still selectable
+suppressed hidden from discovery, NOT deleted, re-tested on a trickle
+```
+
+**Constraint 1 is preserved by putting the filter in exactly one layer.**
+Suppression is a **discovery-layer** filter and **never** a send-layer gate. Three
+rules make that real:
+
+- A shop that appears in the list is always contacted. No suppression check ever
+  runs in `guardOutbound` or the drain.
+- A suppressed shop remains reachable by **explicit search by name**, so a
+  traveller standing outside that shop can always message it.
+- The re-test trickle (roughly 1 in 20 searches carries one suppressed shop)
+  guarantees suppression is self-correcting. Permanent deletion is not: a deleted
+  shop can never generate the evidence that it was wrongly judged.
+
+**Two hard sequencing gates. F2 must not run before either.**
+
+1. **Not before Tier 0.4 and 0.5 have been live long enough to gather clean data.**
+   Today the opener carries no date (`promptCompiler.ts:64` - unanswerable, reads
+   as reseller spam) and `fast_dispatch` neutralises `openNow`, so closed shops are
+   as likely to be message #1 as open ones. **Pruning on that data deletes shops
+   that failed our defect, not their service.** This is the single most important
+   sequencing constraint in Part 11.
+2. **Sample floor n >= 8** per shop (rule E4, Part 9.2). Most shops will sit at
+   n=1-2 for months, so suppression will affect very few shops at first. Say that
+   plainly rather than promising a fast climb to 100%.
+
+**Data source.** Not `response_times` - Part 9.8 already rules it out, because its
+clock is anchored to the global first-ever outbound rather than this user's
+introduction, so a shop contacted three weeks ago that answers in two minutes
+records a three-week sample and never corrects. F2 rides on the **clean per-(shop,
+user) intro→reply ledger already planned**: `first_intro_at` / `first_reply_at` on
+the tail-canonicalised `wa_recipient_state` (Tier 1.0/1.5) and `wa_cold_intro`
+(Part 5.8). **No new plumbing** - F2 is an aggregation over rows Tier 1 already
+creates.
+
+Cross-user aggregation is permitted: Part 9.8 allows shop **responsiveness** as
+behavioural data. It carries no quote, price or negotiation content, so constraint
+3 is intact.
+
+## 11.3 F3 - The exclusive club, and the contradiction it resolves
+
+**This is the best of the five features, and it fixes something the plan has been
+stuck on since Part 0.**
+
+Part 9.1 established that an `ageRamp` cutting a day-0 Ultra user from 40 to 10
+**violates constraint 4** - `capacity.ts:99-104` records "full budget usable day 0"
+as an explicit owner requirement. So the plan had a genuine tension: day-0 volume
+is the top ban risk, and reducing it was forbidden.
+
+**F3 dissolves it by moving the warm-up from the capacity layer to the
+monetization layer.** Instead of selling Ultra and then secretly throttling to 10 -
+the dishonest version - **we do not sell Ultra until the number is warm.** The free
+tier's 10 introductions *is* the safe day-0 number. Every user gets the full budget
+of the plan they are actually on. No hidden throttle, no `ageRamp`, no constraint-4
+violation, and `capacity.ts` stays exactly as the owner specified.
+
+**It also makes a false claim true.** Part 9.6 lists "brand-new numbers are warmed
+up gently" (`TrustPanel.tsx:13`) among eight strings the code contradicts. F3 is
+what makes that sentence honest for the first time - so 0.6's replacement copy
+should be written *once*, against the post-F3 behaviour.
+
+**Unlock rule - REVISED, and the revision is important.** The rule below was
+`days_since_first_link >= 7 AND replies_received >= 1 AND restriction_events == 0`.
+**A calendar-day floor is wrong for this product and would have quietly destroyed
+conversion.** Our users are travellers: a large share search for a bike on the day
+they land and have finished with the app inside 72 hours. A seven-day clock hides
+the paywall behind a window longer than the entire trip, so the modal purchaser
+would never see a purchasable Premium at all - and the failure is invisible,
+because it looks like low conversion rather than a closed door.
+
+Owner decision: **warm-up is measured in usage depth, not elapsed time.** The
+predicate, its thresholds, the copy and the enforcement points are specified in
+**Part 12.3**, which is now the single source for this feature. The reply
+condition survives into it unchanged and for the same reason: **a number nobody
+has ever answered is not a warmed-up number**, it is a number accumulating
+exactly the signal that gets accounts restricted.
+
+**Prerequisites and edge cases, all of which must be handled or the feature
+strands users:**
+
+| Issue | Resolution |
+|---|---|
+| `wa_sessions.first_linked_at` **does not exist** (Part 5.13) | Hard prerequisite. Set once, never overwritten |
+| User never links WhatsApp → clock never starts → can never pay | The gate must render as "link your number to start" with the clock visibly not running, not as a silent block |
+| User restricted during the free window | Needs a defined recovery path to eventual unlock, never a dead end |
+| `TEST_MODE` testers ride Ultra free | Must be exempt, or beta testers cannot test paid tiers |
+| Server-side enforcement | The gate belongs on the checkout route, not only in `UpgradeSheet` - a client-only gate is not a gate |
+
+**Cost.** Part 9.5 established the free tier carries proxy egress at zero revenue.
+Seven forced free days at $0.60-0.90/user-month is roughly **$0.14-0.21 per new
+user** - small, and it is why **C.0.1 (killing `LAUNCH_DISCOUNT`, ₪16.50/₪88
+permanent) should ship before or with F3**, since Pro at the discounted price is
+margin-negative before this feature adds any cost at all.
+
+**Tone.** Framed as an exclusive club that unlocks, never as a punishment or a
+restriction - and per constraint 5 the mechanism is described as protecting the
+number, with ban language reserved for the linking/consent screen.
+
+## 11.4 F4 - The two-segment progress bar
+
+**The single largest risk in this feature is that it becomes a fifth number that
+disagrees with the other four.** Part 5.5: there are four live derivations of
+"how many shops have been contacted" plus a fifth dead one, and `page.tsx:2996`
+renders `Math.max()` of two of them - the app already picks which of its own
+numbers to believe at render time.
+
+**Hard dependency: F4 must be built on the single server-side monotonic rung per
+shop (M17 / Part 5.5), not alongside it.** Built any other way it makes the worst
+UI defect in the app measurably worse.
+
+**Definition** (owner decision 4):
+
+```
+segment 1  0-60%    shops reached / shops selected      exact, from outbox rows
+segment 2  60-100%  quotes collected / shops reached    exact, from the rung
+```
+
+- Segment 1 is exactly computable and monotone.
+- Segment 2 **continues past t+60**, which is what keeps the bar honest about the
+  fact that dispatch finishing is not the same as the price being found.
+- The bar **never** displays 100% while any negotiation is live.
+- Duration comes from `computeQueueEtas` (`eta.ts:77`), which today models a
+  continuous trickle and **has no concept of waves** - M2.2 in Wave B. F4 and F1
+  need the same edit, so they ship together.
+
+**Three states the bar must express, or it will lie:**
+
+| State | Behaviour |
+|---|---|
+| Held on the hourly cap | Bar **stops**, with the honest reason - never keeps climbing |
+| Cold intros halted by the error-ack detector | Bar stops at segment 1; copy is *"Waiting on replies before opening more conversations"* - **never** "ban" or "restricted" (constraint 5) |
+| Shops that never reply | Segment 2 resolves against **shops reached**, so silence does not hang the bar at 80% forever |
+
+Reuse the existing bar at `page.tsx:3319-3330` and the existing loading primitives
+rather than introducing a parallel set.
+
+## 11.5 SANITY CHECK - the conflicts, and what breaks if they are ignored
+
+### The one that would ship a visible bug
+
+**F1 and F4 are both dead on arrival until Tier 1.1, and together they expose an
+existing bug directly to the user for the first time.**
+
+Verified: there is exactly **one** send path (`evolution.ts:1925`) and it calls
+`checkRateLimit` unconditionally with **no kind filter** - `LIMIT_WA_PER_HOUR = 15`
+(`usage.ts:83`). At 8 shops per 20 minutes, **shop 16 arrives around t+40min and is
+refused.** Today that is an invisible stall. With F4 shipped, the user watches a
+premium progress bar **freeze at roughly 65% for twenty minutes** and then resume.
+
+The same cap starves the reply lane: every agent reply to a shop that answers
+inside that hour competes with the intro batch for the same 15 slots. **Tier 1.1
+(split the pool) is a hard prerequisite for F1 and F4 both.**
+
+### The rest, with the consequence of ignoring each
+
+| # | Conflict | Consequence if ignored |
+|---|---|---|
+| 1 | F1 supersedes Vector 1 (5-8 per 8-12 min) and the Part 0.3 SLA table | The plan contradicts itself in two places |
+| 2 | `MASS_BARGAIN_MAX = 15` (`mass-bargain.ts:23`) | 24 shops **cannot be requested at all**. Tier 1.2 must land first |
+| 3 | Three capacity numbers still disagree - `PLAN_CAPACITY` 30, `usage.ts` 15, `newContactBudget` docstring 15 | F1's ceiling of 24 becomes a fourth number in the argument |
+| 4 | F1's 20-min gap vs `BATCH_WINDOW_MINUTES = 15` | ETA copy and F4's bar both read a constant that no longer means what it says |
+| 5 | F1 vs `fast_dispatch = true` default | The wave schedule is decorative; everything fires at once |
+| 6 | F1 vs the drain's 2-cold-row budget and 2-4 min re-stamp | Wave boundaries smear; a wave of 8 needs 4 invocations |
+| 7 | F2 vs constraint 1 (absolute shop choice) | Resolved by confining suppression to the discovery layer, plus name-search escape and the re-test trickle |
+| 8 | F2 running on pre-Tier-0.4 data | Suppresses shops that failed **our** broken opener. Worst failure mode in Part 11 |
+| 9 | F2 vs `response_times` | Its latency clock is anchored wrong (Part 9.8). Use the Tier 1.0 ledger instead |
+| 10 | F2 sample floor | A ratio from n=2 is theatre; rule E4 applies |
+| 11 | F3 vs the Part 9.1 `ageRamp` prohibition | **Not a conflict - F3 resolves it.** Warm-up moves to monetization, capacity untouched |
+| 12 | F3 vs missing `first_linked_at` | The unlock clock has nothing to count from |
+| 13 | F3 vs `TEST_MODE` | Testers cannot test paid tiers |
+| 14 | F3 vs free-tier egress cost | Small (~$0.14-0.21/user), but pairs with C.0.1 |
+| 15 | F4 vs the four existing derivations | A fifth disagreeing number on the most-watched surface |
+| 16 | F4 vs `computeQueueEtas` having no wave concept | The bar's duration cannot be computed; same edit as F1 |
+| 17 | F4 vs constraint 5 tone | A restriction rendered to the traveller in ban language |
+| 18 | F1 per-tier duration | Free tier finishes in ~22 min; a hardcoded 60-min bar would sit at 40% while already done |
+
+### Nothing here contradicts the anti-ban protocols
+
+Checked against all six standing constraints. F1 **strengthens** pacing. F2
+**directly reduces the metered quantity** and is the only feature that improves
+safety and revenue with one mechanism. F3 **removes** day-0 volume without
+violating constraint 4, which nothing else in eleven parts managed. F4 is
+presentation only and touches no send path. The one genuine tension - F2 versus
+absolute shop choice - is resolved by layer separation, not by weakening the
+constraint.
+
+**The caveat from 9.11 is unchanged and none of these five features move it.**
+All of this addresses the velocity axis. The unofficial-client axis fires on
+reply-only accounts, correlates across the fleet, and is untouched by pacing,
+curation, monetization gates or progress bars.
+
+## 11.6 WHERE THESE LAND IN THE EXECUTION PATH
+
+Nothing in Part 11 displaces Tier 0. Two features have hard Tier 1 dependencies.
+
+| Feature | Ships after | Blocked by |
+|---|---|---|
+| **F3** exclusive club | Tier 0 | `wa_sessions.first_linked_at`; C.0.1 pricing. **Otherwise independent - the earliest of the five** |
+| **F1** wave pacing | Tier 1.1, 1.2 | Pool split, `MASS_BARGAIN_MAX`, `fast_dispatch` off for cold |
+| **F4** progress bar | Tier 1.1 + M17 | The monotonic rung, and the pool split, or it renders a 20-minute freeze |
+| **F2** agency scanner | Tier 1.0/1.5 + a data-collection window | Tier 0.4 and 0.5 must have been **live long enough for n>=8 per shop** |
+
+**F3 first.** It is the only one of the five with no send-path dependency, it
+removes day-0 volume immediately, and it makes the warm-up copy in Tier 0.6 true
+so that string only has to be written once.
+
+---
+
+# PART 12 - THE BUSINESS-NUMBER HANDOFF, AND THE WARM-UP GATE
+
+> **This part is referenced from, not appended to, the rest of the plan.**
+> Wave C.0 (pricing), Part 11 F3 (warm-up), Part 8 Tier 2 (proxies), Part 9.10
+> (execution path) and Part 0.9 (ordering) have each been edited in place to
+> point here. Where an earlier part contradicts this one, this one wins and the
+> earlier text carries a correction marker.
+
+## 12.0 What this changes, and the three things it does not
+
+The owner's directive: WheelDeal buys official WhatsApp Business Platform access
+through a reseller. When a traveller starts a chat with an agency, **our** official
+number sends the first message - *"we have a client interested in renting a
+motorcycle, please message them at <number>"* - the agency messages the traveller
+directly, our ingest detects that inbound, and the AI agents take over the
+negotiation from the traveller's own linked number.
+
+**The core insight is correct and it is the best structural idea in twelve parts.**
+Every previous round tried to make an unsolicited first contact *safe*. This makes
+the unsolicited first contact **somebody else's problem to survive** - specifically
+ours, on an asset we can replace, instead of the traveller's, on an asset they
+cannot. That is a real and large improvement, and the plan adopts it.
+
+Three claims in the directive do not survive contact with the evidence, and the
+architecture below is designed around their being false rather than true.
+
+### (1) It does not "100% eliminate ban risk" - it relocates one of the two axes
+
+Part 0.37 established two independent enforcement axes. This pivot addresses
+exactly one of them:
+
+| | Axis 1 - velocity / unanswered cold volume | Axis 2 - unofficial-client detection |
+|---|---|---|
+| Penalty | scoped restriction: may reply, may not start new chats | **full ban** |
+| Before the pivot | on the traveller's personal number | on the traveller's personal number |
+| **After the pivot** | **moved to our WABA** | **unchanged - still the traveller's personal number** |
+
+The traveller still links their own WhatsApp through Baileys/Evolution, because
+the negotiation still runs from their number. Axis 2 **fires on accounts doing
+reply-only work** - that is not speculation, it is the finding that killed the
+"inbound-first is immune" thesis in Part 0.37. So the honest statement is:
+
+> The pivot removes the traveller's exposure to the *scoped restriction* almost
+> entirely, and reduces - but does not remove - their exposure to the *full ban*,
+> because a lower-volume reply-only session is a smaller target but still an
+> unofficial client.
+
+This wording is load-bearing. It must reach the consent screen and the Trust
+panel, and it must not be softened into "your number is protected". Part 9.6
+already deleted eight strings that made exactly that class of promise; shipping a
+ninth would be worse than the eight, because this one would *feel* earned.
+
+### (2) It does not "guarantee that agencies will respond" - it may lower reply rate
+
+We are replacing *"a traveller messages you"* with *"a middleman asks you to go
+message a stranger"*. The second is more work for the agency and reads more like
+lead-gen, which is the register Part 5.12 identified as the thing people block.
+The reply rate `q` - still unmeasured, still the quantity every SLA claim in this
+plan rests on - could move in either direction, and the design must not assume up.
+
+**The engineering answer is to remove the work.** The template carries a
+**dynamic URL button** that opens the traveller's chat in one tap, so the agency
+never types or saves a number. See 12.1.3 - and note that `wa.me` links are
+**rejected by Meta inside templates**, which is why this routes through our own
+domain and is also how we get per-agency click telemetry.
+
+### (3) Dropping proxies is defensible, but not for the stated reason
+
+The owner is dropping the proxy layer. **Accept the paid items, keep the free
+ones.** Tier 2.6 (~$255 residential traffic) and 2.5 (second Evolution host) were
+blast-radius containment for the traveller's session, and with cold outbound gone
+from that session the value drops enough that the money is better spent on WABA
+message volume. But **2.1-2.4 cost $0** and still protect the axis this pivot does
+not touch. Part 8 Tier 2 has been edited in place accordingly.
+
+### (4) And the constraint the owner set - no conflicts with what we are executing
+
+Owner decision, recorded and binding: **the legacy path stays default-ON.** The
+official-API path is built completely, wired completely, and ships **off**, behind
+a real feature flag, activated by pasting credentials into the dashboard and
+flipping a switch. Nothing in Tiers 0 and 1 is wasted or reversed - every one of
+those items remains load-bearing for the default path, and remains the fallback
+for the new one. The coexistence contract is 12.8, and it is the part most likely
+to be got wrong by a future edit, so it is written as invariants rather than prose.
+
+## 12.1 The handoff, mechanically
+
+### 12.1.1 The one platform fact the whole design turns on
+
+Outside a customer service window, a business may only send a **pre-approved
+template**, which is metered, priced, and subject to the per-recipient marketing
+cap. **Inside** an open 24-hour service window - opened by *any* inbound message
+from that agency, and restarted by every subsequent one - the business may send
+**free-form** messages that are unlimited, free, and **do not count against the
+messaging tier at all**, because the tier meters unique recipients contacted
+*outside* a window.
+
+So there are two lanes, and they behave nothing like each other:
+
+| | Template lane (cold) | Service-window lane (warm) |
+|---|---|---|
+| When | no inbound from this agency in the last 24h | agency messaged us within 24h |
+| Cost | per-message, marketing or utility rate | **free** |
+| Tier limit | counts against unique-recipients/24h | **does not count** |
+| Per-recipient cap | error **131049** applies to marketing | does not apply |
+| Content | fixed, pre-approved, variables only | **anything, including informal text and `wa.me` links** |
+
+**Every design decision below follows from wanting traffic in the right-hand
+column.** The first traveller to pick an agency pays the template; if that agency
+answers, every subsequent traveller that day is free, uncapped and instant.
+
+### 12.1.2 The template
+
+Owner decision: **template per lead, no pre-recruited roster.** The traveller
+picks any agency in the app and the handoff fires immediately, with no manual
+district onboarding. The risks were raised and the decision reaffirmed; what
+follows is the engineering that makes it survivable rather than a re-argument.
+
+Register **one** first-contact template, drafted for **utility** categorisation
+and neutral in register. Utility matters enormously: utility templates are
+**exempt from the 131049 per-recipient marketing cap** and are priced lower.
+Meta assigns the category and can re-assign it, so this is a goal, not a
+guarantee - the queue in 12.2 is built to survive being categorised marketing.
+
+Drafting rules, each one traceable to a documented rejection reason:
+
+- No promotional language, no offer, no urgency, no emoji-led opener.
+- **No `wa.me` link and no URL shortener anywhere** - both are named rejection
+  causes. The button URL is our own domain.
+- Name WheelDeal explicitly. A message that hides who is contacting them is both
+  a policy problem and, per 12.5, a strategy that cannot work anyway.
+- Variables carry only: agency display name, vehicle class, rental dates, and the
+  link token. Never the traveller's raw number in the body - it goes in the
+  button target, so the agency taps rather than transcribes.
+- Register the template in **English plus the primary language of each launch
+  region**, and select by region the way `promptCompiler.ts` already does for
+  openers.
+
+**A second template is required and is easy to forget:** a *re-engagement*
+template for an agency that replied once and has since gone quiet past 24h. It
+is the same shape and the same category question.
+
+### 12.1.3 The one-tap handoff link, and why it also fixes attribution
+
+The template's call-to-action is a **dynamic URL button**: a fixed base on our own
+domain plus a variable suffix.
+
+```
+https://<APP_DOMAIN>/h/{token}
+   -> 302 -> https://wa.me/<traveller-number>?text=<prefilled opener>
+```
+
+This single indirection buys four things, and three of them are problems we would
+otherwise have had to solve separately:
+
+1. **It is permitted.** A full domain URL passes template review where a `wa.me`
+   link does not.
+2. **It removes the agency's work entirely** - one tap opens a chat with the
+   traveller. This is the mitigation for 12.0(2).
+3. **It gives us the first real per-agency engagement telemetry in the product** -
+   template delivered, template read, **link tapped**, chat actually started. That
+   is a far better responsiveness signal than anything Part 11 F2 could compute,
+   and F2's agency scanner should consume it.
+4. **It solves thread attribution.** The prefilled text is authored by us, so when
+   the agency's message lands on the traveller's phone it carries a phrase our
+   ingest can recognise, plus a short opaque code. That matters more than it
+   sounds - see 12.9(1).
+
+`token` is a single-use, expiring, opaque id bound to (lead, agency, traveller).
+It must not be guessable and must not encode a phone number, because anyone who
+receives a forwarded template can tap it.
+
+### 12.1.4 The state machine
+
+One lead, one row, one path through these states. Terminal states are marked.
+
+```
+draft
+  -> window_open?  yes -> handoff_freeform_queued -> handoff_sent
+                   no  -> template_allowed?  yes -> template_queued -> template_sent
+                                             no  -> held(reason) [see 12.2]
+template_sent -> agency_replied_to_us   (service window opens; flush any held leads)
+              -> link_tapped
+              -> traveller_got_inbound  -> handed_off  [TERMINAL - agents take over]
+              -> undelivered(131049|other) -> held / fallback
+              -> expired(no response in N)  -> fallback_legacy | abandoned [TERMINAL]
+```
+
+`handed_off` is the moment the existing product resumes: from there the
+negotiation is exactly today's flow, on the traveller's own number, through SPTE
+and the graph engine, with every Tier 0/1 protection intact.
+
+## 12.2 The queue and the rate governor - the owner's explicit requirement
+
+> *"build intelligent rate-limiting, queue management, and fallback mechanisms
+> directly into the backend. Ensure that high-volume shops don't trigger Meta's
+> spam blocks or volume caps, and protect our WABA asset gracefully."*
+
+This is the heart of the new backend and the part that decides whether the pivot
+scales to hundreds of concurrent users or collapses in a week. It is a **single
+admission decision** taken per lead, against **four independent budgets**, and it
+fails **closed** in every direction - because unlike the traveller's session, a
+mistake here degrades an asset shared by every user simultaneously.
+
+### 12.2.1 The four budgets, and why the popular agency is the real bottleneck
+
+| # | Budget | Bound | Why it exists |
+|---|---|---|---|
+| B1 | **Per-agency template cooldown** | 1 template / agency / 24h (tunable) | The binding constraint. **131049 caps a recipient at roughly two marketing templates per 24h across all businesses combined** - not just ours. Our ranking is a pure total order with no user-dependent term (Part 5.11), so every traveller in a district sees the *same* top agencies. Without B1 the third traveller of the day is silently undelivered at exactly the shops that matter most |
+| B2 | **Portfolio tier budget** | unique recipients / 24h outside a window | 250 unverified, 1,000 after business verification, then 10k/100k. Note this counts **unique agencies**, not messages, and **excludes service-window traffic** - so it is far less binding than it first appears, because agencies are a small shared set |
+| B3 | **Quality-rating governor** | derived from Meta's per-number quality signal | A falling rating is the early warning before a restriction. It must throttle automatically, not wait for a human |
+| B4 | **Spend ceiling** | owner-set $/day and $/month | A runaway loop on a per-message-priced API is a financial incident, not a bug |
+
+`admit = min(B1, B2, B3, B4)` - the same shape as `newContactBudget`'s
+`Math.min(...)` in `wa-guard.ts`, deliberately, so the two governors read alike.
+
+### 12.2.2 The mechanism that makes B1 survivable instead of merely safe
+
+B1 looks like it caps a popular agency at one traveller per day. It does not,
+because of the service window - and this is the single most important behaviour
+in the design:
+
+> Traveller 1 picks Agency A. No window is open, so A gets **the template**.
+> Travellers 2-9 pick Agency A in the same hour. They are **held**, not dropped.
+> A replies to our business number → **the 24h service window opens** → every
+> held lead for A **flushes immediately as free-form messages**: free, uncapped,
+> outside the tier, and in whatever informal register we like.
+
+So the cost and the risk of an agency are paid **once per day at most**, and
+popularity becomes cheap rather than expensive. The hold is short by
+construction: if A does not reply within the configured window (default 20-30
+min, tunable), the held leads take a fallback.
+
+**Held is a first-class, user-visible state, not a silent queue.** Part 5.5's
+finding stands: a shop dropped before the loop is counted nowhere and cannot be
+explained. Every held lead emits a row and a reason, and the traveller sees
+*"waiting for <agency> to open the conversation"* - not a stalled spinner.
+
+### 12.2.3 Fallback ladder
+
+In order, first applicable wins:
+
+1. **Service window open** → free-form. Always preferred.
+2. **Template allowed** → template.
+3. **Held** → wait for the window, up to the hold timeout.
+4. **Legacy direct path**, if the flag permits it → the traveller's own number
+   sends, through the existing fully-hardened Tier 0/1 pipeline. This is why 12.8
+   keeps the old engine alive rather than deleting it, and it is the answer to
+   *"a shop the business number cannot reach must still be reachable"*
+   (constraint 1, absolute shop choice).
+5. **Honest refusal** → surfaced with a real reason and a retry time. Never a
+   silent drop, never a fake "sent".
+
+### 12.2.4 Reacting to what Meta tells us
+
+Every one of these arrives on the webhook today and would be discarded by a naive
+integration. Each gets a handler and a state transition:
+
+- **131049** (`failed`) → mark the agency `template_capped_until` = +24h; do **not**
+  retry; drop to the ladder. Counting this as a generic failure and retrying is
+  the mistake that turns a soft cap into a quality-rating problem.
+- **131047** (no open window, template required) → a bug in our own window
+  bookkeeping. Alert, do not paper over.
+- **Quality rating drop** → B3 tightens automatically; owner alerted.
+- **Number restricted / flagged** → **global kill switch on the official path**,
+  automatic and immediate, with every subsequent lead taking the legacy fallback.
+  The WABA is rented from a reseller, not owned - see 12.6 - so a complaint spike
+  can end the account with someone else's decision. Fail fast and loudly.
+
+### 12.2.5 The fail-dark contract applies here too, unchanged
+
+Every read behind these budgets uses `sbSelectStrict`, and an unreadable budget
+**denies** rather than permits. Part 9.2's `TileState` vocabulary
+(`ok | warn | critical | dark | empty`, severity `ok < warn < dark < critical`)
+and the E1-E9 empty-state rules are reused verbatim for the new dashboard in
+12.4.2 - not re-derived. The failure this repo has shipped twice is a green panel
+over a dead sensor; a second dashboard is a second chance to ship it.
+
+## 12.3 The warm-up gate - pricing, access and the copy
+
+Supersedes Wave C.0.2 and Part 11 F3's unlock rule. Both now point here.
+
+### 12.3.1 The decision, and the trap avoided
+
+There is **no discount**. ₪16.50 Pro / ₪88 Ultra quarterly from day one, one
+price source (`plans.ts`), per C.0.1.
+
+Instead, **a user cannot buy a paid plan until the account is warmed up**, and
+warm-up is measured in **usage depth, not calendar days**. The days-based rule
+in Part 11 F3 would have hidden the paywall behind a window longer than the
+average trip; the reasoning is recorded there so it is not reintroduced.
+
+### 12.3.2 The predicate
+
+Every threshold is an owner-tunable Key Vault value with the default shown, and
+the whole gate has a kill switch. Numbers are a starting position to be moved
+from the dashboard once real cohort data exists - not a claim.
+
+```
+warmedUp(user) =
+      completedSearches      >= WARMUP_MIN_SEARCHES      (default 1)
+  AND agenciesEngaged        >= WARMUP_MIN_ENGAGED       (default 3)
+  AND repliesReceived        >= WARMUP_MIN_REPLIES       (default 1)
+  AND whatsappLinked         == true
+  AND restrictionEvents      == 0
+  AND NOT accountFlagged
+```
+
+- `agenciesEngaged` counts distinct agencies actually reached, from the
+  tail-canonicalised `wa_recipient_state` built in Tier 1.0 - **not** a raw send
+  count, and not `response_times`, whose clock is anchored wrong (Part 9.8).
+- `repliesReceived >= 1` is the condition carried over from F3, and it carries
+  its original justification: an account nobody has answered is not warm.
+- All of it is computable from data Tier 1 already writes. **No new counters are
+  required for the predicate itself** - only for the dashboard in 12.4.1.
+- A same-day traveller who runs one real search and gets three shops talking is
+  warm within the hour. That is the intent.
+
+### 12.3.3 Enforcement - four points, and three of them are the ones people forget
+
+1. **`/api/billing/checkout`** - server-side, before any PayPal call. This is the
+   only one that actually enforces anything; a client-only gate is not a gate.
+2. **`UpgradeSheet`** - renders the locked state instead of the buy button.
+3. **Deep links and the pricing page** - a user who arrives at checkout by URL
+   must meet the same wall, with the same explanation.
+4. **`TEST_MODE` and users flagged `test` are exempt**, or beta testers cannot
+   test the paid tiers at all. Same for the owner allowlist.
+
+Two edge cases that otherwise strand people permanently:
+
+- **Never linked WhatsApp** → the gate must render as *"link your number to
+  begin"* with the progress visibly not started, never as a bare refusal.
+- **Restricted during the free window** → a defined recovery path to eventual
+  unlock. A dead end here converts a bad day into a lost user.
+
+### 12.3.4 The copy - eye level, desire not denial
+
+Constraint 5 governs: this is quality control and access, and **the words "ban",
+"restricted" and "risk" do not appear** outside the linking/consent screen. The
+lint test from Part 9.6 already enforces exactly that and covers these strings
+for free.
+
+Primary, at eye level on the upgrade surface, with a live two-segment progress
+indicator reusing F4's component rather than a new one:
+
+> **Premium unlocks soon**
+> We want you to get the most out of Premium, so unlock it by using the app a
+> little more first.
+> *You are 2 of 3 shops away.*
+
+Secondary, on the locked buy button: **"Unlocks as you use the app"**.
+On completion, a genuine moment - a one-time celebratory state, *"Premium is
+unlocked for your account"* - because the entire value of a gate is the release.
+
+Three rules the copy must hold to:
+
+- **Always show the distance.** A gate with no visible progress is a wall, and
+  reads as a bug.
+- **Never imply the user did something wrong.** The subject of every sentence is
+  the product getting ready, not the user being insufficient.
+- **Never say "we are still evaluating you".** True, and corrosive.
+
+## 12.4 The two dashboards
+
+Both live in the existing Management Section, both owner-gated the way Ops
+already is, both **read from hourly rollups rather than fanning out live**.
+Part 9.7's reasoning is not repeated but is binding: `/api/activity` costs ~21
+Supabase round trips per tick, and at fleet scale a live fan-out monitor becomes
+the load it monitors.
+
+### 12.4.1 Monetization and lifecycle (the owner's directive 1)
+
+The question this answers is *"who is converting, who is stuck, and where"* -
+which today has no surface at all.
+
+**The funnel, as one row of counts with conversion between each pair.** This is
+the spine and everything else hangs off it:
+
+```
+signed up -> linked WhatsApp -> ran a search -> reached >=1 agency
+  -> received >=1 reply -> WARMED UP -> viewed upgrade -> checked out -> paid
+  -> renewed
+```
+
+**Warm-up cohort analytics**, which is the part the owner asked for by name:
+
+- Warmed-up users now, and the rate of warming per day.
+- **Median and p90 time-to-warm** - the single number that says whether the
+  threshold is set correctly. If p90 exceeds a typical trip, the gate is too
+  tight and should be loosened from this screen.
+- **Distribution of where non-warm users stall**, by predicate term. If most
+  users fail on `agenciesEngaged`, the threshold is wrong; if most fail on
+  `whatsappLinked`, the problem is onboarding, not pricing. This one chart
+  changes what you work on next.
+- **Conversion within 24h / 72h of unlocking.** The whole thesis of the gate is
+  that earned access converts better. This is the only measurement that can
+  falsify it, and it should be prominent enough to be uncomfortable.
+
+**Suggested additions, offered because the directive asked for them:**
+
+- **A holdout cohort.** Reuse the `WA_COHORT_PCT` primitive from Part 9.4 to let
+  a small percentage buy immediately. Without it, "the gate improves conversion"
+  is unfalsifiable forever - and with it, one number settles the argument.
+- **Revenue per warmed-up user vs per signup**, and **refund/chargeback rate by
+  cohort** - the gate's real claim is better-fit buyers, which shows up in
+  retention and refunds before it shows up in volume.
+- **Segments as saved predicates, not hardcoded tabs** - `warm & unconverted`,
+  `converted & inactive`, `linked & never searched`, `restricted`. Each clickable
+  through to the user list. Hardcoded segments go stale in a month.
+- **Unit economics per cohort**, wired to the same meters as 12.4.2's spend, so
+  the C.0.1/9.5 cost gate stays live instead of being a one-off calculation.
+- **Trip-shaped time axis.** Days-since-signup is the wrong x-axis for a product
+  with a 72-hour lifecycle; use hours-since-first-search for anything about
+  activation.
+
+### 12.4.2 The Business Platform console (the owner's directive 4)
+
+Owner-only, and the operational counterpart to the risk dashboard in Part 9.7 -
+same components, same `TileState` vocabulary, same empty-state rules, so it reads
+as one system rather than a second dialect.
+
+**Live state:** connection and credential health; phone number and display name;
+**quality rating**; current messaging tier and headroom; today's spend against
+B4; and the kill-switch, present and obvious.
+
+**The lead ledger** - the thing the owner specifically asked to track. Every
+first message we send, one row: agency, traveller, template vs free-form, lane,
+send time, delivery, read, **link tap**, agency-replied-to-us, traveller-got-
+inbound, handed-off, and terminal outcome. Filterable, exportable, and with a
+single-lead detail view that shows the exact wire text and every timestamp -
+because the first question about any failed handoff is always *"what did we
+actually send them"*.
+
+**Funnel tiles** on the same ledger: sent → delivered → read → **tapped** →
+replied → handed off. The tap column is the one that tells you whether the
+message worked, and no other product surface has it.
+
+**Per-agency view:** template cooldown state, `template_capped_until`, window
+open/closed with expiry, lifetime taps and replies, and the responsiveness score
+that Part 11 F2's scanner consumes. **This is where F2's data problem gets
+solved** - F2 needed a clean per-agency reply ledger and was blocked on one.
+
+**Configuration, live and without a redeploy** - this is the "AI-agentic,
+flexible" half of the directive, and it means *owner-editable behaviour*, not a
+chat box:
+
+- Template selection per region and language, with the approved body rendered
+  read-only next to it so what Meta approved and what we think we send cannot
+  drift.
+- The prefilled traveller-opener text, per language, editable and previewed.
+- Every budget in 12.2.1 as a live value: per-agency cooldown, hold timeout,
+  daily spend ceiling, fallback ladder toggles.
+- Which fallback rungs are enabled, including whether the legacy path may catch.
+- **Dry-run mode**: run the whole pipeline, render the exact wire text, send
+  nothing. This is how the template gets tested without spending quality rating.
+
+**Sub-agent monitoring:** the handoff pipeline's own agents - lead composer,
+category classifier, reply classifier (is this inbound the agency accepting, or
+declining, or a bounce), attribution matcher - each with its recent decisions,
+confidence, and a manual-override trail. Mirror `src/lib/ops/*` conventions and
+route every behaviour change through `saveVersionedSpec`; do not invent a second
+versioning mechanism.
+
+**Two honesty constraints, carried from Part 9.7:** every configuration change is
+a versioned row with an author and a diff, or before/after comparison on this
+screen means nothing; and the footer states plainly that nothing here reduces the
+chance of Meta restricting the number - it shortens the time between Meta pushing
+back and the owner knowing.
+
+## 12.5 "Humanizing" the official account - the honest answer
+
+The directive asks for research into making the official account look and act
+human: informal openers, and cycling profile picture, name and status every few
+hours. Researched properly, and the answer splits cleanly in two.
+
+### What is impossible, and why
+
+**The display name cannot be cycled.** It is a *certified* name: submitted to
+Meta, reviewed (typically 24-48h), and issued as a certificate. Changes are
+capped at roughly ten per 30 days and each one needs review. Rotating it every
+few hours is not rate-limited, it is structurally unavailable - and attempting it
+would put the account into permanent review.
+
+**The account is labelled as a business by WhatsApp itself.** An API-connected
+number renders in the recipient's client with business-account treatment that we
+do not control and cannot suppress. The agency will know. **This is not a
+solvable engineering problem** - it is a property of the platform, and any design
+whose value depends on concealing it is building on sand.
+
+**And concealment is against the terms of the account we are renting.** Not our
+own account: per 12.6 the WABA sits under a reseller's verified portfolio.
+Deliberately disguising an automated business account is the kind of thing that
+ends with the reseller terminating us, which takes every user's handoff path down
+at once. The failure mode is not a warning - it is a Tuesday with no product.
+
+**So: no persona rotation, no fake human identity, no attempt to pass as an
+individual.** I am not going to design that, and it would not work.
+
+### What is genuinely available, and it is more than it sounds
+
+The owner's actual goal - *the first interaction should feel informal enough that
+the agency engages rather than filing it as automated spam* - is reachable, and
+the service window is what makes it reachable.
+
+- **Inside the 24h window, message content is completely unconstrained.** No
+  template, no review, no category. *"Hey - got someone looking for a scooter for
+  4 days, can you message them?"* is entirely sendable there, along with `wa.me`
+  links, and it is free. **Since 12.2.2 puts most traffic in this lane, most of
+  our messages can be written in exactly the register the owner wants.** The
+  template is only ever the first contact with a given agency in a given day.
+- **Profile picture and the 139-character "about" text are freely updatable** via
+  the profile endpoint - no review. A seasonal or campaign-appropriate picture is
+  legitimate brand management. Cycling them hourly to fake authenticity is not,
+  and buys nothing once the business label is visible anyway. The console exposes
+  them as editable fields with an audit trail, and deliberately does **not** ship
+  an automatic rotator.
+- **Human timing is real and free.** Everything Vector 3 established still
+  applies: send inside the agency's local business hours, vary the gaps, do not
+  fire a burst at 03:00. This moves perception far more than a fake avatar would.
+- **Warmth is a copy problem, and it is the one lever with real headroom.**
+  Naming a specific vehicle and specific dates, writing in the agency's own
+  language, and asking one answerable question does more for reply rate than any
+  identity trick - which is precisely what Part 5.12 found when it discovered our
+  opener was unanswerable.
+
+**The strategic reframe worth stating:** the "authentic local traveller" illusion
+is not being lost here, it is being *traded*. What replaces it is better -
+predictable delivery, a business the agency can recognise and come back to, and
+one tap to a live customer. An agency that learns WheelDeal means real renters
+will answer faster than any stranger ever did. **Design for being a recognised
+channel, not for being an unrecognised person.**
+
+## 12.6 Prerequisites - what to obtain, and in what order
+
+Owner's position, recorded: **there is no registered legal entity**, which is why
+access is being bought through a provider rather than opened directly. That is
+the correct call and it shapes everything below. Note `src/lib/legal.ts` still
+carries `OPERATOR_NAME = "the Operator"` with a `TODO` to replace it with the
+legal entity name - the same gap, already visible in the code.
+
+**Consequence to go in with eyes open:** under a reseller, the WABA is **rented**.
+The provider's verified portfolio hosts it, the provider can suspend it, and the
+per-recipient and tier limits are Meta's regardless of who bills us. Two things
+follow: quality rating is not a metric but an existential asset (hence B3 and the
+automatic kill switch), and the migration path to a directly-owned WABA should be
+kept open from day one - which is what 12.8's adapter boundary is for.
+
+### From the provider
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | Account + **API key** | Stored only in the Key Vault, never in the repo or `render.yaml` |
+| 2 | **Base URL / host** | Most resellers issue a per-account host; it must be configuration, not a constant |
+| 3 | **Sender phone number** | Must be a number **not currently registered on WhatsApp** - it cannot be a personal number in use, and enabling it strips that number of normal WhatsApp use |
+| 4 | **Approved display name** | Reviewed by Meta; expect 24-48h and a possible rejection round |
+| 5 | **Two approved templates** | First-contact and re-engagement, per language, each with the dynamic URL button and its declared base URL |
+| 6 | **Inbound webhook** configured to our endpoint | Many resellers configure this by support ticket rather than self-serve - lead time, not a task |
+| 7 | **Delivery/status webhook** | Separate subscription on several providers. Without it there is no ledger, no 131049 handling, and no dashboard |
+| 8 | **Webhook authentication method** | Meta signs with `X-Hub-Signature-256`; resellers often do not sign at all. If unsigned, the endpoint takes a secret path segment plus a shared-secret header, and rejects everything else |
+| 9 | Sandbox or test sender | Needed to exercise the pipeline before spending quality rating on a live number |
+| 10 | Written pricing per template category, per country, **and whether free-form is billed** | Directly determines whether 12.2.2's economics hold. Some resellers bill free-form messages that Meta provides free - on this design that fee lands on the majority of traffic |
+
+### Config keys (Admin → Keys, scope `messaging`) - names only, no values
+
+```
+WABA_ENABLED              off        # the master switch. Default OFF (12.8)
+WABA_PROVIDER             meta|reseller
+WABA_BASE_URL
+WABA_API_KEY
+WABA_SENDER_ID                       # phone-number id or sender identifier
+WABA_WEBHOOK_SECRET
+WABA_TEMPLATE_FIRST_CONTACT
+WABA_TEMPLATE_REENGAGE
+WABA_LINK_BASE                       # must match the approved button base URL
+WABA_AGENCY_COOLDOWN_HOURS   24
+WABA_HOLD_TIMEOUT_MINUTES    25
+WABA_DAILY_SPEND_CEILING_USD
+WABA_DRY_RUN              on         # ships on; turned off deliberately
+```
+
+### Infrastructure
+
+No new hosting tier. The webhook is a Next.js route on the existing Cloud Run
+service; the queue is Supabase rows drained by the scheduler that already exists.
+`APP_DOMAIN` becomes load-bearing in a new way - it is the approved button base
+URL, so **changing it invalidates approved templates**, which is worth a comment
+next to the setting.
+
+## 12.7 Database - additive only, as always
+
+Four tables and a few nullable columns. `add column if not exists` throughout; no
+migration of existing rows; nothing here is read by the legacy path.
+
+| Table | Purpose |
+|---|---|
+| `waba_leads` | One row per handoff attempt. The state machine of 12.1.4, the traveller, the agency, the search session, lane, template id, link token, and every timestamp the ledger renders |
+| `waba_agencies` | Per-agency canonical state: phone tail key, `window_expires_at`, `template_capped_until`, last template at, lifetime sent/delivered/read/tapped/replied. **Keyed on the phone tail**, reusing `nationalTail()` from Tier 1.0 - re-splitting rows across spellings here would reproduce the exact bug Tier 1.0 just fixed |
+| `waba_events` | Append-only wire log: every outbound send, every webhook, raw payload, error code. This is what makes a failed handoff diagnosable a week later |
+| `waba_rollups` | Hourly aggregate for the dashboards, with `dark_signals[]` so E1/E8/E9 stay reconstructable |
+
+New nullable columns: `app_users.warmed_up_at` (write-once, the moment the
+predicate first passed - needed for time-to-warm and for cohort analysis) and
+`app_users.warmup_snapshot` (the predicate terms at unlock, so a later threshold
+change does not rewrite history).
+
+**One thing not to build:** a new shop table. Agencies are still discovered per
+search from Places; `waba_agencies` is keyed on the phone tail and is a
+*messaging-state* table, not a directory. Introducing a second notion of "shop"
+would be a genuine architectural regression.
+
+## 12.8 Coexistence - the flag contract
+
+Owner requirement, verbatim in intent: the old engine stays default, the new one
+ships complete but **off**, and activation is credentials plus a switch.
+
+These are invariants, written to survive a future edit that does not read this
+section:
+
+1. **`WABA_ENABLED` defaults OFF.** With it off, not one code path changes
+   behaviour, no new table is read, and no new request leaves the process. A
+   fresh clone with no configuration behaves exactly as it does today.
+2. **The flag is checked server-side, at one choke point**, in the outreach
+   dispatch decision - not scattered through the UI. `inCohort()` from Part 9.4
+   is the primitive; the official path is a cohort like any other, so it can be
+   enabled for the owner alone before anyone else.
+3. **Credential absence is equivalent to the flag being off**, and says so in
+   the console. A half-configured official path must never silently half-send.
+4. **The legacy path is the fallback, permanently.** Rung 4 of 12.2.3 is not a
+   migration artefact to be removed later - it is what makes constraint 1
+   (absolute shop choice) survivable when an agency is uncontactable officially.
+5. **Provider access sits behind one adapter interface**, with the Meta dialect
+   as the reference implementation, because every reseller proxies the Cloud API
+   underneath. `src/lib/whatsapp.ts` already speaks that dialect and the existing
+   Meta-shaped webhook already does the challenge and signature dance - so the
+   reseller adapter is a variation on something that exists, not a new subsystem.
+   This is also the migration path off the rented WABA.
+6. **No existing test changes meaning.** If a Tier 0/1 test needs editing to make
+   this pass, that is a signal the flag is leaking, not a chore.
+
+## 12.9 Conflicts with the current implementation - each one named and resolved
+
+Owner requirement: *no conflicts with our current implementation or the plan we
+are executing.* Ten were found. Two are serious, and the first is the one that
+would have silently broken the whole feature.
+
+**1. [SERIOUS] The traveller's inbound gate is built to reject exactly this
+message.** Task #67 ("Z1: Privacy isolation - receiver scoping, ingestion gate,
+anti-spoof") and #85 (the privacy leak where personal chats surfaced as shop
+replies) exist precisely to stop an unknown inbound number being treated as a
+shop reply. **The new design requires the traveller's system to accept and act on
+an inbound from a number it has never written to** - which is the thing those
+tasks made impossible, correctly. Resolution: a *narrow, pre-authorised*
+exception. When a handoff is dispatched, write an expiring expectation for
+(traveller, agency-tail, search-session); the ingest admits an unknown inbound
+**only** if it matches a live expectation. Everything else stays rejected. The
+prefilled opener code from 12.1.3 is the secondary matcher for the case where the
+agency replies from a staff mobile rather than the listed number - which is
+common, and which tail matching alone would miss. **This must not be implemented
+by loosening the existing gate.**
+
+**2. [SERIOUS] Two rate governors that know nothing about each other.** The WABA
+governor (12.2) and `wa-guard`'s traveller-session governor would both be live
+whenever the fallback ladder can reach rung 4. Part 0.37 already recorded what
+happens when two rate systems fight - the plan model loses silently, and it took
+a round to diagnose. Resolution: the fallback is a **single explicit handoff**
+with a recorded reason, not two systems racing; a lead that has been admitted by
+the WABA governor is never simultaneously eligible for the legacy path.
+
+**3. `MASS_BARGAIN_MAX = 24` and the wave pacing of Part 11 F1** are constraints
+on *the traveller's number*. Sending from our WABA has entirely different limits.
+Resolution: the batch cap applies per lane; F1's wave pacing governs the legacy
+lane only, and the official lane is paced by 12.2's budgets. Do not let one
+constant try to mean both.
+
+**4. Part 0.37 and Part 7.8 rule out the official Cloud API for cold contact** on
+three grounds. Two still bite (131049; no opt-in on scraped numbers) and are
+engineered around in 12.2. The third - *"a number lives on exactly one platform,
+so a traveller's personal number can never be the WABA sender"* - **is no longer
+an objection but the actual design**: our number is the sender, theirs is not.
+Those sections carry correction markers pointing here.
+
+**5. The two-meter unanswered budget (Part 9.3)** meters the traveller's
+introductions. Official-lane leads are not introductions from that number and
+**must not debit it**, or a user who never cold-sends will be throttled for
+traffic they did not generate.
+
+**6. Part 11 F2's agency scanner** was blocked on the absence of a clean
+per-agency reply ledger. `waba_agencies` plus the tap telemetry is a better one
+than it was going to build. F2 should consume it rather than aggregate its own.
+
+**7. Part 11 F4's progress bar** gains a state. Segment 1 is now "agencies asked
+to make contact"; a lead sitting in the 12.2.2 hold must render as *waiting for
+the shop to open the conversation*, not as a stalled bar. Same rule as before:
+the bar stops with a reason rather than climbing on nothing.
+
+**8. Wave C.0.4/C.0.5's capacity copy** describes introductions from the
+traveller's number. Under the official lane the number the traveller cares about
+is different, and the copy needs a second variant selected by the active lane.
+
+**9. The traveller's number is disclosed to a third party.** This is new, it is
+personal data, and it is the sharpest item under the owner's *"100% clear to the
+user"* requirement. It needs its own consent - a fourth entry in `CONSENTS`
+alongside `terms`, `wa_risk` and `ai_responsibility`, with its own durable column
+and a `TERMS_VERSION` bump so `needsReacceptance` re-prompts - plus a Privacy
+Policy section naming what is shared, with whom, and why. The consent write
+follows Part 9.9's rule for `wa_link`: **blocking, with retry**, and on durable
+failure we do not dispatch.
+
+**10. The user-facing model of the product changes** and the app currently says
+the opposite. Today: *we message shops for you*. Under this lane: *we ask shops
+to message you*. Every string describing outreach needs a lane-aware variant, and
+the first-run explanation must state plainly that the agency will contact them
+directly on WhatsApp and that WheelDeal's own number - not theirs - makes the
+first approach. **A traveller who is surprised by an incoming message from a
+rental shop is a support ticket and a trust failure.** This is the single largest
+copy surface in Part 12 and it is not optional.
+
+## 12.10 Where this lands in the execution path
+
+Nothing here displaces Tier 0 or Tier 1, both of which remain load-bearing for
+the default path. Ordering inside the new work:
+
+| # | Work | Size | Why here |
+|---|---|---|---|
+| W0 | **The flag, the adapter boundary, and dry-run mode** | days | Everything else is unreachable without a switch that is provably off, and dry-run is how the rest is built without credentials |
+| W1 | **Schema (12.7) + the lead state machine** | days | The ledger has to exist before anything writes to it |
+| W2 | **Inbound expectation gate** (conflict 1) | days | The narrow exception, with tests that prove the general gate did not loosen |
+| W3 | **Send path + webhook + status handling** | days | Includes 131049, quality rating, and the kill switch - not as follow-up work |
+| W4 | **The governor and the fallback ladder** (12.2) | days | The part that decides whether this scales |
+| W5 | **Business Platform console** (12.4.2) | days | Nothing can be operated safely without it |
+| W6 | **Consent, privacy copy, and the lane-aware user-facing strings** (conflicts 9, 10) | days | **Gates first live activation.** No credentials go in before this ships |
+| W7 | **Live validation on one owner-operated lead**, dry-run first, then a single real agency | days | The template's real category, the real button behaviour, and the real webhook shape are all unverifiable from here |
+
+**The warm-up gate (12.3) and its dashboard (12.4.1) are independent of all of
+the above** and depend only on C.0.1 plus Tier 1's recipient ledger. They should
+ship first - they need no credentials, no provider, and no legal entity.
