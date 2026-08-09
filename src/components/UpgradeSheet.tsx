@@ -16,22 +16,24 @@ export interface PlanView {
   id: string;
   name: string;
   blurb: string;
-  listAmount: number;
   amount: number;
-  discountPct: number;
   features: string[];
   highlight?: boolean;
 }
 
 import { CURRENCIES, currency, fromIls, savedCurrency, setSavedCurrency } from "@/lib/currency";
 
-// Pricing is anchored in ILS (matches the PayPal billing plans exactly).
-const ILS_PRICES: Record<string, number> = { pro: 16.5, ultra: 88 };
-
-function planPrice(planId: string, code: string): { now: string; list: string } | null {
-  const ils = ILS_PRICES[planId];
-  if (!ils) return null;
-  return { now: fromIls(ils, code), list: fromIls(ils * 5, code) }; // 80% launch off
+// ONE PRICE, READ FROM THE CATALOGUE.
+//
+// This file used to carry its own `ILS_PRICES = { pro: 16.5, ultra: 88 }` map
+// with a comment saying it matched PayPal exactly. It did - and plans.ts
+// disagreed with it, because plans.ts derived its figure from a list price and
+// an 80% launch discount. Two sources, one of them wrong, and the wrong one was
+// the shared module. The discount is gone and plans.ts now holds the charged
+// price, so there is nothing left to duplicate here.
+function planPrice(amount: number, code: string): string | null {
+  if (!amount) return null;
+  return fromIls(amount / 100, code);
 }
 
 // The messaging capacity of each plan, in plain language. Mirrors PLAN_CAPACITY
@@ -85,9 +87,9 @@ export function PlanCard({
   const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => setCurrencyCode(savedCurrency()), []);
 
-  const px = planPrice(plan.id, currencyCode);
-  const list = px ? px.list : `$${(plan.listAmount / 100).toFixed(0)}`;
-  const now = px ? px.now : `$${(plan.amount / 100).toFixed(2).replace(/\.00$/, "")}`;
+  const now =
+    planPrice(plan.amount, currencyCode) ??
+    `$${(plan.amount / 100).toFixed(2).replace(/\.00$/, "")}`;
   return (
     <div
       className={`surface rounded-blob p-4 ${
@@ -111,7 +113,6 @@ export function PlanCard({
             <div className="text-xl font-extrabold text-strong">Free</div>
           ) : (
             <>
-              <div className="text-[12px] font-bold text-faint line-through">{list}</div>
               <div className="text-xl font-extrabold text-strong">{now}</div>
               <div className="text-[10px] font-bold text-faint">every 3 months</div>
               <button
@@ -145,15 +146,6 @@ export function PlanCard({
           )}
         </div>
       </div>
-      {plan.amount > 0 && (
-        <div
-          className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-extrabold text-white ${
-            plan.id === "ultra" ? "badge-ultra" : "bg-brandblue"
-          }`}
-        >
-          <Icon name="sparkles" className="h-3 w-3" /> Launch pricing · {plan.discountPct}% off
-        </div>
-      )}
       {/* R5: crystal-clear capacity meter - the 10/30/40 limits explained in
           plain "X new shops every Y hours", with a visual bar so buyers see
           exactly what more they get. */}
@@ -246,7 +238,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
         <div>
           <h2 className="text-lg font-extrabold text-strong">{t("Go Pro or Ultra")}</h2>
           <p className="text-[12px] font-bold text-soft">
-            {t("Launch pricing: 80% off while WheelDeal is in its opening season")}
+            {t("Billed every 3 months. Cancel any time.")}
           </p>
         </div>
         <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">

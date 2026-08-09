@@ -14,7 +14,7 @@ import { PLAN_CAPACITY } from "@/lib/wa/capacity";
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Start free. Upgrade to Pro or Ultra for mass bargaining, local-language haggling and Will's price radar - launch pricing, billed quarterly.",
+    "Start free. Upgrade to Pro or Ultra for mass bargaining, local-language haggling and Will's price radar - billed quarterly.",
   alternates: { canonical: "/pricing" },
 };
 

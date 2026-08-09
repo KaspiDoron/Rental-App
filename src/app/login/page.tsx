@@ -305,7 +305,7 @@ export default function LoginPage() {
             {t("Welcome aboard!")} 🎉
           </h1>
           <p className="mt-1 text-sm font-bold text-brandred">
-            {t("One-time opening offer: 80% off, billed every 3 months")}
+            {t("Pro and Ultra are billed every 3 months. Cancel any time.")}
           </p>
         </div>
         <div className="space-y-3">

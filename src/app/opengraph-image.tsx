@@ -59,7 +59,7 @@ export default function OgImage() {
             ))}
           </div>
           <div style={{ display: "flex", marginTop: 22, fontSize: 24, fontWeight: 700, color: "#bcd2ff" }}>
-            Live negotiation · Real Google reviews · 80% off launch
+            Live negotiation · Real Google reviews · Billed quarterly
           </div>
         </div>
 

@@ -2,8 +2,28 @@
 // both server routes and client pricing UI can import it. Payment is handled by
 // src/lib/paypal.ts; this file only describes WHAT the tiers are.
 //
-// Plans bill every 3 MONTHS (quarterly) with an 80% limited-time launch
-// discount. Owner and management hold the Ultra plan automatically, free.
+// Plans bill every 3 MONTHS (quarterly) at the prices below. Owner and
+// management hold the Ultra plan automatically, free.
+//
+// ONE PRICE SOURCE, AND IT USED TO BE WRONG.
+//
+// There were two disagreeing price sources. This file computed Pro 5.40 /
+// Ultra 29.40 by applying an 80% `LAUNCH_DISCOUNT` to a list price, while
+// UpgradeSheet.tsx hardcoded 16.50 / 88 in its own ILS map with a comment
+// claiming those "match the PayPal billing plans exactly". The hardcoded pair
+// was the truth - PayPal charges 16.50 / 88 - so every figure this module
+// produced was fiction, and any consumer that trusted it under-reported revenue
+// by ~3x.
+//
+// The discount is now gone entirely (owner decision, plan C.0.2): there is no
+// launch price, no introductory quarter, and no list price to strike through.
+// What replaces it is not cheaper access but *gated* access - a paid plan
+// cannot be purchased until the account is warmed up (src/lib/warmup.ts). A
+// discount pays people to tolerate a warm-up; a gate makes them want to finish
+// it.
+//
+// `amount` is therefore the real charged price, denominated in ILS agorot, and
+// it is the only price in the codebase.
 
 import type { PlanId } from "./access";
 
@@ -13,33 +33,24 @@ export interface Plan {
   id: PlanId;
   name: string;
   blurb: string;
-  listAmount: number; // minor units per 3 months, before discount (ILS agorot)
-  amount: number; // minor units per 3 months, launch price actually charged
-  discountPct: number;
+  /** Minor units (ILS agorot) per 3 months. The amount PayPal actually charges. */
+  amount: number;
   features: string[];
   highlight?: boolean;
 }
 
-export const LAUNCH_DISCOUNT = 0.8;
+/** The currency `amount` is denominated in. Display converts from here. */
+export const PLAN_CURRENCY = "ILS";
 
 function plan(
   id: PlanId,
   name: string,
   blurb: string,
-  listAmount: number,
+  amount: number,
   features: string[],
   highlight?: boolean
 ): Plan {
-  return {
-    id,
-    name,
-    blurb,
-    listAmount,
-    amount: Math.round(listAmount * (1 - LAUNCH_DISCOUNT)),
-    discountPct: LAUNCH_DISCOUNT * 100,
-    features,
-    highlight,
-  };
+  return { id, name, blurb, amount, features, highlight };
 }
 
 export const PLANS: Plan[] = [
@@ -52,7 +63,7 @@ export const PLANS: Plan[] = [
     "pro",
     "Pro Traveller",
     "Best for frequent travellers",
-    2700,
+    1650,
     [
       "100% ad-free experience",
       "Priority negotiation agents",
@@ -63,7 +74,7 @@ export const PLANS: Plan[] = [
     ],
     true
   ),
-  plan("ultra", "Ultra", "The ultimate bargaining machine", 14700, [
+  plan("ultra", "Ultra", "The ultimate bargaining machine", 8800, [
     "Everything in Pro",
     "Agents bargain in the shop's LOCAL language - real street talk",
     "Locals-only pricing: agents anchor to the real local market floor",
@@ -74,6 +85,11 @@ export const PLANS: Plan[] = [
     "VIP support & early access to new agents",
   ]),
 ];
+
+/** The charged price in whole ILS, for display and currency conversion. */
+export function planPriceIls(id: string): number {
+  return planById(id).amount / 100;
+}
 
 export function planById(id: string | undefined): Plan {
   return PLANS.find((p) => p.id === id) ?? PLANS[0];
