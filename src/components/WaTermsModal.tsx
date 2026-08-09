@@ -25,7 +25,20 @@ const CLAUSES: [string, string][] = [
   ],
   [
     "Limitation of liability",
-    "In no event shall the aggregate liability of the Released Parties arising out of or relating to this agreement or the Service exceed zero (nil), and in no event shall the Released Parties be liable for any indirect, incidental, special, consequential, exemplary, punitive or enhanced damages of any kind.",
+    // A CAP THAT SURVIVES IS WORTH MORE THAN A CAP THAT IS STRUCK.
+    //
+    // This read "shall not exceed zero (nil)". A total exclusion of liability is
+    // commonly severed under Israeli Standard Contracts Law 1982 and EU
+    // unfair-terms rules - and a severed clause can take the rest of the section
+    // with it, which is the opposite of what it was written to do. A nominal,
+    // severable cap with an express carve-out is the version a court is likely
+    // to leave standing.
+    //
+    // It also now matches TERMS_SECTIONS clause 9 rather than contradicting it:
+    // two documents stating different caps is itself an argument that neither
+    // was agreed. Posture, not an opinion on enforceability in any forum - get
+    // counsel.
+    "Except where such limitation is prohibited by applicable law, the total aggregate liability of the Released Parties arising out of or relating to this agreement or the Service is limited to the greater of (a) the amounts you actually paid for the Service in the three (3) months preceding the event giving rise to the claim, or (b) US$50. In no event shall the Released Parties be liable for any indirect, incidental, special, consequential, exemplary, punitive or enhanced damages of any kind. If any part of this limitation is held unenforceable, the remainder continues in full force.",
   ],
   [
     "Indemnification",

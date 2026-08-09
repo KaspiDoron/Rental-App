@@ -148,13 +148,41 @@ describe("every acceptance surface now writes a record", () => {
     expect(route).not.toMatch(/body\.version/);
   });
 
-  it("the writes survive the Cloud Run response boundary", () => {
+  it("the best-effort writes survive the Cloud Run response boundary", () => {
+    // Cloud Run throttles CPU to zero the instant the response flushes, so an
+    // un-awaited write simply never happens.
     const route = readCode("src/app/api/legal/accept/route.ts");
     expect(route).toMatch(/await finishBeforeResponse\("consent-record"/);
-    const connect = readCode("src/app/api/wa/connect/route.ts");
-    expect(connect).toMatch(/finishBeforeResponse\("wa-link-consent"/);
     const close = readCode("src/app/api/negotiate/close-deal/route.ts");
     expect(close).toMatch(/finishBeforeResponse\("deal-terms-consent"/);
+  });
+
+  it("wa_link does something STRONGER than surviving the boundary - it gates", () => {
+    // This used to be a `finishBeforeResponse` after `connectInstance`, which
+    // meant a failed write happened once the QR had already been minted and
+    // there was nothing left to withhold. The one consent whose subject matter
+    // is the permanent loss of someone's phone number was the one we were least
+    // able to prove.
+    //
+    // Now it is awaited inline BEFORE the code is issued, and a durable failure
+    // refuses the link. Refusing to link is a bad afternoon; linking against an
+    // acceptance nobody can produce is what the ledger exists to prevent.
+    const connect = readCode("src/app/api/wa/connect/route.ts");
+    expect(connect).toMatch(/const recorded = await recordConsentBlocking\(/);
+    expect(connect).toMatch(/if \(!recorded\)/);
+    expect(connect).toMatch(/status: 503/);
+    // ...and it happens before the pairing code exists.
+    expect(connect.indexOf("recordConsentBlocking")).toBeLessThan(
+      connect.indexOf("await connectInstance(")
+    );
+  });
+
+  it("only wa_link retries - the rest stay best-effort", () => {
+    // A retry loop on every consent would turn a database blip into a slow
+    // booking flow for no gain, because those acceptances are reconstructable
+    // from the breadcrumb.
+    const consent = readCode("src/lib/consent.ts");
+    expect(consent).toMatch(/const attempts = input\.kind === "wa_link" \? 3 : 1;/);
   });
 });
 

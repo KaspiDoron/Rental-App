@@ -51,10 +51,6 @@ export async function POST(req: Request) {
   // full instance rebuilds per pairing (~3.7 min of self-inflicted churn), which
   // both broke the pairing and hammered the Evolution container. connectInstance
   // now re-issues the code on the SAME instance instead.
-  const result = await connectInstance(session.email, origin, phone, {
-    fresh: body.fresh === true,
-  });
-
   // PER LINKING EVENT, not once at signup. The WhatsApp release (WaTermsModal)
   // is the heaviest document in the product - it is the one that says the user
   // may lose their number - and it was a modal you closed. Nothing recorded
@@ -65,18 +61,44 @@ export async function POST(req: Request) {
   // browser so the proof does not depend on a client call that can simply not
   // be made. `fresh` retries re-issue a code on the same instance and are not
   // new acceptances.
+  //
+  // BEFORE THE CODE, NOT AFTER, AND IT CAN REFUSE.
+  //
+  // This used to run after `connectInstance`, awaited only for the response
+  // boundary - so a failed write happened when the QR had already been minted
+  // and there was nothing left to withhold. The one consent whose subject
+  // matter is the permanent loss of someone's phone number was therefore the
+  // one we were least able to prove.
+  //
+  // Now it gates: the write retries, and if it still cannot be recorded we do
+  // not hand out a pairing code at all. Refusing to link is a bad afternoon;
+  // linking against an acceptance nobody can produce is the thing the whole
+  // consent ledger exists to prevent.
   if (body.fresh !== true) {
-    const { recordConsent } = await import("@/lib/consent");
-    await finishBeforeResponse("wa-link-consent", () =>
-      recordConsent({
-        email: session.email,
-        kind: "wa_link",
-        // The number that carries the risk. Last four only - the full number is
-        // already on the user row and a ledger does not need a second copy.
-        context: { phoneTail: String(phone ?? "").slice(-4) || null },
-      })
-    );
+    const { recordConsentBlocking } = await import("@/lib/consent");
+    const recorded = await recordConsentBlocking({
+      email: session.email,
+      kind: "wa_link",
+      // The number that carries the risk. Last four only - the full number is
+      // already on the user row and a ledger does not need a second copy.
+      context: { phoneTail: String(phone ?? "").slice(-4) || null },
+    });
+    if (!recorded) {
+      return NextResponse.json(
+        {
+          available: true,
+          error:
+            "We could not save your acceptance just now, so we have not started the connection. Please try again in a moment.",
+        },
+        { status: 503 }
+      );
+    }
   }
+
+  // fresh=true is an EXPLICIT user "Try again / new code" tap.
+  const result = await connectInstance(session.email, origin, phone, {
+    fresh: body.fresh === true,
+  });
 
   return NextResponse.json({ available: true, phoneUsed: phone ?? null, ...result });
 }

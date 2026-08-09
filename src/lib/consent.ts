@@ -19,10 +19,17 @@ import "server-only";
 // consent is written, so a new acceptance surface cannot ship without a record
 // again.
 //
-// EVERY WRITE IS BEST-EFFORT AND NEVER BLOCKS THE USER'S ACTION. A database
-// hiccup must not stop someone linking WhatsApp or closing a deal; the ledger
-// is an audit trail, not a gate. The gate is `needsReacceptance`, which is a
-// pure function of data we already have.
+// ALMOST EVERY WRITE IS BEST-EFFORT AND NEVER BLOCKS THE USER'S ACTION. A
+// database hiccup must not stop someone closing a deal; the ledger is an audit
+// trail, not a gate. The gate is `needsReacceptance`, which is a pure function
+// of data we already have.
+//
+// THE EXCEPTION IS `wa_link`, and it is the one that matters most. Its subject
+// matter is the permanent loss of the user's phone number, so a wobble there
+// means the link happens with no provable record that anyone accepted that
+// risk - which is exactly the moment a record exists for. That kind retries,
+// and the linking path calls `recordConsentBlocking` and refuses to hand out a
+// QR or pairing code when it still cannot be recorded.
 
 import { sbInsert, sbSelect, sbUpdate } from "./runtime-config";
 import { TERMS_VERSION } from "./legal";
@@ -111,15 +118,34 @@ export async function recordConsent(input: {
   const email = String(input.email ?? "").trim().toLowerCase();
   if (!email) return false;
   const version = input.version ?? TERMS_VERSION;
-  const landed = await sbInsert("consent_events", [
-    {
-      email,
-      kind: input.kind,
-      version,
-      context: input.context ?? null,
-      accepted_at: new Date().toISOString(),
-    },
-  ]).catch(() => false);
+
+  // ONE KIND IS NOT BEST-EFFORT, AND IT IS THE ONE THAT MATTERS MOST.
+  //
+  // Best-effort is right for five of the six: a database hiccup must not stop
+  // someone closing a deal, and the acceptance is reconstructable from the
+  // breadcrumb below. It is indefensible for `wa_link`, whose subject matter is
+  // the permanent loss of the user's phone number. A wobble there means the
+  // link happens with no provable record that anyone accepted that risk - which
+  // is exactly the moment a record exists for.
+  //
+  // So `wa_link` retries a few times before falling back. The retry is short and
+  // bounded because a linking flow is interactive: somebody is watching a
+  // spinner, and this is meant to survive a blip, not an outage. The refusal
+  // itself lives in the caller, via `recordConsentBlocking`.
+  const attempts = input.kind === "wa_link" ? 3 : 1;
+  let landed = false;
+  for (let i = 0; i < attempts && !landed; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 150 * i));
+    landed = await sbInsert("consent_events", [
+      {
+        email,
+        kind: input.kind,
+        version,
+        context: input.context ?? null,
+        accepted_at: new Date().toISOString(),
+      },
+    ]).catch(() => false);
+  }
   if (landed) return true;
 
   // THE LEDGER FAILED. THE CONSENT STILL HAPPENED.
@@ -147,6 +173,23 @@ export async function recordConsent(input: {
     },
   ]).catch(() => false);
   return false;
+}
+
+/**
+ * Record a consent and REPORT whether it is provable.
+ *
+ * The WhatsApp linking path calls this rather than `recordConsent`, and treats
+ * `false` as a refusal: a number must not be linked against an acceptance
+ * nobody can produce. Everything else stays best-effort - the difference is not
+ * the write, it is what the caller is obliged to do with the answer.
+ */
+export async function recordConsentBlocking(input: {
+  email: string;
+  kind: ConsentKind;
+  version?: string;
+  context?: Record<string, unknown>;
+}): Promise<boolean> {
+  return recordConsent(input);
 }
 
 /**
