@@ -307,6 +307,19 @@ export async function processEvolutionWebhook(
           const { markClosed } = await import("@/lib/evolution");
           await markClosed(email, `${verdict.code ?? "?"} ${verdict.label}`);
 
+          // AXIS 2 GOES IN THE LEDGER, and it is the axis pacing cannot touch.
+          // Unofficial-client detection fires on accounts doing reply-only work
+          // and its penalty is a full ban rather than a scoped restriction, so
+          // it can never be inferred from send volume - the disconnect code is
+          // the only evidence we ever get, and until now it was written to a
+          // status string and overwritten by the next one.
+          const { noteRisk, sessionKindForCode } = await import("./risk-events");
+          await noteRisk({
+            senderKey: email,
+            kind: sessionKindForCode(verdict.code),
+            detail: { code: verdict.code ?? null, label: verdict.label, banRisk: verdict.banRisk },
+          });
+
           if (verdict.banRisk) {
             const { enterBanRecovery } = await import("@/lib/wa-guard");
             await enterBanRecovery(email, 24);

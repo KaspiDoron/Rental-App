@@ -34,6 +34,9 @@ import {
 } from "./wa/business-hours";
 import { jitteredHold, HARD_MIN_GAP_SEC, RECIPIENT_LOCK_SEC } from "./wa/pacing";
 import { clampRestampToWave } from "./wa/waves";
+// THE APPEND-ONLY RISK LEDGER (Tier 3). Every hook below is best-effort and
+// `noteRisk` cannot throw, so telemetry can never be the reason a send fails.
+import { noteRisk } from "./wa/risk-events";
 import { digitsOnly } from "./phone";
 import { numberFilter, waDigits, lidKey, outboxKey, nationalTail } from "./wa/phone-key";
 import {
@@ -574,6 +577,10 @@ export async function recordInboundEngagement(
       // carried discovery's, so before that fix this stamp would have landed on
       // a different row than the one holding first_intro_at.
       await stampRecipientFirst(senderKey, fromNumber, "first_reply_at");
+      // The other half of the metered ratio. On the documented mechanism a reply
+      // CLEARS the unanswered count, so this event is what turns the ledger from
+      // a tally of sends into a tally of exposure.
+      await noteRisk({ senderKey, kind: "intro_answered", toKey: nationalTail(fromNumber) });
     }
   } catch {
     /* reputation is best-effort - never block the reply pipeline */
@@ -609,6 +616,7 @@ export async function recordReadReceipt(
       delivered: true,
       last_read_at: new Date().toISOString(),
     });
+    await noteRisk({ senderKey, kind: "read_receipt", toKey: nationalTail(toNumber) });
   } catch {
     /* best-effort */
   }
@@ -626,6 +634,12 @@ export async function recordDelivery(
       last_delivery_receipt_at: new Date().toISOString(),
     });
     await upsertRecipient(senderKey, toNumber, { delivered: true });
+    // Meter integrity. `delivered_total` is a scalar with NO timestamp, so a
+    // zero conflates "the receipt webhook is dead" with "this account is idle" -
+    // and the engagement breaker only arms once delivered_total >= 8, which is
+    // how it stayed unarmed through both restrictions. An event with a time on
+    // it is what lets the dashboard tell those two apart.
+    await noteRisk({ senderKey, kind: "delivery_receipt", toKey: nationalTail(toNumber) });
   } catch {
     /* best-effort */
   }
@@ -680,6 +694,20 @@ export async function recordSendError(
         { cold_hold_until: new Date(Date.now() + 6 * 3600_000).toISOString() }
       ).catch(() => {});
     }
+
+    // SUSPECTED, not confirmed, and the distinction is load-bearing. One cold
+    // error is a data point; a restriction is a LANE ASYMMETRY - cold failing
+    // while replies keep succeeding - which only the aggregate can see. Writing
+    // "confirmed" here would put a verdict in the ledger that no single event
+    // supports, and this dashboard exists to stop exactly that kind of claim.
+    // A reply-lane error is recorded too, as the control arm: errors spread
+    // evenly across both lanes are an infrastructure fault, not enforcement.
+    await noteRisk({
+      senderKey,
+      kind: opts.firstContact ? "restriction_suspected" : "send_failed",
+      toKey: nationalTail(toNumber),
+      detail: { status: opts.status, lane: opts.firstContact ? "cold" : "reply" },
+    });
   } catch {
     /* telemetry can never break the webhook */
   }
@@ -733,6 +761,13 @@ export async function recordSendFailure(
     } else {
       await saveReputation(senderKey, { fails_total: (rep.fails_total || 0) + 1 });
     }
+    // Three separate kinds, matching the three separate meanings. Folding them
+    // back into one is exactly the miscount this branch was split to fix.
+    await noteRisk({
+      senderKey,
+      kind: kind === "block" ? "recipient_blocked" : kind === "invalid" ? "recipient_invalid" : "send_failed",
+      toKey: nationalTail(toNumber),
+    });
   } catch {
     /* best-effort */
   }
@@ -773,6 +808,13 @@ async function recordOutboundSend(senderKey: string, toNumber?: string): Promise
       new_contacts_date: today,
       new_contacts_today: (isNewDay ? 0 : rep.new_contacts_today || 0) + (newContact ? 1 : 0),
     });
+    // Only a genuine first contact is an introduction. This is the numerator of
+    // the quantity Meta actually meters, and until now it existed nowhere as
+    // data - only as a re-derivation over an unindexed JSON convention that any
+    // of thirteen outbound-writing call sites could silently break.
+    if (newContact && toNumber) {
+      await noteRisk({ senderKey, kind: "intro_sent", toKey: nationalTail(toNumber) });
+    }
   } catch {
     /* best-effort */
   }
@@ -1214,6 +1256,16 @@ export async function enterBanRecovery(
         detail: `${senderKey} entered ban-recovery: paused ${hours}h after a WhatsApp restriction/logout. Sending resumes slowly under warm-up.`,
       },
     ]);
+    // The event that has to be in the ledger for any of this to be reviewable
+    // later. `until` rides along because ban recovery restores the FULL plan
+    // budget the moment it lapses - so the pair (entered, lapsed) is the only
+    // way to see a number going straight back to the behaviour that got it
+    // restricted.
+    await noteRisk({
+      senderKey,
+      kind: "ban_recovery_entered",
+      detail: { hours, until },
+    });
   } catch {
     /* best-effort */
   }

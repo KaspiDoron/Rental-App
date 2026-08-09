@@ -1422,3 +1422,82 @@ alter table public.waba_events enable row level security;
 -- so that agency can message them (plan Part 12.9 item 9). New personal-data
 -- disclosure, so it is recorded separately rather than folded into the terms.
 alter table public.app_users add column if not exists number_sharing_accepted_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- TIER 3 OBSERVABILITY (plan Part 9.7): the append-only risk ledger.
+--
+-- Every safety signal today is a MUTABLE SCALAR on one whatsapp_number_reputation
+-- row per user, overwritten on every send. After a restriction you can read what
+-- the counters are now and nothing at all about the preceding 72 hours - so
+-- there is no numerator, no denominator, and no rate to be 99% of.
+--
+-- Append-only, one row per event, never updated, never re-derived. `axis` is
+-- stored rather than computed at read time because the two enforcement axes have
+-- different penalties and different observability, and a query that has to join
+-- a vocabulary table to tell them apart will eventually stop bothering.
+--
+-- config_fingerprint is the one column that makes fleet-correlated (axis 2) risk
+-- analysable at all: where a single Meta rule keys on a shared config, the
+-- effective sample size across the fleet is 1, and without this stamp a config
+-- change and its consequences cannot be told apart afterwards.
+create table if not exists public.wa_risk_events (
+  id                 bigint generated always as identity primary key,
+  at                 timestamptz not null default now(),
+  sender_key         text not null,
+  kind               text not null,   -- see RISK_KINDS in src/lib/wa/risk-events.ts
+  axis               text not null,   -- velocity | client | meter | policy
+  to_key             text,
+  detail             jsonb,
+  config_fingerprint text,
+  policy_version     text
+);
+-- Descending on time: the window queries that matter want the MOST RECENT rows,
+-- and the ledger this replaces was capped ascending - so past its limit it kept
+-- the oldest week-prefix and discarded exactly the diagnostic tail.
+create index if not exists wa_risk_events_sender_idx
+  on public.wa_risk_events (sender_key, at desc);
+create index if not exists wa_risk_events_axis_idx on public.wa_risk_events (axis, at desc);
+create index if not exists wa_risk_events_kind_idx on public.wa_risk_events (kind, at desc);
+alter table public.wa_risk_events enable row level security;
+
+-- Hourly rollup, so the dashboard reads a handful of rows regardless of fleet
+-- size. /api/activity is the counter-example already in this repo: ~21 Supabase
+-- round trips per tick, and at fleet scale a live fan-out monitor becomes the
+-- load it monitors.
+--
+-- dark_signals[] and truncated_signals[] are what make empty-state rules E1 and
+-- E9 reconstructable after the fact. A bucket that could not be read must be
+-- distinguishable from a bucket in which nothing happened, forever - not just
+-- while the incident is live.
+create table if not exists public.wa_risk_snapshots (
+  bucket             timestamptz primary key,
+  computed_at        timestamptz not null default now(),
+  accounts           int not null default 0,
+  counts             jsonb,           -- {kind: n}
+  dark_signals       text[],
+  truncated_signals  text[]
+);
+create index if not exists wa_risk_snapshots_bucket_idx
+  on public.wa_risk_snapshots (bucket desc);
+alter table public.wa_risk_snapshots enable row level security;
+
+-- Anti-ban policy changes as versioned rows with an author and a diff.
+--
+-- Part 5.9's inversion, stated plainly: negotiation policy is versioned,
+-- golden-replay gated and one-click rollbackable, and its worst case is a bad
+-- haggle - while whatsapp_security_policies took a bare upsert from any
+-- management session with no version, no audit and no undo, and its worst case
+-- is a traveller losing their personal WhatsApp. Without this table no
+-- before/after comparison on the risk dashboard means anything, which is the
+-- entire point of building the dashboard.
+create table if not exists public.wa_policy_versions (
+  id           bigint generated always as identity primary key,
+  created_at   timestamptz not null default now(),
+  version      text not null,
+  author_email text,
+  changes      jsonb,
+  note         text
+);
+create index if not exists wa_policy_versions_at_idx
+  on public.wa_policy_versions (created_at desc);
+alter table public.wa_policy_versions enable row level security;
