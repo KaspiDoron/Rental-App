@@ -113,6 +113,21 @@ export async function dispatchHandoff(input: DispatchInput): Promise<DispatchOut
     };
   }
 
+  // THE FLEET-WIDE BUDGETS, checked before the per-agency lane decision.
+  // Ordered this way on purpose: there is no point resolving which lane an
+  // agency qualifies for if the account may not send at all, and the reason the
+  // owner needs to see is the fleet one, not "this shop is on cooldown".
+  const { governorVerdict } = await import("./governor");
+  const gov = await governorVerdict();
+  if (!gov.allowed) {
+    return {
+      leadId: null,
+      outcome: "refused",
+      reason: gov.binding ?? "budget",
+      userMessage: say(USER_COPY.refused, shop),
+    };
+  }
+
   const admission = await admitLead(input.agencyNumber);
   if ("refuse" in admission) {
     return {

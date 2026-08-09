@@ -39,6 +39,10 @@ export const CONSENT_KINDS = [
   "terms",
   "wa_risk",
   "ai_responsibility",
+  // Sharing the traveller's own phone number with a rental agency so the agency
+  // can message THEM. New personal-data disclosure, so it gets its own
+  // recorded acceptance rather than riding inside the general terms.
+  "number_sharing",
   "wa_link",
   "deal_terms",
 ] as const;

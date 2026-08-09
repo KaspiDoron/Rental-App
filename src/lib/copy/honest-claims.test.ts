@@ -114,9 +114,20 @@ describe("the consent screen names the risk plainly - constraint 5's positive ha
     expect(connect).toMatch(/could manage without/i);
   });
 
-  it("TERMS_VERSION was bumped so existing linked users re-accept", () => {
-    // The thing they previously agreed to was not what the document said.
-    expect(read("src/lib/legal.ts")).toMatch(/TERMS_VERSION = "2026-08-08"/);
+  it("TERMS_VERSION is bumped whenever the document materially changes", () => {
+    // Originally pinned 2026-08-08, when the false safety promises were deleted
+    // and the thing users had agreed to turned out not to be what the document
+    // said. It moved again for the number-sharing consent: adding a term that
+    // hands a third party the user's phone number without re-prompting the
+    // people who already accepted would be the same defect in a new place.
+    //
+    // Pinned as a FORMAT and a floor rather than a literal, so a future
+    // material change bumps it without this test having to be edited - what
+    // must never happen is the document changing while the version does not.
+    const legal = read("src/lib/legal.ts");
+    const m = legal.match(/TERMS_VERSION = "(\d{4}-\d{2}-\d{2})"/);
+    expect(m, "TERMS_VERSION must be a date literal").toBeTruthy();
+    expect(m![1] >= "2026-08-09").toBe(true);
   });
 });
 

@@ -1417,3 +1417,8 @@ create table if not exists public.waba_events (
 create index if not exists waba_events_lead_idx on public.waba_events (lead_id, at desc);
 create index if not exists waba_events_at_idx on public.waba_events (at desc);
 alter table public.waba_events enable row level security;
+
+-- The fourth consent: sharing the traveller's own number with a rental agency
+-- so that agency can message them (plan Part 12.9 item 9). New personal-data
+-- disclosure, so it is recorded separately rather than folded into the terms.
+alter table public.app_users add column if not exists number_sharing_accepted_at timestamptz;

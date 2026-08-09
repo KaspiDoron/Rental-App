@@ -92,10 +92,28 @@ describe("the operator's name is a key, not a constant with a TODO", () => {
 });
 
 describe("every acceptance surface now writes a record", () => {
-  it("the vocabulary covers all five, including the two per-EVENT ones", () => {
+  it("the vocabulary covers all six, including the two per-EVENT ones", () => {
+    // `number_sharing` was added deliberately, not incidentally. Under the
+    // business-number handoff (plan Part 12) WheelDeal's own official number
+    // gives a rental agency the traveller's phone number and the agency then
+    // messages them unprompted. That is new personal-data disclosure AND a
+    // genuinely surprising experience, so it is recorded on its own rather than
+    // folded into the general terms - a traveller startled by a message from a
+    // rental shop is a trust failure, not a UX detail.
     expect([...CONSENT_KINDS].sort()).toEqual(
-      ["ai_responsibility", "deal_terms", "terms", "wa_link", "wa_risk"].sort()
+      ["ai_responsibility", "deal_terms", "number_sharing", "terms", "wa_link", "wa_risk"].sort()
     );
+  });
+
+  it("the number-sharing consent says what will actually happen", () => {
+    // Constraint from the owner: the approach must be 100% clear to the user so
+    // nothing is misunderstood. That means naming both halves - we hand over
+    // the number, AND the shop messages them - not just the disclosure.
+    const legal = readCode("src/lib/legal.ts");
+    const c = legal.slice(legal.indexOf('id: "number_sharing"'), legal.indexOf('id: "ai_responsibility"'));
+    expect(c).toMatch(/my WhatsApp number/i);
+    expect(c).toMatch(/message me directly/i);
+    expect(c).toMatch(/turn this off/i);
   });
 
   it("REPRODUCTION: the booking checkbox reaches the server", () => {

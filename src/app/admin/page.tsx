@@ -33,6 +33,13 @@ const OpsCenterPanel = dynamic(
   () => import("@/components/ops/OpsCenter").then((m) => m.OpsCenter),
   { ssr: false, loading: () => <LoadingDots label="Loading the Ops Center" /> }
 );
+// The Business Platform console: connection, governor, first-contact funnel and
+// the lead ledger with the exact wire text. Owner-facing operations for the
+// official number - inert while WABA_ENABLED is off, and it says so.
+const WabaConsolePanel = dynamic(
+  () => import("@/components/admin/WabaConsole").then((m) => m.WabaConsole),
+  { ssr: false, loading: () => <LoadingDots label="Reading the business number" /> }
+);
 // Monetization + lifecycle: the funnel, time-to-unlock, where people stall, and
 // the gate-vs-holdout comparison. Lazy like every other heavy tab.
 const LifecyclePanel = dynamic(
@@ -181,6 +188,7 @@ export default function AdminPage() {
     | "agents"
     | "ops"
     | "money"
+    | "waba"
     | "keys"
     | "users"
     | "feedback"
@@ -793,7 +801,7 @@ export default function AdminPage() {
             single-pass engine now, so the old graph-pipeline surfaces are no
             longer shown. Their code remains for data/learning continuity but is
             not reachable from the UI. */}
-        {(["command", "analytics", "money", "engine", "keys", "users", "feedback", "billing", "data"] as const)
+        {(["command", "analytics", "money", "waba", "engine", "keys", "users", "feedback", "billing", "data"] as const)
           .map((t) => (
           <button
             key={t}
@@ -808,7 +816,9 @@ export default function AdminPage() {
                 ? "🧠 engine"
                 : t === "money"
                   ? "💸 money"
-                  : t}
+                  : t === "waba"
+                    ? "📲 wa business"
+                    : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -998,6 +1008,8 @@ export default function AdminPage() {
       {loaded && tab === "engine" && <EngineInspectorPanel />}
 
       {loaded && tab === "money" && <LifecyclePanel />}
+
+      {loaded && tab === "waba" && <WabaConsolePanel />}
 
       {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 

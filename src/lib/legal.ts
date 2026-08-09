@@ -11,7 +11,7 @@
 // summarised (that WhatsApp can restrict or ban a number for using an
 // unofficial connection). Existing linked users are re-prompted, because the
 // thing they agreed to was not what the document said.
-export const TERMS_VERSION = "2026-08-08";
+export const TERMS_VERSION = "2026-08-09";
 export const OPERATOR_NAME = "the Operator"; // TODO: replace with the legal entity name
 export const GOVERNING_LAW = "the State of Israel";
 export const JURISDICTION = "the competent courts of Tel Aviv, Israel";
@@ -25,8 +25,12 @@ export const JURISDICTION = "the competent courts of Tel Aviv, Israel";
 // strings below are the canonical legal wording of WHAT was accepted and are
 // rendered inside the Terms (sections 2-3 cover the same ground).
 export interface Consent {
-  id: "terms" | "wa_risk" | "ai_responsibility";
-  column: "terms_accepted_at" | "wa_risk_accepted_at" | "ai_responsibility_accepted_at";
+  id: "terms" | "wa_risk" | "ai_responsibility" | "number_sharing";
+  column:
+    | "terms_accepted_at"
+    | "wa_risk_accepted_at"
+    | "ai_responsibility_accepted_at"
+    | "number_sharing_accepted_at";
   label: string;
 }
 
@@ -42,6 +46,23 @@ export const CONSENTS: Consent[] = [
     column: "wa_risk_accepted_at",
     label:
       "I understand WheelDeal connects to WhatsApp using an unofficial, reverse-engineered method that Meta/WhatsApp do not permit for automation. Meta may block, suspend or PERMANENTLY BAN my phone number, and I assume 100% of that risk with zero liability to the Operator. Using a spare number is recommended.",
+  },
+  {
+    // SHARING THE TRAVELLER'S NUMBER WITH A THIRD PARTY.
+    //
+    // Under the business-number handoff (plan Part 12) WheelDeal's own official
+    // WhatsApp number asks a rental agency to contact the traveller, which means
+    // handing that agency their phone number and expecting an unsolicited
+    // inbound message from a business they have never written to. That is new
+    // personal-data disclosure and a genuinely surprising experience, so it gets
+    // its own recorded acceptance rather than being folded into the general
+    // terms - and the label says plainly what will happen, because a traveller
+    // startled by a message from a rental shop is a support ticket and a trust
+    // failure, not a UX detail.
+    id: "number_sharing",
+    column: "number_sharing_accepted_at",
+    label:
+      "I understand that when I ask WheelDeal to contact a rental shop, WheelDeal may send that shop a message from its own business number giving them my WhatsApp number, and that the shop will then message me directly. I can turn this off at any time.",
   },
   {
     id: "ai_responsibility",
