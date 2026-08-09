@@ -1311,3 +1311,26 @@ alter table public.wa_recipient_state
 create index if not exists wa_recipient_state_unanswered_idx
   on public.wa_recipient_state (sender_key, first_intro_at desc)
   where first_reply_at is null;
+
+-- ---- The warm-up gate -------------------------------------------------------
+-- A paid plan cannot be BOUGHT until the account has done enough real work for
+-- us to know Premium fits (src/lib/warmup.ts). These two columns are the only
+-- storage it needs; every term of the predicate is computed from tables that
+-- already exist (search_sessions, wa_recipient_state, wa_sessions).
+--
+-- `warmed_up_at` is WRITE-ONCE. Moving a threshold later must not un-warm
+-- somebody who already crossed the line, and re-stamping would destroy
+-- time-to-warm - the one measure that says whether the thresholds are set
+-- correctly. The write filters on `warmed_up_at is null` so the database
+-- enforces that rather than the caller remembering to.
+alter table public.app_users add column if not exists warmed_up_at timestamptz;
+
+-- The predicate AS IT STOOD at unlock, so a later threshold change does not
+-- silently rewrite history on the cohort charts.
+alter table public.app_users add column if not exists warmup_snapshot jsonb;
+
+-- The monetization dashboard's spine: "who warmed up, and when". Partial, so it
+-- indexes the converted population rather than every signup.
+create index if not exists app_users_warmed_idx
+  on public.app_users (warmed_up_at desc)
+  where warmed_up_at is not null;

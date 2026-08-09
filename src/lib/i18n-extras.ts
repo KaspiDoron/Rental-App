@@ -16,6 +16,24 @@
 // The generator picks up every two-space-indented quoted line below, so keep
 // the plain array shape. Run `node scripts/gen-i18n-catalog.js` after editing.
 export const I18N_EXTRAS: string[] = [
+  // src/components/UpgradeSheet.tsx - the warm-up gate. The progress line is
+  // rendered as t(warm.progress.template) and the checklist as t(x.label), so
+  // neither is a literal the grep can see. The {n} templates are translated
+  // WHOLE and substituted afterwards - concatenating a count onto a translated
+  // fragment puts the number on the wrong side in RTL.
+  "Connect WhatsApp to get started.",
+  "One search away.",
+  "{n} searches away.",
+  "One more shop away.",
+  "{n} more shops away.",
+  "One shop reply away.",
+  "{n} shop replies away.",
+  "WhatsApp connected",
+  "Searches run",
+  "Shops reached",
+  "Shops that replied",
+  "We want you to get the most out of Premium, so unlock it by using the app a little more first.",
+
   // src/components/landing/TrustPanel.tsx - MECHANICS, rendered as t(m)
   "A trust score per number: sending capacity grows slowly as your number proves healthy - brand-new numbers are warmed up gently.",
   "Human pacing: randomised gaps between messages, typing indicators, and a hard hourly + daily send budget.",

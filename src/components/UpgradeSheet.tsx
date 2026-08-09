@@ -77,11 +77,14 @@ export function PlanCard({
   onSubscribe,
   busy,
   current,
+  locked,
 }: {
   plan: PlanView;
   onSubscribe?: (id: string) => void;
   busy?: boolean;
   current?: boolean;
+  /** Warm-up gate closed: show the tier as desirable and not yet purchasable. */
+  locked?: boolean;
 }) {
   const [currencyCode, setCurrencyCode] = useState("USD");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -146,6 +149,14 @@ export function PlanCard({
           )}
         </div>
       </div>
+      {/* The gate, stated on the tier itself. The price stays visible on
+          purpose - the tier has to look worth wanting, and hiding what it costs
+          makes it feel withheld rather than earned. */}
+      {locked && plan.amount > 0 && (
+        <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-card2 px-2.5 py-1 text-[11px] font-extrabold text-brandblue">
+          <Icon name="sparkles" className="h-3 w-3" /> Unlocks as you use the app
+        </div>
+      )}
       {/* R5: crystal-clear capacity meter - the 10/30/40 limits explained in
           plain "X new shops every Y hours", with a visual bar so buyers see
           exactly what more they get. */}
@@ -192,18 +203,108 @@ export function PlanCard({
 }
 
 // The membership sheet, opened from the upgrade chip above the tab bar.
+interface WarmupTermView {
+  id: string;
+  label: string;
+  have: number;
+  need: number;
+  done: boolean;
+}
+export interface WarmupView {
+  warmed: boolean;
+  remaining: number;
+  /** Template + count, never a finished sentence - see warmupProgressLine. */
+  progress: { template: string; n: number } | null;
+  terms: WarmupTermView[];
+}
+
+/**
+ * THE EXCLUSIVE-CLUB GATE, at eye level.
+ *
+ * Premium is not for sale until the account has done enough real work. Three
+ * rules govern every string here, and they are what separate a gate from a wall:
+ *
+ *  - ALWAYS SHOW THE DISTANCE. A lock with no visible progress reads as a bug,
+ *    and a user who cannot see the finish line has no reason to walk to it.
+ *  - THE SUBJECT IS THE PRODUCT GETTING READY, never the user being
+ *    insufficient. "We want you to get the most out of Premium", not "you have
+ *    not done enough".
+ *  - NEVER SAY WE ARE EVALUATING THEM. True, and corrosive.
+ *
+ * Constraint 5 also applies: no ban, risk or restriction language anywhere
+ * outside the linking/consent screen. This is quality control and access.
+ */
+function WarmupLock({ warm }: { warm: WarmupView }) {
+  const { t } = useI18n();
+  const total = warm.terms.length || 1;
+  const done = warm.terms.filter((x) => x.done).length;
+  return (
+    <div className="mb-3 rounded-blob border-2 border-brandblue/40 bg-brandblue-soft p-3">
+      <div className="flex items-center gap-2">
+        <Icon name="sparkles" className="h-4 w-4 text-brandblue" />
+        <span className="text-[14px] font-extrabold text-strong">
+          {t("Premium unlocks soon")}
+        </span>
+      </div>
+      <p className="mt-1 text-[12px] font-bold text-soft">
+        {t(
+          "We want you to get the most out of Premium, so unlock it by using the app a little more first."
+        )}
+      </p>
+      {warm.progress && (
+        <p className="mt-1.5 text-[13px] font-extrabold text-brandblue">
+          {/* Translate the WHOLE sentence, then substitute. Concatenating the
+              count onto a translated fragment puts the number on the wrong side
+              in RTL and cannot be translated at all in languages that inflect
+              around it. */}
+          {t(warm.progress.template).replace("{n}", String(warm.progress.n))}
+        </p>
+      )}
+      {/* One bar, filled by completed terms - the distance made literal. */}
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-card2">
+        <div
+          className="h-full rounded-full bg-brandblue transition-all duration-500"
+          style={{ width: `${Math.round((done / total) * 100)}%` }}
+        />
+      </div>
+      <ul className="mt-2 grid grid-cols-2 gap-1.5">
+        {warm.terms.map((x) => (
+          <li
+            key={x.id}
+            className={`flex items-center gap-1.5 rounded-xl px-2 py-1 text-[11px] font-bold ${
+              x.done ? "bg-card2 text-strong" : "text-soft"
+            }`}
+          >
+            <span className={x.done ? "text-brandgreen" : "text-faint"}>{x.done ? "✓" : "○"}</span>
+            <span className="truncate">{t(x.label)}</span>
+            <span className="ms-auto shrink-0 tabular-nums text-faint">
+              {Math.min(x.have, x.need)}/{x.need}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function UpgradeSheet({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [myPlan, setMyPlan] = useState<string>("free");
+  const [warm, setWarm] = useState<WarmupView | null>(null);
   const { config: paypal } = usePaypalConfig();
 
   useEffect(() => {
     fetch("/api/billing/checkout")
       .then((r) => r.json())
-      .then((d) => setPlans(d.plans ?? []))
+      .then((d) => {
+        setPlans(d.plans ?? []);
+        // Absent means warm: an older server that does not send the field must
+        // not lock everyone out of paying.
+        setWarm(d.warmup ?? { warmed: true, remaining: 0, progress: null, terms: [] });
+      })
       .catch(() => {});
     fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => r.json())
@@ -250,6 +351,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
           {msg}
         </div>
       )}
+      {warm && !warm.warmed && <WarmupLock warm={warm} />}
       <div className="space-y-3">
         {plans
           .filter((p) => p.amount > 0)
@@ -260,13 +362,17 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
                 onSubscribe={subscribe}
                 busy={busy}
                 current={myPlan === p.id}
+                locked={Boolean(warm && !warm.warmed)}
               />
               {/* THE SUBSCRIBE BUTTON ITSELF. PayPal's own control, in its own
                   iframe - the traveller stays in the app, and we never touch a
                   card number. Nothing here grants a plan: the approval is
                   posted to the server, which asks PayPal what it really was.
-                  Rendered only for a tier they are not already on. */}
-              {isPaidPlan(p.id) && myPlan !== p.id && (
+                  Rendered only for a tier they are not already on, and never
+                  while the warm-up gate is closed - the server would refuse the
+                  checkout anyway, and a button that cannot work is worse than
+                  no button. */}
+              {isPaidPlan(p.id) && myPlan !== p.id && warm?.warmed !== false && (
                 <PayPalSubscriptionButton
                   plan={p.id}
                   onActivated={(applied) => {

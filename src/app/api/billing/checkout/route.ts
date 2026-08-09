@@ -60,6 +60,33 @@ export async function POST(req: Request) {
     /* sandbox path is best-effort; real checkout below */
   }
 
+  // THE WARM-UP GATE, AND THIS IS THE ONLY PLACE IT IS REALLY ENFORCED.
+  //
+  // UpgradeSheet renders a locked state and the pricing page links here, but
+  // both are client-side and neither is a gate - a POST to this route is one
+  // fetch away. The check has to sit in front of the money.
+  //
+  // It runs AFTER the TEST_MODE sandbox above, which is deliberate: flagged
+  // testers ride the sandbox path and are never gated, or beta testers could
+  // not test the paid tiers at all.
+  const { warmupStatus } = await import("@/lib/warmup");
+  const warm = await warmupStatus(session.email);
+  if (!warm.warmed) {
+    const { warmupProgressLine } = await import("@/lib/warmup");
+    return NextResponse.json(
+      {
+        error:
+          "We want you to get the most out of Premium, so unlock it by using the app a little more first.",
+        warmup: {
+          remaining: warm.remaining,
+          progress: warmupProgressLine(warm),
+          terms: warm.terms,
+        },
+      },
+      { status: 403 }
+    );
+  }
+
   const result = await createPaypalCheckout(String(planId), origin, session.email);
   if (result.url) return NextResponse.json({ url: result.url, provider: "paypal" });
   return NextResponse.json(
@@ -75,9 +102,20 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
   const configured = await paypalConfigured();
+  // The catalogue carries the warm-up state with it, so the upgrade sheet can
+  // render the locked variant on first paint rather than flashing a buy button
+  // and then withdrawing it - which would read as the price being snatched away.
+  const { warmupStatus, warmupProgressLine } = await import("@/lib/warmup");
+  const warm = await warmupStatus(session.email);
   return NextResponse.json({
     plans: PLANS,
     configured,
     provider: configured ? "paypal" : null,
+    warmup: {
+      warmed: warm.warmed,
+      remaining: warm.remaining,
+      progress: warmupProgressLine(warm),
+      terms: warm.terms,
+    },
   });
 }
