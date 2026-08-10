@@ -418,7 +418,7 @@ export const I18N_CATALOG: string[] = [
   "Real local floor from live web research - your agents bargain toward it.",
   "Real offers only - nothing here is estimated",
   "Real rental shops near your stay, sourced live from Google.",
-  "Recommended shop",
+  "Promoted - paid placement",
   "Reconnecting - live updates paused for a moment. Your agents keep working.",
   "Remove",
   "Remove from history",

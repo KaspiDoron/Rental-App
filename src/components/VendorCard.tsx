@@ -387,9 +387,18 @@ function VendorCardInner({
         vendor.sponsored ? "sponsored-glow" : ""
       }`}
     >
+      {/* M14: A PAID PLACEMENT SAYS SO.
+          This banner read "Recommended shop", which is an editorial claim - and
+          `sponsored` is set by `tagSponsored` from the owner's paid
+          `sponsored_shops` table and pins the card first under EVERY sort,
+          including "Closest". Nobody recommended it; somebody paid for it.
+          A card that leads the list under a sort it did not win, wearing a word
+          that implies we judged it best, is the same defect Tier 0.6 deleted
+          eight of - a claim the code does not honour. The prominence is the
+          owner's monetization decision and is kept; the word is corrected. */}
       {vendor.sponsored && (
         <div className="flex items-center justify-center gap-1 bg-gradient-to-r from-brandblue via-[#7c5cff] to-brandred py-1 text-[10px] font-extrabold uppercase tracking-wide text-white">
-          ⭐ {t("Recommended shop")}
+          ⭐ {t("Promoted - paid placement")}
         </div>
       )}
       {vendor.photoUrl && (

@@ -1350,8 +1350,10 @@ export default function AdminPage() {
             </summary>
             <div className="mt-2">
             <p className="mb-2 text-[11px] text-faint">
-              Shops that pay for placement appear FIRST with a glowing frame and a
-              &ldquo;Recommended shop&rdquo; tag. Match by the shop&apos;s Google Maps name
+              Shops that pay for placement appear FIRST under every sort, with a
+              glowing frame and a &ldquo;Promoted - paid placement&rdquo; banner.
+              The banner names it as paid, because a card that leads a sort it
+              did not win must say why. Match by the shop&apos;s Google Maps name
               and/or phone number.
             </p>
             <div className="mb-2 space-y-1.5">

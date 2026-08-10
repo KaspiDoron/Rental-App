@@ -1,6 +1,13 @@
 // Sponsored shops: owner-managed paid placements. Google results matching an
 // active sponsorship (by phone digits or shop name) are tagged sponsored -
-// the UI pins them first with a glowing frame and a "Recommended" tag.
+// the UI pins them first with a glowing frame and a "Promoted - paid
+// placement" banner.
+//
+// THE BANNER SAYS "PAID", AND THAT IS NOT DECORATION. This tag pins the card
+// ahead of every other shop under EVERY sort, including "Closest" and "Best
+// rating" - so a traveller reading the list sees a winner that did not win.
+// It used to be labelled "Recommended shop", which asserts a judgement nobody
+// made. The placement is the owner's to sell; the word is not.
 
 import "server-only";
 import { sbSelect, sbInsert, sbDelete, sbUpdate } from "./runtime-config";
