@@ -17,13 +17,18 @@ const CHUNK = 14;
 async function translateChunk(
   langName: string,
   texts: string[]
-): Promise<string[] | null> {
+): Promise<(string | null)[] | null> {
+  // The do-not-translate list is imported so the prompt and the VALIDATOR name
+  // the same words - "Will" chief among them, the assistant's own name and a
+  // high-frequency English auxiliary that a context-free localiser translates
+  // every time.
+  const { DO_NOT_TRANSLATE } = await import("@/lib/i18n-validate");
   const system =
     `You are a senior product localiser translating UI strings for "WheelDeal", a mobile app where AI agents bargain for vehicle rentals, from English to ${langName}. ` +
     "Rules: (1) translate MEANING, not word-by-word - use the natural phrasing a native mobile app in that language would use; " +
     "(2) match register: buttons/labels stay short and imperative, sentences stay friendly and simple; " +
-    "(3) NEVER translate brand/product words: WheelDeal, Ultra, Pro, WhatsApp, Google, AI; " +
-    "(4) keep emoji, numbers, currency symbols, punctuation and placeholders exactly; " +
+    `(3) NEVER translate these brand/product words, keep them verbatim: ${DO_NOT_TRANSLATE.join(", ")}. "Will" is the name of the assistant, never the English verb; ` +
+    "(4) keep emoji, numbers, currency symbols, punctuation and every {placeholder} token exactly as written, same spelling, same count; " +
     "(5) no explanations, no quotes added. " +
     'Reply ONLY as JSON: { "t": ["..."] } with translations in the exact same order and count.';
   const out = await chat([
@@ -37,7 +42,17 @@ async function translateChunk(
   try {
     const parsed = JSON.parse(out.slice(start, end + 1)) as { t?: unknown };
     if (Array.isArray(parsed.t) && parsed.t.length === texts.length) {
-      return parsed.t.map((s) => String(s));
+      const { validateTranslation } = await import("@/lib/i18n-validate");
+      // Per-element validation, NOT String() coercion. A rejected element
+      // becomes null so the caller keeps the English source for that one string
+      // - a wrong translation is worse than an untranslated one, because the
+      // wrong one is invisible until a user complains and unfixable while it
+      // sits in the shared cache. null (JSON or coerced) is the first thing
+      // this rejects, so the "null" button-label bug cannot recur.
+      return parsed.t.map((cand, i) => {
+        const v = validateTranslation(texts[i], cand);
+        return v.ok ? (cand as string).trim() : null;
+      });
     }
   } catch {}
   return null;
