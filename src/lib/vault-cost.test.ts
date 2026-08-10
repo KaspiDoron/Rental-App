@@ -160,7 +160,13 @@ describe("the FAB can no longer be displaced by its own entrance animation", () 
 
 describe("AI usage is recorded, which is why the providers page read zero", () => {
   it("the insert is awaited", () => {
+    // The defect this pins is the MISSING AWAIT: a detached insert stops
+    // wherever it is when Cloud Run throttles the CPU at response flush, which
+    // is why every provider read "0 tokens / 0 calls". The row's columns are a
+    // separate concern - M20 added `model` and `detail` - so this asserts the
+    // await, not the shape.
     const ai = readCode("src/lib/ai.ts");
-    expect(ai).toMatch(/await sbInsert\("ai_usage", \[\{ provider, tokens, failed \}\]\)/);
+    expect(ai).toMatch(/await sbInsert\(\s*"ai_usage"/);
+    expect(ai).not.toMatch(/[^t] sbInsert\("ai_usage"/);
   });
 });

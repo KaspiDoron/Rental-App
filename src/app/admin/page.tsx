@@ -1817,6 +1817,29 @@ export default function AdminPage() {
                     {p.remaining ??
                       (p.cadenceNote ?? "this provider does not expose remaining quota")}
                   </div>
+                  {/* I-7: WHAT THE PROVIDER ACTUALLY SAID.
+                      "14 calls, 14 failovers, 0 tokens" told the owner a
+                      provider was failing and nothing about why - the reason
+                      was caught into a local array and discarded. A drifted
+                      model id answering 400 is the leading hypothesis, and the
+                      served model id is printed next to it because with
+                      <PROVIDER>_MODEL now settable it is no longer inferable
+                      from the code. */}
+                  {p.lastFailure && (
+                    <div className="mt-1 rounded-lg bg-card2 p-1.5 text-left">
+                      <div className="text-[10px] font-extrabold uppercase text-brandred">
+                        Last failure
+                      </div>
+                      {p.lastFailure.model && (
+                        <div className="font-mono text-[10px] text-faint">
+                          sent as {p.lastFailure.model}
+                        </div>
+                      )}
+                      <div className="mt-0.5 break-words font-mono text-[10px] text-soft">
+                        {p.lastFailure.detail || "no detail recorded"}
+                      </div>
+                    </div>
+                  )}
                 </button>
               ))}
             </div>

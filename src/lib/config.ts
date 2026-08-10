@@ -5,6 +5,12 @@
 // status. Values set here are persisted via runtime-config (Supabase, encrypted
 // at rest) when Supabase is configured, so they survive serverless restarts and
 // take effect at the next request without a redeploy.
+//
+// NOT EVERY MANAGED VALUE IS A SECRET. A model id and a provider name are
+// settings: masking them makes them unusable, because correcting a drifted
+// model id requires reading the one currently set. Those entries carry
+// `secret: false` and are shown in full. The flag DEFAULTS TO SECRET, so a key
+// added without thinking about it is masked - the safe direction.
 
 import "server-only";
 import { getConfig, getConfigMany, setConfig, supabaseConfigured } from "./runtime-config";
@@ -13,6 +19,10 @@ export interface KeyInfo {
   name: string;
   label: string;
   configured: boolean;
+  /**
+   * What the panel displays. A masked fingerprint for credentials; the value
+   * itself for the entries marked `secret: false` (model ids, provider name).
+   */
   masked: string;
   scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth" | "maps";
   editable: boolean;
@@ -66,6 +76,14 @@ const KEYS: {
   label: string;
   scope: KeyInfo["scope"];
   editable: boolean;
+  /**
+   * False for values that are settings, not credentials - a model id, a
+   * provider name. Masking those makes them unusable: the whole point of a
+   * live model override is reading what is currently set and correcting it,
+   * and `••••2507` cannot be corrected. Defaults to true, so a new key is a
+   * secret unless someone says otherwise.
+   */
+  secret?: boolean;
 }[] = [
   { name: "GROQ_TOKEN", label: "Groq Gateway", scope: "ai", editable: true },
   { name: "GEMINI_TOKEN", label: "Gemini Gateway", scope: "ai", editable: true },
@@ -76,7 +94,35 @@ const KEYS: {
   { name: "DEEPSEEK_TOKEN", label: "DeepSeek (deepseek-v4-pro - top tier)", scope: "ai", editable: true },
   { name: "TOGETHER_TOKEN", label: "Together AI (Llama 3.3 70B - free)", scope: "ai", editable: true },
   { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
-  { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true },
+  // Not a secret, and I-7 makes it the FIRST thing to read: the default order
+  // returns Groq first, so a "Cerebras primary, fails over to Groq" report is
+  // only possible under a non-default value here. Masked, it could not be
+  // confirmed or denied.
+  { name: "AI_PROVIDER", label: "Preferred AI provider", scope: "ai", editable: true, secret: false },
+
+  // ---- MODEL OVERRIDES - the escape hatch that was documented and unusable --
+  //
+  // `ai.ts` reads all eleven of these through `getConfig`, and its own comment
+  // calls a pasted `<PROVIDER>_MODEL` the way to correct a drifted model id
+  // without a redeploy. None of them were in this allowlist, and `setKey`
+  // refuses anything absent from it - so the documented lever did nothing and
+  // the only fix for a provider answering 400 on a renamed model was a deploy.
+  // That is I-7's one surviving gap: a free-tier provider renames or retires a
+  // model on its own schedule, which is exactly the failure Cerebras showed
+  // (14 calls, 14 failovers, 0 tokens).
+  //
+  // A model id is a setting, so none of them are masked.
+  { name: "GROQ_MODEL", label: "Groq model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "GEMINI_MODEL", label: "Gemini model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "OPENROUTER_MODEL", label: "OpenRouter model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "CEREBRAS_MODEL", label: "Cerebras model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "MISTRAL_MODEL", label: "Mistral model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "HUGGINGFACE_MODEL", label: "Hugging Face model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "DEEPSEEK_MODEL", label: "DeepSeek model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "TOGETHER_MODEL", label: "Together model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "SAMBANOVA_MODEL", label: "SambaNova model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "GEMINI_VISION_MODEL", label: "Gemini vision model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "GROQ_VISION_MODEL", label: "Groq vision model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "GRAPH_ENGINE", label: "Negotiation engine ('off' = legacy pipeline)", scope: "ai", editable: true },
   // ---- Monetization: the warm-up gate and its measurement holdout ----------
   //
@@ -185,6 +231,21 @@ function mask(v?: string): string {
   return `${"•".repeat(Math.min(20, v.length - 4))}${v.slice(-4)}`;
 }
 
+/**
+ * What the admin panel shows for a key.
+ *
+ * A credential is masked. A SETTING is not - a model id shown as `••••2507`
+ * cannot be checked against the provider's docs or corrected, which defeats
+ * the entire purpose of having it be editable at runtime.
+ *
+ * `secret` defaults to true, so this stays fail-safe: a key added without
+ * thinking about it is masked.
+ */
+function displayValue(v: string | undefined, secret: boolean | undefined): string {
+  if (secret === false) return v || "- not set -";
+  return mask(v);
+}
+
 /** True when runtime edits will persist (Supabase configured). */
 export function persistenceEnabled(): boolean {
   return supabaseConfigured();
@@ -201,7 +262,7 @@ export async function listKeys(): Promise<KeyInfo[]> {
         scope: k.scope,
         editable: k.editable,
         configured: Boolean(v),
-        masked: mask(v),
+        masked: displayValue(v, k.secret),
         docUrl: DOC_URLS[k.name],
       };
     })
@@ -224,7 +285,7 @@ export async function setKey(
       scope: meta.scope,
       editable: meta.editable,
       configured: Boolean(v),
-      masked: mask(v),
+      masked: displayValue(v, meta.secret),
     },
     warning: result.error,
   };

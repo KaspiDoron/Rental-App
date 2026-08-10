@@ -1512,3 +1512,21 @@ create table if not exists public.wa_policy_versions (
 create index if not exists wa_policy_versions_at_idx
   on public.wa_policy_versions (created_at desc);
 alter table public.wa_policy_versions enable row level security;
+
+-- ---- M20 / I-7: why a provider failed, not just that it did -----------------
+--
+-- `ai_usage` recorded provider/tokens/failed. The REASON - `errorDetail`'s
+-- trimmed "<provider> <status> - <body>" - was thrown, caught into a local
+-- array in chatDetailed, and discarded, so the Command Center could report
+-- Cerebras failing 14 of 14 calls while nothing anywhere could say it was a
+-- 400 on a renamed model id.
+--
+-- `model` is the id that actually went on the wire, which is not always the
+-- configured one: callProvider retries on `fallbackModel` for a 400/404.
+alter table public.ai_usage add column if not exists model text;
+alter table public.ai_usage add column if not exists detail text;
+
+-- Reading the last failure per provider is the whole query this exists for.
+create index if not exists ai_usage_failed_idx
+  on public.ai_usage (provider, created_at desc)
+  where failed;

@@ -260,7 +260,19 @@ function usageStore() {
   return globalThis.__wheeldeal_ai_usage__;
 }
 
-async function recordUsage(provider: string, tokens: number, failed = false) {
+/**
+ * @param model  The model id actually SENT, not the configured default -
+ *               `callProvider` silently retries on `fallbackModel` for a
+ *               400/404, so those are two different facts.
+ * @param detail Trimmed provider error (status + body, key-free) on a failure.
+ */
+async function recordUsage(
+  provider: string,
+  tokens: number,
+  failed = false,
+  model?: string,
+  detail?: string
+) {
   const s = usageStore();
   if (!s[provider]) s[provider] = { requests: 0, tokens: 0, failures: 0 };
   s[provider].requests += 1;
@@ -278,7 +290,53 @@ async function recordUsage(provider: string, tokens: number, failed = false) {
   // from the GCE worker loop as well as from Cloud Run request paths, and the
   // budget race there would add latency inside the provider failover chain on
   // every LLM call while cancelling nothing.
-  await sbInsert("ai_usage", [{ provider, tokens, failed }]).catch(() => false);
+  // I-7: THE ANSWER TO "WHY" WAS BEING THROWN AWAY.
+  //
+  // `errorDetail` already builds a trimmed, key-free `<provider> <status> -
+  // <body>` string, and `chatDetailed` catches it, pushes it onto a local
+  // array and returns only the LAST one. So the Command Center could say
+  // Cerebras failed 14 times out of 14 and nothing anywhere could say it was
+  // a 400 on a model id the provider had renamed - which is the leading
+  // hypothesis and was untestable without a redeploy that added logging.
+  //
+  // The model id rides along for the same reason: with `CEREBRAS_MODEL` now
+  // settable, "which id actually went on the wire" stops being inferable from
+  // the code and has to be recorded.
+  await sbInsert("ai_usage", [
+    { provider, tokens, failed, model: model ?? null, detail: detail ? detail.slice(0, 300) : null },
+  ]).catch(() => false);
+}
+
+/**
+ * The most recent failure per provider - what the provider actually SAID.
+ *
+ * I-7's first instruction was "read the recorded error", and there was no
+ * recorded error to read: the reason was caught into a local array and
+ * discarded. One query, newest first, keeping the first row seen per provider,
+ * so this stays O(1) round trips however many providers exist.
+ *
+ * Permissive read on purpose. This is diagnostics beside a live status page,
+ * not a safety gate - an unreadable table means "no failure to show", which
+ * degrades to exactly what the page showed before this existed.
+ */
+async function lastFailures(): Promise<
+  Record<string, { at: string; model: string | null; detail: string | null }>
+> {
+  const { sbSelect } = await import("./runtime-config");
+  const rows = await sbSelect<{
+    provider: string;
+    model: string | null;
+    detail: string | null;
+    created_at: string;
+  }>(
+    "ai_usage",
+    "select=provider,model,detail,created_at&failed=is.true&order=created_at.desc&limit=200"
+  );
+  const out: Record<string, { at: string; model: string | null; detail: string | null }> = {};
+  for (const r of rows) {
+    if (!out[r.provider]) out[r.provider] = { at: r.created_at, model: r.model, detail: r.detail };
+  }
+  return out;
 }
 
 /** Live status of every AI provider: configured, our usage, remote quota. */
@@ -287,6 +345,7 @@ export async function aiStatus() {
   const preferred = ((await getConfig("AI_PROVIDER")) || "").toLowerCase();
   const s = usageStore();
   const cyc = await cycleUsage();
+  const fails = await lastFailures();
 
   return Promise.all(
     list.map(async (p) => {
@@ -339,6 +398,11 @@ export async function aiStatus() {
         usedThisCycle: cyc[p.name] ?? 0,
         cadence: meta.cadence, // "day" | "month" | "none"
         cadenceNote: meta.note,
+        // WHAT THE PROVIDER SAID, not just how often it said no. A drifted
+        // model id answering 400 is the leading hypothesis for I-7's
+        // "0 tokens / 14 calls / 14 failovers", and it is unfalsifiable
+        // without this. `model` is the id that actually went on the wire.
+        lastFailure: fails[p.name] ?? null,
       };
     })
   );
@@ -465,11 +529,16 @@ async function callProvider(
   messages: ChatMessage[],
   maxTokens: number,
   timeoutMs = CALL_TIMEOUT_MS
-): Promise<{ text: string; tokens: number }> {
-  const run = (model: string) =>
-    cfg.name === "gemini"
-      ? callGemini(cfg, messages, model, maxTokens, timeoutMs)
-      : callOpenAICompatible(cfg, messages, model, maxTokens, timeoutMs);
+  // `model` is the id that actually ANSWERED. The fallback retry below means
+  // the configured id and the served id are two different facts, and the
+  // telemetry is worthless if it records the one we hoped for.
+): Promise<{ text: string; tokens: number; model: string }> {
+  const run = async (model: string) => ({
+    ...(cfg.name === "gemini"
+      ? await callGemini(cfg, messages, model, maxTokens, timeoutMs)
+      : await callOpenAICompatible(cfg, messages, model, maxTokens, timeoutMs)),
+    model,
+  });
   try {
     return await run(cfg.model);
   } catch (e) {
@@ -529,14 +598,16 @@ export async function chatDetailed(
     try {
       // Never let one call overshoot the caller's total budget.
       const remaining = Math.max(2_000, Math.min(CALL_TIMEOUT_MS, deadline - Date.now()));
-      const { text, tokens } = await callProvider(cfg, messages, maxTokens, remaining);
-      await recordUsage(cfg.name, tokens);
+      const { text, tokens, model } = await callProvider(cfg, messages, maxTokens, remaining);
+      await recordUsage(cfg.name, tokens, false, model);
       if (text) return { text, provider: cfg.name };
       errors.push(`${cfg.name}: empty reply`);
     } catch (e) {
-      // Automatic failover: log the failure and try the next provider.
-      await recordUsage(cfg.name, 0, true);
-      errors.push(e instanceof Error ? e.message : String(e));
+      // Automatic failover: log the failure and try the next provider - and
+      // PERSIST the reason, which used to live only in this local array.
+      const reason = e instanceof Error ? e.message : String(e);
+      await recordUsage(cfg.name, 0, true, cfg.model, reason);
+      errors.push(reason);
     }
   }
   return { text: null, error: errors[errors.length - 1] ?? "All AI providers failed." };
