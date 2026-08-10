@@ -112,8 +112,13 @@ describe("the date reaches the shop", () => {
     // t() now refuses anything outside the catalogue (see i18n-gate), so new UI
     // strings that were not regenerated render in English for everyone.
     const catalog = read("src/lib/i18n-catalog.ts");
+    // M8 renamed the picker's labels when the dates left the carousel: the
+    // panel is always on screen now, so "From ... For ... Back on ..." reads as
+    // one window instead of two questions asked mid-wizard.
     for (const s of [
-      "Starting when?",
+      "From",
+      "For",
+      "Back on",
       "Your plan arranges same-day rentals - Pro and Ultra book ahead.",
     ]) {
       expect(catalog, `missing from the catalogue: "${s}"`).toContain(JSON.stringify(s));

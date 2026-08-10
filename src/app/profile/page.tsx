@@ -672,10 +672,23 @@ export default function ProfilePage() {
           </button>
         </section>
 
-        {/* Appearance */}
+        {/* Alerts (browser push) - a real on/off toggle bound to server truth */}
+        <AlertsToggle t={t} />
+
+        {/* M11 - ONE PREFERENCES CARD, NOT THREE.
+            "Appearance" (two buttons) and "Travel preferences" (two fields)
+            were separate full-width cards with a third card between them, so a
+            320px screen spent three scroll-heights on four controls that are
+            all the same thing: how this traveller likes the app set up. Merged
+            with sub-labels, which keeps every control findable while collapsing
+            the chrome around them.
+            Currency stays where it is - it was deliberately promoted up the
+            page, and pulling it down here would undo that on purpose. */}
         <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Appearance")}</div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Preferences")}</div>
+
+          <div className="text-[11px] font-bold text-faint">{t("Appearance")}</div>
+          <div className="mt-1 grid grid-cols-2 gap-2">
             {(["light", "dark"] as const).map((t2) => (
               <button
                 key={t2}
@@ -690,15 +703,8 @@ export default function ProfilePage() {
               </button>
             ))}
           </div>
-        </section>
 
-        {/* Alerts (browser push) - a real on/off toggle bound to server truth */}
-        <AlertsToggle t={t} />
-
-        {/* Travel preferences */}
-        <section className="surface rounded-blob p-4">
-          <div className="mb-2 text-[13px] font-extrabold text-strong">{t("Travel preferences")}</div>
-          <label className="text-[11px] font-bold text-faint">
+          <label className="mt-3 block text-[11px] font-bold text-faint">
             {t("Favourite ride")}
             <select
               value={prefs.ride}
@@ -710,7 +716,8 @@ export default function ProfilePage() {
               <option value="car">{t("Car")}</option>
             </select>
           </label>
-          <div className="mt-2 text-[11px] font-bold text-faint">
+
+          <div className="mt-3 text-[11px] font-bold text-faint">
             {t("Home city")}
             <PlaceAutocomplete
               placeholder="e.g. Tel Aviv"

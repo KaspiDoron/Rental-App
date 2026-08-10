@@ -6,12 +6,22 @@
 // and there was no way to turn alerts off.
 
 import { usePushAlerts } from "@/lib/use-push";
+import { Skeleton } from "./Skeleton";
 
 export function AlertsToggle({ t }: { t: (s: string) => string }) {
   const { state, devices, note, enable, disable, disableEverywhere, test } = usePushAlerts();
 
   const isOn = state === "on";
   const busy = state === "busy" || state === "loading";
+  // M11: A CHECK IN FLIGHT IS A SHIMMER, NEVER AN ANSWER.
+  //
+  // `loading` fell through to the non-toggle branch and rendered the pill
+  // "Unavailable", with the help text for `off` beneath it - so for the first
+  // moment of every profile load, a traveller whose alerts were ON was told
+  // the feature was unavailable and offered to switch on something already on.
+  // The same shape as the WhatsApp pill's old CHECKING... bug, and the same
+  // rule applies: not-yet-known and known-negative are different answers.
+  const checking = state === "loading";
   // "on-elsewhere" and "stale" are OFF for this phone - the toggle must offer
   // to fix THIS device, which is exactly what enable() now does.
   const canToggle =
@@ -45,7 +55,10 @@ export function AlertsToggle({ t }: { t: (s: string) => string }) {
     <section className="surface rounded-blob p-4">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="text-[13px] font-extrabold text-strong">🔔 {t("Alerts")}</div>
-        {canToggle ? (
+        {checking ? (
+          // Switch-shaped, so the row does not jump when the real answer lands.
+          <Skeleton className="h-6 w-11" rounded="rounded-full" />
+        ) : canToggle ? (
           <button
             role="switch"
             aria-checked={isOn}
@@ -67,7 +80,14 @@ export function AlertsToggle({ t }: { t: (s: string) => string }) {
           </span>
         )}
       </div>
-      <p className="text-[11px] font-medium text-soft">{help}</p>
+      {/* And the help text shimmers with it. Rendering the `off` copy - "Get a
+          notification the moment a shop replies" - under a shimmering switch
+          would still be telling a user with alerts on that they have none. */}
+      {checking ? (
+        <Skeleton className="h-3 w-4/5" />
+      ) : (
+        <p className="text-[11px] font-medium text-soft">{help}</p>
+      )}
       {(state === "on-elsewhere" || state === "stale") && (
         <button
           onClick={() => enable()}
