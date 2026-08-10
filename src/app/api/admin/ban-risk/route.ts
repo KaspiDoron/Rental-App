@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
 import { riskReport, rollupBucket } from "@/lib/wa/risk-rollup";
 import { fleetTruth } from "@/lib/wa/fleet-truth";
+import { transportSummary } from "@/lib/wa/proxy";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +28,10 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours") ?? 24) || 24));
 
-  const [report, fleet] = await Promise.all([
+  const [report, fleet, transport] = await Promise.all([
     riskReport(Date.now(), hours),
     fleetTruth().catch(() => null),
+    transportSummary().catch(() => null),
   ]);
 
   return NextResponse.json({
@@ -38,6 +40,10 @@ export async function GET(req: Request) {
     // not "no instances" - a fleet of two hundred reading zero because every host
     // timed out is the single most dangerous number this screen could show.
     fleet,
+    // Transport tiles (Tier 3): configured? verified exits? "not configured" is
+    // a first-class state, never a red dot, because with the paid proxy cut it
+    // is the expected baseline.
+    transport,
     hours,
     // THE FOOTER IS PART OF THE CONTRACT, not decoration. Nothing on this
     // screen reduces the probability of Meta restricting a number. What it does

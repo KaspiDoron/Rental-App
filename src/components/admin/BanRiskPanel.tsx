@@ -46,6 +46,13 @@ interface Fleet {
   dualSockets: string[];
 }
 
+interface Transport {
+  configured: boolean;
+  sessions: number | null;
+  verified: number | null;
+  note: string;
+}
+
 /** Unknown renders as a dash. Never as zero - that is the whole contract. */
 function Num({ v }: { v: number | null }) {
   if (v === null) return <span className="text-faint" title="Could not be read">&mdash;</span>;
@@ -78,9 +85,12 @@ function DarkBadge({ reason }: { reason: string }) {
 }
 
 export default function BanRiskPanel() {
-  const [data, setData] = useState<{ report: Report; fleet: Fleet | null; disclaimer: string } | null>(
-    null
-  );
+  const [data, setData] = useState<{
+    report: Report;
+    fleet: Fleet | null;
+    transport: Transport | null;
+    disclaimer: string;
+  } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -277,6 +287,31 @@ export default function BanRiskPanel() {
         >
           {busy ? "Rolling up…" : "Roll up the last closed hour"}
         </button>
+      </div>
+
+      {/* ---- Transport: the residential exit, honestly (Tier 3) ---------- */}
+      <div className="surface rounded-blob p-3">
+        <div className="mb-1.5 text-[13px] font-extrabold text-strong">🌐 Transport</div>
+        {!data.transport ? (
+          <DarkBadge reason="transport state could not be read" />
+        ) : !data.transport.configured ? (
+          // "not configured" is a first-class NEUTRAL state, never a red dot -
+          // with the paid proxy cut, an unconfigured exit is the expected
+          // baseline and painting it as a failure would cry wolf every load.
+          <p className="text-[11px] text-soft">{data.transport.note}</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Tile label="Linked sessions" value={data.transport.sessions} />
+              <Tile
+                label="Confirmed exits"
+                value={data.transport.verified}
+                hint="/proxy/set proved the exit carries traffic"
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] text-soft">{data.transport.note}</p>
+          </>
+        )}
       </div>
 
       {/* The footer is part of the contract, not decoration. */}

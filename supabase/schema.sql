@@ -228,6 +228,17 @@ alter table public.wa_sessions add column if not exists host_url text;
 -- Pairing-code freshness (B1): when the code shown to the user was minted, so
 -- the app can enforce a real ~55s TTL instead of guessing from updated_at.
 alter table public.wa_sessions add column if not exists pairing_code_issued_at timestamptz;
+-- Proxy stickiness (Tier 2.3): the per-user residential-gateway session token,
+-- minted ONCE and never rotated automatically. Lives here rather than in
+-- Evolution's own Proxy row because /instance/delete cascades that row away on
+-- every "Try again" - so the exit would silently change on each retry. There
+-- is no pool to resize, so no mod-hash remap.
+alter table public.wa_sessions add column if not exists proxy_session_id text;
+-- Proxy verification (Tier 2.2): when /proxy/set last CONFIRMED the exit was
+-- carrying traffic (it fetches icanhazip.com direct AND through the proxy and
+-- requires them to differ). Null = asserted-but-unverified. The transport
+-- tiles read this so "asserted" and "verified" stop being the same colour.
+alter table public.wa_sessions add column if not exists proxy_verified_at timestamptz;
 
 -- ---- Bookings ---------------------------------------------------------------
 create table if not exists public.bookings (

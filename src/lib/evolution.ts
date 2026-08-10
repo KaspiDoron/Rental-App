@@ -309,20 +309,27 @@ function proxyFromUrl(raw: string): Proxy | null {
 
 /**
  * Resolve the proxy for a given user, in priority order:
- *   1. EVOLUTION_PROXY_POOL - one proxy URL per line; each user is pinned to a
- *      stable line by hashing their email (unique residential IP per instance,
- *      the post-revenue scaling step). A user always maps to the same proxy.
+ *   1. EVOLUTION_PROXY_TEMPLATE - ONE residential gateway with `{session}` (and
+ *      optionally `{country}`) placeholders. The per-user session token is
+ *      persisted on `wa_sessions.proxy_session_id`, minted once, never rotated
+ *      automatically - so the exit survives "Try again" (`/instance/delete`
+ *      cascades Evolution's own Proxy row away) and there is no pool to resize.
  *   2. EVOLUTION_PROXY - a single shared proxy (pre-revenue / testing).
  * Returns null when neither is set (datacenter IP - baseline behaviour).
+ *
+ * THE MOD-HASH POOL IS RETIRED, not moved (Tier 2.3). `EVOLUTION_PROXY_POOL`
+ * pinned users by `sha256(email) % lines.length`, and a mod-hash remaps
+ * roughly (n-1)/n of the fleet whenever the pool resizes - a simultaneous
+ * fleet-wide IP change, which is exactly the signal proxying exists to avoid
+ * emitting. Do not reintroduce a pool; the sticky-token gateway is the shape
+ * every major provider actually sells.
  */
 async function parseProxy(email?: string): Promise<Proxy | null> {
-  const pool = (await getConfig("EVOLUTION_PROXY_POOL"))?.trim();
-  if (pool && email) {
-    const lines = pool.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
-    if (lines.length > 0) {
-      const h = createHash("sha256").update(email.toLowerCase()).digest();
-      const idx = h.readUInt32BE(0) % lines.length;
-      const p = proxyFromUrl(lines[idx]);
+  if (email) {
+    const { templateProxyUrl } = await import("./wa/proxy");
+    const url = await templateProxyUrl(email).catch(() => null);
+    if (url) {
+      const p = proxyFromUrl(url);
       if (p) return p;
     }
   }
@@ -1322,7 +1329,7 @@ export async function connectInstance(
   // evoFetch ceiling) stacked directly in front of the user's code, for no
   // ordering benefit. Only the webhook is required; the other two are
   // best-effort on older Evolution builds that ignore unknown fields.
-  const [webhookSet] = await Promise.all([
+  const [webhookSet, , proxySet] = await Promise.all([
     evoFetch(host, `/webhook/set/${instance}`, {
       method: "POST",
       body: JSON.stringify({
@@ -1344,6 +1351,17 @@ export async function connectInstance(
       : Promise.resolve(undefined),
   ]);
   void webhookSet;
+  // TIER 2.2: /proxy/set is a REAL verification primitive - Evolution fetches
+  // icanhazip.com directly AND through the proxy and requires them to differ,
+  // so a 2xx proves the exit is genuinely carrying traffic. We were discarding
+  // that answer. Record it on the session row (best-effort, after the response
+  // boundary work is already scheduled) so the transport tiles can tell
+  // "asserted" from "verified". It does NOT gate the link - owner decision
+  // keeps proxying non-gating. Only meaningful when a proxy was configured.
+  if (proxy) {
+    const { recordProxyVerification } = await import("./wa/proxy");
+    void recordProxyVerification(email, Boolean(proxySet?.ok));
+  }
 
   const pickPairing = (d: any): string | undefined => {
     const raw = d?.pairingCode ?? d?.qrcode?.pairingCode ?? d?.instance?.pairingCode;
