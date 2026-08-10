@@ -112,6 +112,7 @@ import { deviceTimeZone } from "@/lib/rental-window";
 import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
 import { MassBargainPreview } from "@/components/MassBargainPreview";
 import { VirtualVendorList } from "@/components/VirtualVendorList";
+import { QuotesRail } from "@/components/QuotesRail";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -3586,6 +3587,21 @@ export default function Home() {
           </div>
         ) : (
           <div data-tour="vendors" className="mt-3">
+            {/* M10 - THE SECOND AXIS.
+                The vertical feed holds every shop in the traveller's sort
+                order, so finding the second-cheapest quote means scrolling
+                past every shop still being contacted and every one that went
+                quiet. The rail is the horizontal answer: only the shops that
+                actually answered with a price, cheapest first, and a tap
+                drives this same feed through the jump the status panel and the
+                push deep-links already use. Two axes, one list, one selection
+                - it derives nothing of its own. */}
+            <QuotesRail
+              vendors={filtered}
+              selectedId={selectedId}
+              onPick={scrollToVendor}
+              t={t}
+            />
             {/* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
                 tracker, options, composer, a thread peek with its own poll -
                 all mounted and all re-rendering on every activity tick, on a
