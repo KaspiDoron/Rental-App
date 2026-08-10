@@ -766,6 +766,53 @@ export async function getConfig(name: string): Promise<string | undefined> {
 }
 
 /**
+ * THE EXACT-KEY READER THE VAULT COMMENT PROMISED - I-6a.
+ *
+ * `VAULT_SELECT` filters `key=not.like.I18N_*` so the huge translation
+ * dictionaries never ride the whole-table vault read (they would make cold
+ * start a monotonically growing cost for every key lookup). The comment beside
+ * it claimed those rows were "still readable by their own reader, which asks
+ * for them by exact key" - but that reader was never written, and the translate
+ * route read the cache with plain `getConfig`, which goes through the SAME
+ * filtered load and therefore returned undefined every time.
+ *
+ * The consequence was a live LLM cost leak: every cold load in a non-English
+ * language re-translated the ENTIRE catalogue and wrote back a row that nothing
+ * could ever read, so the next cold load did it again. This is the reader that
+ * closes the loop - one row, by exact key, decrypted the same way the vault
+ * decrypts everything else.
+ *
+ * It deliberately does NOT touch the loadOverrides cache: these rows are large
+ * and read rarely (once per language per cold load), so caching them is exactly
+ * what the exclusion filter exists to prevent.
+ */
+export async function getConfigExact(name: string): Promise<string | undefined> {
+  const s = state();
+  // A value written this session (Supabase unreachable) is plaintext in mem.
+  if (s.mem[name]) return s.mem[name];
+  const conn = supabase();
+  if (!conn) return process.env[name];
+  try {
+    const res = await timedFetch(
+      `${conn.url}/rest/v1/app_config?select=value&key=eq.${encodeURIComponent(name)}&limit=1`,
+      {
+        headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) return process.env[name];
+    const rows = (await res.json()) as { value: string }[];
+    const raw = rows[0]?.value;
+    if (raw === undefined) return process.env[name];
+    // setConfig always encrypts, so decrypt first; fall back to the raw value
+    // for any legacy plaintext row, mirroring how fetchOverrides treats rows.
+    return decrypt(raw) ?? raw;
+  } catch {
+    return process.env[name];
+  }
+}
+
+/**
  * STRICT variant of getConfig for SAFETY GATES, where "not set" and "could not
  * be read" must lead to opposite decisions.
  *

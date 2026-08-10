@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { chat, aiEnabled } from "@/lib/ai";
-import { getConfig, setConfig } from "@/lib/runtime-config";
+import { getConfigExact, setConfig } from "@/lib/runtime-config";
 import { getSession } from "@/lib/session";
 
 // AI translation for the app UI. Uses the configured AI providers (with
@@ -86,7 +86,7 @@ export async function POST(req: Request) {
   const cacheKey = `I18N_${lang}`;
   let cached: Record<string, string> = {};
   try {
-    cached = JSON.parse((await getConfig(cacheKey)) ?? "{}");
+    cached = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
   } catch {}
 
   const missing = texts.filter((t) => !cached[t]);
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
       // another batch wrote in the meantime is kept, not clobbered.
       let latest: Record<string, string> = {};
       try {
-        latest = JSON.parse((await getConfig(cacheKey)) ?? "{}");
+        latest = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
       } catch {
         /* an unreadable cache is an empty one; we still have our own work */
       }
