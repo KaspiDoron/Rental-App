@@ -4,7 +4,7 @@
 > `claude/rental-agents-legal-setup-o7rgcv`, and re-published with this header
 > (Part 10).
 >
-> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,488
+> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,550
 > tests): all of **Tier 0** (0.0-0.75) and all of **Tier 1** (1.0-1.6) from Part
 > 9.10 - the device fingerprint, the origin resolver, the restriction and
 > dead-session detectors, the answerable opener and `openNow` ordering, the
@@ -56,10 +56,27 @@
 > and `wa_policy_versions` so every anti-ban knob change carries an author and
 > its previous value.
 >
-> **Not started:** Tier 2 (amended - see Part 8), Wave C, Part 11 **F2** (agency
-> scanner - blocked on a data-collection window at n>=8 per shop), the Tier 3
-> transport tiles (blocked behind the proxy work, or every tile honestly reads
-> "not configured"), and Part 12 **W7** (live validation - blocked on real
+> **Tier 2 ($0 items) shipped:** the proxy layer rebuilt around one residential
+> gateway template with a per-user sticky token on `wa_sessions.proxy_session_id`
+> (minted once, survives `/instance/delete`), the mod-hash pool retired,
+> `/proxy/set` verification recorded to `proxy_verified_at`. The paid items
+> (2.5/2.6) stay cut. `EVOLUTION_PROXY_REQUIRED` deliberately not built.
+>
+> **Tier 3 transport tiles shipped:** the Ban Risk panel now has a Transport
+> section reading `transportSummary()` - "not configured" is a neutral
+> first-class state, an unreadable session table reads UNKNOWN.
+>
+> **Wave C started:** I-6c (RTL applied before first paint + mirrorable wizard
+> arrows), I-6b (every translation validated before it reaches the shared cache -
+> null/placeholder/brand/length, "Will" now on the do-not-translate list), and
+> I-6a (the exact-key `getConfigExact` reader that finally makes the I18N cache
+> readable - it was write-only, re-translating the whole catalogue every cold
+> load).
+>
+> **Not started:** the rest of Wave C (M3 all-vehicle classes, M8/9/24 date
+> gating + summary header, M10 dual-axis scroll, M11/M14, M23 wire-format
+> upgrade), Part 11 **F2** (agency scanner - blocked on a data-collection window
+> at n>=8 per shop), and Part 12 **W7** (live validation - blocked on real
 > provider credentials).
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
