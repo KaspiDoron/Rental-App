@@ -3439,10 +3439,20 @@ export default function Home() {
           </div>
         )}
 
-        {/* B10: no ad placeholder on the empty first screen - a 'Sponsored' box
-            is the wrong first impression before a single search has run. The ad
-            still shows in results (line ~2320) once there's real content. */}
-        {vendors.length > 0 && <AdBanner plan={session?.plan} />}
+        {/* M13 - NO AD HERE, AND THIS IS THE PLACEMENT RULE.
+            This slot sat between the best-price "Lock it" button above and the
+            Ultra language toggle below: an ad touching the single highest-value
+            tap in the product. That invites a misclick on the one action that
+            closes a deal, and it interrupts the exact moment the app exists to
+            produce.
+            It was also a DUPLICATE. It rendered on `vendors.length > 0` while
+            the in-feed slot renders on `vendors.length > 3 && view === "list"`,
+            so a free user with four shops in list view got two ad units on one
+            screen. The in-feed slot is kept - it sits inside the results, away
+            from every CTA - and this one is removed rather than relocated,
+            because the screen did not need two.
+            B10 still holds and is now trivially satisfied: no ad exists on the
+            empty first screen either. */}
 
         {/* Ultra: bargain in the shop's LOCAL language (optional toggle). */}
         {rfq && (
