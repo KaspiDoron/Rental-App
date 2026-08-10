@@ -6,6 +6,9 @@ import {
   placeholders,
   DO_NOT_TRANSLATE,
   MAX_RATIO,
+  roleOf,
+  translationBrief,
+  LABEL_MAX_CHARS,
 } from "./i18n-validate";
 
 vi.mock("server-only", () => ({}));
@@ -113,6 +116,53 @@ describe("coarse length sanity catches refusals, not register", () => {
   });
 });
 
+// M23: THE MODEL WAS HANDED A BARE ARRAY OF UNRELATED STRINGS.
+//
+// ["Next","Back","Light","Dark","Bargain", ...] - fourteen items with no
+// indication of part of speech, register or length budget, so the localiser had
+// to guess all three per item. "Bargain" is a verb on a button and a noun in a
+// sentence, and a context-free model picks whichever is more common in its own
+// language. The role is derived from the string's own shape, so no caller
+// changes and nothing can fall out of sync.
+
+describe("copy role is derived from the string itself", () => {
+  it("a short fragment with no terminal punctuation is a control label", () => {
+    for (const s of ["Next", "Back", "Bargain", "Edit", "Find my deal"]) {
+      expect(roleOf(s)).toBe("label");
+    }
+  });
+
+  it("terminal punctuation makes it prose regardless of length", () => {
+    expect(roleOf("Done.")).toBe("sentence");
+    expect(roleOf("Ready?")).toBe("sentence");
+    expect(roleOf("Wait!")).toBe("sentence");
+  });
+
+  it("a long fragment is prose even without punctuation", () => {
+    const long = "x".repeat(LABEL_MAX_CHARS + 1);
+    expect(roleOf(long)).toBe("sentence");
+  });
+
+  it("it is TOTAL - an empty or whitespace string still resolves", () => {
+    expect(roleOf("")).toBe("label");
+    expect(roleOf("   ")).toBe("label");
+  });
+
+  it("the brief carries text, role and an advisory budget", () => {
+    const b = translationBrief("Next");
+    expect(b.text).toBe("Next");
+    expect(b.role).toBe("label");
+    // Advisory only - MAX_RATIO in validateTranslation is the ENFORCED bound.
+    // Telling the model up front produces shorter buttons than rejecting after.
+    expect(b.maxChars).toBeGreaterThanOrEqual(LABEL_MAX_CHARS);
+  });
+
+  it("prose gets the real ceiling the validator will apply anyway", () => {
+    const src = "Your first real quotes within the hour.";
+    expect(translationBrief(src).maxChars).toBe(src.length * MAX_RATIO);
+  });
+});
+
 describe("the route uses the validator, not String() coercion", () => {
   const route = readCode("src/app/api/translate/route.ts");
 
@@ -128,6 +178,20 @@ describe("the route uses the validator, not String() coercion", () => {
   it("the prompt names the do-not-translate list, including Will", () => {
     expect(route).toMatch(/DO_NOT_TRANSLATE\.join/);
     expect(route).toMatch(/"Will" is the name of the assistant/);
+  });
+
+  it("M23: it sends a structured brief, NOT a bare array of strings", () => {
+    expect(route).toMatch(/JSON\.stringify\(texts\.map\(translationBrief\)\)/);
+    // And the prompt explains what the role means, or the field is decoration.
+    expect(route).toMatch(/"label" is a button or control caption/);
+    expect(route).toMatch(/Input is a JSON array of \{ text, role, maxChars \}/);
+  });
+
+  it("the reply contract is still index-aligned, so validation stays positional", () => {
+    // validateTranslation compares out[i] to texts[i]; a reordered or reshaped
+    // reply would validate each translation against the wrong source.
+    expect(route).toMatch(/in the exact same order and count/);
+    expect(route).toMatch(/parsed\.t\.length === texts\.length/);
   });
 
   it("a rejected element keeps the English source (caller guards on truthiness)", () => {

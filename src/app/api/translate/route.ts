@@ -22,18 +22,24 @@ async function translateChunk(
   // the same words - "Will" chief among them, the assistant's own name and a
   // high-frequency English auxiliary that a context-free localiser translates
   // every time.
-  const { DO_NOT_TRANSLATE } = await import("@/lib/i18n-validate");
+  const { DO_NOT_TRANSLATE, translationBrief } = await import("@/lib/i18n-validate");
   const system =
     `You are a senior product localiser translating UI strings for "WheelDeal", a mobile app where AI agents bargain for vehicle rentals, from English to ${langName}. ` +
     "Rules: (1) translate MEANING, not word-by-word - use the natural phrasing a native mobile app in that language would use; " +
     "(2) match register: buttons/labels stay short and imperative, sentences stay friendly and simple; " +
     `(3) NEVER translate these brand/product words, keep them verbatim: ${DO_NOT_TRANSLATE.join(", ")}. "Will" is the name of the assistant, never the English verb; ` +
     "(4) keep emoji, numbers, currency symbols, punctuation and every {placeholder} token exactly as written, same spelling, same count; " +
-    "(5) no explanations, no quotes added. " +
+    "(5) no explanations, no quotes added; " +
+    // M23: the model used to receive a BARE ARRAY of unrelated strings and had
+    // to guess part of speech, register and length budget for each. "Bargain"
+    // is a verb on a button and a noun in a sentence, and a context-free
+    // localiser picks whichever is more common in its own language.
+    '(6) each item carries a role: "label" is a button or control caption - keep it short, imperative, and within maxChars; "sentence" is prose - natural and complete. ' +
+    'Input is a JSON array of { text, role, maxChars }. ' +
     'Reply ONLY as JSON: { "t": ["..."] } with translations in the exact same order and count.';
   const out = await chat([
     { role: "system", content: system },
-    { role: "user", content: JSON.stringify(texts) },
+    { role: "user", content: JSON.stringify(texts.map(translationBrief)) },
   ]);
   if (!out) return null;
   const start = out.indexOf("{");

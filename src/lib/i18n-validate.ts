@@ -41,6 +41,57 @@ export const DO_NOT_TRANSLATE = [
   "AI",
 ] as const;
 
+/**
+ * What KIND of copy a string is, derived from its own shape - M23's context
+ * problem, solved without a wire-format change.
+ *
+ * The translator was handed `["Next","Back","Light","Dark","Bargain", ...]` -
+ * fourteen unrelated strings with no indication of part of speech, register or
+ * length budget, so it had to guess all three per item. "Bargain" is a verb on
+ * a button and a noun in a sentence, and a localiser with no context picks
+ * whichever is more common in its own language.
+ *
+ * This cannot recover the true role (only the call site knows that), so it is
+ * deliberately a COARSE two-way split on the properties that actually change
+ * the output: a short fragment with no terminal punctuation behaves like a
+ * control label and must stay short and imperative; anything else is prose and
+ * may breathe. Both signals are visible in the string itself, so no caller
+ * changes and nothing can fall out of sync.
+ */
+export type CopyRole = "label" | "sentence";
+
+/** Above this length a fragment is prose regardless of punctuation. */
+export const LABEL_MAX_CHARS = 24;
+
+export function roleOf(source: string): CopyRole {
+  const s = (source ?? "").trim();
+  if (!s) return "label";
+  if (/[.!?…]$/.test(s)) return "sentence";
+  return s.length <= LABEL_MAX_CHARS ? "label" : "sentence";
+}
+
+/**
+ * The per-string brief the model receives instead of a bare array.
+ *
+ * `maxChars` is advisory, not enforced - `validateTranslation`'s MAX_RATIO is
+ * the enforced bound. Telling the model the budget up front produces shorter
+ * button text than rejecting it afterwards and re-rendering English.
+ */
+export function translationBrief(source: string): {
+  text: string;
+  role: CopyRole;
+  maxChars: number;
+} {
+  const role = roleOf(source);
+  return {
+    text: source,
+    role,
+    // A label gets a tight budget so it still fits the control it sits in;
+    // prose gets the real ceiling the validator will apply anyway.
+    maxChars: role === "label" ? Math.max(LABEL_MAX_CHARS, source.length * 2) : source.length * MAX_RATIO,
+  };
+}
+
 /** Extract the `{placeholder}` tokens from a string, as a sorted multiset. */
 export function placeholders(s: string): string[] {
   return (s.match(/\{[a-zA-Z0-9_]+\}/g) ?? []).sort();
