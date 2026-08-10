@@ -7,20 +7,42 @@
 
 import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
+import { formatDateRange } from "@/lib/clock";
 
 export function SearchSummaryBar({
   requestText,
   originLabel,
   radiusKm,
+  startDate,
+  endDate,
+  durationDays,
   onExpand,
 }: {
   requestText: string;
   originLabel?: string;
   radiusKm: number;
+  /** `YYYY-MM-DD`. Absent on a legacy restored search, and that is renderable. */
+  startDate?: string;
+  endDate?: string;
+  durationDays?: number;
   onExpand: () => void;
 }) {
   const { t } = useI18n();
   const req = requestText.trim();
+  // I-8/M24: THE HEADER HAS TO STATE THE ACTUAL QUERY.
+  //
+  // The collapsed bar showed the free-text request, the origin and the radius,
+  // and said nothing about WHEN - on a product whose whole job is a dated
+  // rental. A traveller who picked the wrong month had no way to notice it
+  // short of re-opening the form, and the dates are also the thing the opener
+  // is now required to carry (Tier 0.4), so a mismatch here is a mismatch on
+  // the wire.
+  //
+  // Absent dates render as nothing rather than a placeholder: a search restored
+  // from before dates existed is legitimately dateless, and "-" would read as
+  // a bug.
+  const dates = formatDateRange(startDate, endDate);
+  const days = Number.isFinite(durationDays) && (durationDays ?? 0) > 0 ? durationDays : null;
   return (
     <button
       type="button"
@@ -38,6 +60,8 @@ export function SearchSummaryBar({
         <span className="block truncate text-[11px] font-bold text-faint">
           {originLabel ? `${originLabel} · ` : ""}
           {radiusKm} km
+          {dates ? ` · 📅 ${dates}` : ""}
+          {days ? ` · ${days} ${days === 1 ? t("day") : t("days")}` : ""}
         </span>
       </span>
       <span className="chip shrink-0 rounded-full border border-line px-2.5 py-1 text-[11px] font-extrabold text-brandblue">

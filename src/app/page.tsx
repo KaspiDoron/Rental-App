@@ -1715,7 +1715,21 @@ export default function Home() {
     const requestText = ov || rawText;
     // The tap-to-build panel (F2) supplies fully-structured fields instead of
     // free text - no requestText needed in that path.
-    if (!structuredFields && !requestText.trim()) return;
+    //
+    // M9/M1: THIS USED TO BE A SILENT `return`. Tapping the one CTA with an
+    // empty box and no vehicle picked did literally nothing - no message, no
+    // scroll, no disabled state - which reads as a broken button, not as
+    // "you have not told me what you want yet". The two guards below it were
+    // already honest about their reason; this one now matches them.
+    if (!structuredFields && !requestText.trim()) {
+      setMassNote(
+        t("Tell me what you are looking for first - pick a vehicle above or describe it in your own words.")
+      );
+      document
+        .querySelector("[data-tour='request']")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     // PAIRING GATE, enforced not just painted. The blur-lock makes the form
     // inert, but Will can call startSearch directly - and a search whose agents
     // can never message anyone is a dead end. Only block on a CONFIRMED unlink
@@ -2671,6 +2685,13 @@ export default function Home() {
             requestText={rawText}
             originLabel={origin?.label}
             radiusKm={radiusKm}
+            // The DATES the search actually ran with, read from the compiled
+            // RFQ rather than from the form's live state - the collapsed bar
+            // describes the query that produced the results below it, and the
+            // form may already have been edited without re-searching.
+            startDate={rfq?.startDate}
+            endDate={rfq?.returnDate}
+            durationDays={rfq?.durationDays}
             onExpand={() => setFormOpen(true)}
           />
         )}
