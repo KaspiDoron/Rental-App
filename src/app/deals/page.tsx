@@ -132,6 +132,8 @@ export default function DealsPage() {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [restoreErr, setRestoreErr] = useState<string | null>(null);
+  /** The trips read did not answer. Distinct from "answered with nothing". */
+  const [loadFailed, setLoadFailed] = useState(false);
   // "Is that price still good?" - one tap re-asks every shop from a past hunt.
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [recheckNote, setRecheckNote] = useState<Record<string, string>>({});
@@ -232,15 +234,27 @@ export default function DealsPage() {
       .catch(() => {})
       .finally(() => settle("session"));
     fetch("/api/deals", { cache: "no-store" })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then((d) => {
         const s: SessionSummary[] = d.sessions ?? [];
         setSessions(s);
         setBookings(d.bookings ?? []);
+        setLoadFailed(false);
         // The freshest hunt opens expanded - it's what you came to check.
         if (s[0]) setExpanded({ [s[0].id]: true });
       })
-      .catch(() => {})
+      // M1 - A FAILED LOAD IS NOT AN EMPTY ONE.
+      //
+      // This catch was silent, so a 500 or a dropped connection left `sessions`
+      // at [] and the page rendered "No hunts yet - and I'm ready" to a
+      // traveller who had run ten searches. That is the same defect as the
+      // fail-green admin panels, except it is pointed at the user: the app
+      // states as fact something it never checked, and the traveller's
+      // reasonable conclusion is that their trips are gone.
+      .catch(() => setLoadFailed(true))
       .finally(() => settle("trips"));
   }, [settle]);
 
@@ -401,7 +415,28 @@ export default function DealsPage() {
           </>
         )}
 
-        {!loading && sessions.length === 0 && bookings.length === 0 && (
+        {/* COULD NOT LOAD - said plainly, with the one action that helps.
+            This has to render INSTEAD of the empty state, not beside it: two
+            cards, one saying "you have no trips" and one saying "we could not
+            check", is worse than either alone. */}
+        {!loading && loadFailed && (
+          <div className="glass-solid glass-rim fluid-in rounded-blob p-6 text-center">
+            <div className="text-[15px] font-extrabold text-strong">
+              {t("Couldn't load your trips")}
+            </div>
+            <p className="mx-auto mt-1 max-w-[300px] text-[12px] text-soft">
+              {t("Nothing is lost - we just couldn't reach the server. Check your connection and try again.")}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="btn btn-primary mt-4 inline-block rounded-2xl px-6 py-3 text-[14px]"
+            >
+              {t("Try again")}
+            </button>
+          </div>
+        )}
+
+        {!loading && !loadFailed && sessions.length === 0 && bookings.length === 0 && (
           <div className="glass-solid glass-rim rounded-blob p-6 text-center fluid-in">
             <div className="mx-auto mb-3 w-fit float-soft">
               <WillAvatar size={64} />
