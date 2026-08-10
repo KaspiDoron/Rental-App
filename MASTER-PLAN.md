@@ -1,4 +1,8 @@
-> # STATUS: TIERS 0-4 AND WAVE C SHIPPED - PART 12 IS THE NEW WORK
+> # STATUS: TIERS 0-4 + WAVE C SHIPPED - WAVE D IN FLIGHT, THEN THE AUDIT
+>
+> **Read Part 13 (the deep project audit) and Part 14 (the remaining execution
+> order) first - they are the live worklist. Everything above them is the
+> reasoning that produced it.**
 >
 > Published to the repo root as `MASTER-PLAN.md`, branch
 > `claude/rental-agents-legal-setup-o7rgcv`, and re-published with this header
@@ -4262,3 +4266,244 @@ the default path. Ordering inside the new work:
 **The warm-up gate (12.3) and its dashboard (12.4.1) are independent of all of
 the above** and depend only on C.0.1 plus Tier 1's recipient ledger. They should
 ship first - they need no credentials, no provider, and no legal entity.
+
+---
+
+# PART 13 - THE DEEP PROJECT AUDIT (new owner task)
+
+## 13.0 Context - why this is being added
+
+The owner has asked for a reverse-engineered technical reference for the whole
+system: a document that lets a senior engineer, a new developer or an AI agent
+understand WheelDeal **without first reading the codebase**, and that would let
+someone else safely take the project over if the original developer vanished.
+
+This is not a README refresh, and the distinction matters here more than usual:
+
+- **`README.md` is materially stale.** It describes an OpenStreetMap-based
+  "demo mode" product with a five-agent ecosystem, written before WhatsApp,
+  Evolution, SPTE, the graph engine, the outbox state machine, the warm-up
+  gate and the WABA lane existed. Anyone trusting it would build a wrong mental
+  model. The audit's rule "do not rely on README files" is not a formality in
+  this repo - it is the single most important instruction in the task.
+- **The other docs are partial by design.** `MASTER-PLAN.md` is a *plan*,
+  `ANTI-BAN.md` is superseded wherever it disagrees with Part 0.37,
+  `V2-BLUEPRINT.md` describes an architecture proposal and its migration,
+  `PRODUCTION-READINESS.md` is a scale/ops review, `GUIDE.md` is a deploy
+  runbook. None of them describes the system **as built**. That document does
+  not exist, and this part creates it.
+
+## 13.1 What the system actually is, at the scale the audit must cover
+
+Measured, not estimated:
+
+| | count |
+|---|---|
+| API route handlers (`src/app/api/**/route.ts`) | **127** |
+| Library modules (`src/lib/**/*.ts`, excluding tests) | **257** |
+| React components (`src/components/**/*.tsx`) | **110** |
+| Test files | **247** (3,659 tests) |
+| Supabase tables (`supabase/schema.sql`, 1,532 lines) | **54** |
+| BullMQ workers (`services/workers/src/*.worker.ts`) | **5** + index |
+| Workspace packages (`packages/*`) | **6** (core, db, queues, redis, shared, testing) |
+| Separate apps | `apps/gateway` (Express) + the Next.js app |
+| CI workflows | 2 (`deploy-gcp.yml`, `heartbeat.yml`) |
+
+Two runtimes, and conflating them is the most likely way to get the audit
+wrong: the **Next.js app on Cloud Run** (request-scoped, CPU throttled to zero
+at response flush) and the **persistent worker tier** (GCE VM + Redis + BullMQ,
+described in `infra/gcp/README.md`, and per task #127 **not yet provisioned**).
+A large amount of this codebase's design - `finishBeforeResponse`, the
+self-kicking tick chain, the outbox lease model - exists specifically because
+the first runtime cannot hold state across a response.
+
+## 13.2 Scope and the deliverable
+
+**One committed document: `PROJECT-AUDIT.md` at the repo root**, alongside
+`MASTER-PLAN.md` and `GUIDE.md`. Owner decision, recorded: repo doc only - no
+published artifact, and **`README.md` is NOT to be rewritten as part of this
+task** (its staleness is *reported* in the audit's Technical Debt section; the
+rewrite is a separate change the owner has not approved).
+
+**The audit is read-only.** No refactors, no deletions, no config changes, no
+behaviour changes. If it finds a defect, the defect is *documented with its
+file and line*, not fixed. Anything worth fixing becomes a P0-P3
+recommendation at the end of the document, for the owner to schedule.
+
+**Structure** follows the owner's section list (Executive Summary → Product →
+Architecture → Repository → Frontend → Backend → Database → Integrations →
+AI/Agents → Critical Flows → Auth/Security → Configuration → Deployment →
+Error Handling → Reliability → Performance → Testing → Observability → Code
+Quality → Technical Debt → Security Risks → Critical System Invariants →
+Unknowns & Gaps → Recommendations), adapted where this project does not fit
+the template. Mermaid diagrams only where they describe the real implementation.
+
+## 13.3 The evidence rule - the part that decides whether this document is worth anything
+
+Every claim is tagged, and the tags are not decoration:
+
+- **FACT** - traced to a file, function and line the auditor opened. Cite it as
+  `src/lib/wa/wa-guard.ts:1528`.
+- **INFERRED** - a strong architectural reading that no single file states
+  outright. Say what it rests on.
+- **REQUIRES VERIFICATION** - plausible, unconfirmed, and named as such.
+- **UNKNOWN / NOT FOUND IN REPOSITORY** - could not be established. Say which
+  file or credential would settle it.
+
+An inference presented as a fact is the failure mode. This repo has already
+paid for that pattern repeatedly - `ANTI-BAN.md` describing `CONNECT_FINGERPRINT`
+as a shipped defence when Evolution's `InstanceDto` silently discards it;
+`evolution.ts:180-184` claiming any host can resume a session when only the
+`creds` blob is shared; `wa-guard.ts:1528` promoting an unsourced 0.6 threshold
+to "research". **The audit must not add a fourth.** Where a comment in the code
+contradicts the code, the audit records both and says which one runs.
+
+## 13.4 Areas the audit must reach, because they are where the system actually lives
+
+A superficial pass would describe a Next.js app with a Postgres database and
+miss everything that makes this system what it is. Non-negotiable coverage:
+
+1. **The dispatch pipeline end to end.** `outreach/mass` → `wa_outbox` →
+   `claimOutboxRow` lease → `guardOutbound` → `drainOutbox` → Evolution →
+   delivery receipt → `whatsapp_messages`. Including the lease model, the
+   `wa_outbox_pending_auto_uidx` partial index that serialises concurrent runs,
+   and the self-kick origin resolver.
+2. **The inbound pipeline.** Evolution webhook → `src/lib/wa/ingest.ts` →
+   privacy/expectation gate → SPTE turn → composed reply → back into the outbox.
+   Including `wa_inbound_seen` / `wa_processed` idempotency.
+3. **The two negotiation engines and which one is primary.** SPTE
+   (`src/lib/spte/*`) versus the graph engine (`src/lib/graph/*`), the
+   `GRAPH_ENGINE` switch, and the fallback relationship.
+4. **The anti-ban governor.** `capacity.ts`, `wa-guard.ts`, the intro/reply lane
+   split, the two-meter unanswered budget, wave pacing, `stealth.ts`,
+   `risk-verdict.ts`'s fail-dark contract.
+5. **The config/secret architecture.** `runtime-config.ts`: Supabase override →
+   `process.env`, AES-256-GCM at rest keyed off `SESSION_SECRET`, the 30s cache,
+   `VAULT_SELECT`'s `not.like.I18N_*` filter and the exact-key reader, and the
+   `KEYS` allowlist with its new `secret` flag.
+6. **Auth and the admin gate.** HMAC-signed cookie sessions (`session.ts`),
+   `ADMIN_EMAILS`, `requireManagement` vs `requireOwner`, and the fact that
+   `isAdmin` is never taken from client input.
+7. **The AI layer.** Provider abstraction and failover order (`ai.ts`), the
+   eleven `<PROVIDER>_MODEL` overrides, vision, the mock fallback, prompt
+   construction in `agents.ts` / `copy/promptCompiler.ts`, and where an LLM
+   decision can actually change an outbound message.
+8. **The learning loop.** `ops_learning`, `policy_overlay`, `saveVersionedSpec`,
+   `agent_golden_cases` + `replayConversation` as the gate, and the rollback path.
+9. **The WABA lane** (Part 12), which ships **off** behind `WABA_ENABLED` - the
+   audit must be explicit that this code exists and does not run by default.
+10. **The scheduled/async surface.** `heartbeat.yml`, `/api/wa/ping`, the tick
+    chain, `graph_wakeups`, the five workers, and what currently drains when
+    the worker tier is unprovisioned.
+
+## 13.5 Method
+
+1. **Inventory first, prose last.** Enumerate routes, tables, workers, packages
+   and integrations mechanically before writing a word of narrative, so the
+   document's structure comes from the repository rather than from expectation.
+2. **Follow imports, do not sample.** For each critical flow, trace the real
+   call chain and record the file:line at each hop.
+3. **Cross-check every table against a writer and a reader.** A table with no
+   writer is a finding; a column read but never written is a finding. This is
+   the same discipline M21 applies to KPIs, applied to the whole schema.
+4. **Cross-check every documented claim against the code**, including this
+   plan's own claims. Where the plan and the code disagree, the code wins and
+   the audit says so.
+5. **Write the Unknowns section as you go**, not at the end - it is the honest
+   half of the document and it is the half that gets skipped if left last.
+
+## 13.6 What would make this document a failure
+
+Recorded so it can be checked against before it is committed:
+
+- A section that restates `README.md` or `MASTER-PLAN.md` instead of the code.
+- Any unattributed claim about behaviour.
+- A "recommendations" list of generic best practices rather than changes that
+  matter for *this* architecture.
+- Silence about the parts that are genuinely unknown from the repository alone -
+  above all the live GCP topology (#127), whether the worker tier runs at all,
+  and any behaviour that depends on credentials this environment does not hold.
+
+---
+
+# PART 14 - THE REMAINING EXECUTION ORDER
+
+Three owner decisions taken, and binding on everything below:
+
+| Decision | Answer |
+|---|---|
+| Where the audit sits | **Last**, after the remaining Wave D code, so it documents the shipped state rather than a state that changes the next day |
+| Audit delivery | **`PROJECT-AUDIT.md` committed to the branch.** No artifact. `README.md` is not rewritten |
+| M25's "master merge" | **Do not merge.** Run the full gate, push the branch, hand the owner the merge decision - 41 commits into master is a production deploy and an owner call |
+
+## 14.1 Run order
+
+**Step 0 - land the work already in the tree.**
+`src/app/api/admin/ops/analytics/route.ts` and
+`src/components/ops/AnalyticsPanel.tsx` are modified and uncommitted: this is
+**M21**, and it is the fail-green defect again. Three reads ended in
+`.catch(() => [])`, so an unreachable Supabase rendered a complete Ops
+analytics page - zero branch uses, zero reviews, zero judge scores, no
+regression detected - indistinguishable from a quiet week, and "no regression
+detected" is precisely the tile an owner acts on. The reads now return `null`,
+`totals` carry `null` rather than `0`, and a dark strip renders above
+everything. Writers were checked first: `agent_traces`, `agent_scores` and
+`agent_reviews` all have real writers (`orchestrator.ts:333`,
+`graph/judge.ts:41`, `ops/detect.ts:196`), so M21's "anything without a writer
+gets a writer or gets removed" is satisfied on the writer side. Finish it, add
+the test, gate, commit.
+
+**Step 1 - M5/M16, the Aurora Glow loading primitive.** One shared primitive -
+iridescent edge glow, soft bloom, breathing gradient - built **on** the three
+that exist (`Skeleton.tsx`, `LoadingDots.tsx`, `NavVeil.tsx`), not beside them;
+a parallel set is what the module text explicitly forbids. CSS-only where
+possible, and it must respect `prefers-reduced-motion`, which `globals.css`
+already honours in seven places.
+
+**Step 2 - M1, defensive states.** `OfflineBanner.tsx` already exists, so this
+is the remainder: missing-data and slow-backend states wherever a screen can
+currently dead-end. Scope it by auditing for dead ends rather than by adding
+states speculatively.
+
+**Step 3 - M13, PayPal + AdSense.** Finish the subscription flow and keep
+banners away from primary actions. `AdBanner.tsx` and
+`PayPalSubscriptionButton.tsx` exist; establish what is actually incomplete
+before changing either.
+
+**Step 4 - M25's gate, without the merge.**
+`npm run typecheck && npm run typecheck:tests && npm run typecheck:services &&
+npx vitest run && npm run build`, plus the e2e harness
+(`packages/testing/e2e.test.ts`, needs `TEST_REDIS_URL`). Push. Stop.
+
+**Step 5 - Part 13, the audit.** Produce `PROJECT-AUDIT.md` against the state
+Steps 0-4 leave behind. Commit and push it. Read-only with respect to
+everything else in the repo.
+
+**Step 6 - re-publish the plan.** Per Part 10, copy this file to
+`MASTER-PLAN.md` so the repo copy stays the published artifact.
+
+## 14.2 What is NOT in this run, and why
+
+Not skipped - blocked, each on something no amount of code solves:
+
+| Item | Blocked on |
+|---|---|
+| Part 11 **F2** - agency scanner | A data-collection window at n>=8 per shop, and it must not run on pre-Tier-0.4 data or it suppresses shops that failed *our* broken opener |
+| Part 12 **W7** - live validation | Real provider credentials, which this environment does not hold |
+| Task **#127** - GCP live provisioning | Owner inputs; also gates whether the worker tier runs at all |
+| Task **#230** - G2 avatar extraction hardening | Carried over, unscheduled |
+| Owner-side | `delete from app_config where key like 'I18N_%';` in Supabase, to clear the leaked dictionary rows |
+
+## 14.3 Verification
+
+Per commit, and non-negotiable: `npm run typecheck && npm run typecheck:tests &&
+npm run typecheck:services && npx vitest run && npm run build`. Every code step
+above ships with tests that pin the *defect*, not the shape - the M20 pass had
+to correct a test that pinned an exact insert shape while its stated subject was
+a missing `await`, and that is the pattern to avoid.
+
+The audit has a different verification, and it is the standard the owner set:
+**could a senior engineer who has never seen this project understand the system
+from the document, and could they safely change it?** Checked section by section
+against the code before it is committed, with every unresolved item named in
+Unknowns & Gaps rather than smoothed over.
