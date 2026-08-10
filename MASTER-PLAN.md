@@ -4,7 +4,7 @@
 > `claude/rental-agents-legal-setup-o7rgcv`, and re-published with this header
 > (Part 10).
 >
-> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,550
+> **Shipped, on branch, gate green on every commit** (typecheck x3, build, 3,566
 > tests): all of **Tier 0** (0.0-0.75) and all of **Tier 1** (1.0-1.6) from Part
 > 9.10 - the device fingerprint, the origin resolver, the restriction and
 > dead-session detectors, the answerable opener and `openNow` ordering, the
@@ -66,18 +66,27 @@
 > section reading `transportSummary()` - "not configured" is a neutral
 > first-class state, an unreadable session table reads UNKNOWN.
 >
-> **Wave C started:** I-6c (RTL applied before first paint + mirrorable wizard
-> arrows), I-6b (every translation validated before it reaches the shared cache -
-> null/placeholder/brand/length, "Will" now on the do-not-translate list), and
-> I-6a (the exact-key `getConfigExact` reader that finally makes the I18N cache
-> readable - it was write-only, re-translating the whole catalogue every cold
-> load).
+> **Wave C in progress.** The whole i18n cluster is shipped: I-6c (RTL applied
+> before first paint + mirrorable wizard arrows), I-6b (every translation
+> validated before it reaches the shared cache - null/placeholder/brand/length,
+> "Will" now on the do-not-translate list), I-6a (the exact-key `getConfigExact`
+> reader that finally makes the I18N cache readable - it was write-only,
+> re-translating the whole catalogue every cold load), and M23's context slice
+> (each string travels as `{text, role, maxChars}` with the role derived from the
+> string's own shape, so no call site changes and nothing drifts).
 >
-> **Not started:** the rest of Wave C (M3 all-vehicle classes, M8/9/24 date
-> gating + summary header, M10 dual-axis scroll, M11/M14, M23 wire-format
-> upgrade), Part 11 **F2** (agency scanner - blocked on a data-collection window
-> at n>=8 per shop), and Part 12 **W7** (live validation - blocked on real
-> provider credentials).
+> **I-8/M24 and M9 shipped:** the collapsed summary bar now states the rental
+> window and duration, read from the compiled RFQ rather than live form state,
+> with a shared local-parsing date formatter (`new Date("2026-08-12")` parses as
+> UTC midnight and shows the previous day west of Greenwich). The search CTA's
+> empty-input branch was a SILENT return - a button that did nothing - and now
+> names its reason and scrolls, matching the two honest guards below it.
+>
+> **Not started in Wave C:** M3 (all-vehicle classes), M8 (date panel lifted out
+> of the wizard), M10 (dual-axis vendor scrolling), M11 (profile restructure),
+> M14 (promoted shops), and M23's owner-editable translation overrides. Also
+> **F2** (agency scanner - blocked on a data-collection window at n>=8 per shop)
+> and Part 12 **W7** (live validation - blocked on real provider credentials).
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
 > Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those
