@@ -37,25 +37,48 @@ export async function GET(req: Request) {
   const days = Math.min(90, Math.max(7, Number(new URL(req.url).searchParams.get("days") ?? 30)));
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-  const [traces, scores, reviews, activeRev] = await Promise.all([
+  // M21 - FAIL DARK, NOT GREEN.
+  //
+  // These three reads ended in `.catch(() => [])`, so an unreachable Supabase
+  // produced a full analytics page: zero branch uses, zero owner reviews, zero
+  // judge scores, no regression, no failure tags. Indistinguishable from a
+  // quiet week, and the tile that says "no regression detected" is exactly the
+  // one the owner would act on.
+  //
+  // This repo has shipped that shape three times - the Command Center's nine
+  // catches, the banner reading "Messaging: All good" over a dead webhook, and
+  // `classifySafety`'s positive-evidence-only design. `null` means UNREAD, the
+  // page says so, and every derived figure below reads the empty array so the
+  // aggregation code stays unchanged.
+  const [tracesRead, scoresRead, reviewsRead, activeRev] = await Promise.all([
     sbSelect<TraceRow>(
       "agent_traces",
       `select=edge_id,spec_rev,created_at&edge_id=not.is.null&created_at=gte.${encodeURIComponent(
         since
       )}&order=created_at.desc&limit=1000`
-    ).catch(() => []),
+    ).catch(() => null),
     sbSelect<ScoreRow>(
       "agent_scores",
       `select=scorer,scores,spec_rev,decision_id,created_at&created_at=gte.${encodeURIComponent(
         since
       )}&order=created_at.desc&limit=400`
-    ).catch(() => []),
+    ).catch(() => null),
     sbSelect<ReviewRow>(
       "agent_reviews",
       `select=decision_id,edge_id,rating,verdict,branch_correct,outcome_impact,tags,created_at&order=created_at.desc&limit=400`
-    ).catch(() => []),
+    ).catch(() => null),
     getActiveRev(),
   ]);
+
+  const traces = tracesRead ?? [];
+  const scores = scoresRead ?? [];
+  const reviews = reviewsRead ?? [];
+  /** Which inputs could not be read. Rendered as a dark strip, never hidden. */
+  const degraded = [
+    tracesRead === null ? "decision traces" : null,
+    scoresRead === null ? "judge scores" : null,
+    reviewsRead === null ? "owner reviews" : null,
+  ].filter((x): x is string => x !== null);
 
   // ---- Branch heatmap: every director edge that actually fired -----------------
   const heat = new Map<
@@ -212,11 +235,15 @@ export async function GET(req: Request) {
     timeline,
     calibration,
     tags,
+    // UNREAD IS NULL, NOT ZERO. The panel renders a dash for null and a real
+    // count for 0 - "nothing happened" and "we could not look" are different
+    // answers and only one of them means the engine is idle.
     totals: {
-      decisionsTraced: traces.length,
-      judgeScores: scores.length,
-      ownerReviews: reviews.length,
+      decisionsTraced: tracesRead === null ? null : traces.length,
+      judgeScores: scoresRead === null ? null : scores.length,
+      ownerReviews: reviewsRead === null ? null : reviews.length,
     },
+    degraded,
   });
 }
 

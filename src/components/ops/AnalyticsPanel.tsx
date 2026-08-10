@@ -42,7 +42,15 @@ interface Analytics {
   timeline: WeekRow[];
   calibration: { owner: number; judge: number }[];
   tags: { tag: string; count: number }[];
-  totals: { decisionsTraced: number; judgeScores: number; ownerReviews: number };
+  // NULL MEANS UNREAD, not zero. The route stopped catching a failed read into
+  // an empty array, so the panel has to be able to say "we could not look".
+  totals: {
+    decisionsTraced: number | null;
+    judgeScores: number | null;
+    ownerReviews: number | null;
+  };
+  /** Inputs that could not be read this load. Empty on a healthy page. */
+  degraded?: string[];
 }
 
 function Meter({ value, max, tone = "blue" }: { value: number; max: number; tone?: "blue" | "green" | "red" }) {
@@ -71,6 +79,8 @@ export function AnalyticsPanel() {
   }
   if (!data) return <LoadingDots label="Crunching negotiation quality" />;
 
+  const degraded = data.degraded ?? [];
+
   const maxUses = Math.max(1, ...data.heatmap.map((h) => h.uses));
   const maxTag = Math.max(1, ...data.tags.map((t) => t.count));
 
@@ -85,6 +95,25 @@ export function AnalyticsPanel() {
 
   return (
     <div className="space-y-3">
+      {/* M21 - THE DARK STRIP RENDERS FIRST.
+          If an input could not be read, every figure below it is unverified,
+          and the page says so before it shows a single number. Silently
+          rendering zeros is the failure this repo has shipped three times:
+          the Command Center's nine catches, "Messaging: All good" over a dead
+          webhook, and classifySafety answering from positive evidence only. */}
+      {degraded.length > 0 && (
+        <div className="surface rounded-blob border-2 border-amber-500/40 p-3.5">
+          <p className="text-[12px] font-extrabold text-amber-400">
+            Some figures could not be read
+          </p>
+          <p className="mt-0.5 text-[11px] text-soft">
+            Unavailable: {degraded.join(", ")}. Anything below that depends on
+            them is missing, not zero - treat this page as incomplete until the
+            database read succeeds.
+          </p>
+        </div>
+      )}
+
       {data.regression && (
         <div className="surface rounded-blob border-2 border-brandred/40 bg-brandred-soft p-3.5">
           <p className="text-[12px] font-extrabold text-brandred">⚠️ Possible regression</p>
@@ -101,7 +130,10 @@ export function AnalyticsPanel() {
           ] as const
         ).map(([label, v]) => (
           <div key={label} className="surface rounded-2xl p-3 text-center">
-            <p className="tabular text-[18px] font-extrabold text-strong">{v}</p>
+            {/* A dash, never a zero. */}
+            <p className="tabular text-[18px] font-extrabold text-strong">
+              {v === null ? <span className="text-faint" title="Could not be read">&mdash;</span> : v}
+            </p>
             <p className="text-[9px] font-extrabold uppercase tracking-wide text-faint">{label}</p>
           </div>
         ))}
