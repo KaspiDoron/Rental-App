@@ -53,6 +53,12 @@ const BanRiskPanel = dynamic(() => import("@/components/admin/BanRiskPanel"), {
   ssr: false,
   loading: () => <LoadingDots label="Reading the risk ledger" />,
 });
+// Owner-editable translation corrections: a bad machine string is fixable at
+// runtime, in its own config row so the translator's own sweep cannot undo it.
+const TranslationRepairPanel = dynamic(
+  () => import("@/components/admin/TranslationRepairPanel"),
+  { ssr: false, loading: () => <LoadingDots label="Reading the corrections" /> }
+);
 const EngineInspectorPanel = dynamic(
   () => import("@/components/admin/EngineInspector").then((m) => m.EngineInspector),
   { ssr: false, loading: () => <LoadingDots label="Reading the live blackboard" /> }
@@ -196,6 +202,7 @@ export default function AdminPage() {
     | "money"
     | "waba"
     | "risk"
+    | "i18n"
     | "keys"
     | "users"
     | "feedback"
@@ -808,7 +815,7 @@ export default function AdminPage() {
             single-pass engine now, so the old graph-pipeline surfaces are no
             longer shown. Their code remains for data/learning continuity but is
             not reachable from the UI. */}
-        {(["command", "analytics", "money", "waba", "risk", "engine", "keys", "users", "feedback", "billing", "data"] as const)
+        {(["command", "analytics", "money", "waba", "risk", "engine", "i18n", "keys", "users", "feedback", "billing", "data"] as const)
           .map((t) => (
           <button
             key={t}
@@ -827,7 +834,9 @@ export default function AdminPage() {
                     ? "📲 wa business"
                     : t === "risk"
                       ? "🛡 risk"
-                      : t}
+                      : t === "i18n"
+                        ? "🌐 copy"
+                        : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -1020,6 +1029,7 @@ export default function AdminPage() {
 
       {loaded && tab === "waba" && <WabaConsolePanel />}
       {loaded && tab === "risk" && <BanRiskPanel />}
+      {loaded && tab === "i18n" && <TranslationRepairPanel />}
 
       {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 

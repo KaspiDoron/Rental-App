@@ -64,6 +64,22 @@ async function translateChunk(
   return null;
 }
 
+/**
+ * The response map: only the strings THIS request asked for, and only the ones
+ * that actually have a translation.
+ *
+ * Extracted because both return paths (no-AI-provider and normal) built it
+ * inline and only one of them was updated the last two times this shape
+ * changed - a second copy of a filter is how one code path starts answering
+ * differently from the other.
+ */
+function pickTranslated(
+  texts: string[],
+  dict: Record<string, string>
+): Record<string, string> {
+  return Object.fromEntries(texts.filter((t) => dict[t]).map((t) => [t, dict[t]]));
+}
+
 export async function POST(req: Request) {
   // Signed-in only + a generous daily cap: the cache means real users almost
   // never hit the LLM (each string is translated once ever), but this stops
@@ -95,14 +111,28 @@ export async function POST(req: Request) {
     cached = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
   } catch {}
 
-  const missing = texts.filter((t) => !cached[t]);
+  // M23: THE OWNER'S CORRECTIONS, FROM THEIR OWN ROW.
+  //
+  // Kept separate from the machine cache on purpose - patching a correction
+  // into `I18N_<lang>` would put it in the exact object this handler rewrites
+  // after every sweep, so the fix would survive until the next string in that
+  // language needed translating and then vanish.
+  //
+  // A corrected string is also NOT "missing": it must never be re-sent to the
+  // model, both because that spends tokens re-deriving an answer a human has
+  // already overruled and because the machine's version would then be cached
+  // and the correction would look like it stopped working.
+  const { readOverrides, applyOverrides } = await import("@/lib/i18n-overrides");
+  const overrides = await readOverrides(lang);
+
+  const missing = texts.filter((t) => !cached[t] && !overrides[t]);
 
   if (missing.length > 0) {
     if (!(await aiEnabled())) {
       return NextResponse.json({
-        map: Object.fromEntries(
-          texts.filter((t) => cached[t]).map((t) => [t, cached[t]])
-        ),
+        // Corrections still apply on the no-AI path - they are already stored
+        // and need no provider to serve.
+        map: pickTranslated(texts, applyOverrides(cached, overrides)),
         error:
           "AI translation needs at least one AI provider key (Admin -> Keys). Showing English for now.",
       });
@@ -147,9 +177,9 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({
-    map: Object.fromEntries(
-      texts.filter((t) => cached[t]).map((t) => [t, cached[t]])
-    ),
+    // OVERRIDES WIN. The owner's correction is the authoritative answer for a
+    // string; the machine cache is the fallback beneath it.
+    map: pickTranslated(texts, applyOverrides(cached, overrides)),
   });
 }
 
