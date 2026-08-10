@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { OrbitDots } from "./OrbitDots";
+import { AURORA } from "../lib/aurora";
 
 // Global navigation veil: instant visual feedback the moment ANY page change
 // or heavy button action starts. Mounted once in the root layout; triggered
@@ -54,7 +55,15 @@ export function NavVeil() {
   if (!on) return null;
   return (
     <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/35 backdrop-blur-[2px]">
-      <OrbitDots size={44} light label="Loading" />
+      {/* M5/M16: the veil's spinner wears the SAME glow the skeleton cards
+          wear, so the whole app has one visual answer to "something is
+          happening" instead of a different one per surface. The glow is on a
+          wrapper rather than on OrbitDots itself - the dots are also used in
+          places that are not loading states, and a primitive that cannot be
+          used without its glow is not a primitive. */}
+      <div className={`${AURORA} rounded-full p-3`}>
+        <OrbitDots size={44} light label="Loading" />
+      </div>
     </div>
   );
 }

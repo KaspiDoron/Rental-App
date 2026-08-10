@@ -614,6 +614,99 @@ html.dark .skeleton::after {
   .skeleton::after { animation: none; transform: none; opacity: 0.5; }
 }
 
+/* ---- AURORA GLOW - Wave D / M5 + M16 ------------------------------------
+ *
+ * ONE definition of "this surface is working", worn by the loading primitives
+ * that already exist rather than shipped as a parallel set beside them. The
+ * module text is explicit about that, and the reason is the one this codebase
+ * keeps re-learning: a second implementation of the same idea drifts from the
+ * first, and then two screens disagree about what waiting looks like.
+ *
+ * Three layers, all on pseudo-elements so nothing in the DOM changes:
+ *   - the EDGE: an iridescent rim that travels around the border
+ *   - the BLOOM: a soft coloured haze behind the surface
+ *   - the BREATH: the whole thing swells and settles
+ *
+ * `overflow: hidden` is deliberately NOT set here - the bloom has to escape the
+ * box to read as a glow, and .skeleton (which does clip) composes with it
+ * because the two use different pseudo-elements.
+ */
+.aurora {
+  position: relative;
+  isolation: isolate;
+}
+.aurora::before {
+  /* THE BLOOM. Behind the content, escaping the box, never interactive. */
+  content: "";
+  position: absolute;
+  inset: -14%;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  filter: blur(18px);
+  opacity: 0.5;
+  background: conic-gradient(
+    from 0deg,
+    rgba(59, 130, 246, 0.55),
+    rgba(124, 92, 255, 0.5),
+    rgba(236, 72, 153, 0.4),
+    rgba(16, 185, 129, 0.45),
+    rgba(59, 130, 246, 0.55)
+  );
+  animation: aurora-drift 7.5s linear infinite, aurora-breathe 3.6s ease-in-out infinite;
+}
+.aurora::after {
+  /* THE EDGE. A gradient ring, masked to the border only - no extra wrapper
+     element and no double-border artefact on a rounded card. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(59, 130, 246, 0.9),
+    rgba(124, 92, 255, 0.85),
+    rgba(236, 72, 153, 0.7),
+    rgba(16, 185, 129, 0.8),
+    rgba(59, 130, 246, 0.9)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: aurora-drift 7.5s linear infinite;
+}
+/* The bloom is what carries the effect in dark mode; the rim is what carries it
+   in daylight. Trading their weight rather than shipping one washed-out
+   compromise is the same lesson the skeleton shimmer learned the hard way. */
+[data-theme="dark"] .aurora::before,
+html.dark .aurora::before { opacity: 0.62; }
+[data-theme="dark"] .aurora::after,
+html.dark .aurora::after { opacity: 0.75; }
+
+@keyframes aurora-drift {
+  to { transform: rotate(1turn); }
+}
+@keyframes aurora-breathe {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 0.62; }
+}
+
+/* A glow is decoration; motion is not mandatory to understand it. Someone who
+   asked for less motion keeps the colour and loses the travel - the same
+   contract .skeleton already honours. */
+@media (prefers-reduced-motion: reduce) {
+  .aurora::before,
+  .aurora::after { animation: none; }
+  .aurora::before { opacity: 0.4; }
+}
+
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
