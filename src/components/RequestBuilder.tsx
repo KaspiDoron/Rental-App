@@ -9,7 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { StructuredRFQ, VehicleClass, Transmission } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
-import { resolveWindow } from "@/lib/rental-window";
+import { addDays, resolveWindow } from "@/lib/rental-window";
+import { formatDateRange, formatRentalDate } from "@/lib/clock";
 import { Icon } from "./icons";
 
 const SCOOTER_CC = [110, 125, 150, 160] as const;
@@ -208,6 +209,10 @@ export function RequestBuilder({
   const [custom, setCustom] = useState("");
 
   const isTwoWheel = vehicle === "scooter" || vehicle === "motorbike";
+  // The day they hand it back. UTC-anchored calendar arithmetic on a date
+  // LABEL - `addDays` exists precisely because doing this with a local Date
+  // returned a day early for every traveller in Asia.
+  const returnDate = addDays(startDate, days);
 
   // BUG 4: the gearbox is IMPLIED for two-wheelers (scooter = automatic,
   // motorbike = manual), so the transmission step is redundant for them and is
@@ -243,6 +248,18 @@ export function RequestBuilder({
       // defaults to today), so the opener can say WHEN rather than only for
       // how long.
       startDate,
+      // M8: THE RETURN DATE WAS NEVER EMITTED BY THE BUILDER.
+      //
+      // `returnDate` is a real field on StructuredRFQ - the opener
+      // interpolates it, clampRfqWindow preserves the span across a clamp, and
+      // the summary bar reads it for the second half of the range - but the
+      // builder only ever sent a day COUNT, so every one of those read
+      // undefined and the window silently collapsed to a start date.
+      //
+      // DERIVED, never a second input. Duration and end date are the same fact
+      // said two ways; collecting both would let them disagree, and this app
+      // has already paid for that mistake once with four shop counters.
+      returnDate,
       transmission,
       // EXTRAS ARE ACCESSORIES, NOT NOTES. This was hard-coded `[]` while the
       // top-box toggle and the free-text field were folded into `notes` - and
@@ -265,7 +282,7 @@ export function RequestBuilder({
     onFieldsChange(fields);
     // onFieldsChange is a stable setter from the parent - the selections drive it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehicle, transmission, cc, carType, days, startDate, helmets, maxMileage, storageBox, delivery, custom]);
+  }, [vehicle, transmission, cc, carType, days, startDate, returnDate, helmets, maxMileage, storageBox, delivery, custom]);
 
   const ccOptions = vehicle === "motorbike" ? MOTORBIKE_CC : SCOOTER_CC;
   const TITLES: Record<StepName, string> = {
@@ -279,6 +296,44 @@ export function RequestBuilder({
 
   return (
     <div data-tour="builder" className="overflow-hidden rounded-2xl border-2 border-line bg-card2">
+      {/* M8 - THE RENTAL WINDOW, ALWAYS VISIBLE, OUTSIDE THE CAROUSEL.
+          The dates lived inside step 3 of 4, so for most of the flow the one
+          fact that decides whether a shop can even answer was off screen and
+          unverifiable - incident I-8. It is not a step: it is the standing
+          context every other step is chosen against, so it sits above the
+          carousel and never scrolls out of the flow.
+          "When" and "how long" stay together because they are one thought, and
+          the day they hand it back is SHOWN rather than asked, so the two can
+          never disagree. */}
+      <div className="border-b-2 border-line bg-card px-3 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-extrabold text-strong">{t("From")}</span>
+            <StartDateField
+              value={startDate}
+              min={today}
+              max={maxStartDate}
+              onChange={setStartDate}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-extrabold text-strong">{t("For")}</span>
+            <DurationField value={days} onChange={setDays} t={t} />
+          </div>
+        </div>
+        <p className="mt-1.5 text-[11px] font-bold text-faint">
+          {t("Back on")} {formatRentalDate(returnDate)}
+        </p>
+        {/* The free plan arranges same-day rentals only. Saying so at the
+            picker beats a silent server-side clamp that moves the date after
+            they have already pressed search. */}
+        {maxStartDate === today && (
+          <p className="mt-0.5 text-[11px] font-bold text-faint">
+            {t("Your plan arranges same-day rentals - Pro and Ultra book ahead.")}
+          </p>
+        )}
+      </div>
+
       {/* Progress rail */}
       <div className="flex items-center gap-1.5 px-3 pt-3">
         {steps.map((_, i) => (
@@ -339,38 +394,6 @@ export function RequestBuilder({
                 </div>
               </>
             )}
-            {/* WHEN, NOT JUST HOW LONG.
-                The builder collected a day COUNT and nothing else, so
-                `startDate` was undefined on every request ever made and no
-                rental DATE has ever reached a shop - the agents asked "for 4
-                days" with no beginning. Everything downstream was already
-                built and waiting: the opener interpolates the date
-                (agents.ts), the period phrase reads it, and the traveller
-                disclosure policy reads it twice.
-                Beside the duration rather than in a step of its own: "when"
-                and "how long" are one thought, and the carousel was
-                deliberately slimmed once already. */}
-            <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
-              <span className="text-[13px] font-extrabold text-strong">{t("Starting when?")}</span>
-              <StartDateField
-                value={startDate}
-                min={today}
-                max={maxStartDate}
-                onChange={setStartDate}
-              />
-            </div>
-            {/* The free plan arranges same-day rentals only. Saying so at the
-                picker beats a silent server-side clamp that moves the date
-                after they have already pressed search. */}
-            {maxStartDate === today && (
-              <p className="px-1 text-[11px] font-bold text-faint">
-                {t("Your plan arranges same-day rentals - Pro and Ultra book ahead.")}
-              </p>
-            )}
-            <div className="flex items-center justify-between gap-2 rounded-xl bg-card p-2.5">
-              <span className="text-[13px] font-extrabold text-strong">{t("For how many days?")}</span>
-              <DurationField value={days} onChange={setDays} t={t} />
-            </div>
           </div>
         )}
 
@@ -428,7 +451,11 @@ export function RequestBuilder({
               {isTwoWheel && cc && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{cc}cc</span>}
               {vehicle === "car" && carType && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t(carType)}</span>}
               <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{days} {t("days")}</span>
-              <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{t("from")} {startDate}</span>
+              {/* THE SAME FORMATTER THE SUMMARY BAR USES. This chip printed the
+                  raw ISO string - "2026-08-12" - which is the one date format
+                  nobody reads at a glance, and it disagreed in shape with every
+                  other surface that states the window. */}
+              <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{formatDateRange(startDate, returnDate)}</span>
               {helmets > 0 && <span className="rounded-full bg-card px-3 py-1 text-[12px] font-bold text-soft">{helmets} 🪖</span>}
               {/* FORMATTED, like every other number the traveller sees. "<30000km"
                   is not a quantity anybody reads at a glance. */}
