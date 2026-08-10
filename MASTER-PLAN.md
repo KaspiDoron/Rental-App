@@ -1,4 +1,4 @@
-> # STATUS: TIERS 0 AND 1 SHIPPED - PART 12 IS THE NEW WORK
+> # STATUS: TIERS 0-4 AND WAVE C SHIPPED - PART 12 IS THE NEW WORK
 >
 > Published to the repo root as `MASTER-PLAN.md`, branch
 > `claude/rental-agents-legal-setup-o7rgcv`, and re-published with this header
@@ -66,7 +66,7 @@
 > section reading `transportSummary()` - "not configured" is a neutral
 > first-class state, an unreadable session table reads UNKNOWN.
 >
-> **Wave C in progress.** The whole i18n cluster is shipped: I-6c (RTL applied
+> **WAVE C IS COMPLETE.** The whole i18n cluster is shipped: I-6c (RTL applied
 > before first paint + mirrorable wizard arrows), I-6b (every translation
 > validated before it reaches the shared cache - null/placeholder/brand/length,
 > "Will" now on the do-not-translate list), I-6a (the exact-key `getConfigExact`
@@ -82,11 +82,37 @@
 > empty-input branch was a SILENT return - a button that did nothing - and now
 > names its reason and scrolls, matching the two honest guards below it.
 >
-> **Not started in Wave C:** M3 (all-vehicle classes), M8 (date panel lifted out
-> of the wizard), M10 (dual-axis vendor scrolling), M11 (profile restructure),
-> M14 (promoted shops), and M23's owner-editable translation overrides. Also
-> **F2** (agency scanner - blocked on a data-collection window at n>=8 per shop)
-> and Part 12 **W7** (live validation - blocked on real provider credentials).
+> **The rest of Wave C shipped too**, and three of the five turned out to be
+> defects rather than features:
+>
+> - **M23's owner-editable overrides** live in their OWN config row
+>   (`I18N_OVERRIDE_<lang>`). Patching the machine cache would have been
+>   destroyed by the translator's own `{...latest, ...cached}` rewrite. A
+>   corrected string is also excluded from `missing`, so it is never re-sent to
+>   the model. Admin -> copy shows every correction beside the machine output it
+>   replaces.
+> - **M8** lifted the rental window out of carousel step 3 into an always-visible
+>   panel - and uncovered that the builder never emitted `returnDate` at all, so
+>   the opener, `clampRfqWindow` and the summary bar were all reading undefined.
+>   It is now derived from the duration through the UTC-anchored `addDays`.
+> - **M11** found the alerts toggle answering "Unavailable" while the check was
+>   still in flight - the third time this repo has rendered not-yet-known as a
+>   confident negative. It shimmers now. Appearance and Travel preferences
+>   merged into one Preferences card.
+> - **M14's** machinery already existed; what it wore was wrong. A paid pin that
+>   leads every sort called itself "Recommended shop". It now reads "Promoted -
+>   paid placement", translated, and a test keeps promotion out of the outreach
+>   ranking.
+> - **M10** added the horizontal axis as a bounded quotes rail - only shops with
+>   a live price, cheapest first, tapping one drives the vertical feed through
+>   the jump that already existed. It derives nothing and cannot touch the
+>   virtualizer.
+> - **M3** was assessed as already complete: `vehicleClass` is threaded through
+>   20+ modules and C7 shipped the parametric pipeline.
+>
+> **Still blocked, not skipped:** **F2** (agency scanner - needs a data-collection
+> window at n>=8 per shop) and Part 12 **W7** (live validation - needs real
+> provider credentials).
 >
 > **Part 12 supersedes** Wave C.0.2 (the 50% discount is cancelled outright),
 > Part 11 F3's days-based unlock rule, and Part 8's Tier 2.5/2.6. Each of those
