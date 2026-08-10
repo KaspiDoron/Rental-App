@@ -131,12 +131,29 @@ export const viewport: Viewport = {
   ],
 };
 
-// Apply the saved theme before first paint to avoid a flash.
+// Apply the saved theme AND direction before first paint.
+//
+// The theme half avoids a colour flash. The direction half fixes I-6c: `dir`
+// was set only by the i18n provider's effect, which runs AFTER hydration - so
+// every Hebrew/Arabic cold load painted left-to-right and then snapped to RTL,
+// a visible mirror-flip on the first frame. Reading `wd_lang` here and stamping
+// `dir`/`lang` on <html> before paint makes the very first frame correct.
+//
+// The RTL set is inlined as a literal rather than imported because this string
+// runs before any module loads. It must stay in sync with LANGS' `rtl: true`
+// entries in src/lib/i18n.tsx - a test pins that it does.
 const themeScript = `
 try {
   var t = localStorage.getItem("wd_theme");
   if (!t) t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", t);
+} catch (e) {}
+try {
+  var l = localStorage.getItem("wd_lang");
+  if (l) {
+    document.documentElement.setAttribute("lang", l);
+    document.documentElement.setAttribute("dir", (l === "he" || l === "ar") ? "rtl" : "ltr");
+  }
 } catch (e) {}
 `;
 

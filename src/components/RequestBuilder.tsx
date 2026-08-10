@@ -448,11 +448,17 @@ export function RequestBuilder({
       {/* Nav */}
       <div className="flex items-center justify-between gap-2 border-t border-line/50 p-3">
         <button type="button" onClick={() => go(-1)} disabled={step === 0} className="btn btn-sm rounded-xl px-4 py-2 text-[13px] font-extrabold text-soft disabled:opacity-30">
-          ← {t("Back")}
+          {/* The arrow is a SEPARATE mirrorable span, not glued to the label.
+              A bare "←" is a fixed glyph: in Hebrew/Arabic the Back button then
+              points the way Next should, because the arrow says "left" while
+              the layout reads right-to-left. `.rtl-flip` (globals.css) mirrors
+              it under [dir="rtl"], and inline-block is required for the
+              transform to apply. */}
+          <span className="rtl-flip inline-block" aria-hidden>←</span> {t("Back")}
         </button>
         {step < total - 1 ? (
           <button type="button" onClick={() => go(1)} disabled={!canNext} className="btn btn-sm rounded-xl bg-brandblue px-5 py-2 text-[13px] font-extrabold text-white disabled:opacity-40">
-            {t("Next")} →
+            {t("Next")} <span className="rtl-flip inline-block" aria-hidden>→</span>
           </button>
         ) : (
           <span className="text-[11px] font-bold text-faint">{busy ? t("Searching...") : t("Ready 👇")}</span>
