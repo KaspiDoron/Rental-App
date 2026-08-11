@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { toTrip } from "@/lib/trips";
+import { isRealHunt } from "@/lib/session-life";
 
 export const dynamic = "force-dynamic";
 
@@ -139,8 +140,7 @@ export async function GET() {
   // row for every RFQ BUILD (source `panel` / `profiler`, `results: 0`, no
   // snapshot). Those are analytics, not hunts - listing them here padded Trips
   // with entries that open onto nothing.
-  const BUILD_ONLY = new Set(["panel", "profiler"]);
-  const hunts = searchRows.filter((r) => !BUILD_ONLY.has(String(r.source ?? "")));
+  const hunts = searchRows.filter((r) => isRealHunt(r.source));
 
   const asc = [...hunts].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const groups: SearchRow[][] = [];

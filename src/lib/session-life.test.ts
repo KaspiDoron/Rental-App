@@ -6,6 +6,7 @@ import {
   CLAMP_GRACE_MS,
   clampSince,
   isSessionFresh,
+  isRealHunt,
   parseSessionTtl,
   sessionFloorIso,
 } from "./session-life";
@@ -199,15 +200,32 @@ describe("all four surfaces ask the same question", () => {
 });
 
 describe("a request BUILD is not a hunt", () => {
-  it("the restore route drops panel/profiler rows before grouping", () => {
-    const route = readCode("src/app/api/deals/restore/route.ts");
-    expect(route).toMatch(/const BUILD_ONLY = new Set\(\["panel", "profiler"\]\);/);
-    expect(route).toMatch(/rows\.filter\(\(r\) => !BUILD_ONLY\.has\(String\(r\.source \?\? ""\)\)\)/);
+  it("the discriminator itself knows a hunt from a request build", () => {
+    expect(isRealHunt("google")).toBe(true);
+    expect(isRealHunt("demo")).toBe(true);
+    expect(isRealHunt("panel")).toBe(false);
+    expect(isRealHunt("profiler")).toBe(false);
+    // A legacy row written before `source` existed is a hunt, not a build - the
+    // build paths have always stamped one, so null can only be an old search.
+    expect(isRealHunt(null)).toBe(true);
+    expect(isRealHunt(undefined)).toBe(true);
   });
 
-  it("so does the Trips list, or it fills with entries that open onto nothing", () => {
-    const deals = readCode("src/app/api/deals/route.ts");
-    expect(deals).toMatch(/const BUILD_ONLY = new Set\(\["panel", "profiler"\]\);/);
+  it("and ALL FOUR consumers share it, so it cannot drift apart again", () => {
+    // It started as two inline copies in two routes. Then the warm-up gate
+    // turned out to need the same answer to decide whether anyone may pay us,
+    // and the funnel needed it to report a stage people had actually reached.
+    // Four copies of a rule is how a rule stops being one rule.
+    for (const p of [
+      "src/app/api/deals/restore/route.ts",
+      "src/app/api/deals/route.ts",
+      "src/lib/warmup.ts",
+      "src/lib/lifecycle.ts",
+    ]) {
+      const code = readCode(p);
+      expect(code, `${p} does not use the shared discriminator`).toMatch(/isRealHunt\(/);
+      expect(code, `${p} still carries its own copy`).not.toMatch(/new Set\(\["panel", "profiler"\]\)/);
+    }
   });
 
   it("...and those rows really are written on a bare RFQ build", () => {

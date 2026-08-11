@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
-import { isSessionFresh } from "@/lib/session-life";
+import { isSessionFresh, isRealHunt } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 export const dynamic = "force-dynamic";
@@ -108,8 +108,7 @@ export async function GET(req: Request) {
   // Filtered in JS rather than in the query on purpose: PostgREST's `not.in`
   // resolves to NULL for a NULL `source`, which would silently exclude legacy
   // rows that predate the column being written.
-  const BUILD_ONLY = new Set(["panel", "profiler"]);
-  const hunts = rows.filter((r) => !BUILD_ONLY.has(String(r.source ?? "")));
+  const hunts = rows.filter((r) => isRealHunt(r.source));
   if (!hunts.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
   rows = hunts;
 

@@ -23,6 +23,7 @@
 
 import "server-only";
 import { sbSelectStrict } from "./runtime-config";
+import { isRealHunt } from "./session-life";
 
 /** `null` means UNREADABLE - render dark, never as zero. */
 export type Maybe<T> = T | null;
@@ -115,9 +116,14 @@ export async function lifecycleReport(): Promise<LifecycleReport> {
       "signups"
     ),
     rows("wa_sessions", "select=email,status&limit=5000", degraded, "whatsapp links"),
+    // `searches`, not `search_sessions`. The latter is declared in schema.sql
+    // and has never been written by anything - so this stage of the funnel
+    // reported a flat zero for every cohort, which is also exactly what the
+    // warm-up gate saw when it decided nobody was allowed to buy a plan.
+    // `source` comes back so a bare request build does not count as a hunt.
     rows(
-      "search_sessions",
-      "select=user_email&limit=20000",
+      "searches",
+      "select=user_email,source&limit=20000",
       degraded,
       "searches"
     ),
@@ -138,7 +144,14 @@ export async function lifecycleReport(): Promise<LifecycleReport> {
       .filter((r) => r.status === "open" || r.status === "connected")
       .map((r) => String(r.email ?? "").toLowerCase())
   );
-  const searchers = new Set((searches ?? []).map((r) => String(r.user_email ?? "").toLowerCase()));
+  // Same discriminator the gate and the restore use: opening the request panel
+  // is not running a hunt, and counting it here would report a funnel stage
+  // people had not actually reached.
+  const searchers = new Set(
+    (searches ?? [])
+      .filter((r) => isRealHunt(r.source as string | null))
+      .map((r) => String(r.user_email ?? "").toLowerCase())
+  );
 
   const reachedBy = new Map<string, number>();
   const repliedBy = new Map<string, number>();

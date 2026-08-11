@@ -36,6 +36,7 @@
 import "server-only";
 import { getConfig, sbSelectStrict, sbUpdate } from "./runtime-config";
 import { nationalTail } from "./wa/phone-key";
+import { isRealHunt } from "./session-life";
 
 export interface WarmupTerm {
   /** Stable id - the admin dashboard groups stalled users by this. */
@@ -128,13 +129,37 @@ async function engagement(
   return { engaged: seen.size, replied: answered.size, unreadable: false };
 }
 
+/**
+ * How many real hunts this traveller has run.
+ *
+ * THIS READ USED TO POINT AT A TABLE NOTHING WRITES, AND IT CLOSED THE PAYWALL
+ * AGAINST EVERY USER.
+ *
+ * `search_sessions` is declared in schema.sql with `status` and `closed_at`
+ * columns and has exactly two references in the entire repository - this
+ * function and `lifecycleReport()`. Both are READS. Nothing has ever inserted a
+ * row. Because the table EXISTS, `sbSelectStrict` returned `{rows: []}` rather
+ * than `{error: "missing"}`, so this reported a confident `n: 0` with
+ * `unreadable: false` - the one shape the fail-warm rule above cannot rescue.
+ *
+ * The consequence was total and silent: `completedSearches >= 1` was
+ * permanently false, so `/api/billing/checkout` 403'd every non-tester with
+ * "unlock it by using the app a little more first", `UpgradeSheet` rendered the
+ * locked state forever, and a traveller who had run ten searches and collected
+ * five replies still saw "Searches run 0/1". The product could not take money,
+ * and the failure looked exactly like poor conversion.
+ *
+ * `searches` is the table that is really written (/api/vendors on every hunt),
+ * filtered through the shared `isRealHunt` discriminator so a bare request
+ * build - which /api/profile also records here - cannot buy someone a plan.
+ */
 async function searchCount(email: string): Promise<{ n: number; unreadable: boolean }> {
-  const read = await sbSelectStrict<{ id: string }>(
-    "search_sessions",
-    `select=id&user_email=eq.${encodeURIComponent(email)}&limit=100`
+  const read = await sbSelectStrict<{ id: number; source: string | null }>(
+    "searches",
+    `select=id,source&user_email=eq.${encodeURIComponent(email)}&limit=100`
   );
   if ("error" in read) return { n: 0, unreadable: read.error === "unavailable" };
-  return { n: read.rows.length, unreadable: false };
+  return { n: read.rows.filter((r) => isRealHunt(r.source)).length, unreadable: false };
 }
 
 async function whatsappLinked(email: string): Promise<{ linked: boolean; unreadable: boolean }> {

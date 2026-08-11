@@ -64,6 +64,28 @@ export function parseSessionTtl(raw: string | null | undefined): number {
  * stale, never as fresh: the whole failure mode here is old state presented as
  * current, so the direction of the doubt matters.
  */
+/**
+ * `searches.source` values that record a REQUEST BUILD rather than a hunt.
+ *
+ * /api/profile inserts a `searches` row every time an RFQ is built - both the
+ * LLM profiler and the zero-token tap-to-build panel - stamped `results: 0`,
+ * with no snapshot and no rfq. /api/vendors is the one that records a real
+ * search.
+ *
+ * Telling them apart matters in three places that had each answered it
+ * differently or not at all: the auto-restore (a build row is the newest
+ * "session" and carries no snapshot, so it fell through to an unbounded
+ * fallback), the Trips list (padded with entries that open onto nothing), and
+ * the warm-up gate - which counts completed searches and therefore decides
+ * whether anyone is allowed to pay us.
+ */
+const BUILD_ONLY_SOURCES = new Set(["panel", "profiler"]);
+
+/** Does this `searches` row represent a hunt the traveller actually ran? */
+export function isRealHunt(source: string | null | undefined): boolean {
+  return !BUILD_ONLY_SOURCES.has(String(source ?? ""));
+}
+
 export function isSessionFresh(
   startMs: number | null | undefined,
   nowMs: number,
