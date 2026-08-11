@@ -83,10 +83,13 @@ interface FieldKpis {
   conversionPct: number | null;
   escalationPct: number | null;
   responseLatencyMs: { p50: number | null; p95: number | null; samples: number };
+  /** Inputs that could not be read this run. Non-empty = the dashes below are
+   *  "we could not ask", not "nothing happened". */
+  degraded?: string[];
 }
 interface Health {
   webhookSilent?: boolean;
-  guardCounters?: Record<string, number>;
+  guardCounters?: Record<string, number | null>;
 }
 
 function ago(iso?: string | null): string {
@@ -205,25 +208,29 @@ export function EngineInspector() {
             queue showing anything: a terminal drop leaves no outbox row, so
             "Held right now" structurally cannot show it. */}
         {health?.guardCounters &&
-          Object.values(health.guardCounters).some((n) => n > 0) && (
+          Object.values(health.guardCounters).some((n) => n === null || (n ?? 0) > 0) && (
             <div className="rounded-2xl border border-line bg-card p-3">
               <div className="mb-2 text-[12px] font-extrabold uppercase text-soft">
                 Refused in the last 6h
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {Object.entries(health.guardCounters)
-                  .filter(([, n]) => n > 0)
-                  .sort((a, b) => b[1] - a[1])
+                  .filter(([, n]) => n === null || (n ?? 0) > 0)
+                  // An unreadable counter sorts FIRST: "we cannot see this" is
+                  // more urgent than any number we can.
+                  .sort((a, b) => (b[1] ?? Infinity) - (a[1] ?? Infinity))
                   .map(([kind, n]) => (
                     <span
                       key={kind}
                       className={`rounded-full px-2 py-1 text-[11px] font-bold ${
-                        kind === "send-dropped" || kind === "engine-graph-turn"
+                        n === null ||
+                        kind === "send-dropped" ||
+                        kind === "engine-graph-turn"
                           ? "bg-brandred-soft text-brandred"
                           : "bg-card2 text-ink"
                       }`}
                     >
-                      {kind.replace(/-/g, " ")}: {n}
+                      {kind.replace(/-/g, " ")}: {n === null ? "unreadable" : n}
                     </span>
                   ))}
               </div>
@@ -432,6 +439,15 @@ export function EngineInspector() {
                 <div className="mb-2 flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide text-faint">
                   Field KPIs (30-day)
                 </div>
+                {/* A dash means one of two very different things, and the panel
+                    has to say which. Without this line an outage renders
+                    identically to a genuinely quiet month. */}
+                {(field.degraded ?? []).length > 0 && (
+                  <div className="mb-2 rounded-xl bg-brandred-soft px-2.5 py-1.5 text-[11px] font-bold text-brandred">
+                    Could not read: {(field.degraded ?? []).join(", ")} - the figures below are
+                    incomplete, not low.
+                  </div>
+                )}
                 <div className="grid grid-cols-4 gap-2 text-center">
                   <KpiCell helpId="discountMargin" value={pct(field.discountMarginPct)} />
                   <KpiCell helpId="conversion" value={pct(field.conversionPct)} />

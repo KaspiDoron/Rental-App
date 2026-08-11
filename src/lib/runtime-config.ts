@@ -362,6 +362,52 @@ export async function sbSelectDark<T = Record<string, unknown>>(
   return read.rows;
 }
 
+/**
+ * THE COUNTER FOR A SURFACE THAT REPORTS TRUTH. A number, or `null` for
+ * "unknown" - the same three-way mapping as `sbSelectDark`, applied to
+ * `sbCount`.
+ *
+ * `sbCount` documents "returns 0 on any failure", which is right for a metric
+ * nobody acts on and wrong for a health page. Every drop counter on
+ * /api/admin/health read zero during an outage, so the twelve numbers that say
+ * whether messages are being dropped looked their most reassuring exactly when
+ * the system could not answer. The `.catch(() => 0)` those calls used to carry
+ * was dead code on top of that - `sbCount` cannot reject either.
+ *
+ * A missing table still counts zero: no row can exist in a table that was never
+ * migrated, and a fresh install must not paint its dashboard dark.
+ */
+export async function sbCountDark(table: string, filter: string): Promise<number | null> {
+  const conn = supabase();
+  if (!conn) return 0; // demo mode: no table, no rows - a real zero.
+  try {
+    const res = await timedFetch(`${conn.url}/rest/v1/${table}?select=id&${filter}`, {
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        Prefer: "count=exact",
+        Range: "0-0",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      if (res.status === 404) return 0;
+      if (res.status === 400) {
+        const body = await res.text().catch(() => "");
+        if (isMissingSchemaBody(body)) return 0;
+      }
+      return null;
+    }
+    const total = res.headers.get("content-range")?.split("/")[1];
+    const n = Number(total);
+    // A 2xx whose Content-Range we cannot parse is not a zero either - it is a
+    // response we did not understand.
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Insert rows into a Supabase table via the service role. No-op if unset. */
 export async function sbInsert(
   table: string,

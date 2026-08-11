@@ -37,7 +37,10 @@ const STATUS_META: Record<ServiceHealth["status"], { bar: string; width: string;
 
 export function HealthPanel() {
   const [services, setServices] = useState<ServiceHealth[] | null>(null);
-  const [guardCounters, setGuardCounters] = useState<Record<string, number> | null>(null);
+  // `null` for a single counter means UNKNOWN, not zero - sbCountDark can say
+  // so now, and a drop counter that reads zero during an outage is the most
+  // reassuring lie this page can tell.
+  const [guardCounters, setGuardCounters] = useState<Record<string, number | null> | null>(null);
   const [webhookSilent, setWebhookSilent] = useState(false);
   const [webhookLastAt, setWebhookLastAt] = useState<string | null>(null);
   // THE VITALS, not just the roll call. A services list can be all-green while
@@ -186,23 +189,28 @@ export function HealthPanel() {
         </div>
       )}
 
-      {guardCounters && Object.values(guardCounters).some((n) => n > 0) && (
-        <div className="mt-2 rounded-2xl bg-card2 p-2.5">
-          <div className="text-[11px] font-extrabold text-strong">Send-pipeline guardrails (24h)</div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {Object.entries(guardCounters)
-              .filter(([, n]) => n > 0)
-              .map(([k, n]) => (
-                <span
-                  key={k}
-                  className="rounded-full bg-card px-2 py-0.5 text-[10px] font-bold text-soft"
-                >
-                  {k}: {n}
-                </span>
-              ))}
+      {guardCounters &&
+        Object.values(guardCounters).some((n) => n === null || (n ?? 0) > 0) && (
+          <div className="mt-2 rounded-2xl bg-card2 p-2.5">
+            <div className="text-[11px] font-extrabold text-strong">
+              Send-pipeline guardrails (24h)
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {Object.entries(guardCounters)
+                .filter(([, n]) => n === null || (n ?? 0) > 0)
+                .map(([k, n]) => (
+                  <span
+                    key={k}
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                      n === null ? "bg-brandred-soft text-brandred" : "bg-card text-soft"
+                    }`}
+                  >
+                    {k}: {n === null ? "unreadable" : n}
+                  </span>
+                ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
       {vitals && (
         <div className="mt-2 space-y-2">
           {/* THE WATCHDOG. Nothing drains the outbox or fires a scheduled

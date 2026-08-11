@@ -45,8 +45,21 @@ export interface BatchProgressInput {
   queued: number;
   /** Introductions left in this window, or null when unreadable. */
   introRemaining: number | null;
-  /** The sender health verdict, as the guard classified it. */
-  health: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention" | null;
+  /**
+   * The sender health verdict, as the guard classified it. `"unknown"` and
+   * `null` mean the same thing here - we have no verdict - and neither is a
+   * stall reason: the bar must not claim the queue is held on evidence we do
+   * not have, any more than it may claim it is flowing.
+   */
+  health:
+    | "healthy"
+    | "pacing"
+    | "paused"
+    | "recovering"
+    | "disconnected"
+    | "attention"
+    | "unknown"
+    | null;
   /** ISO time the queue simulator expects the last intro to land. */
   etaDoneBy?: string | null;
   /** ISO time the introductions window next frees a slot. */

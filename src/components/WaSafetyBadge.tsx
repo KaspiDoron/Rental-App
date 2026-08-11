@@ -12,7 +12,7 @@ import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 
 export interface WaSafety {
-  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention";
+  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention" | "unknown";
   reason?: string;
   publicReason?: string;
   pausedUntil?: string;
@@ -52,6 +52,16 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
           cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
           icon: "shield",
           label: t("Some messages need a look"),
+        }
+      : safety.state === "unknown"
+      ? {
+          // Deliberately NEUTRAL, not green and not red. We are not claiming
+          // the number is fine and we are not alarming anyone about a problem
+          // we have no evidence for - we simply cannot see right now, and the
+          // pill should look like that rather than like either verdict.
+          cls: "bg-card2 text-soft",
+          icon: "clock",
+          label: t("Checking your messaging status"),
         }
       : {
           cls: "bg-brandred-soft text-brandred",

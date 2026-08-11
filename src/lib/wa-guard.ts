@@ -2920,7 +2920,16 @@ export async function releaseSendClaim(
 // ---------------------------------------------------------------------------
 
 export interface SenderSafety {
-  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention";
+  /**
+   * `unknown` is not a health verdict - it is the ABSENCE of one. Every other
+   * state is a claim about the traveller's number; this one is a claim about
+   * us. It exists because the two inputs that produce "healthy" (an empty
+   * queue, a readable reputation row) are indistinguishable from an unreadable
+   * database when read through the permissive reader, so a Supabase outage used
+   * to render as a green "All good" pill on the traveller's screen while
+   * nothing at all was being sent.
+   */
+  state: "healthy" | "pacing" | "paused" | "recovering" | "disconnected" | "attention" | "unknown";
   /** RAW internal reason - admin surfaces only, never shown to travellers. */
   reason?: string;
   /** Calm, outcome-language explanation safe for the traveller UI. */
@@ -3005,14 +3014,22 @@ async function collectSafetySignals(
 }
 
 export async function senderSafety(senderKey: string): Promise<SenderSafety> {
-  const [rep, outbox, signals] = await Promise.all([
-    getReputation(senderKey).catch(() => null),
-    sbSelect<{ meta: { reason?: string } | null }>(
+  const [rep, outboxRead, signals] = await Promise.all([
+    // STRICT on both inputs that can manufacture a green verdict. getReputation
+    // (permissive) INSERTS a fresh trust-20 row when its read comes back empty,
+    // so an outage produced a brand-new-healthy-number reputation out of thin
+    // air; getReputationStrict answers null on `unavailable` and only then.
+    getReputationStrict(senderKey).catch(() => null),
+    sbSelectStrict<{ meta: { reason?: string } | null }>(
       "wa_outbox",
       `select=meta&sender_key=eq.${encodeURIComponent(senderKey)}&limit=50`
-    ).catch(() => [] as { meta: { reason?: string } | null }[]),
+    ),
     collectSafetySignals(senderKey).catch(() => null),
   ]);
+  // A missing (un-migrated) outbox table is genuinely empty; an unreachable one
+  // is not. Only the second can turn "no rows" into a lie.
+  const outboxUnreadable = "error" in outboxRead && outboxRead.error === "unavailable";
+  const outbox = "rows" in outboxRead ? outboxRead.rows : [];
 
   const queued = outbox.length;
   const queueReasons = [
@@ -3072,6 +3089,30 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
         signals,
       };
     }
+  }
+  // NOTHING BELOW THIS LINE CAN BE TRUSTED IF WE COULD NOT READ.
+  //
+  // Placed AFTER the pause check and the signal classifier on purpose: those
+  // two run on positive evidence (a stored pause instant, an observed drop or
+  // dead connection), and positive evidence about a real problem outranks our
+  // own blindness. What must never survive an outage is the pair of INFERENCES
+  // below - "queue is empty, therefore healthy" and "queue is non-empty,
+  // therefore pacing" - because both read an empty array as a fact.
+  if (outboxUnreadable || rep === null) {
+    return {
+      state: "unknown",
+      reason: outboxUnreadable
+        ? "queue state unreadable - cannot confirm what is or is not sending"
+        : "reputation row unreadable - cannot confirm this number's standing",
+      publicReason:
+        "We can't check your messaging status right now. Nothing is lost - this refreshes on its own in a moment.",
+      trustScore,
+      riskScore,
+      queued: 0,
+      queueReasons: [],
+      publicQueueReasons: [],
+      signals: signals ?? undefined,
+    };
   }
   if (queued > 0) {
     return {

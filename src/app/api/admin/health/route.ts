@@ -164,7 +164,7 @@ export async function GET() {
   // the send pipeline - a spike here is the first sign something is being
   // held back (cancellations firing, claims contended, fail-closed holds,
   // structurally illegal phase jumps).
-  const { sbSelect, sbCount } = await import("@/lib/runtime-config");
+  const { sbSelect, sbCountDark } = await import("@/lib/runtime-config");
   const sinceIso = new Date(Date.now() - 24 * 3600_000).toISOString();
   const guardKinds = [
     "cancelled-send-blocked",
@@ -211,26 +211,28 @@ export async function GET() {
   // header with head=true, so this is twelve tiny HEAD-shaped requests rather
   // than one large row transfer - cheaper than what it replaces, and each
   // number is now independent of the others' volume.
-  // The `.catch(() => 0)` that used to sit on each of these was dead: `sbCount`
-  // returns 0 on every failure by its own documented design, so the catch could
-  // never run and the zero it "provided" was the same zero the reader already
-  // gives. Removing it changes nothing except the impression that a failure is
-  // being handled here. It is not - and on a HEALTH page, a count that reads
-  // zero during an outage is the same fail-green shape as everything else in
-  // this commit. Left as a count for now; the honest version needs a
-  // count-with-degraded reader, which is its own change.
+  // AND A ZERO THAT MEANS "WE COULD NOT ASK" IS THE WORST NUMBER ON THE PAGE.
+  //
+  // These used to carry `.catch(() => 0)`, which was dead: `sbCount` returns 0
+  // on every failure by its own documented design, so the catch could never run
+  // and the zero it "provided" was the same zero the reader already gives. The
+  // note that stood here said the honest version needed a count-with-degraded
+  // reader. `sbCountDark` is that reader: a number, or null for unknown. So the
+  // twelve counters that say whether sends are being DROPPED no longer read
+  // their most reassuring value at the exact moment nothing can be read.
   const counts = await Promise.all(
     guardKinds.map((k) =>
-      sbCount(
+      sbCountDark(
         "agent_events",
         `kind=eq.${encodeURIComponent(k)}&created_at=gte.${encodeURIComponent(sinceIso)}`
       )
     )
   );
-  const guardCounters: Record<string, number> = {};
+  const guardCounters: Record<string, number | null> = {};
   guardKinds.forEach((k, i) => {
     guardCounters[k] = counts[i];
   });
+  const guardCountersUnreadable = counts.some((n) => n === null);
 
   // WEBHOOK SILENCE DETECTOR: the launch-blocker signature is "we sent messages
   // recently, ≥1 session is open, but NO inbound arrived and NO webhook was
@@ -304,6 +306,10 @@ export async function GET() {
   return NextResponse.json({
     services,
     guardCounters,
+    // A null anywhere in guardCounters means that counter is UNKNOWN, not zero.
+    // Flagged separately so a client can label the whole block at a glance
+    // rather than having to notice one dash among twelve numbers.
+    guardCountersUnreadable,
     webhookSilent,
     webhookLastAcceptedAt: webhookOk30[0]?.created_at ?? null,
     // The cron watchdog. "never" and "stale" are different failures with

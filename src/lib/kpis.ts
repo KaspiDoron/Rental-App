@@ -11,7 +11,7 @@
 // the telemetry safety score already exist (api/admin/costs, senderSafety).
 
 import "server-only";
-import { sbSelect } from "./runtime-config";
+import { sbSelectDark } from "./runtime-config";
 
 export interface OfferMargin {
   price_per_day: number | string | null;
@@ -51,6 +51,20 @@ export interface FieldKpis {
   responseLatencyMs: { p50: number | null; p95: number | null; samples: number };
   windowDays: number;
   note: string;
+  /**
+   * Inputs that could not be READ this run, by name. Non-empty means the
+   * numbers above are computed from a partial view and must be rendered as
+   * unknown rather than as a quiet month.
+   *
+   * Every read here used to be `sbSelect(...).catch(() => [])` - a permissive
+   * reader whose catch could never fire, chained to a fallback identical to
+   * what the reader already returns. So a total Supabase outage produced a
+   * complete, confident KPI page: 0 searches, 0 bookings, null conversion, and
+   * an escalation rate of null that reads as "no humans needed". The one page
+   * whose job is to say how the fleet is doing answered "quietly" when it could
+   * not answer at all.
+   */
+  degraded: string[];
 }
 
 const sinceIso = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
@@ -77,30 +91,51 @@ export function distinctThreads(
 
 export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   const since = sinceIso(windowDays);
-  const [offers, searches, bookings, takeovers, threads] = await Promise.all([
-    sbSelect<OfferMargin>(
+  const [offersRead, searchesRead, bookingsRead, takeoversRead, threadsRead] = await Promise.all([
+    sbSelectDark<OfferMargin>(
       "offers",
       `select=price_per_day,list_price_per_day&created_at=gte.${since}&limit=10000`
-    ).catch(() => []),
-    sbSelect<{ id: number }>("searches", `select=id&created_at=gte.${since}&limit=10000`).catch(() => []),
-    sbSelect<{ id: number }>("bookings", `select=id&created_at=gte.${since}&limit=10000`).catch(() => []),
-    sbSelect<{ user_email: string | null; vendor_id: string | null }>(
+    ),
+    sbSelectDark<{ id: number }>("searches", `select=id&created_at=gte.${since}&limit=10000`),
+    sbSelectDark<{ id: number }>("bookings", `select=id&created_at=gte.${since}&limit=10000`),
+    sbSelectDark<{ user_email: string | null; vendor_id: string | null }>(
       "agent_events",
       `select=user_email,vendor_id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${since}&limit=10000`
-    ).catch(() => []),
+    ),
     // engine-v3-turn events are the response-latency source (each carries
     // `latencyMs` on a delivered reply) AND, once reduced to distinct threads,
     // the escalation denominator.
-    sbSelect<{ detail: string; user_email: string | null; vendor_id: string | null }>(
+    sbSelectDark<{ detail: string; user_email: string | null; vendor_id: string | null }>(
       "agent_events",
       `select=detail,user_email,vendor_id&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
-    ).catch(() => []),
+    ),
   ]);
+  // null = unreadable. Name it, then compute from [] so the shape stays whole -
+  // but every derived number that depended on an unreadable input is forced to
+  // null below rather than to the flattering zero.
+  const degraded: string[] = [];
+  const take = <T,>(rows: T[] | null, label: string): T[] => {
+    if (rows === null) {
+      degraded.push(label);
+      return [];
+    }
+    return rows;
+  };
+  const offers = take(offersRead, "offers");
+  const searches = take(searchesRead, "searches");
+  const bookings = take(bookingsRead, "bookings");
+  const takeovers = take(takeoversRead, "takeover events");
+  const threads = take(threadsRead, "engine turns");
 
   const { pct: discountMarginPct, sampled } = avgDiscountPct(offers);
-  const conversionPct = searches.length
-    ? Number(((bookings.length / searches.length) * 100).toFixed(1))
-    : null;
+  // A ratio is only as trustworthy as BOTH of its sides. If either read failed,
+  // the answer is unknown - not a rate computed against a zero we invented.
+  const conversionPct =
+    searchesRead === null || bookingsRead === null
+      ? null
+      : searches.length
+        ? Number(((bookings.length / searches.length) * 100).toFixed(1))
+        : null;
   // ESCALATION IS PER CONVERSATION, NOT PER TURN.
   //
   // The denominator was the raw count of engine-v3-turn EVENTS - one row per
@@ -114,9 +149,12 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   // escalation, not two.
   const escalated = distinctThreads(takeovers);
   const conversations = distinctThreads(threads);
-  const escalationPct = conversations
-    ? Number(((escalated / conversations) * 100).toFixed(1))
-    : null;
+  const escalationPct =
+    takeoversRead === null || threadsRead === null
+      ? null
+      : conversations
+        ? Number(((escalated / conversations) * 100).toFixed(1))
+        : null;
 
   // Response latency p50/p95 from the per-turn stamps (delivered replies only).
   const latencies: number[] = [];
@@ -130,7 +168,7 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   }
 
   return {
-    discountMarginPct,
+    discountMarginPct: offersRead === null ? null : discountMarginPct,
     offersSampled: sampled,
     conversionPct,
     searches30d: searches.length,
@@ -143,5 +181,6 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
     },
     windowDays,
     note: "Durable, last 30 days (sampled to 10k rows). Latency = per-turn engine response time on delivered replies.",
+    degraded,
   };
 }

@@ -193,17 +193,26 @@ function cycleStart(cadence: Cadence): Date | null {
 }
 
 /** Tokens we have spent per provider within THIS provider's reset window. */
-async function cycleUsage(): Promise<Record<string, number>> {
+async function cycleUsage(): Promise<{ byProvider: Record<string, number>; unreadable: boolean }> {
   const out: Record<string, number> = {};
   try {
-    const { sbSelect } = await import("./runtime-config");
+    const { sbSelectDark } = await import("./runtime-config");
     // One query over the widest window (a month), then bucket per provider by
     // its own cadence. Cheap enough for an admin-only panel.
     const monthStart = cycleStart("month")!;
-    const rows = await sbSelect<{ provider: string; tokens: number; created_at: string }>(
+    // "0 TOKENS USED THIS CYCLE" IS THE MOST DANGEROUS NUMBER ON THIS PANEL.
+    //
+    // It reads as headroom. The owner uses it to decide whether a free tier is
+    // about to run out, and the permissive reader returned [] for a missing
+    // connection, a non-2xx and a thrown exception alike - so a Supabase outage
+    // rendered every provider at zero spend with a full allowance remaining,
+    // right when nothing could be verified. `null` is now reachable and the
+    // caller renders it as unknown rather than as room to spend.
+    const rows = await sbSelectDark<{ provider: string; tokens: number; created_at: string }>(
       "ai_usage",
       `select=provider,tokens,created_at&created_at=gte.${monthStart.toISOString()}&limit=100000`
     );
+    if (rows === null) return { byProvider: out, unreadable: true };
     const dayStartMs = cycleStart("day")!.getTime();
     const monthStartMs = monthStart.getTime();
     for (const r of rows) {
@@ -215,9 +224,11 @@ async function cycleUsage(): Promise<Record<string, number>> {
       }
     }
   } catch {
-    /* usage is best-effort - the panel still shows in-memory "used here" */
+    // A throw is also "we do not know" - the in-memory "used here" counters
+    // still render, but the cycle total must not claim zero.
+    return { byProvider: out, unreadable: true };
   }
-  return out;
+  return { byProvider: out, unreadable: false };
 }
 
 // Current Gemini model used by every Gemini call (chat + vision).
@@ -344,7 +355,7 @@ export async function aiStatus() {
   const list = await allProviders();
   const preferred = ((await getConfig("AI_PROVIDER")) || "").toLowerCase();
   const s = usageStore();
-  const cyc = await cycleUsage();
+  const { byProvider: cyc, unreadable: cycUnreadable } = await cycleUsage();
   const fails = await lastFailures();
 
   return Promise.all(
@@ -395,7 +406,10 @@ export async function aiStatus() {
         failures: s[p.name]?.failures ?? 0,
         remaining, // null = the provider does not expose remaining quota
         // Free-tier cycle: OUR measured spend this window + the documented reset.
-        usedThisCycle: cyc[p.name] ?? 0,
+        // null = the usage table could not be read. NOT zero: a zero here reads
+        // as "plenty of allowance left", which is the opposite of the truth
+        // when we cannot see the ledger at all.
+        usedThisCycle: cycUnreadable ? null : (cyc[p.name] ?? 0),
         cadence: meta.cadence, // "day" | "month" | "none"
         cadenceNote: meta.note,
         // WHAT THE PROVIDER SAID, not just how often it said no. A drifted

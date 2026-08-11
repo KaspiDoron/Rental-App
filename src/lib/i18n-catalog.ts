@@ -115,6 +115,7 @@ export const I18N_CATALOG: string[] = [
   "Checking sign-in options",
   "Checking the link...",
   "Checking your WhatsApp link…",
+  "Checking your messaging status",
   "Choose a password (6+ characters)",
   "Choose what to share",
   "Choose your language",

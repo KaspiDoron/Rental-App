@@ -1805,7 +1805,15 @@ export default function AdminPage() {
                   </div>
                   {p.cadence && p.cadence !== "none" && (
                     <div className="text-[11px] text-soft">
-                      This {p.cadence}: {Number(p.usedThisCycle ?? 0).toLocaleString()} tokens used
+                      {/* `?? 0` here would have put the lie back one layer up:
+                          null means the usage ledger could not be read, and a
+                          zero reads as unused allowance. */}
+                      This {p.cadence}:{" "}
+                      {p.usedThisCycle === null || p.usedThisCycle === undefined ? (
+                        <span className="font-bold text-brandred">usage unreadable</span>
+                      ) : (
+                        `${Number(p.usedThisCycle).toLocaleString()} tokens used`
+                      )}
                       {" · "}
                       <span className="text-faint">
                         free tier resets {p.cadence === "day" ? "daily" : "monthly"}

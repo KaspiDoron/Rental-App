@@ -75,7 +75,10 @@ describe("the panel renders what it already fetched", () => {
     // rendered, and the two most alarming kinds are coloured as such.
     expect(ui).toMatch(/Refused in the last 6h/);
     expect(ui).toMatch(/Object\.entries\(health\.guardCounters\)/);
-    expect(ui).toMatch(/kind === "send-dropped" \|\| kind === "engine-graph-turn"/);
+    // The alarming colour now also covers `n === null` - a counter we could not
+    // READ is at least as urgent as a counter with a number in it - so the
+    // condition spans lines. Pin the two kinds, not the formatting.
+    expect(ui).toMatch(/kind === "send-dropped" \|\|\s*\n?\s*kind === "engine-graph-turn"/);
   });
 
   it("and the threads that need a look are listed with their reasons", () => {
