@@ -375,11 +375,58 @@ banner is gone from the public pages.
    unchanged - unreadable still means KILLED. Tests:
    `src/lib/kill-switch-latency.test.ts`, `src/lib/fail-closed.test.ts`.
 
+## The deaf-session detector (W-18)
+
+`session_deaf` was a declared risk kind that the dashboard SUMS
+(`deaf: sum(buckets, "session_deaf")`) and that **nothing ever wrote**. The
+tile could only ever read zero - an absent sensor rendering as good news, inside
+the machinery built to catch exactly that.
+
+`looksDeaf` (`wa/fleet-truth.ts`) was written for the condition and never
+called: an instance that says `open`, that Evolution still lists (so keepalives
+are fine), whose message count has **not moved while we were actively sending**.
+It needs a prior sample, so nothing on the dashboard's live read could have
+called it. The hourly rollup now carries one forward in
+`wa_risk_snapshots.fleet` and emits the events.
+
+Three ways of not knowing each darken instead of reporting "no deaf sessions":
+`deaf:fleet-unreadable`, `deaf:no-prior`, `deaf:sends-unreadable`. **Run the
+`fleet jsonb` migration** (it is an `add column if not exists`, safe to re-run)
+or the detector stays permanently dark - which is honest, but blind.
+
+## Two corrections to the anti-ban review
+
+Recorded because both were carried as findings and neither survives contact
+with the code:
+
+- **"Four protections are exported and never called"** - not true as written.
+  The check that produced it excluded each module's own file, so intra-file
+  callers were invisible; `wa/proxy.ts`'s four (`countryFor`,
+  `renderProxyTemplate`, `mintProxySessionId`, `stickyProxySession`) are all
+  called by `templateProxyUrl`, which `evolution.ts:parseProxy` uses on every
+  link. A proper sweep found **one** genuinely uncalled protection - `looksDeaf`,
+  now wired above. The rest of the uncalled exports are dashboard tile helpers.
+- **The `poissonPause` gap** was already fixed in an earlier wave (it was gated
+  on `fast`, which every drain caller set); `skipJitter` is now its own flag.
+
 ## Still blocked on owner input (not skipped - waiting)
 
 These are carried forward unchanged. None is code-blocked; each needs a
 decision or a credential only the owner has.
 
+- **Speed vs safety for COLD INTROS.** `FAST_DISPATCH` defaults **on**, which
+  sets `ignore_business_hours: true` - the whole introduction batch fires
+  immediately, at any hour, paced only by the min-gap. That is a deliberate
+  owner directive ("dispatch the whole intro batch within ~10 min", tasks R2 /
+  #93), and it is also the single largest behavioural risk on the cold lane:
+  unsolicited traffic at 03:00 local is the pattern WhatsApp meters, and
+  reciprocal replies are not. **It has deliberately not been changed.** Reversing
+  a dial the owner set, on an unanswered question, is not a bug fix. Say which
+  you want and it is one line:
+  - keep it (fast intros, current behaviour), or
+  - `FAST_DISPATCH=off` in Admin -> Keys, which restores business-hours deferral
+    for cold introductions only. Agent REPLIES already skip that clamp and are
+    unaffected either way, so answering "off" does not slow the agents down.
 - **GCP live provisioning + deploy** - needs the project, billing account and
   domain. Artifacts are in `infra/gcp/`.
 - **F2 agency scanner** and **Part 12 W7** - awaiting a decision on scope.

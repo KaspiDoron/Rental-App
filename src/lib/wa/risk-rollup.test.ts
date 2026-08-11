@@ -90,14 +90,31 @@ describe("AN UNREADABLE HOUR IS WRITTEN AS DARK, NOT SKIPPED", () => {
     // "Nothing happened" is exactly what a dead sensor looks like.
     selectResults["wa_risk_events"] = { error: "missing" };
     const snap = (await rollupBucket(NOW))!;
-    expect(snap.dark_signals).toEqual(["events:missing"]);
+    // The EVENTS sensor's darkness, named. Containment rather than equality
+    // since W-18: the deaf-session detector is a second, independent sensor
+    // that reports its own darkness into the same array, and asserting the
+    // whole array would make adding an honest sensor look like a regression.
+    expect(snap.dark_signals).toContain("events:missing");
+    expect(snap.dark_signals).not.toContain("events:unavailable");
     expect(inserts[0].table).toBe("wa_risk_snapshots");
-    expect(inserts[0].rows[0].dark_signals).toEqual(["events:missing"]);
+    expect(inserts[0].rows[0].dark_signals).toContain("events:missing");
   });
 
   it("an outage is distinguishable from a missing table", async () => {
     selectResults["wa_risk_events"] = { error: "unavailable" };
-    expect((await rollupBucket(NOW))!.dark_signals).toEqual(["events:unavailable"]);
+    const signals = (await rollupBucket(NOW))!.dark_signals;
+    expect(signals).toContain("events:unavailable");
+    expect(signals).not.toContain("events:missing");
+  });
+
+  it("one dark sensor never masks another", async () => {
+    // Both sensors are out here: the event table is unreadable AND there is no
+    // fleet reading. Two independent facts, both named. A design that kept one
+    // "the" dark reason would silently drop whichever lost the race.
+    selectResults["wa_risk_events"] = { error: "unavailable" };
+    const signals = (await rollupBucket(NOW))!.dark_signals;
+    expect(signals).toContain("events:unavailable");
+    expect(signals.some((s) => s.startsWith("deaf:"))).toBe(true);
   });
 
   it("rolls up the hour that just CLOSED, never the live one", async () => {

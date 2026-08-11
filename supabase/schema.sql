@@ -1486,8 +1486,20 @@ create table if not exists public.wa_risk_snapshots (
   accounts           int not null default 0,
   counts             jsonb,           -- {kind: n}
   dark_signals       text[],
-  truncated_signals  text[]
+  truncated_signals  text[],
+  -- One reading per Evolution instance: {instance: {state, messages}}.
+  --
+  -- A DEAF SESSION IS ONLY VISIBLE ACROSS TWO SAMPLES. `looksDeaf`
+  -- (wa/fleet-truth) is a pure function of a PRIOR and a CURRENT reading: an
+  -- instance that says `open`, that Evolution still lists, and whose message
+  -- count has not moved while we were actively sending. There is no way to see
+  -- that in one sample, so the hourly rollup carries its own reading forward.
+  -- Nullable and read defensively - a deployment that has not run this
+  -- migration simply reports the detector as dark, never as "no deaf
+  -- instances".
+  fleet              jsonb
 );
+alter table public.wa_risk_snapshots add column if not exists fleet jsonb;
 create index if not exists wa_risk_snapshots_bucket_idx
   on public.wa_risk_snapshots (bucket desc);
 alter table public.wa_risk_snapshots enable row level security;

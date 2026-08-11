@@ -11,7 +11,8 @@
 // last N rows. Nothing on the read path touches the event table.
 
 import { sbSelectStrict, sbInsert, pgTimestamp } from "../runtime-config";
-import { RISK_KINDS, type RiskKind } from "./risk-events";
+import { RISK_KINDS, noteRisk, type RiskKind } from "./risk-events";
+import { looksDeaf } from "./fleet-truth";
 import { worseOf, rollupStale, type TileState } from "./risk-verdict";
 
 export const BUCKET_MS = 3_600_000;
@@ -37,6 +38,43 @@ export interface RiskSnapshot {
   counts: Partial<Record<RiskKind, number>>;
   dark_signals: string[];
   truncated_signals: string[];
+  /** One reading per instance, carried forward so the next hour has a prior. */
+  fleet?: FleetSample;
+}
+
+/** `{instance: {state, messages}}` - the two fields `looksDeaf` compares. */
+export type FleetSample = Record<string, { state: string | null; messages: number | null }>;
+
+/**
+ * THE DEAF-SESSION DETECTOR, FINALLY CONNECTED (W-18).
+ *
+ * `session_deaf` is a declared risk kind, the dashboard SUMS it
+ * (`deaf: sum(buckets, "session_deaf")`), and nothing anywhere emitted it. So
+ * that tile has always read a confident zero - the fail-green shape this tier
+ * exists to undo, sitting inside the tier itself.
+ *
+ * `looksDeaf` was written for exactly this and never called. It cannot work on
+ * one sample: the condition is an instance that says `open`, that Evolution
+ * still lists, and whose message count has NOT MOVED while we were actively
+ * sending. Two readings and a send count. The rollup is the only thing in the
+ * system that runs on a schedule and can carry a prior forward, so it does.
+ *
+ * Returns the instance names that look deaf. Pure, so the comparison is
+ * testable without a fleet or a database.
+ */
+export function deafInstances(
+  prev: FleetSample | null | undefined,
+  next: FleetSample,
+  outboundSince: number
+): string[] {
+  if (!prev) return [];
+  const out: string[] = [];
+  for (const [name, cur] of Object.entries(next)) {
+    const before = prev[name];
+    if (!before) continue; // no prior for this instance - not a judgement
+    if (looksDeaf(before, cur, outboundSince)) out.push(name);
+  }
+  return out.sort();
 }
 
 interface RawEvent {
@@ -106,6 +144,53 @@ export async function rollupBucket(nowMs: number): Promise<RiskSnapshot | null> 
     snap = { bucket: from, ...aggregate(res.rows, { truncated: res.rows.length >= ROLLUP_ROW_CAP }) };
   }
 
+  // ---- The deaf-session pass. Never allowed to cost the bucket. -----------
+  //
+  // Everything here is best-effort and each failure DARKENS rather than
+  // reporting a zero: "we could not tell" and "no instance is deaf" are
+  // different facts, and only the second one is reassuring.
+  try {
+    const { fleetTruth } = await import("./fleet-truth");
+    const fleet = await fleetTruth().catch(() => null);
+    if (!fleet) {
+      snap.dark_signals = [...snap.dark_signals, "deaf:fleet-unreadable"];
+    } else {
+      const sample: FleetSample = {};
+      for (const i of fleet.instances) sample[i.name] = { state: i.state, messages: i.messages };
+      snap.fleet = sample;
+
+      const [prior, outbound] = await Promise.all([
+        priorFleetSample(from),
+        outboundInWindow(from, to),
+      ]);
+      if (prior === undefined || outbound === null) {
+        // No prior (first run, or the migration has not been applied) or an
+        // unreadable send count. Either way the detector cannot speak.
+        snap.dark_signals = [
+          ...snap.dark_signals,
+          prior === undefined ? "deaf:no-prior" : "deaf:sends-unreadable",
+        ];
+      } else {
+        for (const name of deafInstances(prior, sample, outbound)) {
+          // The instance name is derived from the user's email (a stable
+          // hash), which is exactly what `sender_key` wants - and it is the
+          // only account identity a fleet listing carries.
+          await noteRisk({
+            senderKey: name,
+            kind: "session_deaf",
+            detail: {
+              host: fleet.instances.find((i) => i.name === name)?.host ?? "",
+              outboundInHour: outbound,
+              messages: sample[name]?.messages ?? null,
+            },
+          });
+        }
+      }
+    }
+  } catch {
+    snap.dark_signals = [...snap.dark_signals, "deaf:fleet-unreadable"];
+  }
+
   await sbInsert(
     "wa_risk_snapshots",
     [
@@ -116,12 +201,48 @@ export async function rollupBucket(nowMs: number): Promise<RiskSnapshot | null> 
         counts: snap.counts,
         dark_signals: snap.dark_signals,
         truncated_signals: snap.truncated_signals,
+        ...(snap.fleet ? { fleet: snap.fleet } : {}),
       },
     ],
     "bucket"
   ).catch(() => false);
 
   return snap;
+}
+
+/**
+ * The fleet reading from the most recent EARLIER bucket.
+ *
+ * `undefined` means "no usable prior" - no row, no `fleet` column (the
+ * migration has not run), or an unreadable table. All three must darken the
+ * detector rather than produce an empty comparison, because comparing against
+ * `{}` would find nothing deaf and look exactly like good news.
+ */
+async function priorFleetSample(beforeIso: string): Promise<FleetSample | undefined> {
+  const res = await sbSelectStrict<{ fleet: FleetSample | null }>(
+    "wa_risk_snapshots",
+    `select=fleet&bucket=lt.${pgTimestamp(beforeIso)}&order=bucket.desc&limit=1`
+  );
+  if ("error" in res) return undefined;
+  const f = res.rows[0]?.fleet;
+  return f && typeof f === "object" && Object.keys(f).length > 0 ? f : undefined;
+}
+
+/**
+ * How many messages we actually sent during the closed hour.
+ *
+ * `looksDeaf` requires this: a flat message count on an idle instance is an
+ * idle instance, not a deaf one, and reporting the difference as deafness
+ * would fire on every account overnight. Null = unreadable, which darkens.
+ */
+async function outboundInWindow(fromIso: string, toIso: string): Promise<number | null> {
+  const res = await sbSelectStrict<{ id: number }>(
+    "whatsapp_messages",
+    `select=id&direction=eq.outbound&received_at=gte.${pgTimestamp(fromIso)}` +
+      `&received_at=lt.${pgTimestamp(toIso)}&limit=${ROLLUP_ROW_CAP}`
+  );
+  if ("error" in res) return res.error === "missing" ? 0 : null;
+  return res.rows.length;
 }
 
 // RULE E8 - a snapshot older than two periods darkens the WHOLE panel, not the
