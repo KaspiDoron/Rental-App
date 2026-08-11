@@ -252,6 +252,29 @@ async function buildSession(
   } catch {
     /* no grounded benchmark -> the pass refuses to invent one */
   }
+  // WHAT PAST TRAVELLERS ACTUALLY LANDED HERE.
+  //
+  // This was pinned to `null`, and `dealPrior` - which computes the median
+  // achieved price and typical discount from `deal_memory` - had ZERO callers.
+  // `rememberDeal` IS wired (negotiate/close-deal:208), so the table filled up
+  // forever and was never read: after a thousand closed deals in Koh Samui, the
+  // thousand-and-first negotiation anchored on exactly the same information as
+  // the first. The prompt line that consumes it (pass.ts:47, "Past travellers
+  // here landed around N/day") was permanently empty, and the self-improvement
+  // loop the module header advertises was a no-op.
+  //
+  // Same region key the writer uses (lowercased free text), and dealPrior
+  // already returns null below three samples so a thin prior cannot over-anchor.
+  let priors: SessionSnapshot["priors"] = null;
+  try {
+    const regionKey = String(input.ctx.region ?? "").trim().toLowerCase();
+    if (regionKey) {
+      const { dealPrior } = await import("./memory");
+      priors = await dealPrior(regionKey, input.rfq);
+    }
+  } catch {
+    /* a prior is grounding, never a requirement - the turn proceeds without it */
+  }
   // Few-shot coaching (owner teaching + Ops learning + distilled winning
   // traces) - the primary engine now learns like the graph engine does.
   // Best-effort; "" when nothing has been taught/distilled yet.
@@ -279,7 +302,7 @@ async function buildSession(
     benchmark,
     lowest,
     rivals,
-    priors: null,
+    priors,
     coaching,
   };
 }

@@ -244,3 +244,38 @@ describe("the opener says what the traveller actually asked for", () => {
     expect(seen.size).toBeGreaterThan(3);
   });
 });
+
+describe("the deal-memory loop reads what it writes", () => {
+  const live = readCode("src/lib/spte/live.ts");
+
+  it("REGRESSION: priors is no longer pinned to null", () => {
+    // `rememberDeal` IS wired at negotiate/close-deal:208, so deal_memory
+    // filled up forever - and `dealPrior`, which computes the median achieved
+    // price from it, had ZERO callers. After a thousand closed deals in one
+    // region, the thousand-and-first negotiation anchored on exactly the same
+    // information as the first.
+    expect(live).not.toMatch(/priors: null,/);
+    expect(live).toMatch(/priors,\s*\n\s*coaching,/);
+    expect(live).toMatch(/priors = await dealPrior\(regionKey, input\.rfq\);/);
+  });
+
+  it("it uses the SAME region key the writer uses", () => {
+    // rememberDeal stores `region.toLowerCase()`; a different normalisation
+    // here would look wired and still return nothing forever.
+    const write = readCode("src/app/api/negotiate/close-deal/route.ts");
+    expect(write).toMatch(/regionKey: region\.toLowerCase\(\)/);
+    expect(live).toMatch(/String\(input\.ctx\.region \?\? ""\)\.trim\(\)\.toLowerCase\(\)/);
+  });
+
+  it("a thin prior still cannot over-anchor, and a failure is not fatal", () => {
+    expect(readCode("src/lib/spte/memory.ts")).toMatch(/if \(rows\.length < 3\) return null;/);
+    // readCode strips comments, so read the raw file for the rationale.
+    expect(readFileSync(join(process.cwd(), "src/lib/spte/live.ts"), "utf8")).toMatch(
+      /a prior is grounding, never a requirement/
+    );
+  });
+
+  it("and the prompt line that consumes it exists, so this is now visible", () => {
+    expect(readCode("src/lib/spte/pass.ts")).toMatch(/Past travellers here landed around/);
+  });
+});
