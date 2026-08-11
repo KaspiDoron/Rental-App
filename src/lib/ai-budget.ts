@@ -1,6 +1,6 @@
 import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { checkDailyLimit, recordApi } from "./usage";
+import { checkDailyLimit, recordApi, reserveDailyUnitFor } from "./usage";
 
 // THE CAP GOVERNED ONE ROUTE; THE SPEND WAS EVERYWHERE ELSE.
 //
@@ -40,6 +40,8 @@ export interface AiBudgetScope {
   remaining: number;
   /** Calls actually made, debited when the scope closes. */
   spent: number;
+  /** The cap in force, so the per-call atomic reservation knows the ceiling. */
+  limit: number;
   /** Set once, so a turn that exhausts its budget explains itself only once. */
   reportedExhausted?: boolean;
 }
@@ -59,10 +61,23 @@ export function currentAiBudget(): AiBudgetScope | undefined {
  * an un-wrapped path behaves exactly as it does today rather than failing shut
  * on a code path nobody has migrated yet. Every governed path is opt-IN.
  */
-export function reserveAiCall(): "ok" | "over-cap" | "ungoverned" {
+export async function reserveAiCall(): Promise<"ok" | "over-cap" | "ungoverned"> {
   const scope = storage.getStore();
   if (!scope) return "ungoverned";
   if (!scope.allowed || scope.remaining <= 0) return "over-cap";
+
+  // THE ATOMIC HALF. The in-scope allowance above is per-TURN and cannot see a
+  // second turn for the same traveller running concurrently - a burst of shop
+  // replies is exactly that. `reserveDailyUnitFor` is a Redis INCR, so parallel
+  // turns get distinct totals and only one can cross the line. Without Redis it
+  // returns true and the local allowance is all there is, which is the
+  // pre-existing behaviour, documented rather than hidden.
+  const ok = await reserveDailyUnitFor("ai", scope.who, scope.limit);
+  if (!ok) {
+    scope.remaining = 0; // the rest of this turn composes deterministically
+    return "over-cap";
+  }
+
   scope.remaining -= 1;
   scope.spent += 1;
   return "ok";
@@ -91,7 +106,9 @@ export async function runWithAiBudget<T>(who: string, fn: () => Promise<T>): Pro
 
   let gate: Awaited<ReturnType<typeof checkDailyLimit>>;
   try {
-    gate = await checkDailyLimit("ai", email, "LIMIT_AI_PER_DAY");
+    // PEEK, do not consume. This scope reserves one unit per actual model call
+    // below; taking one here as well would bill a turn that made none.
+    gate = await checkDailyLimit("ai", email, "LIMIT_AI_PER_DAY", { reserve: false });
   } catch {
     // checkDailyLimit already fails CLOSED on an unreadable count, so reaching
     // here means something unexpected. Do not invent a verdict: run ungoverned
@@ -104,6 +121,7 @@ export async function runWithAiBudget<T>(who: string, fn: () => Promise<T>): Pro
     allowed: gate.allowed,
     remaining: gate.allowed ? Math.max(0, gate.limit - gate.used) : 0,
     spent: 0,
+    limit: gate.limit,
   };
 
   try {

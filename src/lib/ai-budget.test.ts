@@ -51,6 +51,9 @@ async function loadBudget(opts: {
     recordApi: async (kind: string, count: number, who?: string) => {
       debits.push({ kind, count, who });
     },
+    // No Redis in unit tests: the atomic half is a no-op and the local
+    // allowance is all there is - exactly the documented degraded shape.
+    reserveDailyUnitFor: async () => true,
   }));
   const mod = await import("./ai-budget");
   return { ...mod, debits };
@@ -64,9 +67,9 @@ describe("a turn is billed once, to the person who owns it", () => {
     const { runWithAiBudget, reserveAiCall, debits } = await loadBudget({ allowed: true });
     await runWithAiBudget("t@example.com", async () => {
       // A single engine turn makes several model calls.
-      expect(reserveAiCall()).toBe("ok");
-      expect(reserveAiCall()).toBe("ok");
-      expect(reserveAiCall()).toBe("ok");
+      expect(await reserveAiCall()).toBe("ok");
+      expect(await reserveAiCall()).toBe("ok");
+      expect(await reserveAiCall()).toBe("ok");
     });
     expect(debits).toEqual([{ kind: "ai", count: 3, who: "t@example.com" }]);
   });
@@ -81,13 +84,13 @@ describe("a turn is billed once, to the person who owns it", () => {
     // Deliberate: an un-migrated path must behave exactly as it does today
     // rather than failing shut on code nobody has wrapped yet.
     const { reserveAiCall } = await loadBudget({ allowed: true });
-    expect(reserveAiCall()).toBe("ungoverned");
+    expect(await reserveAiCall()).toBe("ungoverned");
   });
 
   it("an empty identity runs ungoverned - there is nobody to bill", async () => {
     const { runWithAiBudget, reserveAiCall, debits } = await loadBudget({ allowed: true });
     await runWithAiBudget("", async () => {
-      expect(reserveAiCall()).toBe("ungoverned");
+      expect(await reserveAiCall()).toBe("ungoverned");
     });
     expect(debits).toEqual([]);
   });
@@ -102,7 +105,7 @@ describe("over the cap, the model is refused - not the turn", () => {
     let ran = false;
     await runWithAiBudget("t@example.com", async () => {
       ran = true; // the TURN still runs...
-      expect(reserveAiCall()).toBe("over-cap"); // ...the MODEL does not.
+      expect(await reserveAiCall()).toBe("over-cap"); // ...the MODEL does not.
     });
     expect(ran, "the turn must still run so the deterministic composer answers").toBe(true);
   });
@@ -114,16 +117,16 @@ describe("over the cap, the model is refused - not the turn", () => {
       limit: 120,
     });
     await runWithAiBudget("t@example.com", async () => {
-      expect(reserveAiCall()).toBe("ok");
-      expect(reserveAiCall()).toBe("ok");
-      expect(reserveAiCall()).toBe("over-cap");
+      expect(await reserveAiCall()).toBe("ok");
+      expect(await reserveAiCall()).toBe("ok");
+      expect(await reserveAiCall()).toBe("over-cap");
     });
   });
 
   it("an over-cap scope debits nothing, because nothing was spent", async () => {
     const { runWithAiBudget, reserveAiCall, debits } = await loadBudget({ allowed: false });
     await runWithAiBudget("t@example.com", async () => {
-      reserveAiCall();
+      await reserveAiCall();
     });
     expect(debits).toEqual([]);
   });
@@ -134,7 +137,7 @@ describe("over the cap, the model is refused - not the turn", () => {
     // stop every negotiation in the system on one bad deploy.
     const { runWithAiBudget, reserveAiCall } = await loadBudget({ throwOnGate: true });
     await runWithAiBudget("t@example.com", async () => {
-      expect(reserveAiCall()).toBe("ungoverned");
+      expect(await reserveAiCall()).toBe("ungoverned");
     });
   });
 
@@ -142,7 +145,7 @@ describe("over the cap, the model is refused - not the turn", () => {
     const { runWithAiBudget, reserveAiCall, debits } = await loadBudget({ allowed: true });
     await expect(
       runWithAiBudget("t@example.com", async () => {
-        reserveAiCall();
+        await reserveAiCall();
         throw new Error("turn blew up after the model was paid for");
       })
     ).rejects.toThrow(/blew up/);
@@ -154,7 +157,7 @@ describe("over the cap, the model is refused - not the turn", () => {
 describe("the scope is wired where the spend actually is", () => {
   it("chatDetailed - the one choke point - consults it", () => {
     const ai = readCode("src/lib/ai.ts");
-    expect(ai).toMatch(/const reservation = reserveAiCall\(\);/);
+    expect(ai).toMatch(/const reservation = await reserveAiCall\(\);/);
     expect(ai).toMatch(/if \(reservation === "over-cap"\)/);
     // The SAME failure shape as "no provider configured", so every existing
     // caller already handles it and the deterministic composer takes over.

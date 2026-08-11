@@ -14,6 +14,9 @@ import {
   sbSelectStrict,
 } from "./runtime-config";
 import { boundedSet } from "./bounded-map";
+// Static, like budget-cache.ts: rival-cache has no top-level side effects and
+// only reaches for `ioredis` lazily, once, when REDIS_URL is actually set.
+import { hotStateClient } from "./rival-cache";
 
 // Free monthly quotas we track against (shown in the cost tracker).
 export const QUOTAS: Record<string, { free: number; label: string; unitCost: number }> = {
@@ -139,6 +142,71 @@ function counters() {
   return globalThis.__wheeldeal_limits__;
 }
 
+// ---- atomic daily reservation (Redis) ------------------------------------------
+
+/**
+ * A CAP YOU CAN WALK THROUGH IS NOT A CAP.
+ *
+ * `checkDailyLimit` READS a count and returns; the debit is a separate
+ * `recordApi` call at a different point in the code (there were ten of those
+ * against five of these, so they were not even paired). Between the read and
+ * the write, every concurrent request sees the same pre-debit number - so a
+ * user exceeds any cap by the parallelism factor. For an AI cap that is a bill;
+ * for the WhatsApp volume caps it is a banned personal number.
+ *
+ * INCR is atomic, so concurrent callers get DISTINCT totals and exactly one can
+ * be the one that crosses the line. Over-cap gives the unit straight back, so a
+ * refused request does not inflate the counter permanently.
+ *
+ * SAME DISCIPLINE AS budget-cache.ts: Redis is a gate that can only ever refuse
+ * MORE, never permit more, and Postgres stays the durable record. That makes
+ * this strictly a tightening - it cannot introduce a new way to over-send.
+ *
+ * WITHOUT REDIS THIS IS A NO-OP, and the read-then-write window is exactly as
+ * wide as it has always been. That is stated here rather than hidden: a
+ * deployment with no REDIS_URL has NOT had this defect fixed.
+ */
+async function reserveDailyUnit(
+  kind: string,
+  who: string,
+  limit: number
+): Promise<"ok" | "over" | "unavailable"> {
+  try {
+    const r = await hotStateClient();
+    if (!r) return "unavailable";
+    const day = new Date().toISOString().slice(0, 10);
+    const key = `usage:${kind}:${who}:${day}`;
+    const n = await r.incr(key);
+    // Only on the first increment of the day, so the window cannot be pushed
+    // forward by later traffic. 26h covers any timezone skew in the day key.
+    if (n === 1) await r.expire(key, 26 * 3600);
+    if (n > Math.max(1, limit)) {
+      // Hand it back - a refusal must not consume allowance, or a burst of
+      // refused requests would lock the user out for the rest of the day.
+      await r.decr(key).catch(() => 0);
+      return "over";
+    }
+    return "ok";
+  } catch {
+    // A Redis hiccup degrades to the Postgres-only path, never to a refusal.
+    return "unavailable";
+  }
+}
+
+/**
+ * Reserve ONE unit atomically, for callers that spend in units rather than in
+ * requests (the AI budget scope reserves per model call). Returns false only
+ * when Redis says the cap is already met - never on an outage, which degrades
+ * to the caller's own local accounting.
+ */
+export async function reserveDailyUnitFor(
+  kind: string,
+  who: string,
+  limit: number
+): Promise<boolean> {
+  return (await reserveDailyUnit(kind, who, limit)) !== "over";
+}
+
 /**
  * Count one use against a per-user daily limit. Uses the durable api_usage log
  * (accurate across serverless instances) with an in-memory fast path.
@@ -146,7 +214,13 @@ function counters() {
 export async function checkDailyLimit(
   kind: string,
   who: string,
-  limitName: keyof typeof LIMIT_DEFAULTS
+  limitName: keyof typeof LIMIT_DEFAULTS,
+  /**
+   * `reserve: false` PEEKS instead of consuming a unit. Used by callers that do
+   * their own per-unit reservation later (the AI budget scope reserves once per
+   * model call, so a peek here plus a reserve there would double-count).
+   */
+  opts?: { reserve?: boolean }
 ): Promise<{ allowed: boolean; used: number; limit: number; reason?: string }> {
   const limit = await limitFor(limitName);
   const today = new Date().toISOString().slice(0, 10);
@@ -183,6 +257,19 @@ export async function checkDailyLimit(
   // distinct user*kind forever on a long-lived process.
   boundedSet(counters(), key, { day: today, n: Math.max(used, mem?.day === today ? mem.n : 0) }, 5000);
   if (used >= limit) return { allowed: false, used, limit };
+
+  // THE POSTGRES READ CANNOT SEE A CONCURRENT BURST - it is a snapshot taken
+  // before anyone debits. The atomic reservation below is what actually makes
+  // the cap hold under parallelism; the read above is what makes it hold across
+  // instances and restarts. Both are needed, and the reservation can only ever
+  // refuse MORE than the read would.
+  if (opts?.reserve !== false) {
+    const reserved = await reserveDailyUnit(kind, who, limit);
+    if (reserved === "over") {
+      return { allowed: false, used: limit, limit, reason: "concurrent" };
+    }
+  }
+
   const cur = counters().get(key)!;
   cur.n += 1;
   return { allowed: true, used: used + 1, limit };

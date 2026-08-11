@@ -623,7 +623,7 @@ export async function chatDetailed(
   // engine's deterministic composer takes over. A traveller who exhausts their
   // allowance keeps a working template-driven negotiation instead of a frozen
   // one, which is this app's degradation contract everywhere else.
-  const reservation = reserveAiCall();
+  const reservation = await reserveAiCall();
   if (reservation === "over-cap") {
     return {
       text: null,
