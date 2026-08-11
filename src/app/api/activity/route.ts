@@ -3,6 +3,8 @@ import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { senderSafety, type SenderSafety } from "@/lib/wa-guard";
 import { deriveCountered } from "@/lib/counter-offer";
+import { clampSince } from "@/lib/session-life";
+import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 // The living-workspace feed: one endpoint that tells the user everything
 // their agents are doing, chronologically, across every shop - built ENTIRELY
@@ -134,7 +136,24 @@ export async function GET(req: Request) {
     console.error("[drain:init]", e instanceof Error ? e.message : e);
   }
 
-  const sinceMs = Number(url.searchParams.get("since")) || Date.now() - 24 * 60 * 60 * 1000;
+  // `since` IS CALLER-SUPPLIED AND USED TO HAVE NO FLOOR.
+  //
+  // The client sends its session epoch here, and when a week-old hunt was
+  // auto-restored it sent THAT - silently overriding the 24h default below and
+  // making every query in this route reach back a week. The traveller then saw a
+  // week of traces, replies and offers rendered as the current session. Clamping
+  // is the server-side half of that fix; it also bounds a parameter that any
+  // caller could previously set to zero.
+  //
+  // Absent `since` keeps the route's own 24h default: a client with no live hunt
+  // is asking a different question, and narrowing it to the session TTL would
+  // hide activity that legitimately belongs to the day.
+  const requestedSince = Number(url.searchParams.get("since"));
+  const ttlMs = await searchSessionTtlMs();
+  const sinceMs =
+    Number.isFinite(requestedSince) && requestedSince > 0
+      ? clampSince(requestedSince, Date.now(), ttlMs)
+      : Date.now() - 24 * 60 * 60 * 1000;
   const sinceIso = new Date(sinceMs).toISOString();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 40, 10), 80);
 

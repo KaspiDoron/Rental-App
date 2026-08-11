@@ -3,6 +3,8 @@ import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
+import { isSessionFresh } from "@/lib/session-life";
+import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +95,24 @@ export async function GET(req: Request) {
   }
   if (!rows.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
 
+  // BUILDING A REQUEST IS NOT RUNNING A HUNT.
+  //
+  // /api/profile writes a `searches` row on every RFQ build - both the LLM
+  // profiler and the zero-token tap-to-build panel - stamped `results: 0` with
+  // no snapshot and no rfq. Those rows are useful analytics and useless as
+  // sessions, but they carry the newest `created_at`, so `ts=latest` picked one,
+  // found no snapshot, and fell straight through to the contacted-shops
+  // fallback. That is how a hunt the traveller had finished with came back
+  // wearing a request they had merely started typing.
+  //
+  // Filtered in JS rather than in the query on purpose: PostgREST's `not.in`
+  // resolves to NULL for a NULL `source`, which would silently exclude legacy
+  // rows that predate the column being written.
+  const BUILD_ONLY = new Set(["panel", "profiler"]);
+  const hunts = rows.filter((r) => !BUILD_ONLY.has(String(r.source ?? "")));
+  if (!hunts.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
+  rows = hunts;
+
   const asc = [...rows].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const groups: SearchRow[][] = [];
   for (const row of asc) {
@@ -110,6 +130,26 @@ export async function GET(req: Request) {
     : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
 
+  // A HUNT HAS AN END. `ts=latest` is the AUTO-restore the Find-deals screen
+  // fires on every cold mount, and it used to mean "the newest row in this
+  // table" with no upper bound on age - so a traveller who searched once, a week
+  // ago, opened the app and was handed that week-old hunt as their live
+  // workspace, complete with "the agents never stopped". They had stopped.
+  //
+  // The freshness gate is deliberately ONLY on the automatic path. An explicit
+  // `ts=<timestamp>` comes from a tap in Trips - the traveller asking for a
+  // specific past hunt by name - and that must keep working at any age. This is
+  // the whole difference between history and the live board.
+  if (wantLatest) {
+    const ttlMs = await searchSessionTtlMs();
+    if (!isSessionFresh(Date.parse(groups[0][0].created_at), Date.now(), ttlMs)) {
+      return NextResponse.json(
+        { error: "no-live-hunt", hint: "Your last hunt has ended - it is saved in Trips." },
+        { status: 404 }
+      );
+    }
+  }
+
   // Gate: everything except the newest session needs trips-history.
   if (gi > 0 && !hasHistory) {
     return NextResponse.json(
@@ -125,6 +165,39 @@ export async function GET(req: Request) {
     const t = Date.parse(iso);
     return t >= start - 1000 && t < end;
   };
+
+  // CLEARED MEANS CLEARED, AT ANY AGE.
+  //
+  // "Clear search" writes a `session-closed` marker row (see
+  // /api/session/close), purges the outbox and tombstones every recipient - and
+  // then the very next cold load restored the exact same hunt, because this
+  // route never looked at the marker. Dismissing a hunt and having it come back
+  // is worse than the staleness itself: it reads as the app ignoring you.
+  //
+  // The marker is a `whatsapp_messages` row with `to_number = 'session'`, which
+  // the vendor rollup below skips (no vendorId), so it was invisible here.
+  //
+  // BOUNDS MATTER MORE THAN THEY LOOK. The marker must fall AFTER this group's
+  // newest search and BEFORE the next group begins. Comparing against the
+  // group's FIRST row instead would break the commonest real sequence there is -
+  // search, clear, search again within the 30-minute grouping window - because
+  // those two searches land in ONE group and the clear between them sits after
+  // its start. The traveller's brand-new hunt would refuse to restore.
+  const groupEndIso = group[group.length - 1].created_at;
+  const nextGroupIso = gi > 0 ? groups[gi - 1][0].created_at : null;
+  const closedRows = await sbSelect<{ received_at: string }>(
+    "whatsapp_messages",
+    `select=received_at&to_number=eq.session&raw->>sender=eq.${enc}&raw->>kind=eq.session-closed` +
+      `&received_at=gt.${encodeURIComponent(groupEndIso)}` +
+      (nextGroupIso ? `&received_at=lt.${encodeURIComponent(nextGroupIso)}` : "") +
+      `&order=received_at.desc&limit=1`
+  ).catch(() => []);
+  if (closedRows.length) {
+    return NextResponse.json(
+      { error: "session-closed", hint: "You cleared this hunt." },
+      { status: 404 }
+    );
+  }
 
   const withSnap = group.find((r) => Array.isArray(r.snapshot) && r.snapshot.length);
   const rfqRow = [...group].reverse().find((r) => r.rfq && typeof r.rfq === "object");
@@ -180,17 +253,32 @@ export async function GET(req: Request) {
   } else {
     partial = true;
     const [outRows, offerRows] = await Promise.all([
-      sbSelect<{ to_number: string; raw: { vendorId?: string; vendorName?: string } | null }>(
+      sbSelect<{
+        to_number: string;
+        received_at: string;
+        raw: { vendorId?: string; vendorName?: string } | null;
+      }>(
         "whatsapp_messages",
-        `select=to_number,raw&direction=eq.outbound&raw->>sender=eq.${enc}&order=received_at.desc&limit=120`
+        `select=to_number,received_at,raw&direction=eq.outbound&raw->>sender=eq.${enc}&received_at=gte.${encodeURIComponent(
+          group[0].created_at
+        )}&order=received_at.desc&limit=120`
       ).catch(() => []),
       sbSelect<{ vendor_id: string | null; vendor_name: string | null; created_at: string }>(
         "offers",
         `select=vendor_id,vendor_name,created_at&user_email=eq.${enc}&simulated=eq.false&order=created_at.desc&limit=120`
       ).catch(() => []),
     ]);
+    // THE FALLBACK NEEDED THE SAME FENCE AS THE PRIMARY PATH.
+    //
+    // `offerRows` below was already window-filtered; `outRows` was not, so this
+    // branch reached back over the last 120 outbound messages of ALL TIME and
+    // pinned them onto whichever hunt was being restored. That is a second,
+    // independent route to the stale-session bug, and it fires precisely when
+    // the snapshot is missing - which happens on every `searches` row written by
+    // /api/profile (a bare RFQ build records a row with no snapshot at all).
     const seen = new Map<string, { id: string; name: string }>();
     for (const m of outRows) {
+      if (!inWindow(m.received_at)) continue;
       const id = m.raw?.vendorId || m.to_number;
       if (id && !seen.has(id)) seen.set(id, { id, name: m.raw?.vendorName || id });
     }

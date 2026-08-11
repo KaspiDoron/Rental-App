@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect } from "@/lib/runtime-config";
 import { identityKey } from "@/lib/wa/phone-key";
+import { clampSince } from "@/lib/session-life";
+import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -17,8 +19,16 @@ export async function GET(req: Request) {
   // ATOMIC SESSION: the client passes the epoch its current search started at;
   // only replies created since then belong to this session. This is what stops
   // a previous search's offers/threads from resurfacing on a new search.
+  //
+  // AND THE EPOCH IS CLAMPED. It arrives from the client, and a client that had
+  // auto-restored a week-old hunt used to send a week-old epoch - so this route
+  // happily returned a week of replies as "this session". Clamping to the
+  // search-session TTL is the server-side backstop; `0` (no session yet) still
+  // means "no lower bound from me", which the filters below already handle.
   const params = new URL(req.url).searchParams;
-  const sinceMs = Number(params.get("since") ?? 0);
+  const rawSince = Number(params.get("since") ?? 0);
+  const sinceMs =
+    rawSince > 0 ? clampSince(rawSince, Date.now(), await searchSessionTtlMs()) : 0;
   // THE DECLARED SPEC scopes the option menu. The traveller asked for one
   // vehicle and declared a licence for that class; a shop's full price board
   // must never become a list of things to pick. Narrowing-only, and the engine

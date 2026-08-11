@@ -22,6 +22,8 @@
 // Pure except for the storage handle, which is passed in - so the ladder is
 // unit-tested rather than inferred from a quota error nobody can reproduce.
 
+import { isSessionFresh } from "../session-life";
+
 export interface PersistedSearch {
   vendors: unknown[];
   [k: string]: unknown;
@@ -109,13 +111,43 @@ export function saveSearch(
   return { ok: false, rung: -1, bytes: 0 };
 }
 
-export function loadSearch(store: StorageLike | undefined, key: string): PersistedSearch | null {
+/**
+ * Read the persisted search back, refusing anything past its life.
+ *
+ * A HUNT THAT ENDED MUST NOT COME BACK AS THE LIVE BOARD. This used to return
+ * whatever was in the slot with no age test at all, even though the blob already
+ * carried `searchEpoch` - so a long-lived tab (an iOS PWA is routinely never
+ * killed) rehydrated a hunt from days earlier and then fed that ancient epoch to
+ * the live polls as `since=`. `null` here puts the traveller on a clean search
+ * screen; the hunt itself is untouched and still opens from Trips.
+ *
+ * The slot is CLEARED on expiry rather than merely ignored, so the next write
+ * measures its quota ladder against an empty slot instead of competing with a
+ * dead blob that will never be read again.
+ */
+export function loadSearch(
+  store: StorageLike | undefined,
+  key: string,
+  opts?: { nowMs?: number; ttlMs?: number }
+): PersistedSearch | null {
   if (!store) return null;
   try {
     const raw = store.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedSearch;
-    return parsed && Array.isArray(parsed.vendors) ? parsed : null;
+    if (!parsed || !Array.isArray(parsed.vendors)) return null;
+    if (opts?.ttlMs != null) {
+      const epoch = typeof parsed.searchEpoch === "number" ? parsed.searchEpoch : null;
+      if (!isSessionFresh(epoch, opts.nowMs ?? Date.now(), opts.ttlMs)) {
+        try {
+          store.removeItem(key);
+        } catch {
+          /* the read still refuses either way */
+        }
+        return null;
+      }
+    }
+    return parsed;
   } catch {
     return null;
   }

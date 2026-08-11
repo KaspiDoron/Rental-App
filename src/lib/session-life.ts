@@ -1,0 +1,126 @@
+// HOW LONG A SEARCH SESSION STAYS LIVE - one answer, shared by four callers.
+//
+// THE DEFECT THIS EXISTS TO KILL. A traveller opened the app and found the hunt
+// they ran a WEEK earlier sitting there as the live workspace, complete with its
+// shops, its offers and the line "Picked your hunt back up - the agents never
+// stopped." The agents had very much stopped. Four independent gaps produced it,
+// and each one on its own was enough:
+//
+//   1. /api/deals/restore?ts=latest selected `searches` with no `created_at`
+//      floor at all and pinned to group 0 - the newest row in the table, whether
+//      that was five minutes or five months old.
+//   2. The cold-mount auto-restore on the client fired whenever the vendor list
+//      was empty, with no age check of its own.
+//   3. sessionStorage's `wd_search` was read back with no TTL, even though the
+//      blob already carried `searchEpoch`.
+//   4. The restored (ancient) epoch was then sent as `since=` to /api/activity
+//      and /api/replies, overriding their own 24h defaults, so a week of traces
+//      and offers was re-hydrated onto the board.
+//
+// A shared constant would not have been enough on its own - the sibling route
+// /api/deals ALREADY had a 14-day window and simply disagreed. What was missing
+// was one PREDICATE that every surface asks. That is this module.
+//
+// It is deliberately pure and free of `server-only` so the browser rehydrate and
+// the route handlers can import the same function. The value is owner-tunable
+// (see `searchSessionTtlMs` in ./session-life-config for the server-side read);
+// this file owns the default and the arithmetic.
+
+/**
+ * How long after a search STARTED it is still "the live hunt".
+ *
+ * Three hours, chosen against the product rather than a round number: a
+ * traveller lands, searches for a bike, and the shops that were going to answer
+ * have answered inside an hour or two. Past that the board is history, not work
+ * in progress - and showing history as live is the bug above.
+ */
+export const SEARCH_SESSION_TTL_MS = 3 * 60 * 60 * 1000;
+
+/** Owner-tunable floor and ceiling, so a bad config value cannot break the app. */
+export const MIN_SESSION_TTL_MS = 15 * 60 * 1000;
+export const MAX_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Parse an owner-supplied TTL (hours, as typed into the Key Vault) into ms.
+ *
+ * Anything unparseable, absent, or outside the sane band falls back to the
+ * default rather than to zero. A zero TTL would expire every session the instant
+ * it was created - which is a worse bug than the one this module fixes, and the
+ * kind of thing an empty text field produces by accident.
+ */
+export function parseSessionTtl(raw: string | null | undefined): number {
+  const hours = Number(String(raw ?? "").trim());
+  if (!Number.isFinite(hours) || hours <= 0) return SEARCH_SESSION_TTL_MS;
+  const ms = hours * 3600_000;
+  if (ms < MIN_SESSION_TTL_MS) return MIN_SESSION_TTL_MS;
+  if (ms > MAX_SESSION_TTL_MS) return MAX_SESSION_TTL_MS;
+  return ms;
+}
+
+/**
+ * Is a session that started at `startMs` still live?
+ *
+ * FAILS CLOSED on a missing or nonsensical start. An unknown age must read as
+ * stale, never as fresh: the whole failure mode here is old state presented as
+ * current, so the direction of the doubt matters.
+ */
+export function isSessionFresh(
+  startMs: number | null | undefined,
+  nowMs: number,
+  ttlMs: number = SEARCH_SESSION_TTL_MS
+): boolean {
+  if (typeof startMs !== "number" || !Number.isFinite(startMs) || startMs <= 0) return false;
+  // A start in the future is a clock-skew artefact, not a fresh session. Treat
+  // it as live rather than stale - the phone is ahead of the server, and the
+  // hunt genuinely just began.
+  if (startMs > nowMs) return true;
+  return nowMs - startMs < ttlMs;
+}
+
+/** The oldest moment that still belongs to a live session, as epoch ms. */
+export function sessionFloorMs(nowMs: number, ttlMs: number = SEARCH_SESSION_TTL_MS): number {
+  return nowMs - ttlMs;
+}
+
+/**
+ * Slack added to the floor used for CLAMPING a caller's window (never to the
+ * freshness test itself).
+ *
+ * The client stamps `searchEpoch` from the PHONE's clock and corrects it with a
+ * measured skew before sending it as `since=`. A hard floor at exactly now-TTL
+ * would therefore shave the first seconds off a session whose own start sits a
+ * hair outside it, and the symptom - the oldest few replies of a hunt quietly
+ * missing - is far more expensive to diagnose than the half hour of extra rows
+ * this grace admits. The clamp exists to refuse a WEEK, not to trim minutes.
+ */
+export const CLAMP_GRACE_MS = 30 * 60 * 1000;
+
+/** The same floor as a Postgres-comparable ISO string. */
+export function sessionFloorIso(nowMs: number, ttlMs: number = SEARCH_SESSION_TTL_MS): string {
+  return new Date(sessionFloorMs(nowMs, ttlMs)).toISOString();
+}
+
+/**
+ * Clamp a caller-supplied `since=` so it can never reach further back than the
+ * TTL.
+ *
+ * This is the server-side backstop for gap 4. The client sends the session epoch
+ * it holds, and a restored-from-history client used to send one a week old -
+ * which silently overrode /api/activity's own 24h default and made the route
+ * return a week of rows. It is also the reason `since` is bounded at all: the
+ * parameter is caller-controlled and previously had no floor.
+ *
+ * Returns the LATER of the two, so a client asking for a narrower window (a
+ * fresh search, a delta poll) still gets exactly what it asked for.
+ */
+export function clampSince(
+  requestedMs: number | null | undefined,
+  nowMs: number,
+  ttlMs: number = SEARCH_SESSION_TTL_MS
+): number {
+  const floor = sessionFloorMs(nowMs, ttlMs) - CLAMP_GRACE_MS;
+  if (typeof requestedMs !== "number" || !Number.isFinite(requestedMs) || requestedMs <= 0) {
+    return floor;
+  }
+  return Math.max(requestedMs, floor);
+}

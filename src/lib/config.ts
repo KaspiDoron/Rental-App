@@ -220,6 +220,9 @@ const KEYS: {
   { name: "TEST_MODE", label: "Test Mode ('on' = flagged testers ride Ultra free + sandbox billing + banner)", scope: "auth", editable: true },
   { name: "SCALE_MODE", label: "Scale Mode ('on' = 3x per-user limits + relaxed polling for high load)", scope: "data", editable: true },
   { name: "PACING_MODE", label: "Pacing Mode (WhatsApp speed vs ban-safety dial: 'fast' | 'balanced' | 'cautious'; blank = balanced)", scope: "data", editable: true },
+  // Not a secret - it is a duration, and masking it would mean the owner could
+  // never read back what they set. `secret: false` shows the live value.
+  { name: "SEARCH_SESSION_TTL_HOURS", label: "How long a search stays the live hunt, in hours (blank = 3; older hunts move to Trips)", scope: "data", editable: true, secret: false },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
   { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },

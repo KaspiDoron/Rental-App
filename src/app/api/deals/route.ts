@@ -135,7 +135,14 @@ export async function GET() {
     `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=30`
   ).catch(() => [] as SearchRow[]);
 
-  const asc = [...searchRows].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  // Same discriminator the restore route uses: /api/profile records a `searches`
+  // row for every RFQ BUILD (source `panel` / `profiler`, `results: 0`, no
+  // snapshot). Those are analytics, not hunts - listing them here padded Trips
+  // with entries that open onto nothing.
+  const BUILD_ONLY = new Set(["panel", "profiler"]);
+  const hunts = searchRows.filter((r) => !BUILD_ONLY.has(String(r.source ?? "")));
+
+  const asc = [...hunts].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const groups: SearchRow[][] = [];
   for (const row of asc) {
     const last = groups[groups.length - 1];

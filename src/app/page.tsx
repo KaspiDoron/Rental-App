@@ -37,6 +37,7 @@ import { can } from "@/lib/entitlements";
 import { checkAction, outcomeFor, compareOutcome, type ActionOutcome } from "@/lib/actions/registry";
 import { FixedLayer } from "@/components/FixedLayer";
 import { saveSearch } from "@/lib/client/search-persist";
+import { isSessionFresh, SEARCH_SESSION_TTL_MS } from "@/lib/session-life";
 import { fetchJson } from "@/lib/client/fetch-json";
 import { reconcileList, reconcileRecord, staggerIndex } from "@/lib/client/reconcile";
 import { dismissalKey, loadDismissals, saveDismissals } from "@/lib/client/dismissals";
@@ -519,13 +520,25 @@ export default function Home() {
   }, [session?.plan]);
 
   // Restore a previous search so it survives navigating to Profile/Admin and
-  // back. Kept in sessionStorage; cleared only by the explicit Clear button.
+  // back. Kept in sessionStorage; cleared by the explicit Clear button - or by
+  // its own age.
+  //
+  // THE AGE TEST IS THE POINT. sessionStorage nominally dies with the tab, but
+  // an installed iOS PWA is routinely left open for days, so this slot really
+  // did hand back hunts that had long since ended - and then fed their ancient
+  // `searchEpoch` to /api/activity and /api/replies as `since=`, dragging a
+  // week of traces onto the board. `loadSearch` now refuses and clears anything
+  // past the TTL; the hunt is still in Trips.
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem("wd_search");
       if (raw) {
         const s = JSON.parse(raw);
-        if (s.vendors?.length) {
+        if (!isSessionFresh(s?.searchEpoch, Date.now(), SEARCH_SESSION_TTL_MS)) {
+          // Clear rather than merely skip: the next write measures its quota
+          // ladder against an empty slot instead of a blob nothing will read.
+          sessionStorage.removeItem("wd_search");
+        } else if (s.vendors?.length) {
           setVendors(s.vendors);
           setRfq(s.rfq ?? null);
           setSource(s.source ?? null);
@@ -559,6 +572,12 @@ export default function Home() {
   // since it shipped - it just had to be asked, by hand, from the Trips tab.
   // The NEWEST session is ungated for every plan (it IS the live workspace), so
   // asking for it automatically opens no paid door.
+  //
+  // WHAT COMES BACK IS ONLY EVER A LIVE HUNT. The route now refuses `ts=latest`
+  // for a session past its TTL, or one the traveller explicitly cleared, with a
+  // 404 - so a hunt from last week lands the app on a clean search screen
+  // instead of pretending to be today's work. Nothing is deleted; it is still in
+  // Trips, which is where a finished hunt belongs.
   useEffect(() => {
     if (!restored || vendors.length || phase !== "idle") return;
     let alive = true;
@@ -571,6 +590,12 @@ export default function Home() {
         if (!alive || !p?.vendors?.length) return;
         // Do not stomp a search the traveller started while this was in flight.
         if (sessionStorage.getItem("wd_search")) return;
+        // BELT AND BRACES ON THE AGE. The server is the authority and has
+        // already refused a stale hunt, but this is the one line that decides
+        // whether an ancient epoch becomes the `since=` of every live poll -
+        // which is how a week of old traces got dragged onto the board last
+        // time. A payload that fails the same test here is simply not applied.
+        if (!isSessionFresh(p.searchEpoch, Date.now(), SEARCH_SESSION_TTL_MS)) return;
         setVendors(p.vendors);
         setRfq(p.rfq ?? null);
         setSource(p.source ?? null);
