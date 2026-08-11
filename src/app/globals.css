@@ -645,6 +645,57 @@ html.dark .skeleton::after {
   position: relative;
   isolation: isolate;
 }
+
+/* THE ANGLE IS A PROPERTY, NOT A TRANSFORM. THIS IS THE WHOLE GEOMETRY FIX.
+ *
+ * The owner's report was that the glow reads as "a rounded square turning 360
+ * degrees". It did, and it had to: the old animation was
+ * `@keyframes aurora-drift { to { transform: rotate(1turn); } }` applied to the
+ * pseudo-element itself. Rotating a NON-SQUARE box about its centre sweeps its
+ * corners in and out of the rounded mask, so on any card wider than it is tall
+ * - which is every card - the eye tracks the box spinning rather than the light
+ * travelling. On the masked rim it is worse: the mask does not rotate with the
+ * element, so the rim's own corners scrape across it.
+ *
+ * Registering the angle with @property makes it an ANIMATABLE <angle>, so the
+ * conic gradient's start point sweeps while the element never moves. The light
+ * travels; the box stays exactly where it was drawn.
+ *
+ * @property is Baseline (Chrome 85, Safari 16.4, Firefox 128). Where it is not
+ * supported the declaration is ignored, the angle stays at its initial 0deg,
+ * and the result is a static multi-hue gradient - which is a perfectly good
+ * loading affordance and is also what prefers-reduced-motion gets.
+ */
+@property --wd-hue-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* THE PALETTE, RE-SEEDED FROM THE BRAND.
+ *
+ * The stops used to be five hardcoded rgba() literals with no relationship to
+ * any token, which is why the glow read as a generic "AI shimmer" rather than
+ * as WheelDeal. Each stop is now a real brand colour mixed toward a saturated
+ * carrier, so the sweep is recognisably ours while still reading as an aurora.
+ *
+ * `in oklch` is load-bearing, not decoration. sRGB interpolation between a blue
+ * and a green drives the midpoint through grey - which is exactly the muddy
+ * band the current glow shows halfway round. oklch keeps chroma up across the
+ * whole arc.
+ *
+ * One held violet stays. Without it, blue -> green -> yellow -> red is a
+ * traffic light; the violet is what makes the set read as light rather than as
+ * a status.
+ */
+:root {
+  --wd-hue-1: color-mix(in oklch, var(--blue) 78%, #4f8bff);
+  --wd-hue-2: #7c5cff; /* the held violet - deliberately not a status colour */
+  --wd-hue-3: color-mix(in oklch, var(--wa-green) 70%, #12b981);
+  --wd-hue-4: color-mix(in oklch, var(--yellow) 72%, #ff9f1c);
+  --wd-hue-5: color-mix(in oklch, var(--red) 62%, #ff5c8a);
+}
+
 .aurora::before {
   /* THE BLOOM. Behind the content, escaping the box, never interactive. */
   content: "";
@@ -654,16 +705,24 @@ html.dark .skeleton::after {
   pointer-events: none;
   border-radius: inherit;
   filter: blur(18px);
+  /* OPACITY BELONGS TO THE THEME, AND ONLY TO THE THEME.
+   *
+   * `aurora-breathe` animated `opacity`, which outranks both the static value
+   * here AND the dark-mode override below - so the breath silently cancelled
+   * the one adjustment that made this readable in daylight. The breath now
+   * rides on `scale`, which nothing else claims, and opacity is a plain
+   * declaration the theme can win. */
   opacity: 0.5;
   background: conic-gradient(
-    from 0deg,
-    rgba(59, 130, 246, 0.55),
-    rgba(124, 92, 255, 0.5),
-    rgba(236, 72, 153, 0.4),
-    rgba(16, 185, 129, 0.45),
-    rgba(59, 130, 246, 0.55)
+    from var(--wd-hue-angle),
+    var(--wd-hue-1),
+    var(--wd-hue-2),
+    var(--wd-hue-5),
+    var(--wd-hue-3),
+    var(--wd-hue-4),
+    var(--wd-hue-1)
   );
-  animation: aurora-drift 7.5s linear infinite, aurora-breathe 3.6s ease-in-out infinite;
+  animation: wd-hue-sweep 7.5s linear infinite, aurora-breathe 3.6s ease-in-out infinite;
 }
 .aurora::after {
   /* THE EDGE. A gradient ring, masked to the border only - no extra wrapper
@@ -675,12 +734,13 @@ html.dark .skeleton::after {
   border-radius: inherit;
   padding: 1.5px;
   background: conic-gradient(
-    from 0deg,
-    rgba(59, 130, 246, 0.9),
-    rgba(124, 92, 255, 0.85),
-    rgba(236, 72, 153, 0.7),
-    rgba(16, 185, 129, 0.8),
-    rgba(59, 130, 246, 0.9)
+    from var(--wd-hue-angle),
+    var(--wd-hue-1),
+    var(--wd-hue-2),
+    var(--wd-hue-5),
+    var(--wd-hue-3),
+    var(--wd-hue-4),
+    var(--wd-hue-1)
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -690,31 +750,72 @@ html.dark .skeleton::after {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: aurora-drift 7.5s linear infinite;
+  animation: wd-hue-sweep 7.5s linear infinite;
 }
 /* The bloom is what carries the effect in dark mode; the rim is what carries it
    in daylight. Trading their weight rather than shipping one washed-out
-   compromise is the same lesson the skeleton shimmer learned the hard way. */
+   compromise is the same lesson the skeleton shimmer learned the hard way.
+   These now actually apply - see the opacity note above. */
 [data-theme="dark"] .aurora::before,
 html.dark .aurora::before { opacity: 0.62; }
 [data-theme="dark"] .aurora::after,
 html.dark .aurora::after { opacity: 0.75; }
 
-@keyframes aurora-drift {
-  to { transform: rotate(1turn); }
+@keyframes wd-hue-sweep {
+  to { --wd-hue-angle: 360deg; }
 }
 @keyframes aurora-breathe {
-  0%, 100% { opacity: 0.42; }
-  50% { opacity: 0.62; }
+  0%, 100% { scale: 1; }
+  50% { scale: 1.045; }
+}
+
+/* THE HEARTBEAT.
+ *
+ * A real cardiac cycle, not a symmetric pulse: a short strong systole (lub), a
+ * shorter softer second contraction (dub), then a long diastole where nothing
+ * happens at all. That pause is what makes it read as alive rather than as a
+ * throbbing element - a sine wave reads as a machine, and a machine is what the
+ * traveller is already worried about.
+ *
+ * ~52 bpm (1150ms) is a resting rate. Faster reads as anxious on a screen
+ * someone is watching because they are waiting.
+ */
+@keyframes wd-heartbeat {
+  0%   { transform: scale(1); }
+  8%   { transform: scale(1.11); }  /* lub */
+  16%  { transform: scale(1); }
+  24%  { transform: scale(1.055); } /* dub - deliberately weaker */
+  32%  { transform: scale(1); }
+  100% { transform: scale(1); }     /* diastole - the long rest */
+}
+.wd-heartbeat {
+  animation: wd-heartbeat 1150ms ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform;
+}
+
+/* THE VEIL. A blurred backdrop so the loader reads as suspended ABOVE the app
+ * rather than as a panel replacing it - the app is still there, it is just out
+ * of focus while the work happens.
+ *
+ * backdrop-filter degrades to no blur where unsupported; the translucent
+ * background keeps the contrast either way, so the loader is never illegible.
+ */
+.wd-loader-veil {
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
 }
 
 /* A glow is decoration; motion is not mandatory to understand it. Someone who
    asked for less motion keeps the colour and loses the travel - the same
-   contract .skeleton already honours. */
+   contract .skeleton already honours. The heartbeat stops too: a pulsing logo
+   is precisely the kind of motion that setting exists to remove. */
 @media (prefers-reduced-motion: reduce) {
   .aurora::before,
   .aurora::after { animation: none; }
   .aurora::before { opacity: 0.4; }
+  .wd-heartbeat { animation: none; }
 }
 
 .no-scrollbar::-webkit-scrollbar { display: none; }

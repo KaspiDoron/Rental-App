@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { OrbitDots } from "./OrbitDots";
-import { AURORA } from "../lib/aurora";
+import { BrandPulse } from "./BrandPulse";
 
 // Global navigation veil: instant visual feedback the moment ANY page change
 // or heavy button action starts. Mounted once in the root layout; triggered
@@ -54,16 +53,15 @@ export function NavVeil() {
 
   if (!on) return null;
   return (
-    <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/35 backdrop-blur-[2px]">
-      {/* M5/M16: the veil's spinner wears the SAME glow the skeleton cards
-          wear, so the whole app has one visual answer to "something is
-          happening" instead of a different one per surface. The glow is on a
-          wrapper rather than on OrbitDots itself - the dots are also used in
-          places that are not loading states, and a primitive that cannot be
-          used without its glow is not a primitive. */}
-      <div className={`${AURORA} rounded-full p-3`}>
-        <OrbitDots size={44} light label="Loading" />
-      </div>
+    <div className="wd-loader-veil layer-veil fixed inset-0 flex items-center justify-center">
+      {/* ONE ANSWER TO "SOMETHING IS HAPPENING", EVERYWHERE.
+          This used to be orbiting dots inside the glow, on a flat black scrim -
+          a second loading vocabulary sitting next to the skeletons' one. It is
+          now the same heartbeat the search screen shows, on the same blurred
+          veil, so a route change and a search read as the same system working
+          rather than as two different apps. The veil blurs the page instead of
+          blacking it out: the app is still there, just out of focus. */}
+      <BrandPulse size={58} />
     </div>
   );
 }

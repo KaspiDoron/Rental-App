@@ -19,6 +19,7 @@ import { Icon } from "@/components/icons";
 import { Filters, DEFAULT_FILTERS, type FilterState } from "@/components/Filters";
 import { VendorCard } from "@/components/VendorCard";
 import { StatusFab } from "@/components/StatusFab";
+import { BrandPulse } from "@/components/BrandPulse";
 import { ShopAvatar, clearShopAvatars } from "@/components/ShopAvatar";
 import { BookingSheet } from "@/components/BookingSheet";
 import { AnimatedNumber } from "@/components/SavingsTicker";
@@ -3766,19 +3767,33 @@ export default function Home() {
           </div>
         )}
 
-        {/* Meta-style skeleton cards while the agents search */}
+        {/* THE SCREEN THE OWNER WAS LOOKING AT WHEN THEY SAID THE GLOW LOOKS BAD.
+            It had no glow at all - four hand-rolled skeleton cards and nothing
+            that said the system was working. The heartbeat leads now, and the
+            skeletons follow as the shape still to fill in.
+
+            EXACTLY ONE full-glow element: the heartbeat. The cards keep the
+            cheap shimmer. A conic gradient under an 18px blur is a real repaint
+            cost on a low-end Android, and this list is virtualized precisely
+            because that phone is the target. One signal is also better design -
+            four glowing cards is a light show, not a status. */}
         {phase === "profiling" && (
-          <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="surface overflow-hidden rounded-blob">
-                <div className="skeleton h-24 w-full" />
-                <div className="space-y-2 p-4">
-                  <div className="skeleton h-4 w-2/3 rounded-full" />
-                  <div className="skeleton h-3 w-1/2 rounded-full" />
-                  <div className="skeleton h-9 w-full rounded-2xl" />
+          <div className="mt-3">
+            <div className="surface flex justify-center rounded-blob px-4 py-7">
+              <BrandPulse size={62} label={t("Finding shops near you")} />
+            </div>
+            <div className="mt-3 space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="surface overflow-hidden rounded-blob">
+                  <div className="skeleton h-24 w-full" />
+                  <div className="space-y-2 p-4">
+                    <div className="skeleton h-4 w-2/3 rounded-full" />
+                    <div className="skeleton h-3 w-1/2 rounded-full" />
+                    <div className="skeleton h-9 w-full rounded-2xl" />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
 

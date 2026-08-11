@@ -19,6 +19,7 @@ import { useCallback, useMemo } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useVersionedToggle } from "@/lib/client/versioned-toggle";
 import { Icon } from "./icons";
+import { OrbitDots } from "./OrbitDots";
 
 export function AgentKillSwitch({
   className = "",
@@ -137,7 +138,9 @@ export function AgentKillSwitch({
             }`}
           >
             {busy ? (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+              /* The second and last bare border spinner - same primitive as
+                 everywhere else now. */
+              <OrbitDots size={12} label={t("Working")} />
             ) : (
               <Icon name={isPaused ? "play" : "pause"} className="h-3 w-3" />
             )}

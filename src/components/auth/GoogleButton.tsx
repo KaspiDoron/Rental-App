@@ -31,6 +31,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Skeleton } from "../Skeleton";
+import { OrbitDots } from "../OrbitDots";
 import { LoadingDots } from "../LoadingDots";
 import { useCallbackRef } from "../useCallbackRef";
 import { useI18n } from "../../lib/i18n";
@@ -186,10 +187,11 @@ export function GoogleButton({
         >
           <Skeleton className="h-11 w-full max-w-[360px]" rounded="rounded-full" />
           <span className="absolute flex items-center gap-2 text-[12px] font-bold text-faint">
-            <span
-              aria-hidden="true"
-              className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
-            />
+            {/* Was a bare border spinner - the last of two that survived a
+                prior cleanup. The orbit is the app's small-loader primitive;
+                a rotating half-border is a different vocabulary for the same
+                sentence. */}
+            <OrbitDots size={16} label={t("Loading Google sign-in")} className="opacity-70" />
             {t("Loading Google sign-in")}
           </span>
         </div>
