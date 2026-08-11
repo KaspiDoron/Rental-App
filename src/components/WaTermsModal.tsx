@@ -1,6 +1,7 @@
 "use client";
 
 import { Modal } from "./Modal";
+import { useI18n } from "@/lib/i18n";
 
 const CLAUSES: [string, string][] = [
   [
@@ -60,22 +61,43 @@ const CLAUSES: [string, string][] = [
 
 // Professional, numbered release of liability. Each clause on its own line,
 // readable type, always left-to-right regardless of the app's language.
+//
+// WHY THE CLAUSES BELOW ARE NOT MACHINE-TRANSLATED, AND THE CHROME NOW IS.
+//
+// This shipped entirely in English - heading, explanation, buttons and all -
+// which meant a traveller reading in Thai or Hebrew was asked to accept a
+// release of liability with no indication in their language of what the
+// document even was. That is the part that is straightforwardly wrong, and it
+// is fixed: everything that FRAMES the document is translated.
+//
+// The numbered clauses themselves stay canonical English on purpose. This is
+// the operative text of a waiver; a machine translation of it is not a
+// convenience but a second, differently-worded agreement, and presenting that
+// as the thing someone accepted is a worse problem than the one it solves.
+// Presenting a translated frame around a canonical-language instrument is
+// ordinary practice. The new line under the heading SAYS so, because a reader
+// who cannot read the clauses is owed that fact rather than left to infer it.
+//
+// This is a deliberate posture, not legal advice - the owner should confirm it
+// with counsel for the jurisdictions they operate in.
 export function WaTermsModal({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   return (
     <Modal onClose={onClose} center>
       <div dir="ltr" className="text-left">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-[16px] font-extrabold text-strong">
-            WhatsApp Linking - Terms &amp; Release of Liability
+            {t("WhatsApp Linking - Terms & Release of Liability")}
           </h2>
-          <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+          <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label={t("Close")}>
             ✕
           </button>
         </div>
         <p className="mb-2 text-[12px] font-bold text-soft">
-          The full legal text, in one place. By ticking the box and linking your
-          WhatsApp you agree to every clause below and accept responsibility for
-          what is sent from your number.
+          {t("The full legal text, in one place. By ticking the box and linking your WhatsApp you agree to every clause below and accept responsibility for what is sent from your number.")}
+        </p>
+        <p className="mb-2 text-[11px] font-bold leading-snug text-faint">
+          {t("The numbered clauses below are the binding agreement and are kept in English so their wording cannot shift in translation. If you would like them explained in your language before accepting, contact us first.")}
         </p>
         <ol className="max-h-[58dvh] list-none space-y-3 overflow-y-auto rounded-2xl bg-card2 p-3">
           {CLAUSES.map(([title, body], i) => (
@@ -91,7 +113,7 @@ export function WaTermsModal({ onClose }: { onClose: () => void }) {
           onClick={onClose}
           className="btn btn-primary mt-3 w-full rounded-2xl py-2.5 text-sm"
         >
-          I have read it
+          {t("I have read it")}
         </button>
       </div>
     </Modal>

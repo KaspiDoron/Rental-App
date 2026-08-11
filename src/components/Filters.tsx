@@ -2,6 +2,7 @@
 
 import type { VehicleClass, Fulfillment } from "@/lib/types";
 import { vehicleLabelPlural } from "@/lib/labels";
+import { useI18n } from "@/lib/i18n";
 import { Icon } from "./icons";
 
 export interface FilterState {
@@ -96,6 +97,7 @@ export function Filters({
    */
   tagCounts?: Partial<Record<FilterState["tag"], number>>;
 }) {
+  const { t } = useI18n();
   const set = (patch: Partial<FilterState>) => onChange({ ...filters, ...patch });
   const classes: (VehicleClass | "any")[] =
     availableClasses.length > 1 ? ["any", ...availableClasses] : availableClasses;
@@ -105,19 +107,19 @@ export function Filters({
       {/* Sort */}
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
         <span className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide text-faint">
-          <Icon name="filter" className="h-3.5 w-3.5" /> Sort
+          <Icon name="filter" className="h-3.5 w-3.5" /> {t("Sort")}
         </span>
         {(["distance", "rating", "reviews", "savings", "status"] as const).map((s) => (
           <Chip key={s} active={filters.sort === s} onClick={() => set({ sort: s })}>
             {s === "distance"
-              ? "Closest"
+              ? t("Closest")
               : s === "rating"
-              ? "Top rated"
+              ? t("Top rated")
               : s === "reviews"
-              ? "Most reviews"
+              ? t("Most reviews")
               : s === "savings"
-              ? "Biggest savings"
-              : "Active first"}
+              ? t("Biggest savings")
+              : t("Active first")}
           </Chip>
         ))}
       </div>
@@ -131,7 +133,7 @@ export function Filters({
               active={filters.vehicleClass === v}
               onClick={() => set({ vehicleClass: v })}
             >
-              {v === "any" ? "All vehicles" : vehicleLabelPlural(v)}
+              {v === "any" ? t("All vehicles") : t(vehicleLabelPlural(v))}
             </Chip>
           ))}
         </div>
@@ -145,13 +147,13 @@ export function Filters({
             set({ agentStatus: filters.agentStatus === "active" ? "all" : "active" })
           }
         >
-          🔵 Active rentals
+          🔵 {t("Active rentals")}
         </Chip>
         <Chip
           active={filters.openNowOnly}
           onClick={() => set({ openNowOnly: !filters.openNowOnly })}
         >
-          Open now
+          {t("Open now")}
         </Chip>
         <Chip
           active={filters.minRating >= 4.3}
@@ -165,7 +167,7 @@ export function Filters({
             set({ agentStatus: filters.agentStatus === "negotiating" ? "all" : "negotiating" })
           }
         >
-          Negotiating now
+          {t("Negotiating now")}
         </Chip>
         <Chip
           active={filters.agentStatus === "dropped"}
@@ -173,7 +175,7 @@ export function Filters({
             set({ agentStatus: filters.agentStatus === "dropped" ? "all" : "dropped" })
           }
         >
-          Dropped price
+          {t("Dropped price")}
         </Chip>
         <Chip
           active={filters.agentStatus === "offer"}
@@ -181,7 +183,7 @@ export function Filters({
             set({ agentStatus: filters.agentStatus === "offer" ? "all" : "offer" })
           }
         >
-          Has offer
+          {t("Has offer")}
         </Chip>
         {/* Ultra insight: fastest-replying shops. Visible to all; tapping it
             without Ultra opens the upgrade sheet instead of filtering. */}
@@ -195,26 +197,26 @@ export function Filters({
             set({ fastOnly: !filters.fastOnly });
           }}
         >
-          ⚡ Fast responders{!isUltra ? " ✦" : ""}
+          ⚡ {t("Fast responders")}{!isUltra ? " ✦" : ""}
         </Chip>
       </div>
 
       {/* Verified reply-based terms (only shown once a shop confirmed them >=2x) */}
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
         <span className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide text-faint">
-          ✓ Verified
+          ✓ {t("Verified")}
         </span>
         {(
           [
-            ["rents-cars", "🚗 Rents cars"],
-            ["delivery", "🛵 Delivers"],
-            ["no-deposit", "🎉 No deposit"],
-            ["passport-deposit", "🛂 Passport deposit"],
-            ["cash-deposit", "🔒 Cash deposit"],
-            ["helmets-included", "🪖 Helmets"],
-            ["insurance-included", "🛡 Insurance"],
+            ["rents-cars", "🚗", "Rents cars"],
+            ["delivery", "🛵", "Delivers"],
+            ["no-deposit", "🎉", "No deposit"],
+            ["passport-deposit", "🛂", "Passport deposit"],
+            ["cash-deposit", "🔒", "Cash deposit"],
+            ["helmets-included", "🪖", "Helmets"],
+            ["insurance-included", "🛡", "Insurance"],
           ] as const
-        ).map(([id, label]) => {
+        ).map(([id, glyph, label]) => {
           const n = tagCounts[id] ?? 0;
           return (
             <Chip
@@ -223,12 +225,12 @@ export function Filters({
               disabled={n === 0}
               title={
                 n === 0
-                  ? "No shop has confirmed this yet - your agents are still asking"
-                  : `${n} shop${n === 1 ? "" : "s"} confirmed this`
+                  ? t("No shop has confirmed this yet - your agents are still asking")
+                  : `${n} ${n === 1 ? t("shop confirmed this") : t("shops confirmed this")}`
               }
               onClick={() => set({ tag: filters.tag === id ? "any" : id })}
             >
-              {label}
+              {glyph} {t(label)}
               {n > 0 && <span className="ml-1 opacity-70">{n}</span>}
             </Chip>
           );

@@ -214,7 +214,22 @@ describe("the first touch is mandatory, and it is decided by the server", () => 
 
   it("it names the six risks from the same list the Terms render", () => {
     expect(gate).toMatch(/INDEMNITY_CLAUSES/);
-    expect(gate).toMatch(/\{c\.summary\}/);
+    // Rendered from the shared clause objects, never a hand-copied paraphrase.
+    // `op()` is translate-then-substitute-the-operator-name; the pin follows the
+    // field rather than the exact wrapper so it survives that shape.
+    expect(gate).toMatch(/\{op\(c\.summary\)\}/);
+    expect(gate).toMatch(/\{op\(c\.title\)\}/);
+  });
+
+  it("the operator name is substituted AFTER translation, not before", () => {
+    // withOperator() used to run over the clause list at module scope, so a
+    // deployment with a custom operator name produced strings that were no
+    // longer the canonical English - and t() refuses anything outside the
+    // catalogue, so the whole consent gate silently fell back to English for
+    // every non-English reader. Translate the canonical text, then substitute.
+    expect(gate).toMatch(/const clauses = INDEMNITY_CLAUSES;/);
+    expect(gate).toMatch(/withOperatorText\(t\(text\), operator\)/);
+    expect(gate).not.toMatch(/withOperator\(INDEMNITY_CLAUSES/);
   });
 });
 

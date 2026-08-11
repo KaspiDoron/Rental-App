@@ -34,13 +34,46 @@ export const I18N_EXTRAS: string[] = [
   "Shops that replied",
   "We want you to get the most out of Premium, so unlock it by using the app a little more first.",
 
-  // src/components/landing/TrustPanel.tsx - MECHANICS, rendered as t(m)
-  "A trust score per number: sending capacity grows slowly as your number proves healthy - brand-new numbers are warmed up gently.",
-  "Human pacing: randomised gaps between messages, typing indicators, and a hard hourly + daily send budget.",
-  "Business-hours queueing: shops are messaged when they are open, never at 3am.",
-  "Every message is uniquely worded - no two shops ever receive the same text.",
-  "Automatic safety pause: at the first sign of risk (failed sends, low reply rates) all sending stops on its own.",
-  "One conversation per shop per day - your agents never spam a thread.",
+  // src/components/landing/TrustPanel.tsx - MECHANICS + CANNOT_PROMISE,
+  // rendered as t(m) and t(CANNOT_PROMISE).
+  //
+  // THESE HAD DRIFTED, AND THE DRIFT WAS THE WORST POSSIBLE KIND. The six
+  // strings that used to sit here were RETRACTED from the component - the
+  // panel's own header explains why, at length: an affirmative misstatement of
+  // present fact on the screen that induces someone to link their personal
+  // number is not cured by a disclaimer elsewhere. They were rewritten to
+  // describe only what the code actually does.
+  //
+  // But this file was never updated. So the app was paying, on every language
+  // switch, to translate six sentences NOTHING renders - while the five that
+  // ARE rendered, and the one line that says what we cannot promise, were
+  // absent from the catalogue and therefore shipped in English to all nineteen
+  // other languages. A traveller reading in Thai or Hebrew got an untranslated
+  // wall of English at exactly the moment they were deciding whether to trust
+  // us with their WhatsApp number.
+  //
+  // If MECHANICS or CANNOT_PROMISE changes again, change it here in the same
+  // commit. There is a test asserting the two stay in step.
+  "Human pacing: randomised gaps between messages, a per-shop send lock, and a hard hourly and daily budget.",
+  "Business-hours awareness: we know each shop's local hours and message the open ones first. A closed shop still gets your message - it simply waits unread until they open.",
+  "Every message is uniquely worded - no two shops receive the same text, and your dates are always included so a shop can actually answer.",
+  "One introduction per shop. After that your agent only writes again once the shop has actually written back.",
+  "If WhatsApp pushes back on a new conversation, your agent stops opening new ones and keeps answering the shops already talking to you.",
+  "What we cannot promise: WhatsApp decides what happens to your number. Messaging many new shops who never reply is what gets personal numbers restricted, and no amount of pacing rules that out. Link a number you could manage without.",
+
+  // src/components/Filters.tsx - the sort/filter rail. The vehicle-class chips
+  // render t(vehicleLabelPlural(v)) and the verified-terms chips render
+  // t(label) from a table, so neither is a literal the grep can see.
+  "Automatic scooters",
+  "Manual motorcycles",
+  "Cars",
+  "Rents cars",
+  "Delivers",
+  "No deposit",
+  "Passport deposit",
+  "Cash deposit",
+  "Helmets",
+  "Insurance",
 
   // src/components/will/WillSheet.tsx - QUICK chips, rendered as t(q)
   "What can you do?",

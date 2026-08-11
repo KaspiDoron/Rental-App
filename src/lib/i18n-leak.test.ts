@@ -128,7 +128,14 @@ describe("the catalogue is the gate, so it has to be complete", () => {
     // because t() queued anything at all. Now they must be declared in
     // i18n-extras or they ship in English.
     for (const s of [
-      "One conversation per shop per day - your agents never spam a thread.", // TrustPanel MECHANICS
+      // TrustPanel MECHANICS. UPDATED, not merely re-pointed: the sample this
+      // used to name ("One conversation per shop per day...") was one of six
+      // claims RETRACTED from the component, and this test was the only thing
+      // still asserting it belonged in the catalogue - which is part of how the
+      // extras file stayed out of step with the panel for so long. The sample
+      // now names a mechanic the panel actually renders, and i18n-drift.test.ts
+      // checks the WHOLE list rather than one representative.
+      "One introduction per shop. After that your agent only writes again once the shop has actually written back.",
       "Compare the top 3", // WillSheet QUICK
       "DIFFERENT VEHICLE", // offer-badges label
       "Nothing to do - it resolves itself, usually within a few minutes.", // offer-badges next

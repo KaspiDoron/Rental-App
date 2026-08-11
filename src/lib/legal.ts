@@ -309,6 +309,28 @@ function escapeRx(s: string): string {
  * Returns the SAME array when there is nothing to change, so a page that has no
  * configured name pays nothing and renders the exact reviewed text.
  */
+/**
+ * The same substitution, for ONE already-resolved string.
+ *
+ * TRANSLATE FIRST, SUBSTITUTE SECOND - and the order is the whole reason this
+ * exists. `withOperator` rewrites the array before render, which means a
+ * deployment with a custom operator name produces clause text that is not the
+ * canonical string, so it is not in the i18n catalogue, so `t()` refuses it and
+ * the clause ships in English. Translating the CANONICAL text and substituting
+ * into the result keeps the catalogue to one fixed set of strings whatever the
+ * operator is called.
+ *
+ * A brand name is a proper noun and normally survives translation verbatim; if
+ * a particular language does render it differently the substitution simply does
+ * not match and the canonical name shows - which is exactly today's behaviour
+ * for the default operator, so the failure direction is unchanged.
+ */
+export function withOperatorText(text: string, operator?: string | null): string {
+  const name = String(operator ?? "").trim();
+  if (!name || name === OPERATOR_NAME) return text;
+  return text.replace(new RegExp(escapeRx(OPERATOR_NAME), "g"), name);
+}
+
 export function withOperator<T extends { title: string; body: string }>(
   sections: T[],
   operator?: string | null

@@ -20,7 +20,8 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { INDEMNITY_CLAUSES, TERMS_VERSION, withOperator } from "@/lib/legal";
+import { INDEMNITY_CLAUSES, TERMS_VERSION, withOperatorText } from "@/lib/legal";
+import { useI18n } from "@/lib/i18n";
 import { TermsModal } from "./TermsModal";
 
 interface MeResponse {
@@ -30,6 +31,7 @@ interface MeResponse {
 }
 
 export function FirstTouchTerms() {
+  const { t } = useI18n();
   const [show, setShow] = useState(false);
   const [reason, setReason] = useState<string>("first-time");
   const [operator, setOperator] = useState("");
@@ -92,31 +94,40 @@ export function FirstTouchTerms() {
     }
   };
 
-  const clauses = withOperator(INDEMNITY_CLAUSES, operator);
+  // TRANSLATE THE CANONICAL TEXT, THEN SUBSTITUTE THE OPERATOR.
+  //
+  // This used to call `withOperator` first, which rewrites the clause array
+  // BEFORE render. A deployment with a custom operator name therefore produced
+  // text that is not the canonical string, so it is not in the i18n catalogue,
+  // so `t()` refuses it - and the clause shipped in English. Doing it the other
+  // way round keeps the catalogue to one fixed set whatever the operator is
+  // called. See withOperatorText for why that is safe.
+  const clauses = INDEMNITY_CLAUSES;
+  const op = (text: string) => withOperatorText(t(text), operator);
 
   const gate = (
     <div
       className="layer-veil fixed inset-0 flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm sm:items-center"
       role="dialog"
       aria-modal="true"
-      aria-label="Terms of Use"
+      aria-label={t("Terms of Use")}
     >
       <div className="surface w-full max-w-[420px] rounded-blob p-4 pb-safe shadow-2xl">
         <h2 className="text-[17px] font-extrabold leading-tight text-strong">
           {reason === "version-bump"
-            ? "The terms have changed"
-            : "Before your agents message anyone"}
+            ? t("The terms have changed")
+            : t("Before your agents message anyone")}
         </h2>
         <p className="mt-1 text-[12px] font-bold leading-snug text-soft">
           {reason === "version-bump"
-            ? "A new version is in force. Please read what changed and accept to carry on."
-            : "WheelDeal sends real WhatsApp messages from your own number. Six things can go wrong, and they are yours to carry."}
+            ? t("A new version is in force. Please read what changed and accept to carry on.")
+            : t("WheelDeal sends real WhatsApp messages from your own number. Six things can go wrong, and they are yours to carry.")}
         </p>
 
         <ul className="mt-3 max-h-[42dvh] space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3">
           {clauses.map((c) => (
             <li key={c.anchor} className="text-[12px] leading-relaxed text-soft">
-              <span className="font-extrabold text-strong">{c.title}.</span> {c.summary}
+              <span className="font-extrabold text-strong">{op(c.title)}.</span> {op(c.summary)}
             </li>
           ))}
         </ul>
@@ -125,13 +136,12 @@ export function FirstTouchTerms() {
           onClick={() => setFull(true)}
           className="mt-2 w-full text-[11px] font-extrabold text-brandblue underline"
         >
-          Read the full Terms of Use and Privacy Policy
+          {t("Read the full Terms of Use and Privacy Policy")}
         </button>
 
         {failed && (
           <p className="mt-2 rounded-xl bg-warn-soft p-2 text-[11px] font-bold leading-snug text-warn">
-            We could not record your acceptance. Check your connection and try
-            again - nothing is sent from your number until this is saved.
+            {t("We could not record your acceptance. Check your connection and try again - nothing is sent from your number until this is saved.")}
           </p>
         )}
 
@@ -140,10 +150,10 @@ export function FirstTouchTerms() {
           disabled={saving}
           className="btn btn-primary mt-3 w-full rounded-2xl py-3 text-sm font-extrabold disabled:opacity-60"
         >
-          {saving ? "Saving..." : "I have read and accept"}
+          {saving ? t("Saving...") : t("I have read and accept")}
         </button>
         <p className="mt-1.5 text-center text-[10px] font-bold text-soft">
-          Version {TERMS_VERSION}
+          {t("Version")} {TERMS_VERSION}
         </p>
       </div>
       {full && <TermsModal onClose={() => setFull(false)} operatorName={operator} />}
