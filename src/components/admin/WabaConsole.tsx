@@ -57,6 +57,9 @@ interface Data {
     blocked: string | null;
     blockedLabel: string | null;
   };
+  /** Every code path that can put a message on WhatsApp, and whether it can
+   *  right now. See the api route for why this exists. */
+  senders?: { id: string; label: string; live: boolean; detail: string }[];
   governor: {
     allowed: boolean;
     binding: string | null;
@@ -112,6 +115,32 @@ export function WabaConsole() {
       {d.degraded.length > 0 && (
         <div className="rounded-blob border-2 border-brandred/40 bg-brandred-soft p-3 text-[12px] font-extrabold text-brandred">
           Could not read: {d.degraded.join(", ")}. Anything shown as &mdash; is unknown, not zero.
+        </div>
+      )}
+
+      {/* WHICH ENGINES CAN SEND, ANSWERED IN ONE PLACE. Before this the answer
+          lived in three files and two of them were governed by nothing but
+          whether a Key Vault field happened to be blank. */}
+      {(d.senders ?? []).length > 0 && (
+        <div className="rounded-blob border-2 border-line bg-card p-3">
+          <div className="text-[13px] font-extrabold text-strong">Who can send right now</div>
+          <div className="mt-2 space-y-2">
+            {(d.senders ?? []).map((s) => (
+              <div key={s.id} className="flex items-start gap-2">
+                <span
+                  className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                    s.live ? "bg-savings-soft text-savings" : "bg-card2 text-soft"
+                  }`}
+                >
+                  {s.live ? "LIVE" : "OFF"}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[12px] font-extrabold text-strong">{s.label}</div>
+                  <div className="text-[11px] font-bold text-soft">{s.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -52,6 +52,18 @@ export async function GET(
 
   if (!token || token.length < 12) return dead();
 
+  // THE FLAG WAS READ AND THROWN AWAY. `const c = await wabaConfig()` sat at
+  // the top of this handler and the only use of it was `void c;` at the bottom
+  // - a deliberate silencing of the unused-variable warning that read as "the
+  // config is considered here". It was not. With WABA_ENABLED off, every
+  // handoff link ever minted still resolved: it still stamped link_tapped_at,
+  // still recorded a `tap` event into the ledger, and still redirected a real
+  // agency into a real chat with a real traveller.
+  //
+  // A lane that is off has no live links. Checked BEFORE the lead read so a
+  // switched-off deployment does not even confirm whether a token exists.
+  if (!c.enabled) return dead();
+
   const read = await sbSelectStrict<LeadRow & { user_phone?: string }>(
     "waba_leads",
     `select=id,user_email,agency_name,link_tapped_at,state&link_token=eq.${encodeURIComponent(
@@ -82,6 +94,5 @@ export async function GET(
   const text = encodeURIComponent(prefilledOpener(lead.agency_name));
   // Inside a normal message wa.me is entirely fine - only TEMPLATES restrict it.
   const target = `https://wa.me/${to}?text=${text}`;
-  void c;
   return NextResponse.redirect(target, 302);
 }

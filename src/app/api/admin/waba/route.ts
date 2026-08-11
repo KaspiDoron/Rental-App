@@ -107,6 +107,43 @@ export async function GET() {
       blocked,
       blockedLabel: blocked ? WABA_BLOCK_LABELS[blocked] : null,
     },
+    // ENGINE TRUTH: every code path that can put a message on WhatsApp, and
+    // whether it can do so RIGHT NOW. The owner's rule is one sentence - only
+    // Evolution sends until real WABA credentials arrive - and until this
+    // existed there was no single place that could confirm it. The second
+    // official sender (lib/whatsapp.ts) in particular was off only because two
+    // Key Vault fields happened to be blank, which is not something a person
+    // can see from any screen.
+    senders: [
+      {
+        id: "evolution",
+        label: "Evolution (per-user WhatsApp session)",
+        live: true,
+        detail: "The only live sender. Every traveller message goes out from their own linked number.",
+      },
+      {
+        id: "waba-handoff",
+        label: "Business-number handoff (Part 12)",
+        live: c.enabled && !c.dryRun && blocked === null,
+        detail: !c.enabled
+          ? "Off - WABA_ENABLED is not on."
+          : blocked
+            ? WABA_BLOCK_LABELS[blocked]
+            : c.dryRun
+              ? "Flag on, but WABA_DRY_RUN is on - composes and records, sends nothing."
+              : "LIVE - the official number makes first contact.",
+      },
+      {
+        id: "cloud-api",
+        label: "Meta Cloud API direct sender (legacy)",
+        live: await (await import("@/lib/whatsapp")).whatsappConfigured(),
+        detail: !c.enabled
+          ? (await (await import("@/lib/whatsapp")).whatsappCredentialsPresent())
+            ? "Off - credentials ARE set, but WABA_ENABLED is not on. This is the intended state."
+            : "Off - WABA_ENABLED is not on, and no credentials are set."
+          : "LIVE - WABA_ENABLED is on and Cloud API credentials are set.",
+      },
+    ],
     governor: gov,
     funnel,
     leads,
