@@ -14,6 +14,7 @@
 
 import type { GraphIO, GraphTurnInput } from "../graph/types";
 import { runTurn } from "./orchestrator";
+import { newDecisionId } from "../orchestrator";
 import { clampWaitMinutes } from "./wait";
 import { optionsFromThread, signalsVariance } from "../offer-options";
 import { emptyDigest } from "./digest";
@@ -468,6 +469,19 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // ---- from here we OWN the turn: never throw (would risk a double send) -----
   const senderKey = input.ctx.sender ?? "system";
   const toNumber = input.event.toDigits;
+  // THE OPS PANEL COULD NOT EXPLAIN A SINGLE MESSAGE THE PRIMARY ENGINE SENT.
+  //
+  // "Why behind this message" joins `whatsapp_messages.raw.decisionId` to
+  // `agent_traces.decision_id`. The graph engine stamps both. SPTE - which is
+  // the engine that actually runs, since `engineV3Enabled` returns true even
+  // when config is UNREADABLE - stamped neither and wrote zero trace rows. Its
+  // entire record of a turn was one `agent_events` row whose reasoning is
+  // capped at 180 characters.
+  //
+  // So the owner's request in item 16 - "record the path of each reply from the
+  // agent's thinking all the way to WhatsApp" - was not a missing feature so
+  // much as a missing KEY: the surfaces existed and had nothing to join on.
+  const decisionId = newDecisionId();
   const meta: Record<string, unknown> = {
     kind: metaKindFor(outcome.move),
     vendorId: input.ctx.vendorId,
@@ -475,6 +489,7 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     engine: "v3",
     move: outcome.move,
     tacticId: outcome.move,
+    decisionId,
     // The freshness fingerprint - see wa/freshness.ts. A parked reply carries
     // what it was an answer to, so the drain can tell whether it still is one.
     composedAgainst: {
@@ -485,6 +500,42 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
       move: outcome.move,
     },
   };
+
+  // THE FULL REASONING, UNDER THAT KEY. The `engine-v3-turn` event stays as the
+  // cheap always-on summary (metrics first, 1600 chars, reasoning clipped to
+  // 180); this is the durable record the review console reads. Best-effort and
+  // never awaited into the send path: a lost trace is a blind spot, while a
+  // throw here would cost a negotiation turn that has already been decided.
+  //
+  // Wrapped in a resolved promise rather than called bare: this runs AFTER the
+  // move is decided, where this file's contract is that nothing throws (a throw
+  // here risks the caller falling back to the graph engine and sending twice).
+  // A bare `io.writeTrace(...)` throws SYNCHRONOUSLY when the io object does not
+  // implement it, which `.catch()` cannot catch.
+  void Promise.resolve()
+    .then(() =>
+      io.writeTrace([
+      {
+        decisionId,
+        userEmail: input.ctx.sender ?? undefined,
+        vendorId: input.ctx.vendorId,
+        vendorName: input.ctx.vendorName,
+        stage: `spte:${outcome.move}`,
+        input: JSON.stringify({
+          inboundId: input.ctx.inboundId,
+          inbound: tc.inbound.text,
+          quotePerDay: tc.inbound.verified.pricePerDay,
+          floor: input.floorPrice ?? null,
+          lowest: tc.session.lowest?.pricePerDay ?? null,
+          legalMoves: tc.legalMoves,
+        }),
+        reasoning: outcome.artifact?.think ?? "",
+        output: outcome.text ?? "",
+        verdict: outcome.move,
+      },
+      ])
+    )
+    .catch(() => {});
 
   let delivered: SpteLiveResult["delivered"] = "silent";
   // WHERE THE MESSAGE ENDED UP, when it did not go out. `delivered` is written
