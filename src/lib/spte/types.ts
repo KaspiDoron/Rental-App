@@ -186,7 +186,31 @@ export interface TurnContext {
    *  Absent addressText means we have nothing shareable, so `pickup-location`
    *  is not a legal move and the UI asks the traveller instead. */
   share?: { addressText?: string; mapsLink?: string };
-  guards: { floorPerDay?: number; maxRounds: number };
+  /**
+   * THE OWNER'S SLIDERS REACH THIS ENGINE, OR THEY REACH NOTHING.
+   *
+   * Nothing under src/lib/spte imported the policy overlay, and SPTE is the
+   * PRIMARY engine (the graph engine is the failover). So every threshold the
+   * owner moved in Admin -> Ops applied only to the path that usually does not
+   * run: `priceFarAboveFloor` was hard-coded 1.25 here while the overlay's own
+   * default is 1.08 with a comment calling 1.25 "far too soft"; `maxRounds` was
+   * hard-coded 6 while the graph spec's owner-editable maxRoundsPerShop
+   * defaults to 4, so the live engine allowed 50% more pushes per shop than the
+   * configured policy; and bannedPhrases was enforced only in the graph engine,
+   * so a phrase the owner banned still went out on every real message.
+   *
+   * Both numbers are OPTIONAL with the historical literal as the fallback, so a
+   * caller that cannot read config (replay, the simulator, a unit test) behaves
+   * exactly as before rather than silently adopting a different policy.
+   */
+  guards: {
+    floorPerDay?: number;
+    maxRounds: number;
+    /** overlay.priceFarAboveFloor; falls back to the historical 1.25. */
+    priceFarAboveFloor?: number;
+    /** overlay.bannedPhrases - scrubbed from the finished draft by the rails. */
+    bannedPhrases?: string[];
+  };
   /** Event that triggered this turn - a real inbound, a wakeup, or a swarm poke. */
   event: "shop-message" | "tick" | "rival-improved";
   /** REPLAY ONLY. Skips the single LLM pass and composes from the deterministic

@@ -18,6 +18,11 @@ import { clampWaitMinutes } from "./wait";
 import { optionsFromThread, signalsVariance } from "../offer-options";
 import { emptyDigest } from "./digest";
 import { deriveThreadFacts } from "./thread-facts";
+import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
+import { getGraphSpec } from "../graph/engine";
+/** The historical literal, kept as the config-outage fallback. It is the graph
+ *  spec's own default (default-graph.ts:44), not the 6 that used to be here. */
+const DEFAULT_MAX_ROUNDS = 4;
 import { buildLedger } from "../thread/ledger";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
@@ -311,7 +316,25 @@ function metaKindFor(move: MoveKind): string {
   }
 }
 
+/**
+ * The owner-tunable half of the policy: the clamped overlay and the graph
+ * spec's round cap. `input.overlay` is set on the REPLAY path so the golden
+ * suite stays bit-stable regardless of live config - the same contract the
+ * graph engine uses at engine.ts:384.
+ */
+async function resolvePolicy(
+  input: GraphTurnInput
+): Promise<{ overlay: PolicyOverlay; maxRounds: number }> {
+  const overlay =
+    input.overlay ?? (await getPolicyOverlay().catch(() => DEFAULT_OVERLAY));
+  const maxRounds = await getGraphSpec()
+    .then((spec) => spec.settings.maxRoundsPerShop)
+    .catch(() => DEFAULT_MAX_ROUNDS);
+  return { overlay, maxRounds };
+}
+
 async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<TurnContext> {
+  const policy = await resolvePolicy(input);
   const verified = mapVerified(input);
   const digest = buildDigest(input);
   // OUT OF STOCK IS A STATE (thread/ledger stockState), derived from the same
@@ -371,7 +394,22 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
     tail: buildTail(input),
     inbound: { text, verified },
     legalMoves: [], // computed deterministically inside runTurn (legalMovesFor)
-    guards: { floorPerDay: input.floorPrice, maxRounds: 6 },
+    guards: {
+      floorPerDay: input.floorPrice,
+      // THE OWNER'S POLICY, READ WHERE IT IS ACTUALLY USED.
+      //
+      // `maxRounds: 6` was a literal, and the graph spec's owner-editable
+      // `maxRoundsPerShop` defaults to 4 - so the PRIMARY engine allowed 50%
+      // more pushes per shop than the configured policy, and the Ops slider
+      // that sets it moved only the failover engine. Same for the two below.
+      //
+      // Both reads are already 30s-cached (getGraphSpec / getPolicyOverlay) and
+      // both fall back to the historical literal, so a config outage keeps
+      // today's behaviour rather than adopting a different one.
+      maxRounds: policy.maxRounds,
+      priceFarAboveFloor: policy.overlay.priceFarAboveFloor,
+      bannedPhrases: policy.overlay.bannedPhrases,
+    },
     event: input.event.kind === "tick" ? "tick" : "shop-message",
   };
 }

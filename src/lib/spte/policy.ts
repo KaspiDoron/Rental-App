@@ -126,7 +126,10 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   const priceFarAboveFloor =
     typeof ctx.guards.floorPerDay === "number" &&
     typeof v.pricePerDay === "number" &&
-    v.pricePerDay > ctx.guards.floorPerDay * 1.25;
+    // The owner's threshold, not a literal. Default 1.08 - the overlay's own
+    // comment calls the old 1.25 "far too soft", and that tightening applied
+    // only to the fallback engine until this line read it.
+    v.pricePerDay > ctx.guards.floorPerDay * (ctx.guards.priceFarAboveFloor ?? 1.25);
   const firmAllowsBargain =
     firmCount >= 2 ? false : firmCount === 1 ? rivalCheaper || priceFarAboveFloor : true;
 

@@ -341,5 +341,29 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
     text = `${text}${TIME_DEFER_LINE}`;
   }
 
+  // 4) OWNER-BANNED PHRASES.
+  //
+  // The graph engine has scrubbed these since the overlay shipped
+  // (engine.ts:1072) and SPTE never did - and SPTE is the engine that runs. So
+  // a phrase the owner outlawed in the Ops Center went out on every real
+  // message, and only the failover path honoured the ban. Deterministic and
+  // last, matching the graph engine's placement, so nothing downstream can
+  // reintroduce a banned phrase after the scrub.
+  //
+  // The phrases arrive on ctx.guards rather than being read here: rails are
+  // pure and synchronous by design, and the one place that awaits config is
+  // the context builder.
+  for (const phrase of ctx.guards.bannedPhrases ?? []) {
+    const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    if (rx.test(text)) text = text.replace(rx, "").replace(/\s{2,}/g, " ").trim();
+  }
+  // A scrub that emptied the message is not a message. Dropping the turn is
+  // right: the alternative is sending a fragment, and a banned phrase that
+  // carried the whole sentence means the draft has to be rewritten, not
+  // trimmed. The caller re-parks and the next turn composes fresh.
+  if (!text) {
+    return { ok: false, rejected: { rule: "banned-phrase", detail: "nothing left after scrub" } };
+  }
+
   return { ok: true, finalText: text };
 }
