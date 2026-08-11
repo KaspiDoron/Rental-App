@@ -173,6 +173,35 @@ export const EXTRAS_PHRASINGS = [
   (x: string) => `And ${x} if possible.`,
 ] as const;
 
+/**
+ * A ONE-WAY DROP-OFF CHANGES THE PRICE, AND WE WERE NEVER MENTIONING IT.
+ *
+ * `rfq.oneWayDropOff` survives the profiler and then reappears only at booking
+ * time (BookingSheet / bookings route). compileOpener REPLACES whatever the
+ * client built, so nothing between those two points ever told the shop - the
+ * whole negotiation priced a round-trip rental, that number was presented as
+ * the deal, and the one-way fee surfaced at handover. Unlike delivery there is
+ * no probe move anywhere that can recover it later.
+ */
+export const DROPOFF_PHRASINGS = [
+  (x: string) => `I'd need to drop it off in ${x} (one-way).`,
+  (x: string) => `It would be a one-way - returning it in ${x}.`,
+  (x: string) => `I'd be leaving it in ${x} rather than bringing it back, if that works.`,
+] as const;
+
+/**
+ * A delivery REQUEST, with no address in it. The address is gated by the
+ * disclosure rail (resolveShareableLocation) and is never ours to send
+ * unprompted; asking whether delivery is possible at all costs nothing and is
+ * the thing the traveller actually asked for. The engine's `fulfillment-probe`
+ * can recover this later, which is why it is the softer of the two.
+ */
+export const DELIVERY_PHRASINGS = [
+  () => `Would you be able to deliver it to where I'm staying?`,
+  () => `Do you deliver, or would I collect from the shop?`,
+  () => `Is delivery an option, or is it pickup only?`,
+] as const;
+
 export const SIGN_OFFS = [
   "Thanks!",
   "Thank you!",
@@ -265,6 +294,10 @@ export interface StyleChoice {
   ask: string;
   /** How the traveller's extras are asked for, when there are any. */
   extrasPhrase: (x: string) => string;
+  /** How a one-way return is stated, when the traveller asked for one. */
+  dropOffPhrase: (x: string) => string;
+  /** How delivery is asked about. Carries NO address - see DELIVERY_PHRASINGS. */
+  deliveryPhrase: () => string;
   signOff: string;
   emoji: string;
   order: SentenceOrder;
@@ -324,6 +357,8 @@ export function drawStyle(seed: CopySeed, region?: string): StyleChoice {
     dateRangePhrase: seededPick(rng, DATE_RANGE_PHRASINGS),
     ask: seededPick(rng, plain ? PLAIN_ASKS : ASK_PHRASINGS),
     extrasPhrase: seededPick(rng, EXTRAS_PHRASINGS),
+    dropOffPhrase: seededPick(rng, DROPOFF_PHRASINGS),
+    deliveryPhrase: seededPick(rng, DELIVERY_PHRASINGS),
     signOff: seededPick(rng, SIGN_OFFS),
     // Emoji weight: ~2/3 of messages carry one (a real texting distribution).
     emoji: rng() < 0.66 ? seededPick(rng, EMOJIS.filter(Boolean)) : "",

@@ -25,6 +25,16 @@ const DEPOSIT_RX =
 const FULFILLMENT_RX =
   /\b(deliver|delivery|drop( it)? off|bring it|we (can|will) deliver|free delivery|pick ?up|pick it up|come to (the|our) shop|at (the|our) shop|in ?store|meet you)\b/i;
 
+/** The stamped moves that ARE a push on price. Anything else stamped - answer,
+ *  clarify, close, a probe - is not a round, whatever its wording looks like. */
+const BARGAIN_KINDS = new Set(["bargain", "auto-bargain", "counter", "auto-counter"]);
+
+/** Fallback for UNSTAMPED history only. A message reads as a push when it asks
+ *  for less; a bare daily-rate mention does not, which is why this is only
+ *  consulted when no stamp exists. */
+const BARGAIN_TEXT_RX =
+  /\b(better (rate|deal|price)|lower|discount|cheaper|can (you|u) do|even better|multi-day|per day\??$|\/day\??)\b/i;
+
 export interface ThreadFacts {
   /** Cumulative count of shop messages asserting a firm/last price. */
   firmCount: number;
@@ -43,6 +53,12 @@ export interface ThreadFactsInput {
   inbound: string[];
   /** Every outbound (our) message body in this thread, chronological. */
   outbound: string[];
+  /** The move stamped on each `outbound` entry, SAME ORDER, SAME LENGTH;
+   *  `undefined` where the row carries no stamp. Supplying it is what stops our
+   *  own `answer` template being counted as a bargain round - see the note at
+   *  the derivation below. Omit it and every entry falls back to the wording,
+   *  which is the pre-existing behaviour. */
+  outboundKinds?: (string | undefined)[];
   /** The message that JUST arrived (may already be in `inbound`; deduped). */
   currentInbound?: string;
   /** How many prior bargains the caller counted from message kinds - the
@@ -65,14 +81,32 @@ export function deriveThreadFacts(input: ThreadFactsInput): ThreadFacts {
   const depositKnown = inbound.some((m) => DEPOSIT_RX.test(m));
   const fulfillmentKnown = inbound.some((m) => FULFILLMENT_RX.test(m));
 
-  // Round count: how many of OUR messages actually pushed on price. A bargain
-  // reads as an ask to lower ("better", "lower", "discount", a "PHP/day" target,
-  // "can you do"). This heals a history where sends were mis-stamped "reply".
-  const derivedRounds = input.outbound.filter((m) =>
-    /\b(better (rate|deal|price)|lower|discount|cheaper|can (you|u) do|even better|multi-day|per day\??$|\/day\??)\b/i.test(
-      m
-    )
-  ).length;
+  // Round count: how many of OUR messages actually pushed on price.
+  //
+  // WE WERE COUNTING OUR OWN ANSWERS AS PUSHES. The regex below cannot tell a
+  // bargain from a confirmation, because our own templates share its vocabulary:
+  // the `answer` template renders "is 250 THB/day the best you can do for 4
+  // days?" - which matches BOTH `/day` and `can you do` - and the price-board
+  // read-back renders "I read 250 THB/day for the 4 days", which matches
+  // `/day`. Both are stamped `auto-answer`. So a thread that opened with a
+  // photo reached turn two believing round 1 was already spent: pass.ts emitted
+  // "second push: DO NOT reuse the reason you already gave" when no reason had
+  // been given, planLeverage demoted the duration card from 40 to 15 and
+  // unlocked the later levers, and roundsLeft burned down early. The traveller
+  // lost the strongest opening frame on every thread that started with a price
+  // list - and `Math.max` meant the accurate stamped counter could never pull
+  // it back down.
+  //
+  // The STAMP is the discriminator; the regex is only the fallback for history
+  // written before moves were stamped. Where a kind is known we trust it; where
+  // it is absent we fall back to the wording, which is what this heuristic was
+  // always for.
+  const kinds = input.outboundKinds;
+  const derivedRounds = input.outbound.filter((m, i) => {
+    const kind = kinds && i < kinds.length ? kinds[i] : undefined;
+    if (kind) return BARGAIN_KINDS.has(kind);
+    return BARGAIN_TEXT_RX.test(m);
+  }).length;
   const bargainRounds = Math.max(input.priorBargainCount ?? 0, derivedRounds);
 
   return {

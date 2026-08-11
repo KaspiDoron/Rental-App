@@ -260,7 +260,19 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
     // spec named = regular 4-seat economy.
     engineSizeCc:
       vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : 110,
-    seats: vehicleClass === "car" ? seats ?? 4 : undefined,
+    // NO SEAT DEFAULT - the same rule normalizeRFQ carries at :122, and for
+    // the same reason. This path was missed when that one was fixed, and it is
+    // not a rare path: runProfiler returns heuristicRFQ DIRECTLY whenever the
+    // LLM gives nothing back - no key, an unparseable answer, or the 9s budget
+    // expiring. `seats` is disqualifying in the identity gate, so a phantom 4
+    // meant every car search silently demanded a seat count the traveller never
+    // gave: a shop that quoted a car without stating its seats could never be
+    // confirmed, and its price never reached the board. The traveller saw "no
+    // price yet" on shops that had answered with a price.
+    //
+    // `seats` here is whatever "5 seats" / "7-seater" was actually read out of
+    // the text at :229, and undefined when they never said.
+    seats: vehicleClass === "car" ? seats : undefined,
     carType: vehicleClass === "car" ? (carType !== "any" ? carType : "economy") : undefined,
     transmission: /manual|stick/.test(t)
       ? "manual"

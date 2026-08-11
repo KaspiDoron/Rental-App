@@ -39,7 +39,23 @@ describe("the strongest card leads the push", () => {
   });
 
   it("duration is still the reason when there is genuinely nothing better", () => {
-    expect(pass()).toMatch(/!lead && round <= 0 && days >= 3/);
+    // ...but NOT when we are the session floor. `!lead` alone is exactly the
+    // state planLeverage creates when it deliberately returns nothing at the
+    // session low, so this fallback was handing back the very card that
+    // suppression had just taken away - arguing duration against a floor we set
+    // ourselves, which is the field failure leverage.ts was written for.
+    expect(pass()).toMatch(/!lead && !atLow && round <= 0 && days >= 3/);
+  });
+
+  it("REGRESSION: at the session low, the first push asks for terms, not a lower number", () => {
+    const p = pass();
+    expect(p).toMatch(/const atLow = atSessionLow\(ctx\);/);
+    // The branch exists and comes FIRST, so it wins over the price angle.
+    expect(p).toMatch(/first push, and they are ALREADY the best price you have/);
+    expect(p).toMatch(/do NOT argue the number/);
+    // One nudge at the floor is still legal by design - it just is not a price
+    // argument. So the branch must not remove `bargain`, only re-aim it.
+    expect(p).toMatch(/a helmet, fuel, or free delivery/);
   });
 
   it("the angle is computed AFTER the plan it defers to", () => {

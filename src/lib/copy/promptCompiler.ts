@@ -179,8 +179,27 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   // client built (outreach/route.ts), a request for a child seat or a phone
   // mount was silently dropped on its way to every shop. It goes after the ask
   // so the price question stays the message's point.
+  // A ONE-WAY DROP-OFF IS A PRICE FACT, AND IT WAS NEVER LEAVING THE APP.
+  //
+  // Same defect as the accessories one above, found later and one degree worse:
+  // `rfq.oneWayDropOff` survived the profiler and then reappeared only at
+  // BOOKING time. Nothing in between told the shop, so the whole negotiation
+  // priced a round-trip rental, that number was presented as the deal, and the
+  // one-way fee arrived at handover. Accessories at least had a probe; this has
+  // no compensating path anywhere in spte/ or graph/.
+  //
+  // Ahead of the extras because it changes the number the message is asking for.
+  const dropOff = String(rfq.oneWayDropOff ?? "").trim().slice(0, 60);
+  if (dropOff) body = `${body} ${s.dropOffPhrase(dropOff)}`;
+
   const extras = extrasClause(rfq);
   if (extras) body = `${body} ${s.extrasPhrase(extras)}`;
+
+  // ...and whether they deliver at all, when that is what the traveller asked
+  // for. NO ADDRESS: the stay location is gated by the disclosure rail and is
+  // never sent unprompted. Last, because it is the softest of the three and the
+  // engine's fulfillment-probe can still recover it if the shop ignores it.
+  if (rfq.fulfillment === "hotel-delivery") body = `${body} ${s.deliveryPhrase()}`;
 
   let out = applyContraction(body, s.contraction).replace(/\s{2,}/g, " ").trim();
   if (signOff) out = `${out} ${signOff}`;

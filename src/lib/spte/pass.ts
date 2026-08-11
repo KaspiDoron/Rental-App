@@ -254,6 +254,20 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       })
     : [];
   const lead = leadCard(plan);
+  // WE WERE HANDING BACK THE CARD leverage.ts HAD JUST TAKEN AWAY.
+  //
+  // planLeverage returns an EMPTY list when this shop is the session's cheapest
+  // and no round has been played, and says why at length: being the floor is
+  // "a position with no argument in it", so returning nothing "lets the caller
+  // do the right thing (terms, not price) instead of the least-wrong thing".
+  //
+  // Both fallbacks below key on `!lead` - which is PRECISELY the state that
+  // suppression creates. So the prompt turned around and told the model to
+  // "give the N-day rental as your reason" and that "Duration is your lever
+  // this first push": the exact message leverage.ts exists to prevent, argued
+  // against a floor we set ourselves. One nudge at the session low is still
+  // legal by design; what it must not be is a price argument.
+  const atLow = atSessionLow(ctx);
   const rivalLeverage = lead
     ? `LEVERAGE, STRONGEST FIRST - lead with the first one:\n` +
       plan.map((c, i) => `  ${i + 1}. ${c.line}`).join("\n") +
@@ -271,7 +285,9 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // which is exactly what leverage.ts was built to decide.
   const roundPlay = ctx.legalMoves.includes("bargain")
     ? round <= 0
-      ? `BARGAIN ANGLE (first push): warmly say the quote is a bit high for you, give ${lead ? "the leverage above as your reason" : `the ${days}-day rental as your reason`}, and ask for a friendly better daily rate. Vary the exact wording.\n`
+      ? atLow
+        ? `BARGAIN ANGLE (first push, and they are ALREADY the best price you have): do NOT argue the number - you have nothing to argue with, and saying it is high against your own floor reads as haggling for its own sake. Warmly ask for something thrown in instead - a helmet, fuel, or free delivery - or a small round-number gesture if they would rather. Vary the exact wording.\n`
+        : `BARGAIN ANGLE (first push): warmly say the quote is a bit high for you, give ${lead ? "the leverage above as your reason" : `the ${days}-day rental as your reason`}, and ask for a friendly better daily rate. Vary the exact wording.\n`
       : round === 1
         ? `BARGAIN ANGLE (second push): DO NOT reuse the reason you already gave - switch lever. ${lead ? "Use the next card in the leverage list." : "Ask for a small round-number discount, or a free extra (helmet/fuel/delivery), or mention you're ready to book right now."}\n`
         : `BARGAIN ANGLE (final gentle nudge): one last soft ask, then you will accept. Use a DIFFERENT phrasing and lever from your earlier messages.\n`
@@ -279,7 +295,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
 
   // Kept as its own line only when there is nothing stronger to lead with.
   const durationLeverage =
-    !lead && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
+    !lead && !atLow && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
       ? `Duration is your lever this first push: ${days} days is a long rental.\n`
       : "";
 

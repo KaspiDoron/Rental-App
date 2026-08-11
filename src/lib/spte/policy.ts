@@ -384,6 +384,36 @@ export function atSessionLow(ctx: TurnContext): boolean {
 const MEASUREMENT_UNIT =
   /^\s*(cc|km|kms|kilometers?|kg|mm|cm|hp|l|lit(er|re)s?|%|days?|nights?|weeks?|months?|years?|hours?|hrs?|mins?|minutes?|people|persons?|pax|am|pm|o'clock)\b/i;
 
+/**
+ * A CALENDAR DATE IS NOT A PRICE ASK, AND WE WERE READING OURS AS ONE.
+ *
+ * `compileOpener` renders the rental start through `formatRentalDate`, which
+ * produces "12 Aug" - a bare day number followed by a month name. A month name
+ * is not a measurement unit, so the day number fell straight through the guard
+ * above and into the band below.
+ *
+ * That was enough to silence the cheapest shop in the hunt. Greece, scooter,
+ * start 12 Aug: shop B quotes EUR 18, `atSessionLow` is true, and the opener's
+ * bare "12" satisfies `12 < 18 && 12 >= 9` - so `alreadyPushedAtFloor` returned
+ * true, `lockedAtFloor` followed, and `bargain` never entered the legal set.
+ * The single nudge the cheapest shop is entitled to was never sent. It is
+ * currency-scoped: a day-of-month between 13 and 31 lands inside the band for
+ * EUR/USD/GBP/AUD/MYR/SGD/ILS day-rates, while THB/IDR/PHP quotes are large
+ * enough that a day number falls below the 0.5 floor - which is exactly why it
+ * never showed up in testing.
+ *
+ * Both orders, because locales write both: "12 Aug" and "Aug 12".
+ */
+const MONTH_NAME =
+  "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+/** "12 Aug", and the ordinal forms a person types: "12th Aug", "12 of Aug". */
+const DATE_AFTER = new RegExp(`^\\s*(?:st|nd|rd|th)?\\s*(?:of\\s+)?(?:${MONTH_NAME})\\b`, "i");
+/** "Aug 12" - the month sits before the number instead. */
+const DATE_BEFORE = new RegExp(`(?:${MONTH_NAME})\\s*$`, "i");
+/** "12/08", "2026-08-12" - a separator on either side means a date field. */
+const DATE_SEPARATOR_AFTER = /^\s?[/-]\s?\d/;
+const DATE_SEPARATOR_BEFORE = /\d\s?[/-]\s?$/;
+
 function alreadyPushedAtFloor(ctx: TurnContext): boolean {
   const quote = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
   if (typeof quote !== "number" || quote <= 0) return false;
@@ -391,7 +421,14 @@ function alreadyPushedAtFloor(ctx: TurnContext): boolean {
   for (const msg of mine) {
     const text = String(msg);
     for (const m of text.matchAll(/\d[\d,.]*/g)) {
-      if (MEASUREMENT_UNIT.test(text.slice(m.index + m[0].length))) continue;
+      const after = text.slice(m.index + m[0].length);
+      const before = text.slice(0, m.index);
+      if (MEASUREMENT_UNIT.test(after)) continue;
+      // A date, in any of the shapes our own opener and a person's reply use.
+      // Skipping it is the safe direction: a missed ask means we push once more
+      // than we might have, while a false ask silences the shop entirely.
+      if (DATE_AFTER.test(after) || DATE_BEFORE.test(before)) continue;
+      if (DATE_SEPARATOR_AFTER.test(after) || DATE_SEPARATOR_BEFORE.test(before)) continue;
       const n = Number(m[0].replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, ""));
       if (!Number.isFinite(n)) continue;
       // Below the quote, but not absurdly below - an ask, not a house number.

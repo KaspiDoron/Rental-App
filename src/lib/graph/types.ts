@@ -339,6 +339,15 @@ export interface GraphTurnInput {
   sessionClosed: boolean;
   history: string;
   priorOutbound: string[];
+  // The semantic move stamped on each `priorOutbound` entry, SAME ORDER, SAME
+  // LENGTH; `undefined` where the row carries no stamp. The round counter needs
+  // it because our own non-bargain templates are indistinguishable from a push
+  // by wording alone: the `answer` template ("is 250/day the best you can do
+  // for 4 days?") contains both "/day" and "can you do", and the price-board
+  // read-back contains "/day", so a regex over the text counted our own
+  // ANSWERS as bargain rounds. Optional: the simulator and the legacy
+  // orchestrator pass text only, and fall back to the regex.
+  priorOutboundKinds?: (string | undefined)[];
   // Every inbound (shop) message body in this thread, chronological - the SPTE
   // engine derives firm-count / deposit-known / fulfillment-known from these.
   priorInbound?: string[];

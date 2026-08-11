@@ -2003,10 +2003,17 @@ export async function buildTurnFromThread(
   const history = thread
     .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
     .join("\n");
-  const priorOutbound = thread
-    .filter((m) => m.direction === "outbound")
-    .map((m) => m.body ?? "")
-    .filter(Boolean);
+  const outboundRows = thread.filter((m) => m.direction === "outbound" && (m.body ?? ""));
+  const priorOutbound = outboundRows.map((m) => m.body ?? "");
+  // Parallel to priorOutbound, same order and length. SPTE stamps the semantic
+  // move in raw.move; the legacy paths use raw.kind. Either identifies a
+  // message better than its wording can - see the note on the field.
+  const priorOutboundKinds = outboundRows.map(
+    (m) =>
+      (m.raw as { move?: string; kind?: string } | null)?.move ??
+      (m.raw as { move?: string; kind?: string } | null)?.kind ??
+      undefined
+  );
   const lastInbound = [...thread].reverse().find((m) => m.direction === "inbound");
   // COALESCE the unread inbound buffer for the tick path too, so a strategic-
   // wait re-evaluation sees the shop's whole recent burst (vehicle + price),
@@ -2087,6 +2094,7 @@ export async function buildTurnFromThread(
     sessionClosed,
     history,
     priorOutbound,
+    priorOutboundKinds,
     legacyCounts: {
       clarify: countKind("auto-clarify"),
       bargain: countKind("auto-bargain") + countKind("bargain"),

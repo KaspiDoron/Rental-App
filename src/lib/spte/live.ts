@@ -144,6 +144,7 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
   const facts = deriveThreadFacts({
     inbound,
     outbound,
+    outboundKinds: input.priorOutboundKinds,
     currentInbound: curInbound,
     priorBargainCount: input.legacyCounts?.bargain ?? 0,
   });
