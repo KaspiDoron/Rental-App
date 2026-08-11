@@ -8,10 +8,11 @@
 // own ingress); everything from event parsing to processVendorReply + the
 // opportunistic drains lives here, byte-identical to the route it came from.
 
-import { sbInsert, sbSelect } from "@/lib/runtime-config";
+import { sbInsert, sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { processVendorReply } from "@/lib/agent-loop";
 import {
   emailForInstance,
+  resolveInstanceEmail,
   sendFromUser,
 } from "@/lib/evolution";
 import { noteInboundDropped } from "@/lib/wa/webhook-trace";
@@ -215,7 +216,12 @@ export async function processEvolutionWebhook(
     // strong spam signal, so we track it and let the guard react.
     if (event.includes("messages.update")) {
       try {
-        const email = await emailForInstance(instance);
+        // A receipt whose receiver cannot be resolved is not "not ours" - it may
+        // be an outage. Ask again rather than discarding read/delivery/ERROR
+        // signals the guard uses to decide whether a number is in trouble.
+        const who = await resolveInstanceEmail(instance);
+        if (!who.ok) return { retryable: true };
+        const email = who.email;
         if (email) {
           const items = Array.isArray(body.data) ? body.data : [body.data];
           const { recordReadReceipt, recordDelivery, recordSendError, hasInboundFrom } =
@@ -262,7 +268,11 @@ export async function processEvolutionWebhook(
     // would be the definition of too late.
     if (event.includes("call")) {
       try {
-        const email = await emailForInstance(instance);
+        // An inbound CALL is a shop trying to reach the traveller right now; an
+        // unresolvable receiver here is worth a redelivery rather than silence.
+        const who = await resolveInstanceEmail(instance);
+        if (!who.ok) return { retryable: true };
+        const email = who.email;
         const { handleCallEvent } = await import("./call-intercept");
         await finishBeforeResponse("inbound-call", () => handleCallEvent({ email, data: body.data }));
       } catch {
@@ -280,7 +290,13 @@ export async function processEvolutionWebhook(
       try {
         const data = Array.isArray(body.data) ? body.data[0] : body.data;
         const state = String(data?.state ?? data?.connection ?? "").toLowerCase();
-        const email = await emailForInstance(instance);
+        // A connection transition is how a BAN becomes visible. Losing one to a
+        // database blip leaves the app reporting a linked, healthy session for a
+        // number WhatsApp has already severed - the exact lie Tier 0.3 existed
+        // to end. Ask again.
+        const who = await resolveInstanceEmail(instance);
+        if (!who.ok) return { retryable: true };
+        const email = who.email;
         if (state === "open" && email) {
           const { markOpen } = await import("@/lib/evolution");
           markOpen(email).catch(() => {});
@@ -388,7 +404,22 @@ export async function processEvolutionWebhook(
       // them, and a privacy-JID alias is only evidence inside ONE inbox. An
       // unresolvable instance is never ingested (a receiver-less row would be
       // unscopeable forever).
-      const email = await emailForInstance(instance);
+      // UNKNOWN IS NOT "NOT OURS". Read permissively, a Supabase timeout and an
+      // unknown instance both answered null - and null meant `continue`, which
+      // with `retryable` still false let the route answer 200. Evolution treats
+      // 200 as delivered and never sends it again, so a few seconds of database
+      // trouble destroyed every shop reply that arrived during it, permanently,
+      // and blamed Evolution in the only trace it left.
+      const who = await resolveInstanceEmail(instance);
+      if (!who.ok) {
+        retryable = true;
+        void noteInboundDropped(undefined, waDigits(remoteJid), "receiver-unresolvable", {
+          instance,
+          via: "webhook",
+        });
+        continue;
+      }
+      const email = who.email;
       if (!email) {
         await sbInsert("agent_events", [
           {
@@ -468,19 +499,38 @@ export async function processEvolutionWebhook(
           // matched, so our OWN send echoed back was misread as a human
           // takeover: the agent stood down permanently and wrote an rfq-less
           // row on top of the thread. Same variants the resolver uses.
+          //
+          // AND AN UNREADABLE ECHO CHECK MUST NOT CONVICT. Both probes below
+          // ran through the permissive reader, so a Supabase blip answered `[]`
+          // - "no record of us sending this" - and the app concluded the
+          // TRAVELLER had typed it. The consequences are not cosmetic: an
+          // rfq-less `human-manual` row is written on top of the thread,
+          // `setThreadTakeover` fires, EVERY pending wa_outbox row for that shop
+          // is deleted along with its graph_wakeups tick, and the traveller is
+          // pushed "You've got the wheel". The agent never speaks to that shop
+          // again until they hand it back by hand.
+          //
+          // Standing an agent down is destructive and irreversible-by-itself, so
+          // it must rest on POSITIVE evidence that a human typed - never on the
+          // absence of evidence that we did. Unknown is treated as our own echo.
           const numFilter = numberFilter("to_number", from);
-          const byId = msgId
-            ? await sbSelect(
+          const byIdRead = msgId
+            ? await sbSelectStrict(
                 "whatsapp_messages",
                 `select=id&direction=eq.outbound&wa_message_id=eq.${encodeURIComponent(
                   msgId
                 )}&limit=1${numFilter}`
               )
-            : [];
-          if (byId.length > 0) continue;
+            : { rows: [] as unknown[] };
+          if ("error" in byIdRead) {
+            if (byIdRead.error === "unavailable") {
+              void noteInboundDropped(email, from, "echo-check-unreadable", { via: "webhook" });
+              continue;
+            }
+          } else if (byIdRead.rows.length > 0) continue;
           // Echo check 2: same body already stored as OUR outbound recently
           // (every bot/app send is inserted at send time).
-          const recentOut = await sbSelect<{ body: string | null }>(
+          const recentRead = await sbSelectStrict<{ body: string | null }>(
             "whatsapp_messages",
             `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
               email
@@ -488,6 +538,13 @@ export async function processEvolutionWebhook(
               new Date(Date.now() - 10 * 60_000).toISOString()
             )}&order=received_at.desc&limit=10${numFilter}`
           );
+          if ("error" in recentRead) {
+            if (recentRead.error === "unavailable") {
+              void noteInboundDropped(email, from, "echo-check-unreadable", { via: "webhook" });
+              continue;
+            }
+          }
+          const recentOut = "rows" in recentRead ? recentRead.rows : [];
           const isEcho = recentOut.some(
             (m) => (m.body ?? "").replace(/\s+/g, " ").trim().toLowerCase() === normalized
           );

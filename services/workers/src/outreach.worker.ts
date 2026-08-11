@@ -119,20 +119,56 @@ async function handleBatch(job: Job<OutreachBatchJobV2 & LegacyBatchJob>): Promi
   let remaining = await introUsage(userEmail, cap.windowHours).then((used) =>
     used === null ? null : Math.max(0, cap.newContacts - used)
   );
+  // Distinct from `remaining === 0`: the budget could not be READ. A spent
+  // budget is a finished campaign; an unknown one is a job that should come
+  // back in a moment (batch jobs carry 3 attempts with backoff), not a campaign
+  // silently reported "completed" with every shop skipped.
+  let budgetUnknown = false;
   if (remaining === null) {
     // Mirror not seeded (or Redis off). Seed it from the authoritative window,
     // and use that same read for the budget so we never send blind.
     try {
       const win = await introductionsInWindow(userEmail, cap.windowHours);
-      await seedIntroWindow(userEmail, cap.windowHours, win.entries);
+      // NEVER SEED A MIRROR FROM A READ THAT DID NOT SUCCEED.
+      //
+      // On an unreadable window the Postgres side answers count = Infinity and
+      // entries = [] - deliberately, so THIS batch is treated as at cap. But
+      // seeding ran unconditionally, and seedIntroWindow DELs the sorted set
+      // and stamps the `:live` marker for windowHours*2. So the next batch's
+      // introUsage took the fast path, found a live-and-empty mirror, read 0
+      // used, and granted the FULL cold budget - for twice the window, from a
+      // read that never succeeded. One blip bought hours of unmetered cold
+      // outreach on the traveller's personal number.
+      //
+      // A blind batch is a batch that waits. An empty mirror is a batch that
+      // sends everything.
+      if (win.unreadable) budgetUnknown = true;
+      else await seedIntroWindow(userEmail, cap.windowHours, win.entries);
       remaining = Math.max(0, cap.newContacts - win.count);
     } catch {
       // Postgres window read failed too - fall back to the guard's own budget.
+      // Its own docstring says an unreadable count means "remaining is 0
+      // defensively, not because the budget is spent", so an unreadable budget
+      // and a throwing one both mean zero here. Granting cap.newContacts was
+      // the same fail-open the read above already refuses.
       const budget = await newContactBudget(userEmail, plan).catch(() => ({
-        remaining: cap.newContacts,
+        remaining: 0,
+        unreadable: true,
       }));
-      remaining = budget.remaining;
+      if (budget.unreadable) budgetUnknown = true;
+      remaining = budget.unreadable ? 0 : budget.remaining;
     }
+  }
+
+  // Retry rather than report a phantom completion. The slot claim above is
+  // replay-safe (its held-marker is set NX and answers "already counted"), so a
+  // re-attempt does not double-count concurrency.
+  if (budgetUnknown) {
+    logger.warn(
+      { batchId, userEmail },
+      "outreach batch - introductions budget unreadable, retrying rather than sending blind"
+    );
+    throw new Error("intro budget unreadable");
   }
 
   // 3. Dedup by number, slice to the budget (overflow = reported skipped).

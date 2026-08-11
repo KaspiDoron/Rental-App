@@ -787,11 +787,41 @@ export async function pingAllHosts(): Promise<{ url: string; ok: boolean }[]> {
 
 /** Look up which user owns an instance (used by the webhook). */
 export async function emailForInstance(instance: string): Promise<string | null> {
-  const rows = await sbSelect<{ email: string }>(
+  const read = await resolveInstanceEmail(instance);
+  return read.ok ? read.email : null;
+}
+
+/**
+ * WHOSE INBOX IS THIS? - with "I could not find out" kept separate from "nobody".
+ *
+ * THE DEFECT THIS EXISTS TO KILL. Every inbound WhatsApp frame is attributed to
+ * a traveller by looking up the Evolution instance here. Read through the
+ * permissive `sbSelect`, a Supabase timeout and an unknown instance produced the
+ * same `null` - and the webhook treats `null` as "not one of ours": it drops
+ * every frame in the batch with `continue`, leaves `retryable` false, and
+ * answers 200. Evolution takes a 200 as delivered and NEVER REDELIVERS.
+ *
+ * So a database blip of a few seconds silently and permanently destroyed every
+ * shop reply that arrived during it - along with the read/delivery receipts,
+ * inbound calls and connection.update transitions that resolve through the same
+ * read. The only trace said "unknown Evolution instance", which sends whoever
+ * investigates to look at Evolution rather than at the database.
+ *
+ * `ok: false` means UNKNOWN. The webhook must mark the delivery retryable and
+ * answer non-2xx so Evolution sends it again, which is the entire point of
+ * having a retry protocol at all.
+ */
+export async function resolveInstanceEmail(
+  instance: string
+): Promise<{ ok: true; email: string | null } | { ok: false }> {
+  const read = await sbSelectStrict<{ email: string }>(
     "wa_sessions",
     `select=email&instance_name=eq.${encodeURIComponent(instance)}&limit=1`
   );
-  return rows[0]?.email ?? null;
+  // "missing" is a database with no wa_sessions table at all - nobody has ever
+  // linked, so there genuinely is no receiver. That is an answer, not an outage.
+  if ("error" in read) return read.error === "missing" ? { ok: true, email: null } : { ok: false };
+  return { ok: true, email: read.rows[0]?.email ?? null };
 }
 
 /** Real-world WhatsApp pairing codes die in about a minute. The app treats a

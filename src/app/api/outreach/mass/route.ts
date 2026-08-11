@@ -307,13 +307,28 @@ export async function POST(req: Request) {
   // (first now, the rest 45-75s apart), shops beyond it get an HONEST
   // tomorrow-morning slot and the user is told so in the response.
   const { newContactBudget, introHoldIso } = await import("@/lib/wa-guard");
+  // AN UNKNOWN BUDGET IS NOT AN UNLIMITED ONE.
+  //
+  // This used to fall back to `remaining: 99` - three to ten times any plan's
+  // real cap - and it never looked at `budget.unreadable`, which the budget
+  // sets precisely to say "the count could not be READ, so remaining is 0
+  // defensively rather than because the budget is spent". So the one moment
+  // the anti-ban meter went blind was the one moment this route handed out
+  // ninety-nine cold introductions on the traveller's personal number.
+  //
+  // Unknown now means zero, on both paths. The cost of being wrong this way is
+  // a batch that waits ~3 minutes (newContactBudget stamps nextFreeAt that
+  // close on an unreadable read, deliberately, so it re-checks in minutes);
+  // the cost of being wrong the other way is someone's WhatsApp account.
   const budget = await newContactBudget(session.email, session.plan).catch(() => ({
-    remaining: 99,
-    cap: 99,
+    remaining: 0,
+    cap: planCapacity(session.plan).newContacts,
     windowHours: planCapacity(session.plan).windowHours,
-    nextFreeAt: new Date().toISOString(),
+    nextFreeAt: new Date(Date.now() + 3 * 60_000).toISOString(),
+    unreadable: true,
   }));
-  let newIntrosLeft = budget.remaining;
+  const budgetUnreadable = Boolean((budget as { unreadable?: boolean }).unreadable);
+  let newIntrosLeft = budgetUnreadable ? 0 : budget.remaining;
   // Which of these shops has this user EVER messaged before? (Known contacts
   // do not consume the introductions budget.)
   const { sbSelect } = await import("@/lib/runtime-config");
@@ -410,6 +425,13 @@ export async function POST(req: Request) {
         String(body.region ?? "") || undefined,
         session.plan
       );
+      // Say which of the two it is. "Introductions full" is a fact about the
+      // traveller's usage; an unreadable meter is a fact about us, and telling
+      // someone they have spent an allowance they have not spent is the kind of
+      // small lie that makes the whole queue untrustworthy.
+      const holdReason = budgetUnreadable
+        ? "checking your introductions allowance - retrying shortly"
+        : "introductions full - refreshes soon";
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: session.email,
@@ -417,7 +439,7 @@ export async function POST(req: Request) {
           to_key: outboxKey(digits),
           body: opener.text,
           not_before: notBefore,
-          meta: { ...meta, reason: "introductions full - refreshes soon" },
+          meta: { ...meta, reason: holdReason },
         },
       ]);
       deferredTomorrow++;
@@ -426,7 +448,7 @@ export async function POST(req: Request) {
         sent: false,
         queued: parked,
         queuedUntil: parked ? notBefore : undefined,
-        queuedReason: parked ? "introductions full - refreshes soon" : undefined,
+        queuedReason: parked ? holdReason : undefined,
         reason: parked ? "queued" : "queue-unavailable",
       });
       continue;
@@ -608,6 +630,10 @@ export async function POST(req: Request) {
       cap: budget.cap,
       windowHours: budget.windowHours,
       nextFreeAt: budget.nextFreeAt,
+      // Carried through so the UI can say "checking" rather than "you have used
+      // your allowance" - the same distinction IntroBudget's own docstring asks
+      // callers to make, which this route was the only caller not making.
+      ...(budgetUnreadable ? { unreadable: true } : {}),
     },
   });
 }

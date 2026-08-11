@@ -1667,6 +1667,25 @@ export async function guardOutbound(rawOpts: {
   //     message loop (the "agent sent the same message again" bug). Compares
   //     the normalized body against this sender's recent outbound to this
   //     number.
+  //
+  //     DELIBERATELY PERMISSIVE, AND CHECKED. An audit flagged this read (and
+  //     the rfq-dedup below it) as fail-open: sbSelect answers [] on an outage,
+  //     so isDup is false and the send proceeds. That is true in isolation and
+  //     wrong in context, which is why it stays as it is:
+  //
+  //       - For opts.auto - the only path where a loop can run unattended - an
+  //         outage is already caught THREE times above, at -3 (repStrict, which
+  //         getReputationStrict returns null for on `unavailable` and ONLY on
+  //         `unavailable`), at -2 (cancelled === null) and at -2 again
+  //         (takeover === null). All three hold and re-check. An automated send
+  //         cannot reach this line while Supabase is unreadable.
+  //       - For a manual send there is a human who just pressed the button.
+  //         Refusing it because a dedup read blipped is the worse direction:
+  //         the failure it would prevent is one possibly-repeated message, and
+  //         the failure it would cause is a person unable to talk to a shop.
+  //
+  //     Converting this to a strict read would add a fourth hold on a path that
+  //     already holds, and a first refusal on a path that should not.
   {
     const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
     const recentOut = await sbSelect<{ body: string | null }>(
@@ -1840,12 +1859,37 @@ export async function guardOutbound(rawOpts: {
           lastOut[0].received_at
         )}&limit=1${numberFilter("from_number", opts.toDigits)}`
       );
-      const state = await sbSelect<{ read: boolean; last_reply_at: string | null }>(
+      const stateRead = await sbSelectStrict<{ read: boolean; last_reply_at: string | null }>(
         "wa_recipient_state",
         `select=read,last_reply_at&sender_key=eq.${encodeURIComponent(
           opts.senderKey
         )}&to_number=eq.${encodeURIComponent(opts.toDigits)}&limit=1`
       );
+      // AN UNREADABLE PROBE MUST NOT DELETE A COMPOSED REPLY.
+      //
+      // Both probes ran through the permissive reader, so a Supabase blip
+      // answered `[]` - "this shop never replied" - and the branch below is
+      // TERMINAL: drainOutbox calls completeOutboxRow, which DELETEs the row.
+      // No lease, no re-park, no retry. The agent's answer to a shop that had
+      // genuinely quoted was destroyed by a few seconds of database trouble,
+      // and the traveller saw a shop that made an offer and was never answered.
+      //
+      // Terminal is the right verdict for "the shop has not replied". It is the
+      // wrong verdict for "I could not find out". Unknown re-parks instead, so
+      // the next drain asks again.
+      // No `terminal`, no `queuedUntil`: that is exactly the shape `needsRepark`
+      // (wa/outbox-policy.ts:20-25) reads as "non-terminal reject that did not
+      // re-queue", and the drain re-parks it on its own proportional backoff -
+      // 20-40s for a reply, minutes for a cold intro. Inventing a timestamp here
+      // would duplicate a decision that already has one owner.
+      if ("error" in stateRead && stateRead.error === "unavailable") {
+        return {
+          allow: false,
+          reason: "checking whether the shop replied - will retry shortly",
+          text,
+        };
+      }
+      const state = "rows" in stateRead ? stateRead.rows : [];
       // A READ RECEIPT IS NOT ENGAGEMENT - it is the opposite.
       //
       // `state[0]?.read` used to satisfy this test, so a blue tick unlocked a
