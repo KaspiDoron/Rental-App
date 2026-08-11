@@ -140,8 +140,18 @@ describe("the Command Center can go dark", () => {
     expect(route).not.toMatch(/catch\(\(\) => \[\]\)/);
   });
 
-  it("all nine reads resolve to null on failure", () => {
-    expect((route.match(/catch\(\(\) => null\)/g) ?? []).length).toBe(9);
+  it("all nine reads use the reader that can actually answer 'unknown'", () => {
+    // The previous version of this counted nine `.catch(() => null)` handlers
+    // and passed for months while every one of them was unreachable: `sbSelect`
+    // returns [] on a missing connection, a non-2xx AND a thrown exception, so
+    // it can never reject. `degraded` was therefore permanently empty and the
+    // Command Center stayed green through a total outage - the exact failure
+    // this file's own header describes.
+    //
+    // `sbSelectDark` returns `T[] | null`, so the null branch is reachable by
+    // construction. The behaviour itself is executed in fail-dark.test.ts.
+    expect((route.match(/sbSelectDark</g) ?? []).length).toBe(9);
+    expect(route).not.toMatch(/catch\(\(\) => null\)/);
   });
 
   it("a failed read raises a critical alert rather than nothing at all", () => {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelectDark } from "@/lib/runtime-config";
 
 // Owner Command Center: one call that surfaces everything needing immediate
 // attention - real bugs, stuck queues, WhatsApp health, low trust scores,
@@ -23,53 +23,66 @@ export async function GET() {
 
   const [feedback, outbox, reputation, sessions, billing, replies, offers, aiErrors, agentEvents] =
     await Promise.all([
-      sbSelect<{ id: number; severity: string; summary: string; created_at: string }>(
+      sbSelectDark<{ id: number; severity: string; summary: string; created_at: string }>(
         "feedback",
         `select=id,severity,summary,created_at&is_real_issue=eq.true&or=(status.is.null,status.eq.open,status.eq.in-progress)&order=created_at.desc&limit=20`
-      ).catch(() => null),
-      sbSelect<{ id: number; not_before: string }>(
+      ),
+      sbSelectDark<{ id: number; not_before: string }>(
         "wa_outbox",
         "select=id,not_before&order=not_before.asc&limit=50"
-      ).catch(() => null),
-      sbSelect<{ sender_key: string; trust_score: number; paused_until?: string; risk_score?: number }>(
+      ),
+      sbSelectDark<{ sender_key: string; trust_score: number; paused_until?: string; risk_score?: number }>(
         "whatsapp_number_reputation",
         "select=sender_key,trust_score,paused_until,risk_score&or=(trust_score.lt.15,risk_score.gte.40,paused_until.not.is.null)&limit=30"
-      ).catch(() => null),
-      sbSelect<{ email: string; status: string }>(
+      ),
+      sbSelectDark<{ email: string; status: string }>(
         "wa_sessions",
         "select=email,status&limit=100"
-      ).catch(() => null),
-      sbSelect<{ id: number; kind: string; created_at: string }>(
+      ),
+      sbSelectDark<{ id: number; kind: string; created_at: string }>(
         "billing_events",
         `select=id,kind,created_at&created_at=gte.${encodeURIComponent(dayAgo)}&limit=50`
-      ).catch(() => null),
-      sbSelect<{ id: number }>(
+      ),
+      sbSelectDark<{ id: number }>(
         "vendor_replies",
         `select=id&created_at=gte.${encodeURIComponent(dayAgo)}&limit=200`
-      ).catch(() => null),
-      sbSelect<{ id: number }>(
+      ),
+      sbSelectDark<{ id: number }>(
         "offers",
         `select=id&created_at=gte.${encodeURIComponent(dayAgo)}&limit=200`
-      ).catch(() => null),
+      ),
       // NOTE: the column is `failed` (not `ok`) - the old query silently
       // returned [] and AI-failure alerts never fired.
-      sbSelect<{ id: number; provider: string; failed: boolean; created_at: string }>(
+      sbSelectDark<{ id: number; provider: string; failed: boolean; created_at: string }>(
         "ai_usage",
         `select=id,provider,failed,created_at&failed=eq.true&created_at=gte.${encodeURIComponent(dayAgo)}&limit=100`
-      ).catch(() => null),
-      sbSelect<{ id: number; kind: string; vendor_name: string; detail: string }>(
+      ),
+      sbSelectDark<{ id: number; kind: string; vendor_name: string; detail: string }>(
         "agent_events",
         `select=id,kind,vendor_name,detail&handled=eq.false&created_at=gte.${encodeURIComponent(weekAgo)}&order=created_at.desc&limit=30`
-      ).catch(() => null),
+      ),
     ]);
 
-  // EVERY READ ABOVE USED TO END `.catch(() => [])`.
+  // EVERY READ ABOVE USED TO END `.catch(() => [])`, THEN `.catch(() => null)`,
+  // AND NEITHER EVER RAN.
   //
   // An empty array is indistinguishable from "nothing wrong", so an unreachable
   // Supabase produced ZERO alerts and a fully green Command Center - the one
   // surface whose entire job is to say "something is broken" reported "nothing
-  // is broken" as its failure mode. They now resolve to `null`, and a null is
-  // named here rather than silently coerced.
+  // is broken" as its failure mode.
+  //
+  // The first fix changed the catches to `() => null` and built the `readOr`
+  // machinery below to name each null. It did nothing, because `sbSelect` has no
+  // rejection path: a missing connection, a non-2xx and a thrown exception all
+  // `return []`, so the catch was unreachable and the null branch behind it was
+  // dead code. The panel stayed green and the repair was recorded as shipped.
+  //
+  // `sbSelectDark` is the read that can actually answer "unknown": rows on
+  // success, `[]` for a table that does not exist yet (vacuously empty - a fresh
+  // install must not paint itself dark), and `null` only for a real outage.
+  //
+  // `degraded` is what the panel renders as a dark strip. The rule from
+  // wa/risk-verdict.ts applies: a metric whose source read failed is NOT zero.
   //
   // `degraded` is what the panel renders as a dark strip. The rule from
   // wa/risk-verdict.ts applies: a metric whose source read failed is NOT zero.

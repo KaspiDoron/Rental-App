@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelectDark } from "@/lib/runtime-config";
 import { getActiveRev } from "@/lib/ops/rev";
 
 // Negotiation-quality analytics: branch heatmap (usage x owner verdicts x
@@ -50,23 +50,37 @@ export async function GET(req: Request) {
   // `classifySafety`'s positive-evidence-only design. `null` means UNREAD, the
   // page says so, and every derived figure below reads the empty array so the
   // aggregation code stays unchanged.
+  //
+  // AND THEN IT SHIPPED A FOURTH TIME, HERE, AS THE FIX ITSELF.
+  //
+  // The M21 repair changed `.catch(() => [])` to `.catch(() => null)` and built
+  // the `degraded` list below to name each null. None of it ran. `sbSelect` has
+  // no rejection path - a missing connection, a non-2xx and a thrown exception
+  // all `return []` - so the catch was unreachable, `null` was unreachable,
+  // `degraded` was permanently empty, and the panel went on rendering a
+  // confident zero over a dead database while the repair was recorded as done.
+  //
+  // A fix for a fail-green defect that is itself fail-green is the sharpest
+  // version of this mistake available, and it is why the reader below is
+  // `sbSelectDark`: it returns rows, `[]` for a table that does not exist yet,
+  // and `null` ONLY for a real outage. There is nothing left to catch.
   const [tracesRead, scoresRead, reviewsRead, activeRev] = await Promise.all([
-    sbSelect<TraceRow>(
+    sbSelectDark<TraceRow>(
       "agent_traces",
       `select=edge_id,spec_rev,created_at&edge_id=not.is.null&created_at=gte.${encodeURIComponent(
         since
       )}&order=created_at.desc&limit=1000`
-    ).catch(() => null),
-    sbSelect<ScoreRow>(
+    ),
+    sbSelectDark<ScoreRow>(
       "agent_scores",
       `select=scorer,scores,spec_rev,decision_id,created_at&created_at=gte.${encodeURIComponent(
         since
       )}&order=created_at.desc&limit=400`
-    ).catch(() => null),
-    sbSelect<ReviewRow>(
+    ),
+    sbSelectDark<ReviewRow>(
       "agent_reviews",
       `select=decision_id,edge_id,rating,verdict,branch_correct,outcome_impact,tags,created_at&order=created_at.desc&limit=400`
-    ).catch(() => null),
+    ),
     getActiveRev(),
   ]);
 

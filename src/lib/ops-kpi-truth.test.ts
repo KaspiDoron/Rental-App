@@ -31,8 +31,18 @@ describe("a failed read is dark, never zero", () => {
     expect(route).not.toMatch(/\.catch\(\(\) => \[\]\)/);
   });
 
-  it("all three reads catch to null", () => {
-    expect((route.match(/\.catch\(\(\) => null\)/g) ?? []).length).toBe(3);
+  it("all three reads use the reader that can actually answer 'unknown'", () => {
+    // THIS ASSERTION USED TO COUNT `.catch(() => null)` AND IT PASSED WHILE THE
+    // FIX DID NOTHING. `sbSelect` has no rejection path, so those catches were
+    // unreachable, `null` never happened, `degraded` was permanently empty, and
+    // the panel went on rendering a confident zero over a dead database.
+    //
+    // Counting a catch proves a line exists. It cannot prove the line runs. The
+    // reader is now `sbSelectDark`, whose `T[] | null` return type makes the
+    // unknown case reachable by construction - and fail-dark.test.ts executes it
+    // against a stubbed outage rather than reading the source.
+    expect((route.match(/sbSelectDark</g) ?? []).length).toBe(3);
+    expect(route).not.toMatch(/\.catch\(\(\) => null\)/);
   });
 
   it("the aggregation still runs on an empty array, so nothing below changed", () => {
@@ -114,7 +124,7 @@ describe("every KPI on this page has a real writer", () => {
   });
 
   it("the route reads exactly those three tables and no fourth", () => {
-    const tables = Array.from(route.matchAll(/sbSelect<\w+>\(\s*"(\w+)"/g)).map((m) => m[1]);
+    const tables = Array.from(route.matchAll(/sbSelectDark<\w+>\(\s*"(\w+)"/g)).map((m) => m[1]);
     expect(new Set(tables)).toEqual(new Set(["agent_traces", "agent_scores", "agent_reviews"]));
   });
 });

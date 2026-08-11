@@ -326,6 +326,42 @@ export async function sbSelectStrict<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * THE READ FOR A SURFACE THAT REPORTS TRUTH. Rows, or `null` for "unknown".
+ *
+ * WHY THIS EXISTS, AND WHY THE OBVIOUS VERSION DID NOT WORK.
+ *
+ * Several panels tried to fail dark by writing `sbSelect(...).catch(() => null)`
+ * and treating `null` as "could not read". That code has never run. `sbSelect`
+ * has no rejection path at all - a missing connection, a non-2xx and a thrown
+ * exception all `return []` - so the catch is unreachable and the `null` branch
+ * behind it is dead. The Command Center and the Ops Analytics panel both shipped
+ * that way and both still rendered a confident green over a dead database, which
+ * is the exact failure their fix was written to prevent.
+ *
+ * The mapping here is the whole point, and the two error values are NOT
+ * interchangeable:
+ *
+ *   { rows }                 -> the rows. `[]` is a real, trustworthy zero.
+ *   { error: "missing" }     -> `[]`. The table is not migrated, so no row CAN
+ *                               exist. Vacuously empty, and NOT degraded - a
+ *                               fresh install must not paint itself dark.
+ *   { error: "unavailable" } -> `null`. The truth is unknown. A caller that
+ *                               renders this as zero is lying to its operator.
+ *
+ * Use this for KPIs, health tiles and alert feeds. For a SAFETY GATE - a budget,
+ * a cap, a restriction check - use `sbSelectStrict` directly and branch on the
+ * error, because "unknown" there must deny rather than merely display a dash.
+ */
+export async function sbSelectDark<T = Record<string, unknown>>(
+  table: string,
+  query = "select=*&limit=50"
+): Promise<T[] | null> {
+  const read = await sbSelectStrict<T>(table, query);
+  if ("error" in read) return read.error === "missing" ? [] : null;
+  return read.rows;
+}
+
 /** Insert rows into a Supabase table via the service role. No-op if unset. */
 export async function sbInsert(
   table: string,

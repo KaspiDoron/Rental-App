@@ -211,12 +211,20 @@ export async function GET() {
   // header with head=true, so this is twelve tiny HEAD-shaped requests rather
   // than one large row transfer - cheaper than what it replaces, and each
   // number is now independent of the others' volume.
+  // The `.catch(() => 0)` that used to sit on each of these was dead: `sbCount`
+  // returns 0 on every failure by its own documented design, so the catch could
+  // never run and the zero it "provided" was the same zero the reader already
+  // gives. Removing it changes nothing except the impression that a failure is
+  // being handled here. It is not - and on a HEALTH page, a count that reads
+  // zero during an outage is the same fail-green shape as everything else in
+  // this commit. Left as a count for now; the honest version needs a
+  // count-with-degraded reader, which is its own change.
   const counts = await Promise.all(
     guardKinds.map((k) =>
       sbCount(
         "agent_events",
         `kind=eq.${encodeURIComponent(k)}&created_at=gte.${encodeURIComponent(sinceIso)}`
-      ).catch(() => 0)
+      )
     )
   );
   const guardCounters: Record<string, number> = {};

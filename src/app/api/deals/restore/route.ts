@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
 import { isSessionFresh, isRealHunt } from "@/lib/session-life";
@@ -81,17 +81,41 @@ export async function GET(req: Request) {
 
   // 1. Recent search rows -> the same 30-min session grouping the Trips list uses.
   // Try the snapshot-bearing select first; fall back for a pre-migration DB.
-  let rows = await sbSelect<SearchRow>(
+  // THE PRE-MIGRATION FALLBACK BELOW WAS UNREACHABLE.
+  //
+  // It was written as `sbSelect(...).catch(() => null)` and gated on
+  // `rows === null`. `sbSelect` has no rejection path - a 400 carrying
+  // "column snapshot does not exist" returns `[]` like everything else - so the
+  // catch never ran, `null` never happened, and a database without the
+  // `rfq`/`snapshot` columns answered "No searches found." instead of degrading
+  // to the columns it does have. The degrade was recorded in the code and has
+  // never executed.
+  //
+  // `sbSelectStrict` is the reader that can tell those apart: `missing` is
+  // exactly "that column is not there yet", which is the one case this fallback
+  // exists for. `unavailable` is an outage and must NOT trigger the fallback -
+  // retrying the same unreachable database with fewer columns just fails twice.
+  const wide = await sbSelectStrict<SearchRow>(
     "searches",
     `select=id,query_text,lat,lng,radius_km,vehicle_class,source,rfq,snapshot,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
-  ).catch(() => null);
-  if (rows === null) {
-    rows = (
-      await sbSelect<Omit<SearchRow, "rfq" | "snapshot">>(
-        "searches",
-        `select=id,query_text,lat,lng,radius_km,vehicle_class,source,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
-      ).catch(() => [])
-    ).map((r) => ({ ...r, rfq: null, snapshot: null }));
+  );
+  let rows: SearchRow[];
+  if ("rows" in wide) {
+    rows = wide.rows;
+  } else if (wide.error === "missing") {
+    const narrow = await sbSelectStrict<Omit<SearchRow, "rfq" | "snapshot">>(
+      "searches",
+      `select=id,query_text,lat,lng,radius_km,vehicle_class,source,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
+    );
+    rows = "rows" in narrow ? narrow.rows.map((r) => ({ ...r, rfq: null, snapshot: null })) : [];
+  } else {
+    // Unreadable. Say so rather than answering "you have never searched" - the
+    // client treats a 404 as "no live hunt" and lands on a clean search screen,
+    // which would quietly discard a hunt that is still running.
+    return NextResponse.json(
+      { error: "unavailable", hint: "Could not reach your hunts just now." },
+      { status: 503 }
+    );
   }
   if (!rows.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
 
@@ -184,14 +208,24 @@ export async function GET(req: Request) {
   // its start. The traveller's brand-new hunt would refuse to restore.
   const groupEndIso = group[group.length - 1].created_at;
   const nextGroupIso = gi > 0 ? groups[gi - 1][0].created_at : null;
-  const closedRows = await sbSelect<{ received_at: string }>(
+  //
+  // STRICT, because this is a gate rather than a display. Read permissively it
+  // would answer `[]` during an outage - "not closed" - and a hunt the traveller
+  // had explicitly cleared would come back. Unknown must refuse, not restore.
+  const closedRead = await sbSelectStrict<{ received_at: string }>(
     "whatsapp_messages",
     `select=received_at&to_number=eq.session&raw->>sender=eq.${enc}&raw->>kind=eq.session-closed` +
       `&received_at=gt.${encodeURIComponent(groupEndIso)}` +
       (nextGroupIso ? `&received_at=lt.${encodeURIComponent(nextGroupIso)}` : "") +
       `&order=received_at.desc&limit=1`
-  ).catch(() => []);
-  if (closedRows.length) {
+  );
+  if ("error" in closedRead && closedRead.error === "unavailable") {
+    return NextResponse.json(
+      { error: "unavailable", hint: "Could not reach your hunts just now." },
+      { status: 503 }
+    );
+  }
+  if ("rows" in closedRead && closedRead.rows.length) {
     return NextResponse.json(
       { error: "session-closed", hint: "You cleared this hunt." },
       { status: 404 }
