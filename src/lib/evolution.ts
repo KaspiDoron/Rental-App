@@ -63,6 +63,16 @@ const WEBHOOK_EVENTS = [
   "MESSAGES_UPDATE",
   "CONNECTION_UPDATE",
   "CALL",
+  // WE DO NOT OWN THE PAIRING CODE'S LIFETIME (W-5).
+  //
+  // `PAIRING_TTL_MS` is OUR number. Baileys mints the code, Baileys rotates it,
+  // on its own timer, and this is the event that says so. Without it the app is
+  // structurally unable to learn that the credential on the traveller's screen
+  // has been replaced: it keeps counting down its own 55 seconds over a code
+  // that Evolution retired twenty seconds ago, the traveller types it, WhatsApp
+  // says "incorrect", and "Try again" - which re-polls and gets the current one
+  // - works. That is the first-attempt failure the owner reported, exactly.
+  "QRCODE_UPDATED",
 ] as const;
 
 const CONNECT_FINGERPRINT = { browser: CLIENT_BROWSER, mobile: false } as const;
@@ -825,10 +835,42 @@ export async function resolveInstanceEmail(
   return { ok: true, email: read.rows[0]?.email ?? null };
 }
 
-/** Real-world WhatsApp pairing codes die in about a minute. The app treats a
- *  shown code as live for this long; past it, any retry takes the hard
- *  logout+delete+recreate path so the user always types a CURRENT code. */
+/**
+ * How long a pairing code is assumed live when nothing better is known.
+ *
+ * A CEILING, NOT A CONTRACT (W-5). WhatsApp codes die in about a minute, so 55s
+ * is a reasonable outer bound - but the code is minted and rotated by Baileys,
+ * on Baileys' timer, and this constant cannot know when that happened. Treating
+ * it as authoritative is what stranded travellers on a dead code: the countdown
+ * said 30 seconds left while Evolution had already replaced the credential.
+ *
+ * The truth now arrives as `QRCODE_UPDATED`, which re-stamps
+ * `wa_sessions.pairing_code_issued_at`; the window is measured from that stamp,
+ * so a rotation restarts the clock. This number is only the fallback for the
+ * span before any rotation has been observed.
+ */
 export const PAIRING_TTL_MS = 55_000;
+
+/**
+ * Evolution rotated the pairing credential - re-anchor our window to now.
+ *
+ * Narrow on purpose: it touches one column and never the status, because a
+ * rotation says nothing about whether the socket opened. Never throws; a
+ * missed stamp degrades to the old fixed-window behaviour rather than
+ * breaking the link.
+ */
+export async function notePairingRotation(email: string): Promise<void> {
+  try {
+    const { sbUpdate } = await import("./runtime-config");
+    await sbUpdate(
+      "wa_sessions",
+      `email=eq.${encodeURIComponent(email.trim().toLowerCase())}`,
+      { pairing_code_issued_at: new Date().toISOString() }
+    );
+  } catch {
+    /* the countdown is a hint, never a gate */
+  }
+}
 
 async function saveSession(
   email: string,

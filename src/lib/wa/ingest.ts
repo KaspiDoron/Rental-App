@@ -214,6 +214,34 @@ export async function processEvolutionWebhook(
     const event = String(body.event ?? "").toLowerCase().replace(/_/g, ".");
     const instance = String(body.instance ?? body.instanceName ?? "");
 
+    // BAILEYS JUST REPLACED THE CODE ON THE TRAVELLER'S SCREEN (W-5).
+    //
+    // The app was counting down its own fixed 55 seconds over a credential it
+    // does not own and cannot see rotate - the event was never subscribed to.
+    // So the countdown read "30 seconds left" while Evolution had already
+    // retired the code; the traveller typed it, WhatsApp refused, and "Try
+    // again" - which re-polls and gets the current one - worked. That is the
+    // reported first-attempt failure, and this is the missing signal.
+    //
+    // Re-stamping is the whole handler: `connectInstance` measures the window
+    // from `pairing_code_issued_at`, so a rotation restarts the clock and the
+    // next poll reports the life of the code actually on screen.
+    if (event.includes("qrcode.updated")) {
+      try {
+        const who = await resolveInstanceEmail(instance);
+        // An unresolvable instance here is not "not ours" - it may be an
+        // outage - and a missed stamp only costs accuracy, so ask again.
+        if (!who.ok) return { retryable: true };
+        if (who.email) {
+          const { notePairingRotation } = await import("@/lib/evolution");
+          await notePairingRotation(who.email);
+        }
+      } catch {
+        /* the countdown is a hint, never a gate */
+      }
+      return { retryable };
+    }
+
     // Delivery / read receipts (blue tick) feed the Anti-Ban risk engine:
     // a healthy number gets read and replied to; delivered-but-never-read is a
     // strong spam signal, so we track it and let the guard react.
