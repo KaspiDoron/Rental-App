@@ -63,6 +63,16 @@ export interface ThreadContext {
   vendorId?: string;
   vendorName?: string;
   kind?: string;
+  /**
+   * The engine MOVE this outbound carried (`confirm-vehicle`, `bargain`, ...).
+   *
+   * It was already being written here by the dispatch site and read back by
+   * `graph/engine.ts` through a cast - but it was never declared, so every
+   * other consumer had to either cast too or fall back to guessing the fact
+   * from our own prose. Both of those happened, and both produced the same
+   * user-visible bug: a question asked twice.
+   */
+  move?: string;
   round?: number;
   rfq?: StructuredRFQ | null;
   region?: string;
@@ -842,16 +852,24 @@ export async function processVendorReply(opts: {
       const prevConf = (prevState?.fields as {
         vehicleConfirmation?: import("./vehicle/confirmation").VehicleConfirmationState;
       } | null)?.vehicleConfirmation;
-      const lastOut = await sbSelect<{ body: string }>(
+      // `raw` as well as `body`: the MOVE we chose when we sent that message is
+      // already recorded there. The confirmation resolver used to re-derive
+      // "did we ask?" by regex over `body` - our own LLM-composed prose, in a
+      // randomized template family with no rail constraining its shape for this
+      // move. When the phrasing missed the pattern, the ask-once latch never
+      // set and the engine asked the same question again, which is exactly what
+      // the owner watched happen after the shop had answered "Click 125 cc yes".
+      const lastOut = await sbSelect<{ body: string; raw: { move?: string } | null }>(
         "whatsapp_messages",
-        `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        `select=body,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
           ctx.sender
         )}&order=received_at.desc&limit=1${numberFilter("to_number", from)}`
-      ).catch(() => [] as { body: string }[]);
+      ).catch(() => [] as { body: string; raw: { move?: string } | null }[]);
       const conf = resolveConfirmation(prevConf, {
         declared,
         inboundText: extractText,
         lastOutboundText: lastOut[0]?.body ?? "",
+        lastOutboundMove: lastOut[0]?.raw?.move ?? null,
         messageStatus: extraction.vehicleAssessment?.status ?? null,
         hasPrice: Boolean(usablePrice),
       });
@@ -1519,6 +1537,23 @@ export async function processVendorReply(opts: {
       .filter((m) => m.direction === "outbound")
       .map((m) => m.body ?? "")
       .filter(Boolean),
+    // THE SAME BUG AS THE CONFIRM LOOP, ON THE SAME TURN.
+    //
+    // `deriveThreadFacts` prefers the recorded MOVE and falls back to matching
+    // BARGAIN_TEXT_RX against our own prose. `priorOutboundKinds` is what feeds
+    // it the recorded moves - and it was populated in exactly ONE place, the
+    // graph TICK path (graph/engine.ts buildTurnFromThread). The INBOUND path,
+    // which is the one that runs when a shop actually replies, never set it. So
+    // the primary engine re-derived "have we bargained yet?" from wording on
+    // every live turn, while the answer was sitting in `raw.move` on rows this
+    // very function had already loaded (`thread` carries `raw`).
+    //
+    // Deliberately NOT filtered like `priorOutbound` above: the kinds array is
+    // positional against the outbound rows, so dropping empties would shift
+    // every subsequent move onto the wrong message.
+    priorOutboundKinds: thread
+      .filter((m) => m.direction === "outbound")
+      .map((m) => m.raw?.move ?? m.raw?.kind ?? undefined),
     priorInbound: thread
       .filter((m) => m.direction === "inbound")
       .map((m) => m.body ?? "")

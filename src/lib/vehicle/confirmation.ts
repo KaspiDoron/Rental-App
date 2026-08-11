@@ -89,6 +89,30 @@ export interface ConfirmationInput {
   inboundText: string;
   /** OUR most recent outbound in this thread (empty when none/unknown). */
   lastOutboundText: string;
+  /**
+   * The MOVE we recorded when we sent that outbound (`whatsapp_messages.raw.move`),
+   * when it is known.
+   *
+   * WE ALREADY KNEW THE ANSWER AND WERE GUESSING IT FROM OUR OWN PROSE.
+   *
+   * `askedVehicleQuestion` re-derives "did we ask?" by regex-matching the text
+   * we sent. That text is composed by an LLM through a randomized template
+   * family, and nothing constrains its shape for this move - `rails.ts` does
+   * not mention `confirm-vehicle` at all. So a perfectly good confirm question
+   * that happened to be phrased without a matching frame read as "we never
+   * asked", the ask-once latch never set, and the engine asked again.
+   *
+   * The owner watched exactly that: the shop answered "Click 125 cc yes", and
+   * the very next turn asked "Just to confirm, is the 200 baht per day quote
+   * for a fully automatic 125cc scooter?" - the same question, already answered
+   * twice.
+   *
+   * The dispatch site knew the move and wrote it durably. Reading it back is
+   * strictly better than inferring it: it cannot be defeated by rephrasing.
+   * The regex stays as the fallback for rows written before the move was
+   * recorded, so old threads keep whatever accuracy they had.
+   */
+  lastOutboundMove?: string | null;
   /** The per-message identity verdict for the price in play (null = no price). */
   messageStatus: "confirmed" | "needs-confirmation" | "wrong-vehicle" | null;
   /** A usable price was read from this reply. */
@@ -106,7 +130,14 @@ export function resolveConfirmation(
   input: ConfirmationInput
 ): VehicleConfirmationState {
   const now = new Date().toISOString();
-  const asked = askedVehicleQuestion(input.lastOutboundText, input.declared);
+  // THE RECORDED MOVE OUTRANKS THE REGEX. We wrote down what we did; reading it
+  // back cannot be defeated by rephrasing, which is what the text match was.
+  // `undefined`/`null` means the row predates the move being recorded - only
+  // then do we fall back to inferring it from our own prose.
+  const asked =
+    input.lastOutboundMove != null && input.lastOutboundMove !== ""
+      ? input.lastOutboundMove === "confirm-vehicle"
+      : askedVehicleQuestion(input.lastOutboundText, input.declared);
   // The ask-once fact survives every transition below.
   const askedAt = prev?.askedAt ?? (asked ? now : undefined);
   const keep = (s: VehicleConfirmationState): VehicleConfirmationState =>
