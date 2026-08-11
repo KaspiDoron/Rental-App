@@ -127,6 +127,27 @@ export const OUTREACH_SYNC_OPTS: JobsOptions = {
 // Enqueue helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * THIS TIER IS BUILT, TESTED, AND NOT WIRED UP. Say so, rather than let the
+ * next reader assume batches flow through it.
+ *
+ * `enqueueOutreachBatch` has ZERO producers. Nothing in src/, services/, apps/
+ * or packages/ calls it - only the barrel re-exports it. So
+ * `outreach.worker`'s "batch" handler, and every gate inside it (the
+ * concurrency slot, the intro-window budget, the addBulk fan-out), never runs
+ * in this deployment. /api/outreach/mass does its own inline fan-out instead,
+ * with its own copies of those gates.
+ *
+ * That is not automatically wrong - the inline path is what ships today and it
+ * works - but it is a fact worth stating out loud, because two implementations
+ * of "how a batch is paced" is exactly how one of them drifts into being more
+ * permissive than the other (which is what happened to the lane argument in
+ * scheduler.worker, fixed in the same wave as this note).
+ *
+ * There is a test asserting the producer count is still zero. It fails if
+ * someone wires this up - at which point this comment is the thing to update,
+ * and the duplicate gates are the thing to reconcile.
+ */
 export async function enqueueOutreachBatch(job: OutreachBatchJobV2): Promise<void> {
   await queue(OUTREACH_QUEUE).add(OUTREACH_BATCH, job, {
     ...OUTREACH_BATCH_OPTS,

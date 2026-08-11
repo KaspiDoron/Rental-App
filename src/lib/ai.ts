@@ -559,6 +559,26 @@ async function callProvider(
     const reason = e instanceof Error ? e.message : String(e);
     const modelIssue = /\b(400|404)\b/.test(reason);
     if (cfg.fallbackModel && modelIssue) {
+      // A SUCCESSFUL RESCUE HID THE THING THAT NEEDED FIXING.
+      //
+      // When the fallback works, the primary's error was discarded entirely:
+      // nothing recorded it, no counter moved, no admin surface changed. So a
+      // configured model id the provider had RENAMED - which is the ordinary
+      // way this breaks, not an exotic one - stayed broken forever while
+      // DOUBLING every single LLM call: two HTTP round trips and two latencies
+      // on every turn, permanently, invisibly. The retry was designed as a
+      // safety net and had quietly become the steady state.
+      //
+      // Record it as a non-fatal failure. `recordUsage` already carries the
+      // model and a trimmed, key-free reason, and the Providers panel already
+      // renders `lastFailure` - so the drifted id becomes visible on a screen
+      // the owner already reads, with no new surface to build.
+      //
+      // Awaited, not detached: on Cloud Run a detached insert dies at the
+      // response boundary, which is the reason this telemetry read zero for
+      // months in the first place.
+      await recordUsage(cfg.name, 0, true, cfg.model, `primary model failed, fell back: ${reason}`)
+        .catch(() => {});
       return run(cfg.fallbackModel);
     }
     throw e;

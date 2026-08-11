@@ -2019,6 +2019,41 @@ export async function buildTurnFromThread(
       (m) => m.direction === "outbound" && (m.raw as { kind?: string } | null)?.kind === k
     ).length;
 
+  // THE PRICE THE WAIT WAS SCHEDULED FOR.
+  //
+  // A strategic wait exists to come back to a shop that has already quoted -
+  // "they said 400, hold, then push". The tick then ran the engine with
+  // `usablePrice: undefined`, and on the PRIMARY engine that is not a missing
+  // optimisation, it is amnesia: spte/live.ts reads `input.usablePrice`
+  // directly with no fallback, so `found: Boolean(input.usablePrice)` was
+  // false, `quotedPricePerDay` was undefined and `quote` was null. The
+  // follow-up the wait was scheduled for is structurally impossible when the
+  // engine cannot see the number it was waiting on.
+  //
+  // (The graph engine happened to survive this - it falls back to
+  // `state.fields.pricePerDay`. That is exactly why nothing caught it: the
+  // fallback path was fine and the default path was not.)
+  //
+  // `usablePrice` on a live turn means "the price this turn established". On a
+  // tick there is no new inbound, so the honest value is the price the THREAD
+  // has already established - which `offers` records durably, per user and
+  // vendor. `extraction` stays null: that really is "no new information", and
+  // conflating the two is what produced the bug.
+  let threadPrice: number | undefined;
+  if (ctx.sender && ctx.vendorId) {
+    const priced = await sbSelect<{ price_per_day: number | string | null }>(
+      "offers",
+      `select=price_per_day&user_email=eq.${encodeURIComponent(ctx.sender)}` +
+        `&vendor_id=eq.${encodeURIComponent(ctx.vendorId)}` +
+        `&order=created_at.desc&limit=1`
+    ).catch(() => []);
+    const n = Number(priced[0]?.price_per_day);
+    // A missing or unreadable offer leaves it undefined - the state this code
+    // had unconditionally, so the failure direction is exactly today's
+    // behaviour rather than a worse one.
+    if (Number.isFinite(n) && n > 0) threadPrice = n;
+  }
+
   const rfq = resolved.rfq; // non-null: guarded by `if (!resolved.rfq) return null`
   const { floorPriceFor } = await import("../market");
   const { currencyForRegion } = await import("../agents");
@@ -2043,7 +2078,9 @@ export async function buildTurnFromThread(
     ctx,
     rfq,
     extraction: null, // no NEW inbound information on a tick/user action
-    usablePrice: undefined,
+    // ...but the price the thread already established is not new information
+    // either - it is the standing fact the wait was scheduled around.
+    usablePrice: threadPrice,
     currency: cur,
     floorPrice: floorSameCur?.floor,
     floorTypical: floorSameCur?.typical ?? undefined,
