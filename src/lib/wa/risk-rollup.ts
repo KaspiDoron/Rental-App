@@ -10,7 +10,7 @@
 // So: a scheduled job aggregates one hour into one row, and the panel reads the
 // last N rows. Nothing on the read path touches the event table.
 
-import { sbSelectStrict, sbInsert } from "../runtime-config";
+import { sbSelectStrict, sbInsert, pgTimestamp } from "../runtime-config";
 import { RISK_KINDS, type RiskKind } from "./risk-events";
 import { worseOf, rollupStale, type TileState } from "./risk-verdict";
 
@@ -87,7 +87,7 @@ export async function rollupBucket(nowMs: number): Promise<RiskSnapshot | null> 
 
   const res = await sbSelectStrict<RawEvent>(
     "wa_risk_events",
-    `select=sender_key,kind&at=gte.${from}&at=lt.${to}&order=at.desc&limit=${ROLLUP_ROW_CAP}`
+    `select=sender_key,kind&at=gte.${pgTimestamp(from)}&at=lt.${pgTimestamp(to)}&order=at.desc&limit=${ROLLUP_ROW_CAP}`
   );
 
   let snap: RiskSnapshot;
@@ -166,7 +166,7 @@ export async function riskReport(nowMs: number, hours = 24): Promise<RiskReport>
     truncated_signals: string[] | null;
   }>(
     "wa_risk_snapshots",
-    `select=bucket,accounts,counts,dark_signals,truncated_signals&bucket=gte.${since}&order=bucket.desc&limit=${hours + 2}`
+    `select=bucket,accounts,counts,dark_signals,truncated_signals&bucket=gte.${pgTimestamp(since)}&order=bucket.desc&limit=${hours + 2}`
   );
 
   if ("error" in res) {

@@ -74,17 +74,21 @@ export async function POST(req: Request) {
   // started, and only allow the remainder. The session boundary is the user's
   // latest `searches` row - the same signal the deals dashboard groups by.
   try {
-    const { sbSelect } = await import("@/lib/runtime-config");
+    const { sbSelect, pgTimestamp } = await import("@/lib/runtime-config");
     const enc = encodeURIComponent(session.email);
     const lastSearch = await sbSelect<{ created_at: string }>(
       "searches",
       `select=created_at&user_email=eq.${enc}&order=created_at.desc&limit=1`
     );
+    // pgTimestamp, NOT raw interpolation. This value comes back from PostgREST
+    // as `...+00:00`; raw, the `+` decoded to a space and the read below 400'd,
+    // so `contacted` was always empty and this cap - "backend truth, cannot be
+    // bypassed by repeat taps" - failed OPEN. See pgTimestamp's docblock.
     const sinceIso = lastSearch[0]?.created_at ?? new Date(Date.now() - 86400000).toISOString();
     const [sentRows, queuedRows] = await Promise.all([
       sbSelect<{ to_number: string }>(
         "whatsapp_messages",
-        `select=to_number&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&limit=200`
+        `select=to_number&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(sinceIso)}&limit=200`
       ).catch(() => []),
       sbSelect<{ to_number: string }>(
         "wa_outbox",

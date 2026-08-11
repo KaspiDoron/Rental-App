@@ -5,7 +5,7 @@
 // functional in demo mode. Providers are tried in preference order.
 
 import "server-only";
-import { getConfig } from "./runtime-config";
+import { getConfig, pgTimestamp } from "./runtime-config";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -210,7 +210,7 @@ async function cycleUsage(): Promise<{ byProvider: Record<string, number>; unrea
     // caller renders it as unknown rather than as room to spend.
     const rows = await sbSelectDark<{ provider: string; tokens: number; created_at: string }>(
       "ai_usage",
-      `select=provider,tokens,created_at&created_at=gte.${monthStart.toISOString()}&limit=100000`
+      `select=provider,tokens,created_at&created_at=gte.${pgTimestamp(monthStart)}&limit=100000`
     );
     if (rows === null) return { byProvider: out, unreadable: true };
     const dayStartMs = cycleStart("day")!.getTime();

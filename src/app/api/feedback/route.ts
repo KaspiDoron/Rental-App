@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { triageFeedback } from "@/lib/agents";
 import { sendEmail } from "@/lib/email";
-import { sbInsert, sbInsertReturning, sbSelect, sbDelete } from "@/lib/runtime-config";
+import {
+  sbInsert,
+  sbInsertReturning,
+  sbSelect,
+  sbDelete,
+  supabaseConfigured,
+} from "@/lib/runtime-config";
 import { adminEmails, getSession } from "@/lib/session";
 
 interface ImagePayload {
@@ -54,6 +60,15 @@ export async function POST(req: Request) {
     },
   ]);
   const feedbackId = inserted[0]?.id ?? null;
+  // A LOST REPORT MUST NOT READ AS A RECEIVED ONE.
+  //
+  // Both replies below promise the reporter they can follow up "under Your
+  // reports" - a thread that only exists if this row landed. With Supabase
+  // configured and unreachable the row does not land, and the response still
+  // said `accepted: true` with a null id. The escalation email is a separate
+  // path and still goes out, so this is not a hard failure; it is a different
+  // promise, and the copy has to match which one we actually kept.
+  const storedRow = feedbackId !== null || !supabaseConfigured();
 
   if (feedbackId !== null && Array.isArray(body.images) && body.images.length) {
     const rows = (body.images as { dataUrl?: string }[])
@@ -69,8 +84,10 @@ export async function POST(req: Request) {
     return NextResponse.json({
       accepted: false,
       id: feedbackId,
-      reason:
-        "Thanks! Our assistant reviewed this and didn't flag a concrete bug, so it wasn't escalated. Add more detail (what happened, steps) to send it through - you can also reply on it under Your reports.",
+      stored: storedRow,
+      reason: storedRow
+        ? "Thanks! Our assistant reviewed this and didn't flag a concrete bug, so it wasn't escalated. Add more detail (what happened, steps) to send it through - you can also reply on it under Your reports."
+        : "Thanks - we read this, and our assistant didn't flag a concrete bug. We could not save a copy just now, so it will not appear under Your reports. If you want us to look again, please send it once more in a few minutes.",
     });
   }
 
@@ -94,6 +111,12 @@ export async function POST(req: Request) {
   return NextResponse.json({
     accepted: true,
     id: feedbackId,
+    stored: storedRow,
+    // The team got it either way (that is `emailed`); `stored` is specifically
+    // whether a thread exists for the reporter to follow up in.
+    storedNote: storedRow
+      ? undefined
+      : "Sent to the team, but we could not save your copy - it will not appear under Your reports.",
     severity: verdict.severity,
     summary: verdict.summary,
     emailed: emailResult.sent,

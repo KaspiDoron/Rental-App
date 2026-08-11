@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbInsert, sbSelect, sbDelete } from "@/lib/runtime-config";
+import { sbInsert, sbSelect, sbDelete, supabaseConfigured } from "@/lib/runtime-config";
 
 // Persist confirmed bookings and list the caller's booking history.
 export async function POST(req: Request) {
@@ -143,11 +143,42 @@ export async function POST(req: Request) {
       shopsCompared: Number.isFinite(Number(b.shopsCompared)) ? Math.floor(Number(b.shopsCompared)) : null,
     },
   };
-  const ok = await sbInsert("bookings", [{ ...bookingBase, ...extra }]);
-  if (!ok) {
-    const okCur = await sbInsert("bookings", [{ ...bookingBase, currency: extra.currency }]);
-    if (!okCur) await sbInsert("bookings", [bookingBase]);
+  let stored = await sbInsert("bookings", [{ ...bookingBase, ...extra }]);
+  if (!stored) {
+    stored = await sbInsert("bookings", [{ ...bookingBase, currency: extra.currency }]);
+    // The third tier's result was DISCARDED, and `{ok:true}` was returned
+    // unconditionally. So with Supabase configured and unreachable, all three
+    // writes failed, the money record vanished, and the traveller was told the
+    // booking was confirmed. Nothing was logged, and the commitment lock above
+    // reads the same table - so the double-booking guard opened at the same
+    // moment. Same shape as the setPlan defect documented in access.ts:341;
+    // this path never got the same treatment.
+    if (!stored) stored = await sbInsert("bookings", [bookingBase]);
   }
+
+  if (!stored && supabaseConfigured()) {
+    // Demo mode (no Supabase) is a supported configuration and must still
+    // answer ok - hence the `supabaseConfigured()` guard. A CONFIGURED database
+    // that refused all three writes is a different thing entirely, and the one
+    // answer that is never acceptable is "confirmed".
+    void sbInsert("agent_events", [
+      {
+        kind: "booking-write-failed",
+        user_email: session.email,
+        vendor_name: String(b.vendorName).slice(0, 120),
+        detail: `all 3 insert tiers failed; total=${totalPrice} ${extra.currency}`,
+      },
+    ]).catch(() => false);
+    return NextResponse.json(
+      {
+        error:
+          "We could not save this booking just now, so we have not locked it in. Nothing was charged. Please try again in a moment - the shop has not been told anything yet.",
+        stored: false,
+      },
+      { status: 503 }
+    );
+  }
+
   return NextResponse.json({ ok: true, totalPrice, currency: extra.currency });
 }
 

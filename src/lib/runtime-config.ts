@@ -175,6 +175,55 @@ export function supabaseConfigured(): boolean {
 }
 
 /**
+ * A timestamp that is safe to drop into a PostgREST filter.
+ *
+ * THE BUG THIS EXISTS FOR. PostgREST renders a `timestamptz` column as
+ * `2026-08-11T12:00:00.123456+00:00`. That value is perfectly valid, and the
+ * obvious thing to do with it - feed it straight back as the lower bound of the
+ * next query - is broken, because `+` in a query string decodes to a SPACE.
+ * Postgres then receives `2026-08-11T12:00:00.123456 00:00`, fails to parse it,
+ * and answers 400. `sbSelect` maps 400 to `[]`, so the caller sees an empty
+ * table rather than an error, and the failure is invisible.
+ *
+ * It bit twice, in opposite directions:
+ *
+ *   - `/api/deals` used the oldest kept session's `created_at` as the floor for
+ *     FIVE reads (outbound, replies, offers x2, risk alerts). Every one of them
+ *     400'd, so the entire Trips hub rendered 0 contacted, 0 replied, no offers
+ *     and no best price for anybody who had ever run a hunt. The offers read even
+ *     has a two-tier fallback, and both tiers carried the same broken filter, so
+ *     the fallback could not rescue it.
+ *
+ *   - `/api/outreach/mass` used the newest `searches.created_at` as the floor for
+ *     the per-session shop cap - the one the comment calls "backend truth, cannot
+ *     be bypassed by repeat taps". A 400 there means zero shops counted as already
+ *     contacted, so the cap FAILS OPEN and repeat taps can exceed it.
+ *
+ * A date only ever came from `new Date(...).toISOString()` before, which ends in
+ * `Z` and survives being interpolated raw - which is exactly why nobody noticed
+ * that raw interpolation was unsafe, and why every other call site in the repo
+ * looks fine.
+ *
+ * Normalising through `Date` also truncates PostgREST's microseconds to
+ * milliseconds. That rounds the boundary DOWN, which is the safe direction for a
+ * `gte` floor (it can only include a row it already included) and for an `lte`
+ * ceiling (it can only exclude the final microsecond).
+ *
+ * Returns the value already percent-encoded, so the call site cannot forget.
+ * An unparseable input throws rather than silently producing a filter that
+ * matches everything - a floor that has quietly become "the beginning of time"
+ * is how a cap fails open.
+ */
+export function pgTimestamp(value: string | number | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  const ms = d.getTime();
+  if (!Number.isFinite(ms)) {
+    throw new Error(`pgTimestamp: not a timestamp: ${String(value).slice(0, 64)}`);
+  }
+  return encodeURIComponent(d.toISOString());
+}
+
+/**
  * fetch with a HARD timeout. undici's fetch has no short overall request
  * timeout, so a Supabase connection that accepts but stalls would block the
  * handler until Cloud Run's request timeout - and a single guardOutbound/drain pass

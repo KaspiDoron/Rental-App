@@ -76,12 +76,37 @@ export async function POST(req: Request) {
       "searches",
       `select=id&user_email=eq.${encodeURIComponent(session.email)}&order=created_at.desc&limit=1`
     ).catch(() => []);
+    // THE SAVINGS BASELINE IS NOT THE CLIENT'S TO DECIDE.
+    //
+    // `body.firstQuote` went into the `numeric` column verbatim - no Number(),
+    // no range check - and that column IS the "before" price behind every
+    // savings figure: the per-session saved%, the trip snapshot, the judge's
+    // scoring, and the owner's GLOBAL, cross-user average-discount KPI. One
+    // caller could move the headline number for every user.
+    //
+    // It also broke the row: a non-numeric value 400s the insert, and the
+    // fallback insert below re-sent the SAME field, so the offer was dropped
+    // entirely while the route still answered 200 with the extraction.
+    //
+    // A baseline is only meaningful if it is a real number, at or above what we
+    // negotiated (a "before" cannot be cheaper than the "after"), and not
+    // absurd - beyond 10x the quote it is not a rental list price, it is noise
+    // that would report a 90%+ discount. Anything else falls back to the quote
+    // itself, which reports a saving of zero: honest, and the direction that
+    // cannot flatter us.
+    const askedRaw = Number(body.firstQuote);
+    const listPerDay =
+      Number.isFinite(askedRaw) &&
+      askedRaw >= result.pricePerDay &&
+      askedRaw <= result.pricePerDay * 10
+        ? askedRaw
+        : result.pricePerDay;
     const row = {
       user_email: session.email,
       vendor_id: String(body.vendorId ?? ""),
       vendor_name: String(body.vendorName ?? ""),
       price_per_day: result.pricePerDay,
-      list_price_per_day: body.firstQuote ?? result.pricePerDay,
+      list_price_per_day: listPerDay,
       currency: cur,
       round: Number(body.round ?? 0),
       simulated: false,

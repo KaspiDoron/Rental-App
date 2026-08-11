@@ -97,6 +97,10 @@ describe("fieldKpis renders a dead database as dark, not as a quiet month", () =
     vi.resetModules();
     vi.doMock("server-only", () => ({}));
     vi.doMock("./runtime-config", () => ({
+      // The real one. A stub that just returned the input would let a raw "+00:00"
+      // through here while 400ing in production - the exact gap this export closes.
+      pgTimestamp: (v: string | number | Date) =>
+        encodeURIComponent(new Date(v as string).toISOString()),
       sbSelectDark: async () => null,
       sbSelect: async () => [],
       sbSelectStrict: async () => ({ error: "unavailable" as const }),
@@ -133,6 +137,10 @@ describe("fieldKpis renders a dead database as dark, not as a quiet month", () =
     vi.resetModules();
     vi.doMock("server-only", () => ({}));
     vi.doMock("./runtime-config", () => ({
+      // The real one. A stub that just returned the input would let a raw "+00:00"
+      // through here while 400ing in production - the exact gap this export closes.
+      pgTimestamp: (v: string | number | Date) =>
+        encodeURIComponent(new Date(v as string).toISOString()),
       sbSelectDark: async () => [],
       sbSelect: async () => [],
       sbSelectStrict: async () => ({ rows: [] }),
@@ -150,6 +158,10 @@ describe("fieldKpis renders a dead database as dark, not as a quiet month", () =
     vi.doMock("server-only", () => ({}));
     const since = new Date().toISOString();
     vi.doMock("./runtime-config", () => ({
+      // The real one. A stub that just returned the input would let a raw "+00:00"
+      // through here while 400ing in production - the exact gap this export closes.
+      pgTimestamp: (v: string | number | Date) =>
+        encodeURIComponent(new Date(v as string).toISOString()),
       sbSelectDark: async (table: string, query: string) => {
         if (table === "offers") return [{ price_per_day: 80, list_price_per_day: 100 }];
         if (table === "searches") return [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];

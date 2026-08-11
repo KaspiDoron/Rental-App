@@ -11,7 +11,7 @@
 // the telemetry safety score already exist (api/admin/costs, senderSafety).
 
 import "server-only";
-import { sbSelectDark } from "./runtime-config";
+import { sbSelectDark, pgTimestamp } from "./runtime-config";
 
 export interface OfferMargin {
   price_per_day: number | string | null;
@@ -94,20 +94,20 @@ export async function fieldKpis(windowDays = 30): Promise<FieldKpis> {
   const [offersRead, searchesRead, bookingsRead, takeoversRead, threadsRead] = await Promise.all([
     sbSelectDark<OfferMargin>(
       "offers",
-      `select=price_per_day,list_price_per_day&created_at=gte.${since}&limit=10000`
+      `select=price_per_day,list_price_per_day&created_at=gte.${pgTimestamp(since)}&limit=10000`
     ),
-    sbSelectDark<{ id: number }>("searches", `select=id&created_at=gte.${since}&limit=10000`),
-    sbSelectDark<{ id: number }>("bookings", `select=id&created_at=gte.${since}&limit=10000`),
+    sbSelectDark<{ id: number }>("searches", `select=id&created_at=gte.${pgTimestamp(since)}&limit=10000`),
+    sbSelectDark<{ id: number }>("bookings", `select=id&created_at=gte.${pgTimestamp(since)}&limit=10000`),
     sbSelectDark<{ user_email: string | null; vendor_id: string | null }>(
       "agent_events",
-      `select=user_email,vendor_id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${since}&limit=10000`
+      `select=user_email,vendor_id&kind=in.(human-takeover,takeover,takeover-detected)&created_at=gte.${pgTimestamp(since)}&limit=10000`
     ),
     // engine-v3-turn events are the response-latency source (each carries
     // `latencyMs` on a delivered reply) AND, once reduced to distinct threads,
     // the escalation denominator.
     sbSelectDark<{ detail: string; user_email: string | null; vendor_id: string | null }>(
       "agent_events",
-      `select=detail,user_email,vendor_id&kind=eq.engine-v3-turn&created_at=gte.${since}&limit=20000`
+      `select=detail,user_email,vendor_id&kind=eq.engine-v3-turn&created_at=gte.${pgTimestamp(since)}&limit=20000`
     ),
   ]);
   // null = unreadable. Name it, then compute from [] so the shape stays whole -

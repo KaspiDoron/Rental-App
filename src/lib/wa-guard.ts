@@ -22,7 +22,15 @@
 //     caps, scoring weights and hours from the DB without a redeploy.
 
 import "server-only";
-import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, sbDelete, getConfig } from "./runtime-config";
+import {
+  sbSelect,
+  sbSelectStrict,
+  sbInsert,
+  sbUpdate,
+  sbDelete,
+  getConfig,
+  pgTimestamp,
+} from "./runtime-config";
 import { parseFlag } from "./config-flags";
 import { policyRowValue } from "./wa/policy-values";
 import {
@@ -2374,7 +2382,7 @@ export async function drainOutbox(
   }>,
   opts?: DrainOptions
 ): Promise<number> {
-  const due = encodeURIComponent(new Date().toISOString());
+  const due = new Date().toISOString();
   const cols = "select=id,sender_key,to_number,body,not_before,meta";
   const senderFilter = opts?.senderKey
     ? `&sender_key=eq.${encodeURIComponent(opts.senderKey)}`
@@ -2391,7 +2399,7 @@ export async function drainOutbox(
   // Asking for replies in their own query makes the promise structural: they
   // are in the pool whatever the cold queue is doing.
   const replyQuery =
-    `${cols}&not_before=lte.${due}&meta->>kind=${REPLY_KIND_FILTER}` +
+    `${cols}&not_before=lte.${pgTimestamp(due)}&meta->>kind=${REPLY_KIND_FILTER}` +
     `${senderFilter}&order=not_before.asc&limit=24`;
   const [replyRows, anyRows] = await Promise.all([
     sbSelect<OutboxRow>("wa_outbox", replyQuery).catch(() => [] as OutboxRow[]),
@@ -2402,7 +2410,7 @@ export async function drainOutbox(
       ? Promise.resolve([] as OutboxRow[])
       : sbSelect<OutboxRow>(
           "wa_outbox",
-          `${cols}&not_before=lte.${due}${senderFilter}&order=not_before.asc&limit=48`
+          `${cols}&not_before=lte.${pgTimestamp(due)}${senderFilter}&order=not_before.asc&limit=48`
         ),
   ]);
   const byId = new Map<number, OutboxRow>();

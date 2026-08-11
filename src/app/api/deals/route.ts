@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, pgTimestamp } from "@/lib/runtime-config";
 import { toTrip } from "@/lib/trips";
 import { isRealHunt } from "@/lib/session-life";
 
@@ -133,7 +133,7 @@ export async function GET() {
   const sinceIso = new Date(Date.now() - 14 * DAY_MS).toISOString();
   const searchRows = await sbSelect<SearchRow>(
     "searches",
-    `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=30`
+    `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=30`
   ).catch(() => [] as SearchRow[]);
 
   // Same discriminator the restore route uses: /api/profile records a `searches`
@@ -159,6 +159,10 @@ export async function GET() {
   groups.reverse();
   const kept = groups.slice(0, 5);
 
+  // pgTimestamp, NOT raw interpolation. `kept[...].created_at` comes back from
+  // PostgREST as `...+00:00`, and a raw `+` in a query string decodes to a
+  // space - which 400'd all five reads below and rendered the whole Trips hub
+  // empty for anyone who had ever run a hunt. See pgTimestamp's docblock.
   const oldestStart = kept.length
     ? kept[kept.length - 1][0].created_at
     : new Date(Date.now() - DAY_MS).toISOString();
@@ -174,7 +178,7 @@ export async function GET() {
         received_at: string;
       }>(
         "whatsapp_messages",
-        `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${oldestStart}&order=received_at.desc&limit=250`
+        `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(oldestStart)}&order=received_at.desc&limit=250`
       ).catch(() => []),
       sbSelect<{
         id: number;
@@ -185,17 +189,17 @@ export async function GET() {
         created_at: string;
       }>(
         "vendor_replies",
-        `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${oldestStart}&order=created_at.desc&limit=250`
+        `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`
       ).catch(() => []),
       (async () => {
         let rows = await sbSelect<OfferRow>(
           "offers",
-          `select=id,vendor_id,vendor_name,price_per_day,list_price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${oldestStart}&order=created_at.desc&limit=250`
+          `select=id,vendor_id,vendor_name,price_per_day,list_price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`
         );
         if (rows.length === 0) {
           rows = await sbSelect<OfferRow>(
             "offers",
-            `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${oldestStart}&order=created_at.desc&limit=250`
+            `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`
           );
         }
         return rows;
@@ -215,7 +219,7 @@ export async function GET() {
         // across users whose emails were substrings of each other).
         `select=id,vendor_name,detail,created_at&kind=eq.inbound-risk&user_email=eq.${encodeURIComponent(
           email
-        )}&created_at=gte.${oldestStart}&order=created_at.desc&limit=20`
+        )}&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=20`
       ).catch(() => []),
       sbSelect<{ id: number; not_before: string }>(
         "wa_outbox",

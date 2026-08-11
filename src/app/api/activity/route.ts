@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, pgTimestamp } from "@/lib/runtime-config";
 import { senderSafety, type SenderSafety } from "@/lib/wa-guard";
 import { deriveCountered } from "@/lib/counter-offer";
 import { clampSince } from "@/lib/session-life";
@@ -172,7 +172,7 @@ export async function GET(req: Request) {
   const [traces, outbound, replies, offers, outbox, wakeups, events, inboundRows] = await Promise.all([
     sbSelect<TraceRow>(
       "agent_traces",
-      `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=120`
+      `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=120`
     ).catch(() => [] as TraceRow[]),
     sbSelect<{
       id: number;
@@ -186,7 +186,7 @@ export async function GET(req: Request) {
       // keep them out of the human-facing feed. Fetched deep enough (150) that
       // the per-vendor state rollup below covers a full 40+ shop batch, not just
       // the newest 40 (the feed itself is still sliced to `limit`).
-      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${sinceIso}&order=received_at.desc&limit=150`
+      `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=150`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -197,7 +197,7 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "vendor_replies",
-      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${sinceIso}&order=created_at.desc&limit=80`
+      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=80`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -210,7 +210,7 @@ export async function GET(req: Request) {
       created_at: string;
     }>(
       "offers",
-      `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${sinceIso}&order=created_at.desc&limit=80`
+      `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=80`
     ).catch(() => []),
     sbSelect<{
       id: number;
@@ -259,7 +259,7 @@ export async function GET(req: Request) {
       // gate, user pause, coalesced turns) are filtered out downstream.
       `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=in.("inbound-risk","inbound-dropped","send-dropped")&user_email=eq.${encodeURIComponent(
         email
-      )}&created_at=gte.${sinceIso}&order=created_at.desc&limit=20`
+      )}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=20`
     ).catch(() => []),
     sbSelect<{ from_number: string; body: string | null; received_at: string }>(
       "whatsapp_messages",
@@ -268,7 +268,7 @@ export async function GET(req: Request) {
       // failed (or is still queued for the recovery sweep) left the card on
       // "Awaiting reply" while the reply sat in the DB. The card state must
       // follow the wire, not the derivation.
-      `select=from_number,body,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${sinceIso}&order=received_at.desc&limit=60`
+      `select=from_number,body,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=60`
     ).catch(() => []),
   ]);
 

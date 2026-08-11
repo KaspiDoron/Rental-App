@@ -43,9 +43,13 @@ describe("the booking row carries the trip, not just the price", () => {
 
   it("the insert still degrades through the pre-migration column ladder", () => {
     // A booking must NEVER be lost to a migration that has not been run - the
-    // richest insert first, then progressively smaller ones.
-    expect(route).toMatch(/const ok = await sbInsert\("bookings", \[\{ \.\.\.bookingBase, \.\.\.extra \}\]\);/);
-    expect(route).toMatch(/if \(!okCur\) await sbInsert\("bookings", \[bookingBase\]\);/);
+    // richest insert first, then progressively smaller ones. The ladder is
+    // unchanged; what changed is that the LAST rung's result is no longer
+    // discarded (see write-truth.test.ts - all three failing used to answer
+    // `{ok:true}`), so the pins follow `stored` rather than the old `ok`/`okCur`.
+    expect(route).toMatch(/let stored = await sbInsert\("bookings", \[\{ \.\.\.bookingBase, \.\.\.extra \}\]\);/);
+    expect(route).toMatch(/stored = await sbInsert\("bookings", \[\{ \.\.\.bookingBase, currency: extra\.currency \}\]\);/);
+    expect(route).toMatch(/if \(!stored\) stored = await sbInsert\("bookings", \[bookingBase\]\);/);
   });
 });
 
