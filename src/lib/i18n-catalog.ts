@@ -518,7 +518,7 @@ export const I18N_CATALOG: string[] = [
   "Street-smart haggling in the shop's own language",
   "Structured request",
   "Structuring your request",
-  "Switch plans any time - a new subscription replaces the old one. To cancel or downgrade, use the manage link in your payment receipt email.",
+  "Switch plans any time - the new subscription replaces the old one and we cancel it for you. To cancel or downgrade, use the manage link in your payment receipt email.",
   "Tactic:",
   "Take me to the offers",
   "Take over",

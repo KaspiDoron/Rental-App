@@ -93,18 +93,26 @@ describe("POST /api/billing/confirm - executed, not pinned", () => {
     expect(events[0]).toMatchObject({ type: "plan_activated_ultra_sandbox", verified: false });
   });
 
-  it("REPRODUCTION: a grant that did NOT persist is not reported as applied", async () => {
-    // setPlan used to return void, so a failed write to app_users answered
-    // ok:true - the tester was shown Ultra features they did not have. This is
-    // the assertion a source pin could not make: it reads the actual response.
+  it("REGRESSION: the sandbox grant is DERIVED, so a failed write cannot exist", async () => {
+    // This test used to assert a 503 when setPlan failed. That assertion has
+    // been superseded by removing the write it guarded.
+    //
+    // The sandbox wrote the DURABLE `app_users.plan` column, which meant a free
+    // TEST_MODE grant outlived the switch that granted it - the one thing
+    // TEST_MODE's own contract (session.ts) promises it will not do. And the
+    // write was never doing the work it appeared to: getSession already grants
+    // Ultra to any flagged tester on every request, so the entitlement was live
+    // either way. Its only observable effect was permanence.
+    //
+    // `granted: false` stubs a failing setPlan. The route must now succeed
+    // anyway, because it no longer depends on that write at all.
     const { POST, events } = await loadConfirm({ isTestUser: true, granted: false });
     const res = await POST(jsonRequest({ plan: "ultra" }));
-    expect(res.status).toBe(503);
-    const body = await res.json();
-    expect(body.ok).toBeUndefined();
-    expect(body.error).toMatch(/could not apply the plan/i);
-    // ...and the failure leaves a trace the owner can find.
-    expect(events[0]).toMatchObject({ type: "plan_grant_failed_ultra_sandbox" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, sandbox: true, applied: "ultra" });
+    // The event is still written, because the owner reading billing_events
+    // needs to see that a tester exercised the flow.
+    expect(events[0]).toMatchObject({ type: "plan_activated_ultra_sandbox" });
   });
 
   it("maps 'business' to ultra rather than inventing a tier", async () => {

@@ -21,6 +21,46 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
+  // THE BUTTON PATH HAD NO GATES AT ALL.
+  //
+  // /api/billing/checkout enforces two things in front of the money: the
+  // owner's payments kill switch, and the warm-up gate. The PayPal button is a
+  // SECOND way to start a subscription and it went through neither - the client
+  // asked for plan ids, got them, and the traveller could subscribe.
+  //
+  // The gate has to sit HERE rather than on paypal-success. By the time that
+  // route runs PayPal has already taken the money; refusing then would mean
+  // charging someone and withholding the plan, which is worse than either
+  // failure alone. Withholding the plan IDS is the only refusal that happens
+  // before a payment exists.
+  //
+  // Both checks fail CLOSED, and both are the same predicates the checkout
+  // route uses - one definition of "may this person buy", not two that drift.
+  const { killSwitchOn } = await import("@/lib/usage");
+  if (await killSwitchOn()) {
+    return NextResponse.json(
+      { error: "Payments are temporarily paused by the owner." },
+      { status: 503 }
+    );
+  }
+  // Flagged testers ride the sandbox and are never gated - otherwise a beta
+  // tester could not exercise the paid tiers at all. Same carve-out, same
+  // ordering, as the checkout route.
+  const { isTestUser } = await import("@/lib/allowlist");
+  if (!(await isTestUser(session.email).catch(() => false))) {
+    const { warmupStatus } = await import("@/lib/warmup");
+    const warm = await warmupStatus(session.email);
+    if (!warm.warmed) {
+      return NextResponse.json(
+        {
+          error: "Unlock upgrading by using the app a little more first.",
+          warmup: warm,
+        },
+        { status: 403 }
+      );
+    }
+  }
+
   const { getConfig } = await import("@/lib/runtime-config");
   const [clientId, env, proPlan, ultraPlan] = await Promise.all([
     getConfig("PAYPAL_CLIENT_ID"),

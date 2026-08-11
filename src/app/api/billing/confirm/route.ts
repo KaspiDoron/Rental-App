@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { setPlan } from "@/lib/access";
 import { sbInsert } from "@/lib/runtime-config";
 import { isTestUser } from "@/lib/allowlist";
 
@@ -20,25 +19,22 @@ export async function POST(req: Request) {
 
   const sandbox = await isTestUser(session.email).catch(() => false);
   if (sandbox) {
-    const applied = String(plan) === "pro" ? "pro" : "ultra";
-    // setPlan reports whether the grant PERSISTED. It used to return void, so a
-    // failed write answered ok:true and the tester was told they were on Ultra
-    // while the account stayed free.
-    const granted = await setPlan(session.email, applied);
+    // THE SANDBOX GRANT IS DERIVED, NOT STORED - see the long note in
+    // billing/checkout. Writing `app_users.plan` here made a free Test Mode
+    // grant outlive the switch that granted it, which is the one thing
+    // TEST_MODE promises it will not do. `getSession` already grants Ultra to
+    // any flagged tester on every request, so there was never anything for this
+    // write to add except permanence.
+    //
+    // The event is still recorded, because the owner reading billing_events
+    // needs to see that a tester exercised the flow.
     await sbInsert("billing_events", [
-      {
-        type: granted ? `plan_activated_${plan}_sandbox` : `plan_grant_failed_${plan}_sandbox`,
-        verified: false,
-        provider_event_id: null,
-      },
+      { type: `plan_activated_${plan}_sandbox`, verified: false, provider_event_id: null },
     ]);
-    if (!granted) {
-      return NextResponse.json(
-        { error: "Could not apply the plan right now - please try again in a moment." },
-        { status: 503 }
-      );
-    }
-    return NextResponse.json({ ok: true, sandbox: true, applied });
+    // "ultra" because that is what the session derives for a flagged tester -
+    // reporting the requested tier would put this response out of step with
+    // /api/auth/me on the very next read.
+    return NextResponse.json({ ok: true, sandbox: true, applied: "ultra" });
   }
 
   await sbInsert("billing_events", [

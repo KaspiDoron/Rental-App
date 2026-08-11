@@ -116,6 +116,63 @@ export async function confirmPaypalSubscription(input: {
     },
   ]).catch(() => {});
 
+  // A PLAN SWITCH USED TO LEAVE THE OLD SUBSCRIPTION RUNNING.
+  //
+  // PayPal subscriptions do not replace one another. Approving a second one
+  // creates a SECOND live billing agreement, so a traveller who switched Pro ->
+  // Ultra was charged for both, every month, and the UpgradeSheet told them
+  // "a new subscription replaces the old one" - which PayPal had never agreed
+  // to. The only escape offered was the manage link in a receipt email, and
+  // cancelling from there cancels whichever one they happen to click, which is
+  // as likely to be the NEW one - dropping a paying customer to free.
+  //
+  // So the switch cancels its predecessor, here, where we already know both
+  // ids. Everything about this is deliberately conservative:
+  //
+  //   - it runs AFTER the grant, so a cancel that fails can never leave someone
+  //     paying with no plan;
+  //   - only ids from THIS account's own activation trail are ever cancelled;
+  //   - the outcome is recorded either way, because a failed cancel means a
+  //     traveller is being double-billed and the owner has to be able to find
+  //     that;
+  //   - a failure does not fail the request. The plan is live and the payment
+  //     is real; refusing the whole thing over a cleanup step would be the
+  //     worse trade.
+  if (granted) {
+    try {
+      const { activationsFor, SUPERSEDED_KIND } = await import("./subscription-link");
+      const { cancelPaypalSubscription, fetchPaypalSubscription, subscriptionEntitles } =
+        await import("../paypal");
+      const prior = (await activationsFor(email)).filter((id) => id !== sub.id);
+      for (const oldId of prior) {
+        // Only cancel what is actually still live - a cancelled or expired
+        // subscription needs no action, and asking first keeps the event trail
+        // meaningful rather than full of no-op cancels.
+        const old = await fetchPaypalSubscription(oldId).catch(() => null);
+        if (!old || !subscriptionEntitles(old.status)) continue;
+        const cancelled = await cancelPaypalSubscription(
+          oldId,
+          "Replaced by a new WheelDeal plan"
+        );
+        await sbInsert("agent_events", [
+          {
+            kind: SUPERSEDED_KIND,
+            user_email: email,
+            vendor_id: "",
+            vendor_name: "",
+            detail: JSON.stringify({
+              subscriptionId: oldId,
+              replacedBy: sub.id,
+              cancelled,
+            }).slice(0, 800),
+          },
+        ]).catch(() => {});
+      }
+    } catch {
+      /* cleanup only - the plan is already live and the payment is real */
+    }
+  }
+
   // The subscription IS real and verified - that part is settled and the event
   // above records it, so a later retry (webhook, another redirect) can finish
   // the job. What failed is our own write, and the traveller must not be told

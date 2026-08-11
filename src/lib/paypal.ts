@@ -244,6 +244,41 @@ export async function fetchPaypalSubscription(
 }
 
 /**
+ * Cancel a subscription at PayPal. Returns true only when PayPal confirms it.
+ *
+ * USED WHEN A PLAN SWITCH SUPERSEDES AN OLD SUBSCRIPTION, and the honesty of
+ * the return value is the whole point: a switch that silently failed to cancel
+ * leaves the traveller paying for two plans at once, and only PayPal knows
+ * whether it worked.
+ */
+export async function cancelPaypalSubscription(
+  subscriptionId: string,
+  reason: string
+): Promise<boolean> {
+  const id = String(subscriptionId ?? "").trim();
+  if (!id || id.length > 64 || !/^[A-Za-z0-9_-]+$/.test(id)) return false;
+  const token = await paypalToken();
+  if (!token) return false;
+  const base = await paypalBase();
+  try {
+    const res = await fetch(`${base}/v1/billing/subscriptions/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason.slice(0, 127) }),
+      cache: "no-store",
+    });
+    // 204 is the success shape. 422 usually means it is already cancelled,
+    // which is the state we wanted - treat it as done rather than as a failure
+    // that would make a retry loop forever.
+    if (res.status === 204) return true;
+    if (res.status === 422) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Which WheelDeal tier a PayPal plan id corresponds to.
  *
  * Resolved from the CONFIGURED plan ids rather than from anything the client

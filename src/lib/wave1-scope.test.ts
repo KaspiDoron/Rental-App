@@ -109,13 +109,31 @@ describe("a plan grant that did not persist is not reported as success", () => {
     expect(read("src/lib/billing/confirm-subscription.ts")).toMatch(/no need to pay again/);
   });
 
-  it("both sandbox grants refuse to claim a plan they did not apply", () => {
+  it("the sandbox has no persist step left to fail", () => {
+    // SUPERSEDED, AND DELIBERATELY. This used to require a 503 on both sandbox
+    // routes, because both called setPlan and a failed write reported success.
+    // The write itself was the bug: it put a free TEST_MODE grant into the
+    // durable `app_users.plan` column, so it outlived the switch that granted
+    // it - the one thing TEST_MODE's own contract says it will not do. Neither
+    // route writes a plan now, so there is no persist to check.
+    //
+    // The invariant this test was protecting - a grant that did not land must
+    // not be reported as applied - still holds everywhere real money moves, and
+    // is pinned by the two tests above and the webhook test below.
     for (const p of [
       "src/app/api/billing/confirm/route.ts",
       "src/app/api/billing/checkout/route.ts",
     ]) {
-      expect(readCode(p), p).toMatch(/status: 503/);
+      expect(readCode(p), `${p} must not durably write a TEST_MODE grant`).not.toMatch(
+        /setPlan\(/
+      );
     }
+  });
+
+  it("and a TEST_MODE grant is derived on every request, so it can be revoked", () => {
+    // The grant lives here, and nowhere else.
+    const session = readCode("src/lib/session.ts");
+    expect(session).toMatch(/if \(await isTestUser\(raw\.email\)\) plan = "ultra";/);
   });
 
   it("the webhook asks PayPal to retry instead of dropping the grant", () => {

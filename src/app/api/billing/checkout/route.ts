@@ -42,24 +42,39 @@ export async function POST(req: Request) {
   // TEST MODE sandbox: flagged testers get the plan applied instantly - no
   // real charge, no payment provider round-trip. Only while the owner's
   // TEST_MODE switch is on.
+  //
+  // A FREE GRANT MUST NOT OUTLIVE THE SWITCH THAT GRANTED IT.
+  //
+  // This used to call `setPlan`, which writes the DURABLE `app_users.plan`
+  // column. TEST_MODE's whole contract - stated in its own comment in
+  // session.ts - is that "flipping it off instantly returns them to their real
+  // (paid) plan, since the plan is re-derived on every request". The durable
+  // write broke exactly that: once a tester tapped upgrade, the stored plan
+  // said `ultra` forever, so turning the switch off left every tester on a
+  // permanent free Ultra with no record anywhere of why.
+  //
+  // And the write was never doing the work it appeared to. `getSession` already
+  // grants Ultra to any flagged tester (session.ts, the `isTestUser` branch),
+  // so the entitlement was live with or without it. Worse, the branch reads
+  // `plan !== "ultra"` first - so a tester who "bought" Pro to test the Pro
+  // tier was overridden back to Ultra on the very next request. The durable
+  // write's only observable effect was surviving the switch.
+  //
+  // So: no write. Report the plan the session will actually derive, which is
+  // the honest answer and is what the client already renders.
   try {
     const { isTestUser } = await import("@/lib/allowlist");
     if (await isTestUser(session.email)) {
       const plan = PLANS.find((p) => p.id === planId && p.amount > 0);
       if (!plan) return NextResponse.json({ error: "Choose a paid plan." }, { status: 400 });
-      const { setPlan } = await import("@/lib/access");
-      // A grant that did not persist must not be reported as applied - the
-      // tester would be shown Ultra features they do not have.
-      if (!(await setPlan(session.email, plan.id))) {
-        return NextResponse.json(
-          { error: "Could not apply the plan right now - please try again in a moment." },
-          { status: 503 }
-        );
-      }
       return NextResponse.json({
         sandbox: true,
         provider: "test-mode",
-        applied: plan.id,
+        // Ultra, not `plan.id`: that is what getSession derives for a flagged
+        // tester, and telling the client anything else would put the two out of
+        // step the moment the page re-reads /api/auth/me.
+        applied: "ultra",
+        note: "Test Mode - granted for as long as the switch is on, and revoked the moment it is off.",
       });
     }
   } catch {

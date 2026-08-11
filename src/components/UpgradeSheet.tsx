@@ -393,7 +393,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
           ))}
       </div>
       <p className="mt-3 text-center text-[10px] text-faint">
-        {t("Switch plans any time - a new subscription replaces the old one. To cancel or downgrade, use the manage link in your payment receipt email.")}
+        {t("Switch plans any time - the new subscription replaces the old one and we cancel it for you. To cancel or downgrade, use the manage link in your payment receipt email.")}
       </p>
       </PayPalProvider>
     </Modal>

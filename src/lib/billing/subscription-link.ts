@@ -61,6 +61,39 @@ function matchesSubscription(detail: string | null | undefined, id: string): boo
   }
 }
 
+/**
+ * Every subscription id we have ever activated for this account, newest first.
+ *
+ * Derived from the same append-only activation trail `subscriberFor` reads, so
+ * there is no mutable "current subscription" column to fall out of step with
+ * reality when a webhook is lost.
+ */
+export async function activationsFor(email: string): Promise<string[]> {
+  const key = String(email ?? "").trim().toLowerCase();
+  if (!key) return [];
+  const rows = await sbSelect<ActivationRow>(
+    "agent_events",
+    `select=user_email,detail&kind=eq.${ACTIVATION_KIND}` +
+      `&user_email=eq.${encodeURIComponent(key)}` +
+      `&order=created_at.desc&limit=20`
+  ).catch(() => [] as ActivationRow[]);
+  const ids: string[] = [];
+  for (const row of rows) {
+    try {
+      const id = String(
+        (JSON.parse(row.detail ?? "null") as { subscriptionId?: unknown })?.subscriptionId ?? ""
+      ).trim();
+      if (id && !ids.includes(id)) ids.push(id);
+    } catch {
+      /* an unparseable row is not a subscription */
+    }
+  }
+  return ids;
+}
+
+/** Recorded when a plan switch cancels the subscription it replaced. */
+export const SUPERSEDED_KIND = "subscription-superseded";
+
 // ---- Suspension state, derived from the same append-only evidence ------------
 //
 // A suspension needs a START so the grace window in ./suspension can be
