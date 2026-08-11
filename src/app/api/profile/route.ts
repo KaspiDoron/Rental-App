@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runProfiler, deterministicRFQ } from "@/lib/agents";
+import { runWithAiBudget } from "@/lib/ai-budget";
 import { aiEnabled } from "@/lib/ai";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
@@ -57,8 +58,13 @@ export async function POST(req: Request) {
   // The session identity powers the stable per-user voice persona, so this
   // user's first message always sounds like the same distinct human.
   const session = await getSession();
+  // The profiler is an LLM call and was ungoverned. Over-cap it falls back to
+  // heuristicRFQ - the same deterministic path it already uses when no provider
+  // key is configured or the 9s budget expires - so the search still runs.
   const rfq = applyWindow(
-    await runProfiler(text, durationDays, session?.email),
+    await runWithAiBudget(session?.email ?? "", () =>
+      runProfiler(text, durationDays, session?.email)
+    ),
     session?.plan,
     body?.timeZone
   );

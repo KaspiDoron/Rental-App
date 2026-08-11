@@ -6,6 +6,7 @@
 
 import "server-only";
 import { getConfig, pgTimestamp } from "./runtime-config";
+import { reserveAiCall } from "./ai-budget";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -605,6 +606,30 @@ export async function chatDetailed(
   messages: ChatMessage[],
   opts?: { maxTokens?: number; budgetMs?: number; preferProvider?: ProviderName }
 ): Promise<{ text: string | null; provider?: ProviderName; error?: string }> {
+  // THE PER-USER AI CAP, AT THE ONE PLACE EVERY LLM CALL PASSES THROUGH.
+  //
+  // `LIMIT_AI_PER_DAY` used to be enforced at exactly ONE route
+  // (api/extract-offer), so the negotiation engine - where essentially all the
+  // spend is - was ungoverned, while the owner's slider claimed otherwise.
+  // Gating here rather than at the ~20 call sites is deliberate: a new caller
+  // cannot forget to opt in, because it does not have to.
+  //
+  // The identity arrives via an AsyncLocalStorage scope (lib/ai-budget), opened
+  // once per turn/request. No scope means ungoverned, which keeps every
+  // un-migrated path behaving exactly as it does today.
+  //
+  // Over-cap returns the SAME shape as "no provider configured" - text: null
+  // with a readable reason - because every caller already handles that, and the
+  // engine's deterministic composer takes over. A traveller who exhausts their
+  // allowance keeps a working template-driven negotiation instead of a frozen
+  // one, which is this app's degradation contract everywhere else.
+  const reservation = reserveAiCall();
+  if (reservation === "over-cap") {
+    return {
+      text: null,
+      error: "Daily AI limit reached for this account - continuing without the model.",
+    };
+  }
   let list = await providers();
   // preferProvider hoists one provider to the front WHEN it is configured
   // (used by the distillation "teacher" to prefer DeepSeek, while still falling

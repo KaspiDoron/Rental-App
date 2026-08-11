@@ -1854,7 +1854,17 @@ export async function drainGraphWakeups(
             // stamp payload.engine = "v3" right here in this table) were routed
             // straight past it. See src/lib/engine-route.ts.
             const { runThreadTurn } = await import("../engine-route");
-            await runThreadTurn(input, liveGraphIO(send), "wakeup");
+            // BILLED TO THE THREAD'S OWNER, like the inbound path.
+            //
+            // A scheduled wakeup is the cheapest way to spend someone's AI
+            // budget without them doing anything - the quiet-thread return and
+            // the strategic wait both fire on a timer. Ungoverned, a stalled
+            // hunt with forty threads keeps composing forever. `input.ctx.sender`
+            // is the same identity the inbound turn uses.
+            const { runWithAiBudget } = await import("../ai-budget");
+            await runWithAiBudget(input.ctx.sender ?? "", () =>
+              runThreadTurn(input, liveGraphIO(send), "wakeup")
+            );
             ran++;
           }
           // input === null -> the thread was cancelled / taken over / closed:
@@ -1862,7 +1872,15 @@ export async function drainGraphWakeups(
           // buildTurnFromThread). Only a THROW below re-parks.
         } else if (row.kind === "judge" || row.kind === "session-judge") {
           const { runJudgeJob } = await import("./judge");
-          await runJudgeJob(row.kind, row.thread_key, row.payload ?? {});
+          // The judge is an LLM call too, and thread_key is `<email>:<vendor>`.
+          const sepIdx = row.thread_key.lastIndexOf(":");
+          const judgeOwner = sepIdx > 0 ? row.thread_key.slice(0, sepIdx) : "";
+          // Captured before the closure so the union narrowing survives it.
+          const judgeKind = row.kind;
+          const { runWithAiBudget } = await import("../ai-budget");
+          await runWithAiBudget(judgeOwner, () =>
+            runJudgeJob(judgeKind, row.thread_key, row.payload ?? {})
+          );
           ran++;
         }
       } catch {

@@ -1,0 +1,119 @@
+import "server-only";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { checkDailyLimit, recordApi } from "./usage";
+
+// THE CAP GOVERNED ONE ROUTE; THE SPEND WAS EVERYWHERE ELSE.
+//
+// `LIMIT_AI_PER_DAY` was enforced at exactly one call site
+// (`api/extract-offer/route.ts`). A grep for `checkDailyLimit` across
+// `src/lib/spte/**`, `src/lib/graph/**`, `agent-loop.ts`, `ai.ts` and
+// `orchestrator.ts` returned NOTHING - the negotiation engine, which is where
+// virtually all of the token spend actually happens, had no per-user gate of
+// any kind. One traveller running forty shops across several rounds each
+// generated unbounded LLM cost while the owner's "AI calls per day" slider in
+// Admin -> Limits reported that it was capped.
+//
+// WHY NOT JUST ADD checkDailyLimit AT EACH CALL SITE. Because that is how it
+// ended up on one route: there are twenty-odd `chat()` callers across agents,
+// nodes, judge, director, gaps, coherence, scenarios and the SPTE pass, and any
+// new one silently opts out. The identity has to arrive at the choke point
+// without every caller having to remember to carry it.
+//
+// So: one AsyncLocalStorage scope, opened once at the turn/request boundary.
+// Every nested `chat()` inherits it with no signature change and no way to
+// forget. (Node-only - the one `runtime = "edge"` route in this app is the
+// banner image generator, which never touches the AI path.)
+//
+// COST OF THE GATE ITSELF. Checking the limit inside `chat()` would add a
+// Supabase round trip per LLM call, and a single engine turn makes several. So
+// the scope checks ONCE on open and debits ONCE on close, holding a local
+// allowance in between. That also repairs a second-order defect: the codebase
+// had ten `recordApi` call sites against five `checkDailyLimit` sites, so the
+// gate and the debit were not even paired. Here they are the same object.
+
+export interface AiBudgetScope {
+  /** Who the spend belongs to. */
+  who: string;
+  /** False when they were already over the cap when the scope opened. */
+  allowed: boolean;
+  /** Calls still permitted inside THIS scope. Decremented as they are made. */
+  remaining: number;
+  /** Calls actually made, debited when the scope closes. */
+  spent: number;
+  /** Set once, so a turn that exhausts its budget explains itself only once. */
+  reportedExhausted?: boolean;
+}
+
+const storage = new AsyncLocalStorage<AiBudgetScope>();
+
+/** The scope for the current async context, or undefined when ungoverned. */
+export function currentAiBudget(): AiBudgetScope | undefined {
+  return storage.getStore();
+}
+
+/**
+ * Reserve a call against the active scope.
+ *
+ * Returns `"ok"` when the call may proceed, `"over-cap"` when it may not, and
+ * `"ungoverned"` when there is no scope - which is deliberately permissive, so
+ * an un-wrapped path behaves exactly as it does today rather than failing shut
+ * on a code path nobody has migrated yet. Every governed path is opt-IN.
+ */
+export function reserveAiCall(): "ok" | "over-cap" | "ungoverned" {
+  const scope = storage.getStore();
+  if (!scope) return "ungoverned";
+  if (!scope.allowed || scope.remaining <= 0) return "over-cap";
+  scope.remaining -= 1;
+  scope.spent += 1;
+  return "ok";
+}
+
+/**
+ * Run `fn` with a per-user AI budget in scope.
+ *
+ * The gate is checked once here and the debit written once at the end, so a
+ * multi-call turn costs one read and one write rather than one of each per
+ * call.
+ *
+ * NEVER THROWS AND NEVER BLOCKS THE WORK ITSELF. An over-cap scope still runs
+ * `fn` - it simply refuses the model calls inside it, and the engine's
+ * deterministic composer takes over exactly as it does when no provider key is
+ * configured. That is the graceful degradation this app is built on: a
+ * traveller who exhausts their AI allowance keeps a working (template-driven)
+ * negotiation rather than a frozen one.
+ *
+ * `who` empty (an unauthenticated or system path) runs ungoverned, since there
+ * is no one to bill.
+ */
+export async function runWithAiBudget<T>(who: string, fn: () => Promise<T>): Promise<T> {
+  const email = String(who ?? "").trim();
+  if (!email) return await fn();
+
+  let gate: Awaited<ReturnType<typeof checkDailyLimit>>;
+  try {
+    gate = await checkDailyLimit("ai", email, "LIMIT_AI_PER_DAY");
+  } catch {
+    // checkDailyLimit already fails CLOSED on an unreadable count, so reaching
+    // here means something unexpected. Do not invent a verdict: run ungoverned
+    // rather than silently halting every negotiation in the fleet.
+    return await fn();
+  }
+
+  const scope: AiBudgetScope = {
+    who: email,
+    allowed: gate.allowed,
+    remaining: gate.allowed ? Math.max(0, gate.limit - gate.used) : 0,
+    spent: 0,
+  };
+
+  try {
+    return await storage.run(scope, fn);
+  } finally {
+    // Debit what was actually spent, once. Best-effort: losing the debit is a
+    // billing inaccuracy, while throwing here would fail a negotiation turn
+    // that has already happened.
+    if (scope.spent > 0) {
+      await recordApi("ai", scope.spent, email).catch(() => {});
+    }
+  }
+}

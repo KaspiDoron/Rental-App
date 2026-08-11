@@ -43,6 +43,7 @@ function safeLeverageNote(note: string | undefined, rivalPrice: number | undefin
   return ""; // asserts a rival price that is not our verified one - drop it
 }
 import { floorPriceFor, credibleFloor } from "./market";
+import { runWithAiBudget } from "./ai-budget";
 import {
   guardOutbound,
   afterSend,
@@ -346,7 +347,20 @@ export async function processVendorReply(opts: {
     holdsTurn = turn === "won";
     void releaseThreadTurn; // released in the finally below
 
-    return await runVendorTurn();
+    // EVERY LLM CALL IN THIS TURN IS BILLED TO THE TRAVELLER WHO OWNS IT.
+    //
+    // One wrap covers the whole turn - extraction, safety, strategist, the
+    // engine pass, the judge - because runVendorTurn is already the single
+    // inner function. The scope is checked once and debited once, so a
+    // multi-call turn costs one read and one write rather than one of each per
+    // call.
+    //
+    // Over-cap does NOT abort the turn: chatDetailed refuses the model calls
+    // and the deterministic composer answers instead, so the shop still gets a
+    // reply and the traveller still gets a negotiation - just without the
+    // model. Freezing the thread would be a worse answer to "you have used
+    // your AI allowance" than degrading it.
+    return await runWithAiBudget(opts.senderEmail ?? "", runVendorTurn);
   } finally {
     const { releaseThreadTurn } = await import("./wa/turn-lock");
     if (holdsTurn) await releaseThreadTurn(senderKeyForTurn, from, turnClaimedAtMs);
