@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { sbSelect, sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
 import { killSwitchOn } from "@/lib/usage";
+import { groupSearchSessions, sessionIdOf } from "@/lib/session-life";
 import { recheckMessage } from "@/lib/wa/recheck-message";
 
 export const dynamic = "force-dynamic";
@@ -57,22 +58,25 @@ export async function POST(req: Request) {
 
   // The session window, grouped exactly the way the Trips list groups it, so
   // "this hunt" means the same thing on both sides.
-  const searches = await sbSelect<{ created_at: string; rfq: { durationDays?: number } | null }>(
+  // `id` and `source` were not even SELECTED here, so this route could not tell
+  // a hunt from a request-build and grouped analytics rows as sessions. That is
+  // a third way its boundaries drifted from the Trips list's - on top of the
+  // duplicated loop and the timestamp match. All three are gone.
+  type RecheckRow = {
+    id: number;
+    source: string | null;
+    created_at: string;
+    rfq: { durationDays?: number } | null;
+  };
+  const searches = await sbSelect<RecheckRow>(
     "searches",
-    `select=created_at,rfq&user_email=eq.${enc}&order=created_at.desc&limit=40`
-  ).catch(() => [] as { created_at: string; rfq: { durationDays?: number } | null }[]);
-  const asc = [...searches].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-  const groups: (typeof asc)[] = [];
-  for (const row of asc) {
-    const last = groups[groups.length - 1];
-    if (last && Date.parse(row.created_at) - Date.parse(last[last.length - 1].created_at) <= GROUP_GAP_MS) {
-      last.push(row);
-    } else {
-      groups.push([row]);
-    }
-  }
-  groups.reverse();
-  const gi = groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
+    `select=id,source,created_at,rfq&user_email=eq.${enc}&order=created_at.desc&limit=40`
+  ).catch(() => [] as RecheckRow[]);
+  const groups = groupSearchSessions(searches);
+  const sid = Number(body.sid);
+  const gi = Number.isFinite(sid)
+    ? groups.findIndex((g) => sessionIdOf(g) === sid)
+    : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
   const start = Date.parse(groups[gi][0].created_at);
   const end = gi === 0 ? Infinity : Date.parse(groups[gi - 1][0].created_at);

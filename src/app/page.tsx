@@ -4012,14 +4012,27 @@ export default function Home() {
             <div className="mx-auto mb-3 w-fit">
               <WillAvatar size={56} />
             </div>
+            {/* THE "10" WAS A LIE, AND IT WAS NOT EVEN A STALE CONSTANT.
+
+                This screen hardcoded the LITERAL STRING "Up to 10 shops per
+                hunt" - dead beta copy that no longer matched any code path.
+                The next screen computes the truth from `massBargainTargets`,
+                which caps at `massBargainCap(plan)` (free 10 / pro 15 / ultra
+                24). So an Ultra traveller was told 10 and then offered all 18
+                shops the search had found, and reasonably read that as a bug
+                in the cap rather than a bug in the sentence.
+
+                One source now. `massBargainCap` is the same function the
+                confirm sheet slices with, so the two screens cannot disagree
+                again. */}
             <h2 className="text-lg font-extrabold text-strong">
-              {t("Up to 10 shops per hunt")}
+              {t("Up to")} {massBargainCap(session?.plan)} {t("shops per hunt")}
             </h2>
             <p className="mx-auto mt-2 max-w-[300px] text-[13px] leading-relaxed text-soft">
-              {t("During the beta, each search contacts up to 10 rental shops. This keeps every negotiation sharp and your number perfectly paced while we scale the platform.")}
+              {t("Each search contacts up to this many rental shops in one run. It keeps every negotiation sharp and your number perfectly paced.")}
             </p>
             <p className="mx-auto mt-1.5 max-w-[300px] text-[12px] font-bold text-faint">
-              {t("Future updates raise this limit automatically - nothing for you to do.")}
+              {t("A higher plan raises this automatically - nothing for you to do.")}
             </p>
             <div className="mt-4 flex gap-2">
               <button
@@ -4228,12 +4241,39 @@ export default function Home() {
       {/* W7: summon chip - when the inline guide is dismissed for this stage,
           Will stays one tap away as a small avatar button above the TabBar. No
           drag, no auto-nap; a stage change resurfaces the full banner. */}
+      {/* TWO BUTTONS, ONE PIECE OF SCREEN, NO OWNER.
+
+          "Ask Will" and "Live status" each hard-coded their own bottom-right
+          position with no knowledge of the other. At 320px the chip occupied
+          72-110px above the bottom edge and the status FAB 84-121px: a ~26px
+          overlap across most of their shared width. And the chip's raw
+          `z-[900]` beat the FAB's `layer-chrome` (50), so the chip painted on
+          top and SWALLOWED the FAB's taps - the owner could see "Live status"
+          and could not press it.
+
+          The stack has an owner now: this file renders both, so it decides
+          where they sit. The chip lifts clear whenever the FAB can be mounted
+          (same condition as the FAB below). The FAB additionally hides itself
+          when the status panel is already on screen, so the chip sometimes
+          floats a slot higher than it strictly needs to - a cosmetic cost, and
+          the alternative is a visibility handshake between two independent
+          components for no functional gain.
+
+          Both now use the same layering token, so neither can silently eat the
+          other's taps again. */}
       {session && !willOpen && willStageNow && dismissedStages.has(willStageNow) && (
         <button
           onClick={() => setWillOpen(true)}
           aria-label={t("Ask Will")}
-          className="fixed right-3 z-[900] flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
-          style={{ bottom: "calc(72px + env(safe-area-inset-bottom, 0px))" }}
+          className="layer-chrome fixed right-3 flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
+          style={{
+            bottom:
+              vendors.length > 0 && view === "list"
+                ? // Clear of the status FAB: its top edge is 5.25rem + its own
+                  // height, plus a thumb-sized gap.
+                  "calc(env(safe-area-inset-bottom, 0px) + 8.5rem)"
+                : "calc(72px + env(safe-area-inset-bottom, 0px))",
+          }}
         >
           <WillAvatar size={22} wave={false} />
           {t("Ask Will")}

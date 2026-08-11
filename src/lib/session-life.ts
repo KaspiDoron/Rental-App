@@ -146,3 +146,73 @@ export function clampSince(
   }
   return Math.max(requestedMs, floor);
 }
+
+// ---- one definition of "a search session" ---------------------------------
+
+/** The 30-minute quiet gap that separates one hunt from the next. */
+export const SESSION_GROUP_GAP_MS = 30 * 60_000;
+
+/** The minimum a row must carry to be grouped. */
+export interface GroupableSearchRow {
+  id: number;
+  source: string | null;
+  created_at: string;
+}
+
+/**
+ * Group `searches` rows into hunts, newest hunt first.
+ *
+ * THREE ROUTES GROUPED THE SAME ROWS AND DISAGREED ABOUT THE ANSWER.
+ *
+ * `/api/deals` (the Trips list), `/api/deals/restore` and `/api/deals/recheck`
+ * each carried their own copy of this loop. The copies were identical - but the
+ * QUERIES feeding them were not: the list reads 14 days x 30 rows, restore
+ * reads unbounded x 40. Same algorithm, different inputs, different group
+ * boundaries.
+ *
+ * That mattered because restore then matched the hunt the traveller tapped by
+ * TIMESTAMP, with a one-second tolerance, against a boundary computed from a
+ * different row set:
+ *
+ *     groups.findIndex(g => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000)
+ *
+ * Past ~30 hunt rows the list's oldest group is truncated mid-hunt and starts
+ * at a LATER row than restore's version of the same hunt. The timestamps differ
+ * by minutes, the match fails, and the traveller is told "That hunt is no
+ * longer available" about a hunt that is sitting right there in the list.
+ * `recheck` has the identical branch, so price re-check broke the same way.
+ *
+ * So: one implementation, and hunts are addressed by the `searches.id` of their
+ * first row - a value that does not move when the query window does. A
+ * reconstructed timestamp was never an identity; it was a coincidence that
+ * usually held.
+ */
+export function groupSearchSessions<T extends GroupableSearchRow>(rows: T[]): T[][] {
+  // Building a request is not running a hunt: /api/profile writes a row for
+  // every RFQ build, and those carry the newest created_at with no snapshot.
+  const hunts = rows.filter((r) => isRealHunt(r.source));
+  const asc = [...hunts].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const groups: T[][] = [];
+  for (const row of asc) {
+    const last = groups[groups.length - 1];
+    const prev = last?.[last.length - 1];
+    if (prev && Date.parse(row.created_at) - Date.parse(prev.created_at) <= SESSION_GROUP_GAP_MS) {
+      last.push(row);
+    } else {
+      groups.push([row]);
+    }
+  }
+  groups.reverse(); // newest session first, matching the Trips list order
+  return groups;
+}
+
+/**
+ * The stable identity of a hunt: the id of the row it starts with.
+ *
+ * Callers address a session with this instead of `group[0].created_at`, so a
+ * different LIMIT or date window can no longer make two routes disagree about
+ * which hunt the traveller meant.
+ */
+export function sessionIdOf<T extends GroupableSearchRow>(group: T[]): number | null {
+  return group[0]?.id ?? null;
+}

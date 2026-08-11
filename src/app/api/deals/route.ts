@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect, pgTimestamp } from "@/lib/runtime-config";
 import { toTrip } from "@/lib/trips";
-import { isRealHunt } from "@/lib/session-life";
+import { groupSearchSessions } from "@/lib/session-life";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +74,10 @@ export interface TimelineEvent {
 export interface SessionSummary {
   id: string;
   startedAt: string;
+  /** The searches.id of this hunt's first row - its stable identity. See
+   *  groupSearchSessions: addressing a hunt by a reconstructed timestamp broke
+   *  re-open and re-check whenever two routes' query windows disagreed. */
+  sid: number | null;
   isLatest: boolean;
   query: string | null;
   vehicleClass: string | null;
@@ -140,21 +144,10 @@ export async function GET() {
   // row for every RFQ BUILD (source `panel` / `profiler`, `results: 0`, no
   // snapshot). Those are analytics, not hunts - listing them here padded Trips
   // with entries that open onto nothing.
-  const hunts = searchRows.filter((r) => isRealHunt(r.source));
-
-  const asc = [...hunts].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-  const groups: SearchRow[][] = [];
-  for (const row of asc) {
-    const last = groups[groups.length - 1];
-    if (
-      last &&
-      Date.parse(row.created_at) - Date.parse(last[last.length - 1].created_at) <= GROUP_GAP_MS
-    ) {
-      last.push(row);
-    } else {
-      groups.push([row]);
-    }
-  }
+  // ONE grouping, shared with /api/deals/restore and /api/deals/recheck. Three
+  // private copies of this loop, fed by three different queries, is how the
+  // boundaries drifted and re-open started 404ing - see groupSearchSessions.
+  const groups = groupSearchSessions(searchRows);
   // Newest session first; keep the dashboard focused on the last few hunts.
   groups.reverse();
   const kept = groups.slice(0, 5);
@@ -431,6 +424,7 @@ export async function GET() {
     return {
       id: String(group[0].id),
       startedAt: group[0].created_at,
+      sid: group[0].id ?? null,
       isLatest,
       query,
       vehicleClass,

@@ -49,6 +49,8 @@ interface TimelineEvent {
 interface SessionSummary {
   id: string;
   startedAt: string;
+  /** Stable hunt identity from /api/deals - see groupSearchSessions. */
+  sid?: number | null;
   isLatest: boolean;
   query: string | null;
   vehicleClass: string | null;
@@ -138,7 +140,7 @@ export default function DealsPage() {
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [recheckNote, setRecheckNote] = useState<Record<string, string>>({});
 
-  async function recheckPrices(startedAt: string) {
+  async function recheckPrices(startedAt: string, sid?: number | null) {
     if (rechecking) return;
     setRechecking(startedAt);
     setRecheckNote((n) => ({ ...n, [startedAt]: "" }));
@@ -146,7 +148,7 @@ export default function DealsPage() {
       const r = await fetch("/api/deals/recheck", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ts: startedAt }),
+        body: JSON.stringify({ ts: startedAt, sid }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -182,14 +184,21 @@ export default function DealsPage() {
   // Re-open a past hunt: pull its shops + RFQ from the server, write the same
   // sessionStorage payload a live search uses, then navigate home where the
   // existing rehydrate path renders the full Find-Deals workspace.
-  async function restoreSession(startedAt: string, isLatest: boolean) {
+  async function restoreSession(startedAt: string, isLatest: boolean, sid?: number | null) {
     if (restoring) return;
     setRestoreErr(null);
     setRestoring(startedAt);
     try {
-      const r = await fetch(`/api/deals/restore?ts=${encodeURIComponent(startedAt)}`, {
-        cache: "no-store",
-      });
+      // `sid` is the hunt's row id and is what the route matches on now; `ts`
+      // stays in the URL so a server that has not been redeployed yet still
+      // understands the request.
+      const r = await fetch(
+        `/api/deals/restore?ts=${encodeURIComponent(startedAt)}` +
+          (sid != null ? `&sid=${sid}` : ""),
+        {
+          cache: "no-store",
+        }
+      );
       const d = await r.json().catch(() => ({}));
       if (r.status === 402 || d?.error === "upgrade-required") {
         setRestoring(null);
@@ -794,7 +803,7 @@ export default function DealsPage() {
                         </a>
                       ) : canHistory ? (
                         <button
-                          onClick={() => restoreSession(s.startedAt, false)}
+                          onClick={() => restoreSession(s.startedAt, false, s.sid)}
                           disabled={restoring === s.startedAt}
                           className="btn btn-primary flex flex-1 items-center justify-center gap-2 rounded-2xl py-2.5 text-center text-[13px] disabled:opacity-70"
                         >
@@ -828,7 +837,7 @@ export default function DealsPage() {
                           each shop's own quote read back to them. */}
                       {s.contacted > 0 && (
                         <button
-                          onClick={() => recheckPrices(s.startedAt)}
+                          onClick={() => recheckPrices(s.startedAt, s.sid)}
                           disabled={rechecking === s.startedAt}
                           className="btn btn-ghost flex items-center justify-center gap-1.5 rounded-2xl border-2 border-savings/50 py-2.5 text-[12.5px] font-extrabold text-savings disabled:opacity-70"
                         >

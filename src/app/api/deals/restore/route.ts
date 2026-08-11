@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import { sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
-import { isSessionFresh, isRealHunt } from "@/lib/session-life";
+import { isSessionFresh, groupSearchSessions, sessionIdOf } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 export const dynamic = "force-dynamic";
@@ -132,25 +132,32 @@ export async function GET(req: Request) {
   // Filtered in JS rather than in the query on purpose: PostgREST's `not.in`
   // resolves to NULL for a NULL `source`, which would silently exclude legacy
   // rows that predate the column being written.
-  const hunts = rows.filter((r) => isRealHunt(r.source));
-  if (!hunts.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
-  rows = hunts;
+  // ONE grouping, shared with /api/deals and /api/deals/recheck. Three private
+  // copies of this loop used to be fed by three different queries, which is how
+  // the boundaries drifted apart - see groupSearchSessions for the full story.
+  const groups = groupSearchSessions(rows);
+  if (!groups.length) return NextResponse.json({ error: "No searches found." }, { status: 404 });
 
-  const asc = [...rows].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-  const groups: SearchRow[][] = [];
-  for (const row of asc) {
-    const last = groups[groups.length - 1];
-    if (last && Date.parse(row.created_at) - Date.parse(last[last.length - 1].created_at) <= GROUP_GAP_MS) {
-      last.push(row);
-    } else {
-      groups.push([row]);
-    }
-  }
-  groups.reverse(); // newest session first, matching the Trips list order
-
+  // ADDRESS A HUNT BY ITS ROW ID, NOT BY A RECONSTRUCTED TIMESTAMP.
+  //
+  // The old match was `Math.abs(g[0].created_at - startMs) < 1000` - a
+  // one-second tolerance against a boundary this route computed from ITS row
+  // window (unbounded x 40) while the Trips list computed the tap's timestamp
+  // from a DIFFERENT one (14 days x 30). Past ~30 hunt rows the two windows
+  // truncate the oldest hunt at different rows, the boundaries differ by
+  // minutes, and the traveller is told a hunt they can see in the list is "no
+  // longer available".
+  //
+  // `sid` is the searches.id of the hunt's first row, which does not move when
+  // a query window does. The timestamp path stays for older clients that have
+  // not been reloaded yet - same failure mode as before for those, but no worse.
+  const sidParam = new URL(req.url).searchParams.get("sid");
+  const sid = sidParam ? Number(sidParam) : NaN;
   const gi = wantLatest
     ? 0
-    : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
+    : Number.isFinite(sid)
+      ? groups.findIndex((g) => sessionIdOf(g) === sid)
+      : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
 
   // A HUNT HAS AN END. `ts=latest` is the AUTO-restore the Find-deals screen

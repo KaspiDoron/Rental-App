@@ -223,7 +223,14 @@ describe("a request BUILD is not a hunt", () => {
       "src/lib/lifecycle.ts",
     ]) {
       const code = readCode(p);
-      expect(code, `${p} does not use the shared discriminator`).toMatch(/isRealHunt\(/);
+      // Either calls the discriminator directly, or goes through
+      // `groupSearchSessions`, which applies it internally. The second is
+      // STRONGER, not a loophole: a route that groups through the shared helper
+      // cannot disagree about what a hunt is OR about where one ends - which is
+      // the pair of drifts that broke Trips re-open and price re-check.
+      expect(code, `${p} does not use the shared discriminator`).toMatch(
+        /isRealHunt\(|groupSearchSessions\(/
+      );
       expect(code, `${p} still carries its own copy`).not.toMatch(/new Set\(\["panel", "profiler"\]\)/);
     }
   });
