@@ -86,8 +86,15 @@ describe("REPRODUCTION: a checkout PayPal cannot return from", () => {
     // checkout could be created with a return URL nobody can follow - and the
     // traveller who paid landed nowhere.
     const checkout = readCode("src/app/api/billing/checkout/route.ts");
-    expect(checkout).toMatch(/publicRequestOrigin\(req\) \?\? \(await resolveSiteOrigin\(\)\)/);
+    // Now the ALLOW-LISTED resolver, not merely the routable one: this origin
+    // is PayPal's return URL, and `x-forwarded-host` is client input, so
+    // publicRequestOrigin let a caller choose where a payer lands at the end of
+    // our checkout. The fallback is unchanged and is still the point of the
+    // original test - a payment must never be created against a URL nobody can
+    // follow.
+    expect(checkout).toMatch(/\(await trustedRequestOrigin\(req\)\) \?\? \(await resolveSiteOrigin\(\)\)/);
     expect(checkout).not.toMatch(/= requestOrigin\(req\)/);
+    expect(checkout).not.toMatch(/publicRequestOrigin\(req\)/);
   });
 });
 

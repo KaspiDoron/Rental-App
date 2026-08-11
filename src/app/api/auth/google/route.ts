@@ -79,8 +79,30 @@ export async function POST(req: Request) {
     }
     // Same resilient resolve as the client button, so token verification and
     // button rendering agree on the client ID across every host/vault state.
+    //
+    // THE AUDIENCE CHECK IS THE ONLY THING THAT MAKES THIS TOKEN OURS.
+    //
+    // Google's tokeninfo endpoint will happily validate an ID token minted for
+    // ANY OAuth client - that is what it is for. `aud` is the claim that says
+    // the token was issued for us. The guard used to be `if (expectedAud && ...)`,
+    // and expectedAud comes from the vault, so a Supabase brownout turned it
+    // undefined and the check SKIPPED ITSELF: any valid Google ID token from any
+    // app in the world, replayed here, minted a wd_session for that token's
+    // email. Every account with a Google address was takeoverable for the
+    // duration of a database hiccup, and nothing would have logged a thing.
+    //
+    // An absent secret now REFUSES. A sign-in that fails during a vault outage
+    // is an inconvenience with an obvious workaround (email sign-in, which is
+    // still up); a sign-in that succeeds without an audience is a full account
+    // takeover with no trace.
     const expectedAud = await getGoogleClientId();
-    if (expectedAud && info.aud !== expectedAud) {
+    if (!expectedAud) {
+      return NextResponse.json(
+        { error: "Google sign-in is temporarily unavailable - use email sign-in." },
+        { status: 503 }
+      );
+    }
+    if (info.aud !== expectedAud) {
       await noteAuthFailure(callerKey, "google");
       return NextResponse.json({ error: "Google credential audience mismatch." }, { status: 401 });
     }

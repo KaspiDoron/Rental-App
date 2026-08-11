@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { PLANS } from "@/lib/plans";
 import { createPaypalCheckout, paypalConfigured } from "@/lib/paypal";
-import { publicRequestOrigin } from "@/lib/request-origin";
+import { trustedRequestOrigin } from "@/lib/request-origin";
 import { resolveSiteOrigin } from "@/lib/site";
 
 // Start a checkout for a paid plan via PayPal Subscriptions (no merchant-
@@ -28,10 +28,16 @@ export async function POST(req: Request) {
   // (it is used for local dev), and on Cloud Run the request can arrive with a
   // bind address rather than the public host - so a checkout could be created
   // with a return URL PayPal cannot reach, and the traveller who paid landed
-  // nowhere. `publicRequestOrigin` applies the routability filter; the
-  // configured site origin is the fallback, because a payment must not be
-  // created against a URL nobody can follow.
-  const origin = publicRequestOrigin(req) ?? (await resolveSiteOrigin());
+  // nowhere. The configured site origin is the fallback, because a payment must
+  // not be created against a URL nobody can follow.
+  //
+  // ALLOW-LISTED, not merely routable. This origin becomes PayPal's return URL.
+  // `x-forwarded-host` is client input, so `publicRequestOrigin` alone let a
+  // caller send a payer back to a page of their choosing at the end of OUR
+  // checkout - a phishing surface wearing our identity, complete with a real
+  // PayPal flow in front of it. trustedRequestOrigin only answers for hosts the
+  // owner controls.
+  const origin = (await trustedRequestOrigin(req)) ?? (await resolveSiteOrigin());
 
   // TEST MODE sandbox: flagged testers get the plan applied instantly - no
   // real charge, no payment provider round-trip. Only while the owner's

@@ -16,7 +16,7 @@ import { threadNumberOr, sameNumber } from "@/lib/wa/phone-key";
 import { resolveThreadContext } from "@/lib/wa/thread-context";
 import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
-import { publicRequestOrigin } from "@/lib/request-origin";
+import { trustedRequestOrigin } from "@/lib/request-origin";
 import { pushDiagnostics } from "@/lib/push";
 import { turnLatencyStats } from "@/lib/wa/turn-latency";
 
@@ -32,9 +32,13 @@ export async function GET(req: Request) {
   if (!email) return NextResponse.json({ error: "email required" }, { status: 400 });
 
   const enc = encodeURIComponent(email);
-  // Forwarded-aware: lets the expected-URL diagnosis work from the live public
-  // host even before APP_DOMAIN is saved (the canonicalizer still prefers it).
-  const reqOrigin = publicRequestOrigin(req) ?? undefined;
+  // Forwarded-aware AND allow-listed: this origin reaches webhookDiagnostics,
+  // which is the same path that can RE-ARM a webhook URL. Owner-only or not, a
+  // header must not be able to choose where the token gets registered. It still
+  // works before APP_DOMAIN is saved as long as the host is one the owner
+  // controls (site origin or TRUSTED_HOSTS); the canonicalizer prefers
+  // APP_DOMAIN over it regardless.
+  const reqOrigin = (await trustedRequestOrigin(req)) ?? undefined;
   const [diag, sessionRow, waOk, wa403, push, latencyRows, claimsTable] = await Promise.all([
     webhookDiagnostics(email, reqOrigin).catch(() => null),
     sbSelect<{ status: string | null; host_url: string | null; updated_at: string | null }>(
@@ -193,12 +197,14 @@ export async function POST(req: Request) {
   if (action !== "rearm" || !email) {
     return NextResponse.json({ error: "action:rearm + email required" }, { status: 400 });
   }
-  // Forwarded-aware: the re-arm works from the live public host even before
-  // APP_DOMAIN is saved (canonicalWebhookOrigin prefers APP_DOMAIN and rejects
-  // unroutable bind addresses, so this can never register 0.0.0.0).
+  // THIS is the call that writes a webhook URL - with the token in it - onto
+  // Evolution. Forwarded-aware so it works from the live public host before
+  // APP_DOMAIN is saved, but ALLOW-LISTED, because a header must never choose
+  // where the token is registered. canonicalWebhookOrigin still prefers
+  // APP_DOMAIN and still rejects unroutable bind addresses on top of this.
   const result = await reassertWebhook(email, {
     force: true,
-    requestOrigin: publicRequestOrigin(req) ?? undefined,
+    requestOrigin: (await trustedRequestOrigin(req)) ?? undefined,
   }).catch((e) => ({
     ok: false,
     changed: false,

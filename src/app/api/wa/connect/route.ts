@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { connectInstance, evolutionConfigured } from "@/lib/evolution";
-import { requestOrigin } from "@/lib/request-origin";
+import { trustedRequestOrigin } from "@/lib/request-origin";
+import { resolveSiteOrigin } from "@/lib/site";
 import { finishBeforeResponse } from "@/lib/after";
 
 // Start (or resume) the signed-in user's personal WhatsApp session: creates
@@ -18,10 +19,15 @@ export async function POST(req: Request) {
     });
   }
 
-  // Proxy-aware: on Cloud Run the raw request origin is the container bind
-  // address; the forwarded host is the real public one. connectInstance
-  // canonicalizes again (APP_DOMAIN wins) before registering the webhook.
-  const origin = requestOrigin(req);
+  // Proxy-aware AND allow-listed. The forwarded host is the real public one on
+  // Cloud Run, but it is also client input, and this origin ends up REGISTERED
+  // ON EVOLUTION as `<origin>/api/webhooks/evolution?token=<webhookToken>`. Any
+  // signed-in user sending `x-forwarded-host: theirs.example` could therefore
+  // hand out the webhook token and redirect every shop reply on this instance
+  // to their server. trustedRequestOrigin only answers for hosts the OWNER
+  // controls; anything else falls back to the canonical site origin, which
+  // connectInstance canonicalizes again (APP_DOMAIN wins) regardless.
+  const origin = (await trustedRequestOrigin(req)) ?? (await resolveSiteOrigin());
   const body = await req.json().catch(() => ({}));
   // Pairing code needs the user's WhatsApp number - prefer the one they typed
   // now, else the phone on their profile.

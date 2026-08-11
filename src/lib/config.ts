@@ -217,6 +217,14 @@ const KEYS: {
   // changes nothing would be worse than a refusal.
   { name: "WILL_ACTIONS", label: "Will can operate the app ('off' = guidance only, answers still work)", scope: "auth", editable: true },
   { name: "APP_DOMAIN", label: "Public app domain (https://... - drives share links, SEO & sender identity)", scope: "auth", editable: true },
+  // The allow-list for `x-forwarded-host`. Not a secret - it is a list of the
+  // owner's own hostnames, and masking it would mean never being able to read
+  // back what was set. APP_DOMAIN is always trusted; this is for the extra
+  // hosts a deployment legitimately answers on (the GCP gateway URL, a staging
+  // host) so they can be added without a redeploy. Anything NOT listed here
+  // cannot choose the URL we fetch, the webhook URL we register, or where a
+  // payer lands after checkout.
+  { name: "TRUSTED_HOSTS", label: "Extra hostnames this app answers on (comma-separated; APP_DOMAIN is always trusted)", scope: "auth", editable: true, secret: false },
   { name: "TEST_MODE", label: "Test Mode ('on' = flagged testers ride Ultra free + sandbox billing + banner)", scope: "auth", editable: true },
   { name: "SCALE_MODE", label: "Scale Mode ('on' = 3x per-user limits + relaxed polling for high load)", scope: "data", editable: true },
   { name: "PACING_MODE", label: "Pacing Mode (WhatsApp speed vs ban-safety dial: 'fast' | 'balanced' | 'cautious'; blank = balanced)", scope: "data", editable: true },

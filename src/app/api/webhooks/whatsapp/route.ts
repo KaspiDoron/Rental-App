@@ -19,10 +19,13 @@ import { digitsOnly } from "@/lib/phone";
 import { readOrientation } from "@/lib/media/orientation";
 import type { InboundImage } from "@/lib/media/orientation";
 
-// Verify Meta's X-Hub-Signature-256 over the RAW request body. Returns true
-// when no app secret is configured (demo/dev) so the endpoint still works,
-// but once WHATSAPP_APP_SECRET is set an unsigned or forged POST is rejected -
-// closing the "anyone who knows the URL can inject vendor replies" hole.
+// Verify Meta's X-Hub-Signature-256 over the RAW request body.
+//
+// The comment that used to sit here said this "returns true when no app secret
+// is configured (demo/dev) so the endpoint still works". It did not return
+// true - the CALLER skipped the check entirely, which is worse, because the
+// skip lived at the call site where nobody reading this function could see it.
+// See the POST handler for why an absent secret now refuses.
 function signatureValid(raw: string, header: string | null, secret: string): boolean {
   if (!header) return false;
   const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
@@ -125,12 +128,30 @@ export async function POST(req: Request) {
   // Read the RAW body once - signature verification must run over the exact
   // bytes Meta signed, so we cannot use req.json() first.
   const raw = await req.text();
+  // NO SECRET MEANS REFUSE, NOT SKIP.
+  //
+  // The check used to live inside `if (appSecret)`. `getConfig` resolves from
+  // the Supabase-backed vault, so a brownout - or an unset key, or a rotated
+  // SESSION_SECRET making the stored value undecryptable - silently disabled
+  // authentication on a public endpoint. Anyone who knew the URL could then POST
+  // fabricated shop replies, complete with prices, straight into
+  // `processVendorReply` and a live negotiation. The agent would read them as
+  // the shop's real position and bargain against them.
+  //
+  // The old behaviour was justified as "demo/dev still works", but the cost of
+  // that convenience is an unauthenticated write path into the negotiation
+  // engine that opens itself whenever the vault hiccups. A Cloud API deployment
+  // that has not configured its app secret is not configured; 401 says so.
   const appSecret = await getConfig("WHATSAPP_APP_SECRET");
-  if (appSecret) {
-    const sig = req.headers.get("x-hub-signature-256");
-    if (!signatureValid(raw, sig, appSecret)) {
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-    }
+  if (!appSecret) {
+    return NextResponse.json(
+      { error: "Webhook not configured - set WHATSAPP_APP_SECRET." },
+      { status: 401 }
+    );
+  }
+  const sig = req.headers.get("x-hub-signature-256");
+  if (!signatureValid(raw, sig, appSecret)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
   let body: any = null;
   try {
