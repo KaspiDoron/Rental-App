@@ -103,8 +103,22 @@ describe("3. a reply row can no longer be dropped before it is ranked", () => {
     // the list to rank.
     const fn = guard.slice(guard.indexOf("export async function drainOutbox"));
     expect(fn).toMatch(/const \[replyRows, anyRows\] = await Promise\.all\(/);
-    expect(fn).toMatch(/meta->>kind=\$\{REPLY_KIND_FILTER\}/);
-    expect(guard).toMatch(/REPLY_KIND_FILTER = "not\.in\.\(rfq,custom,human-manual\)"/);
+    expect(fn).toMatch(/\$\{REPLY_KIND_FILTER\}/);
+  });
+
+  it("a row with NO meta.kind is still a reply - the NULL hole is closed", () => {
+    // `meta->>kind=not.in.(...)` looks like it means "any kind except these".
+    // For a row with no `kind` at all, `meta->>kind` is SQL NULL and
+    // `NOT (NULL IN (...))` is NULL, not true - so PostgREST dropped it. Every
+    // kind-less park was invisible to the reply select AND to the dispatcher's
+    // next-due probe, while the drain's own `isReplyRow` called it a reply.
+    // The two halves of the lane disagreed about the same row.
+    expect(guard).toMatch(/meta->>kind\.is\.null/);
+    expect(guard).toMatch(/meta->>kind\.not\.in\.\(rfq,custom,human-manual\)/);
+    // An `or=` group, not a column predicate - so it carries its own `&`.
+    expect(guard).toMatch(/REPLY_KIND_FILTER =\s*\n?\s*"&or=\(/);
+    // And it must agree with the drain's in-memory classifier.
+    expect(guard).toMatch(/isReplyRow/);
   });
 
   it("one definition of 'a reply' is shared with the dispatcher", () => {

@@ -89,7 +89,7 @@ export async function GET(req: Request) {
     const rows = await sbSelect<{ not_before: string }>(
       "wa_outbox",
       `select=not_before&sender_key=eq.${encodeURIComponent(sender)}` +
-        `&meta->>kind=${REPLY_KIND_FILTER}` +
+        REPLY_KIND_FILTER +
         `&not_before=gt.${encodeURIComponent(new Date().toISOString())}` +
         `&order=not_before.asc&limit=1`
     ).catch(() => []);

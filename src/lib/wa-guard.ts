@@ -1739,14 +1739,57 @@ export async function guardOutbound(rawOpts: {
     }
   }
 
-  // Is this a brand-new cold contact (no prior message to this number)?
-  const priorRecipient = await sbSelect<{ id: number }>(
+  // IS THIS A COLD CONTACT? THE ONE QUESTION THAT DECIDED EVERYTHING, ASKED WRONG.
+  //
+  // `isNewContact` is the whole lane switch. It gates the introductions budget
+  // (whose hold is clamped to business hours - a hold measured in HOURS), the
+  // reply-rate breaker, the delivery-rate breaker, the hourly cap, and via
+  // `isReply` both the burst lane and the min-gap keying. Getting it wrong in
+  // the "new" direction does not slow a reply down slightly; it governs a
+  // reply to a shop that just messaged us under the rules written for cold
+  // outreach to a stranger, and the shop waits hours for an answer we already
+  // composed. That is exactly the reported symptom: fast for some shops,
+  // silent for hours for others, while the Ops panel shows the reply ready.
+  //
+  // Two independent defects, and the second is the one that bit hardest.
+  //
+  // 1. THE NUMBER WAS MATCHED EXACTLY. This table is WRITTEN tail-keyed by
+  //    `upsertRecipient` for the reason spelled out above: the shop's reply
+  //    carries WhatsApp's spelling of the number while our introduction carried
+  //    discovery's. Reading it with `to_number=eq.` is the same bug this file
+  //    already solved everywhere else - `numberFilter` is the tolerant,
+  //    tail-aware primitive, and it was simply not used here.
+  //
+  // 2. THE READ FAILED OPEN. `sbSelect` collapses every failure to `[]`, and
+  //    `[] -> length === 0 -> isNewContact = true`. So an unreadable table, a
+  //    brownout, a timeout - each one silently reclassified every reply in the
+  //    fleet as a cold introduction. "I could not find a prior message" and "I
+  //    could not read the table" are opposite facts and they arrived as the
+  //    same empty array.
+  //
+  // So this is now a THREE-state answer, and the unknown case leans WARM.
+  // That direction is deliberate and it is the safe one: WhatsApp's ban
+  // signals are about unsolicited outreach to people who never replied, not
+  // about answering someone who wrote to you first. Treating an unknown
+  // recipient as warm risks sending one reciprocal message slightly too
+  // quickly; treating it as cold risks the product not working at all.
+  const priorRecipient = await sbSelectStrict<{ id: number }>(
     "wa_recipient_state",
-    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}&to_number=eq.${encodeURIComponent(
-      opts.toDigits
-    )}&limit=1`
+    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
+      `&limit=1${numberFilter("to_number", opts.toDigits)}`
   );
-  const isNewContact = priorRecipient.length === 0;
+  const contactState: "new" | "known" | "unknown" =
+    "rows" in priorRecipient
+      ? priorRecipient.rows.length > 0
+        ? "known"
+        : "new"
+      : priorRecipient.error === "missing"
+        ? // The table has never existed (fresh install). Vacuously empty is an
+          // honest "new" - failing warm here would let a brand-new deployment
+          // blast cold intros with no pacing at all.
+          "new"
+        : "unknown";
+  const isNewContact = contactState === "new";
 
   // 0.0 THE OWNER'S KILL SWITCH, ENFORCED WHERE SENDS ACTUALLY HAPPEN.
   //
@@ -1867,11 +1910,17 @@ export async function guardOutbound(rawOpts: {
           lastOut[0].received_at
         )}&limit=1${numberFilter("from_number", opts.toDigits)}`
       );
+      // ...AND THE SECOND PROBE HAD THE SAME SPELLING BUG THE FIRST ONE FIXED.
+      //
+      // The `lastInbound` read directly above already goes through
+      // `numberFilter` for exactly the reason its comment gives. This one, four
+      // lines later and feeding the SAME terminal branch, still matched
+      // `to_number` exactly - so a shop stored under discovery's spelling read
+      // as "never replied, never read" and helped condemn a composed answer.
       const stateRead = await sbSelectStrict<{ read: boolean; last_reply_at: string | null }>(
         "wa_recipient_state",
-        `select=read,last_reply_at&sender_key=eq.${encodeURIComponent(
-          opts.senderKey
-        )}&to_number=eq.${encodeURIComponent(opts.toDigits)}&limit=1`
+        `select=read,last_reply_at&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
+          `&limit=1${numberFilter("to_number", opts.toDigits)}`
       );
       // AN UNREADABLE PROBE MUST NOT DELETE A COMPOSED REPLY.
       //
@@ -1945,15 +1994,18 @@ export async function guardOutbound(rawOpts: {
     // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
     // a reply "until the shop opens" would be absurd (and was: a deal-close on
     // a live chat once queued for "opening hours" on a wrong-timezone number).
+    // Tolerant number matching here too: this probe decides whether a shop that
+    // is demonstrably at the phone right now gets an answer, or gets told to
+    // wait until "opening hours". Matching `from_number` exactly meant the
+    // override silently never fired for any shop whose WhatsApp spelling
+    // differed from discovery's - the exact population this override exists for.
     const recentInbound = await sbSelect<{ id: number }>(
       "whatsapp_messages",
-      `select=id&direction=eq.inbound&from_number=eq.${encodeURIComponent(
-        opts.toDigits
-      )}&raw->>receiver=eq.${encodeURIComponent(
+      `select=id&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
         opts.senderKey
       )}&received_at=gte.${encodeURIComponent(
         new Date(now - 30 * 60_000).toISOString()
-      )}&limit=1`
+      )}&limit=1${numberFilter("from_number", opts.toDigits)}`
     ).catch(() => []);
     const activelyChatting = recentInbound.length > 0;
     const { off, known } = resolveOffset(opts.toDigits, region);
@@ -2343,13 +2395,33 @@ async function staleDraftDropped(
 }
 
 /**
- * What counts as an ENGAGED REPLY, as a PostgREST fragment.
+ * What counts as an ENGAGED REPLY, as a complete PostgREST fragment
+ * (leading `&` included - it is an `or=` group, not a column predicate).
  *
  * One definition, shared by the drain's reply select and the reply
  * dispatcher's "when is the next one due?" probe, so the lane can never
  * disagree with itself about what it is carrying.
+ *
+ * A ROW WITH NO `kind` WAS INVISIBLE TO THE ENTIRE FAST LANE.
+ *
+ * This was `meta->>kind=not.in.(rfq,custom,human-manual)`. When `meta` carries
+ * no `kind` at all, `meta->>kind` is SQL NULL, and `NOT (NULL IN (...))` is
+ * NULL - not true. PostgREST keeps only rows where the predicate is TRUE, so
+ * every kind-less row was excluded from the reply select AND from the reply
+ * dispatcher's next-due probe.
+ *
+ * Meanwhile the drain's own `isReplyRow` treats an undefined kind as a REPLY.
+ * So the two halves of the lane disagreed about the same row: the dispatcher
+ * could not see it, and the drain, when it eventually picked it up on the
+ * general pass, called it a reply. The row was not lost - it just never moved
+ * on the fast lane, only on whatever slow sweep happened along. Any park that
+ * forgets to stamp `meta.kind` silently loses its 2-minute SLA.
+ *
+ * Spelling it as an explicit `or` makes the NULL case a decision rather than an
+ * accident, and matches `isReplyRow`: no kind means reply.
  */
-export const REPLY_KIND_FILTER = "not.in.(rfq,custom,human-manual)";
+export const REPLY_KIND_FILTER =
+  "&or=(meta->>kind.is.null,meta->>kind.not.in.(rfq,custom,human-manual))";
 
 export type DrainOptions = {
   /**
@@ -2399,7 +2471,7 @@ export async function drainOutbox(
   // Asking for replies in their own query makes the promise structural: they
   // are in the pool whatever the cold queue is doing.
   const replyQuery =
-    `${cols}&not_before=lte.${pgTimestamp(due)}&meta->>kind=${REPLY_KIND_FILTER}` +
+    `${cols}&not_before=lte.${pgTimestamp(due)}${REPLY_KIND_FILTER}` +
     `${senderFilter}&order=not_before.asc&limit=24`;
   const [replyRows, anyRows] = await Promise.all([
     sbSelect<OutboxRow>("wa_outbox", replyQuery).catch(() => [] as OutboxRow[]),
