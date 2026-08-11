@@ -135,12 +135,26 @@ export async function GET(req: Request) {
     // The hop chain used to re-derive url.origin, so even a correctly-started
     // tick could not continue past hop 0 on Cloud Run.
     const { selfKickOrigin } = await import("@/lib/request-origin");
+    const { kickDispatcher } = await import("@/lib/wa/kick");
     const origin = await selfKickOrigin(req);
-    fetch(
+    // 350ms WAS NOT A NUMBER, IT WAS A HOPE.
+    //
+    // This was a bare fetch plus a hand-rolled sleep, and the sleep was less
+    // than a THIRD of the settle window kick.ts derived for exactly this
+    // problem (KICK_SETTLE_MS = 1200). On Cloud Run the CPU drops to ~0 the
+    // moment the response flushes, so an outgoing request that has not
+    // finished its DNS/TCP/TLS handshake simply stops existing - and 350ms is
+    // routinely short of that on a cold connection. The chain then ends
+    // silently at whatever hop happened to lose the race, which is precisely
+    // the "queue stuck" shape this chain exists to prevent.
+    //
+    // kickDispatcher races the settle window against the callee ANSWERING, so
+    // the common case (the successor stands down immediately because another
+    // runner holds the claim) still returns in milliseconds. One implementation
+    // of "make sure this actually left", used by every site that needs it.
+    await kickDispatcher(
       `${origin}/api/wa/tick?token=${encodeURIComponent(expected)}&hop=${hop + 1}`
-    ).catch(() => {});
-    // Give the outgoing request a moment to actually leave this instance.
-    await new Promise((r) => setTimeout(r, 350));
+    );
     return NextResponse.json({ ok: true, ran: true, drained, chained: true, hop });
   }
   return NextResponse.json({ ok: true, ran: true, drained, chained: false, hop });

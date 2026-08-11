@@ -105,11 +105,23 @@ export function startSchedulerWorker(): Worker<SchedulerJob> {
     async (job: Job<SchedulerJob>) => {
       if (job.data.kind === "drain") {
         // Same senders as the legacy drains: each user's own linked WhatsApp.
-        await drainOutbox((senderKey, to, text) =>
-          sendFromUser(senderKey, to, text)
+        //
+        // LANE AND SPEED, both of which this worker was dropping. `sendFromUser`
+        // defaults to the INTRO lane (the tighter cold cap) and to the slow
+        // presence simulation, so every agent reply drained from here was
+        // metered against the cold-introduction budget - starving a traveller's
+        // own batch of its replies - and paid 4-12s of typing theatre it does
+        // not need. That is the same defect RC-2 fixed at the route sites; this
+        // worker was outside the sweep that found them, which is exactly how a
+        // defect survives its own fix.
+        //
+        // The drain already knows which lane each row belongs to and passes it
+        // as the fourth argument. Accepting it is the whole change.
+        await drainOutbox((senderKey, to, text, lane) =>
+          sendFromUser(senderKey, to, text, true, { lane })
         ).catch((e) => logger.warn({ err: (e as Error).message }, "outbox drain error"));
         await drainGraphWakeups((senderKey, to, text) =>
-          sendFromUser(senderKey, to, text)
+          sendFromUser(senderKey, to, text, true, { lane: "reply" })
         ).catch((e) => logger.warn({ err: (e as Error).message }, "wakeup drain error"));
       } else if (job.data.kind === "gc") {
         // Observability sweep - all budget keys carry TTLs, nothing to delete.

@@ -119,12 +119,21 @@ export async function GET(req: Request) {
       `sender_key=eq.__reply__&slot_key=eq.${encodeURIComponent(slot)}`
     ).catch(() => {});
     const { selfKickOrigin } = await import("@/lib/request-origin");
+    const { kickDispatcher } = await import("@/lib/wa/kick");
     const origin = await selfKickOrigin(req);
-    fetch(
+    // AND THE RELEASE ABOVE IS WHY THIS ONE MATTERS MOST.
+    //
+    // The claim is deleted BEFORE the hop is fired, deliberately - a runner
+    // that returns still holding its window makes its own successor lose. But
+    // that ordering means a hop which never leaves the instance is not merely a
+    // missed beat: the window is already released and NOBODY is draining this
+    // sender. The 350ms sleep was under a third of kick.ts's own settle floor,
+    // derived for exactly this failure, so the release was being paid for with
+    // a handoff that might not have happened.
+    await kickDispatcher(
       `${origin}/api/wa/reply-tick?token=${encodeURIComponent(expected)}` +
         `&sender=${encodeURIComponent(sender)}&hop=${hop + 1}`
-    ).catch(() => {});
-    await new Promise((r) => setTimeout(r, 350));
+    );
   }
   return NextResponse.json({ ok: true, ran: true, drained, chained: chaining, hop });
 }

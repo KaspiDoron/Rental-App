@@ -597,15 +597,24 @@ export async function POST(req: Request) {
   }
 
   // LIVENESS: kick the self-chaining drain so the staggered batch keeps
-  // progressing even if the user locks their phone right now (fire-and-
-  // forget; the activity polls and the ping cron remain the backstops).
+  // progressing even if the user locks their phone right now.
+  //
+  // The last bare unawaited fetch in the codebase. It was described as
+  // fire-and-forget with the polls and the ping cron as backstops - but this is
+  // the kick that starts a batch the traveller JUST clicked, and on Cloud Run
+  // an unawaited fetch that has not finished its handshake when the response
+  // flushes never leaves. Falling back to a poll means the first message of a
+  // hand-triggered batch waits for whatever pokes the server next, which is the
+  // slow-first-send report this chain was built to end. kickDispatcher returns
+  // as soon as the tick answers, so the cost in the common case is milliseconds.
   try {
     const { webhookToken } = await import("@/lib/evolution");
     const { selfKickOrigin } = await import("@/lib/request-origin");
+    const { kickDispatcher } = await import("@/lib/wa/kick");
     const token = await webhookToken();
     const origin = await selfKickOrigin(req);
     if (token) {
-      fetch(`${origin}/api/wa/tick?token=${encodeURIComponent(token)}&hop=0`).catch(() => {});
+      await kickDispatcher(`${origin}/api/wa/tick?token=${encodeURIComponent(token)}&hop=0`);
     }
   } catch {
     /* best-effort */
