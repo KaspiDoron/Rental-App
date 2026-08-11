@@ -31,6 +31,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { WillAvatar } from "@/components/will/WillAvatar";
 import { OriginPicker, type Origin } from "@/components/OriginPicker";
 import { RequestBuilder } from "@/components/RequestBuilder";
+import { RentalWindowField, usePlanWindow } from "@/components/RentalWindowField";
 import { FaqSection } from "@/components/FaqSection";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SearchSummaryBar } from "@/components/SearchSummaryBar";
@@ -110,7 +111,7 @@ import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
-import { deviceTimeZone } from "@/lib/rental-window";
+import { addDays, deviceTimeZone } from "@/lib/rental-window";
 import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
 import { MassBargainPreview } from "@/components/MassBargainPreview";
 import { VirtualVendorList } from "@/components/VirtualVendorList";
@@ -177,7 +178,7 @@ function pickExamples(plan?: string): string[] {
 }
 
 export default function Home() {
-  const { t } = useI18n();
+  const { t, tShared } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [originHint, setOriginHint] = useState<string | null>(null);
@@ -251,6 +252,32 @@ export default function Home() {
   // the free-text box greys out and the ONE bottom "Find my deal" button runs
   // the structured search (input-mode disambiguation, owner directive).
   const [builderFields, setBuilderFields] = useState<Partial<StructuredRFQ> | null>(null);
+  // W-7: THE RENTAL WINDOW IS THE PAGE'S, NOT THE TAP BUILDER'S.
+  //
+  // "From" and "For" were private state inside RequestBuilder, which is mounted
+  // only under `{builderOpen && ...}`. Typing a request - the default mode -
+  // therefore never asked WHEN, and the page posted `{ text, timeZone }` to
+  // /api/profile while that route's free-text branch destructured a
+  // `durationDays` no client had ever sent. Both modes now read and write these
+  // two values, so they cannot describe different trips.
+  const planWindow = usePlanWindow(session?.plan);
+  const [startDate, setStartDate] = useState("");
+  const [days, setDays] = useState(4);
+  // Whether the traveller has ACTUALLY touched the window. It matters: the
+  // control always shows a date, but an untouched default must not out-rank a
+  // date the profiler read from their own words ("from the 20th for a week").
+  // Touched, it wins - a visible control that a hidden parse silently overrides
+  // is the same class of lie this whole item is about.
+  const [windowTouched, setWindowTouched] = useState(false);
+  // What the SERVER did to the window on the last search. `clampRfqWindow` has
+  // always returned a `reason`; every caller discarded it, so a clamped date
+  // just looked like a typo the traveller had made.
+  const [windowNote, setWindowNote] = useState<string | null>(null);
+  // The plan window resolves after mount (the device zone is not the server's),
+  // so the picker starts empty and adopts the soonest bookable day once known.
+  useEffect(() => {
+    setStartDate((d) => (d && d >= planWindow.startDate && d <= planWindow.maxStartDate ? d : planWindow.startDate));
+  }, [planWindow.startDate, planWindow.maxStartDate]);
   // IDP disclaimer (owner directive): search stays disabled until the traveller
   // declares they hold a valid International Driving Permit for the category.
   //
@@ -1967,6 +1994,15 @@ export default function Home() {
         ...(structuredFields
           ? { structured: true, fields: structuredFields }
           : { text: requestText }),
+        // W-7: THE TYPED PATH CARRIES A WINDOW TOO.
+        //
+        // Only sent when the traveller actually set it. An untouched default
+        // must not silently overrule a date they stated in their own words -
+        // the profiler reads "from the 20th for a week" and, unset here, keeps
+        // it. Touched, this wins, because it is the value on screen.
+        ...(windowTouched && !structuredFields
+          ? { startDate: startDate || planWindow.startDate, durationDays: days }
+          : {}),
         // THE TRAVELLER'S DAY, not Greenwich's. clampRfqWindow already accepted
         // a zone and already did the right thing with one - the client simply
         // never sent it, so every rental window in Asia was decided against a
@@ -2007,6 +2043,21 @@ export default function Home() {
       return;
     }
     setRfq(pData.rfq);
+    // W-7: THE PICKER NOW SHOWS THE WINDOW THE SEARCH ACTUALLY RAN WITH.
+    //
+    // The server is the rental-window authority and always was; what it never
+    // did was say so. `clampRfqWindow` returns `{adjusted, reason}` and every
+    // caller dropped both, so a free-plan traveller who picked next Tuesday got
+    // today's rental and no explanation - the control still read "Tuesday".
+    // Syncing the control back from the compiled RFQ also settles the other
+    // direction: a date the PROFILER read out of their prose ("from the 20th")
+    // appears in the picker instead of being invisible.
+    if (pData.rfq?.startDate) {
+      setStartDate(pData.rfq.startDate);
+      setWindowTouched(true);
+    }
+    if (Number.isFinite(pData.rfq?.durationDays)) setDays(pData.rfq.durationDays);
+    setWindowNote(pData.windowAdjusted ? pData.windowReason ?? null : null);
     // The active filter always follows the requested vehicle class.
     setFilters({ ...DEFAULT_FILTERS, vehicleClass: pData.rfq.vehicleClass });
     setPhase("discovering");
@@ -2899,6 +2950,34 @@ export default function Home() {
             ))}
           </div>
 
+          {/* THE RENTAL WINDOW - BOTH MODES, ALWAYS ON SCREEN (W-7).
+              This sits between the request and the tap builder because it is
+              the standing context both are chosen against, not a step of
+              either. It was the builder's private state, and the builder is
+              mounted only when the tap mode is open, so every typed request
+              reached the shops with no start date at all. */}
+          <div className="mt-3">
+            <RentalWindowField
+              startDate={startDate || planWindow.startDate}
+              days={days}
+              today={planWindow.startDate}
+              maxStartDate={planWindow.maxStartDate}
+              onStartDateChange={(d) => {
+                setStartDate(d);
+                setWindowTouched(true);
+                setWindowNote(null);
+              }}
+              onDaysChange={(n) => {
+                setDays(n);
+                setWindowTouched(true);
+                setWindowNote(null);
+              }}
+              adjustedReason={windowNote}
+              t={t}
+              tShared={tShared}
+            />
+          </div>
+
           {/* Tap-to-build panel (F2 / Step 2): a zero-typing alternative to the
               free text above. Toggle so first-timers see the guided builder and
               typists keep the box. Locking runs the SAME search, structured. */}
@@ -2922,10 +3001,11 @@ export default function Home() {
                   // carried over from the previous request.
                   key={searchEpoch}
                   busy={phase === "profiling" || phase === "running"}
-                  // The date picker's ceiling is plan-tiered (free books
-                  // same-day only). The server clamps regardless; this stops
-                  // the picker offering a date it knows will be moved.
-                  plan={session?.plan}
+                  // The window is the page's now (see RentalWindowField above);
+                  // the builder reports it back inside its RFQ fields so the
+                  // structured path carries the same dates the typed path does.
+                  startDate={startDate || planWindow.startDate}
+                  days={days}
                   onFieldsChange={setBuilderFields}
                 />
               </div>

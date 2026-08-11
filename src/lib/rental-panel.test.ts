@@ -12,6 +12,7 @@ const readCode = (p: string) =>
     .replace(/\/\/.*$/gm, "");
 
 const builder = readCode("src/components/RequestBuilder.tsx");
+const field = readCode("src/components/RentalWindowField.tsx");
 
 // M8 / I-8: THE DATES WERE BURIED IN STEP 3 OF 4.
 //
@@ -20,24 +21,28 @@ const builder = readCode("src/components/RequestBuilder.tsx");
 // screen for the rest of the flow. Since Tier 0.4 that date also rides on the
 // wire in the opener, so a window the traveller cannot see is a window they
 // cannot check against what the shops were actually asked.
+//
+// W-7 CARRIED THE SAME ARGUMENT ONE STEP FURTHER. Lifting the panel out of the
+// carousel was not enough, because the carousel itself is mounted only under
+// `{builderOpen && ...}` - so everyone who typed their request instead of
+// tapping it still never saw a date. The window now lives in its own component
+// that the PAGE renders in both input modes; these tests moved with it, and the
+// claim they make is strictly stronger: it is not a step of the wizard, and it
+// is not behind the wizard either. See rental-window-reach.test.ts.
 
 describe("the rental window is not a step", () => {
-  it("the date field lives OUTSIDE every `current === ...` step block", () => {
-    // The panel renders above the progress rail, so it is on screen no matter
-    // which step the carousel is showing.
-    const panelAt = builder.indexOf("<StartDateField");
-    const railAt = builder.indexOf("{steps.map(");
-    expect(panelAt).toBeGreaterThan(-1);
-    expect(railAt).toBeGreaterThan(-1);
-    expect(panelAt).toBeLessThan(railAt);
+  it("the date field is not inside the carousel at all", () => {
+    // It used to render above the progress rail. It now renders above the
+    // whole component - the builder has no date input left.
+    expect(builder).not.toMatch(/<StartDateField|<DurationField/);
+    expect(field).toMatch(/<StartDateField/);
   });
 
   it("the duration travels with it - one thought, one panel", () => {
-    const dateAt = builder.indexOf("<StartDateField");
-    const durationAt = builder.indexOf("<DurationField");
-    const railAt = builder.indexOf("{steps.map(");
+    const dateAt = field.indexOf("<StartDateField");
+    const durationAt = field.indexOf("<DurationField");
+    expect(dateAt).toBeGreaterThan(-1);
     expect(durationAt).toBeGreaterThan(dateAt);
-    expect(durationAt).toBeLessThan(railAt);
   });
 
   it("the specs step no longer carries the date", () => {
@@ -52,9 +57,8 @@ describe("the rental window is not a step", () => {
     // A silent server-side clamp that moves the date after the traveller has
     // pressed search is the failure this line exists to prevent, so it has to
     // sit where the date is chosen.
-    const panel = builder.slice(0, builder.indexOf("{steps.map("));
-    expect(panel).toMatch(/maxStartDate === today/);
-    expect(panel).toMatch(/same-day rentals/);
+    expect(field).toMatch(/maxStartDate === today/);
+    expect(field).toMatch(/same-day rentals/);
   });
 });
 
@@ -68,9 +72,13 @@ describe("the return date is emitted, and derived", () => {
 
   it("it is DERIVED from the duration, never a second input", () => {
     // Two inputs for one fact is how this app got four disagreeing shop
-    // counters. There is exactly one date input in the builder.
+    // counters. There is exactly one date input in the whole search flow, and
+    // both the reporting builder and the rendering field derive the return
+    // date from it with the same helper.
     expect(builder).toMatch(/const returnDate = addDays\(startDate, days\)/);
-    expect(builder.match(/<StartDateField/g)?.length ?? 0).toBe(1);
+    expect(field).toMatch(/const returnDate = addDays\(startDate, days\)/);
+    expect(builder.match(/<StartDateField/g)?.length ?? 0).toBe(0);
+    expect(field.match(/<StartDateField/g)?.length ?? 0).toBe(1);
   });
 
   it("the arithmetic is the UTC-anchored label helper, not a local Date", () => {

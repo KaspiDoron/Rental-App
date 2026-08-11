@@ -27,8 +27,9 @@ const readCode = (p: string) =>
 // halves: the picker offers only what the plan allows, and the date reaches the
 // RFQ that the composer reads.
 
-describe("REPRODUCTION: the builder now collects a date, not only a count", () => {
+describe("REPRODUCTION: a date is collected, not only a count", () => {
   const builder = readCode("src/components/RequestBuilder.tsx");
+  const field = readCode("src/components/RentalWindowField.tsx");
 
   it("startDate is in the reported RFQ fields", () => {
     // The one line whose absence made every downstream read dead.
@@ -42,13 +43,17 @@ describe("REPRODUCTION: the builder now collects a date, not only a count", () =
   });
 
   it("the picker is bounded by the plan window, not free-form", () => {
-    expect(builder).toMatch(/resolveWindow\(\{ plan, nowMs: Date\.now\(\) \}\)/);
-    expect(builder).toMatch(/min=\{today\}/);
-    expect(builder).toMatch(/max=\{maxStartDate\}/);
+    // W-7 moved the picker OUT of the builder (see session-window.test.ts for
+    // why), so the bounds are pinned where they now live. Same claim, same
+    // authority, one file across.
+    expect(field).toMatch(/resolveWindow\(\{/);
+    expect(field).toMatch(/min=\{min\}/);
+    expect(field).toMatch(/max=\{max\}/);
+    expect(readCode("src/app/page.tsx")).toMatch(/maxStartDate=\{planWindow\.maxStartDate\}/);
   });
 
-  it("the page hands the builder the signed-in plan", () => {
-    expect(readCode("src/app/page.tsx")).toMatch(/plan=\{session\?\.plan\}/);
+  it("the page hands the picker the signed-in plan", () => {
+    expect(readCode("src/app/page.tsx")).toMatch(/usePlanWindow\(session\?\.plan\)/);
   });
 });
 

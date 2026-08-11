@@ -874,6 +874,29 @@ export async function processVendorReply(opts: {
         hasPrice: Boolean(usablePrice),
       });
       extraction.vehicleConfirmation = conf;
+      // W-15: AND WRITE IT DOWN. `prev` above comes out of
+      // negotiation_threads.fields.vehicleConfirmation, whose only writer was
+      // applyExtractionToState - reached solely from the graph engine, which
+      // the SPTE route makes unreachable on an ordinary turn. So `prev` was
+      // null every single turn and the ask-once latch survived only while the
+      // confirm question was still our most recent outbound. One bargain later
+      // the thread had forgotten, `vehicleAsked` read false, and the engine
+      // asked a question the shop had already answered.
+      //
+      // Persisted HERE, next to where it is resolved, so it holds whichever
+      // engine then runs. Never blocks the turn: a thread that cannot write its
+      // memory must still get a reply.
+      const { saveVehicleConfirmation } = await import("./graph/state");
+      await saveVehicleConfirmation(
+        {
+          threadKey: threadKeyFor(ctx.sender, from),
+          userEmail: ctx.sender,
+          vendorId: ctx.vendorId,
+          vendorName: ctx.vendorName,
+          toNumber: from,
+        },
+        conf
+      ).catch(() => {});
       // A confirmed THREAD upgrades this message's verdict: the price on the
       // table belongs to the vehicle the conversation already established, so
       // no surface may keep asking and no offer stays "unverified".

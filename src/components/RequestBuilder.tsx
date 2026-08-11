@@ -9,8 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { StructuredRFQ, VehicleClass, Transmission } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
-import { addDays, resolveWindow } from "@/lib/rental-window";
-import { formatDateRange, formatRentalDate } from "@/lib/clock";
+import { addDays } from "@/lib/rental-window";
+import { formatDateRange } from "@/lib/clock";
 import { Icon } from "./icons";
 
 const SCOOTER_CC = [110, 125, 150, 160] as const;
@@ -109,82 +109,29 @@ function Stepper({ value, min, max, onChange, suffix }: { value: number; min: nu
   );
 }
 
-// BUG 4: the rental duration must be directly EDITABLE - not only nudged one day
-// at a time. This control keeps the -/+ steppers but the number itself is a
-// typeable input (clamped 1-90), so a 30-day rental is one keystroke.
-function DurationField({ value, onChange, t }: { value: number; onChange: (n: number) => void; t: (s: string) => string }) {
-  const clamp = (n: number) => Math.max(1, Math.min(90, n));
-  return (
-    <div className="inline-flex items-center gap-2 rounded-2xl border-2 border-line bg-card px-2 py-1.5">
-      <button type="button" aria-label="decrease" onClick={() => onChange(clamp(value - 1))} className="btn h-8 w-8 rounded-xl bg-card2 text-xl font-extrabold text-strong">−</button>
-      <input
-        type="number"
-        inputMode="numeric"
-        min={1}
-        max={90}
-        value={value}
-        aria-label={t("Rental days")}
-        onChange={(e) => {
-          const n = parseInt(e.target.value, 10);
-          if (Number.isFinite(n)) onChange(clamp(n));
-        }}
-        className="w-12 bg-transparent text-center text-[15px] font-extrabold text-strong outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-      />
-      <span className="text-[12px] font-bold text-faint">{t("days")}</span>
-      <button type="button" aria-label="increase" onClick={() => onChange(clamp(value + 1))} className="btn h-8 w-8 rounded-xl bg-card2 text-xl font-extrabold text-strong">+</button>
-    </div>
-  );
-}
-
-// A NATIVE DATE INPUT, BOUNDED BY THE PLAN.
-//
-// `min`/`max` are the plan window (rental-window.ts: free books today only, Pro
-// 30 days ahead, Ultra 180). The server clamps too - clampRfqWindow is the
-// authority and stays so - but a picker that lets someone choose a date the
-// server will silently move is a picker that lies. Native `date` because it is
-// the one control every phone already knows how to drive, in every locale.
-function StartDateField({
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  value: string;
-  min: string;
-  max: string;
-  onChange: (d: string) => void;
-}) {
-  return (
-    <input
-      type="date"
-      value={value}
-      min={min}
-      max={max}
-      onChange={(e) => {
-        const d = e.target.value;
-        // An empty or out-of-range value falls back to the soonest bookable
-        // day rather than travelling to the server as undefined.
-        if (!d) return onChange(min);
-        onChange(d < min ? min : d > max ? max : d);
-      }}
-      // >= 16px so iOS does not zoom the whole page on focus.
-      className="rounded-2xl border-2 border-line bg-card px-3 py-1.5 text-[16px] font-extrabold text-strong outline-none"
-    />
-  );
-}
-
 export function RequestBuilder({
   onFieldsChange,
   busy,
-  plan,
+  startDate,
+  days,
 }: {
   /** Live report of the current structured selections (null until a vehicle is
    *  picked). The page's single bottom "Find my deal" button consumes this -
    *  the builder itself has NO search button (one unified CTA, owner directive). */
   onFieldsChange: (fields: Partial<StructuredRFQ> | null) => void;
   busy?: boolean;
-  /** Drives how far ahead the date picker allows. Falls back to the free window. */
-  plan?: string | null;
+  /**
+   * THE RENTAL WINDOW BELONGS TO THE PAGE (M8 / W-7).
+   *
+   * It used to be private state here, and the page mounts this component only
+   * when the tap builder is open - so a traveller who typed their request was
+   * never asked when the rental starts or how long it runs. The window is now
+   * a page-level control shown in BOTH modes (components/RentalWindowField),
+   * and this component only reports what it is given. Read-only on purpose:
+   * two owners of one fact is how the two input modes would drift apart.
+   */
+  startDate: string;
+  days: number;
 }) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
@@ -192,16 +139,6 @@ export function RequestBuilder({
   const [transmission, setTransmission] = useState<Transmission>("any");
   const [cc, setCc] = useState<number | null>(null);
   const [carType, setCarType] = useState<(typeof CAR_TYPES)[number] | null>(null);
-  const [days, setDays] = useState(4);
-  // The plan window, computed once per mount. `resolveWindow` with no
-  // `requested` answers "today" plus the plan's ceiling, which is exactly the
-  // bounds the picker needs.
-  const { today, maxStartDate } = useMemo(() => {
-    const w = resolveWindow({ plan, nowMs: Date.now() });
-    return { today: w.startDate, maxStartDate: w.maxStartDate };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan]);
-  const [startDate, setStartDate] = useState(today);
   const [helmets, setHelmets] = useState(0);
   const [maxMileage, setMaxMileage] = useState<number | null>(null);
   const [storageBox, setStorageBox] = useState(false);
@@ -296,43 +233,14 @@ export function RequestBuilder({
 
   return (
     <div data-tour="builder" className="overflow-hidden rounded-2xl border-2 border-line bg-card2">
-      {/* M8 - THE RENTAL WINDOW, ALWAYS VISIBLE, OUTSIDE THE CAROUSEL.
-          The dates lived inside step 3 of 4, so for most of the flow the one
-          fact that decides whether a shop can even answer was off screen and
-          unverifiable - incident I-8. It is not a step: it is the standing
-          context every other step is chosen against, so it sits above the
-          carousel and never scrolls out of the flow.
-          "When" and "how long" stay together because they are one thought, and
-          the day they hand it back is SHOWN rather than asked, so the two can
-          never disagree. */}
-      <div className="border-b-2 border-line bg-card px-3 py-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-extrabold text-strong">{t("From")}</span>
-            <StartDateField
-              value={startDate}
-              min={today}
-              max={maxStartDate}
-              onChange={setStartDate}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-extrabold text-strong">{t("For")}</span>
-            <DurationField value={days} onChange={setDays} t={t} />
-          </div>
-        </div>
-        <p className="mt-1.5 text-[11px] font-bold text-faint">
-          {t("Back on")} {formatRentalDate(returnDate)}
-        </p>
-        {/* The free plan arranges same-day rentals only. Saying so at the
-            picker beats a silent server-side clamp that moves the date after
-            they have already pressed search. */}
-        {maxStartDate === today && (
-          <p className="mt-0.5 text-[11px] font-bold text-faint">
-            {t("Your plan arranges same-day rentals - Pro and Ultra book ahead.")}
-          </p>
-        )}
-      </div>
+      {/* M8 / W-7 - THE RENTAL WINDOW IS NOT A STEP, AND NOT THE BUILDER'S.
+          It first moved out of step 3 of 4 because the one fact that decides
+          whether a shop can even answer was off screen for most of the flow
+          (incident I-8). It has now moved out of this component entirely: the
+          page mounts the builder only when the tap mode is open, so keeping
+          the dates here hid them from everyone who typed instead. The page
+          renders components/RentalWindowField above this card, in both modes,
+          and hands the result down. */}
 
       {/* Progress rail */}
       <div className="flex items-center gap-1.5 px-3 pt-3">

@@ -6,6 +6,7 @@
 import type { ExtractedOffer } from "../agents";
 import { digitsOnly } from "../phone";
 import { boundedSet } from "../bounded-map";
+import type { VehicleConfirmationState } from "../vehicle/confirmation";
 import type {
   FulfillmentKind,
   NegotiationThreadState,
@@ -105,6 +106,71 @@ export function validatePhaseTransition(from: string, to: string): boolean {
 // Applying an extraction to the state (the ONLY place inbound facts land)
 // ---------------------------------------------------------------------------
 
+/**
+ * Merge a freshly-resolved vehicle confirmation onto whatever the thread
+ * already held. CONFIRMED NEVER REGRESSES, and the ask-once latch survives even
+ * when the rest of the state does not: a later vehicle-less price update
+ * ("1100b./6days") must not un-confirm a thread or make the confirm question
+ * legal again.
+ *
+ * Extracted so the two writers cannot drift. It used to be inline here, in the
+ * graph engine's write path - the only path that persisted it - and that engine
+ * effectively never runs (`engineV3Enabled` returns true even when config is
+ * unreadable), so in practice the fact was resolved every turn and stored on
+ * none of them.
+ */
+export function mergeVehicleConfirmation(
+  prev: VehicleConfirmationState | undefined,
+  next: VehicleConfirmationState
+): VehicleConfirmationState {
+  if (prev?.status !== "confirmed" || next.status === "confirmed") return next;
+  return next.askedAt && !prev.askedAt ? { ...prev, askedAt: next.askedAt } : prev;
+}
+
+/**
+ * Persist ONLY the vehicle confirmation for a thread (W-15).
+ *
+ * The thread forgot that it had already asked. `resolveConfirmation` reads
+ * `prev` out of `negotiation_threads.fields.vehicleConfirmation`, and the sole
+ * writer of that field was `applyExtractionToState`, called only from the graph
+ * engine - which the SPTE route makes unreachable on an ordinary turn. So `prev`
+ * was null on every single turn, and the ask-once latch could only survive while
+ * the confirm question was still our MOST RECENT outbound. One bargain later it
+ * was gone, `vehicleAsked` read false again, and the engine re-asked a question
+ * the shop had already answered - the loop the owner watched.
+ *
+ * Deliberately narrow: it writes one field and touches nothing else, so it is
+ * safe to call from the inbound path regardless of which engine then runs. The
+ * engine's own full save merges through `mergeVehicleConfirmation` and cannot
+ * undo it.
+ */
+export async function saveVehicleConfirmation(
+  args: {
+    threadKey: string;
+    userEmail?: string;
+    vendorId?: string;
+    vendorName?: string;
+    toNumber: string;
+  },
+  conf: VehicleConfirmationState
+): Promise<void> {
+  const prior = await loadThreadState(args.threadKey).catch(() => null);
+  const state = prior ?? newThreadState(args);
+  const merged = mergeVehicleConfirmation(state.fields.vehicleConfirmation, conf);
+  // Nothing to say: do not burn a version bump (and a write) on a no-op.
+  if (
+    state.fields.vehicleConfirmation &&
+    merged.status === state.fields.vehicleConfirmation.status &&
+    merged.askedAt === state.fields.vehicleConfirmation.askedAt
+  ) {
+    return;
+  }
+  await saveThreadState({
+    ...state,
+    fields: { ...state.fields, vehicleConfirmation: merged },
+  });
+}
+
 export function applyExtractionToState(
   state: NegotiationThreadState,
   extraction: ExtractedOffer | null,
@@ -115,16 +181,14 @@ export function applyExtractionToState(
   const f = { ...state.fields };
 
   // Thread-level vehicle confirmation: resolved once per turn in agent-loop
-  // and carried on the extraction; persisted here (the ONLY place inbound
-  // facts land). Confirmed never regresses - a later vehicle-less price
-  // update keeps the thread confirmed.
+  // and carried on the extraction; persisted here AND, since W-15, directly by
+  // the inbound path (saveVehicleConfirmation) so it survives on threads this
+  // engine never touches. Confirmed never regresses.
   if (extraction.vehicleConfirmation) {
-    const prev = f.vehicleConfirmation;
-    if (prev?.status !== "confirmed" || extraction.vehicleConfirmation.status === "confirmed") {
-      f.vehicleConfirmation = extraction.vehicleConfirmation;
-    } else if (extraction.vehicleConfirmation.askedAt && !prev.askedAt) {
-      f.vehicleConfirmation = { ...prev, askedAt: extraction.vehicleConfirmation.askedAt };
-    }
+    f.vehicleConfirmation = mergeVehicleConfirmation(
+      f.vehicleConfirmation,
+      extraction.vehicleConfirmation
+    );
   }
 
   if (usablePrice && usablePrice > 0) {

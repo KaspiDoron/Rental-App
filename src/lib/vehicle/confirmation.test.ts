@@ -138,8 +138,15 @@ describe("the thread fact is wired end to end (source pins)", () => {
 
   it("the state persists with the negotiation thread and never regresses there", () => {
     const state = readCode("src/lib/graph/state.ts");
-    expect(state).toMatch(/f\.vehicleConfirmation = extraction\.vehicleConfirmation;/);
-    expect(state).toMatch(/prev\?\.status !== "confirmed"/);
+    // W-15 pulled the never-regress branch out of this one call site into
+    // `mergeVehicleConfirmation`, because the inbound path now persists the
+    // fact too - the graph engine's write path was the only one, and that
+    // engine effectively never runs. Both writers go through the same rule.
+    expect(state).toMatch(/f\.vehicleConfirmation = mergeVehicleConfirmation\(/);
+    expect(state).toMatch(/if \(prev\?\.status !== "confirmed" \|\| next\.status === "confirmed"\) return next;/);
+    // ...and the fact is actually written on an ordinary turn, which is the
+    // half that was missing. See confirmation-memory.test.ts.
+    expect(readCode("src/lib/agent-loop.ts")).toMatch(/saveVehicleConfirmation\(/);
   });
 
   it("/api/replies merges thread state over per-row derivation", () => {
