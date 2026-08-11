@@ -908,9 +908,25 @@ export async function processEvolutionWebhook(
           mediaFetchFailed && !syntheticText
             ? (await import("@/lib/agent-loop")).photoClarifyExtraction()
             : undefined,
+        // THE AGENT'S REPLY IS A REPLY. It was billed as a cold introduction.
+        //
+        // This is the send SPTE's inline `guardAndSend` uses for the actual
+        // answer to a shop - the single most latency-sensitive call in the
+        // product - and it passed neither argument. `sendFromUser` defaults the
+        // missing lane to "intro" (evolution.ts), so every live reply was
+        // metered against the TIGHTER cold-intro cap. Once a cold batch had
+        // spent that cap, the shop's answer came back `rateLimited`, was parked
+        // 30s out, and was labelled "reconnecting - reply resumes
+        // automatically": the wrong reason, for a refusal that was ours.
+        //
+        // `fast` matters for the same call. Without it the reply pays the 4-12s
+        // presence simulation, on the one path the drain below explicitly
+        // refuses to pay it on. The guard, the pacing claims and the recipient
+        // mutex all still run - they are what make a send look human; the
+        // presence theatre here only delayed the message we are racing to land.
         send: async (to, message) => {
           if (!email) return { ok: false, error: "unknown instance" };
-          return sendFromUser(email, to, message);
+          return sendFromUser(email, to, message, true, { lane: "reply" });
         },
       });
       } catch (e) {
@@ -938,15 +954,24 @@ export async function processEvolutionWebhook(
   // skips costs 4-12s PER ROW and buys nothing - the guard, the pacing claims
   // and the recipient mutex are what make a send look human, and they all still
   // run. Paying it here just made the reply we are racing to deliver later.
+  //
+  // The drain already KNOWS which lane each row belongs to (`isCold(row)`), and
+  // hands it to the sender as the fourth argument. Dropping it on the floor here
+  // re-billed every drained reply as a cold introduction - the same defect as
+  // the inline send above, in the same file, on the same webhook invocation.
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
-    await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    await drainOutbox((senderKey, to, text, lane) =>
+      sendFromUser(senderKey, to, text, true, { lane })
+    );
   } catch {
     /* best-effort */
   }
   try {
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    await drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    await drainGraphWakeups((senderKey, to, text) =>
+      sendFromUser(senderKey, to, text, true, { lane: "reply" })
+    );
   } catch {
     /* best-effort */
   }

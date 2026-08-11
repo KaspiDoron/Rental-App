@@ -69,9 +69,12 @@ export async function POST(req: Request) {
 
   if (body.action === "flush") {
     // Send every DUE queued message right now, respecting the anti-ban gate.
-    const sent = await drainOutbox(async (senderKey, to, text) => {
-      // Owner pressed "send now" and is looking at the row.
-      const r = await sendFromUser(senderKey, to, text, true, { skipJitter: true });
+    const sent = await drainOutbox(async (senderKey, to, text, lane) => {
+      // Owner pressed "send now" and is looking at the row. The lane still
+      // matters: flushing a stuck reply through the cold-intro budget is how a
+      // manual rescue turns into a rate-limit refusal on the reply lane that
+      // had headroom all along.
+      const r = await sendFromUser(senderKey, to, text, true, { skipJitter: true, lane });
       return { ok: r.ok };
     });
     return NextResponse.json({ ok: true, sent });

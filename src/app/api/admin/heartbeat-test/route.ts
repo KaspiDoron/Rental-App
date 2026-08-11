@@ -29,7 +29,9 @@ export async function POST() {
   try {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
-    drained = await drainOutbox((senderKey, to, text) => sendFromUser(senderKey, to, text, true));
+    drained = await drainOutbox((senderKey, to, text, lane) =>
+      sendFromUser(senderKey, to, text, true, { lane })
+    );
     steps.push({
       step: "outbox drain",
       ok: true,
@@ -48,7 +50,7 @@ export async function POST() {
     const { drainGraphWakeups } = await import("@/lib/graph/engine");
     const { sendFromUser } = await import("@/lib/evolution");
     wakeups = await drainGraphWakeups((senderKey, to, text) =>
-      sendFromUser(senderKey, to, text, true)
+      sendFromUser(senderKey, to, text, true, { lane: "reply" })
     );
     steps.push({
       step: "scheduled follow-ups",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { LIMIT_DEFAULTS } from "../usage";
 import { PLAN_CAPACITY } from "./capacity";
@@ -11,6 +11,17 @@ const readCode = (p: string) =>
   readFileSync(join(process.cwd(), p), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
+
+/** Every file under a directory, recursively - repo-relative paths. */
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(process.cwd(), dir), { withFileTypes: true })) {
+    const p = `${dir}/${e.name}`;
+    if (e.isDirectory()) out.push(...walk(p));
+    else out.push(p);
+  }
+  return out;
+}
 
 // THE BATCH STARVED ITS OWN NEGOTIATION.
 //
@@ -116,19 +127,53 @@ describe("the lane reaches the rate limiter", () => {
     expect(guard).toMatch(/isCold\(row\) \? "intro" : "reply"/);
   });
 
-  it("REGRESSION: no drain call site drops the lane on the floor", () => {
-    for (const route of [
-      "src/app/api/wa/tick/route.ts",
-      "src/app/api/wa/ping/route.ts",
-      "src/app/api/wa/reply-tick/route.ts",
-      "src/app/api/wa/status/route.ts",
-      "src/app/api/activity/route.ts",
-      "src/app/api/replies/route.ts",
-    ]) {
-      const code = readCode(route);
-      if (!code.includes("drainOutbox(")) continue;
-      expect(code, `${route} drops the lane`).toMatch(/lane\b/);
+  it("REGRESSION: no send call site drops the lane on the floor", () => {
+    // THIS NET USED TO BE A HARDCODED LIST OF SIX ROUTES, and the busiest send
+    // path in the product was not on it. `src/lib/wa/ingest.ts` - the webhook,
+    // the one invocation that answers a shop while it is still waiting - passed
+    // neither `lane` nor `fast` on three separate calls, so every live agent
+    // reply was billed against the cold-intro cap and paid 4-12s of presence
+    // theatre. A regression test that enumerates its own coverage will always
+    // be outgrown by the code, so this one DISCOVERS the call sites instead.
+    const files = walk("src").filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f));
+    const offenders: string[] = [];
+    for (const f of files) {
+      const code = readCode(f);
+      if (!/drain(Outbox|GraphWakeups)\(/.test(code)) continue;
+      // Every drain callback must forward a lane, either the one the drain
+      // computed or an explicit literal. Anything else falls through to the
+      // "intro" default and mis-meters a reply.
+      //
+      // A FIXED WINDOW, not a paren match: the callback's own parameter list
+      // closes long before the `{ lane }` that matters, so a non-greedy
+      // `\(...\)` stops at `(k, to, text)` and passes every site trivially -
+      // which is how a "regression test" can be green and blind at once.
+      const CALL = /drain(?:Outbox|GraphWakeups)\(/g;
+      for (let m = CALL.exec(code); m; m = CALL.exec(code)) {
+        // The declaration itself is not a call site.
+        if (/function\s*$/.test(code.slice(Math.max(0, m.index - 20), m.index))) continue;
+        const window = code.slice(m.index, m.index + 260);
+        // The rule is about `sendFromUser`, which is the metered path. The Cloud
+        // API sender (`sendWhatsApp`) has no per-user lane budget at all, so
+        // demanding one there would be cargo-culting the fix rather than
+        // applying it.
+        if (!/sendFromUser\(/.test(window)) continue;
+        if (!/\blane\b/.test(window)) {
+          offenders.push(`${f}: ${window.slice(0, 100).replace(/\s+/g, " ").trim()}`);
+        }
+      }
     }
+    expect(offenders, `these drain call sites drop the lane:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("REGRESSION: the webhook's inline reply is metered as a reply, and is fast", () => {
+    // The inline `send:` injected into processVendorReply is the path SPTE's
+    // guardAndSend actually uses to answer the shop. It is not a drain, so the
+    // sweep above cannot see it - it gets its own pin.
+    const ingest = readCode("src/lib/wa/ingest.ts");
+    expect(ingest).toMatch(
+      /return sendFromUser\(email, to, message, true, \{ lane: "reply" \}\);/
+    );
   });
 
   it("a cap refusal is marked rateLimited so the drain cannot call it a host fault", () => {
