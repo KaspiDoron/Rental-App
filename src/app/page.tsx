@@ -156,6 +156,19 @@ const ALL_EXAMPLES = [
 
 // Free plan is today-pickup only, so never suggest future-scheduling searches.
 const FUTURE_HINT = /tomorrow|next (hour|day|week)|weekend|month|long-term|\d+ weeks?/i;
+
+/**
+ * How coarsely the measured clock skew is allowed to reach the render tree.
+ *
+ * A real device clock is wrong by minutes or not at all; it does not drift by
+ * 400ms between two polls eight seconds apart. Anything finer than this is
+ * network noise, and network noise passed as a prop is what re-rendered the
+ * whole vendor board and restarted every child poll on every tick.
+ *
+ * 30s is well below the drift that actually eats replies (the bug this
+ * correction exists for was a phone minutes fast) and far above the jitter.
+ */
+const SKEW_STEP_MS = 30_000;
 function pickExamples(plan?: string): string[] {
   const pool =
     plan === "free" ? ALL_EXAMPLES.filter((e) => !FUTURE_HINT.test(e)) : ALL_EXAMPLES;
@@ -202,7 +215,21 @@ export default function Home() {
   const [massState, setMassState] = useState<"idle" | "running" | "done">("idle");
   const [massNote, setMassNote] = useState<string | null>(null);
   /** Row the list should bring into view - see VirtualVendorList's prop. */
-  const [scrollToIndex, setScrollToIndex] = useState<number | null>(null);
+  // A SCROLL REQUEST, NOT A POSITION.
+  //
+  // This was a bare index, and setting state to the value it already holds is a
+  // React bail-out - so the effect in VirtualVendorList did not re-run and
+  // jumping to the SAME shop a second time did nothing at all. Tap a shop under
+  // "Offers & negotiations", scroll away to read others, tap the same shop
+  // again: silence. Every other shop still worked, which made it read as
+  // random. The rAF fallback could not save it either, because the list is
+  // windowed and a row scrolled out of view has no DOM node.
+  //
+  // The nonce makes each request distinct, so a repeat jump is a new request.
+  const [scrollRequest, setScrollRequest] = useState<{ index: number; nonce: number } | null>(
+    null
+  );
+  const scrollNonceRef = useRef(0);
   /** The pre-dispatch preview: who the run picked, before anything is sent. */
   const [massPreview, setMassPreview] = useState<{
     targets: Vendor[];
@@ -270,6 +297,30 @@ export default function Home() {
   // (the filter runs on server timestamps); feedStale surfaces a failing poll
   // instead of freezing the screen on a stale snapshot.
   const clockSkewRef = useRef(0);
+  // ...AND THE QUANTIZED COPY THE RENDER TREE IS ALLOWED TO SEE.
+  //
+  // The raw skew is `serverNow - Date.now()`, where serverNow is stamped at the
+  // END of the /api/activity handler - so it carries the full response transit
+  // and JSON parse, on an endpoint that awaits up to ~16s of drain work. It
+  // therefore moves by tens to thousands of milliseconds on EVERY poll, and the
+  // page re-renders on every poll regardless.
+  //
+  // That number was passed as a prop to every memoised child. `VendorCard` is
+  // memo()'d with a shallow compare; vendors keep identity through
+  // reconcileList, agentPending through reconcileRecord, handlers through
+  // useCallbackRef - every other memo-stability defence in this file holds, and
+  // then one jittering number broke all of them, re-rendering the whole board
+  // twice per poll cycle. Worse, it is an effect DEPENDENCY downstream:
+  // ThreadPeek, ThreadDashboard and TranscriptSheet all key their polls on it,
+  // so each tick tore down and rebuilt those effects - aborting the in-flight
+  // request every ~6s, which on a slow connection meant the conversation peek
+  // never completed at all.
+  //
+  // Quantized, it changes ~never, so identity holds. FLOOR rather than round:
+  // the epoch feeds `since=` filters, and an epoch that can only move EARLIER
+  // widens the window. A later epoch would drop replies, which is the exact
+  // failure the skew correction exists to prevent.
+  const [clockSkew, setClockSkew] = useState(0);
   const [feedStale, setFeedStale] = useState(false);
   // Will - the conversational layer. Session pause + compare live here too.
   const [willOpen, setWillOpen] = useState(false);
@@ -323,7 +374,7 @@ export default function Home() {
     // A NEW HUNT STARTS AT THE TOP. The windowed list has no page counter to
     // reset any more, but a stale scroll target from the previous search would
     // still fire once the new vendors land.
-    if (phase === "profiling" || phase === "discovering") setScrollToIndex(null);
+    if (phase === "profiling" || phase === "discovering") setScrollRequest(null);
   }, [phase]);
   const formCollapsed = !formOpen && vendors.length > 0 && (phase === "running" || phase === "done");
 
@@ -373,7 +424,7 @@ export default function Home() {
     // the two frames below then centre the real element once it exists.
     {
       const idx = filtered.findIndex((v) => v.id === id);
-      if (idx >= 0) setScrollToIndex(idx);
+      if (idx >= 0) setScrollRequest({ index: idx, nonce: ++scrollNonceRef.current });
     }
     // Two frames: let React commit the larger window before scrolling.
     requestAnimationFrame(() =>
@@ -463,7 +514,8 @@ export default function Home() {
   // running a couple of minutes fast silently ate replies that arrived right
   // after the search started. The activity poll already measures the skew
   // (clockSkewRef); every server-facing use of the epoch goes through here.
-  const epochOnServerClock = () => (searchEpoch ? searchEpoch + clockSkewRef.current : 0);
+  // Reads the QUANTIZED skew, never the raw ref - see its declaration.
+  const epochOnServerClock = () => (searchEpoch ? searchEpoch + clockSkew : 0);
 
   // Restore the local-language preference.
   useEffect(() => {
@@ -982,15 +1034,27 @@ export default function Home() {
       // skewMs corrects the client clock against the server's: `since` filters
       // SERVER row timestamps, so a phone running minutes fast hid every row
       // written in that window.
+      const sentAt = Date.now();
       const res = await fetch(
-        `/api/activity?since=${(searchEpoch || Date.now() - 86400000) + clockSkewRef.current}&t=${Date.now()}`,
+        `/api/activity?since=${(searchEpoch || Date.now() - 86400000) + clockSkewRef.current}&t=${sentAt}`,
         { cache: "no-store" }
       );
       if (!res.ok) throw new Error(`activity ${res.status}`);
       const d = await res.json();
       if (typeof d.now === "string") {
         const serverNow = Date.parse(d.now);
-        if (Number.isFinite(serverNow)) clockSkewRef.current = serverNow - Date.now();
+        if (Number.isFinite(serverNow)) {
+          // Midpoint estimate: the server stamped `now` somewhere between the
+          // request leaving and the response being parsed, so half the round
+          // trip is the least-wrong guess. `sentAt` is captured just before the
+          // fetch below.
+          const raw = serverNow - (sentAt + Date.now()) / 2;
+          clockSkewRef.current = raw;
+          const quantized = Math.floor(raw / SKEW_STEP_MS) * SKEW_STEP_MS;
+          // Only when it actually moved - setState with the same number is a
+          // React bail-out, but being explicit keeps the intent readable.
+          setClockSkew((prev) => (prev === quantized ? prev : quantized));
+        }
       }
       setFeedStale(false);
       // The kill switch and the queue rows now read the SAME poll: a session
@@ -3110,25 +3174,41 @@ export default function Home() {
             for opening hours (removable), which sent a deal, and exactly when. */}
         {vendors.length > 0 && (
           <div data-tour="status" className="mt-2 overflow-hidden rounded-2xl bg-card2">
+            {/* THE ONLY WAY TO OPEN THIS PANEL WAS BEING CLIPPED OFF.
+
+                `gap-y-1` is dead on a non-wrapping row - clear evidence
+                `flex-wrap` was intended and omitted. With all four counters
+                live the row needs ~348px at 11px bold, against 288px available
+                inside `max-w-md px-4` at a 320px viewport and 343px at 375px.
+                The parent has `overflow-hidden`, so this never produced page
+                scroll (the mobile rule held) - it CLIPPED instead, cutting
+                "offers" mid-word and taking the chevron with it. Translated
+                locales are longer still.
+
+                The counters wrap; the chevron is pulled out of the wrapping
+                group so it keeps its own column and can never be the thing
+                that falls off the end. */}
             <button
               onClick={() => setStatusOpen((o) => !o)}
-              className="flex w-full items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[11px] font-bold text-soft"
+              className="flex w-full items-center gap-3 px-3 py-2 text-left text-[11px] font-bold text-soft"
             >
-              {stageCounts.messaged > 0 && <span>📤 {stageCounts.messaged} {t("messaged")}</span>}
-              {stageCounts.replied > 0 && (
-                <span className="text-brandblue">💬 {stageCounts.replied} {t("replied")}</span>
-              )}
-              {Math.max(stageCounts.queued, queueItems.length) > 0 && (
-                <span>
-                  🕘 {Math.max(stageCounts.queued, queueItems.length)} {t("queued")}
-                </span>
-              )}
-              {stageCounts.offers > 0 && <span className="text-savings">💰 {stageCounts.offers} {t("offers")}</span>}
-              {stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers === 0 && (
-                <span>{t("Tap 'Ask for price' on a shop to start")}</span>
-              )}
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+                {stageCounts.messaged > 0 && <span>📤 {stageCounts.messaged} {t("messaged")}</span>}
+                {stageCounts.replied > 0 && (
+                  <span className="text-brandblue">💬 {stageCounts.replied} {t("replied")}</span>
+                )}
+                {Math.max(stageCounts.queued, queueItems.length) > 0 && (
+                  <span>
+                    🕘 {Math.max(stageCounts.queued, queueItems.length)} {t("queued")}
+                  </span>
+                )}
+                {stageCounts.offers > 0 && <span className="text-savings">💰 {stageCounts.offers} {t("offers")}</span>}
+                {stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers === 0 && (
+                  <span>{t("Tap 'Ask for price' on a shop to start")}</span>
+                )}
+              </span>
               {stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers > 0 && (
-                <span className="ml-auto text-[10px] text-faint">{statusOpen ? "▲" : "▼"}</span>
+                <span className="shrink-0 text-[10px] text-faint">{statusOpen ? "▲" : "▼"}</span>
               )}
             </button>
 
@@ -3720,7 +3800,7 @@ export default function Home() {
                 list is heaviest. Only the rows near the viewport exist now. */}
             <VirtualVendorList
               vendors={filtered}
-              scrollToIndex={scrollToIndex}
+              scrollRequest={scrollRequest}
               renderCard={(v, i) => (
               <div
                 id={`vendor-${v.id}`}

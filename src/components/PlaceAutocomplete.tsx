@@ -87,6 +87,9 @@ export function PlaceAutocomplete({
   const [locating, setLocating] = useState(false);
   const [resolving, setResolving] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  /** Monotonic request token - only the newest turn may write to the UI. */
+  const turnRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   // One autocomplete billing session per typing burst; renewed after a pick.
   const sessionToken = useRef<string>(newSessionToken());
@@ -112,13 +115,43 @@ export function PlaceAutocomplete({
       return;
     }
     clearTimeout(timer.current);
+    // A STALE RESPONSE COULD SET THE SEARCH ORIGIN.
+    //
+    // The debounce cleared the TIMER but never cancelled the in-flight fetch,
+    // and the handler called setResults unconditionally with no check that `q`
+    // was still the current query. On a slow connection, typing a hotel name
+    // showed suggestions for an earlier prefix - and OriginPicker feeds a tap
+    // straight into onChange({label, lat, lng}), so the whole shop discovery
+    // then ran around the wrong COORDINATES with nothing on screen to say so.
+    //
+    // Two guards, because either alone leaks: abort so a superseded request
+    // stops costing a billed Place call, and compare the token so a response
+    // that wins the race anyway cannot write.
+    const ctrl = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = ctrl;
+    const myTurn = ++turnRef.current;
     timer.current = setTimeout(async () => {
       setBusy(true);
       try {
         const res = await fetch(
-          `/api/geocode?q=${encodeURIComponent(q)}&st=${encodeURIComponent(sessionToken.current)}`
+          `/api/geocode?q=${encodeURIComponent(q)}&st=${encodeURIComponent(sessionToken.current)}`,
+          { signal: ctrl.signal }
         );
         const data = await res.json();
+        // Superseded while in flight - the cache write below is still correct
+        // (it is keyed by ITS OWN query), but nothing may touch the UI.
+        if (myTurn !== turnRef.current) {
+          if (Array.isArray(data.results) && data.results.length) {
+            SUGGESTION_CACHE.set(
+              q.toLowerCase(),
+              (data.results as { label: string; lat: number; lng: number; placeId?: string }[]).map(
+                (r) => ({ label: r.label, lat: r.lat, lng: r.lng, placeId: r.placeId })
+              )
+            );
+          }
+          return;
+        }
         const list: Suggestion[] = (data.results ?? []).map((r: any) => ({
           label: r.label,
           lat: r.lat,
@@ -130,15 +163,21 @@ export function PlaceAutocomplete({
         setResults(list);
         setNote(list.length ? null : friendlyError(data.error, q));
         setOpen(true);
-      } catch {
+      } catch (e) {
+        // An abort is us superseding ourselves, not a failure to report.
+        if ((e as { name?: string })?.name === "AbortError") return;
+        if (myTurn !== turnRef.current) return;
         setResults([]);
         setNote("Could not reach location search. Check your connection and retry.");
         setOpen(true);
       } finally {
-        setBusy(false);
+        if (myTurn === turnRef.current) setBusy(false);
       }
     }, 300);
-    return () => clearTimeout(timer.current);
+    return () => {
+      clearTimeout(timer.current);
+      ctrl.abort();
+    };
   }, [query, minChars]);
 
   // Close the dropdown on an outside tap.

@@ -16,6 +16,7 @@ import { PhotoGallery } from "./PhotoGallery";
 import { ShopPhoto } from "./ShopPhoto";
 import { StageBadge, Pipeline, stageCaption } from "./Tracker";
 import { MessageBubble, type ThreadMsg } from "./MessageBubble";
+import { reconcileMessages, useFollowNewMessages } from "./useTranscriptScroll";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { agentBusyLabel } from "@/lib/client/agent-busy";
 
@@ -77,6 +78,7 @@ export function ThreadDashboard({
   const [switching, setSwitching] = useState(false);
   const [gallery, setGallery] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -115,7 +117,9 @@ export function ThreadDashboard({
         .then((r) => r.json())
         .then((d) => {
           if (!alive || ctl.signal.aborted) return;
-          setMessages(Array.isArray(d.messages) ? d.messages : []);
+          // Reconciled, so an unchanged transcript keeps its array identity
+          // and the follow-scroll effect does not fire. See useTranscriptScroll.
+          setMessages((prev) => reconcileMessages(prev, Array.isArray(d.messages) ? d.messages : []));
           setDelivery(d.delivery ?? null);
         })
         // An abort is this component replacing its own request, never a
@@ -137,9 +141,10 @@ export function ThreadDashboard({
     };
   }, [vendor.id, searchEpoch]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+  // Follows the newest message only while the reader is already at the bottom.
+  // The unconditional version snapped anyone reading history back down every
+  // five seconds, which made reading history impossible.
+  useFollowNewMessages(scrollerRef, endRef, messages);
 
   async function switchTakeover(mode: "takeover" | "handback") {
     setSwitching(true);
@@ -187,7 +192,7 @@ export function ThreadDashboard({
         </button>
       </div>
 
-      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+      <div ref={scrollerRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {/* Meta row: rating, distance, open-now, address, Maps link */}
         <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
           {vendor.rating > 0 && (

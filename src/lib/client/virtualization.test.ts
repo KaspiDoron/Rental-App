@@ -74,9 +74,30 @@ describe("REPRODUCTION: jumping to a shop that is not mounted", () => {
     // The status panel and the push deep-links jump straight to a shop, and a
     // windowed row far down has no DOM node for scrollIntoView to find. The
     // old fix grew the pagination window past the index; that lever is gone.
-    expect(list).toMatch(/virtualizer\.scrollToIndex\(scrollToIndex, \{ align: "center" \}\)/);
-    expect(page).toMatch(/if \(idx >= 0\) setScrollToIndex\(idx\);/);
-    expect(page).toMatch(/scrollToIndex=\{scrollToIndex\}/);
+    expect(list).toMatch(/virtualizer\.scrollToIndex\(index, \{ align: "center" \}\)/);
+    expect(page).toMatch(/setScrollRequest\(\{ index: idx, nonce: \+\+scrollNonceRef\.current \}\)/);
+    expect(page).toMatch(/scrollRequest=\{scrollRequest\}/);
+  });
+
+  it("REGRESSION: the same shop twice is TWO requests, not a React bail-out", () => {
+    // It was a bare index, and setState with the value it already holds does
+    // not re-run the effect - so tapping the same shop again after scrolling
+    // away did nothing at all, while every other shop still worked. The nonce
+    // is what makes a repeat jump a distinct request.
+    expect(page).toMatch(/const scrollNonceRef = useRef\(0\);/);
+    expect(list).toMatch(/\}, \[scrollRequest\?\.nonce\]\);/);
+  });
+
+  it("the list re-measures its document offset when the page above moves", () => {
+    // scrollMargin is what scrollToIndex aims with, and it was re-measured only
+    // on a vendor-COUNT change or a window resize. During a live hunt the count
+    // holds still while the search card folds, the status panel expands
+    // (300-600px), QuotesRail appears - so the jump landed off target.
+    expect(list).toMatch(/new ResizeObserver\(\(\) => measure\(\)\)/);
+    expect(list).toMatch(/ro\.observe\(document\.body\)/);
+    // Guarded, because the observer does not exist in every test/SSR context.
+    expect(list).toMatch(/typeof ResizeObserver === "undefined"/);
+    expect(list).toMatch(/ro\?\.disconnect\(\)/);
   });
 
   it("...and scrollIntoView still does the fine positioning afterwards", () => {
@@ -84,6 +105,6 @@ describe("REPRODUCTION: jumping to a shop that is not mounted", () => {
   });
 
   it("a new hunt clears a stale target from the previous one", () => {
-    expect(page).toMatch(/setScrollToIndex\(null\)/);
+    expect(page).toMatch(/setScrollRequest\(null\)/);
   });
 });

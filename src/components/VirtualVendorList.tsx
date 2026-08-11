@@ -33,7 +33,7 @@ const TWO_COLUMN_MIN_PX = 768;
 export function VirtualVendorList({
   vendors,
   renderCard,
-  scrollToIndex,
+  scrollRequest,
 }: {
   vendors: Vendor[];
   renderCard: (vendor: Vendor, index: number) => React.ReactNode;
@@ -45,7 +45,9 @@ export function VirtualVendorList({
    * bumps this and the virtualizer scrolls the page, mounting the row on the
    * way; `scrollIntoView` on the real element then does the fine positioning.
    */
-  scrollToIndex?: number | null;
+  /** A scroll REQUEST - carries a nonce so jumping to the same row twice is two
+   *  distinct requests. A bare index made the second jump a React bail-out. */
+  scrollRequest?: { index: number; nonce: number } | null;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [lanes, setLanes] = useState(1);
@@ -57,11 +59,40 @@ export function VirtualVendorList({
     const measure = () => {
       setLanes(window.innerWidth >= TWO_COLUMN_MIN_PX ? 2 : 1);
       const top = parentRef.current?.getBoundingClientRect().top ?? 0;
-      setOffset(top + window.scrollY);
+      const next = top + window.scrollY;
+      // Only on a real change: setState with the same number is a bail-out, but
+      // the ResizeObserver below fires often enough that being explicit matters.
+      setOffset((prev) => (Math.abs(prev - next) < 1 ? prev : next));
     };
     measure();
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+
+    // EVERYTHING ABOVE THIS LIST CHANGES HEIGHT WHILE vendors.length DOES NOT.
+    //
+    // `offset` is the virtualizer's scrollMargin - where the list starts in the
+    // document - and it was re-measured only when the vendor COUNT changed or
+    // the window resized. During a live hunt the count is constant while the
+    // page above keeps moving: the search card folds away, the Live Status
+    // panel expands (easily 300-600px), QuotesRail appears once the second
+    // quote lands, the queued-messages card, the kill switch, the
+    // cheapest-offer banner.
+    //
+    // Overscan absorbs most of it for the render window, so the visible
+    // symptom is not blank gaps - it is scrollToIndex landing hundreds of
+    // pixels off target, because scrollMargin is what that call aims with. And
+    // the status panel, the surface that triggers most jumps, is the biggest
+    // offender.
+    const ro =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => measure());
+    if (ro && parentRef.current?.parentElement) ro.observe(parentRef.current.parentElement);
+    if (ro && typeof document !== "undefined") ro.observe(document.body);
+
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
   }, [vendors.length]);
 
   const virtualizer = useWindowVirtualizer({
@@ -76,12 +107,14 @@ export function VirtualVendorList({
   });
 
   useEffect(() => {
-    if (typeof scrollToIndex !== "number" || scrollToIndex < 0) return;
-    virtualizer.scrollToIndex(scrollToIndex, { align: "center" });
-    // `virtualizer` is recreated every render by design; depending on it here
-    // would scroll on every tick.
+    const index = scrollRequest?.index;
+    if (typeof index !== "number" || index < 0) return;
+    virtualizer.scrollToIndex(index, { align: "center" });
+    // Keyed on the NONCE, so a repeat jump to the same row re-runs. `virtualizer`
+    // is recreated every render by design; depending on it here would scroll on
+    // every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollToIndex]);
+  }, [scrollRequest?.nonce]);
 
   const items = virtualizer.getVirtualItems();
 

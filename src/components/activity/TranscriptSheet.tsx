@@ -8,6 +8,7 @@ import { Modal } from "../Modal";
 import { LoadingDots } from "../LoadingDots";
 import { useI18n } from "@/lib/i18n";
 import { MessageBubble, type ThreadMsg } from "../MessageBubble";
+import { reconcileMessages, useFollowNewMessages } from "../useTranscriptScroll";
 
 type Msg = ThreadMsg;
 
@@ -34,26 +35,42 @@ export function TranscriptSheet({
   const [takeover, setTakeover] = useState<boolean | null>(null);
   const [switching, setSwitching] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
 
   // POLL, like ThreadDashboard does. Fetching once meant a sheet left open
   // while a shop was actively replying quietly went stale - the reader had no
   // way to tell an idle thread from a frozen view.
   useEffect(() => {
     let alive = true;
+    // THE GUARD ITS SIBLING ALREADY HAD. ThreadDashboard documents this at
+    // length - two polls in flight at once on a slow connection, and the OLDER
+    // response can land last, rewinding the transcript to a state the traveller
+    // already scrolled past. The fix was never applied here, so the shop's
+    // newest message would appear and then disappear again.
+    let inFlight: AbortController | null = null;
     const load = () => {
+      inFlight?.abort();
+      const ctl = new AbortController();
+      inFlight = ctl;
       const q = new URLSearchParams({ vendorId, full: "1" });
       if (since) q.set("since", String(since));
       // Cache-bust: an intermediary caching this GET is what froze the
       // transcript on its first snapshot before.
       q.set("t", String(Date.now()));
-      fetch(`/api/thread?${q.toString()}`, { cache: "no-store" })
+      fetch(`/api/thread?${q.toString()}`, { cache: "no-store", signal: ctl.signal })
         .then((r) => r.json())
         .then((d) => {
-          if (!alive) return;
-          setMessages(Array.isArray(d.messages) ? d.messages : []);
+          if (!alive || ctl.signal.aborted) return;
+          setMessages((prev) =>
+            reconcileMessages(prev, Array.isArray(d.messages) ? d.messages : [])
+          );
           setDelivery(d.delivery ?? null);
         })
-        .catch(() => alive && setMessages([]));
+        // An abort is this component replacing its own request, never a
+        // failure - blanking the transcript for it would be the bug it fixes.
+        .catch((e) => {
+          if (alive && (e as { name?: string })?.name !== "AbortError") setMessages([]);
+        });
     };
     load();
     const id = setInterval(() => !document.hidden && load(), 5000);
@@ -64,6 +81,7 @@ export function TranscriptSheet({
     return () => {
       alive = false;
       clearInterval(id);
+      inFlight?.abort();
     };
   }, [vendorId, since]);
 
@@ -82,9 +100,8 @@ export function TranscriptSheet({
     }
   }
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+  // Only while the reader is already at the bottom - see useTranscriptScroll.
+  useFollowNewMessages(scrollerRef, endRef, messages);
 
   return (
     <Modal onClose={onClose}>
@@ -139,7 +156,10 @@ export function TranscriptSheet({
         </div>
       )}
 
-      <div className="no-scrollbar max-h-[55vh] space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3">
+      <div
+        ref={scrollerRef}
+        className="no-scrollbar max-h-[55vh] space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3"
+      >
         {messages === null && <LoadingDots label={t("Loading the conversation")} />}
         {messages !== null && messages.length === 0 && (
           <p className="py-4 text-center text-[12px] text-faint">
