@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { chat, aiEnabled } from "@/lib/ai";
 import { getConfigExact, setConfig } from "@/lib/runtime-config";
 import { getSession } from "@/lib/session";
+import { I18N_CATALOG } from "@/lib/i18n-catalog";
 
 // AI translation for the app UI. Uses the configured AI providers (with
 // automatic failover) - real context-aware translation, not word-by-word.
@@ -94,8 +95,31 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const lang = String(body.lang ?? "").trim();
   const langName = String(body.langName ?? lang).slice(0, 40);
+  // ONLY STRINGS THE APP ACTUALLY RENDERS.
+  //
+  // This accepted up to 500 arbitrary caller-supplied strings of 300 chars each
+  // and merged them into the SHARED `I18N_<lang>` row via setConfig. Nothing
+  // constrained them to real UI copy, and there is no pruning or size cap
+  // anywhere - the daily gate permits ~30k new dictionary entries per user per
+  // day. The row is read on every cold load for that language through
+  // getConfigExact, which is bounded by the same 8s timedFetch deadline that
+  // runtime-config.ts:708 already documents as a terminal state for the vault:
+  // "once the corpus exceeded what transfers inside timedFetch's 8s deadline,
+  // this threw". getConfigExact degrades more gracefully (it falls back to
+  // process.env) but the end state is the same - the cache stops loading, every
+  // cold load re-translates the whole catalogue, and the LLM cost leak this
+  // function exists to close reopens.
+  //
+  // The catalogue is the honest bound, not an arbitrary number: `t()` refuses
+  // anything outside it, so a string that is not in it would never be RENDERED
+  // even if we translated it. Filtering here means the row can only ever grow
+  // to the size of the app's own copy.
+  const allowed = new Set(I18N_CATALOG);
   const texts: string[] = Array.isArray(body.texts)
-    ? body.texts.slice(0, MAX_TEXTS).map((t: unknown) => String(t).slice(0, 300))
+    ? body.texts
+        .slice(0, MAX_TEXTS)
+        .map((t: unknown) => String(t).slice(0, 300))
+        .filter((t: string) => allowed.has(t))
     : [];
 
   if (!LANG_RX.test(lang)) {

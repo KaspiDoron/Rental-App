@@ -110,13 +110,29 @@ export async function POST(req: Request) {
 
   // Social proof: how many WheelDeal bookings each shop already has.
   try {
+    // SCOPED TO THE SHOPS ON THIS SCREEN, NOT THE WHOLE TABLE.
+    //
+    // This read the entire `bookings` table - no filter, no order - on EVERY
+    // discovery request, capped at 2000 rows. The cross-user scope is
+    // deliberate (that is what makes it social proof) but the cap is not: past
+    // 2000 rows the counts come from an arbitrary, PostgREST-order-dependent
+    // slice, so the "orders" number a traveller sees becomes wrong and unstable
+    // with no signal anywhere. Before that, every search paid a full-table read.
+    //
+    // A search returns tens of shops, so filtering to those ids is both bounded
+    // and exact - and the row count now scales with the RESULT, not with the
+    // lifetime size of the table.
     const { sbSelect } = await import("@/lib/runtime-config");
-    const rows = await sbSelect<{ vendor_id: string }>(
-      "bookings",
-      "select=vendor_id&limit=2000"
-    );
+    const ids = vendors.map((v) => v.id).filter(Boolean).slice(0, 60);
     const counts: Record<string, number> = {};
-    for (const r of rows) counts[r.vendor_id] = (counts[r.vendor_id] ?? 0) + 1;
+    if (ids.length) {
+      const list = ids.map((id) => `"${String(id).replace(/"/g, "")}"`).join(",");
+      const rows = await sbSelect<{ vendor_id: string }>(
+        "bookings",
+        `select=vendor_id&vendor_id=in.(${encodeURIComponent(list)})&limit=5000`
+      );
+      for (const r of rows) counts[r.vendor_id] = (counts[r.vendor_id] ?? 0) + 1;
+    }
     vendors = vendors.map((v) => ({ ...v, orders: counts[v.id] ?? 0 }));
   } catch {}
 

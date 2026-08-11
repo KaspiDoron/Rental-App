@@ -41,9 +41,26 @@ export async function GET() {
     });
     if (top.length >= 20) break;
   }
-  const mine = rows
-    .filter((r) => r.user_email === session.email)
-    .reduce((m, r) => Math.max(m, r.score), 0);
+  // YOUR OWN BEST SCORE IS NOT A FACT ABOUT THE LEADERBOARD.
+  //
+  // `mine` was computed by filtering the SAME global top-60 slice - so a player
+  // whose best did not make the global top 60 saw their own score as 0. The
+  // table keeps full history (one row per submission), so a handful of high
+  // scorers with many attempts is enough to push everyone else out.
+  //
+  // One extra scoped read answers it exactly, and cannot be crowded out.
+  const own = await sbSelect<{ score: number }>(
+    "game_scores",
+    `select=score&user_email=eq.${encodeURIComponent(
+      session.email
+    )}&order=score.desc&limit=1`
+  ).catch(() => []);
+  const mine = Math.max(
+    own[0]?.score ?? 0,
+    // The board slice is still consulted, so a read failure above degrades to
+    // the old behaviour rather than to zero.
+    rows.filter((r) => r.user_email === session.email).reduce((m, r) => Math.max(m, r.score), 0)
+  );
 
   return NextResponse.json({ top, myBest: mine });
 }

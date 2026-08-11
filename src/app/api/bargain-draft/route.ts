@@ -98,12 +98,31 @@ export async function POST(req: Request) {
   }
 
   // Thread history: what we and the shop already said - the draft must never
-  // repeat an answered question. PRIVACY: vendorId is a Google place id SHARED
-  // across users, so both directions are filtered to THIS user (outbound by
-  // sender, inbound by receiver) - never another user's thread.
+  // repeat an answered question.
+  //
+  // PRIVACY holds: both directions are filtered to THIS user in JS below
+  // (outbound by sender, inbound by receiver), so no other user's message can
+  // ever reach the prompt. There is no leak here and never was.
+  //
+  // WHAT WAS BROKEN IS THE LIMIT'S POSITION. The comment above this block used
+  // to claim the SQL filtered by user; it did not. `limit=20` was applied to a
+  // query whose only predicate is `vendorId OR from_number` - and the comment
+  // itself explains why that is cross-user: a Google place id is shared by
+  // every traveller, and so is a shop's number. For any shop several people are
+  // talking to, the newest 20 rows are mostly other users', `mine` comes back
+  // empty, and the bargaining prompt loses the traveller's own history - so the
+  // agent re-asks questions the shop already answered, which is the exact
+  // failure this block exists to prevent. It degrades silently, and gets worse
+  // the more popular the shop is.
+  //
+  // Scoping the SQL to this user makes the 20 rows THEIR 20 rows. Both arms of
+  // the OR are still needed (outbound rows carry vendorId; inbound rows are
+  // matched by the shop's number), so the ownership predicate is expressed as a
+  // second OR over the two directional stamps rather than one column.
   let history: string | undefined;
   try {
     const digits = digitsOnly(String(vendor.whatsapp ?? ""));
+    const me = encodeURIComponent(session.email);
     const out = await sbSelect<{
       direction: string;
       body: string | null;
@@ -112,8 +131,12 @@ export async function POST(req: Request) {
       "whatsapp_messages",
       `select=direction,body,raw&or=(raw->>vendorId.eq.${encodeURIComponent(
         String(vendor.id ?? "")
-      )},from_number.eq.${encodeURIComponent(digits || "none")})&order=received_at.desc&limit=20`
+      )},from_number.eq.${encodeURIComponent(digits || "none")})` +
+        `&or=(raw->>sender.eq.${me},raw->>receiver.eq.${me})` +
+        `&order=received_at.desc&limit=20`
     );
+    // The JS filter stays. It is stricter than the SQL (it pairs the stamp with
+    // the DIRECTION), and it is the guarantee - the query is an optimisation.
     const mine = out.filter((m) =>
       m.direction === "inbound"
         ? m.raw?.receiver === session.email

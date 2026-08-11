@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, sbCountDark } from "@/lib/runtime-config";
 
 // Owner data explorer: read recent rows from any of the app's tables so the
 // owner has full visibility into everything the app records. Read-only, an
@@ -35,14 +35,34 @@ export async function GET(req: Request) {
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
 
   if (!table) {
-    // List the tables + a live row count for each.
+    // A COUNT IS A COUNT, NOT A THOUSAND ROWS WITH .length TAKEN.
+    //
+    // This downloaded up to 1000 FULL rows from all 18 tables in parallel and
+    // reported `rows.length`. Three things wrong with that, and sbCount's own
+    // docblock in runtime-config already forbids the pattern by name:
+    //
+    //   - the number saturates at exactly 1000 and then never moves again;
+    //   - sbSelect maps a timeout or non-2xx to [], so a slow table reports
+    //     ZERO rows rather than "could not read";
+    //   - `select=*` over 1000 whatsapp_messages rows (full `raw` jsonb) or
+    //     app_users rows (including password_hash) realistically trips the 8s
+    //     timedFetch deadline - and every byte is discarded except .length.
+    //
+    // sbCountDark answers from Content-Range with a single-row body, and
+    // returns null on an outage so an unreadable table reads as unknown rather
+    // than as empty - the fail-dark contract this panel is supposed to honour.
     const tables = await Promise.all(
       TABLES.map(async (t) => {
-        const rows = await sbSelect<Record<string, unknown>>(t.name, "select=*&limit=1000");
-        return { name: t.name, label: t.label, count: rows.length };
+        // No filter - the whole table. Range: 0-0 keeps the body to one row.
+        const n = await sbCountDark(t.name, "");
+        return { name: t.name, label: t.label, count: n, unreadable: n === null };
       })
     );
-    return NextResponse.json({ tables });
+    return NextResponse.json({
+      tables,
+      // So the panel can say so rather than rendering a confident zero.
+      degraded: tables.filter((t) => t.unreadable).map((t) => t.name),
+    });
   }
 
   const meta = TABLES.find((t) => t.name === table);
