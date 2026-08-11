@@ -1,6 +1,6 @@
 # WheelDeal - Production Readiness & Scale Review
 
-Date: 2026-07-16 · Branch: `claude/rental-agents-legal-setup-o7rgcv`
+Date: 2026-08-11 · Branch: `claude/rental-agents-legal-setup-o7rgcv`
 Scope: queue architecture, concurrency, rate limiting, test mode,
 observability, cost control and the concrete path to hundreds of concurrent
 users. Complements `ENTERPRISE-READINESS.md` (the earlier QA pass).
@@ -11,14 +11,23 @@ The platform is architecturally sound for the private beta: every queue claim
 is atomic at the database level (no double-sends across serverless
 instances), inbound WhatsApp events are deduplicated exactly-once, per-user
 isolation is enforced consistently by `user_email`/`sender_key` filters, and
-the anti-ban engine's budgets are conservative. The real scaling constraints
-are operational: queue draining depends on user traffic plus ONE external
-cron, several read-then-write limit checks can over-admit under concurrency,
-and the hottest table (`whatsapp_messages`) needed two more indexes (added in
-this pass).
+the anti-ban engine's budgets are conservative. The remaining scaling
+constraint is operational: queue draining depends on user traffic plus ONE
+external cron, and the hottest table (`whatsapp_messages`) needed two more
+indexes (added in this pass).
 
-Verdict: **safe for the 25-tester beta today; complete the P1 list before
-paid public signups; the P2 list before hundreds of concurrent users.**
+**Three cost/safety gaps that this document previously listed under P2 have now
+been closed, and one of them was materially worse than described here.**
+`LIMIT_AI_PER_DAY` was not merely "bypassed by background wakeups" - it
+governed exactly one route, and that route never debited, so the counter was
+permanently zero and the cap could not fire at any call site. The owner's "AI
+calls per day" slider reported that spend was capped while capping nothing. See
+P2 #2, #5 and #6 below for what shipped, including the honest caveat that the
+atomic cap is a no-op without `REDIS_URL`.
+
+Verdict: **safe for the 25-tester beta today; complete the P1 runbook before
+paid public signups; the remaining P2 items before hundreds of concurrent
+users.**
 
 ## How work actually gets done (queues & workers)
 
@@ -230,52 +239,176 @@ progresses hundreds of concurrent users' queues; a dedicated worker/queue
 (Upstash QStash free tier, or a Render background worker) is the P2 upgrade if
 volume outgrows it, not a launch blocker.
 
-## Before a paid public launch (P1)
+## Before a paid public launch (P1) - the owner runbook
 
-1. **Move Evolution off Render free tier** (Starter, ~$7/mo) + **second +
-   monitored pinger** for `/api/wa/ping` (uptime alert on it) - today the whole
-   background pipeline leans on one free host and one unmonitored external cron.
-2. **Error tracking** (Sentry or similar) + alerts on `agent_events` kinds
-   `wa-send-dropped`, `wa-ban-risk`, `media-fetch-failed` - failures are
-   currently silent rows an admin must go look for.
-3. **Run the updated `supabase/schema.sql`** - this pass added the three
-   missing hot-path indexes (`raw->>'sender'`, `from_number`,
-   `wa_outbox.sender_key`), plus the **feedback threads** additions
-   (`feedback_replies` table, `feedback.user_seen_at`, `feedback_reporter_idx`).
-   All additive/`if not exists` - safe to re-run. Until it runs, feedback
-   threads degrade gracefully (reads return empty, no crash); replies persist
-   only after the migration. The **messaging capacity redesign needs NO
-   migration** - the rolling window is counted from existing `whatsapp_messages`
-   RFQ rows.
-4. **Raise Evolution capacity intentionally**: one host ≈ 40 users; add hosts
-   to the pool before invites outgrow it.
-5. **PayPal live-mode checklist**: client id/secret, both billing plan ids,
-   webhook id set in the Vault (PAYPAL_ENV=live); test a real purchase + webhook
-   round-trip once.
+Everything in this section needs a human with credentials. No amount of code
+closes any of it, which is exactly why it is written out as steps rather than
+as advice. Do them in order; each one is independently verifiable.
+
+### 1. Run `supabase/schema.sql`
+
+Supabase dashboard -> SQL Editor -> paste the whole file -> Run.
+
+Every statement is `create ... if not exists` / `add column if not exists`, so
+it is additive and safe to re-run as many times as you like. It carries the
+three hot-path indexes (`raw->>'sender'`, `from_number`,
+`wa_outbox.sender_key`) and the feedback-thread additions (`feedback_replies`,
+`feedback.user_seen_at`, `feedback_reporter_idx`).
+
+Until it runs the app does not crash - feedback threads read empty and replies
+simply do not persist - so a missing migration is silent. Verify rather than
+assume:
+
+```sql
+select to_regclass('public.feedback_replies') is not null as feedback_ok,
+       to_regclass('public.wa_outbox')        is not null as outbox_ok;
+```
+
+Both must be `true`. The messaging-capacity redesign needs no migration; the
+rolling window is counted from existing `whatsapp_messages` rows.
+
+### 2. Move Evolution off the Render free tier, and watch the pinger
+
+Render -> the Evolution service -> Starter (~$7/mo). The free tier sleeps, and
+a sleeping Evolution is a WhatsApp link that silently stops delivering.
+
+Then a **second, monitored** pinger on `/api/wa/ping` (UptimeRobot / Better
+Stack / a GCP Cloud Scheduler job), with an alert to a phone. Today the whole
+background pipeline leans on one free host and one unmonitored external cron:
+if that cron dies, nothing drains and nothing tells anyone. The point of the
+second pinger is not redundancy of the ping - it is that someone finds out.
+
+Verify: stop the primary cron for five minutes and confirm an alert arrives.
+An untested alert is not an alert.
+
+### 3. Error tracking with alerts on the three kinds that already exist
+
+Wire Sentry (or equivalent), then alert on these `agent_events` kinds, which
+the code already writes and which nobody currently reads:
+
+| kind | what it means | urgency |
+|---|---|---|
+| `wa-send-dropped` | a message was composed and never delivered | page someone |
+| `wa-ban-risk` | the anti-ban guard saw a pattern that risks the number | page someone |
+| `media-fetch-failed` | a price-list image could not be fetched, so an offer was missed | daily digest |
+
+```sql
+select kind, count(*) from agent_events
+where created_at > now() - interval '24 hours'
+  and kind in ('wa-send-dropped','wa-ban-risk','media-fetch-failed')
+group by kind;
+```
+
+Right now that query is the only way anyone finds out. That is the gap.
+
+### 4. PayPal live mode
+
+In Admin -> Keys, set: `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, both plan
+ids (`PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_ULTRA`), `PAYPAL_WEBHOOK_ID`, and
+`PAYPAL_ENV=live`.
+
+Then buy something. One real purchase, on a real card, end to end:
+
+1. Check out from the pricing page and complete payment.
+2. Confirm the plan applies in Admin -> Users.
+3. Confirm the webhook round-trip landed (`webhooks/paypal` wrote its row).
+4. Cancel, and confirm the downgrade lands too.
+
+Sandbox credentials that work prove nothing about live ones, and the webhook id
+is environment-specific - a live webhook verified against a sandbox id fails
+signature verification and every subscription event is silently discarded.
+
+### 5. Size the Evolution pool before the invites go out
+
+One host carries roughly **40 users**. Add hosts to the pool *before* invites
+outgrow it, not after: the failure mode is not a queue, it is a banned personal
+WhatsApp number, and that is not reversible by adding capacity later.
+
+### 6. Turn off TEST_MODE, and check it is actually off
+
+`TEST_MODE=on` gives flagged testers Ultra free and applies plans at checkout
+with no charge. Launching with it on means taking no money while believing you
+are. Admin -> Keys (or Admin -> Users) -> off, then confirm the global test
+banner is gone from the public pages.
 
 ## For hundreds of concurrent users (P2)
 
 1. **Dedicated worker for draining** (the GCE `scheduler.worker` drains every
    minute) + adaptive batch size (5 → 25) so the queue
    drains independently of user traffic.
-2. **Atomic counters for limits**: `checkDailyLimit` and the WA volume caps
-   are read-then-write - under concurrency a user can exceed a limit by the
-   parallelism factor. Move to a per-user-per-day counter row with
-   `insert ... on conflict do update ... returning` (single round-trip, no
-   TOCTOU), which also kills the 1000-row scan per gated request.
+2. ~~**Atomic counters for limits**~~ - **SHIPPED.** `reserveDailyUnit` in
+   `src/lib/usage.ts` is an atomic Redis `INCR` on `usage:<kind>:<who>:<day>`,
+   so concurrent callers get distinct totals and only one crosses the line; a
+   refusal hands its unit back. Postgres stays authoritative and Redis can only
+   ever refuse MORE, so it is strictly a tightening.
+   **Caveat, deliberately not hidden: with no `REDIS_URL` this is a no-op** and
+   the read-then-write window is exactly as wide as it always was. A deployment
+   without Redis has not had this fixed. Tests: `src/lib/daily-cap-atomic.test.ts`.
+   The WA volume caps were examined and did NOT need the same treatment -
+   `claimSendSlots` already serialises sends per sender through an atomic
+   unique-constraint insert, so two concurrent volume-cap reads cannot both
+   proceed. The reasoning is recorded as executable assertions in that same file.
 3. **Queue inbound webhook work**: today each shop reply runs the full AI
    pipeline synchronously inside the webhook invocation. Bursty replies =
    unbounded concurrent AI spend. Enqueue → 200 immediately → worker
-   processes.
+   processes. (The per-user AI budget in #5 now bounds the SPEND; this is
+   still worth doing for latency and for connection pressure.)
 4. **Retention jobs**: `whatsapp_messages`, `agent_traces`, `api_usage`,
    `negotiation_threads` grow unbounded; add TTL cleanup (90d) + monthly
    rollups for the cost tracker.
-5. **Debit background AI**: engine wakeups/judge calls bypass
-   `LIMIT_AI_PER_DAY` (only interactive routes debit it) - record them so
-   cost scales with the budget, not with thread count.
-6. **Config cache-bust**: safety-critical keys (KILL_SWITCH) are cached 30s
-   per instance; add a cheap version-key check so a kill applies in seconds
-   everywhere.
+5. ~~**Debit background AI**~~ - **SHIPPED, and it was worse than this entry
+   said.** `LIMIT_AI_PER_DAY` was enforced at exactly ONE call site
+   (`api/extract-offer`) and *that site never debited* - nothing anywhere wrote
+   `recordApi("ai", ...)` - so the counter was permanently 0 and the cap could
+   never fire at all. The engine, where essentially all token spend happens, had
+   no gate of any kind. `src/lib/ai-budget.ts` now opens an AsyncLocalStorage
+   scope at each turn/request boundary; every `chat()` inherits it at the choke
+   point with no signature change, reserving per model call and debiting once on
+   close. Over-cap degrades to the deterministic composer (a frozen negotiation
+   is worse than a template-driven one); interactive routes still return a real
+   429. Tests: `src/lib/ai-budget.test.ts`.
+6. ~~**Config cache-bust**~~ - **SHIPPED.** `getConfigFresh` in
+   `src/lib/runtime-config.ts` reads the safety-gate key as a single row by
+   exact key on a 3s window, so a `KILL_SWITCH` flip reaches a warm instance in
+   seconds instead of thirty. Concurrent callers share one in-flight read, so
+   the cost does not scale with traffic. The fail-CLOSED semantics are
+   unchanged - unreadable still means KILLED. Tests:
+   `src/lib/kill-switch-latency.test.ts`, `src/lib/fail-closed.test.ts`.
+
+## Still blocked on owner input (not skipped - waiting)
+
+These are carried forward unchanged. None is code-blocked; each needs a
+decision or a credential only the owner has.
+
+- **GCP live provisioning + deploy** - needs the project, billing account and
+  domain. Artifacts are in `infra/gcp/`.
+- **F2 agency scanner** and **Part 12 W7** - awaiting a decision on scope.
+- **WhatsApp avatar extraction hardening + Places fallback** (task #230).
+- **Purge the stale translation rows** once the catalogue settles:
+  `delete from app_config where key like 'I18N_%';` - they are regenerated on
+  demand, and stale rows serve the old copy.
+
+## Verifying the mobile rules
+
+The repo rule is "mobile first, 320-430px, no horizontal overflow". That rule
+was carried by review and by unit tests, and unit tests cannot see layout -
+jsdom has no layout engine, which is how a clipped chevron shipped past a fully
+green suite. `npm run check:mobile` renders the real production build in real
+Chromium at 320 / 375 / 430px, in English and in a longer-labelled locale, and
+asserts the funnel does not overflow and the status expander is reachable and
+toggles.
+
+It is deliberately NOT part of `npm test`: it needs a browser and a booted
+server, and a unit suite that can fail on a missing browser download is a unit
+suite people stop trusting. Run it before shipping anything that touches the
+funnel's layout:
+
+```
+npm run build && npm run check:mobile
+```
+
+What it does not cover is stated in the script's own header - the transcript
+follow-scroll needs a live message stream and keeps unit coverage only.
 
 ## What is already right (do not re-solve)
 
