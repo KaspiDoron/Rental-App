@@ -29,6 +29,7 @@ import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
 import { waDigits, numberFilter, waIdKind, lidKey } from "@/lib/wa/phone-key";
+import { waMessageText, waUnwrap, waMediaKind } from "@/lib/wa/message-text";
 import { resolveChatIdentity } from "@/lib/wa/lid-alias";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { kickDispatcher } from "@/lib/wa/kick";
@@ -78,21 +79,23 @@ async function pairingStampFor(email: string): Promise<string | null> {
   }
 }
 
-function unwrap(data: any): any {
-  return data?.message?.ephemeralMessage?.message ?? data?.message ?? {};
-}
-
-function extractText(data: any): string {
-  const m = unwrap(data);
-  return (
-    m?.conversation ??
-    m?.extendedTextMessage?.text ??
-    m?.imageMessage?.caption ??
-    m?.documentMessage?.caption ??
-    m?.videoMessage?.caption ??
-    ""
-  );
-}
+// THE LIVE PATH USED THE WEAKER OF THIS REPO'S TWO EXTRACTORS.
+//
+// `unwrap` peeled ONE envelope (ephemeralMessage) and `extractText` read FIVE
+// subtypes. The complete reader already existed - it was private to
+// evolution.ts and wired only to the wa-sync RECOVERY sweep - so the sweep
+// could read a message the live webhook had already thrown away.
+//
+// Concretely, everything below arrived and became nothing: stickers (a shop
+// sent "I'M SORRY" beside "sorry tomorrow we closed and open again on 20th"),
+// reactions, button / list / template replies, view-once media, and edited
+// messages. And because `unwrap` fed the media DETECTORS too, a view-once
+// photo was not merely unreadable - `hasImageMessage` said false and the
+// vision job never ran at all.
+//
+// Both paths now share src/lib/wa/message-text.ts. This is a deletion.
+const unwrap = waUnwrap;
+const extractText = waMessageText;
 
 // WhatsApp voice notes arrive as audioMessage (audio/ogg; codecs=opus), also
 // wrapped in ephemeralMessage on disappearing chats.
@@ -876,6 +879,24 @@ export async function processEvolutionWebhook(
       // video, but we can say that it arrived and ask for the part we need in
       // words - which is what a person would do.
       if (!syntheticText && hasVideo) syntheticText = "[video]";
+
+      // NEITHER IS A STICKER, A REACTION, OR A POLL.
+      //
+      // Same argument as the captionless video, and the owner hit it for real:
+      // a shop sent an "I'M SORRY" sticker alongside "sorry tomorrow we closed
+      // and open again on 20th", and the sticker frame reached here as empty
+      // text with no media flag and was dropped. To the traveller the shop had
+      // sent two things and the agent acknowledged one.
+      //
+      // We cannot read a sticker's meaning, and we do not pretend to. We record
+      // that a frame of that kind arrived, which is enough for the engine to
+      // know the shop is present and responsive, and enough for the transcript
+      // to stop lying about what was said.
+      if (!syntheticText) {
+        const kind = waMediaKind(data);
+        if (kind) syntheticText = `[${kind}]`;
+      }
+
       if (!syntheticText && !hasImage && !hasAudio && !docIsImage) {
         void noteInboundDropped(email, from, "empty-media", { via: "webhook" });
         continue;

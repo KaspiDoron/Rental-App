@@ -19,6 +19,7 @@ import { getConfig, sbInsert, sbSelect, sbDelete, sbSelectStrict } from "./runti
 import { deriveWebhookToken, sameWebhookTarget, classifyRegisteredWebhook } from "./wa/webhook-token";
 import type { TokenState } from "./wa/webhook-token";
 import { jidMatches } from "./wa/jid";
+import { waMessageText } from "./wa/message-text";
 import { isLinkedFromStatus } from "./wa/linked-status";
 import { routableOrigin } from "./request-origin";
 import { digitsOnly } from "./phone";
@@ -1505,47 +1506,11 @@ export interface WaMessage {
   ts: number;
 }
 
-// Pull readable text out of ANY Evolution/Baileys message object. WhatsApp nests
-// the real payload under wrappers (disappearing messages -> ephemeralMessage,
-// view-once -> viewOnceMessage, edits -> editedMessage) and spreads text across
-// many subtypes - missing these made real shop chats look "empty", which was the
-// "no readable conversation found" bug. Media-only messages return a short
-// placeholder so a photo-heavy price chat still counts as a real conversation.
-function waMessageText(message: any): string {
-  if (!message || typeof message !== "object") return "";
-  // Unwrap the common envelopes first (they hold a nested `message`).
-  const inner =
-    message.ephemeralMessage?.message ??
-    message.viewOnceMessage?.message ??
-    message.viewOnceMessageV2?.message ??
-    message.viewOnceMessageV2Extension?.message ??
-    message.editedMessage?.message?.protocolMessage?.editedMessage ??
-    message.documentWithCaptionMessage?.message ??
-    null;
-  if (inner) return waMessageText(inner);
-
-  const text =
-    message.conversation ??
-    message.extendedTextMessage?.text ??
-    message.imageMessage?.caption ??
-    message.videoMessage?.caption ??
-    message.documentMessage?.caption ??
-    message.buttonsResponseMessage?.selectedDisplayText ??
-    message.templateButtonReplyMessage?.selectedDisplayText ??
-    message.listResponseMessage?.title ??
-    message.reactionMessage?.text ??
-    "";
-  if (String(text).trim()) return String(text);
-
-  // Media with no caption is still a real turn (often a price-list photo).
-  if (message.imageMessage) return "[photo]";
-  if (message.videoMessage) return "[video]";
-  if (message.audioMessage) return "[voice note]";
-  if (message.documentMessage) return "[document]";
-  if (message.stickerMessage) return "[sticker]";
-  if (message.locationMessage) return "[location]";
-  return "";
-}
+// waMessageText now lives in wa/message-text.ts and is SHARED with the live
+// webhook path. It used to be private to this file and wired only to
+// fetchMessages/fetchMessagesRaw - the recovery sweep - while the live path
+// carried a weaker private copy that dropped stickers, reactions, button
+// replies, view-once media and edited messages. See that file for the story.
 
 // Evolution's findMessages body shape varies across versions; try each so a
 // real chat is never wrongly reported empty. EVERY returned record is then
