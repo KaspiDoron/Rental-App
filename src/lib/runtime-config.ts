@@ -28,6 +28,21 @@ const CACHE_TTL_MS = 30_000;
  *  fetch storm across all 140 getConfig call sites. */
 const NEGATIVE_TTL_MS = 5_000;
 
+/**
+ * AN EMERGENCY STOP THAT ARRIVES HALF A MINUTE LATE IS NOT AN EMERGENCY STOP.
+ *
+ * `KILL_SWITCH` read through the 30s whole-vault cache, so flipping it left
+ * every warm instance sending, spending and charging for up to thirty more
+ * seconds - the one moment the owner most wants everything to stop NOW. This is
+ * the window for the handful of SAFETY-GATE keys instead. Deliberately not the
+ * general cache TTL: this is a single-row read, not the whole vault download,
+ * and it is paid only by the gates that need it.
+ */
+const FRESH_TTL_MS = 3_000;
+
+/** A safety-gate read: resolved value, or the fact that it could not be read. */
+type FreshEntry = { ok: boolean; value: string | undefined; exp: number };
+
 declare global {
   // eslint-disable-next-line no-var
   var __wheeldeal_cfg__:
@@ -36,20 +51,31 @@ declare global {
         mem: Record<string, string>;
         /** The in-flight vault read, shared by every concurrent caller. */
         inflight: Promise<Record<string, string>> | null;
+        /** Per-key short-TTL cache for the safety gates (getConfigFresh). */
+        fresh: Map<string, FreshEntry>;
+        /** One in-flight single-row read per key, shared by concurrent gates. */
+        freshInflight: Map<string, Promise<FreshRead>>;
       }
     | undefined;
 }
 
 function state() {
   if (!globalThis.__wheeldeal_cfg__) {
-    globalThis.__wheeldeal_cfg__ = { cache: null, mem: {}, inflight: null };
+    globalThis.__wheeldeal_cfg__ = {
+      cache: null,
+      mem: {},
+      inflight: null,
+      fresh: new Map(),
+      freshInflight: new Map(),
+    };
   }
-  // Older instances of this global (hot reload, or a module loaded before this
-  // field existed) will not have `inflight`.
-  if (globalThis.__wheeldeal_cfg__.inflight === undefined) {
-    globalThis.__wheeldeal_cfg__.inflight = null;
-  }
-  return globalThis.__wheeldeal_cfg__;
+  const s = globalThis.__wheeldeal_cfg__;
+  // Older instances of this global (hot reload, or a module loaded before these
+  // fields existed) will not have them.
+  if (s.inflight === undefined) s.inflight = null;
+  if (!s.fresh) s.fresh = new Map();
+  if (!s.freshInflight) s.freshInflight = new Map();
+  return s;
 }
 
 function supabase(): { url: string; key: string } | null {
@@ -966,6 +992,83 @@ export async function getConfigStrict(
   return { value: undefined };
 }
 
+type FreshRead = { value: string | undefined } | { error: "unavailable" };
+
+/**
+ * STRICT, AND FRESH WITHIN SECONDS - for the safety gates only.
+ *
+ * `getConfigStrict` has the right error semantics but reads through the 30s
+ * whole-vault cache, so `KILL_SWITCH` took up to thirty seconds to reach a warm
+ * instance. During an incident that is thirty more seconds of sends, spend and
+ * charges after the owner has already pulled the handle.
+ *
+ * This reads the ONE row by exact key - a tiny query next to the whole-table
+ * download the general cache exists to avoid - and caches it for
+ * FRESH_TTL_MS. Bounded cost regardless of traffic: one small query per key per
+ * 3s per instance, no matter how many sends are in flight, because concurrent
+ * callers share the in-flight promise.
+ *
+ * ERROR SEMANTICS ARE getConfigStrict'S, UNCHANGED, and they matter more than
+ * the freshness:
+ *   - a value in `mem` (saved this session while Supabase was unreachable) wins;
+ *   - with no Supabase connection at all the app is in env-only/demo mode, which
+ *     is supported and must NOT trip a fail-closed branch;
+ *   - `process.env` stays authoritative during an outage - the environment does
+ *     not go unreadable;
+ *   - only a genuine unreadable-with-no-env-fallback escalates to `unavailable`,
+ *     and that is cached for the short negative window so an outage cannot turn
+ *     every send into a fresh query.
+ */
+export async function getConfigFresh(name: string): Promise<FreshRead> {
+  const s = state();
+  if (s.mem[name] !== undefined) return { value: s.mem[name] };
+  const conn = supabase();
+  if (!conn) return { value: process.env[name] };
+
+  const hit = s.fresh.get(name);
+  if (hit && hit.exp > Date.now()) {
+    return hit.ok ? { value: hit.value } : { error: "unavailable" };
+  }
+  const pending = s.freshInflight.get(name);
+  if (pending) return pending;
+
+  const run = (async (): Promise<FreshRead> => {
+    let entry: FreshEntry;
+    try {
+      const res = await timedFetch(
+        `${conn.url}/rest/v1/app_config?select=value&key=eq.${encodeURIComponent(name)}&limit=1`,
+        {
+          headers: { apikey: conn.key, Authorization: `Bearer ${conn.key}` },
+          cache: "no-store",
+        }
+      );
+      if (!res.ok) throw new Error(`supabase ${res.status}`);
+      const rows = (await res.json()) as { value: string }[];
+      const raw = rows[0]?.value;
+      // setConfig always encrypts; fall back to the raw value for any legacy
+      // plaintext row, mirroring how fetchOverrides treats rows.
+      const stored = raw === undefined ? undefined : (decrypt(raw) ?? raw);
+      entry = {
+        ok: true,
+        value: stored ?? process.env[name],
+        exp: Date.now() + FRESH_TTL_MS,
+      };
+    } catch {
+      const env = process.env[name];
+      entry =
+        env !== undefined
+          ? { ok: true, value: env, exp: Date.now() + FRESH_TTL_MS }
+          : { ok: false, value: undefined, exp: Date.now() + NEGATIVE_TTL_MS };
+    }
+    s.fresh.set(name, entry);
+    return entry.ok ? { value: entry.value } : { error: "unavailable" };
+  })().finally(() => {
+    s.freshInflight.delete(name);
+  });
+  s.freshInflight.set(name, run);
+  return run;
+}
+
 /**
  * MANY KEYS, ONE VAULT READ.
  *
@@ -1019,6 +1122,9 @@ export async function setConfig(
     if (value) s.mem[name] = value;
     else delete s.mem[name];
     s.cache = null;
+    // The safety gates read per-key; drop those too so the instance that
+    // FLIPPED the switch is not the last one to notice.
+    s.fresh.clear();
     return {
       ok: true,
       persistent: false,
@@ -1052,6 +1158,9 @@ export async function setConfig(
       );
     }
     s.cache = null;
+    // The safety gates read per-key; drop those too so the instance that
+    // FLIPPED the switch is not the last one to notice.
+    s.fresh.clear();
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       const hint =
@@ -1068,6 +1177,9 @@ export async function setConfig(
   } catch (e) {
     if (value) s.mem[name] = value;
     s.cache = null;
+    // The safety gates read per-key; drop those too so the instance that
+    // FLIPPED the switch is not the last one to notice.
+    s.fresh.clear();
     return {
       ok: false,
       persistent: false,

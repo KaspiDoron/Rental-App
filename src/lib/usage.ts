@@ -8,7 +8,7 @@
 import "server-only";
 import {
   getConfig,
-  getConfigStrict,
+  getConfigFresh,
   sbInsert,
   sbSelect,
   sbSelectStrict,
@@ -42,12 +42,20 @@ export const QUOTAS: Record<string, { free: number; label: string; unitCost: num
  * So: unreadable means KILLED. A false stop costs a paused search; a false
  * "running" costs someone their WhatsApp account.
  *
- * `error: "missing"` is NOT reachable here - getConfigStrict escalates only when
+ * `error: "missing"` is NOT reachable here - getConfigFresh escalates only when
  * the vault genuinely could not be read, never when Supabase is simply not
  * configured (demo mode) or the key is honestly unset.
+ *
+ * AND IT HAS TO STOP THINGS PROMPTLY. This read `getConfigStrict`, which goes
+ * through the 30s whole-vault cache - so pulling the handle left every warm
+ * instance sending, spending and charging for up to thirty more seconds.
+ * `getConfigFresh` has the SAME error semantics (that is the part that must not
+ * change) but reads this one row by exact key on a 3s window, so the stop
+ * arrives in seconds. Concurrent callers share one in-flight read, so the cost
+ * is one small query per instance per 3s no matter how many sends are running.
  */
 export async function killSwitchOn(): Promise<boolean> {
-  const r = await getConfigStrict("KILL_SWITCH");
+  const r = await getConfigFresh("KILL_SWITCH");
   if ("error" in r) return true;
   return r.value === "1";
 }
