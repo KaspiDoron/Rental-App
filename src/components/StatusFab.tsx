@@ -24,9 +24,21 @@ export function StatusFab({
   /** CSS selector for the panel to watch and return to. */
   target,
   label,
+  /**
+   * Open the panel as well as scroll to it.
+   *
+   * WITHOUT THIS THE BUTTON DELIVERED THE TRAVELLER TO A CLOSED DOOR. It only
+   * ever called scrollIntoView, so tapping "Live status" during a live
+   * negotiation scrolled forty shops back up to a COLLAPSED one-line bar - the
+   * exact thing the owner reported seeing instead of the panel. Scrolling to a
+   * thing and revealing it are the same intention, and splitting them meant the
+   * button did the half that does not answer the question.
+   */
+  onOpen,
 }: {
   target: string;
   label: string;
+  onOpen?: () => void;
 }) {
   const [show, setShow] = useState(false);
   const observed = useRef<Element | null>(null);
@@ -68,6 +80,7 @@ export function StatusFab({
   return (
     <button
       onClick={() => {
+        onOpen?.();
         const el = observed.current ?? document.querySelector(target);
         el?.scrollIntoView({ behavior: "smooth", block: "center" });
       }}

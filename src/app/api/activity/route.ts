@@ -122,15 +122,27 @@ export async function GET(req: Request) {
     // paying 4-12s of presence simulation could consume the entire drain, so
     // the poll sent ONE message and timed out. The anti-ban floors are the
     // guard and the pacing claims, and both still run per row.
+    // SCOPED TO THIS TRAVELLER. Both drains ran GLOBALLY here: one person's
+    // 6-second poll executed OTHER users' real WhatsApp sends and up to 24
+    // other users' multi-agent LLM composes, inside their request. The cost
+    // scales as users x users - every extra traveller made every other
+    // traveller's poll slower - and one person's slow Evolution host stalled a
+    // stranger's feed while advancing pacing state that had nothing to do with
+    // them. /api/replies fixed exactly this and left a comment saying the
+    // sibling routes still needed it; this is that route.
+    //
+    // Rows belonging to signed-out users are not orphaned: the heartbeat
+    // (Cloud Scheduler -> /api/wa/ping) and the tick chain drain globally,
+    // which is a worker's job rather than somebody else's poll.
     await bounded(
-      drainOutbox((k, to, text, lane) => sendFromUser(k, to, text, true, { lane })).catch((e) =>
-        console.error("[drain:outbox]", e instanceof Error ? e.message : e)
-      )
+      drainOutbox((k, to, text, lane) => sendFromUser(k, to, text, true, { lane }), {
+        senderKey: session.email,
+      }).catch((e) => console.error("[drain:outbox]", e instanceof Error ? e.message : e))
     );
     await bounded(
-      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true, { lane: "reply" })).catch((e) =>
-        console.error("[drain:wakeups]", e instanceof Error ? e.message : e)
-      )
+      drainGraphWakeups((k, to, text) => sendFromUser(k, to, text, true, { lane: "reply" }), {
+        userEmail: session.email,
+      }).catch((e) => console.error("[drain:wakeups]", e instanceof Error ? e.message : e))
     );
   } catch (e) {
     console.error("[drain:init]", e instanceof Error ? e.message : e);

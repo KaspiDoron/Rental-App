@@ -108,16 +108,22 @@ export async function GET(req: Request) {
       const DRAIN_BUDGET_MS = 8_000;
       const bounded = <T,>(p: Promise<T>) =>
         Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
+      // SCOPED. The third of three sibling polls that drained GLOBALLY inside
+      // one traveller's request - /api/replies was fixed, /api/activity is
+      // fixed in this same change, and leaving this one unscoped would keep the
+      // whole users-x-users cost alive through a different door.
       await bounded(
-        drainOutbox((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane })).catch(
-          () => {}
-        )
+        drainOutbox(
+          (senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }),
+          { senderKey: session.email }
+        ).catch(() => {})
       );
       const { drainGraphWakeups } = await import("@/lib/graph/engine");
       await bounded(
-        drainGraphWakeups((senderKey, to, text) => sendFromUser(senderKey, to, text, true, { lane: "reply" })).catch(
-          () => {}
-        )
+        drainGraphWakeups(
+          (senderKey, to, text) => sendFromUser(senderKey, to, text, true, { lane: "reply" }),
+          { userEmail: session.email }
+        ).catch(() => {})
       );
     } catch {
       /* best-effort */

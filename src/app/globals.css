@@ -223,6 +223,15 @@ input, textarea, select, button {
   --z-chrome: 50; /* tab bar, floating page furniture */
   --topbar-z: 60;
   --z-coach: 900; /* Will's anchored card - above chrome, below dialogs */
+  /* A full-screen PANEL is not a dialog. It replaces the page, but the dialogs
+     it opens must sit on top of it - "Lock this deal", "Bargain" and the review
+     sheet are all launched FROM the thread panel. ThreadDashboard carried a raw
+     z-[1250], which is above --z-overlay, so every modal it opened rendered
+     UNDERNEATH it: an invisible dialog that still took the scroll lock, leaving
+     three dead buttons and a page that would not scroll. Both surfaces portal
+     to document.body, so DOM order could never have rescued it - only the
+     number decided, and the number was picked to win. */
+  --z-panel: 1100; /* full-screen panels - above chrome, BELOW the dialogs they open */
   --z-overlay: 1200; /* modals, sheets, onboarding: they own the screen */
   --z-veil: 1400; /* route-change veil - covers a dialog mid-navigation */
   --z-alert: 2000; /* offline / test-mode banners - always legible */
@@ -270,6 +279,7 @@ input, textarea, select, button {
    overlay is still responsible for being fixed/absolute itself. */
 .layer-chrome { z-index: var(--z-chrome); }
 .layer-coach { z-index: var(--z-coach); }
+.layer-panel { z-index: var(--z-panel); }
 .layer-overlay { z-index: var(--z-overlay); }
 .layer-veil { z-index: var(--z-veil); }
 .layer-alert { z-index: var(--z-alert); }

@@ -327,6 +327,7 @@ export const I18N_CATALOG: string[] = [
   "Nothing in this radius yet - let me widen the net, or double-check the location is right.",
   "Nothing is being sent - replies still arrive",
   "Nothing is lost - we just couldn't reach the server. Check your connection and try again.",
+  "Nothing is on the wire yet. Tap 'Ask for price' on a shop and this fills in live - who was messaged, who replied, and every offer as it lands.",
   "Nothing on the wire yet",
   "Nothing to do - it resolves itself, usually within a few minutes.",
   "Nothing to do. Lock it if you like it, or let the agent keep pushing.",

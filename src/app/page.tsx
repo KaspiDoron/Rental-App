@@ -1420,6 +1420,52 @@ export default function Home() {
     }
   }
 
+  // THE PANEL WAS STRUCTURALLY GUARANTEED TO BE SHUT WHILE SHOPS WERE WRITING.
+  //
+  // The owner's report was "I can't see the status panel, only the status bar,
+  // while the rental shops write me". That is not a flaky effect - it is what
+  // this code did by construction:
+  //
+  //   1. `autoOpenedRef` latched per MOUNT, so the effect fired at most once
+  //      ever, no matter what happened afterwards.
+  //   2. Its predicate matched only OUTBOUND states - queued, rfq-sent,
+  //      awaiting-response. The one open it was allowed therefore spent itself
+  //      the moment the first message went out.
+  //   3. When a shop replied the stage advanced to negotiating / counter-offer
+  //      or an offer landed, the predicate went false, and the latch was
+  //      already gone. So the panel could only ever open BEFORE anything had
+  //      been said, and never once a conversation was live.
+  //
+  // The fix latches per EVENT rather than per mount. Inbound evidence - a shop
+  // that has answered, or an offer that has landed - is counted, and any
+  // INCREASE reopens the panel. A traveller who collapses it keeps it collapsed
+  // until the next shop writes, which is the only moment reopening is welcome
+  // rather than rude.
+  const inboundLevel = useMemo(
+    () =>
+      vendors.reduce(
+        (n, v) =>
+          n +
+          (v.offer ? 1 : 0) +
+          (v.lastInboundAt || v.stage === "negotiating" || v.stage === "counter-offer" ? 1 : 0),
+        0
+      ),
+    [vendors]
+  );
+  const lastInboundLevelRef = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = lastInboundLevelRef.current;
+    lastInboundLevelRef.current = inboundLevel;
+    // First observation is a baseline, not an event: a cold load into a hunt
+    // that already has five replies must not fight the traveller's own choice
+    // of what to look at.
+    if (prev === null) return;
+    if (inboundLevel > prev) setStatusOpen(true);
+  }, [inboundLevel]);
+
+  // The ORIGINAL open still happens - once per mount, when the first batch is
+  // on the wire - because seeing the send start is genuinely useful. It is the
+  // inbound half above that was missing, not this.
   useEffect(() => {
     if (autoOpenedRef.current) return;
     const sending =
@@ -1466,14 +1512,29 @@ export default function Home() {
 
   // Poll the consolidated activity endpoint while there are vendors on
   // screen (cheap, user-scoped). Pauses in hidden tabs - no wasted requests.
+  // ONE POLL AT A TIME. /api/activity awaits real drain work - up to roughly
+  // sixteen seconds of it on a busy hunt - while this interval fires every six.
+  // With no in-flight guard three or more requests stacked per tab, each one
+  // re-entering the same drains, and every extra tab multiplied it. The guard
+  // is a ref rather than state because it must not cause a render and must be
+  // read synchronously by the very next tick.
+  const activityInFlight = useRef(false);
   useEffect(() => {
     if (!session || vendors.length === 0) return;
-    const tick = () => {
-      if (document.hidden) return;
-      refreshQueue();
+    const tick = async () => {
+      if (document.hidden || activityInFlight.current) return;
+      activityInFlight.current = true;
+      try {
+        await refreshQueue();
+      } finally {
+        // ALWAYS cleared, including on unmount mid-flight. A guard that can
+        // stay stuck true is worse than no guard - it stops the polling
+        // permanently instead of merely stacking it.
+        activityInFlight.current = false;
+      }
     };
-    tick();
-    const id = setInterval(tick, pollCfg.activityMs);
+    void tick();
+    const id = setInterval(() => void tick(), pollCfg.activityMs);
     return () => clearInterval(id);
   }, [session, vendors.length, refreshQueue, pollCfg.activityMs, syncNonce]);
 
@@ -3080,6 +3141,18 @@ export default function Home() {
               </div>
             )}
 
+            {/* AN EXPANDER THAT OPENS ONTO NOTHING IS BROKEN, NOT EMPTY.
+                With all four counters at zero the whole body was suppressed, so
+                the chevron toggled and the panel visibly did not open - which
+                reads as a bug rather than as "there is nothing here yet". Say
+                the honest thing instead. */}
+            {statusOpen &&
+              stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers === 0 && (
+                <div className="border-t border-line px-3 py-3 text-[11px] font-bold text-soft">
+                  {t("Nothing is on the wire yet. Tap 'Ask for price' on a shop and this fills in live - who was messaged, who replied, and every offer as it lands.")}
+                </div>
+              )}
+
             {statusOpen && (stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers > 0) && (
               <div className="space-y-2 border-t border-line px-3 py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -4121,7 +4194,11 @@ export default function Home() {
           clutter - and it watches the element itself rather than guessing from
           a scroll offset that a collapsing header would invalidate. */}
       {vendors.length > 0 && view === "list" && (
-        <StatusFab target="[data-tour='status']" label={t("Live status")} />
+        <StatusFab
+          target="[data-tour='status']"
+          label={t("Live status")}
+          onOpen={() => setStatusOpen(true)}
+        />
       )}
 
       <TabBar

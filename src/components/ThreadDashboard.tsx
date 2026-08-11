@@ -166,7 +166,7 @@ export function ThreadDashboard({
   const photos = vendor.photoUrls?.length ? vendor.photoUrls : vendor.photoUrl ? [vendor.photoUrl] : [];
 
   return createPortal(
-    <div className="fixed inset-0 z-[1250] flex flex-col bg-base pop-in">
+    <div className="layer-panel fixed inset-0 flex flex-col bg-base pop-in">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 pt-safe">
         <div className="min-w-0 py-3">
