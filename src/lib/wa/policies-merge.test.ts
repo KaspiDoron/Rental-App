@@ -35,10 +35,14 @@ beforeEach(() => {
 // 05:38 the next morning.
 
 describe("getPolicies - the merged truth cannot be flipped by a spelling", () => {
-  it("fast dispatch defaults ON with no config and no rows", async () => {
+  it("fast dispatch defaults OFF with no config and no rows", async () => {
+    // The owner's speed-vs-safety call: cold introductions respect the
+    // recipient's business hours. Agent REPLIES skip that clamp regardless, so
+    // this costs no reply latency - only night-time first contact, which is the
+    // pattern WhatsApp meters.
     const p = await getPolicies();
-    expect(p.fast_dispatch).toBe(true);
-    expect(p.ignore_business_hours).toBe(true);
+    expect(p.fast_dispatch).toBe(false);
+    expect(p.ignore_business_hours).toBe(false);
   });
 
   it("a fast_dispatch row spelled 'on' keeps fast dispatch ON (the incident)", async () => {
@@ -53,9 +57,14 @@ describe("getPolicies - the merged truth cannot be flipped by a spelling", () =>
   });
 
   it("a gibberish row keeps the effective value instead of meaning false", async () => {
+    // The claim is about COERCION, not about which way the default points: an
+    // unparseable row must leave the effective value alone. It is pinned here
+    // against a value that is now TRUE by an explicit config, so the assertion
+    // still fails if "maybe" ever starts meaning false.
+    state.config = { FAST_DISPATCH: "on" };
     state.rows = [{ key: "ignore_business_hours", value: "maybe" }];
     const p = await getPolicies();
-    expect(p.ignore_business_hours).toBe(true); // derived from FAST_DISPATCH default
+    expect(p.ignore_business_hours).toBe(true); // derived from FAST_DISPATCH=on
   });
 
   it("FAST_DISPATCH config accepts both dialects and ignores gibberish", async () => {
@@ -64,7 +73,10 @@ describe("getPolicies - the merged truth cannot be flipped by a spelling", () =>
 
     (globalThis as unknown as { __wd_wa_policies__?: unknown }).__wd_wa_policies__ = undefined;
     state.config = { FAST_DISPATCH: "banana" };
-    expect((await getPolicies()).fast_dispatch).toBe(true);
+    // Gibberish keeps the DEFAULT, and the default is now off. That direction
+    // matters: an unreadable config must never hand cold outreach a 24/7
+    // licence.
+    expect((await getPolicies()).fast_dispatch).toBe(false);
   });
 
   it("out-of-range numeric rows are ignored, in-range ones apply", async () => {

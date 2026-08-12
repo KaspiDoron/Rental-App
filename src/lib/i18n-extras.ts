@@ -16,6 +16,15 @@
 // The generator picks up every two-space-indented quoted line below, so keep
 // the plain array shape. Run `node scripts/gen-i18n-catalog.js` after editing.
 export const I18N_EXTRAS: string[] = [
+  // src/lib/queue-reason.ts - queueReasonWhy(). Rendered as
+  // t(queueReasonWhy(...)), so there is no literal for the grep to find. These
+  // explain WHY a first message waits, which matters more since cold intros
+  // stopped going out overnight: without the reason, a shop sitting untouched
+  // until morning reads as a broken app.
+  "This shop is closed right now. A first message sent at 3am is still read at 9am - it only makes your number look automated, which is what gets WhatsApp numbers restricted. Shops already talking to you are answered immediately, day or night.",
+  "You have used today's batch of NEW shops. Conversations already open keep running normally - only first messages wait.",
+  "Your plan opens new shops in batches, so your number stays under WhatsApp's radar. Shops already replying are unaffected.",
+  "WhatsApp pushed back on this number, so first messages pause while it settles. Replies to shops that wrote to you still go out.",
   // src/components/UpgradeSheet.tsx - the warm-up gate. The progress line is
   // rendered as t(warm.progress.template) and the checklist as t(x.label), so
   // neither is a literal the grep can see. The {n} templates are translated

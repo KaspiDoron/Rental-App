@@ -41,6 +41,44 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   return "unknown";
 }
 
+/**
+ * WHY the wait, in the traveller's terms - one sentence, for the surfaces that
+ * have room for it.
+ *
+ * The short label says WHAT is happening. When a first message is being held
+ * overnight, "what" is not enough: the traveller sees a shop sitting untouched
+ * until tomorrow morning and reasonably concludes the app is broken or slow.
+ * The reason is genuinely good and costs them nothing, so it should be said.
+ */
+export function queueReasonWhy(raw?: string | null): string | null {
+  switch (classifyQueueReason(raw)) {
+    case "closed":
+      return (
+        "This shop is closed right now. A first message sent at 3am is still " +
+        "read at 9am - it only makes your number look automated, which is what " +
+        "gets WhatsApp numbers restricted. Shops already talking to you are " +
+        "answered immediately, day or night."
+      );
+    case "tomorrow":
+      return (
+        "You have used today's batch of NEW shops. Conversations already open " +
+        "keep running normally - only first messages wait."
+      );
+    case "capacity":
+      return (
+        "Your plan opens new shops in batches, so your number stays under " +
+        "WhatsApp's radar. Shops already replying are unaffected."
+      );
+    case "breaker":
+      return (
+        "WhatsApp pushed back on this number, so first messages pause while it " +
+        "settles. Replies to shops that wrote to you still go out."
+      );
+    default:
+      return null;
+  }
+}
+
 /** Short label for card badges and queue rows. */
 export function queueReasonLabel(raw?: string | null): string {
   switch (classifyQueueReason(raw)) {

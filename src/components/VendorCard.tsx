@@ -12,7 +12,7 @@ import { friendlySendError } from "@/lib/wa/send-error";
 import { fetchJson } from "@/lib/client/fetch-json";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, convertApprox, savedCurrency, currencySymbol } from "@/lib/currency";
-import { queueReasonLabel, queueEta } from "@/lib/queue-reason";
+import { queueReasonLabel, queueReasonWhy, queueEta } from "@/lib/queue-reason";
 import { VENDOR_TAG_LABELS } from "@/lib/labels";
 import { ThreadPeek } from "./ThreadPeek";
 import { OptionList } from "./OptionList";
@@ -503,9 +503,22 @@ function VendorCardInner({
               pacing / daily limit) + an honest ETA. The user can remove it
               from the status panel above. */}
           {vendor.queuedUntil && !offer && (
-            <div className="mb-2 flex items-center gap-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
-              🕘 {t(queueReasonLabel(vendor.queuedReason))}
-              {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
+            <div className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <div className="flex items-center gap-1.5">
+                🕘 {t(queueReasonLabel(vendor.queuedReason))}
+                {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
+              </div>
+              {/* WHY, not just WHAT. Cold introductions now wait for the shop's
+                  opening hours (FAST_DISPATCH off). Without the reason, a
+                  traveller watching a shop sit untouched until tomorrow morning
+                  reasonably concludes the app is broken - so the surfaces that
+                  have room say why, and say plainly that shops already talking
+                  to them are answered immediately. */}
+              {queueReasonWhy(vendor.queuedReason) && (
+                <p className="mt-1 font-semibold leading-snug opacity-90">
+                  {t(queueReasonWhy(vendor.queuedReason) as string)}
+                </p>
+              )}
             </div>
           )}
           {/* The user removed this shop's queued messages: honest paused

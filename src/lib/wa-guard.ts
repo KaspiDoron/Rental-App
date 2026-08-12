@@ -161,12 +161,22 @@ const DEFAULTS: SecurityPolicies = {
   // night. PACING_MODE=fast (or a DB override) flips this to send the whole
   // 40-intro burst NOW regardless of hour - the owner's explicit 24/7 dial.
   ignore_business_hours: false,
-  // DEFAULT ON (owner directive: dispatch the whole intro batch within ~10 min).
-  // Cold intros fire immediately, paced only by the min-gap - they are NOT
-  // deferred to shop-open hours (the message simply waits unread until the shop
-  // opens). Set FAST_DISPATCH=off to restore conservative business-hours
-  // deferral for cold outreach.
-  fast_dispatch: true,
+  // DEFAULT OFF, as of the owner's speed-vs-safety decision.
+  //
+  // It shipped ON, to dispatch the whole intro batch within ~10 minutes at any
+  // hour. That is the single largest behavioural risk on the cold lane:
+  // unsolicited first-contact traffic at 03:00 local is the pattern WhatsApp
+  // meters for restrictions, and it buys the traveller nothing - a message sent
+  // to a closed shop at 3am is READ at 9am either way. The only thing the night
+  // send changes is our risk profile.
+  //
+  // Cold introductions now wait for the recipient's business hours. Agent
+  // REPLIES are unaffected and never were: they skip this clamp entirely
+  // (reciprocal traffic is the side WhatsApp does not meter), so answering an
+  // engaged shop is exactly as fast as before.
+  //
+  // Set FAST_DISPATCH=on in Admin -> Keys to restore 24/7 cold dispatch.
+  fast_dispatch: false,
 };
 
 declare global {
@@ -189,9 +199,11 @@ export async function getPolicies(): Promise<SecurityPolicies> {
   ]);
   // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
   const mode = normalizePacingMode(modeRaw);
-  // FAST_DISPATCH defaults ON (owner directive) - one shared flag dialect, an
-  // unreadable spelling keeps the default instead of silently flipping.
-  const fastDispatch = parseFlag(fastRaw, true);
+  // FAST_DISPATCH defaults OFF (owner's speed-vs-safety decision) - one shared
+  // flag dialect, and an UNREADABLE spelling keeps the default rather than
+  // silently flipping. That direction matters more now than it did: a config
+  // read that fails must not hand cold outreach a 24/7 licence.
+  const fastDispatch = parseFlag(fastRaw, DEFAULTS.fast_dispatch);
   const merged: SecurityPolicies = {
     ...DEFAULTS,
     ...(PACING_PRESETS[mode] as Partial<SecurityPolicies>),

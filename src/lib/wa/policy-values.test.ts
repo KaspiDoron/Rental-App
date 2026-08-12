@@ -76,8 +76,10 @@ describe("the spec stays in sync with the engine (source-level pins)", () => {
     const guard = readCode("src/lib/wa-guard.ts");
     expect(guard).toMatch(/policyRowValue\(/);
     expect(guard).not.toMatch(/r\.value === "true"/);
-    // FAST_DISPATCH uses the shared dialect too.
-    expect(guard).toMatch(/parseFlag\(fastRaw, true\)/);
+    // FAST_DISPATCH uses the shared dialect too, and its fallback is the
+    // shipped DEFAULT rather than a hardcoded `true` - an unreadable config
+    // must not hand cold outreach a 24/7 licence.
+    expect(guard).toMatch(/parseFlag\(fastRaw, DEFAULTS\.fast_dispatch\)/);
     // An inverted hours window falls back to the shipped defaults.
     expect(guard).toMatch(/business_hour_start >= merged\.business_hour_end/);
   });

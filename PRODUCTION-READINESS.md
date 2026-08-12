@@ -409,31 +409,44 @@ with the code:
 - **The `poissonPause` gap** was already fixed in an earlier wave (it was gated
   on `fast`, which every drain caller set); `skipJitter` is now its own flag.
 
+## The cold-intro dial - DECIDED (owner, this cycle)
+
+`FAST_DISPATCH` now defaults **off**. Cold introductions respect the recipient's
+business hours; the whole batch no longer fires at 03:00.
+
+What this does NOT slow down: **agent replies**. They skip the business-hours
+clamp entirely and always did - reciprocal traffic is the side WhatsApp does not
+meter. A shop that writes to you is still answered in seconds, at any hour.
+
+An unreadable `FAST_DISPATCH` config now keeps the OFF default
+(`parseFlag(fastRaw, DEFAULTS.fast_dispatch)`), rather than the old hardcoded
+`true`. A failed config read must not hand cold outreach a 24/7 licence.
+
+The traveller is told WHY, not just that they are waiting: `queueReasonWhy`
+(`src/lib/queue-reason.ts`) renders under the queued badge on the shop card. It
+says the shop is closed, that a 3am first message is read at 9am anyway, that
+night sending is what gets numbers restricted - and, load-bearing, that shops
+already talking to them are answered immediately. Without that last clause a
+shop sitting untouched until morning reads as a broken app.
+
+Set `FAST_DISPATCH=on` in Admin -> Keys to restore 24/7 cold dispatch.
+
 ## Still blocked on owner input (not skipped - waiting)
 
 These are carried forward unchanged. None is code-blocked; each needs a
 decision or a credential only the owner has.
 
-- **Speed vs safety for COLD INTROS.** `FAST_DISPATCH` defaults **on**, which
-  sets `ignore_business_hours: true` - the whole introduction batch fires
-  immediately, at any hour, paced only by the min-gap. That is a deliberate
-  owner directive ("dispatch the whole intro batch within ~10 min", tasks R2 /
-  #93), and it is also the single largest behavioural risk on the cold lane:
-  unsolicited traffic at 03:00 local is the pattern WhatsApp meters, and
-  reciprocal replies are not. **It has deliberately not been changed.** Reversing
-  a dial the owner set, on an unanswered question, is not a bug fix. Say which
-  you want and it is one line:
-  - keep it (fast intros, current behaviour), or
-  - `FAST_DISPATCH=off` in Admin -> Keys, which restores business-hours deferral
-    for cold introductions only. Agent REPLIES already skip that clamp and are
-    unaffected either way, so answering "off" does not slow the agents down.
-- **GCP live provisioning + deploy** - needs the project, billing account and
-  domain. Artifacts are in `infra/gcp/`.
-- **F2 agency scanner** and **Part 12 W7** - awaiting a decision on scope.
-- **WhatsApp avatar extraction hardening + Places fallback** (task #230).
-- **Purge the stale translation rows** once the catalogue settles:
-  `delete from app_config where key like 'I18N_%';` - they are regenerated on
-  demand, and stale rows serve the old copy.
+- **F2 agency scanner** - see the note below; my recommendation is not to build
+  it as specified.
+- **Part 12 W7** - awaiting a decision on scope.
+- **WhatsApp avatar extraction hardening + Places fallback** (task #230) - this
+  is a STALE DUPLICATE of #237, already shipped in `b808059`. Closing it.
+- **Purge the stale translation rows** after each deploy that changes user
+  copy: `delete from app_config where key like 'I18N_%';` - they are regenerated
+  on demand, and stale rows serve the old wording to non-English users. This
+  cycle changed the rental-window panel, the mass-bargain sheet, the clamp
+  notice and the queued-reason explanations, so it is worth re-running once the
+  next deploy is live.
 
 ## Verifying the mobile rules
 
