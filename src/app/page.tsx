@@ -2798,8 +2798,24 @@ export default function Home() {
         vendorCount: vendors.length,
         offerCount,
         closing: Boolean(bookingVendor),
+        // W-6: THE INPUTS WILL COULD NOT SEE. Without these the pre-search
+        // advice was one message for four different situations, so most of the
+        // time it named a step the traveller had already completed.
+        hasRequest: Boolean(rawText.trim()) || Boolean(builderFields?.vehicleClass),
+        hasStay: Boolean(origin),
+        idpDeclared: idpConsent,
       }),
-    [waConnected, phase, vendors.length, offerCount, bookingVendor]
+    [
+      waConnected,
+      phase,
+      vendors.length,
+      offerCount,
+      bookingVendor,
+      rawText,
+      builderFields,
+      origin,
+      idpConsent,
+    ]
   );
   const assistant = useWillAssistant();
   const assistantSetStep = assistant.setStep;
@@ -4195,7 +4211,10 @@ export default function Home() {
                 },
               ],
             };
-          } else if (step === "SEARCH_INPUT" && justLinked) {
+          } else if (
+            (step === "SEARCH_EMPTY" || step === "SEARCH_INPUT") &&
+            justLinked
+          ) {
             guidance = {
               anchor: "[data-tour='request']",
               tone: "celebrate",
@@ -4212,7 +4231,10 @@ export default function Home() {
               ],
               onDismiss: clearJustLinked,
             };
-          } else if (step === "SEARCH_INPUT" && assistant.idle) {
+          } else if (
+            (step === "SEARCH_EMPTY" || step === "SEARCH_INPUT") &&
+            assistant.idle
+          ) {
             guidance = {
               anchor: "[data-tour='request']",
               text: t("Tell me what you want to ride - I'll haggle every shop nearby. Not a typer? Build it in taps."),
@@ -4224,6 +4246,49 @@ export default function Home() {
                 },
               ],
             };
+          } else if (step === "SEARCH_NEEDS_STAY" && assistant.idle) {
+            // The one that actually BLOCKS: discovery needs an origin, so no
+            // amount of describing the bike gets a single shop contacted.
+            guidance = {
+              anchor: "[data-tour='stay']",
+              text: t("Got it. Now drop your hotel or area - I search outward from there, so this is the one thing I can't guess."),
+              actions: [
+                {
+                  label: t("Use my location"),
+                  primary: true,
+                  onAction: () => {
+                    document
+                      .querySelector("[data-tour='stay']")
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  },
+                },
+              ],
+            };
+          } else if (step === "SEARCH_NEEDS_REQUEST" && assistant.idle) {
+            guidance = {
+              anchor: "[data-tour='request']",
+              text: t("Stay's set. What are we riding? Even 'cheap automatic scooter' is enough for me to work with."),
+              actions: [
+                {
+                  label: t("Build it in taps"),
+                  primary: true,
+                  onAction: () => setBuilderOpen(true),
+                },
+              ],
+            };
+          } else if (step === "SEARCH_READY" && assistant.idle) {
+            // Everything is present. The only honest advice left is either the
+            // one blocker that remains, or "press it".
+            guidance = !idpConsent
+              ? {
+                  anchor: "[data-tour='find']",
+                  text: t("All set bar one tick - confirm you hold a licence for this category and I'll start messaging shops."),
+                }
+              : {
+                  anchor: "[data-tour='find']",
+                  tone: "celebrate",
+                  text: t("That's everything I need. Hit Find my deal and I'll start haggling."),
+                };
           } else if (step === "AGENTS_DISPATCHED") {
             // Every action here MOVES the traveller somewhere real. These used
             // to flip a view flag with no scroll (so nothing visibly happened)
