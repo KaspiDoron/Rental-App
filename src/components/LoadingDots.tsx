@@ -34,14 +34,15 @@ export function LoadingDots({
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="h-1.5 w-1.5 animate-bounce rounded-full"
+            className="wd-dot-breathe h-1.5 w-1.5 rounded-full"
             style={{
               // `light` still wins outright: on a dark or coloured backdrop the
               // hue stops lose contrast, and legibility outranks family
               // resemblance every time.
               background: light ? "#ffffff" : `var(--wd-hue-${i + 1})`,
-              animationDelay: `${i * 0.15}s`,
-              animationDuration: "0.9s",
+              // NEGATIVE, so the three dots start already mid-cycle instead of
+              // lighting up in a visible left-to-right row on the first frame.
+              animationDelay: `${-0.45 + i * 0.18}s`,
             }}
           />
         ))}

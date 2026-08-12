@@ -41,11 +41,16 @@ describe("REPRODUCTION: the banner had a publisher but no ad unit", () => {
     expect(ad).toMatch(/if \(!client \|\| !adSlot \|\| pushed\.current\) return;/);
   });
 
-  it("...and the placeholder stops saying 'under review' when it is really unconfigured", () => {
-    // The two states have different fixes - one is waiting on Google, the other
-    // is waiting on the owner - and the copy said the first for both.
-    expect(ad).toMatch(/no ad unit configured yet/);
-    expect(ad).toMatch(/activates after Google review/);
+  it("...and an unconfigured banner renders NOTHING rather than an empty frame", () => {
+    // This used to assert that the placeholder distinguished "waiting on
+    // Google" from "waiting on the owner". W-4 removed the placeholder
+    // entirely, and that is the stronger answer to the same problem: a
+    // labelled, permanently unfilled 100px slot is itself an AdSense rejection
+    // signal, and the distinction it was drawing is an OWNER diagnostic that
+    // belongs in Admin -> Keys (asserted below), not in a traveller's results
+    // list. No client or no unit now means no frame at all.
+    expect(ad).toMatch(/if \(!client \|\| !adSlot\) return null;/);
+    expect(ad).not.toMatch(/Ad space/);
   });
 
   it("the space is reserved either way, so configuring the unit shifts no layout", () => {

@@ -4,7 +4,7 @@ import { getSession } from "@/lib/session";
 import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { digitsOnly } from "@/lib/phone";
-import { can } from "@/lib/entitlements";
+import { can, localLanguageAllowed } from "@/lib/entitlements";
 
 // Adaptive Bargaining Agent: composes the next negotiation message to send.
 // This is the SAME brain the automatic funnel uses - market-floor anchored
@@ -20,9 +20,13 @@ export async function POST(req: Request) {
   }
 
   // Local-language street bargaining is an Ultra perk (management included).
+  //
+  // Named for what it CHECKS, not for the tier that currently satisfies it.
+  // `isUltra` was a feature check wearing a tier's name, which is how a second
+  // surface ends up hardcoding `plan === "ultra"` to "match" it.
   const wantsLocal = body.language === "local";
-  const isUltra = can(session.plan, "local-language");
-  if (wantsLocal && !isUltra) {
+  const localAllowed = localLanguageAllowed({ requested: true, plan: session.plan });
+  if (wantsLocal && !localAllowed) {
     return NextResponse.json(
       {
         error: "Bargaining in the shop's local language is an Ultra feature.",
@@ -170,7 +174,7 @@ export async function POST(req: Request) {
     region,
     round: Math.max(0, Number(body.round ?? 0)),
     currency: cur,
-    localLanguage: wantsLocal && isUltra,
+    localLanguage: wantsLocal && localAllowed,
     targetPricePerDay: target,
     floorPricePerDay: floorPrice,
     history,

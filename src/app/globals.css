@@ -1190,3 +1190,66 @@ html.dark .aurora::after { opacity: 0.75; }
      a transparent pill with no blur would be unreadable over a photo. */
   .wd-status-fab { background: var(--card); }
 }
+
+/* THE DOTS BREATHED LIKE A BALL BOUNCING (W-1).
+ *
+ * `animate-bounce` is Tailwind's ball-drop: a hard translate with an
+ * asymmetric cubic-bezier, so the dot slams down and eases up. That reads as
+ * mechanical - it is the shape of a physics toy, not of something thinking.
+ *
+ * The Gemini-family feel is a BREATHE: scale and opacity together, symmetric
+ * easing, slower period, and a NEGATIVE stagger so all three are already
+ * mid-cycle on the first frame rather than starting in a visible row. No
+ * transform on the layout box, so nothing reflows and nothing shifts. */
+@keyframes wd-breathe {
+  0%,
+  100% {
+    transform: scale(0.62);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.wd-dot-breathe {
+  animation: wd-breathe 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform, opacity;
+}
+
+/* Reduced motion gets a still, legible dot - never a frozen half-scaled one. */
+@media (prefers-reduced-motion: reduce) {
+  .wd-dot-breathe {
+    animation: none;
+    transform: none;
+    opacity: 0.75;
+  }
+}
+
+/* A VIEWPORT-LEVEL AMBIENT GLOW.
+ *
+ * `.aurora::before` is box-scoped (inset:-14%, blur(18px)) - it decorates the
+ * element it is on. During a long wait there was nothing at the PAGE level, so
+ * a full-screen loading state was a small spinner on flat background. This is
+ * the ambient wash behind it: fixed, behind everything, pointer-transparent,
+ * and it fades itself out rather than being toggled off in one frame. */
+.wd-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 45% at 18% 12%, var(--wd-hue-1) 0%, transparent 70%),
+    radial-gradient(55% 40% at 82% 22%, var(--wd-hue-2) 0%, transparent 70%),
+    radial-gradient(65% 50% at 50% 88%, var(--wd-hue-3) 0%, transparent 72%);
+  opacity: 0.16;
+  filter: blur(48px) saturate(1.3);
+  animation: aurora-breathe 9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wd-ambient {
+    animation: none;
+  }
+}

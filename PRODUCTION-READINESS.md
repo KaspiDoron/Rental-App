@@ -3,7 +3,7 @@
 Date: 2026-08-11 · Branch: `claude/rental-agents-legal-setup-o7rgcv`
 Scope: queue architecture, concurrency, rate limiting, test mode,
 observability, cost control and the concrete path to hundreds of concurrent
-users. Complements `ENTERPRISE-READINESS.md` (the earlier QA pass).
+users. Complements `docs/ENTERPRISE-READINESS.md` (the earlier QA pass).
 
 ## Executive summary
 

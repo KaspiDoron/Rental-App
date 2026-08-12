@@ -1,6 +1,6 @@
 // SPTE public surface (V2-4). The Single-Pass Turn Engine: Blackboard +
 // single-pass agent that replaces the graph director/edge branching. See
-// V2-BLUEPRINT.md section 4. Gated behind ENGINE_V3 during the dual-run; the
+// docs/V2-BLUEPRINT.md section 4. Gated behind ENGINE_V3 during the dual-run; the
 // graph engine remains the live path + rollback until golden parity is proven.
 
 export * from "./types";

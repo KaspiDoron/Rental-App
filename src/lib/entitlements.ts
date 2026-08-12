@@ -127,3 +127,38 @@ export function planFor(f: Feature): "pro" | "ultra" {
   const p = FEATURE_META[f].plan;
   return p === "free" ? "pro" : p;
 }
+
+// ---------------------------------------------------------------------------
+// LOCAL LANGUAGE - one predicate, one place (W-11)
+// ---------------------------------------------------------------------------
+
+/**
+ * May this request haggle in the shop's own language?
+ *
+ * ONE RULE, ONE SPELLING. The entitlement was enforced everywhere - the plan's
+ * "any account can POST {localLang:true}" did not survive checking - but it was
+ * enforced in THREE DIFFERENT DIALECTS:
+ *
+ *   can(session.plan, "local-language")   outreach, mass (x3), graph nodes+engine
+ *   isUltra                               bargain-draft
+ *   ctx.plan === "ultra"                  agent-loop (the reply composer)
+ *
+ * The third is the dangerous one. It is a hardcoded tier literal, and the day
+ * `can()` learns a new tier - a grandfathered plan, an annual SKU, a trial -
+ * every surface follows except the one that actually writes the message to the
+ * shop. The gate would still be "working" everywhere it is tested, and quietly
+ * wrong on the send path. That is how one rule stops being one rule.
+ *
+ * `enabled` is the owner's fleet-wide kill switch (`LOCAL_LANGUAGE` in the Key
+ * Vault). It is the LAST word and can only ever subtract: an owner who turns
+ * this off must not be overridden by a plan.
+ */
+export function localLanguageAllowed(args: {
+  requested: unknown;
+  plan: string | null | undefined;
+  /** The owner switch, already resolved. Defaults to on when unset. */
+  enabled?: boolean;
+}): boolean {
+  if (args.enabled === false) return false;
+  return Boolean(args.requested) && can(args.plan as PlanId, "local-language");
+}

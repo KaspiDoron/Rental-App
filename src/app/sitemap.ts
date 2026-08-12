@@ -9,6 +9,7 @@ import { resolveSiteOrigin } from "@/lib/site";
 // matcher, so none of them bounces to /login.
 const PUBLIC_PATHS = [
   { path: "/welcome", priority: 1, changeFrequency: "weekly" as const },
+  { path: "/guides", priority: 0.9, changeFrequency: "monthly" as const },
   { path: "/pricing", priority: 0.8, changeFrequency: "monthly" as const },
   { path: "/terms", priority: 0.3, changeFrequency: "yearly" as const },
   { path: "/privacy", priority: 0.3, changeFrequency: "yearly" as const },
@@ -16,9 +17,20 @@ const PUBLIC_PATHS = [
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const origin = await resolveSiteOrigin();
-  return PUBLIC_PATHS.map(({ path, priority, changeFrequency }) => ({
-    url: `${origin}${path}`,
-    changeFrequency,
-    priority,
-  }));
+  const { GUIDES } = await import("@/lib/guides");
+  return [
+    ...PUBLIC_PATHS.map(({ path, priority, changeFrequency }) => ({
+      url: `${origin}${path}`,
+      changeFrequency,
+      priority,
+    })),
+    // DERIVED FROM THE GUIDES THEMSELVES, never a second hand-kept list: a
+    // sitemap that can disagree with the pages it advertises is worse than no
+    // sitemap, because a crawler that hits a 404 from it discounts the rest.
+    ...GUIDES.map((g) => ({
+      url: `${origin}/guides/${g.slug}`,
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    })),
+  ];
 }
