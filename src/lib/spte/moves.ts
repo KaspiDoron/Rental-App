@@ -23,7 +23,12 @@ const MEANING: Record<MoveKind, string> = {
     "a warm goodbye ONLY - thank them and end the conversation. This is NOT " +
     "an agreement: never state a price, never accept one, never confirm a booking",
   "deposit-probe": "ask what deposit they require",
-  "fulfillment-probe": "ask how pickup or delivery works",
+  // The glossary is what the model reads. It has to carry BOTH questions, or a
+  // shop that has already said "we deliver" gets asked whether it delivers.
+  "fulfillment-probe":
+    "ask how the traveller gets the vehicle - and if they have already said " +
+    "they deliver, ask what the delivery CHARGE is and whether collecting at " +
+    "the shop is cheaper. Never ask again what they have already answered",
   "pickup-location": "give them the traveller's stay address and ask if they deliver",
   "option-probe": "they offered several tiers - ask what separates them",
   "confirm-vehicle": "check the quote is for the exact vehicle the traveller asked for",

@@ -187,6 +187,14 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
     // possible terms read as "unknown" and got asked about forever.
     depositKnown: facts.depositKnown || ledger.known.includes("deposit"),
     fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
+    deliveryOffered: facts.deliveryOffered,
+    // The MODE and its PRICE are two facts. `fulfillmentKnown` went true on the
+    // word "deliver", which retired the handover probe before anyone had asked
+    // what delivery costs - so the traveller compared per-day rates and met the
+    // fee at handover. The ledger's "handover" subject settles the mode, so it
+    // is deliberately NOT OR-ed in here: knowing HOW is not knowing HOW MUCH.
+    fulfillmentCostKnown: facts.fulfillmentCostKnown,
+    handoverAsks: facts.handoverAsks,
     lastOutbound: facts.lastOutbound,
     options: options.length >= 2 ? options : undefined,
     ledger,

@@ -486,7 +486,18 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       return FAMILY[Math.abs(h) % FAMILY.length];
     }
     case "fulfillment-probe":
-      return `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
+      // TWO DIFFERENT QUESTIONS WEAR THIS ONE MOVE.
+      //
+      // The first asks HOW the traveller gets the vehicle. The second - legal
+      // only once the shop has offered to bring it and has not said what that
+      // costs - asks HOW MUCH, and offers collection as the alternative in the
+      // same breath, so the shop can answer with either number. A single
+      // template here would have re-sent "do you deliver?" to a shop that had
+      // just said it delivers, which is the repeat this move is gated against.
+      return ctx.thread.digest.deliveryOffered === true &&
+        ctx.thread.digest.fulfillmentCostKnown !== true
+        ? `Great, thanks! Is there a charge for delivery to the hotel - and would it be cheaper if I collect it from the shop instead?`
+        : `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
     case "momentum":
       return `Hi again! Just checking in - any chance on that better rate for ${days} days?`;
     default:

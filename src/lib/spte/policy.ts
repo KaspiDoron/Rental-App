@@ -174,6 +174,11 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     // accepted gracefully by construction.
     if (priceKnown && depositKnown(ctx) && passportCounterDue(ctx)) moves.push("deposit-probe");
     if (priceKnown && !fulfillmentKnown(ctx)) moves.push("fulfillment-probe");
+    // ...AND ONE FOLLOW-UP FOR WHAT IT COSTS. The gate above closed on the word
+    // "deliver", so "yes, we deliver to your hotel" retired the subject with the
+    // fee never asked - and a delivery charge discovered at handover is exactly
+    // the number this app exists to have found before the traveller chose.
+    if (priceKnown && handoverCostDue(ctx)) moves.push("fulfillment-probe");
   }
 
   // A complete, priced deal -> present it to the traveller.
@@ -463,6 +468,33 @@ function fulfillmentKnown(ctx: TurnContext): boolean {
     ctx.thread.digest.fulfillmentKnown === true ||
     ctx.thread.digest.facts.some((f) => /delivery|pickup|on-shop|in-store/i.test(f))
   );
+}
+
+/**
+ * KNOWING HOW IS NOT KNOWING HOW MUCH.
+ *
+ * The handover probe retired the instant a shop's message contained the word
+ * "deliver", so "yes, we can deliver to your hotel" closed the subject and the
+ * FEE was never asked. The traveller compared per-day rates across shops,
+ * picked one, and met the delivery charge at handover - the single number a
+ * price-comparison app exists to surface before the choice, not after it.
+ *
+ * One follow-up is due when the shop has offered to bring it and has not
+ * priced that: a number, or "free", either settles it. Bounded to ONE by the
+ * stamped move history, because a shop that simply will not answer must not be
+ * asked a third time - at that point the honest thing is to present the deal
+ * with the fee marked unknown, which is what the traveller can act on.
+ */
+const HANDOVER_COST_ASKS_MAX = 1;
+
+function handoverCostDue(ctx: TurnContext): boolean {
+  const d = ctx.thread.digest;
+  if (d.fulfillmentCostKnown === true) return false;
+  if (d.deliveryOffered !== true) return false;
+  const asked = d.handoverAsks ?? 0;
+  // The first probe establishes the MODE; the follow-up prices it. Anything
+  // past that is nagging a shop that has already been asked twice.
+  return asked >= 1 && asked <= HANDOVER_COST_ASKS_MAX;
 }
 function dedupe(m: MoveKind[]): MoveKind[] {
   return Array.from(new Set(m));

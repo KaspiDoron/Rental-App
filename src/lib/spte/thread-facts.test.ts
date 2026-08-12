@@ -66,6 +66,12 @@ describe("deriveThreadFacts - deposit + pickup", () => {
       firmCount: 0,
       depositKnown: false,
       fulfillmentKnown: false,
+      // The MODE and its PRICE are separate facts (see delivery-cost.test.ts):
+      // "we deliver" used to answer for both, which retired the handover probe
+      // before anyone had asked what delivery costs.
+      deliveryOffered: false,
+      fulfillmentCostKnown: false,
+      handoverAsks: 0,
       bargainRounds: 0,
       lastOutbound: [],
     });

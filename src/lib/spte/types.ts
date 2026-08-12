@@ -93,6 +93,12 @@ export interface ThreadDigest {
   firmCount?: number; // shop said "last price" this many times
   depositKnown?: boolean; // the shop already told us its deposit terms
   fulfillmentKnown?: boolean; // the shop already told us delivery-vs-pickup
+  /** The shop offered to BRING it - the only mode that can carry a fee. */
+  deliveryOffered?: boolean;
+  /** The shop said what the handover costs, or that it is free. */
+  fulfillmentCostKnown?: boolean;
+  /** How many handover questions we have already put (stamped moves). */
+  handoverAsks?: number;
   lastOutbound?: string[]; // our last 5 messages - the anti-repetition memory
   /** Every tier this shop has offered, accumulated across the whole thread. */
   options?: VehicleOption[];
