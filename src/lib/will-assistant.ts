@@ -10,7 +10,19 @@
 export type WillStep =
   | "WA_LINK_PENDING" // WhatsApp not linked - the search is locked
   | "WA_AUTHENTICATING" // code entered / handshake verifying
-  | "SEARCH_INPUT" // linked, no search yet - compose the request
+  // ONE STEP SAID EVERYTHING ABOUT THE WHOLE START OF THE FUNNEL (W-6).
+  //
+  // `SEARCH_INPUT` covered every pre-search state at once - nothing typed, a
+  // request with no stay, a stay with no request, and a form that is genuinely
+  // ready to send. Will's advice was the same in all four, which is why it read
+  // as irrelevant: three quarters of the time it named a step the traveller had
+  // already taken. These are derived from the actual inputs, not from a phase
+  // enum that cannot see them.
+  | "SEARCH_EMPTY" // linked, nothing entered at all
+  | "SEARCH_NEEDS_STAY" // a request, but no stay pinned - discovery has no origin
+  | "SEARCH_NEEDS_REQUEST" // a stay, but no vehicle described
+  | "SEARCH_READY" // everything present - the only step that says "press it"
+  | "SEARCH_INPUT" // fallback when the inputs are not reported (legacy callers)
   | "AGENTS_DISPATCHED" // profiling / discovering / first messages going out
   | "NEGOTIATING" // shops contacted, no prices yet
   | "RESULTS_READY"; // offers on the table (or a deal closing)
@@ -25,6 +37,20 @@ export interface WillStepInput {
   vendorCount: number;
   offerCount: number;
   closing: boolean;
+  /**
+   * THE INPUTS WILL COULD NOT SEE.
+   *
+   * The guidance catalogue was keyed on a six-value enum whose only sources
+   * were waConnected/phase/vendorCount/offerCount/closing - so it was
+   * structurally unable to say anything about the request the traveller had
+   * actually typed, whether they had set a stay, or what the local rate is.
+   * Optional so existing callers keep working and simply fall back to the old
+   * lumped `SEARCH_INPUT`.
+   */
+  hasRequest?: boolean;
+  hasStay?: boolean;
+  /** The consent tick is a real, common blocker with a one-tap fix. */
+  idpDeclared?: boolean;
 }
 
 /**
@@ -40,7 +66,17 @@ export function deriveWillStep(s: WillStepInput): WillStep | null {
   if (s.closing || s.offerCount > 0) return "RESULTS_READY";
   if (s.phase === "profiling" || s.phase === "running") return "AGENTS_DISPATCHED";
   if (s.vendorCount > 0) return "NEGOTIATING";
-  return "SEARCH_INPUT";
+
+  // Pre-search. Only refine when the caller actually reported the inputs -
+  // a legacy caller that reports none must not be told its form is empty.
+  const reported = s.hasRequest !== undefined || s.hasStay !== undefined;
+  if (!reported) return "SEARCH_INPUT";
+  if (!s.hasRequest && !s.hasStay) return "SEARCH_EMPTY";
+  // Ordered by what BLOCKS: discovery cannot run without an origin at all,
+  // whereas a missing request only means the profiler has less to work with.
+  if (!s.hasStay) return "SEARCH_NEEDS_STAY";
+  if (!s.hasRequest) return "SEARCH_NEEDS_REQUEST";
+  return "SEARCH_READY";
 }
 
 // ---------------------------------------------------------------------------

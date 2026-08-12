@@ -32,10 +32,17 @@ const LOCAL_LANG_SITES = [
 ];
 
 describe("REPRODUCTION: eight gates bypassed the matrix they claim to obey", () => {
-  it("every local-language gate asks can(), not the plan name", () => {
+  it("every local-language gate asks the MATRIX, not the plan name", () => {
+    // W-11 hoisted the three surviving dialects - can(), isUltra, and a
+    // hardcoded `plan === "ultra"` on the send path - into one predicate.
+    // `localLanguageAllowed` calls can() internally and adds the owner switch,
+    // so it satisfies this claim more strongly than an inline can() did: there
+    // is now exactly one place the rule can be written down.
     for (const f of LOCAL_LANG_SITES) {
       const code = readCode(f);
-      expect(code, f).toMatch(/can\(\s*[^)]*?,\s*"local-language"\s*\)/);
+      expect(code, f).toMatch(
+        /can\(\s*[^)]*?,\s*"local-language"\s*\)|localLanguageAllowed\(/
+      );
     }
   });
 

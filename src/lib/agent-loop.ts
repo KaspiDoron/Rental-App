@@ -58,6 +58,23 @@ import type { TraceRow } from "./orchestrator";
 import type { StructuredRFQ, Vendor } from "./types";
 import { digitsOnly } from "./phone";
 
+/**
+ * The owner's fleet-wide local-language switch (`LOCAL_LANGUAGE` in the Key
+ * Vault). Defaults ON, and an UNREADABLE config keeps that default: this switch
+ * exists to stop the feature, not to be the reason a reply is composed in the
+ * wrong language during an outage.
+ */
+async function localLanguageEnabled(): Promise<boolean> {
+  try {
+    const { getConfig } = await import("./runtime-config");
+    const raw = (await getConfig("LOCAL_LANGUAGE"))?.trim().toLowerCase();
+    if (!raw) return true;
+    return !["off", "false", "0", "no"].includes(raw);
+  } catch {
+    return true;
+  }
+}
+
 export interface ThreadContext {
   sender?: string;
   vendorId?: string;
@@ -1828,8 +1845,17 @@ export async function processVendorReply(opts: {
   // LANGUAGE ADAPTATION: a shop writing real English gets English back for
   // this reply - matching the human beats the local-language setting.
   const { looksEnglish } = await import("./agents");
+  // ONE PREDICATE (entitlements.localLanguageAllowed). This read
+  // `ctx.plan === "ultra"` - a hardcoded tier on the one path that actually
+  // composes the message to the shop, so a new tier would have been honoured by
+  // every other surface and silently refused here.
+  const { localLanguageAllowed } = await import("./entitlements");
   const useLocalLang =
-    Boolean(ctx.localLang) && ctx.plan === "ultra" && !looksEnglish(text);
+    localLanguageAllowed({
+      requested: ctx.localLang,
+      plan: ctx.plan,
+      enabled: await localLanguageEnabled(),
+    }) && !looksEnglish(text);
   const register = registerRules(cfg, cur, ctx.region || undefined);
 
   if (direction === "answer") {

@@ -75,14 +75,14 @@ describe("the TIER comes from PayPal's plan, not from the caller", () => {
   });
 
   it("every lifecycle event the PayPal dashboard must be told to send is handled", () => {
-    // Documented in LAUNCH-wheeldeal.pro.md; pinned here so the two cannot
+    // Documented in docs/LAUNCH-wheeldeal.pro.md; pinned here so the two cannot
     // drift - a missing checkbox in the dashboard is invisible until a
     // cancellation silently does nothing.
     // The events are handled across TWO files since the suspension grace
     // landed: activation in the route, the terminal/recoverable distinction in
     // the policy. Both are part of the handling surface.
     const h = hook() + readCode("src/lib/billing/suspension.ts");
-    const doc = read("LAUNCH-wheeldeal.pro.md");
+    const doc = read("docs/LAUNCH-wheeldeal.pro.md");
     for (const event of [
       "BILLING.SUBSCRIPTION.ACTIVATED",
       "BILLING.SUBSCRIPTION.RE-ACTIVATED",

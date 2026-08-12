@@ -11,7 +11,7 @@ import {
 import { placeDetails } from "@/lib/google";
 import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
-import { can } from "@/lib/entitlements";
+import { can, localLanguageAllowed } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
 import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
   // then varies it per shop). English fallback if the AI is unavailable.
   let batchMessage = message;
   let englishGloss: string | undefined;
-  if (Boolean(body.localLang) && can(session.plan, "local-language")) {
+  if (localLanguageAllowed({ requested: body.localLang, plan: session.plan })) {
     const { localizeMessage } = await import("@/lib/agents");
     const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
     batchMessage = localized.text;
@@ -282,7 +282,7 @@ export async function POST(req: Request) {
       ? (body.rfq as import("@/lib/types").StructuredRFQ)
       : null;
   const compiledRecent: string[] = [];
-  const wantLocalLang = Boolean(body.localLang) && can(session.plan, "local-language");
+  const wantLocalLang = localLanguageAllowed({ requested: body.localLang, plan: session.plan });
   const openerFor = async (vendorId: string, shopDigits: string): Promise<{ text: string; gloss?: string }> => {
     if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
     const { compileOpener } = await import("@/lib/copy/promptCompiler");
@@ -396,7 +396,7 @@ export async function POST(req: Request) {
       rfq: body.rfq ?? null,
       region: String(body.region ?? ""),
       plan: session.plan,
-      localLang: Boolean(body.localLang) && can(session.plan, "local-language"),
+      localLang: localLanguageAllowed({ requested: body.localLang, plan: session.plan }),
       batchId,
       batchSize: vendors.length,
       // DISPATCH FACTS RIDE THE ROW. The drain re-guards every parked row;

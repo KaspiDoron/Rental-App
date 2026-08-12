@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { railVendors, RAIL_MAX, RAIL_MIN } from "./quotes-rail";
+import { railVendors, quotedVendors, RAIL_MAX, RAIL_MIN } from "./quotes-rail";
 import { I18N_CATALOG } from "./i18n-catalog";
 import type { Vendor } from "./types";
 
@@ -79,6 +79,48 @@ describe("the rail carries quotes, cheapest first", () => {
   });
 });
 
+describe("the cap is a display bound, not a fact about the hunt", () => {
+  const rail = stripComments(readRaw("src/components/QuotesRail.tsx"));
+
+  it("the uncapped set is available, and it is the same rule minus the slice", () => {
+    const many = Array.from({ length: 20 }, (_, i) => shop({ price: 100 + i }));
+    expect(quotedVendors(many)).toHaveLength(20);
+    expect(railVendors(many)).toHaveLength(RAIL_MAX);
+    // Same ordering, same exclusions - only the length differs.
+    expect(railVendors(many).map((v) => v.id)).toEqual(
+      quotedVendors(many).slice(0, RAIL_MAX).map((v) => v.id)
+    );
+    expect(quotedVendors([shop({ price: 0 }), shop()])).toHaveLength(0);
+  });
+
+  it("...and it does not mutate the feed's array either", () => {
+    const list = [shop({ price: 500 }), shop({ price: 200 })];
+    const before = list.map((v) => v.id);
+    quotedVendors(list);
+    expect(list.map((v) => v.id)).toEqual(before);
+  });
+
+  it("the header counts every quote, not the twelve that fit", () => {
+    // It counted `rail.length`, so thirteen quotes read "12 shops" - a silently
+    // truncated number presented as a total, which is the same defect as a
+    // daily rate captioned as a trip total.
+    expect(rail).toMatch(/const quoted = quotedVendors\(vendors\)\.length/);
+    expect(rail).toMatch(/\{quoted\} \{quoted === 1 \? t\("shop"\) : t\("shops"\)\}/);
+    expect(rail).not.toMatch(/\{rail\.length\} \{rail\.length === 1/);
+  });
+
+  it("and it SAYS when the strip is showing fewer than that", () => {
+    // A count that does not match the tiles beside it is its own confusion.
+    // Naming the truncation is what makes the honest number legible.
+    expect(rail).toMatch(/const hidden = quoted - rail\.length/);
+    expect(rail).toMatch(/hidden > 0 \?/);
+  });
+
+  it("the truncation copy is translated", () => {
+    expect(I18N_CATALOG).toContain("showing the cheapest");
+  });
+});
+
 describe("the rail cannot break the windowed list", () => {
   const rail = stripComments(readRaw("src/components/QuotesRail.tsx"));
   const lib = stripComments(readRaw("src/lib/quotes-rail.ts"));
@@ -98,6 +140,14 @@ describe("the rail cannot break the windowed list", () => {
 
   it("the strip owns its own horizontal overflow, so the page never scrolls sideways", () => {
     expect(rail).toMatch(/overflow-x-auto/);
+  });
+
+  it("...and the swipe STOPS at the strip's edge instead of chaining", () => {
+    // A horizontal swipe that reaches the end of an overflow container chains
+    // to the document, and on iOS a chained horizontal swipe is the back
+    // gesture - so flicking past the last quote could navigate away from the
+    // hunt entirely. Owning the overflow is only half the rule.
+    expect(rail).toMatch(/overscroll-x-contain/);
   });
 
   it("it relies on normal flow, so RTL mirrors it without hand-flipping", () => {

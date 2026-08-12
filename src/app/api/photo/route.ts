@@ -72,7 +72,11 @@ export async function GET(req: Request) {
     const timer = setTimeout(() => ctrl.abort(), 10_000);
     try {
       res = await fetch(target, {
-        cache: "no-store",
+        // `no-store` on the UPSTREAM fetch defeated the runtime's own cache as
+        // well, so even a warm instance re-fetched from Google every time. The
+        // image is immutable for the life of its photo reference; caching it is
+        // the whole point of proxying it.
+        cache: "force-cache",
         signal: ctrl.signal,
         headers: { Accept: "image/*" },
       });
@@ -110,7 +114,21 @@ export async function GET(req: Request) {
       "Content-Type": type,
       // Only a SUCCESSFUL image is cacheable, and it is public: a shop photo is
       // the same for everyone and never traveller-specific.
-      "Cache-Control": "public, max-age=86400",
+      // A PLACE PHOTO IS IMMUTABLE, AND NOTHING WAS CACHING IT BUT THE BROWSER.
+      //
+      // The old header was browser-only: `max-age` alone tells a CDN nothing,
+      // so every viewer of every shop re-fetched an 800px original THROUGH this
+      // Node route, which re-fetched it from Google. On a results page that is
+      // up to a dozen cold round trips behind a serverless cold start, which is
+      // the "shop images load too slowly" the owner reported.
+      //
+      // `s-maxage` gives the CDN a year (the photo reference encodes the image;
+      // Google mints a new reference when the photo changes, so the URL is the
+      // version). `immutable` stops revalidation entirely.
+      // `stale-while-revalidate` means a expiring entry is still served
+      // instantly while it refreshes behind the request.
+      "Cache-Control":
+        "public, max-age=31536000, s-maxage=31536000, immutable, stale-while-revalidate=86400",
     },
   });
 }

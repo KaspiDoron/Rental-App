@@ -66,23 +66,25 @@ export function AdBanner({
 
   if (!free) return null;
 
+  // AN EMPTY AD FRAME IS ITSELF A REJECTION SIGNAL (W-4).
+  //
+  // This reserved 100px, drew a "Sponsored" strip and an "Ad space" panel
+  // whether or not there was anything to serve - so a reviewer loading the app
+  // saw a labelled, permanently unfilled slot, which reads as either a broken
+  // integration or a page built around ads rather than content. Both are things
+  // the policy review looks for.
+  //
+  // Nothing renders until there is a real client AND a real unit to fill. When
+  // there is, the slot appears; when there is not, the layout simply does not
+  // contain it.
+  if (!client || !adSlot) return null;
+
   return (
     <div className="mt-3 overflow-hidden rounded-blob border-2 border-line">
       <div className="bg-card2 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-faint">
         Sponsored
       </div>
       <div className="relative" style={{ minHeight: 100 }}>
-        {/* Placeholder shown until AdSense fills the space */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 bg-card2/60">
-          <span className="text-[12px] font-extrabold text-faint">Ad space</span>
-          <span className="text-[10px] text-faint">
-            {!client
-              ? "activates after Google review"
-              : !adSlot
-                ? "no ad unit configured yet"
-                : "waiting for Google to serve"}
-          </span>
-        </div>
         {client && adSlot && (
           <ins
             className="adsbygoogle relative block"

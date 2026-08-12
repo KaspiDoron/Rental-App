@@ -40,8 +40,13 @@ describe("photo proxy: every failure says which one it was", () => {
   it("never caches a failure - once broken must not stay broken", () => {
     const code = readCode(ROUTE);
     expect(code).toMatch(/private,\s*no-store/);
-    // Success is still publicly cacheable: a shop photo is the same for everyone.
-    expect(code).toMatch(/public,\s*max-age=86400/);
+    // Success is still publicly cacheable: a shop photo is the same for
+    // everyone. W-8 widened that from browser-only to CDN-and-immutable - a
+    // place photo does not change for the life of its photo reference - so the
+    // pin is on the PROPERTY (public + a real max-age) rather than on the one
+    // duration it happened to have.
+    expect(code).toMatch(/public,\s*max-age=\d+/);
+    expect(code).toMatch(/s-maxage=\d+/);
   });
 
   it("only streams something that is actually an image", () => {

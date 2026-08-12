@@ -35,9 +35,22 @@ export const RAIL_MIN = 2;
  * shipped a card reading "bargained to 0".
  */
 export function railVendors(vendors: Vendor[]): Vendor[] {
+  return quotedVendors(vendors).slice(0, RAIL_MAX);
+}
+
+/**
+ * Every shop with a live quote, cheapest first - the rail's input BEFORE the
+ * cap.
+ *
+ * Split out because the header was counting the capped array. With thirteen
+ * quotes in, "Quotes so far - 12 shops" is a silently truncated number
+ * presented as a total, which is the same defect as the Trips headline that
+ * summed a daily rate and captioned it a trip total. The cap is a display
+ * bound, not a fact about the hunt, and the header now says so.
+ */
+export function quotedVendors(vendors: Vendor[]): Vendor[] {
   return vendors
     .filter((v) => v.offer && v.offer.pricePerDay > 0)
     .slice()
-    .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay)
-    .slice(0, RAIL_MAX);
+    .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay);
 }

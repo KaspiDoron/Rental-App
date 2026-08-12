@@ -32,7 +32,7 @@ import type { Vendor } from "@/lib/types";
 import { moneyLocal } from "@/lib/currency";
 // The ordering rule lives in lib, pure and testable without a DOM - same split
 // as progress.ts and the progress bar.
-import { railVendors, RAIL_MIN } from "@/lib/quotes-rail";
+import { railVendors, quotedVendors, RAIL_MIN } from "@/lib/quotes-rail";
 
 export function QuotesRail({
   vendors,
@@ -49,6 +49,12 @@ export function QuotesRail({
 }) {
   const rail = railVendors(vendors);
   if (rail.length < RAIL_MIN) return null;
+  // THE HEADER COUNTED THE CAPPED ARRAY. With thirteen quotes in it read
+  // "Quotes so far - 12 shops", which is a silently truncated number presented
+  // as a total: the same defect as a daily rate captioned as a trip total. The
+  // cap is a display bound on the strip, not a fact about the hunt.
+  const quoted = quotedVendors(vendors).length;
+  const hidden = quoted - rail.length;
 
   return (
     <div className="mt-3">
@@ -57,7 +63,11 @@ export function QuotesRail({
           💰 {t("Quotes so far")}
         </span>
         <span className="text-[11px] font-bold text-faint">
-          {rail.length} {rail.length === 1 ? t("shop") : t("shops")}
+          {quoted} {quoted === 1 ? t("shop") : t("shops")}
+          {/* Say what is not on the strip rather than letting the count shrink
+              to fit it. The shops are all in the feed below - the rail is a
+              shortcut to the cheapest, not the whole set. */}
+          {hidden > 0 ? ` · ${t("showing the cheapest")} ${rail.length}` : ""}
         </span>
       </div>
       {/* The strip owns its overflow, so the PAGE never scrolls sideways -
@@ -66,7 +76,12 @@ export function QuotesRail({
           not the absolutely-positioned rows the windowed list has to flip by
           hand. */}
       <div
-        className="no-scrollbar -mx-1 flex snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
+        // `overscroll-x-contain` is not decoration. A horizontal swipe that
+        // reaches the end of an overflow container CHAINS to the document, and
+        // on iOS a chained horizontal swipe is the back gesture - so flicking
+        // past the last quote could navigate away from the hunt entirely. The
+        // scroll stops at the strip's own edge.
+        className="no-scrollbar -mx-1 flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-1 pb-1"
         role="list"
         aria-label={t("Quotes so far")}
       >

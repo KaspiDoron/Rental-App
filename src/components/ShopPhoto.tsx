@@ -25,6 +25,13 @@ export function ShopPhoto({
   label?: string;
 }) {
   const [broken, setBroken] = useState(false);
+  // NOTHING WAS ON SCREEN UNTIL THE LAST BYTE ARRIVED (W-8).
+  //
+  // A bare lazy <img> paints nothing while it loads, so a results page showed a
+  // grid of empty holes that filled in at random - which reads as slower than
+  // it is, and shifts attention every time one lands. The card keeps its exact
+  // footprint and holds a calm shimmer until the image decodes.
+  const [loaded, setLoaded] = useState(false);
 
   if (!src || broken) {
     return (
@@ -38,14 +45,26 @@ export function ShopPhoto({
     );
   }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      onError={() => setBroken(true)}
-      className={`object-cover ${className}`}
-    />
+    <span className={`relative block overflow-hidden ${className}`}>
+      {!loaded && (
+        <span
+          aria-hidden
+          className="absolute inset-0 animate-pulse bg-card2"
+          data-testid="shop-photo-placeholder"
+        />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={() => setBroken(true)}
+        onLoad={() => setLoaded(true)}
+        className={`h-full w-full object-cover transition-opacity duration-300 ${
+          loaded ? "opacity-100" : "opacity-0"
+        }`}
+      />
+    </span>
   );
 }

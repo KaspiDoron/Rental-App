@@ -1,7 +1,7 @@
 // SPTE - Single-Pass Turn Engine (V2-4). The types for the Blackboard +
 // single-pass agent that replaces the graph director/edge branching.
 //
-// Design (from V2-BLUEPRINT.md section 4): at most ONE LLM call per
+// Design (from docs/V2-BLUEPRINT.md section 4): at most ONE LLM call per
 // compositional turn, ZERO for reflex turns. Numbers never originate in the LLM
 // (deterministic price-extract seeds them; post-rails guards verify them). The
 // move vocabulary is closed (safety keys on it); the strategy is open (the LLM

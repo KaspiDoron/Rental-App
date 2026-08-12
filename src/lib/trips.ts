@@ -184,6 +184,90 @@ export function previewTrip(trip: Trip): Trip {
   return { ...trip, perDay: null, total: null, savedPerDay: null, saved: null, savedPct: null };
 }
 
+// ---------------------------------------------------------------------------
+// ACTIVE vs ARCHIVE (W-2b)
+//
+// Trips rendered ONE card shape for everything: a hunt with shops answering
+// right now and a hunt that died three weeks ago got the same 480-line
+// dashboard, the same expand chevron, the same "what happens next" panel. So
+// the screen grew linearly with use and the one thing a traveller opens it for
+// - what is happening with my rental - sank further down the page every week.
+//
+// The split is not cosmetic and it is not "newest first". It asks one question
+// per hunt: CAN ANYTHING STILL CHANGE HERE? Everything else is a record, and a
+// record belongs in a list, not in a dashboard.
+// ---------------------------------------------------------------------------
+
+/** Whatever the caller calls a hunt - only these four fields are read. */
+export interface HuntStamp {
+  startedAt: string;
+  status: "booked" | "live" | "waiting" | "wrapped";
+  /** ISO pick-up time, when the traveller agreed one. */
+  scheduledAt?: string | null;
+  /** Rental length, so a multi-day rental stays current for its whole run. */
+  durationDays?: number | null;
+}
+
+/**
+ * How long a booked rental keeps its place at the top when we know the pick-up
+ * but NOT the length. One day, not a week: claiming a rental is still running
+ * when it may have ended yesterday is the same class of lie as showing a
+ * week-old hunt as live, just quieter.
+ */
+export const UNKNOWN_RENTAL_MS = 24 * 3600_000;
+
+/**
+ * Can anything still change in this hunt?
+ *
+ * Deliberately NOT keyed on `isLatest`. "Latest" only means no newer search
+ * exists - a hunt from last month is still the latest one if the traveller has
+ * not searched since, and treating that as live is precisely the defect
+ * `session-life.ts` exists to kill. Age is the honest test.
+ */
+export function huntIsActive(h: HuntStamp, nowMs: number, ttlMs: number): boolean {
+  // A rental that has not been collected yet, or is being ridden right now, is
+  // the most current thing on the screen whatever the hunt's age - the search
+  // finished a week ago precisely BECAUSE it succeeded.
+  const pickup = h.scheduledAt ? Date.parse(h.scheduledAt) : NaN;
+  if (Number.isFinite(pickup)) {
+    const days = h.durationDays;
+    const runsFor = days != null && days > 0 ? days * 24 * 3600_000 : UNKNOWN_RENTAL_MS;
+    if (nowMs < pickup + runsFor) return true;
+  }
+
+  // Past that, only an unfinished hunt inside the session window is live work.
+  //
+  // NOTE that a BOOKED hunt with no agreed pick-up falls through to the age
+  // rule rather than being archived on the spot. "Pick-up time agreed in chat"
+  // is a real and common state, and a deal locked twenty minutes ago is the
+  // most current thing the traveller owns - filing it under "earlier hunts"
+  // because we happen not to know the hour would hide exactly the card they
+  // opened the screen to see.
+  if (h.status === "wrapped") return false;
+  const started = Date.parse(h.startedAt);
+  // An unparseable stamp is filed as history rather than promoted to live: a
+  // broken timestamp must never be able to claim the agents are still working.
+  if (!Number.isFinite(started)) return false;
+  return nowMs - started < ttlMs;
+}
+
+export interface HuntSplit<T> {
+  active: T[];
+  archive: T[];
+}
+
+/** Partition hunts into live work and history, preserving the caller's order. */
+export function partitionHunts<T extends HuntStamp>(
+  hunts: readonly T[],
+  nowMs: number,
+  ttlMs: number
+): HuntSplit<T> {
+  const active: T[] = [];
+  const archive: T[] = [];
+  for (const h of hunts) (huntIsActive(h, nowMs, ttlMs) ? active : archive).push(h);
+  return { active, archive };
+}
+
 /** Which trips a plan may see in full: always the current hunt, history on Pro+. */
 export function visibleTrips(trips: Trip[], canHistory: boolean): Array<Trip & { locked: boolean }> {
   return trips.map((t) => {
