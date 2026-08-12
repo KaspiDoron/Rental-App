@@ -193,6 +193,7 @@ export const I18N_CATALOG: string[] = [
   "Drop the pin on a map",
   "Dropped price",
   "Each search contacts up to this many rental shops in one run. It keeps every negotiation sharp and your number perfectly paced.",
+  "Earlier hunts",
   "Edit",
   "Edit your search",
   "Edited by you - screened before sending",

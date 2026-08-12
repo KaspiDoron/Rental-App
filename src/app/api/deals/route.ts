@@ -97,6 +97,8 @@ export interface SessionSummary {
     perDay: number | null;
     currency: string;
     scheduledAt: string | null;
+    /** Rental length, so an in-progress rental stays in the active section. */
+    durationDays: number | null;
     at: string;
   } | null;
   attention: string[];
@@ -264,6 +266,20 @@ export async function GET() {
     const off = offers.filter((o) => inWindow(o.created_at) && (o.price_per_day ?? 0) > 0);
     const risks = riskEvents.filter((e) => inWindow(e.created_at));
     const booking = bookings.find((b) => inWindow(b.created_at)) ?? null;
+
+    // THE RENTAL LENGTH, DERIVED FROM THE TWO NUMBERS WE ALREADY HAVE.
+    //
+    // `savingOf` totals the per-day gap over the rental and returns null when
+    // it does not know the duration - correct, but nothing was ever passing a
+    // duration, so every trip reported "cannot total" and the headline saving
+    // stayed blank. `bookings.duration_days` exists in the schema, but adding a
+    // column to this select would 400 for anyone who has not run the migration
+    // and take every booking down with it. The total and the per-day rate are
+    // already selected and their ratio IS the duration, by definition.
+    const bookedDays =
+      booking && booking.total_price != null && Number(booking.price_per_day) > 0
+        ? Math.max(1, Math.round(Number(booking.total_price) / Number(booking.price_per_day)))
+        : null;
 
     const contactedIds = new Set<string>();
     for (const m of sent) contactedIds.add(m.raw?.vendorId || m.to_number);
@@ -445,6 +461,7 @@ export async function GET() {
             perDay: booking.price_per_day != null ? Number(booking.price_per_day) : null,
             currency: booking.currency ?? "USD",
             scheduledAt: booking.scheduled_at,
+            durationDays: bookedDays,
             at: booking.created_at,
           }
         : null,
@@ -478,6 +495,7 @@ export async function GET() {
                 scheduledAt: booking.scheduled_at,
               }
             : null,
+          durationDays: bookedDays,
           isLatest,
           lastEventAt,
         },

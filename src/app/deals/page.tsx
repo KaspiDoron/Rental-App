@@ -24,7 +24,8 @@ import { startNav } from "@/components/NavVeil";
 import { OrbitDots } from "@/components/OrbitDots";
 import { moneyLocal } from "@/lib/currency";
 import { can } from "@/lib/entitlements";
-import { previewTrip } from "@/lib/trips";
+import { previewTrip, partitionHunts } from "@/lib/trips";
+import { SEARCH_SESSION_TTL_MS } from "@/lib/session-life";
 import { useI18n } from "@/lib/i18n";
 
 interface SessionOffer {
@@ -70,6 +71,8 @@ interface SessionSummary {
     perDay: number | null;
     currency: string;
     scheduledAt: string | null;
+    /** Rental length, so an in-progress rental stays in the active section. */
+    durationDays: number | null;
     at: string;
   } | null;
   attention: string[];
@@ -81,6 +84,17 @@ interface SessionSummary {
   /** What became of this hunt - outcome, cost, saving (lib/trips). */
   trip?: import("@/lib/trips").Trip;
 }
+
+/**
+ * A session flattened into the shape `partitionHunts` reads. The pick-up and
+ * the rental length live under `booking`; lifting them is what lets a rental
+ * that is being ridden RIGHT NOW stay at the top even though its hunt finished
+ * a week ago - the search ended early precisely because it succeeded.
+ */
+type HuntRow = SessionSummary & {
+  scheduledAt: string | null;
+  durationDays: number | null;
+};
 
 interface Booking {
   id?: number;
@@ -128,6 +142,8 @@ export default function DealsPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  /** History stays COLLAPSED by default - that is the whole point of the split. */
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [email, setEmail] = useState<string | undefined>();
   const [plan, setPlan] = useState<string>("free");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -311,6 +327,19 @@ export default function DealsPage() {
     return { saved, currency, counted, contacted, booked, visible: visible.length };
   }, [sessions, canHistory]);
 
+  // LIVE WORK ON TOP, HISTORY FOLDED AWAY. The pick-up and the rental length
+  // are lifted out of `booking` so a rental being ridden right now counts as
+  // active even though its hunt finished days ago. Order within each half is
+  // the server's (newest first) - the split re-groups, it never re-sorts.
+  const { active, archive } = useMemo(() => {
+    const rows: HuntRow[] = sessions.map((s) => ({
+      ...s,
+      scheduledAt: s.booking?.scheduledAt ?? null,
+      durationDays: s.booking?.durationDays ?? null,
+    }));
+    return partitionHunts(rows, Date.now(), SEARCH_SESSION_TTL_MS);
+  }, [sessions]);
+
   const savingsHeadline = useMemo(() => {
     if (heroStats.saved > 0 && heroStats.currency) {
       return {
@@ -474,405 +503,450 @@ export default function DealsPage() {
           </div>
         )}
 
-        {/* One living dashboard per search session */}
+        {/* ONE CARD SHAPE FOR EVERYTHING WAS THE PROBLEM (W-2b).
+
+            A hunt with shops answering right now and a hunt that died three
+            weeks ago got the same 480-line dashboard, the same expand chevron,
+            the same "what happens next" panel. So the screen grew linearly with
+            use, and the one thing a traveller opens Trips for - what is
+            happening with my rental - sank further down the page every week.
+
+            The split asks one question per hunt: can anything still change
+            here? See partitionHunts. The card itself is unchanged and shared,
+            because an archived hunt that renders differently is a second
+            component to keep true. */}
         {!loading &&
-          sessions.map((s) => {
-            const open = Boolean(expanded[s.id]);
-            // LOCKED PREVIEW, not a hidden row. A past trip stays visible with
-            // its real headline and shape; the numbers a paid plan unlocks are
-            // held back. An empty tab teaches a traveller the feature does not
-            // exist - a visible trip they cannot fully open teaches them what
-            // they would get, which is the honest version of the same gate.
-            const locked = !canHistory && !s.isLatest;
-            const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
-            return (
-              <section key={s.id} className="glass-solid glass-rim overflow-hidden rounded-blob fluid-in">
-                {/* Header - always visible, tap to expand */}
-                <button
-                  onClick={() => setExpanded((e) => ({ ...e, [s.id]: !open }))}
-                  className="block w-full p-3.5 text-left"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brandblue-soft text-brandblue">
-                        <Icon name={s.vehicleClass === "car" ? "car" : "bike"} className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-[14px] font-extrabold text-strong">
-                          {vehicleLabel(s.vehicleClass)} {t("hunt")}
-                          {s.radiusKm ? ` · ${s.radiusKm}km` : ""}
-                        </div>
-                        {/* WHAT BECAME OF THIS TRIP - the line a traveller
-                            recognises their own hunt by. A session could only
-                            say what was happening right now, so a finished trip
-                            looked exactly like an abandoned one. */}
-                        {trip && (
-                          <div className="truncate text-[11.5px] font-bold text-soft">
-                            {trip.headline}
-                            {trip.perDay != null
-                              ? ` · ${moneyLocal(trip.perDay, trip.currency)}/${t("day")}`
-                              : ""}
-                            {trip.savedPct != null ? ` · ${t("saved")} ${trip.savedPct}%` : ""}
-                            {locked && (
-                              <span className="ml-1 inline-flex items-center gap-1 align-middle text-[10px] font-extrabold text-brandblue">
-                                <Icon name="lock" className="h-3 w-3" />
-                                {t("Pro")}
-                              </span>
-                            )}
+          (() => {
+            const renderSession = (s: HuntRow) => {
+              const open = Boolean(expanded[s.id]);
+              // LOCKED PREVIEW, not a hidden row. A past trip stays visible with
+              // its real headline and shape; the numbers a paid plan unlocks are
+              // held back. An empty tab teaches a traveller the feature does not
+              // exist - a visible trip they cannot fully open teaches them what
+              // they would get, which is the honest version of the same gate.
+              const locked = !canHistory && !s.isLatest;
+              const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
+              return (
+                <section key={s.id} className="glass-solid glass-rim overflow-hidden rounded-blob fluid-in">
+                  {/* Header - always visible, tap to expand */}
+                  <button
+                    onClick={() => setExpanded((e) => ({ ...e, [s.id]: !open }))}
+                    className="block w-full p-3.5 text-left"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brandblue-soft text-brandblue">
+                          <Icon name={s.vehicleClass === "car" ? "car" : "bike"} className="h-5 w-5" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="truncate text-[14px] font-extrabold text-strong">
+                            {vehicleLabel(s.vehicleClass)} {t("hunt")}
+                            {s.radiusKm ? ` · ${s.radiusKm}km` : ""}
                           </div>
-                        )}
-                        <div className="mt-0.5 truncate text-[11px] text-faint">
-                          {s.query ? `"${s.query}"` : `${s.shopsFound} ${t("shops found")}`} ·{" "}
-                          {timeAgo(s.startedAt, t)}
+                          {/* WHAT BECAME OF THIS TRIP - the line a traveller
+                              recognises their own hunt by. A session could only
+                              say what was happening right now, so a finished trip
+                              looked exactly like an abandoned one. */}
+                          {trip && (
+                            <div className="truncate text-[11.5px] font-bold text-soft">
+                              {trip.headline}
+                              {trip.perDay != null
+                                ? ` · ${moneyLocal(trip.perDay, trip.currency)}/${t("day")}`
+                                : ""}
+                              {trip.savedPct != null ? ` · ${t("saved")} ${trip.savedPct}%` : ""}
+                              {locked && (
+                                <span className="ml-1 inline-flex items-center gap-1 align-middle text-[10px] font-extrabold text-brandblue">
+                                  <Icon name="lock" className="h-3 w-3" />
+                                  {t("Pro")}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="mt-0.5 truncate text-[11px] text-faint">
+                            {s.query ? `"${s.query}"` : `${s.shopsFound} ${t("shops found")}`} ·{" "}
+                            {timeAgo(s.startedAt, t)}
+                          </div>
                         </div>
                       </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {statusPill(s)}
+                        <Icon
+                          name="chevron"
+                          className={`h-4 w-4 text-faint transition-transform ${open ? "rotate-90" : ""}`}
+                        />
+                      </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {statusPill(s)}
-                      <Icon
-                        name="chevron"
-                        className={`h-4 w-4 text-faint transition-transform ${open ? "rotate-90" : ""}`}
-                      />
-                    </div>
-                  </div>
 
-                  {/* THE LOCK, AS A PANE OF FROSTED GLASS.
-                      A chip saying "Pro" tells a traveller they are missing
-                      something. A frosted panel with the real shape of their
-                      own trip behind it shows them WHAT - which is the only
-                      version of a paywall that is honest and the only one that
-                      converts. The numbers underneath are already redacted
-                      server-side by previewTrip; this is not a CSS blur over
-                      real data. */}
-                  {locked && (
-                    <div className="relative mx-3 mb-3 overflow-hidden rounded-2xl">
-                      <div className="grid grid-cols-3 gap-2 p-3 opacity-45 blur-[3px]" aria-hidden>
-                        {[t("Best price"), t("You saved"), t("Shops")].map((k) => (
-                          <div key={k} className="rounded-xl bg-card2 px-2 py-2 text-center">
-                            <div className="text-[15px] font-extrabold text-strong">&#8226;&#8226;&#8226;</div>
-                            <div className="text-[9px] font-extrabold uppercase text-faint">{k}</div>
+                    {/* THE LOCK, AS A PANE OF FROSTED GLASS.
+                        A chip saying "Pro" tells a traveller they are missing
+                        something. A frosted panel with the real shape of their
+                        own trip behind it shows them WHAT - which is the only
+                        version of a paywall that is honest and the only one that
+                        converts. The numbers underneath are already redacted
+                        server-side by previewTrip; this is not a CSS blur over
+                        real data. */}
+                    {locked && (
+                      <div className="relative mx-3 mb-3 overflow-hidden rounded-2xl">
+                        <div className="grid grid-cols-3 gap-2 p-3 opacity-45 blur-[3px]" aria-hidden>
+                          {[t("Best price"), t("You saved"), t("Shops")].map((k) => (
+                            <div key={k} className="rounded-xl bg-card2 px-2 py-2 text-center">
+                              <div className="text-[15px] font-extrabold text-strong">&#8226;&#8226;&#8226;</div>
+                              <div className="text-[9px] font-extrabold uppercase text-faint">{k}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="glass-strong absolute inset-0 flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 text-center">
+                          <Icon name="lock" className="h-4 w-4 text-brandblue" />
+                          <p className="text-[11.5px] font-extrabold text-strong">
+                            {t("Your full trip history is a Pro feature")}
+                          </p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUpgradeOpen(true);
+                            }}
+                            className="btn btn-sm btn-primary fluid-press rounded-xl px-3.5 py-1.5 text-[11px]"
+                          >
+                            {t("See Pro & Ultra")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Progress - the one line users actually care about */}
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-[10px] font-bold">
+                        <span className="text-soft">{t(s.progressLabel)}</span>
+                        <span className="tabular-nums text-faint">{s.progress}%</span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-card2">
+                        <div
+                          className={`h-full rounded-full transition-all duration-700 ${
+                            s.status === "booked" ? "bg-savings" : "bg-brandblue"
+                          }`}
+                          style={{ width: `${s.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  </button>
+
+                  {open && (
+                    <div className="space-y-3 px-3.5 pb-3.5">
+                      {/* Stat trio */}
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { n: s.contacted, label: t("contacted") },
+                          { n: s.replied, label: t("replied") },
+                          { n: s.waiting, label: t("waiting") },
+                        ].map((st) => (
+                          <div key={st.label} className="rounded-2xl bg-card2 p-2.5 text-center">
+                            <div className="text-[18px] font-extrabold tabular-nums text-strong">
+                              {st.n}
+                            </div>
+                            <div className="text-[10px] font-bold text-faint">{st.label}</div>
                           </div>
                         ))}
                       </div>
-                      <div className="glass-strong absolute inset-0 flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 text-center">
-                        <Icon name="lock" className="h-4 w-4 text-brandblue" />
-                        <p className="text-[11.5px] font-extrabold text-strong">
-                          {t("Your full trip history is a Pro feature")}
-                        </p>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUpgradeOpen(true);
-                          }}
-                          className="btn btn-sm btn-primary fluid-press rounded-xl px-3.5 py-1.5 text-[11px]"
-                        >
-                          {t("See Pro & Ultra")}
-                        </button>
+
+                      {/* Booked - the crown */}
+                      {s.booking && (
+                        <div className="rounded-2xl bg-savings-soft p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-savings">
+                                <Icon name="check" className="h-3.5 w-3.5" /> {t("Locked in")}
+                              </div>
+                              <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
+                                {s.booking.vendorName}
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              {s.booking.total != null && (
+                                <div className="text-[16px] font-extrabold text-strong">
+                                  {moneyLocal(s.booking.total, s.booking.currency)}
+                                </div>
+                              )}
+                              {s.booking.perDay != null && (
+                                <div className="text-[10px] font-bold text-faint">
+                                  {moneyLocal(s.booking.perDay, s.booking.currency)}/{t("day")}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Best offer on the table */}
+                      {!s.booking && s.best && (
+                        <div className="rounded-2xl border border-brandblue/25 bg-brandblue-soft/60 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-extrabold uppercase tracking-wide text-brandblue">
+                                {t("Best on the table")}
+                              </div>
+                              <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
+                                {s.best.vendorName}
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                {s.best.verified ? (
+                                  <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
+                                    {t("Confirmed by the shop")}
+                                  </span>
+                                ) : (
+                                  <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-faint">
+                                    {t("Unconfirmed")}
+                                  </span>
+                                )}
+                                {s.best.round > 0 && (
+                                  <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-soft">
+                                    {t("After")} {s.best.round}{" "}
+                                    {s.best.round === 1 ? t("round") : t("rounds")}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <div className="text-[18px] font-extrabold text-strong">
+                                {moneyLocal(s.best.current, s.best.currency)}
+                              </div>
+                              <div className="text-[10px] font-bold text-faint">/{t("day")}</div>
+                              {s.best.savedPct != null && s.best.savedPct > 0 && (
+                                <div className="mt-0.5 rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
+                                  −{s.best.savedPct}% {t("off asking")}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {s.avgAsk != null && s.avgAsk > s.best.current && (
+                            <div className="mt-2 text-[11px] font-bold text-soft">
+                              {t("Average asking price nearby")}:{" "}
+                              <span className="line-through opacity-70">
+                                {moneyLocal(s.avgAsk, s.best.currency)}
+                              </span>{" "}
+                              → {t("yours")}: {moneyLocal(s.best.current, s.best.currency)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Needs you */}
+                      {s.attention.length > 0 && (
+                        <div className="rounded-2xl bg-brandred-soft p-3">
+                          <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-brandred">
+                            <Icon name="bell" className="h-3.5 w-3.5" /> {t("Needs you")}
+                          </div>
+                          <ul className="mt-1 space-y-1">
+                            {s.attention.map((a, i) => (
+                              <li key={i} className="text-[11px] font-bold leading-snug text-strong">
+                                · {a}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Will's planned moves */}
+                      {(s.plannedMoves.length > 0 || s.queuedSends > 0) && (
+                        <div className="rounded-2xl bg-card2 p-3">
+                          <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-soft">
+                            <Icon name="sparkles" className="h-3.5 w-3.5" /> {t("Will's next moves")}
+                          </div>
+                          <ul className="mt-1 space-y-1 text-[11px] font-bold leading-snug text-soft">
+                            {s.queuedSends > 0 && (
+                              <li>
+                                · {s.queuedSends}{" "}
+                                {s.queuedSends === 1
+                                  ? t("message queued - it sends the moment the shop opens")
+                                  : t("messages queued - they send the moment shops open")}
+                              </li>
+                            )}
+                            {s.plannedMoves.map((m, i) => (
+                              <li key={i}>
+                                · {m.vendorName ? `${m.vendorName}: ` : ""}
+                                {m.reason} ({timeAt(m.at)})
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* All offers, cheapest first */}
+                      {s.offers.length > 1 && (
+                        <div>
+                          <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                            {t("Every offer in this hunt")}
+                          </div>
+                          <div className="space-y-1.5">
+                            {s.offers.map((o) => (
+                              <div
+                                key={o.vendorId + o.at}
+                                className="flex items-center justify-between gap-2 rounded-xl bg-card2 px-3 py-2"
+                              >
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <span
+                                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                      o.verified ? "bg-savings" : "bg-faint"
+                                    }`}
+                                  />
+                                  <span className="truncate text-[12px] font-bold text-strong">
+                                    {o.vendorName}
+                                  </span>
+                                  {o.stale && (
+                                    <Icon name="clock" className="h-3 w-3 shrink-0 text-brandyellow" />
+                                  )}
+                                </div>
+                                <div className="shrink-0 text-[12px] font-extrabold tabular-nums text-strong">
+                                  {moneyLocal(o.current, o.currency)}
+                                  <span className="text-[10px] font-bold text-faint">/{t("day")}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Mini timeline */}
+                      {s.timeline.length > 0 && (
+                        <div>
+                          <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                            {t("Latest moves")}
+                          </div>
+                          <div className="space-y-1.5">
+                            {s.timeline.map((e, i) => (
+                              <div key={i} className="flex items-start gap-2">
+                                <span
+                                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                                    e.kind === "alert"
+                                      ? "bg-brandred-soft text-brandred"
+                                      : e.kind === "offer" || e.kind === "booked"
+                                        ? "bg-savings-soft text-savings"
+                                        : "bg-card2 text-faint"
+                                  }`}
+                                >
+                                  <Icon name={TIMELINE_ICON[e.kind]} className="h-3 w-3" />
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-[11px] font-bold leading-tight text-soft">
+                                    {e.vendorName ? `${e.vendorName}: ` : ""}
+                                    {e.text}
+                                  </div>
+                                  <div className="text-[10px] text-faint">{timeAgo(e.at, t)}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Actions - Open re-opens the hunt's full workspace. The
+                          latest hunt is always free; earlier ones need trip
+                          history (Pro), which surfaces the upgrade sheet. */}
+                      <div className="flex flex-col gap-1.5 pt-0.5">
+                        {s.isLatest ? (
+                          <a
+                            href="/"
+                            onClick={() => startNav()}
+                            className="btn btn-primary flex-1 rounded-2xl py-2.5 text-center text-[13px]"
+                          >
+                            {t("Open live workspace")}
+                          </a>
+                        ) : canHistory ? (
+                          <button
+                            onClick={() => restoreSession(s.startedAt, false, s.sid)}
+                            disabled={restoring === s.startedAt}
+                            className="btn btn-primary flex flex-1 items-center justify-center gap-2 rounded-2xl py-2.5 text-center text-[13px] disabled:opacity-70"
+                          >
+                            {restoring === s.startedAt ? (
+                              <>
+                                <OrbitDots size={16} light label={t("Re-opening")} />
+                                {t("Re-opening…")}
+                              </>
+                            ) : (
+                              t("Re-open this hunt")
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setUpgradeOpen(true)}
+                            className="btn btn-ghost flex flex-1 items-center justify-center gap-1.5 rounded-2xl py-2.5 text-center text-[13px]"
+                          >
+                            <Icon name="lock" className="h-3.5 w-3.5" />
+                            {t("Re-open this hunt (Pro)")}
+                          </button>
+                        )}
+                        {restoreErr && restoring === null && (
+                          <p className="text-center text-[10px] font-bold text-brandred">{restoreErr}</p>
+                        )}
+
+                        {/* THE QUESTION A PAST TRIP IS ACTUALLY FOR.
+                            Re-opening an old hunt showed prices frozen at
+                            whatever the shop said last time - useful only if you
+                            then message ten shops by hand to find out whether any
+                            of it still stands. One tap asks all of them, with
+                            each shop's own quote read back to them. */}
+                        {s.contacted > 0 && (
+                          <button
+                            onClick={() => recheckPrices(s.startedAt, s.sid)}
+                            disabled={rechecking === s.startedAt}
+                            className="btn btn-ghost flex items-center justify-center gap-1.5 rounded-2xl border-2 border-savings/50 py-2.5 text-[12.5px] font-extrabold text-savings disabled:opacity-70"
+                          >
+                            {rechecking === s.startedAt ? (
+                              <>
+                                <OrbitDots size={15} label={t("Asking")} />
+                                {t("Asking your shops…")}
+                              </>
+                            ) : (
+                              <>
+                                <Icon name="whatsapp" className="h-3.5 w-3.5" />
+                                {t("Ask if these prices still stand")}
+                              </>
+                            )}
+                          </button>
+                        )}
+                        {recheckNote[s.startedAt] && (
+                          <p className="text-center text-[10.5px] font-bold text-soft">
+                            {recheckNote[s.startedAt]}
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
+                </section>
+              );
+            };
+            return (
+              <>
+                {active.map(renderSession)}
 
-                  {/* Progress - the one line users actually care about */}
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-[10px] font-bold">
-                      <span className="text-soft">{t(s.progressLabel)}</span>
-                      <span className="tabular-nums text-faint">{s.progress}%</span>
-                    </div>
-                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-card2">
-                      <div
-                        className={`h-full rounded-full transition-all duration-700 ${
-                          s.status === "booked" ? "bg-savings" : "bg-brandblue"
+                {archive.length > 0 && (
+                  <section className="fluid-in">
+                    <button
+                      onClick={() => setArchiveOpen((o) => !o)}
+                      className="flex w-full items-center justify-between gap-2 rounded-2xl bg-card2/60 px-3.5 py-2.5 text-left"
+                    >
+                      <span className="flex items-center gap-1.5 text-[12.5px] font-extrabold text-soft">
+                        <Icon name="clock" className="h-3.5 w-3.5 text-faint" />
+                        {t("Earlier hunts")}
+                        <span className="rounded-full bg-card px-1.5 py-0.5 text-[10px] font-extrabold text-faint">
+                          {archive.length}
+                        </span>
+                      </span>
+                      <Icon
+                        name="chevron"
+                        className={`h-4 w-4 shrink-0 text-faint transition-transform ${
+                          archiveOpen ? "rotate-90" : ""
                         }`}
-                        style={{ width: `${s.progress}%` }}
                       />
-                    </div>
-                  </div>
-                </button>
-
-                {open && (
-                  <div className="space-y-3 px-3.5 pb-3.5">
-                    {/* Stat trio */}
-                    <div className="grid grid-cols-3 gap-2">
-                      {[
-                        { n: s.contacted, label: t("contacted") },
-                        { n: s.replied, label: t("replied") },
-                        { n: s.waiting, label: t("waiting") },
-                      ].map((st) => (
-                        <div key={st.label} className="rounded-2xl bg-card2 p-2.5 text-center">
-                          <div className="text-[18px] font-extrabold tabular-nums text-strong">
-                            {st.n}
-                          </div>
-                          <div className="text-[10px] font-bold text-faint">{st.label}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Booked - the crown */}
-                    {s.booking && (
-                      <div className="rounded-2xl bg-savings-soft p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-savings">
-                              <Icon name="check" className="h-3.5 w-3.5" /> {t("Locked in")}
-                            </div>
-                            <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
-                              {s.booking.vendorName}
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            {s.booking.total != null && (
-                              <div className="text-[16px] font-extrabold text-strong">
-                                {moneyLocal(s.booking.total, s.booking.currency)}
-                              </div>
-                            )}
-                            {s.booking.perDay != null && (
-                              <div className="text-[10px] font-bold text-faint">
-                                {moneyLocal(s.booking.perDay, s.booking.currency)}/{t("day")}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
+                    </button>
+                    {archiveOpen && (
+                      <div className="mt-3 space-y-4">{archive.map(renderSession)}</div>
                     )}
-
-                    {/* Best offer on the table */}
-                    {!s.booking && s.best && (
-                      <div className="rounded-2xl border border-brandblue/25 bg-brandblue-soft/60 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-[10px] font-extrabold uppercase tracking-wide text-brandblue">
-                              {t("Best on the table")}
-                            </div>
-                            <div className="mt-0.5 truncate text-[14px] font-extrabold text-strong">
-                              {s.best.vendorName}
-                            </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                              {s.best.verified ? (
-                                <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
-                                  {t("Confirmed by the shop")}
-                                </span>
-                              ) : (
-                                <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-faint">
-                                  {t("Unconfirmed")}
-                                </span>
-                              )}
-                              {s.best.round > 0 && (
-                                <span className="rounded-full bg-card2 px-2 py-0.5 text-[10px] font-extrabold text-soft">
-                                  {t("After")} {s.best.round}{" "}
-                                  {s.best.round === 1 ? t("round") : t("rounds")}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <div className="text-[18px] font-extrabold text-strong">
-                              {moneyLocal(s.best.current, s.best.currency)}
-                            </div>
-                            <div className="text-[10px] font-bold text-faint">/{t("day")}</div>
-                            {s.best.savedPct != null && s.best.savedPct > 0 && (
-                              <div className="mt-0.5 rounded-full bg-savings-soft px-2 py-0.5 text-[10px] font-extrabold text-savings">
-                                −{s.best.savedPct}% {t("off asking")}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        {s.avgAsk != null && s.avgAsk > s.best.current && (
-                          <div className="mt-2 text-[11px] font-bold text-soft">
-                            {t("Average asking price nearby")}:{" "}
-                            <span className="line-through opacity-70">
-                              {moneyLocal(s.avgAsk, s.best.currency)}
-                            </span>{" "}
-                            → {t("yours")}: {moneyLocal(s.best.current, s.best.currency)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Needs you */}
-                    {s.attention.length > 0 && (
-                      <div className="rounded-2xl bg-brandred-soft p-3">
-                        <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-brandred">
-                          <Icon name="bell" className="h-3.5 w-3.5" /> {t("Needs you")}
-                        </div>
-                        <ul className="mt-1 space-y-1">
-                          {s.attention.map((a, i) => (
-                            <li key={i} className="text-[11px] font-bold leading-snug text-strong">
-                              · {a}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* Will's planned moves */}
-                    {(s.plannedMoves.length > 0 || s.queuedSends > 0) && (
-                      <div className="rounded-2xl bg-card2 p-3">
-                        <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-soft">
-                          <Icon name="sparkles" className="h-3.5 w-3.5" /> {t("Will's next moves")}
-                        </div>
-                        <ul className="mt-1 space-y-1 text-[11px] font-bold leading-snug text-soft">
-                          {s.queuedSends > 0 && (
-                            <li>
-                              · {s.queuedSends}{" "}
-                              {s.queuedSends === 1
-                                ? t("message queued - it sends the moment the shop opens")
-                                : t("messages queued - they send the moment shops open")}
-                            </li>
-                          )}
-                          {s.plannedMoves.map((m, i) => (
-                            <li key={i}>
-                              · {m.vendorName ? `${m.vendorName}: ` : ""}
-                              {m.reason} ({timeAt(m.at)})
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* All offers, cheapest first */}
-                    {s.offers.length > 1 && (
-                      <div>
-                        <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
-                          {t("Every offer in this hunt")}
-                        </div>
-                        <div className="space-y-1.5">
-                          {s.offers.map((o) => (
-                            <div
-                              key={o.vendorId + o.at}
-                              className="flex items-center justify-between gap-2 rounded-xl bg-card2 px-3 py-2"
-                            >
-                              <div className="flex min-w-0 items-center gap-1.5">
-                                <span
-                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                                    o.verified ? "bg-savings" : "bg-faint"
-                                  }`}
-                                />
-                                <span className="truncate text-[12px] font-bold text-strong">
-                                  {o.vendorName}
-                                </span>
-                                {o.stale && (
-                                  <Icon name="clock" className="h-3 w-3 shrink-0 text-brandyellow" />
-                                )}
-                              </div>
-                              <div className="shrink-0 text-[12px] font-extrabold tabular-nums text-strong">
-                                {moneyLocal(o.current, o.currency)}
-                                <span className="text-[10px] font-bold text-faint">/{t("day")}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Mini timeline */}
-                    {s.timeline.length > 0 && (
-                      <div>
-                        <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wide text-faint">
-                          {t("Latest moves")}
-                        </div>
-                        <div className="space-y-1.5">
-                          {s.timeline.map((e, i) => (
-                            <div key={i} className="flex items-start gap-2">
-                              <span
-                                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                                  e.kind === "alert"
-                                    ? "bg-brandred-soft text-brandred"
-                                    : e.kind === "offer" || e.kind === "booked"
-                                      ? "bg-savings-soft text-savings"
-                                      : "bg-card2 text-faint"
-                                }`}
-                              >
-                                <Icon name={TIMELINE_ICON[e.kind]} className="h-3 w-3" />
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-[11px] font-bold leading-tight text-soft">
-                                  {e.vendorName ? `${e.vendorName}: ` : ""}
-                                  {e.text}
-                                </div>
-                                <div className="text-[10px] text-faint">{timeAgo(e.at, t)}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Actions - Open re-opens the hunt's full workspace. The
-                        latest hunt is always free; earlier ones need trip
-                        history (Pro), which surfaces the upgrade sheet. */}
-                    <div className="flex flex-col gap-1.5 pt-0.5">
-                      {s.isLatest ? (
-                        <a
-                          href="/"
-                          onClick={() => startNav()}
-                          className="btn btn-primary flex-1 rounded-2xl py-2.5 text-center text-[13px]"
-                        >
-                          {t("Open live workspace")}
-                        </a>
-                      ) : canHistory ? (
-                        <button
-                          onClick={() => restoreSession(s.startedAt, false, s.sid)}
-                          disabled={restoring === s.startedAt}
-                          className="btn btn-primary flex flex-1 items-center justify-center gap-2 rounded-2xl py-2.5 text-center text-[13px] disabled:opacity-70"
-                        >
-                          {restoring === s.startedAt ? (
-                            <>
-                              <OrbitDots size={16} light label={t("Re-opening")} />
-                              {t("Re-opening…")}
-                            </>
-                          ) : (
-                            t("Re-open this hunt")
-                          )}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => setUpgradeOpen(true)}
-                          className="btn btn-ghost flex flex-1 items-center justify-center gap-1.5 rounded-2xl py-2.5 text-center text-[13px]"
-                        >
-                          <Icon name="lock" className="h-3.5 w-3.5" />
-                          {t("Re-open this hunt (Pro)")}
-                        </button>
-                      )}
-                      {restoreErr && restoring === null && (
-                        <p className="text-center text-[10px] font-bold text-brandred">{restoreErr}</p>
-                      )}
-
-                      {/* THE QUESTION A PAST TRIP IS ACTUALLY FOR.
-                          Re-opening an old hunt showed prices frozen at
-                          whatever the shop said last time - useful only if you
-                          then message ten shops by hand to find out whether any
-                          of it still stands. One tap asks all of them, with
-                          each shop's own quote read back to them. */}
-                      {s.contacted > 0 && (
-                        <button
-                          onClick={() => recheckPrices(s.startedAt, s.sid)}
-                          disabled={rechecking === s.startedAt}
-                          className="btn btn-ghost flex items-center justify-center gap-1.5 rounded-2xl border-2 border-savings/50 py-2.5 text-[12.5px] font-extrabold text-savings disabled:opacity-70"
-                        >
-                          {rechecking === s.startedAt ? (
-                            <>
-                              <OrbitDots size={15} label={t("Asking")} />
-                              {t("Asking your shops…")}
-                            </>
-                          ) : (
-                            <>
-                              <Icon name="whatsapp" className="h-3.5 w-3.5" />
-                              {t("Ask if these prices still stand")}
-                            </>
-                          )}
-                        </button>
-                      )}
-                      {recheckNote[s.startedAt] && (
-                        <p className="text-center text-[10.5px] font-bold text-soft">
-                          {recheckNote[s.startedAt]}
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                  </section>
                 )}
-              </section>
+              </>
             );
-          })}
+          })()}
+
 
         {/* Older bookings that predate the recent sessions */}
         {!loading &&
