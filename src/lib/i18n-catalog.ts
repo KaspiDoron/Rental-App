@@ -823,6 +823,7 @@ export const I18N_CATALOG: string[] = [
   "shops found",
   "shops per hunt",
   "shops, one at a time.",
+  "showing the cheapest",
   "skipped",
   "small 4-seat",
   "so far",

@@ -141,6 +141,31 @@ function check(ok, label) {
   console.log(`  ${ok ? "ok  " : "FAIL"}  ${label}`);
 }
 
+/**
+ * Is SOMETHING already answering on our port?
+ *
+ * THIS CHECK ONCE SPENT AN HOUR LYING. `server.kill()` below killed the `npx`
+ * wrapper and left its `next-server` grandchild bound to the port. Every later
+ * run then found the port answering, decided the boot had succeeded, and
+ * measured a build from an hour earlier - while `npm run build` had already
+ * replaced `.next` underneath it, so the stale process served 404s for chunk
+ * names it no longer had. The visible result was a hydration error and a
+ * missing panel that tracked NOTHING in the source, and an exact revert
+ * "fixing" it only because a deterministic build reproduced the hashes the
+ * orphan still had on disk.
+ *
+ * A check that silently measures the wrong build is worse than no check. So
+ * this refuses to run rather than guess whose server it is talking to.
+ */
+async function portIsBusy(url) {
+  try {
+    await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(2_000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForServer(url, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -155,6 +180,21 @@ async function waitForServer(url, timeoutMs = 60_000) {
   return false;
 }
 
+/** Kill the booted server AND its children - see the spawn's `detached`. */
+function stopServer(server) {
+  if (!server?.pid) return;
+  try {
+    process.kill(-server.pid, "SIGTERM");
+  } catch {
+    // The group is already gone, or we never owned one.
+    try {
+      server.kill();
+    } catch {
+      /* nothing left to stop */
+    }
+  }
+}
+
 async function run() {
   let server = null;
   if (!process.env.MOBILE_CHECK_URL) {
@@ -162,8 +202,20 @@ async function run() {
       console.error("No .next build found. Run `npm run build` first.");
       process.exit(2);
     }
+    if (await portIsBusy(BASE)) {
+      console.error(
+        `Something is already listening on :${PORT}. This check would silently measure\n` +
+          `THAT server's build instead of the one you just built - see portIsBusy.\n` +
+          `Stop it first, or point MOBILE_CHECK_PORT somewhere free.`
+      );
+      process.exit(2);
+    }
     console.log(`Booting the production build on :${PORT} ...`);
+    // `detached` so the whole process GROUP can be signalled. Without it,
+    // killing the npx wrapper orphans the next-server grandchild - which is the
+    // exact failure portIsBusy exists to make loud.
     server = spawn("npx", ["next", "start", "-p", String(PORT)], {
+      detached: true,
       env: {
         ...process.env,
         NODE_ENV: "production",
@@ -175,8 +227,16 @@ async function run() {
       },
       stdio: "ignore",
     });
+    // A hard exit (Ctrl-C, a CI timeout) must not leave the port squatted for
+    // the next run - that is how the stale-build lie starts.
+    for (const sig of ["SIGINT", "SIGTERM"]) {
+      process.once(sig, () => {
+        stopServer(server);
+        process.exit(130);
+      });
+    }
     if (!(await waitForServer(BASE))) {
-      server.kill();
+      stopServer(server);
       console.error("Server did not come up.");
       process.exit(2);
     }
@@ -379,7 +439,7 @@ async function run() {
     }
   } finally {
     await browser.close();
-    if (server) server.kill();
+    stopServer(server);
   }
 
   console.log("");
