@@ -58,9 +58,27 @@ describe("a trip has an OUTCOME - a session never did", () => {
 
 describe("the saving is honest or it is absent", () => {
   it("is the gap between the shop's opening price and what is paid", () => {
-    const { saved, savedPct } = savingOf({ ...base, best: { pricePerDay: 400, ask: 500, currency: "PHP" } });
-    expect(saved).toBe(100);
+    // PER DAY - which is what `ask` and `pricePerDay` are. This assertion used
+    // to read `saved`, back when that field held the daily gap and the Trips
+    // hero summed it under "saved across N trips" (see trip-savings.test.ts).
+    const { savedPerDay, saved, savedPct } = savingOf({
+      ...base,
+      best: { pricePerDay: 400, ask: 500, currency: "PHP" },
+    });
+    expect(savedPerDay).toBe(100);
     expect(savedPct).toBe(20);
+    // `base` carries no duration, so there is no trip total to state.
+    expect(saved).toBeNull();
+  });
+
+  it("...and over the whole rental once the duration is known", () => {
+    const { savedPerDay, saved } = savingOf({
+      ...base,
+      durationDays: 5,
+      best: { pricePerDay: 400, ask: 500, currency: "PHP" },
+    });
+    expect(savedPerDay).toBe(100);
+    expect(saved).toBe(500);
   });
 
   it("a booking's real price beats a live quote", () => {

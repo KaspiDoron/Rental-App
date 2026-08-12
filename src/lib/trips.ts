@@ -61,7 +61,22 @@ export interface Trip {
   perDay: number | null;
   /** Total for the whole rental, when both parts are known. */
   total: number | null;
-  /** How much the negotiation took off the shop's own opening price. */
+  /**
+   * How much the negotiation took off the shop's opening price, PER DAY.
+   *
+   * This is the number the negotiation actually produces: `ask` and
+   * `pricePerDay` are both daily rates.
+   */
+  savedPerDay: number | null;
+  /**
+   * The same saving OVER THE WHOLE RENTAL - the per-day gap times the days.
+   *
+   * SEPARATED BECAUSE ONE OF THEM WAS BEING SHOWN AS THE OTHER. Trips summed
+   * the per-day figure across trips and captioned it "Your travel savings" /
+   * "saved across N trips", so a six-day rental haggled down 50 a day reported
+   * 50 instead of 300. Null when the duration is unknown: a total nobody can
+   * compute is not a total to guess at.
+   */
   saved: number | null;
   savedPct: number | null;
   contacted: number;
@@ -99,14 +114,26 @@ export function outcomeOf(input: TripInput, nowMs: number): TripOutcome {
  * what the traveller actually pays - never a comparison against an invented
  * "typical" price, and never negative.
  */
-export function savingOf(input: TripInput): { saved: number | null; savedPct: number | null } {
+export function savingOf(input: TripInput): {
+  savedPerDay: number | null;
+  saved: number | null;
+  savedPct: number | null;
+} {
   const paid = input.booking?.perDay ?? input.best?.pricePerDay ?? null;
   const asked = input.best?.ask ?? null;
   if (paid == null || asked == null || asked <= 0 || paid >= asked) {
-    return { saved: null, savedPct: null };
+    return { savedPerDay: null, saved: null, savedPct: null };
   }
-  const saved = Math.round(asked - paid);
-  return { saved, savedPct: Math.round(((asked - paid) / asked) * 100) };
+  const savedPerDay = Math.round(asked - paid);
+  const days = input.durationDays ?? null;
+  // A TOTAL NEEDS A DURATION. Falling back to the per-day figure here is
+  // exactly the bug: it is a smaller, wrong number wearing the label of a
+  // bigger, right one. Null says "we cannot total this trip", which the caller
+  // can report honestly.
+  const saved = days != null && days > 0 ? Math.round(savedPerDay * days) : null;
+  // The percentage is scale-free - per-day and per-trip give the same answer -
+  // so it is unaffected by the split.
+  return { savedPerDay, saved, savedPct: Math.round(((asked - paid) / asked) * 100) };
 }
 
 const HEADLINES: Record<TripOutcome, (t: { vehicle: string; n: number }) => string> = {
@@ -120,7 +147,7 @@ const HEADLINES: Record<TripOutcome, (t: { vehicle: string; n: number }) => stri
 export function toTrip(input: TripInput, nowMs: number): Trip {
   const outcome = outcomeOf(input, nowMs);
   const vehicle = vehicleLabel(input);
-  const { saved, savedPct } = savingOf(input);
+  const { savedPerDay, saved, savedPct } = savingOf(input);
   const perDay = input.booking?.perDay ?? input.best?.pricePerDay ?? null;
   const days = input.durationDays ?? null;
   const total =
@@ -135,6 +162,7 @@ export function toTrip(input: TripInput, nowMs: number): Trip {
     currency: input.booking?.currency ?? input.best?.currency ?? "USD",
     perDay,
     total,
+    savedPerDay,
     saved,
     savedPct,
     contacted: input.contacted,
@@ -153,7 +181,7 @@ export function toTrip(input: TripInput, nowMs: number): Trip {
  * would get, which is the honest version of the same gate.
  */
 export function previewTrip(trip: Trip): Trip {
-  return { ...trip, perDay: null, total: null, saved: null, savedPct: null };
+  return { ...trip, perDay: null, total: null, savedPerDay: null, saved: null, savedPct: null };
 }
 
 /** Which trips a plan may see in full: always the current hunt, history on Pro+. */

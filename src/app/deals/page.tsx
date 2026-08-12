@@ -279,6 +279,14 @@ export default function DealsPage() {
   // Only what the traveller can SEE is counted. A free plan showing a lifetime
   // total that includes trips it is hiding would be quietly using locked data to
   // sell the unlock - the honest version says how many trips the figure covers.
+  //
+  // AND IT SUMS A TRIP TOTAL, NOT A DAILY RATE. This read `tr.saved` when that
+  // field was the PER-DAY gap, and captioned the sum "saved across N trips" -
+  // so a six-day rental haggled down 50 a day reported 50 instead of 300. The
+  // headline number on the Trips screen was simply wrong, and wrong in the
+  // direction that undersells the one thing the product does. `saved` is now
+  // the whole-rental figure and is null when the duration is unknown, so a trip
+  // that cannot be totalled is left out of the count rather than guessed at.
   const heroStats = useMemo(() => {
     const visible = sessions.filter((s) => canHistory || s.isLatest);
     let saved = 0;
