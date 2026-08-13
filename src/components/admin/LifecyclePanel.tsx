@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Num, DegradedBanner } from "./primitives";
 
 // THE MONETIZATION SCREEN.
 //
@@ -51,19 +52,9 @@ interface Report {
   };
 }
 
-/** A number that might not be knowable. Dash, never zero. */
-function Num({ v, suffix }: { v: number | null; suffix?: string }) {
-  if (v === null) {
-    return <span className="text-faint" title="Could not be read">&mdash;</span>;
-  }
-  return (
-    <span className="tabular-nums">
-      {v.toLocaleString()}
-      {suffix}
-    </span>
-  );
-}
-
+// `Num` and the degraded strip were born here and are now SHARED
+// (admin/primitives) so every management surface carries the same fail-dark
+// contract instead of re-inventing (or forgetting) it per tab.
 function Pct({ v }: { v: number | null }) {
   if (v === null) return <span className="text-faint">&mdash;</span>;
   return <span className="tabular-nums">{Math.round(v * 100)}%</span>;
@@ -102,12 +93,7 @@ export function LifecyclePanel() {
 
   return (
     <div className="space-y-3">
-      {d.degraded.length > 0 && (
-        <div className="rounded-blob border-2 border-brandred/40 bg-brandred-soft p-3 text-[12px] font-extrabold text-brandred">
-          Some figures could not be read: {d.degraded.join(", ")}. Anything shown as
-          &mdash; is unknown, not zero.
-        </div>
-      )}
+      <DegradedBanner degraded={d.degraded} />
 
       {/* The gate as it currently stands - every number below is only
           interpretable against the predicate that produced it. */}

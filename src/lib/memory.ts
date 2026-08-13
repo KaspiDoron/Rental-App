@@ -228,12 +228,26 @@ export function updateTraining(id: number, text: string): boolean {
   return true;
 }
 
+/**
+ * SEEDED IS NOT MEASURED. The starter playbook ships with plausible-looking
+ * priors (uses: 12, wins: 7...) so ranking works from day one - but a tactic
+ * still sitting EXACTLY at its shipped priors has never been touched by a
+ * live negotiation, and rendering "7/12 wins" for it without saying so
+ * presents an invented number as evidence. A tactic is measured the moment
+ * any of its counters moves off the shipped baseline.
+ */
+export function isSeededTactic(t: NegotiationTactic): boolean {
+  const s = STARTER.find((x) => x.id === t.id);
+  return !!s && s.uses === t.uses && s.wins === t.wins && s.avgDiscountPct === t.avgDiscountPct;
+}
+
 export function analytics() {
   const s = store();
   const ranked = getTactics();
   const avgDiscount =
     ranked.reduce((sum, t) => sum + t.avgDiscountPct * t.uses, 0) /
     Math.max(1, ranked.reduce((sum, t) => sum + t.uses, 0));
+  const tactics = ranked.map((t) => ({ ...t, seeded: isSeededTactic(t) }));
   return {
     totalRuns: s.runs,
     totalOffers: s.offers,
@@ -241,6 +255,9 @@ export function analytics() {
     avgCycleSeconds:
       s.runs > 0 ? Number((s.cycleSecTotal / s.runs).toFixed(1)) : 0,
     bestTactic: ranked[0]?.label ?? null,
-    tactics: ranked,
+    tactics,
+    /** True while every tactic is still at its shipped priors - the panel
+     *  must present the playbook as a starting stance, not as results. */
+    allSeeded: tactics.every((t) => t.seeded),
   };
 }

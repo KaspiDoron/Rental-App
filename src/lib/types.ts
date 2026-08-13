@@ -244,6 +244,9 @@ export interface NegotiationTactic {
   uses: number;
   wins: number;
   avgDiscountPct: number;
+  /** True while the counters sit exactly at the shipped starter priors -
+   *  a ranking aid, not a measurement. Stamped by analytics(). */
+  seeded?: boolean;
 }
 
 export interface AnalyticsSnapshot {
@@ -253,6 +256,8 @@ export interface AnalyticsSnapshot {
   avgCycleSeconds: number;
   bestTactic: string | null;
   tactics: NegotiationTactic[];
+  /** True while EVERY tactic is still seeded - nothing has been measured. */
+  allSeeded?: boolean;
 }
 
 export type PlanId = "free" | "pro" | "ultra";

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManagement, getSession } from "@/lib/session";
 import { monthlyUsage, QUOTAS, limitDefaults, killSwitchOn } from "@/lib/usage";
-import { getConfig, setConfig, sbSelect } from "@/lib/runtime-config";
+import { getConfig, setConfig, sbSelect, sbCountDark } from "@/lib/runtime-config";
 
 // Cost tracker + abuse limits + owner kill switch.
 // GET: this month's usage per API vs free quota, AI token totals, current limits.
@@ -15,35 +15,47 @@ export async function GET() {
   start.setHours(0, 0, 0, 0);
 
   const since = `created_at=gte.${encodeURIComponent(start.toISOString())}`;
-  const [usage, aiRows, searches, offers, outbound, users, kill] = await Promise.all([
-    monthlyUsage(),
-    sbSelect<{ provider: string; tokens: number }>(
-      "ai_usage",
-      `select=provider,tokens&${since}&limit=10000`
-    ),
-    sbSelect<{ id: number }>("searches", `select=id&${since}&limit=10000`),
-    sbSelect<{ id: number }>("offers", `select=id&${since}&limit=10000`),
-    sbSelect<{ id: number }>(
-      "whatsapp_messages",
-      `select=id&direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(start.toISOString())}&limit=10000`
-    ),
-    sbSelect<{ email: string }>("app_users", "select=email&limit=10000"),
-    killSwitchOn(),
-  ]);
+  // KPIs ARE EXACT COUNTS THAT CAN SAY "UNKNOWN" (3.5). These four numbers
+  // were `.length` over bare sbSelect slices capped at 10k - so an outage
+  // rendered a confident zero (the fail-green shape this repo keeps digging
+  // out) and a month past the cap silently plateaued. sbCountDark is exact
+  // and answers null when it cannot ask; nulls are named in `degraded` so the
+  // panel can say which figures are unknown rather than low. The ai_usage ROW
+  // read stays for the per-provider token breakdown (a grouping, not a KPI).
+  const [usage, aiRows, searchCount, offerCount, outboundCount, userCount, aiCallCount, kill] =
+    await Promise.all([
+      monthlyUsage(),
+      sbSelect<{ provider: string; tokens: number }>(
+        "ai_usage",
+        `select=provider,tokens&${since}&limit=10000`
+      ),
+      sbCountDark("searches", since),
+      sbCountDark("offers", since),
+      sbCountDark(
+        "whatsapp_messages",
+        `direction=eq.outbound&to_number=not.in.(session,takeover,cancel)&received_at=gte.${encodeURIComponent(start.toISOString())}`
+      ),
+      sbCountDark("app_users", ""),
+      sbCountDark("ai_usage", since),
+      killSwitchOn(),
+    ]);
 
   const aiTokens: Record<string, number> = {};
-  let aiCalls = 0;
   for (const r of aiRows) {
     aiTokens[r.provider] = (aiTokens[r.provider] ?? 0) + (r.tokens ?? 0);
-    aiCalls += 1;
   }
 
+  const degraded: string[] = [];
+  const dark = (n: number | null, label: string): number | null => {
+    if (n === null) degraded.push(label);
+    return n;
+  };
   const stats = {
-    searchesThisMonth: searches.length,
-    offersThisMonth: offers.length,
-    messagesSent: outbound.length,
-    aiCalls,
-    totalUsers: users.length,
+    searchesThisMonth: dark(searchCount, "searches"),
+    offersThisMonth: dark(offerCount, "offers"),
+    messagesSent: dark(outboundCount, "messages sent"),
+    aiCalls: dark(aiCallCount, "AI calls"),
+    totalUsers: dark(userCount, "users"),
   };
 
   const defaults = limitDefaults();
@@ -65,7 +77,7 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ apis, aiTokens, stats, limits, defaults, killSwitch: kill });
+  return NextResponse.json({ apis, aiTokens, stats, degraded, limits, defaults, killSwitch: kill });
 }
 
 export async function POST(req: Request) {
