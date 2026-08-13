@@ -21,7 +21,8 @@
     "workers": "tsx --tsconfig services/workers/tsconfig.json services/workers/src/index.ts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "check:mobile": "node scripts/mobile-check.mjs",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "knip": "knip"
   },
   "dependencies": {
     "@paypal/react-paypal-js": "^10.1.2",
@@ -47,11 +48,11 @@
     "@types/leaflet": "^1.9.12",
     "@types/node": "^20.14.0",
     "@types/nodemailer": "^8.0.1",
-    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@types/web-push": "^3.6.4",
     "autoprefixer": "^10.4.19",
+    "knip": "^5.88.1",
     "playwright": "^1.62.1",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.6",

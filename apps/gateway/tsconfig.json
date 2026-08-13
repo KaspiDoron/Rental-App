@@ -10,8 +10,7 @@
       "@wheeldeal/core": ["../../packages/core/index.ts"],
       "@wheeldeal/shared": ["../../packages/shared/index.ts"],
       "@wheeldeal/redis": ["../../packages/redis/index.ts"],
-      "@wheeldeal/queues": ["../../packages/queues/index.ts"],
-      "@wheeldeal/db": ["../../packages/db/index.ts"]
+      "@wheeldeal/queues": ["../../packages/queues/index.ts"]
     }
   },
   "include": ["src/**/*.ts"],

@@ -13,9 +13,10 @@ coverage
 .env
 .env.*
 !.env.example
-test
-e2e
-scratchpad
+tests
+test-results
+playwright-report
+playwright.config.ts
 infra
 Dockerfile
 *.md
