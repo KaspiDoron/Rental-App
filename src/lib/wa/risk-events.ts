@@ -28,7 +28,7 @@
 import { sbInsert } from "../runtime-config";
 
 /**
- * THE VOCABULARY. Twenty-two kinds, and the grouping is the argument.
+ * THE VOCABULARY. Twenty-three kinds, and the grouping is the argument.
  *
  * Part 0.37 established that there are TWO independent enforcement axes with
  * different penalties and different observability, and that treating them as
@@ -74,6 +74,13 @@ export const RISK_KINDS = [
   "session_deaf",
   /** What this session actually announced itself as, as a measured fact. */
   "fingerprint_observed",
+  /**
+   * The instance was destructively torn down and rebuilt (logout + delete +
+   * recreate). Churn is itself an axis-2 signal: a number re-registering from
+   * fresh sessions in quick succession is a known restriction vector, and
+   * until this kind existed the rebuild storm was invisible in the ledger.
+   */
+  "instance_recreated",
 
   // ---- Meter integrity: can we believe anything above? -------------------
   "delivery_receipt",
@@ -129,6 +136,7 @@ const AXIS: Record<RiskKind, RiskAxis> = {
   session_multidevice_mismatch: "client",
   session_deaf: "client",
   fingerprint_observed: "client",
+  instance_recreated: "client",
   delivery_receipt: "meter",
   read_receipt: "meter",
   receipts_stalled: "meter",

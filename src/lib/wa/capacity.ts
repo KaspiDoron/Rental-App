@@ -118,17 +118,43 @@ export function warmupFactor(ageDays: number, warmupDays: number): number {
 }
 
 /**
- * Effective new-shop introductions for this window. The FULL plan budget is
- * available immediately, on day 0 - warm-up never reduces how many distinct
- * conversations a user may start (only the send rate ramps, and even that stays
- * at/above the budget). A brand-new ultra user gets all 40 conversations at once.
+ * THE REAL WARM-UP RAMP (owner report 3, decision 3 - the one deliberate
+ * product-behavior change of that round).
+ *
+ * The previous version of this function ignored age entirely and handed a
+ * brand-new number the FULL plan budget on day 0 - the warm-up was a
+ * documented no-op, and a fresh number blasting its whole allowance at
+ * strangers on its first day is the single most bannable pattern WhatsApp
+ * meters. Day 0 now starts at ~50% of the plan's introductions and earns
+ * linearly to 100% over `warmupDays`.
+ *
+ * EARNED FASTER BY BEHAVING WELL: an observed reply rate accelerates the
+ * ramp - a number whose messages get ANSWERED is behaving like a person's,
+ * which is precisely the evidence WhatsApp's own systems weight. The caller
+ * passes replyRate only once there are enough samples to mean something
+ * (min_reply_samples); a benefit-of-the-doubt 1.0 from zero sends must not
+ * unlock the full budget on day 0.
  */
+export function warmupNewContactFactor(
+  ageDays: number,
+  warmupDays: number,
+  replyRate?: number | null
+): number {
+  if (!(ageDays < warmupDays)) return 1;
+  const linear = 0.5 + 0.5 * (Math.max(0, ageDays) / Math.max(1, warmupDays));
+  const accel = replyRate != null && replyRate > 0 ? Math.min(0.5, replyRate) : 0;
+  return Math.max(0.5, Math.min(1, linear + accel));
+}
+
+/** Effective new-shop introductions for this window (plan x warm-up ramp). */
 export function effectiveNewContactCap(
   plan: string | null | undefined,
-  _ageDays: number,
-  _warmupDays: number
+  ageDays: number,
+  warmupDays: number,
+  replyRate?: number | null
 ): number {
-  return planCapacity(plan).newContacts;
+  const cap = planCapacity(plan).newContacts;
+  return Math.max(1, Math.round(cap * warmupNewContactFactor(ageDays, warmupDays, replyRate)));
 }
 
 /** Effective sends/hour ceiling: the higher of the trust-scaled base and the

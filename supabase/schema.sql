@@ -1327,6 +1327,13 @@ alter table public.wa_recipient_state
 alter table public.wa_recipient_state
   add column if not exists first_reply_at timestamptz;
 
+-- "STOP MESSAGING ME" IS PERMANENT. Once stamped, guardOutbound refuses every
+-- future send to this number from this sender - automated, manual, and any
+-- later hunt that rediscovers the same shop. There is deliberately no unset
+-- path in the product: a shop that asked to be left alone stays left alone.
+alter table public.wa_recipient_state
+  add column if not exists opted_out_at timestamptz;
+
 -- The open-thread query: this sender's introductions that have not been
 -- answered. Partial, so it stays small no matter how much history accrues.
 create index if not exists wa_recipient_state_unanswered_idx

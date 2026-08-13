@@ -58,6 +58,7 @@ import {
 import { personaHumanize } from "./wa/persona";
 import { stealthFactor } from "./wa/stealth";
 import { stripWaFormatting } from "./text";
+import { tableReady } from "./schema-probe";
 import { PACING_PRESETS, normalizePacingMode } from "./wa/pacing-mode";
 import {
   planCapacity,
@@ -183,21 +184,64 @@ const DEFAULTS: SecurityPolicies = {
 declare global {
   // eslint-disable-next-line no-var
   var __wd_wa_policies__: { at: number; value: SecurityPolicies } | undefined;
+  // The LAST-GOOD policy set, no TTL: what the owner's dials actually resolved
+  // to the last time storage answered. Survives as long as the instance does.
+  // eslint-disable-next-line no-var
+  var __wd_wa_policies_lastgood__: SecurityPolicies | undefined;
+  // The last successfully READ pacing-mode string, so a config blip holds the
+  // owner's chosen mode instead of silently reverting to "balanced".
+  // eslint-disable-next-line no-var
+  var __wd_wa_pacing_raw__: string | null | undefined;
 }
 
 export async function getPolicies(): Promise<SecurityPolicies> {
   const cached = globalThis.__wd_wa_policies__;
   if (cached && Date.now() - cached.at < 60_000) return cached.value;
-  const [rows, modeRaw, fastRaw] = await Promise.all([
-    sbSelect<{ key: string; value: string }>(
+  const [rowsRes, modeRaw, fastRaw] = await Promise.all([
+    sbSelectStrict<{ key: string; value: string }>(
       "whatsapp_security_policies",
       // Ordered + generous limit: with the old bare limit=50, junk rows could
       // non-deterministically push a real override past the cut.
       "select=key,value&order=key.asc&limit=200"
     ),
-    getConfig("PACING_MODE").catch(() => undefined),
+    // A read that THROWS holds the last mode the owner was known to have set;
+    // a read that succeeds (even as "unset") updates that memory. Without the
+    // distinction, one config blip on a "cautious" fleet silently re-armed
+    // balanced pacing - the policy layer failing OPEN toward looser defaults.
+    getConfig("PACING_MODE").then(
+      (v) => {
+        globalThis.__wd_wa_pacing_raw__ = v ?? null;
+        return v;
+      },
+      () => globalThis.__wd_wa_pacing_raw__
+    ),
     getConfig("FAST_DISPATCH").catch(() => undefined),
   ]);
+  // THE FAIL DIRECTION OF THE WHOLE POLICY LAYER (owner report 3, 3.4 #5).
+  // sbSelect used to collapse an outage to [] - indistinguishable from "the
+  // owner set no overrides" - so every dial (a cautious preset, a lowered day
+  // cap, a longer warm-up) evaporated for exactly the 60s cache window,
+  // repeatedly, whenever Supabase wobbled. Now:
+  //   unavailable + last-good  -> serve the last policies that actually
+  //                               resolved (the owner's dials, remembered);
+  //   unavailable + no memory  -> the CAUTIOUS preset. A fresh instance that
+  //                               cannot read the owner's dials must err
+  //                               toward safety, not toward the mid-band.
+  //   "missing" (never migrated) -> vacuously no overrides: honest defaults.
+  if (!("rows" in rowsRes) && rowsRes.error === "unavailable") {
+    const lastGood = globalThis.__wd_wa_policies_lastgood__;
+    const value: SecurityPolicies = lastGood ?? {
+      ...DEFAULTS,
+      ...(PACING_PRESETS.cautious as Partial<SecurityPolicies>),
+      ignore_business_hours: false,
+      fast_dispatch: false,
+    };
+    // Cache briefly so a broken store is not hammered; NOT stored as
+    // last-good - this value is a stance, not a reading.
+    globalThis.__wd_wa_policies__ = { at: Date.now(), value };
+    return value;
+  }
+  const rows = "rows" in rowsRes ? rowsRes.rows : [];
   // Layer order: hard DEFAULTS -> owner speed/safety preset -> explicit DB rows.
   const mode = normalizePacingMode(modeRaw);
   // FAST_DISPATCH defaults OFF (owner's speed-vs-safety decision) - one shared
@@ -235,6 +279,7 @@ export async function getPolicies(): Promise<SecurityPolicies> {
     merged.business_hour_end = DEFAULTS.business_hour_end;
   }
   globalThis.__wd_wa_policies__ = { at: Date.now(), value: merged };
+  globalThis.__wd_wa_policies_lastgood__ = merged;
   return merged;
 }
 
@@ -369,14 +414,13 @@ function ageDaysOf(rep: Reputation): number {
 }
 
 /**
- * Warm-up ramp: a fresh number earns its full budget gradually over
- * `warmup_days`. Day 0 gets ~1/warmup of the budget, day warmup_days gets the
- * full budget. This is the single biggest protection for a NEW linked number.
+ * Warm-up ramp for the SEND RATE (85% floor). Note: the ramp that matters for
+ * ban risk is the NEW-CONTACT one below - the rate one only trims headroom.
+ * The old comment here called this "the single biggest protection for a NEW
+ * linked number", which was false twice over: the contact cap ignored age
+ * entirely, and this factor bottomed at 0.85. See wa/capacity.ts.
  */
 function warmupMultiplier(rep: Reputation, p: SecurityPolicies): number {
-  // Humane ramp: a fresh number still warms up, but from a usable 45% floor
-  // (not the old ~14% day-0 that made a new number nearly mute). The per-send
-  // rate governors keep it safe at the floor. See wa/capacity.ts.
   return warmupFactor(ageDaysOf(rep), p.warmup_days);
 }
 
@@ -414,9 +458,15 @@ export function dynamicHourCap(rep: Reputation, p: SecurityPolicies, plan?: stri
   return effectiveHourCap(plan ?? "free", base, ageDaysOf(rep), p.warmup_days);
 }
 
-/** New-shop introductions allowed per rolling window (plan x warm-up). */
+/** New-shop introductions allowed per rolling window (plan x warm-up ramp).
+ *  Day 0 starts at ~50% of the plan budget and earns to 100% over
+ *  warmup_days, ACCELERATED by an observed reply rate - but only once there
+ *  are enough samples for the rate to mean anything (the zero-send
+ *  benefit-of-the-doubt 1.0 must not unlock the full budget on day 0). */
 function newContactCap(rep: Reputation, p: SecurityPolicies, plan?: string): number {
-  return effectiveNewContactCap(plan ?? "free", ageDaysOf(rep), p.warmup_days);
+  const measuredReplyRate =
+    (rep.sent_total || 0) >= p.min_reply_samples ? replyRate(rep) : null;
+  return effectiveNewContactCap(plan ?? "free", ageDaysOf(rep), p.warmup_days, measuredReplyRate);
 }
 
 /** Lifetime reply rate (0..1) - the strongest health signal. */
@@ -435,7 +485,15 @@ export interface RiskBreakdown {
  * Ban-risk score from real behaviour. High score => the number looks like an
  * automated spammer to WhatsApp's heuristics and must be throttled/paused.
  */
-export function computeRisk(rep: Reputation, p: SecurityPolicies): RiskBreakdown {
+export function computeRisk(
+  rep: Reputation,
+  p: SecurityPolicies,
+  recent?: {
+    /** recipient_blocked events in the last 7 days (wa_risk_events). null =
+     *  the ledger was unreadable; undefined = the caller did not measure. */
+    blocks7d?: number | null;
+  }
+): RiskBreakdown {
   const reasons: string[] = [];
   let risk = 0;
 
@@ -448,11 +506,23 @@ export function computeRisk(rep: Reputation, p: SecurityPolicies): RiskBreakdown
       reasons.push(`low reply rate ${(rr * 100).toFixed(0)}% (+${add})`);
     }
   }
-  // 2. Blocks/reports from recipients are catastrophic.
-  if ((rep.blocks_total || 0) > 0) {
-    const add = Math.min(30, (rep.blocks_total || 0) * 12);
+  // 2. Blocks/reports from recipients are catastrophic - measured over the
+  //    LAST 7 DAYS, not a lifetime (owner report 3, 3.4 #9). blocks_total
+  //    never decays, so two blocks from a bad batch last season scored +24
+  //    forever - a number could never earn its way back, and a permanently
+  //    elevated score both crowds out FRESH signals (the pause threshold was
+  //    partly pre-spent) and trains the owner to ignore it. The windowed
+  //    count comes from the append-only wa_risk_events ledger; the ABSOLUTE
+  //    FLOOR stands - even one block inside the window scores +12, because a
+  //    single real report is a person saying stop. When the ledger was
+  //    unreadable (null) or unmeasured (undefined), the lifetime counter
+  //    remains the CONSERVATIVE fallback: blindness must never lower a risk
+  //    score.
+  const blocks = typeof recent?.blocks7d === "number" ? recent.blocks7d : rep.blocks_total || 0;
+  if (blocks > 0) {
+    const add = Math.min(30, blocks * 12);
     risk += add;
-    reasons.push(`${rep.blocks_total} block/report (+${add})`);
+    reasons.push(`${blocks} block/report in 7d (+${add})`);
   }
   // 3. Failed sends (invalid/non-WA numbers) look like list-blasting.
   if ((rep.fails_total || 0) >= 3) {
@@ -532,6 +602,40 @@ async function upsertRecipient(
 }
 
 /**
+ * The shop said "stop messaging me", and stop is FOREVER.
+ *
+ * Called from the inbound path when the deterministic opt-out detection fires
+ * (lib/inbound-risk `detectOptOutIntent`). The stamp is what guardOutbound's
+ * opt-out veto reads - once written, every future send to this number from
+ * this sender is refused, manual sends and later hunts included. Write-once by
+ * intent: re-stamping only moves a timestamp nobody compares.
+ *
+ * Degrades loudly: against a pre-migration database (no `opted_out_at` column)
+ * the upsert fails, but the `wa-opt-out` event still records that the shop
+ * asked - and the guard's column probe keeps its veto consistent with what the
+ * database can actually answer.
+ */
+export async function markRecipientOptedOut(
+  senderKey: string,
+  toNumber: string,
+  vendorName?: string
+): Promise<void> {
+  try {
+    await upsertRecipient(senderKey, toNumber, { opted_out_at: new Date().toISOString() });
+  } catch {
+    /* the event below still records the request */
+  }
+  await sbInsert("agent_events", [
+    {
+      kind: "wa-opt-out",
+      vendor_name: vendorName || digitsOnly(toNumber),
+      user_email: senderKey,
+      detail: `+${digitsOnly(toNumber)} asked not to be messaged again - every future send to this number is refused.`,
+    },
+  ]).catch(() => {});
+}
+
+/**
  * Stamp a conversation milestone WITHOUT overwriting it.
  *
  * `first_intro_at` and `first_reply_at` are the denominator the introduction
@@ -563,6 +667,23 @@ async function stampRecipientFirst(
   }
 }
 
+/**
+ * recipient_blocked events in the trailing 7 days, from the append-only
+ * ledger. Returns null when the ledger cannot answer (unreadable OR never
+ * migrated) - computeRisk then falls back to the lifetime counter, the
+ * conservative direction.
+ */
+async function blocksInWindow(senderKey: string, days = 7): Promise<number | null> {
+  const res = await sbSelectStrict<{ id: number }>(
+    "wa_risk_events",
+    `select=id&sender_key=eq.${encodeURIComponent(senderKey)}` +
+      `&kind=eq.recipient_blocked&at=gte.${encodeURIComponent(
+        new Date(Date.now() - days * 24 * 3600_000).toISOString()
+      )}&limit=50`
+  );
+  return "rows" in res ? res.rows.length : null;
+}
+
 /** Persist reputation and recompute the ban-risk score (auto-pause on spike). */
 async function saveReputation(
   senderKey: string,
@@ -570,7 +691,7 @@ async function saveReputation(
 ): Promise<void> {
   const rep = { ...(await getReputation(senderKey)), ...patch };
   const p = await getPolicies();
-  const risk = computeRisk(rep, p);
+  const risk = computeRisk(rep, p, { blocks7d: await blocksInWindow(senderKey) });
   const update: Record<string, unknown> = { ...patch, risk_score: risk.score };
   // Auto-pause a number that has crossed the danger line. The pause blocks all
   // automated sending and the owner is alerted from the command center.
@@ -772,11 +893,16 @@ export async function hasInboundFrom(
   toNumber: string
 ): Promise<boolean> {
   try {
+    // TAIL-TOLERANT, like every other read of this table. This was the last
+    // exact-match holdout: the table is WRITTEN tail-keyed by upsertRecipient
+    // (the shop's reply carries WhatsApp's spelling of the number, our send
+    // carried discovery's), so `to_number=eq.` routinely missed the row the
+    // reply actually landed on - and an established thread's send error was
+    // then escalated as a cold-lane "restriction suspected".
     const rows = await sbSelect<{ id: number }>(
       "wa_recipient_state",
       `select=id&sender_key=eq.${encodeURIComponent(senderKey)}` +
-        `&to_number=eq.${encodeURIComponent(toNumber)}` +
-        `&last_reply_at=not.is.null&limit=1`
+        `&last_reply_at=not.is.null&limit=1${numberFilter("to_number", toNumber)}`
     );
     return Boolean(rows[0]?.id);
   } catch {
@@ -1284,6 +1410,46 @@ export function humanizeVariant(text: string, rand: () => number = Math.random):
 }
 
 /**
+ * THE ONE SEEDED HUMANIZE PASS, callable wherever a message is COMMITTED.
+ *
+ * The full anti-fingerprinting chain (personaHumanize -> humanizeVariant ->
+ * stripWaFormatting) used to run only inside guardOutbound's inline path. But
+ * the drain re-guards every parked row with `alreadyHumanized: true` - a
+ * correct idempotency contract built on a false premise, because the two
+ * paths that PARK most rows (parkOutboxOnce's composed replies and the mass
+ * route's stagger slots) never humanized at all. So the dominant share of
+ * automated traffic went out with the raw composer text: uniform greetings,
+ * corporate sign-offs, identical punctuation - the exact hash-uniformity the
+ * engine exists to break.
+ *
+ * Seeded from the message identity (sender + shop + text), exactly like the
+ * inline path: the same input always yields the same output, so a re-park, a
+ * retry, or two concurrent writers produce byte-identical bodies and the
+ * idempotency slot hash stays stable. The number spelling is normalised
+ * before seeding so every call site agrees on the seed for one shop.
+ */
+export function humanizeForOutbound(senderKey: string, toDigits: string, text: string): string {
+  const digits = waDigits(toDigits) || toDigits;
+  const rand = (() => {
+    let h = 2166136261 >>> 0;
+    const seed = `${senderKey}|${digits}|${text}`;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return () => {
+      // mulberry32 step - deterministic, well-distributed.
+      h = (h + 0x6d2b79f5) >>> 0;
+      let t = h;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+  return stripWaFormatting(humanizeVariant(personaHumanize(text, rand), rand));
+}
+
+/**
  * Graduated ban-recovery: after a REAL WhatsApp restriction (a 401/logout or a
  * detected soft-ban), pause the number for a long rest, then it resumes under
  * the warm-up ramp. Called from the connection lifecycle handler.
@@ -1488,26 +1654,14 @@ export async function guardOutbound(rawOpts: {
   // the composed text), so the SAME input always yields the SAME output. This
   // restores the copy engine's determinism contract and, together with
   // humanize-once, guarantees two drainers hash a parked row identically.
-  const humanRand = (() => {
-    let h = 2166136261 >>> 0;
-    const seed = `${opts.senderKey}|${opts.toDigits}|${opts.text}`;
-    for (let i = 0; i < seed.length; i++) {
-      h ^= seed.charCodeAt(i);
-      h = Math.imul(h, 16777619) >>> 0;
-    }
-    return () => {
-      // mulberry32 step - deterministic, well-distributed.
-      h = (h + 0x6d2b79f5) >>> 0;
-      let t = h;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  })();
+  // The pass itself lives in `humanizeForOutbound` so the park paths
+  // (parkOutboxOnce, the mass route's stagger slots) run the IDENTICAL chain
+  // at enqueue - which is what makes the drain's `alreadyHumanized: true`
+  // premise actually true.
   const text = opts.auto
     ? opts.alreadyHumanized
       ? stripWaFormatting(opts.text)
-      : stripWaFormatting(humanizeVariant(personaHumanize(opts.text, humanRand), humanRand))
+      : humanizeForOutbound(opts.senderKey, opts.toDigits, opts.text)
     : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must
@@ -1804,9 +1958,17 @@ export async function guardOutbound(rawOpts: {
   // about answering someone who wrote to you first. Treating an unknown
   // recipient as warm risks sending one reciprocal message slightly too
   // quickly; treating it as cold risks the product not working at all.
-  const priorRecipient = await sbSelectStrict<{ id: number }>(
+  // The read doubles as the opt-out lookup. `opted_out_at` is newer than some
+  // databases this code can reach (the park.ts to_key seatbelt, same class):
+  // naming an unknown column would 400 the WHOLE select and silently degrade
+  // contactState to "unknown" on every pre-migration install, so the column
+  // only joins the select once the probe has seen it. Ordered so an opted-out
+  // row always surfaces first when a shop is stored under two spellings.
+  const hasOptOutCol = (await tableReady("wa_recipient_state", "opted_out_at")) === "ready";
+  const priorRecipient = await sbSelectStrict<{ id: number; opted_out_at?: string | null }>(
     "wa_recipient_state",
-    `select=id&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
+    `select=id${hasOptOutCol ? ",opted_out_at&order=opted_out_at.desc.nullslast" : ""}` +
+      `&sender_key=eq.${encodeURIComponent(opts.senderKey)}` +
       `&limit=1${numberFilter("to_number", opts.toDigits)}`
   );
   const contactState: "new" | "known" | "unknown" =
@@ -1821,6 +1983,35 @@ export async function guardOutbound(rawOpts: {
           "new"
         : "unknown";
   const isNewContact = contactState === "new";
+
+  // 0.-1 THE SHOP SAID STOP, AND STOP IS FOREVER.
+  //
+  //      A recipient who reports or blocks a number is WhatsApp's single
+  //      strongest ban signal, and the message before a block is almost always
+  //      some spelling of "stop writing to me". Once the inbound path stamps
+  //      `opted_out_at` (lib/inbound-risk detectOptOutIntent ->
+  //      markRecipientOptedOut), this veto refuses EVERY future send - and
+  //      unlike the tombstone/takeover vetoes above it deliberately binds
+  //      MANUAL sends and later hunts too: the shop's request was about being
+  //      contacted at all, not about which button produced the message.
+  //      Terminal, never queued, never retried; the drop leaves a durable
+  //      trace. An unreadable row proceeds (the auto path is already held at
+  //      -3 during an outage; refusing a manual send on a read blip is the
+  //      wrong direction for a boundary we may not even have on record).
+  if ("rows" in priorRecipient && priorRecipient.rows.some((r) => r.opted_out_at)) {
+    void recordSendDropped(
+      opts.senderKey,
+      opts.toDigits,
+      "opted-out - this shop asked not to be messaged again",
+      opts.meta
+    );
+    return {
+      allow: false,
+      terminal: true,
+      reason: "opted-out - this shop asked not to be messaged again",
+      text,
+    };
+  }
 
   // 0.0 THE OWNER'S KILL SWITCH, ENFORCED WHERE SENDS ACTUALLY HAPPEN.
   //

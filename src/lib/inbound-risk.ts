@@ -16,6 +16,12 @@ export interface InboundRisk {
   /** Hosts the deterministic allow-list already cleared. The LLM half is told
    *  about these so it cannot re-flag a link we have positively judged safe. */
   clearedHosts?: string[];
+  /** The shop asked us to stop messaging them. Deterministic, multilingual,
+   *  and PERMANENT once the caller stamps it - so precision beats recall here:
+   *  a missed opt-out costs one more annoyed message; a false one mutes a live
+   *  negotiation forever. Never affects `risk` - a shop saying "leave me alone"
+   *  is not a scam, it is a boundary. */
+  optOut?: boolean;
 }
 
 const SAFE_LINK_HOSTS = [
@@ -105,6 +111,64 @@ const DEMAND = new RegExp(
 /** Does the model's stated reason hinge on documents/IDs? */
 const DOC_REASON = /\b(passport|id card|identity|licen[cs]e|document)/i;
 
+// "STOP MESSAGING ME" IS A COMMAND, NOT A NEGOTIATION SIGNAL.
+//
+// WhatsApp's single strongest ban input is a recipient who reports or blocks a
+// number - and the message before a block is almost always some spelling of
+// "stop writing to me". Honouring it is both the decent thing and the
+// anti-ban keystone: guardOutbound turns the stamp this detection produces
+// into a PERMANENT refusal (manual sends and future hunts included).
+//
+// DETERMINISTIC AND NARROW BY DESIGN. Every pattern is an imperative aimed at
+// the sender ("don't message me", "תפסיק לשלוח", "อย่าส่งข้อความ") - never a
+// bare keyword. "stop" alone only counts as the WHOLE message (the SMS
+// convention), because "you can stop by the shop" and "we stop at 6pm" are
+// ordinary rental talk. The languages are the funnel's live markets: EN, HE,
+// TH, ES, PT, FR, ID/MS, VI, DE, RU, TR, AR, ZH, HI.
+const OPT_OUT_EXACT = /^\s*(?:stop|stop it|please stop|stop please|unsubscribe|no more messages?)\s*[.!]*\s*$/i;
+const OPT_OUT_PHRASES: RegExp[] = [
+  // English
+  /\b(?:do not|don'?t|dont|never)\s+(?:message|text|write(?:\s+to)?|contact|whatsapp|call)\s+(?:me|us)\b/i,
+  /\bstop\s+(?:messaging|texting|writing|contacting|sending|spamming)\b/i,
+  /\b(?:remove|delete)\s+(?:me|us|my number|this number)\b/i,
+  /\bleave\s+(?:me|us)\s+alone\b/i,
+  /\bunsubscribe\b/i,
+  // Hebrew
+  /אל תכתו?בו? ל(?:י|נו)|אל תשלחו? ל?(?:י|נו)|תפסיקו? לשלוח|די לשלוח|תמחקו? אות(?:י|נו)|הסירו? אות(?:י|נו)|עז[וב]ב? אות(?:י|נו) בשקט/,
+  // Thai
+  /หยุดส่ง|อย่าส่งข้อความ|อย่าติดต่อ|เลิกส่ง|อย่าทักมา/,
+  // Spanish
+  /no me escrib(?:as|a|an)|deja de escribir|no me env[ií]e[sn]? m[aá]s|no me contacte[sn]?|no me molestes/i,
+  // Portuguese
+  /n[aã]o me escreva|pare de enviar|n[aã]o me mande mais|me tire da lista|n[aã]o me incomode/i,
+  // French
+  /ne m'?[ée]cri(?:s|vez) plus|arr[eê]te[zr]? de m'?[ée]crire|ne me contacte[zr]? plus/i,
+  // Indonesian / Malay
+  /jangan (?:kirim pesan|chat|hubungi) (?:saya|aku|lagi)|berhenti mengirim|jangan ganggu saya/i,
+  // Vietnamese
+  /đừng nhắn tin|đừng liên hệ|ngừng gửi|đừng làm phiền/i,
+  // German
+  /schreib(?:en sie)? mir nicht mehr|h[oö]r(?:en sie)? auf zu schreiben|kontaktier(?:e|en sie) mich nicht/i,
+  // Russian
+  /не пиши(?:те)? (?:мне|нам)|перестань(?:те)? писать|хватит писать/i,
+  // Turkish
+  /mesaj atma(?:y[ıi]n)?|bana yazma(?:y[ıi]n)?|beni rahat b[ıi]rak/i,
+  // Arabic
+  /لا ترسل|توقف عن (?:المراسلة|الإرسال)|لا تتواصل مع/,
+  // Chinese
+  /不要再发|别再发|停止发送|不要联系我|别烦我/,
+  // Hindi (Devanagari + common Latin transliteration)
+  /(?:message|मैसेज|संदेश)\s*(?:मत|mat)\s*(?:करो|भेजो|karo|bhejo)|मत भेजो|परेशान मत करो/i,
+];
+
+/** Is this inbound message the shop telling us to stop messaging them? */
+export function detectOptOutIntent(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  if (OPT_OUT_EXACT.test(t)) return true;
+  return OPT_OUT_PHRASES.some((rx) => rx.test(t));
+}
+
 export function screenInboundDeterministic(text: string, vendorName?: string): InboundRisk {
   const reasons: string[] = [];
   const cleared: string[] = [];
@@ -112,6 +176,7 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
   const s = text.toLowerCase();
   if (!s.trim()) return { risk: "none", reasons };
   const ownSlugs = shopNameSlugs(vendorName);
+  const optOut = detectOptOutIntent(text);
 
   const bump = (level: "caution" | "high", why: string) => {
     reasons.push(why);
@@ -196,7 +261,7 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
     bump("high", "asked for card details in chat - never share card numbers over WhatsApp");
   }
 
-  return { risk, reasons, clearedHosts: cleared };
+  return { risk, reasons, clearedHosts: cleared, ...(optOut ? { optOut: true } : {}) };
 }
 
 /**
@@ -259,7 +324,9 @@ export async function screenInbound(
         const reasons = [...det.reasons, ...modelReasons].slice(0, 4);
         // Escalate only: the model can raise the floor, never lower it.
         const risk: InboundRisk["risk"] = j.risk === "high" ? "high" : "caution";
-        return { risk, reasons, clearedHosts: cleared };
+        // The opt-out signal is deterministic-only and rides through untouched:
+        // a model verdict about scam risk must never eat "stop messaging me".
+        return { risk, reasons, clearedHosts: cleared, ...(det.optOut ? { optOut: true } : {}) };
       }
     }
   } catch {

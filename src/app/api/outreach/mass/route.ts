@@ -158,9 +158,8 @@ export async function POST(req: Request) {
     }
   }
 
-  const { guardOutbound, afterSend, claimForSend, releaseSendClaim } = await import(
-    "@/lib/wa-guard"
-  );
+  const { guardOutbound, afterSend, claimForSend, releaseSendClaim, humanizeForOutbound } =
+    await import("@/lib/wa-guard");
   const { batchStagger, gaussianUnit, HARD_MIN_GAP_SEC } = await import("@/lib/wa/pacing");
   const { randomBytes } = await import("crypto");
   const results: {
@@ -436,12 +435,15 @@ export async function POST(req: Request) {
       const holdReason = budgetUnreadable
         ? "checking your introductions allowance - retrying shortly"
         : "introductions full - refreshes soon";
+      // Humanize at park: the drain delivers this row verbatim
+      // (alreadyHumanized), so the anti-fingerprinting pass must run HERE.
+      // Seeded, so a retry parks the identical body.
       const parked = await sbInsert("wa_outbox", [
         {
           sender_key: session.email,
           to_number: digits,
           to_key: outboxKey(digits),
-          body: opener.text,
+          body: humanizeForOutbound(session.email, digits, opener.text),
           not_before: notBefore,
           meta: { ...meta, reason: holdReason },
         },
@@ -483,7 +485,9 @@ export async function POST(req: Request) {
           sender_key: session.email,
           to_number: digits,
           to_key: outboxKey(digits),
-          body: opener.text,
+          // Same humanize-at-park rule as the budget hold above: parked slots
+          // are delivered verbatim by the drain, so the pass runs at enqueue.
+          body: humanizeForOutbound(session.email, digits, opener.text),
           not_before: notBefore,
           meta: { ...rowMeta, reason: "batch-spacing" },
         },

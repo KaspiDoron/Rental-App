@@ -466,7 +466,7 @@ export function WaConnect({
                   informed to be consent. */}
               <span className="mt-0.5 block text-[11px] text-faint">
                 {t(
-                  "The short version: you are linking your own WhatsApp, this uses an unofficial connection, and WhatsApp can restrict or ban a number for it. Disconnect any time. Use a number you could manage without."
+                  "The short version: you are linking your own WhatsApp, this uses an unofficial connection, and WhatsApp can restrict or ban a number for it. Our pacing and safety limits lower that risk - they cannot remove it. Disconnect any time. Use a number you could manage without."
                 )}
               </span>
             </span>

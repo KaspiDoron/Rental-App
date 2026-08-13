@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   planCapacity,
   normalizeCapacityPlan,
@@ -51,22 +53,43 @@ describe("plan capacity tiers", () => {
   });
 });
 
-describe("full-budget-day-0 conversation cap", () => {
-  it("gives a BRAND-NEW number its FULL plan budget of conversations - no warm-up crush", () => {
-    // STILL THE OWNER'S REQUIREMENT, and still enforced: warm-up must never
-    // reduce the COUNT of conversations a user may start. Reinstating an
-    // age ramp here would violate it - the warm-up that DOES ship lives in the
-    // monetization gate (a new user stays on the free tier, whose budget is 10,
-    // until their number is warm) rather than in a hidden throttle on a tier
-    // they already paid for.
-    expect(effectiveNewContactCap("ultra", 0, 7)).toBe(24);
-    expect(effectiveNewContactCap("pro", 0, 7)).toBe(20);
-    expect(effectiveNewContactCap("free", 0, 7)).toBe(10);
-  });
-
-  it("stays at the full budget as the number ages", () => {
+describe("the warm-up ramp on NEW CONTACTS (owner report 3, decision 3)", () => {
+  // DELIBERATELY REVERSED from the old "full budget day 0" pin. That
+  // requirement dated from an earlier round; the owner's third report chose
+  // the ramp as the one real product-behavior change: a brand-new number
+  // blasting its whole allowance at strangers on day one is the single most
+  // bannable pattern WhatsApp meters. Day 0 = ~50%, earning to 100% over
+  // warmup_days, accelerated by an OBSERVED reply rate.
+  it("day 0 is half the plan budget; maturity is the full budget", () => {
+    expect(effectiveNewContactCap("ultra", 0, 7)).toBe(12);
+    expect(effectiveNewContactCap("pro", 0, 7)).toBe(10);
+    expect(effectiveNewContactCap("free", 0, 7)).toBe(5);
     expect(effectiveNewContactCap("ultra", 7, 7)).toBe(24);
     expect(effectiveNewContactCap("free", 30, 7)).toBe(10);
+  });
+
+  it("the INVARIANT: day 0 is strictly below maturity, for every plan", () => {
+    for (const plan of ["free", "pro", "ultra"]) {
+      expect(effectiveNewContactCap(plan, 0, 7)).toBeLessThan(effectiveNewContactCap(plan, 7, 7));
+    }
+  });
+
+  it("a measured reply rate earns the budget FASTER - answered messages are the proof", () => {
+    const cold = effectiveNewContactCap("ultra", 1, 7, null);
+    const answered = effectiveNewContactCap("ultra", 1, 7, 0.4);
+    expect(answered).toBeGreaterThan(cold);
+    // ...but acceleration is capped: even a perfect rate cannot exceed 100%.
+    expect(effectiveNewContactCap("ultra", 1, 7, 1)).toBeLessThanOrEqual(24);
+  });
+
+  it("never below one conversation - a ramp is not a mute button", () => {
+    expect(effectiveNewContactCap("free", 0, 30)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the zero-send benefit-of-the-doubt cannot unlock day 0 (guard passes null below samples)", () => {
+    const guard = readFileSync(join(process.cwd(), "src/lib/wa-guard.ts"), "utf8");
+    expect(guard).toMatch(/\(rep\.sent_total \|\| 0\) >= p\.min_reply_samples \? replyRate\(rep\) : null/);
+    expect(guard).toMatch(/effectiveNewContactCap\(plan \?\? "free", ageDaysOf\(rep\), p\.warmup_days, measuredReplyRate\)/);
   });
 });
 

@@ -97,12 +97,26 @@ users.**
 
 ## Rate limiting & anti-ban budgets (as shipped)
 
-Per user daily: 15 searches, 300 geocodes, 120 AI calls, 60 WA sends
-(15/hour). Anti-ban per number: base 4/hour growing to 14/hour with trust and
-plan headroom (free 6/h, pro 10/h, ultra 18/h), 40/day cap (±20% jitter),
-50-120s gaps, business hours 08-21, plan-tiered rolling new-contact window
-(free 10/6h, pro 15/4h, ultra 40/3h), auto-pause on risk ≥70 for 4h, 7-day
-warm-up ramping from a 45% floor to full.
+> DOC PIN: every number below is asserted against the live constants
+> (`PLAN_CAPACITY`, `getPolicies()` defaults, the usage lane limits) by
+> `src/lib/wa/readiness-numbers.test.ts`. Change code and doc together or the
+> gate goes red - this section drifted from the code once before and shipped
+> five stale numbers.
+
+Per user daily: 15 searches, 300 geocodes, 120 AI calls. WhatsApp sends run in
+two lanes: cold introductions 24/hour and 80/day, replies 40/hour and 200/day.
+Anti-ban per number: base 4/hour growing to 14/hour with trust, with the
+hourly velocity floor pinned to the plan budget (free 10/h, pro 20/h, ultra
+24/h) so a within-budget batch never splits across hours; 220/day hard ceiling
+(±20% jitter); 12-28s jittered gaps on the cold lane and ~5s per engaged shop
+on the reply lane; cold intros wait for the recipient's business hours 08-21
+(replies are exempt; `FAST_DISPATCH` lifts it); plan-tiered rolling
+new-contact window (free 10/6h, pro 20/4h, ultra 24/3h); auto-pause at risk
+score 70 for 240 min. The warm-up ramp is REAL as of owner report 3: a
+brand-new number starts at ~50% of its plan's introductions on day 0 (ultra
+12, pro 10, free 5) and earns to 100% over 7 days, accelerated by an observed
+reply rate. A shop that says "stop messaging me" (multilingual detection) is
+opted out permanently - the guard refuses every future send, manual included.
 `SCALE_MODE=on` triples the per-user budgets and relaxes client polling
 (12s→25s activity, 15s→30s replies) - it does NOT change anti-ban pacing
 (deliberate: number safety never scales down).

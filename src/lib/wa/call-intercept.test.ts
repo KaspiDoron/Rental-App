@@ -15,8 +15,10 @@ const world: {
   claim: "won" | "lost" | "error";
   pushes: { title: string; url: string; tag?: string }[];
   sends: { to: string; text: string; auto: boolean }[];
+  /** What actually reached the TRANSPORT - the reproduction's whole point. */
+  transported: { to: string; text: string; lane?: string }[];
   events: { kind: string; vendor: string }[];
-} = { known: null, claim: "won", pushes: [], sends: [], events: [] };
+} = { known: null, claim: "won", pushes: [], sends: [], transported: [], events: [] };
 
 vi.mock("./known-thread", () => ({
   resolveKnownThreadNumber: async (_e: string, digits: string) =>
@@ -43,6 +45,15 @@ vi.mock("../wa-guard", () => ({
     world.sends.push({ to: o.toDigits, text: o.text, auto: o.auto });
     return { allow: true, text: o.text };
   },
+  claimForSend: async () => ({ ok: true }),
+  releaseSendClaim: async () => {},
+  afterSend: async () => {},
+}));
+vi.mock("../evolution", () => ({
+  sendFromUser: async (_e: string, to: string, text: string, _fast: boolean, o?: { lane?: string }) => {
+    world.transported.push({ to, text, lane: o?.lane });
+    return { ok: true, messageId: "m1" };
+  },
 }));
 
 import { handleCallEvent, parseCallFrame, isRinging, missedCallReply } from "./call-intercept";
@@ -55,6 +66,7 @@ beforeEach(() => {
   world.claim = "won";
   world.pushes = [];
   world.sends = [];
+  world.transported = [];
   world.events = [];
 });
 
@@ -90,6 +102,9 @@ describe("a shop rings: the traveller hears about it and the shop gets an answer
       expect(world.pushes[0].url).toBe(`/?from=${SHOP}`);
       expect(world.sends[0].to).toBe(SHOP);
       expect(world.sends[0].text).toMatch(/can'?t (take|really do) a? ?calls?/i);
+      // REPRODUCTION of the 3.4 defect: a guard verdict is a DECISION, not a
+      // delivery. The message must reach the transport, on the reply lane.
+      expect(world.transported[0]).toMatchObject({ to: SHOP, lane: "reply" });
     });
   });
 
@@ -158,6 +173,7 @@ describe("a shop that redials four times is still one conversation", () => {
     const r = await handleCallEvent({ email: "t@example.com", data: offer() });
     expect(r.outcome).toBe("answered");
     expect(world.sends.length).toBe(1);
+    expect(world.transported.length).toBe(1);
   });
 });
 

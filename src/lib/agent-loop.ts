@@ -596,6 +596,14 @@ export async function processVendorReply(opts: {
         if (ours.some((o) => norm(o.body || "") === norm(text))) return;
         const { screenInbound } = await import("./inbound-risk");
         const verdict = await screenInbound(text, { vendorName: ctx.vendorName ?? undefined });
+        // "Stop messaging me" is honored BEFORE the risk-none return - an
+        // opt-out is not a risk, so it must not depend on one. The stamp is
+        // what makes guardOutbound's permanent veto fire; the self-flag skip
+        // above already protects it from the user's own mislabeled text.
+        if (verdict.optOut) {
+          const { markRecipientOptedOut } = await import("./wa-guard");
+          await markRecipientOptedOut(ctx.sender!, from, ctx.vendorName ?? undefined).catch(() => {});
+        }
         if (verdict.risk === "none") return;
         // user_email column = EXACT ownership scoping for the risk feed (the
         // old detail LIKE *email* filter leaked alerts across users whose

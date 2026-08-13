@@ -128,7 +128,7 @@ describe("the wiring is in place (source pins)", () => {
 
   it("park.ts dedups with the shared NULL-safe kind filter (the W-14 class)", () => {
     const park = readCode("src/lib/wa/park.ts");
-    expect(park).toMatch(/import \{ REPLY_KIND_FILTER \} from "\.\.\/wa-guard"/);
+    expect(park).toMatch(/import \{ REPLY_KIND_FILTER, humanizeForOutbound \} from "\.\.\/wa-guard"/);
     expect(park).toMatch(/\$\{REPLY_KIND_FILTER\}/);
     // The NULL-blind local predicate is gone.
     expect(park).not.toMatch(/meta->>kind=not\.in\./);
