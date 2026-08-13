@@ -453,6 +453,35 @@ export default function AdminPage() {
   const [keyWarning, setKeyWarning] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; label: string; value: string }[] | null>(null);
   const [aiProviders, setAiProviders] = useState<any[]>([]);
+  // "Test AI providers": one tap fires a tiny real completion at EVERY
+  // configured provider concurrently (POST /api/admin/ai-test) and shows,
+  // per provider, whether it answered and with WHICH model - a primary id
+  // rescued by its fallback is a fix-me, not a pass.
+  const [aiTest, setAiTest] = useState<
+    | {
+        name: string;
+        configured: boolean;
+        ok: boolean;
+        model?: string;
+        configuredModel?: string;
+        ms?: number;
+        detail?: string;
+      }[]
+    | null
+  >(null);
+  const [aiTestBusy, setAiTestBusy] = useState(false);
+  async function runAiTest() {
+    setAiTestBusy(true);
+    try {
+      const r = await fetch("/api/admin/ai-test", { method: "POST" });
+      const d = await r.json();
+      setAiTest(Array.isArray(d?.results) ? d.results : []);
+    } catch {
+      setAiTest([]);
+    } finally {
+      setAiTestBusy(false);
+    }
+  }
   const [distillMsg, setDistillMsg] = useState<string | null>(null);
   const [distillBusy, setDistillBusy] = useState(false);
   const [trainingCount, setTrainingCount] = useState(0);
@@ -1870,6 +1899,60 @@ export default function AdminPage() {
               The starred provider goes first; if it fails or runs out, the next
               one takes over automatically. Tap to switch.
             </p>
+            <button
+              onClick={runAiTest}
+              disabled={aiTestBusy}
+              className="btn btn-primary mb-2 w-full rounded-2xl py-2.5 text-[13px] disabled:opacity-60"
+            >
+              {aiTestBusy ? "Testing every provider…" : "🧪 Test AI providers"}
+            </button>
+            {aiTest !== null && (
+              <div className="mb-3 space-y-1.5">
+                {aiTest.length === 0 && (
+                  <p className="text-[11.5px] font-bold text-brandred">
+                    The test call itself failed - that is unknown, not healthy.
+                  </p>
+                )}
+                {aiTest.map((t) => {
+                  const drifted = t.ok && t.model && t.configuredModel && t.model !== t.configuredModel;
+                  return (
+                    <div
+                      key={t.name}
+                      className={`rounded-2xl border-2 px-3 py-2 text-[11.5px] font-bold ${
+                        !t.configured
+                          ? "border-line bg-card2 text-faint"
+                          : t.ok && !drifted
+                            ? "border-savings/50 bg-savings-soft text-savings"
+                            : t.ok
+                              ? "border-brandyellow bg-brandyellow-soft text-warn"
+                              : "border-brandred/60 bg-brandred-soft text-brandred"
+                      }`}
+                    >
+                      <span className="capitalize">{t.name}</span>
+                      {!t.configured ? (
+                        " - no key set"
+                      ) : t.ok ? (
+                        <>
+                          {" "}
+                          - OK · <span className="font-mono text-[10.5px]">{t.model}</span>
+                          {typeof t.ms === "number" ? ` · ${t.ms}ms` : ""}
+                          {drifted && (
+                            <div className="mt-0.5 font-mono text-[10px]">
+                              primary {t.configuredModel} FAILED - the fallback answered.
+                              Fix it or paste a working id as {t.name.toUpperCase()}_MODEL.
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="mt-0.5 break-words font-mono text-[10px]">
+                          {t.detail ?? "failed"}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div className="space-y-2">
               {aiProviders.map((p) => (
                 <button
