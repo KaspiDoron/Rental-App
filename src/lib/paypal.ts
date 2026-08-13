@@ -136,6 +136,130 @@ export async function createPaypalCheckout(
   }
 }
 
+// ---------------------------------------------------------------------------
+// WEBHOOK MANAGEMENT (wave 4.3 - the doctor's hands).
+//
+// No webhook was ever registered on the live PayPal app, so the ONLY code
+// path that can LOWER a plan (cancellation/expiry events) never ran -
+// cancelled subscribers kept paid tiers forever. These helpers let
+// /api/admin/paypal-doctor register + repair the webhook via the API using
+// the credentials already in the vault, so the owner's job is one button.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every event the webhook route + suspension logic actually branch on.
+ * paypal-webhook-events.test.ts pins this list against those source files,
+ * so a new branch cannot ship without the subscription being updated here.
+ */
+export const PAYPAL_WEBHOOK_EVENTS = [
+  "BILLING.SUBSCRIPTION.ACTIVATED",
+  "BILLING.SUBSCRIPTION.RE-ACTIVATED",
+  "BILLING.SUBSCRIPTION.CANCELLED",
+  "BILLING.SUBSCRIPTION.EXPIRED",
+  "BILLING.SUBSCRIPTION.SUSPENDED",
+  "PAYMENT.SALE.COMPLETED",
+] as const;
+
+export interface PaypalWebhookInfo {
+  id: string;
+  url: string;
+  eventTypes: string[];
+}
+
+/**
+ * The app's registered webhooks. `null` means UNREADABLE (bad credentials or
+ * network) - which is a different answer from "there are none", and callers
+ * must not treat the two alike (that is exactly the key-test fail-green this
+ * wave fixes).
+ */
+export async function listPaypalWebhooks(): Promise<PaypalWebhookInfo[] | null> {
+  const token = await paypalToken();
+  if (!token) return null;
+  const base = await paypalBase();
+  try {
+    const res = await fetch(`${base}/v1/notifications/webhooks`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const d = (await res.json().catch(() => null)) as {
+      webhooks?: { id?: string; url?: string; event_types?: { name?: string }[] }[];
+    } | null;
+    if (!d || !Array.isArray(d.webhooks)) return null;
+    return d.webhooks.map((w) => ({
+      id: String(w.id ?? ""),
+      url: String(w.url ?? ""),
+      eventTypes: Array.isArray(w.event_types)
+        ? w.event_types.map((e) => String(e?.name ?? "")).filter(Boolean)
+        : [],
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** Register a webhook for our event set. Returns the new webhook id. */
+export async function createPaypalWebhook(
+  url: string
+): Promise<{ id?: string; error?: string }> {
+  const token = await paypalToken();
+  if (!token) return { error: "PayPal credentials rejected." };
+  const base = await paypalBase();
+  try {
+    const res = await fetch(`${base}/v1/notifications/webhooks`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url,
+        event_types: PAYPAL_WEBHOOK_EVENTS.map((name) => ({ name })),
+      }),
+      cache: "no-store",
+    });
+    const d = await res.json().catch(() => ({}) as Record<string, unknown>);
+    if (!res.ok || !d?.id) {
+      const detail =
+        (d as { details?: { description?: string }[]; message?: string })?.details?.[0]
+          ?.description ??
+        (d as { message?: string })?.message ??
+        `PayPal ${res.status}`;
+      return { error: String(detail) };
+    }
+    return { id: String(d.id) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "network error" };
+  }
+}
+
+/**
+ * Point an EXISTING webhook at our URL + event set (repair, never delete -
+ * deleting a webhook that something else depends on is not this tool's call).
+ */
+export async function patchPaypalWebhook(id: string, url: string): Promise<boolean> {
+  const wid = String(id ?? "").trim();
+  if (!wid || !/^[A-Za-z0-9_-]+$/.test(wid)) return false;
+  const token = await paypalToken();
+  if (!token) return false;
+  const base = await paypalBase();
+  try {
+    const res = await fetch(`${base}/v1/notifications/webhooks/${encodeURIComponent(wid)}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { op: "replace", path: "/url", value: url },
+        {
+          op: "replace",
+          path: "/event_types",
+          value: PAYPAL_WEBHOOK_EVENTS.map((name) => ({ name })),
+        },
+      ]),
+      cache: "no-store",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verify a PayPal webhook via the verify-webhook-signature API (PayPal signs
  * with a rotating cert, so verification is a server-to-server call keyed on the

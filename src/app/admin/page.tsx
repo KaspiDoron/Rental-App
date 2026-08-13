@@ -25,6 +25,10 @@ const WaDoctorCard = dynamic(
   () => import("@/components/admin/WaDoctorCard").then((m) => m.WaDoctorCard),
   { ssr: false, loading: () => <LoadingDots label="Loading WA doctor" /> }
 );
+const PaypalDoctorCard = dynamic(
+  () => import("@/components/admin/PaypalDoctorCard").then((m) => m.PaypalDoctorCard),
+  { ssr: false, loading: () => <LoadingDots label="Loading PayPal doctor" /> }
+);
 const DeployInfoCard = dynamic(() => import("@/components/admin/DeployInfoCard"), {
   ssr: false,
   loading: () => <LoadingDots label="Reading the running service" />,
@@ -1705,6 +1709,10 @@ export default function AdminPage() {
 
           {/* WA doctor: one-tap inbound incident tracer + webhook re-arm */}
           <WaDoctorCard />
+
+          {/* PayPal doctor: register/repair the billing webhook + reconcile
+              plans against PayPal (4.3 - cancellations finally reach us). */}
+          <PaypalDoctorCard />
 
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${

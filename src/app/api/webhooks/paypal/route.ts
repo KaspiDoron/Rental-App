@@ -22,11 +22,34 @@ export async function POST(req: Request) {
   const raw = await req.text();
   const webhookId = await getConfig("PAYPAL_WEBHOOK_ID");
 
-  // Fail closed: if the webhook id is set, an unverifiable call is rejected; if
-  // it is not set yet (pre-config), we record the event but never grant.
+  // Fail closed: if the webhook id is set, an unverifiable call is rejected.
   const verified = webhookId ? await verifyPaypalWebhook(req.headers, raw) : false;
   if (webhookId && !verified) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+  // NOT CONFIGURED IS NOT "OK". Answering 200 here told PayPal the event was
+  // delivered, so the one retry channel the billing system has was consumed
+  // by a deploy that could not verify anything - the event was gone for good.
+  // 503 makes PayPal retry (with backoff, for days) into a deploy where the
+  // doctor HAS registered the id. The event is still recorded first, so the
+  // owner can see what has been knocking.
+  if (!webhookId) {
+    let evtType = "unparseable";
+    let evtId = "";
+    try {
+      const b = JSON.parse(raw) as { event_type?: string; id?: string };
+      evtType = String(b?.event_type ?? "unknown");
+      evtId = String(b?.id ?? "");
+    } catch {
+      /* recorded as unparseable */
+    }
+    await sbInsert("billing_events", [
+      { provider_event_id: evtId || null, type: `pp_unconfigured_${evtType}`, verified: false },
+    ]).catch(() => {});
+    return NextResponse.json(
+      { error: "PAYPAL_WEBHOOK_ID is not configured - retry after setup" },
+      { status: 503 }
+    );
   }
 
   let body: any = null;
@@ -139,6 +162,18 @@ export async function POST(req: Request) {
       // is not one already.
       await markSubscriptionState(SUSPENDED_KIND, { email, subscriptionId });
     }
+  } else if (verified && !email && (activates || subscriptionId)) {
+    // A VERIFIED event we could not pin to any account. Money may be moving
+    // with nobody attributed - the reconcile sweep and the owner both need to
+    // be able to find these, so the shrug leaves a durable, queryable trace
+    // instead of dissolving into the generic pp_* row above.
+    await sbInsert("billing_events", [
+      {
+        provider_event_id: String(body?.id ?? "") || null,
+        type: `pp_unattributed_${event || "unknown"}`,
+        verified: true,
+      },
+    ]).catch(() => {});
   }
 
   return NextResponse.json({ ok: true });
