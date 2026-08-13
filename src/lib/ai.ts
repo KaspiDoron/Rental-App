@@ -570,7 +570,13 @@ async function callProvider(
     return await run(cfg.model);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    const modelIssue = /\b(400|404)\b/.test(reason);
+    // 400/404: the id is wrong or renamed. 429: THIS model's pool is
+    // congested - SambaNova and OpenRouter throttle PER MODEL, so the
+    // sibling fallback id on the same key routinely answers immediately
+    // while the popular primary is drowning. Either way the fallback id is
+    // the right next move; a provider-wide quota 429 just fails a second
+    // cheap call and the cross-provider failover chain moves on as before.
+    const modelIssue = /\b(400|404|429)\b/.test(reason);
     if (cfg.fallbackModel && modelIssue) {
       // A SUCCESSFUL RESCUE HID THE THING THAT NEEDED FIXING.
       //
