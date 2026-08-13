@@ -53,8 +53,30 @@ test.describe("Hebrew / RTL @rtl", () => {
     await expect(summary.getByText("5 km", { exact: false })).toBeVisible();
 
     // Hebrew glyphs draw from the Rubik brand font, not a system fallback.
-    const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
-    expect(bodyFont).toMatch(/Rubik/i);
+    //
+    // Measured TWO ways, either one passes: the computed body font-family, OR
+    // the next/font custom property that injects Rubik into the stack. The
+    // first alone proved brittle in CI (run #245): with fonts verifiably in
+    // the build's CSS, Chromium 151 serialized the nested var() chain's
+    // computed font-family as the bare UA default - a serialization quirk,
+    // not a missing font. The custom property read bypasses font-family
+    // serialization entirely and still fails RED when a build genuinely
+    // ships without the Hebrew font (the owner's original complaint). The
+    // diagnostics ride in the failure message so a future recurrence is
+    // debuggable from the CI log alone.
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const fontDiag = await page.evaluate(() => ({
+      bodyFont: getComputedStyle(document.body).fontFamily,
+      heVar: getComputedStyle(document.documentElement)
+        .getPropertyValue("--wd-font-body-he")
+        .trim(),
+      htmlClass: document.documentElement.className,
+      sheets: document.styleSheets.length,
+    }));
+    expect(
+      /rubik/i.test(fontDiag.bodyFont) || /rubik/i.test(fontDiag.heVar),
+      `Hebrew brand font missing from BOTH signals: ${JSON.stringify(fontDiag)}`
+    ).toBe(true);
 
     await assertNoOverflow(page, "RTL workspace");
   });
