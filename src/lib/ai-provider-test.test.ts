@@ -86,6 +86,46 @@ describe("testAllProviders contract (source pins)", () => {
     expect(ai).toMatch(/\\b\(400\|404\|429\)\\b/);
   });
 
+  it("EXECUTED: 429 primary -> fallback answers; both-fail names BOTH ids", async () => {
+    // Live evidence this encodes: the owner's sweep showed SambaNova red with
+    // ONLY the primary's "high demand" error, which was indistinguishable
+    // from "the fallback was never tried". Run the real code against a
+    // stubbed network both ways.
+    process.env.SAMBANOVA_TOKEN = "fake-key";
+    try {
+      let mode: "rescue" | "both-fail" = "rescue";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: { body?: string }) => {
+          if (!String(url).includes("sambanova")) return new Response("{}", { status: 200 });
+          const model = JSON.parse(init?.body ?? "{}").model as string;
+          const busy = (m: string) =>
+            new Response(JSON.stringify({ error: { message: `${m} is currently experiencing high demand.` } }), { status: 429 });
+          if (mode === "both-fail") return busy(model);
+          return model === "gpt-oss-120b"
+            ? new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }), { status: 200 })
+            : busy(model);
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+
+      // Primary answers immediately (gpt-oss-120b now leads on SambaNova).
+      const rescued = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(rescued?.ok).toBe(true);
+      expect(rescued?.model).toBe("gpt-oss-120b");
+
+      // Both pools drowning: the detail must name BOTH attempts.
+      mode = "both-fail";
+      const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(drowned?.ok).toBe(false);
+      expect(drowned?.detail).toMatch(/primary gpt-oss-120b:/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct:/);
+    } finally {
+      delete process.env.SAMBANOVA_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("one hung provider cannot stall the whole sweep past an infra timeout", () => {
     // Real keys mean real calls: without a hard per-provider deadline the
     // response could take primary+fallback (20s+20s), long enough for the
