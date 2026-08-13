@@ -113,11 +113,12 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "sambanova",
       token: sambanova,
       endpoint: "https://api.sambanova.ai/v1/chat/completions",
-      // Meta-Llama-3.3-70B-Instruct is still current on SambaNova Cloud (the
-      // panel's 429 was a rate limit, not a dead id). gpt-oss-120b is the
-      // newer catalog entry used as fallback.
-      model: pick(sambaM, "Meta-Llama-3.3-70B-Instruct"),
-      fallbackModel: "gpt-oss-120b",
+      // gpt-oss-120b leads: it is SambaCloud's newly promoted flagship with
+      // dedicated capacity, while the Llama-3.3-70B free pool 429s with
+      // "experiencing high demand" at peak (the owner hit it twice live).
+      // Llama stays as the fallback - still a current id, just crowded.
+      model: pick(sambaM, "gpt-oss-120b"),
+      fallbackModel: "Meta-Llama-3.3-70B-Instruct",
     },
     {
       name: "deepseek",
@@ -598,7 +599,19 @@ async function callProvider(
       // months in the first place.
       await recordUsage(cfg.name, 0, true, cfg.model, `primary model failed, fell back: ${reason}`)
         .catch(() => {});
-      return run(cfg.fallbackModel);
+      try {
+        return await run(cfg.fallbackModel);
+      } catch (e2) {
+        // BOTH ids failed. Reporting only one of the two errors made the
+        // live panel ambiguous: a red card naming the primary's error reads
+        // as "the fallback was never tried" when it was tried and also
+        // refused. Name both attempts, each with its own model id.
+        const r2 = e2 instanceof Error ? e2.message : String(e2);
+        // Bound each half so the second one survives downstream truncation.
+        throw new Error(
+          `primary ${cfg.model}: ${reason.slice(0, 220)} | fallback ${cfg.fallbackModel}: ${r2.slice(0, 220)}`
+        );
+      }
     }
     throw e;
   }
@@ -664,7 +677,8 @@ export async function testAllProviders(): Promise<ProviderTestResult[]> {
           ok: false,
           configuredModel: p.model,
           ms: Date.now() - t0,
-          detail: reason.slice(0, 300),
+          // Wide enough for a both-ids-failed report (two bounded halves).
+          detail: reason.slice(0, 500),
         };
       } finally {
         clearTimeout(watchdog);
