@@ -627,8 +627,21 @@ export async function testAllProviders(): Promise<ProviderTestResult[]> {
     providers.map(async (p): Promise<ProviderTestResult> => {
       if (!p.token) return { name: p.name, configured: false, ok: false, detail: "no key set" };
       const t0 = Date.now();
+      // Hard per-provider deadline. Primary and fallback each get 10s, raced
+      // against 12s overall, so ONE hung provider cannot stretch the sweep
+      // past an intermediary's response timeout - the whole route answers in
+      // ~12s or not at all, and "too slow" is itself an honest verdict.
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
       try {
-        const r = await callProvider(p, probe, 16, 20_000);
+        const r = await Promise.race([
+          callProvider(p, probe, 16, 10_000),
+          new Promise<never>((_, reject) => {
+            watchdog = setTimeout(
+              () => reject(new Error("probe timed out after 12s - the provider hung or is unreachable")),
+              12_000
+            );
+          }),
+        ]);
         return {
           name: p.name,
           configured: true,
@@ -647,6 +660,8 @@ export async function testAllProviders(): Promise<ProviderTestResult[]> {
           ms: Date.now() - t0,
           detail: reason.slice(0, 300),
         };
+      } finally {
+        clearTimeout(watchdog);
       }
     })
   );

@@ -41,6 +41,24 @@ describe("/api/admin/ai-test", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).results).toEqual(results);
   });
+
+  it("a crashed sweep returns its own words, not an opaque 500", async () => {
+    // The production failure mode this exists for: the panel showed only
+    // "the test call itself failed" because every server-side crash reached
+    // the client as an unreadable non-JSON 500.
+    vi.doMock("@/lib/session", () => ({
+      requireManagement: vi.fn(async () => ({ email: "admin@e2e.test", isAdmin: true })),
+    }));
+    vi.doMock("@/lib/ai", () => ({
+      testAllProviders: vi.fn(async () => {
+        throw new Error("supabase config read exploded");
+      }),
+    }));
+    const route = await import("../app/api/admin/ai-test/route");
+    const res = await route.POST();
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/supabase config read exploded/);
+  });
 });
 
 describe("testAllProviders contract (source pins)", () => {
@@ -58,6 +76,16 @@ describe("testAllProviders contract (source pins)", () => {
   it("an unconfigured provider is reported, never silently skipped", () => {
     expect(ai).toMatch(/configured: false, ok: false, detail: "no key set"/);
   });
+
+  it("one hung provider cannot stall the whole sweep past an infra timeout", () => {
+    // Real keys mean real calls: without a hard per-provider deadline the
+    // response could take primary+fallback (20s+20s), long enough for the
+    // transport in front of Cloud Run - or the phone - to give up, which is
+    // exactly the "test call itself failed" the owner hit.
+    expect(ai).toMatch(/probe timed out after 12s/);
+    expect(ai).toMatch(/callProvider\(p, probe, 16, 10_000\)/);
+    expect(ai).toMatch(/clearTimeout\(watchdog\)/);
+  });
 });
 
 describe("the admin panel wiring", () => {
@@ -74,5 +102,17 @@ describe("the admin panel wiring", () => {
   it("a fallback-rescued primary renders as a fix-me, not a pass", () => {
     expect(page).toMatch(/t\.model !== t\.configuredModel/);
     expect(page).toMatch(/the fallback answered/);
+  });
+
+  it("a failed sweep names WHICH layer failed, never one blanket line", () => {
+    // HTTP status vs browser-side failure vs timeout are three different
+    // diagnoses; collapsing them made the button undebuggable in production.
+    expect(page).toMatch(/aiTestError/);
+    expect(page).toMatch(/The server answered HTTP \$\{r\.status\}/);
+    expect(page).toMatch(/The request failed in the browser/);
+    expect(page).toMatch(/AbortSignal\.timeout\(60_000\)/);
+    // The old behavior - every failure collapsing to an empty array with no
+    // detail - must stay dead.
+    expect(page).not.toMatch(/aiTest\.length === 0/);
   });
 });
