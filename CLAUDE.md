@@ -91,8 +91,9 @@ Bootstrap env vars in GCP Secret Manager: `SUPABASE_URL`,
 `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SESSION_SECRET`,
 `ADMIN_EMAILS`, `APP_DOMAIN` (the public GCP gateway URL). Run
 `supabase/schema.sql`. All other keys can be pasted in Admin -> Keys. See
-`GUIDE.md` for the step-by-step. Deployment is GCP-only (Cloud Run web +
-gateway + workers).
+`GUIDE.md` for the step-by-step. GCP (Cloud Run web + gateway + workers) is
+the primary target; `render.yaml` + `deploy/*` remain the live Render half
+and are NOT dead code.
 
 ## Working branch
 

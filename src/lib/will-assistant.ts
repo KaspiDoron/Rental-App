@@ -24,6 +24,14 @@ export type WillStep =
   | "SEARCH_READY" // everything present - the only step that says "press it"
   | "SEARCH_INPUT" // fallback when the inputs are not reported (legacy callers)
   | "AGENTS_DISPATCHED" // profiling / discovering / first messages going out
+  // SHOPS FOUND, NOTHING SENT (owner report 3, item 9). `NEGOTIATING` fired on
+  // `vendorCount > 0` alone - and since discovery finds shops without sending
+  // anything, "Shops are reading your request... See it live" was the DEFAULT
+  // state after every search, with zero messages out and nothing to see live.
+  // The status panel on the same screen truthfully said 0 contacted; Will
+  // contradicted it. The honest advice here is pick shops / ask for a price /
+  // narrow with filters - the actions that MAKE something to see live.
+  | "SHOPS_FOUND"
   | "NEGOTIATING" // shops contacted, no prices yet
   | "RESULTS_READY"; // offers on the table (or a deal closing)
 
@@ -51,6 +59,14 @@ export interface WillStepInput {
   hasStay?: boolean;
   /** The consent tick is a real, common blocker with a one-tap fix. */
   idpDeclared?: boolean;
+  /**
+   * Shops actually CONTACTED (messaged + replied + queued + offers - the
+   * status panel's own arithmetic, so the two surfaces cannot disagree).
+   * Optional for the same reason as the inputs above: a caller that does not
+   * report it keeps the old lumped NEGOTIATING and is never told its board is
+   * untouched when it simply cannot see the board.
+   */
+  contactedCount?: number;
 }
 
 /**
@@ -64,8 +80,18 @@ export function deriveWillStep(s: WillStepInput): WillStep | null {
     return s.waPhase === "AUTHENTICATING" ? "WA_AUTHENTICATING" : "WA_LINK_PENDING";
   }
   if (s.closing || s.offerCount > 0) return "RESULTS_READY";
-  if (s.phase === "profiling" || s.phase === "running") return "AGENTS_DISPATCHED";
-  if (s.vendorCount > 0) return "NEGOTIATING";
+  if (s.phase === "profiling" || s.phase === "discovering" || s.phase === "running") {
+    return "AGENTS_DISPATCHED";
+  }
+  if (s.vendorCount > 0) {
+    // Found is not contacted. Discovery fills the board without sending a
+    // single message, so "shops found" and "messages out" are different
+    // states with different honest advice - collapsing them told travellers
+    // to "see it live" when nothing was live. A caller that does not report
+    // contactedCount keeps the old lumped NEGOTIATING.
+    if (s.contactedCount === 0) return "SHOPS_FOUND";
+    return "NEGOTIATING";
+  }
 
   // Pre-search. Only refine when the caller actually reported the inputs -
   // a legacy caller that reports none must not be told its form is empty.

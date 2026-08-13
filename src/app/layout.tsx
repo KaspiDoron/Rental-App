@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Baloo_2, Nunito } from "next/font/google";
+import { Baloo_2, Nunito, Rubik, Secular_One } from "next/font/google";
 import { I18nProvider } from "@/lib/i18n";
 import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
+import { AmbientGlow } from "@/components/AmbientGlow";
+import { PageFade } from "@/components/PageFade";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { ADSENSE_PUBLISHER, resolveSiteOrigin } from "@/lib/site";
 import { TestModeBanner } from "@/components/TestModeBanner";
@@ -36,6 +38,30 @@ const baloo = Baloo_2({
   subsets: ["latin"],
   weight: ["600", "700", "800"],
   variable: "--wd-font-display",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// THE HEBREW FACES (owner report 3, item 10). Neither brand font carries
+// Hebrew glyphs, so Hebrew fell through to an arbitrary system face - the
+// "not premium enough" in the owner's screenshots. These sit AFTER the Latin
+// families in the --font-body/--font-display ladders (globals.css): font
+// fallback is per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo
+// while Hebrew glyphs resolve to Rubik (body) and Secular One (display).
+const rubik = Rubik({
+  subsets: ["hebrew", "latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--wd-font-body-he",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const secular = Secular_One({
+  // Secular One ships ONE weight; .font-display gets font-synthesis-weight:
+  // none so browsers never smear a fake bold onto it.
+  subsets: ["hebrew", "latin"],
+  weight: "400",
+  variable: "--wd-font-display-he",
   display: "swap",
   adjustFontFallback: true,
 });
@@ -142,10 +168,18 @@ export const viewport: Viewport = {
 // The RTL set is inlined as a literal rather than imported because this string
 // runs before any module loads. It must stay in sync with LANGS' `rtl: true`
 // entries in src/lib/i18n.tsx - a test pins that it does.
+//
+// The storage read sits in its OWN try: when localStorage throws (private
+// mode, blocked storage) the OS fallback and the attribute stamp must still
+// run - one shared try/catch made a storage exception silently strand a
+// dark-OS visitor on the light theme. The stored value is also validated, so
+// a corrupted "wd_theme" falls back to the OS instead of stamping garbage.
 const themeScript = `
+var t = null;
+try { t = localStorage.getItem("wd_theme"); } catch (e) {}
 try {
-  var t = localStorage.getItem("wd_theme");
-  if (!t) t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  if (t !== "dark" && t !== "light")
+    t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", t);
 } catch (e) {}
 try {
@@ -167,7 +201,7 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       // The two font variables land on the root, where globals.css reads them.
-      className={`${nunito.variable} ${baloo.variable}`}
+      className={`${nunito.variable} ${baloo.variable} ${rubik.variable} ${secular.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
@@ -198,7 +232,15 @@ export default function RootLayout({
                 leaves one behind: both would make it the containing block for
                 every `position: fixed` element inside it. `page-fade` is
                 opacity-only for exactly that reason. */}
-            <div className="app-canvas page-fade">{children}</div>
+            {/* The whole-screen loading wash - a permanent SIBLING of the
+                canvas (never inside it: the canvas clips X and must stay
+                transform-free). It paints only while something raised it. */}
+            <AmbientGlow />
+            {/* PageFade keys the canvas per pathname so the fade re-runs on
+                CLIENT navigations too - under router.push this div used to
+                persist and the new page popped in with no ease. The canvas
+                rules (opacity-only, never a transform) live in PageFade. */}
+            <PageFade>{children}</PageFade>
             <NavVeil />
             <OfflineBanner />
             <TestModeBanner />

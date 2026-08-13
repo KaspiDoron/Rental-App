@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallbackRef } from "@/components/useCallbackRef";
+import { useRouter } from "next/navigation";
 import { useHeaderCollapse } from "@/components/useHeaderCollapse";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -84,7 +85,12 @@ function etaRangeLabel(
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
-import { ThreadDashboard } from "@/components/ThreadDashboard";
+// Heavy full-screen surface, opened on demand - out of the route's first
+// parse, like MapView below. No ssr: it renders only after a tap.
+const ThreadDashboard = dynamic(
+  () => import("@/components/ThreadDashboard").then((m) => m.ThreadDashboard),
+  { ssr: false }
+);
 import { LocationShareSheet } from "@/components/LocationShareSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
@@ -105,8 +111,10 @@ import { AlertsChip } from "@/components/AlertsChip";
 import { WaLockVeil } from "@/components/WaLockVeil";
 import { probeWaStatus } from "@/lib/wa-status";
 import { startNav } from "@/components/NavVeil";
+import { raiseAmbient, lowerAmbient } from "@/components/AmbientGlow";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
@@ -116,6 +124,7 @@ import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
 import { MassBargainPreview } from "@/components/MassBargainPreview";
 import { VirtualVendorList } from "@/components/VirtualVendorList";
 import { QuotesRail } from "@/components/QuotesRail";
+import { HorizontalVendorRail } from "@/components/HorizontalVendorRail";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -178,7 +187,10 @@ function pickExamples(plan?: string): string[] {
 }
 
 export default function Home() {
-  const { t, tShared } = useI18n();
+  // Client-side navigation: the tab hop keeps the React tree alive, so the
+  // destination paints from cache instead of re-parsing the whole bundle.
+  const router = useRouter();
+  const { t, tShared, lang } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [originHint, setOriginHint] = useState<string | null>(null);
@@ -196,6 +208,21 @@ export default function Home() {
     "idle" | "profiling" | "discovering" | "running" | "done"
   >("idle");
   const [view, setView] = useState<"list" | "map" | "activity">("list");
+  // THE LIST'S AXIS (owner report 3, item 12): the same vendor cards, swiped
+  // sideways or scrolled down - the traveller's choice, remembered across
+  // sessions like the language (wd_local_lang pattern). Default vertical.
+  const [listAxis, setListAxisState] = useState<"vertical" | "horizontal">("vertical");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("wd_list_axis") === "horizontal") setListAxisState("horizontal");
+    } catch {}
+  }, []);
+  const setListAxis = (a: "vertical" | "horizontal") => {
+    setListAxisState(a);
+    try {
+      localStorage.setItem("wd_list_axis", a);
+    } catch {}
+  };
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
@@ -444,6 +471,19 @@ export default function Home() {
   function scrollToVendor(id: string) {
     setView("list");
     setSelectedId(id);
+    // HORIZONTAL MODE: every card is mounted (plain flex, no windowing), and
+    // the movement is the STRIP's, not the page's - inline centring inside
+    // the rail, block "nearest" so the page never jumps vertically.
+    if (listAxis === "horizontal") {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          document
+            .getElementById(`vendor-${id}`)
+            ?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+        })
+      );
+      return;
+    }
     // THE TARGET MAY NOT BE MOUNTED. The list is windowed, so a card far down
     // it has no DOM node to scroll to - the old fix was to grow a "show more"
     // window past the index, which the virtualizer replaced. Scroll the page to
@@ -1933,6 +1973,10 @@ export default function Home() {
     setOriginHint(null);
     // A search starting is the celebration's natural end.
     clearJustLinked();
+    // The whole-screen wash answers the tap on this very frame and holds
+    // through profiling + discovery. Every exit below lowers it; a thrown
+    // fetch is caught by AmbientGlow's own timeout escape.
+    raiseAmbient();
     setPhase("profiling");
     setVendors([]);
     setRfq(null);
@@ -2019,6 +2063,7 @@ export default function Home() {
           origin: { lat: origin.lat, lng: origin.lng },
           radiusKm,
           vehicleClass,
+          lang,
           fulfillment: rfqSnap?.fulfillment === "any" ? undefined : rfqSnap?.fulfillment,
           // Snapshot-forward: hand the full RFQ so the search row can store it
           // and this hunt is restorable later from Trips (issue 8). On the fast
@@ -2038,6 +2083,7 @@ export default function Home() {
     const pRes = await profileP;
     const pData = await pRes.json();
     if (!pRes.ok) {
+      lowerAmbient();
       setPhase("idle");
       alert(pData.error ?? "Could not parse your request.");
       return;
@@ -2067,6 +2113,7 @@ export default function Home() {
       // A failed discovery call must NEVER masquerade as "no shops found
       // near your stay" - that sends users widening the radius for nothing.
       const err = await vRes.json().catch(() => ({}));
+      lowerAmbient();
       setPhase("idle");
       setSourceError(
         err.error ?? t("The shop search hiccuped - tap Find my deal to try again.")
@@ -2093,6 +2140,10 @@ export default function Home() {
 
     // A declaration is made about THIS request. The next search asks again.
     setIdpConsent(false);
+    // The shops are on screen - the WAIT is over even though the funnel keeps
+    // working. Holding the wash through the whole negotiation would teach
+    // travellers to ignore it.
+    lowerAmbient();
     setPhase("running");
     runFunnel(list, pData.rfq);
   }
@@ -2415,6 +2466,9 @@ export default function Home() {
     setMassPreview(null);
     setMassState("running");
     setMassNote(null);
+    // The wash covers the whole compose-and-queue round trip; the finally
+    // below is its guaranteed lower.
+    raiseAmbient();
     try {
       const chosen = new Set(vendorIds);
       const targets = filtered
@@ -2542,6 +2596,7 @@ export default function Home() {
         if (d.upgrade) setUpgradeOpen(true);
       }
     } finally {
+      lowerAmbient();
       setMassState("done");
     }
   });
@@ -2804,6 +2859,12 @@ export default function Home() {
         hasRequest: Boolean(rawText.trim()) || Boolean(builderFields?.vehicleClass),
         hasStay: Boolean(origin),
         idpDeclared: idpConsent,
+        // FOUND IS NOT CONTACTED (owner report 3, item 9). The panel's own
+        // arithmetic, so Will and the status panel cannot disagree: without
+        // this, a board full of discovered-but-unmessaged shops read as
+        // NEGOTIATING and Will offered "See it live" with nothing live.
+        contactedCount:
+          stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers,
       }),
     [
       waConnected,
@@ -2815,6 +2876,10 @@ export default function Home() {
       builderFields,
       origin,
       idpConsent,
+      stageCounts.messaged,
+      stageCounts.replied,
+      stageCounts.queued,
+      stageCounts.offers,
     ]
   );
   const assistant = useWillAssistant();
@@ -2851,6 +2916,45 @@ export default function Home() {
   // Give the listing back the ~100px the brand row costs while the traveller is
   // reading down the results, and return it the moment they scroll up.
   useHeaderCollapse();
+
+  // ONE card renderer for BOTH list axes (owner report 3, item 12). The
+  // vertical feed and the horizontal rail render this same closure, so the
+  // two modes can never drift apart in what a shop card shows or does.
+  const renderVendorCard = (v: Vendor, i: number) => (
+    <div
+      id={`vendor-${v.id}`}
+      className={`rise-in scroll-mt-24 mb-3 rounded-blob transition-shadow ${
+        selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
+      }`}
+      // The stagger was uncapped, so the twentieth card started animating
+      // 1.14s after the first - a flourish for the first few rows; past that
+      // it is just work.
+      style={{ ["--i" as string]: staggerIndex(i) }}
+    >
+      <VendorCard
+        vendor={v}
+        rfq={rfq}
+        plan={session?.plan}
+        waConnected={waConnected}
+        localLang={localLangActive}
+        region={origin?.label ?? ""}
+        searchEpoch={epochOnServerClock()}
+        onBook={onBookVendor}
+        onReviews={setReviewsVendor}
+        onBargain={onBargainVendor}
+        onStage={handleStage}
+        onQueued={handleQueued}
+        onCustomMessage={customMessage}
+        onPickupConsent={pickupConsent}
+        onLocationRequest={onLocationRequest}
+        whyDecisionId={whyByVendor[v.id]}
+        onWhy={openWhy}
+        onOpenThread={onOpenThread}
+        riskNote={riskByVendor[v.id]}
+        agentPending={agentPending[v.id]}
+      />
+    </div>
+  );
 
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-3xl">
@@ -2893,6 +2997,7 @@ export default function Home() {
                 {session.plan}
               </span>
             )}
+            <ThemeToggle />
             <LanguageButton />
           </div>
         </div>
@@ -3154,7 +3259,7 @@ export default function Home() {
         )}
 
         {source === "demo" && (
-          <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow animate-slide-up">
+          <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-warn animate-slide-up">
             {t("Demo shop list - no Google Maps key is set yet (owner: Admin -> Keys). Prices are never invented either way: we first ask each shop.")}
           </div>
         )}
@@ -3165,6 +3270,16 @@ export default function Home() {
             <div className="mt-1 font-semibold">
               {t("Owner: open Admin -> Keys -> Test Google key for a one-tap diagnosis.")}
             </div>
+          </div>
+        )}
+        {/* A failed DISCOVERY CALL (500/network) sets sourceError without a
+            source verdict - it must still be said out loud. Without this the
+            error string lived in state and rendered nowhere: the funnel
+            silently snapped back to idle, which is the "healthy-looking
+            failure" defect class this repo keeps fighting. */}
+        {sourceError && source !== "google-error" && (
+          <div className="mt-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred animate-slide-up">
+            {sourceError}
           </div>
         )}
         {source === "google" && (
@@ -3200,7 +3315,7 @@ export default function Home() {
         )}
 
         {feedStale && vendors.length > 0 && (
-          <p className="mt-3 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <p className="mt-3 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn">
             ⏳ {t("Reconnecting - live updates paused for a moment. Your agents keep working.")}
           </p>
         )}
@@ -3590,7 +3705,7 @@ export default function Home() {
               <span className="text-[10px] font-bold text-faint">{t("auto-sends")}</span>
             </div>
             {queueStalled && (
-              <p className="mb-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <p className="mb-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
                 ⏱ {t("Sending fell behind while the app was away - catching up now, one message at a time.")}
               </p>
             )}
@@ -3839,6 +3954,7 @@ export default function Home() {
                 isUltra={session?.plan === "ultra"}
                 onUpgrade={() => setUpgradeOpen(true)}
                 tagCounts={tagCounts}
+                {...(view === "list" ? { axis: listAxis, onAxis: setListAxis } : {})}
               />
             </div>
           </>
@@ -3881,60 +3997,31 @@ export default function Home() {
                 drives this same feed through the jump the status panel and the
                 push deep-links already use. Two axes, one list, one selection
                 - it derives nothing of its own. */}
-            <QuotesRail
-              vendors={filtered}
-              selectedId={selectedId}
-              onPick={scrollToVendor}
-              t={t}
-            />
-            {/* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
-                tracker, options, composer, a thread peek with its own poll -
-                all mounted and all re-rendering on every activity tick, on a
-                phone. "Show 20 more" was the old defence and it was a bad one
-                twice: it made the traveller work to see shops the app already
-                had, and it did nothing once tapped, which is exactly when the
-                list is heaviest. Only the rows near the viewport exist now. */}
-            <VirtualVendorList
-              vendors={filtered}
-              scrollRequest={scrollRequest}
-              renderCard={(v, i) => (
-              <div
-                id={`vendor-${v.id}`}
-                className={`rise-in scroll-mt-24 mb-3 rounded-blob transition-shadow ${
-                  selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
-                }`}
-                // The stagger was uncapped, so the twentieth card started
-                // animating 1.14s after the first and the last finished at
-                // 2.34s - two and a half seconds of compositing while the
-                // traveller was already scrolling. It is a flourish for the
-                // first few rows; past that it is just work.
-                style={{ ["--i" as string]: staggerIndex(i) }}
-              >
-                <VendorCard
-                  vendor={v}
-                  rfq={rfq}
-                  plan={session?.plan}
-                  waConnected={waConnected}
-                  localLang={localLangActive}
-                  region={origin?.label ?? ""}
-                  searchEpoch={epochOnServerClock()}
-                  onBook={onBookVendor}
-                  onReviews={setReviewsVendor}
-                  onBargain={onBargainVendor}
-                  onStage={handleStage}
-                  onQueued={handleQueued}
-                  onCustomMessage={customMessage}
-                  onPickupConsent={pickupConsent}
-                  onLocationRequest={onLocationRequest}
-                  whyDecisionId={whyByVendor[v.id]}
-                  onWhy={openWhy}
-                  onOpenThread={onOpenThread}
-                  riskNote={riskByVendor[v.id]}
-                  agentPending={agentPending[v.id]}
-                />
-              </div>
-              )}
-            />
+            {listAxis === "vertical" && (
+              <QuotesRail
+                vendors={filtered}
+                selectedId={selectedId}
+                onPick={scrollToVendor}
+                t={t}
+              />
+            )}
+            {listAxis === "horizontal" ? (
+              // THE SIDEWAYS LIST (owner report 3, item 12): the SAME cards,
+              // one per snap stop, on the rail's own scroller. QuotesRail is
+              // hidden here - a quotes strip above a horizontal list would be
+              // two rails stacked, and the cards already carry the prices.
+              <HorizontalVendorRail vendors={filtered} renderCard={renderVendorCard} />
+            ) : (
+              /* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
+                 tracker, options, composer, a thread peek with its own poll -
+                 all mounted and all re-rendering on every activity tick, on a
+                 phone. Only the rows near the viewport exist. */
+              <VirtualVendorList
+                vendors={filtered}
+                scrollRequest={scrollRequest}
+                renderCard={renderVendorCard}
+              />
+            )}
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
                 <LoadingDots label={t("More agents reporting in")} />
@@ -4113,7 +4200,7 @@ export default function Home() {
                 This screen hardcoded the LITERAL STRING "Up to 10 shops per
                 hunt" - dead beta copy that no longer matched any code path.
                 The next screen computes the truth from `massBargainTargets`,
-                which caps at `massBargainCap(plan)` (free 10 / pro 15 / ultra
+                which caps at `massBargainCap(plan)` (free 10 / pro 20 / ultra
                 24). So an Ultra traveller was told 10 and then offered all 18
                 shops the search had found, and reasonably read that as a bug
                 in the cap rather than a bug in the sentence.
@@ -4206,7 +4293,7 @@ export default function Home() {
                   primary: true,
                   onAction: () => {
                     startNav();
-                    window.location.href = "/profile";
+                    router.push("/profile");
                   },
                 },
               ],
@@ -4296,16 +4383,38 @@ export default function Home() {
             // ever open the chat instead of guiding me around the app".
             guidance = {
               anchor: "[data-tour='status']",
-              text: t("I'm reaching out to the shops from your WhatsApp now. You can close the app - I keep working."),
+              // HONEST TENSE. The old copy claimed "I'm reaching out to the
+              // shops from your WhatsApp now" during a phase that sends
+              // nothing - discovery only FINDS shops; messages go out when the
+              // traveller picks them.
+              text: t("Scanning the area for real rental shops near your stay - a few seconds."),
               actions: [
                 {
                   label: t("Watch live"),
                   primary: true,
                   onAction: () => goToSection("[data-tour='views']", "activity"),
                 },
+              ],
+            };
+          } else if (step === "SHOPS_FOUND") {
+            // THE STATE THE OWNER CAUGHT (report 3, item 9): shops found, zero
+            // messages sent - and Will offered "See it live" with nothing live,
+            // while the status panel on the same screen truthfully said 0
+            // contacted. The honest advice is the actions that MAKE something
+            // live: pick a shop, or let the mass bargain contact the best ones.
+            guidance = {
+              anchor: "[data-tour='vendors']",
+              text: t("Found your shops. Tap 'Ask for price' on the ones you like - or I can message the best ones for you at once."),
+              actions: [
                 {
-                  label: t("See the queue"),
-                  onAction: () => goToSection("[data-tour='queue']"),
+                  label: t("Message the best shops"),
+                  primary: true,
+                  dismissOnDone: true,
+                  onAction: () => void runAction("mass-bargain"),
+                },
+                {
+                  label: t("Let me pick"),
+                  onAction: () => goToSection("[data-tour='vendors']", "list"),
                 },
               ],
             };
@@ -4410,14 +4519,20 @@ export default function Home() {
         <button
           onClick={() => setWillOpen(true)}
           aria-label={t("Ask Will")}
+          // The other half of the onboarding "Meet Will" anchor: when the
+          // guide banner is dismissed for this stage, the summon chip is what
+          // "Will on the edge of your screen" IS. The two mounts are mutually
+          // exclusive, so the attribute is never duplicated.
+          data-tour="will"
           className="layer-chrome fixed right-3 flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
           style={{
+            // SLOTS from the shared bottom-right stack (globals.css, beside
+            // the z ladder): slot 2 clears the status FAB in slot 1; slot 0
+            // hugs the tab bar when no FAB can mount.
             bottom:
               vendors.length > 0 && view === "list"
-                ? // Clear of the status FAB: its top edge is 5.25rem + its own
-                  // height, plus a thumb-sized gap.
-                  "calc(env(safe-area-inset-bottom, 0px) + 8.5rem)"
-                : "calc(72px + env(safe-area-inset-bottom, 0px))",
+                ? "var(--stack-bottom-2)"
+                : "var(--stack-bottom-0)",
           }}
         >
           <WillAvatar size={22} wave={false} />
@@ -4484,8 +4599,8 @@ export default function Home() {
       <TabBar
         active="home"
         onSelect={(t) => {
-          if (t === "profile") window.location.href = "/profile";
-          else if (t === "deals") window.location.href = "/deals";
+          if (t === "profile") router.push("/profile");
+          else if (t === "deals") router.push("/deals");
           else {
             setView("list");
             window.scrollTo({ top: 0, behavior: "smooth" });
@@ -4493,7 +4608,15 @@ export default function Home() {
         }}
         onFeedback={() => setFeedbackOpen(true)}
         onUpgrade={() => setUpgradeOpen(true)}
-        showUpgrade={!upgradeOpen && !paidPlan && !onboarding}
+        // THE THIRD OCCUPANT OF THE BOTTOM BAND. The centered upgrade pill
+        // shares its vertical band with the status FAB, and at 320px their
+        // widths met in the middle - a free-plan hunt could not press "Live
+        // status". One owner (this page) decides occupancy: while the FAB can
+        // mount, the pill yields; it returns the moment the hunt leaves the
+        // list view. Pricing stays one tap away in the tab bar throughout.
+        showUpgrade={
+          !upgradeOpen && !paidPlan && !onboarding && !(vendors.length > 0 && view === "list")
+        }
       />
     </main>
   );

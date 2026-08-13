@@ -68,7 +68,7 @@ export default function BatchProgressBar({
           style={{ width: `${seg2Width}%` }}
         />
       </div>
-      <p className={`mt-1 text-[10px] ${held ? "font-bold text-[#8a6100] dark:text-brandyellow" : "text-faint"}`}>
+      <p className={`mt-1 text-[10px] ${held ? "font-bold text-warn" : "text-faint"}`}>
         {held ? "⏸ " : ""}
         {line}
         {/* The ETA is the schedule's own number, or nothing. A batch runs about

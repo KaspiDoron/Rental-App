@@ -78,7 +78,7 @@ function Tile({ label, value, hint }: { label: string; value: number | null; hin
  */
 function DarkBadge({ reason }: { reason: string }) {
   return (
-    <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+    <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-warn">
       unreadable: {reason}
     </span>
   );
@@ -157,7 +157,7 @@ export default function BanRiskPanel() {
           )}
         </div>
         {metersDark ? (
-          <p className="text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <p className="text-[11px] font-bold text-warn">
             Meters unverified - every figure below may be wrong.
           </p>
         ) : (
@@ -239,7 +239,7 @@ export default function BanRiskPanel() {
       <div className="surface rounded-blob p-3">
         <div className="mb-1.5 text-[13px] font-extrabold text-strong">🛰 Fleet</div>
         {fleet === null ? (
-          <p className="text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <p className="text-[11px] font-bold text-warn">
             ⚠ Could not read any Evolution host. This is not an empty fleet - it is an unknown one.
           </p>
         ) : (
@@ -265,7 +265,7 @@ export default function BanRiskPanel() {
               </div>
             )}
             {fleet.dualSockets.length > 0 && (
-              <p className="mt-1.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <p className="mt-1.5 text-[11px] font-bold text-warn">
                 {fleet.dualSockets.length} instance(s) open on more than one host. WhatsApp answers
                 this with connectionReplaced - fix per-host ownership before adding hosts.
               </p>

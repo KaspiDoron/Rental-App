@@ -34,3 +34,7 @@ yarn-error.log*
 # Claude Code local (per-machine) settings
 .claude/settings.local.json
 dump.rdb
+
+# Playwright artifacts (tests/e2e)
+/test-results/
+/playwright-report/

@@ -30,7 +30,7 @@ const REFRESH_MS = 10 * 60_000;
 
 const STATUS_META: Record<ServiceHealth["status"], { bar: string; width: string; label: string; text: string }> = {
   ok: { bar: "bg-savings", width: "w-full", label: "HEALTHY", text: "text-savings" },
-  degraded: { bar: "bg-brandyellow", width: "w-2/3", label: "DEGRADED", text: "text-[#8a6100] dark:text-brandyellow" },
+  degraded: { bar: "bg-brandyellow", width: "w-2/3", label: "DEGRADED", text: "text-warn" },
   down: { bar: "bg-brandred", width: "w-1/4", label: "DOWN", text: "text-brandred" },
   off: { bar: "bg-line", width: "w-1/12", label: "NOT SET", text: "text-faint" },
 };
@@ -258,13 +258,13 @@ export function HealthPanel() {
                 </span>
               )}
               {vitals.providerErrors.degraded > 0 && (
-                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[#8a6100] dark:text-brandyellow">
+                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-warn">
                   {vitals.providerErrors.degraded}/{vitals.providerErrors.total} turns with no
                   provider
                 </span>
               )}
               {vitals.push24h.failureRate !== null && vitals.push24h.failureRate > 0 && (
-                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[#8a6100] dark:text-brandyellow">
+                <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-warn">
                   push {vitals.push24h.failureRate}% failing ({vitals.push24h.failed}/24h)
                 </span>
               )}

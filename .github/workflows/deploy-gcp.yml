@@ -111,6 +111,29 @@ jobs:
       # once. It runs here, before anything is pushed anywhere.
       - name: Build
         run: npm run build
+      # THE BROWSER GATE (owner report 3, wave 4.1 - owner decision 6: hard
+      # gate). The repo's own history: a fully green unit suite missed every
+      # symptom the owner photographed, because they were BROWSER facts - a
+      # mid-screen tab bar, a wordmark spelled backwards, an error that
+      # rendered nowhere. The journey suite runs against the production build
+      # from the step above (playwright.config.ts webServer boots `next
+      # start`), so nothing deploys with a broken journey.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser journeys (Playwright)
+        run: npx playwright test
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   deploy:
     needs: verify

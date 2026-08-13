@@ -85,6 +85,9 @@ export interface SessionSummary {
   shopsFound: number;
   status: "booked" | "live" | "waiting" | "wrapped";
   paused: boolean;
+  /** The traveller cleared this hunt - restore will refuse, so the list must
+   *  not offer a live Re-open that can only 404. */
+  closed: boolean;
   contacted: number;
   replied: number;
   waiting: number;
@@ -149,9 +152,12 @@ export async function GET() {
   // ONE grouping, shared with /api/deals/restore and /api/deals/recheck. Three
   // private copies of this loop, fed by three different queries, is how the
   // boundaries drifted and re-open started 404ing - see groupSearchSessions.
+  // ALREADY newest-first - groupSearchSessions ends with its own reverse and
+  // documents it. A second reverse here flipped the list to oldest-first, so
+  // Trips rendered the OLDEST five hunts, pinned `isLatest` (and the free-plan
+  // unlock) to the oldest one, and disagreed with restore/recheck - which do
+  // NOT reverse - about which hunt `gi === 0` means.
   const groups = groupSearchSessions(searchRows);
-  // Newest session first; keep the dashboard focused on the last few hunts.
-  groups.reverse();
   const kept = groups.slice(0, 5);
 
   // pgTimestamp, NOT raw interpolation. `kept[...].created_at` comes back from
@@ -163,7 +169,7 @@ export async function GET() {
     : new Date(Date.now() - DAY_MS).toISOString();
 
   // 2. Everything the pipeline persisted since the oldest kept session.
-  const [outbound, replies, offers, bookings, riskEvents, outbox, wakeups, pauseMarkers] =
+  const [outbound, replies, offers, bookings, riskEvents, outbox, wakeups, pauseMarkers, closedMarkers] =
     await Promise.all([
       sbSelect<{
         id: number;
@@ -235,14 +241,32 @@ export async function GET() {
           email
         )}&kind=eq.tick&order=not_before.asc&limit=10`
       ).catch(() => []),
+      // KIND-FILTERED, matching sessionPauseState's canonical read. Unfiltered,
+      // the newest session row of ANY kind answered here - so a pause followed
+      // by a clear read as "not paused" while the pause switch itself (which
+      // reads the filtered family) still said paused. Two surfaces, one fact.
       sbSelect<{ raw: { kind?: string } | null }>(
         "whatsapp_messages",
-        `select=raw&to_number=eq.session&raw->>sender=eq.${enc}&order=received_at.desc&limit=1`
+        `select=raw&to_number=eq.session&raw->>sender=eq.${enc}&raw->>kind=in.(session-paused,session-resumed)&order=received_at.desc&limit=1`
       ).catch(() => []),
+      // Session-closed markers across the whole kept window, ONE read for all
+      // five groups. Permissive on purpose: this flags the DISPLAY (hide the
+      // live Re-open on a cleared hunt); the restore route keeps its strict
+      // gate, so an outage here degrades to a button that 404s honestly, never
+      // to a cleared hunt silently coming back.
+      sbSelect<{ received_at: string }>(
+        "whatsapp_messages",
+        `select=received_at&to_number=eq.session&raw->>sender=eq.${enc}&raw->>kind=eq.session-closed&received_at=gte.${pgTimestamp(
+          oldestStart
+        )}&order=received_at.desc&limit=20`
+      ).catch(() => [] as { received_at: string }[]),
     ]);
 
   const now = Date.now();
   const paused = pauseMarkers[0]?.raw?.kind === "session-paused";
+  const closedStamps = closedMarkers
+    .map((m) => Date.parse(m.received_at))
+    .filter((t) => Number.isFinite(t));
 
   // 3. Build each session's living summary from its activity window.
   const sessions: SessionSummary[] = kept.map((group, gi) => {
@@ -254,6 +278,12 @@ export async function GET() {
       return t >= start && t < end;
     };
     const isLatest = gi === 0;
+    // Same bounds as the restore route's gate: the marker must fall AFTER this
+    // group's newest row and BEFORE the next group begins - comparing against
+    // the group's FIRST row would mark the search-clear-search-again sequence
+    // (one 30-min group with the clear in the middle) as closed.
+    const groupEnd = Date.parse(group[group.length - 1].created_at);
+    const closed = closedStamps.some((t) => t > groupEnd && t < end);
 
     const query = group.find((r) => r.query_text)?.query_text ?? null;
     const vehicleClass = [...group].reverse().find((r) => r.vehicle_class)?.vehicle_class ?? null;
@@ -448,6 +478,7 @@ export async function GET() {
       shopsFound,
       status,
       paused: isLatest ? paused : false,
+      closed,
       contacted: Math.max(contacted, humanSent.length ? 1 : 0),
       replied,
       waiting: Math.max(0, contacted - replied),

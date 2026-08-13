@@ -149,6 +149,18 @@ export default function PricingPage() {
         </a>
       </section>
 
+      {/* Cross-link into the public guides library (wave 4.4): the pages that
+          answer what things cost and what deposits are normal - the exact
+          questions someone comparing plans is about to ask. */}
+      <section className="mt-8 rounded-2xl border-2 border-line bg-card p-4 text-center">
+        <p className="text-[13px] font-bold text-soft">
+          Not sure what a fair rental price even looks like?
+        </p>
+        <a href="/guides" className="mt-1 inline-block text-[13px] font-extrabold text-brandblue underline">
+          Read the rental guides - real price bands, deposits and paperwork
+        </a>
+      </section>
+
       <SiteFooter />
     </main>
   );

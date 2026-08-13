@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { LoadingDots } from "./LoadingDots";
@@ -21,7 +22,7 @@ const SEEN_KEY = "wd_fb_seen";
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   open: { label: "Open", cls: "bg-brandblue-soft text-brandblue" },
-  "in-progress": { label: "In progress", cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow" },
+  "in-progress": { label: "In progress", cls: "bg-brandyellow-soft text-warn" },
   resolved: { label: "Resolved", cls: "bg-savings-soft text-savings" },
   dismissed: { label: "Closed", cls: "bg-card2 text-faint" },
 };
@@ -61,6 +62,7 @@ function fmtDate(iso: string): string {
 }
 
 export function FeedbackModal({ email, onClose }: { email?: string; onClose: () => void }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<"new" | "yours">("new");
   const [reports, setReports] = useState<Report[] | null>(null);
   const [reportsError, setReportsError] = useState<string | null>(null);
@@ -112,7 +114,7 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-brandblue-soft">
             <Icon name="chat" className="h-4 w-4 text-brandblue" />
           </div>
-          <h2 className="text-lg font-extrabold text-strong">Feedback</h2>
+          <h2 className="text-lg font-extrabold text-strong">{t("Feedback")}</h2>
         </div>
         <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
           ✕
@@ -164,6 +166,7 @@ function ComposeTab({
   onSubmitted: () => void;
   onSeeYours: () => void;
 }) {
+  const { t } = useI18n();
   const [category, setCategory] = useState("bug");
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ filename: string; dataUrl: string }[]>([]);
@@ -245,7 +248,7 @@ function ComposeTab({
         </div>
         {status.s === "accepted" ? (
           <>
-            <p className="text-sm font-extrabold text-strong">Thanks - this one is on us.</p>
+            <p className="text-sm font-extrabold text-strong">{t("Thanks - this one is on us.")}</p>
             <p className="mt-1 text-[13px] text-soft">
               Verified as a real issue
               {status.emailed ? " and emailed to the team." : " and logged for the team."} You can
@@ -378,6 +381,7 @@ function ReportsTab({
   error: string | null;
   onChanged: () => void;
 }) {
+  const { t } = useI18n();
   if (reports === null) {
     return (
       <div className="py-8 text-center">
@@ -391,7 +395,7 @@ function ReportsTab({
   if (reports.length === 0) {
     return (
       <div className="py-8 text-center">
-        <p className="text-[13px] font-extrabold text-strong">No reports yet</p>
+        <p className="text-[13px] font-extrabold text-strong">{t("No reports yet")}</p>
         <p className="mx-auto mt-1 max-w-[260px] text-[12px] text-soft">
           Anything you send appears here as a conversation you can follow and reply to.
         </p>
@@ -408,6 +412,7 @@ function ReportsTab({
 }
 
 function ReportRow({ report, onChanged }: { report: Report; onChanged: () => void }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
@@ -531,7 +536,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
           <div className="mt-2 flex justify-end">
             {confirmDel ? (
               <div className="flex items-center gap-2 text-[11px]">
-                <span className="text-soft">Delete this report?</span>
+                <span className="text-soft">{t("Delete this report?")}</span>
                 <button onClick={remove} disabled={busy} className="font-extrabold text-brandred">
                   Delete
                 </button>

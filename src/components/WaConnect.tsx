@@ -63,6 +63,10 @@ export function WaConnect({
   const autoReissues = useRef(0);
   const startedAt = useRef<number | null>(null);
   const poll = useRef<ReturnType<typeof setInterval>>();
+  /** The server-side mint stamp of the code currently ON SCREEN. Baileys
+   *  rotates codes on its own schedule; when the status poll reports a NEWER
+   *  stamp than this, the code the user is reading is already dead. */
+  const shownIssuedAt = useRef<string | null>(null);
 
   const showingCode = Boolean(pairingCode || qr);
 
@@ -209,6 +213,10 @@ export function WaConnect({
         setExpiresAt(Number.isFinite(ttl) && ttl > 0 ? Date.now() + ttl : null);
         // A credential IS on screen, so any earlier soft error is now history.
         setErr(null);
+        // NEW code, new baseline: the next status poll adopts the server's
+        // fresh mint stamp. Keeping the old stamp here would make the fresh
+        // code read as "rotated" and re-issue in a loop.
+        shownIssuedAt.current = null;
       } else {
         setExpiresAt(null);
         setErr(
@@ -225,6 +233,30 @@ export function WaConnect({
             await fetch(`/api/wa/status?pairing=1&t=${Date.now()}`, { cache: "no-store" })
           ).json();
           setWa(s);
+          // SERVER-SIDE ROTATION (owner report 3, first-code-rejected).
+          // Baileys re-mints on its own schedule and the QRCODE_UPDATED
+          // webhook stamps the new mint time - a newer stamp than the code on
+          // screen means the user is reading a DEAD code. Re-issue on the
+          // same instance immediately instead of letting them type it and get
+          // "Incorrect code". Guarded by the same auto-reissue budget as the
+          // countdown path so a flapping webhook cannot loop forever.
+          if (
+            !s.connected &&
+            typeof s.pairingIssuedAt === "string" &&
+            shownIssuedAt.current &&
+            s.pairingIssuedAt > shownIssuedAt.current &&
+            autoReissues.current < MAX_AUTO_REISSUES
+          ) {
+            autoReissues.current += 1;
+            shownIssuedAt.current = s.pairingIssuedAt;
+            void connect(false);
+            return;
+          }
+          if (typeof s.pairingIssuedAt === "string" && !shownIssuedAt.current) {
+            // First poll after a code was shown: adopt the server's stamp as
+            // the baseline for the code on screen.
+            shownIssuedAt.current = s.pairingIssuedAt;
+          }
           if (s.connected) {
             clearInterval(poll.current);
             setQr(null);
@@ -308,7 +340,7 @@ export function WaConnect({
 
   if (wa && !wa.available) {
     return (
-      <p className="rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+      <p className="rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-warn">
         {t("The WhatsApp connector is not set up yet (owner: Admin -> Keys -> Evolution API).")}
       </p>
     );
@@ -320,7 +352,7 @@ export function WaConnect({
         <div className="flex items-center justify-between">
           <span
             className={`text-[13px] font-extrabold ${
-              wa.reconnecting ? "text-[#8a6100] dark:text-brandyellow" : "text-savings"
+              wa.reconnecting ? "text-warn" : "text-savings"
             }`}
           >
             {wa.reconnecting
@@ -434,7 +466,7 @@ export function WaConnect({
                   informed to be consent. */}
               <span className="mt-0.5 block text-[11px] text-faint">
                 {t(
-                  "The short version: you are linking your own WhatsApp, this uses an unofficial connection, and WhatsApp can restrict or ban a number for it. Disconnect any time. Use a number you could manage without."
+                  "The short version: you are linking your own WhatsApp, this uses an unofficial connection, and WhatsApp can restrict or ban a number for it. Our pacing and safety limits lower that risk - they cannot remove it. Disconnect any time. Use a number you could manage without."
                 )}
               </span>
             </span>
@@ -510,7 +542,7 @@ export function WaConnect({
                 </p>
               )}
               {!pairingCode && (
-                <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+                <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn">
                   {hostDown ? "🔧 " : ""}
                   {err ||
                     t("Preparing your code... tap Try again in a few seconds. If it keeps failing, use the QR tab from a computer.")}
@@ -551,7 +583,7 @@ export function WaConnect({
               what was actually happening - it cheerfully said "Almost there"
               while the screen was showing an error. */}
           {phase === "FAILED" ? (
-            <div className="mt-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <div className="mt-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-warn">
               {hostDown
                 ? t("Our WhatsApp server is restarting - nothing is wrong on your side. Give it a minute, then tap Try again.")
                 : t("This is taking longer than it should. Tap Try again for a fresh code, or use the QR tab from a computer.")}
@@ -600,7 +632,7 @@ export function WaConnect({
           unconditionally, which is how a valid code and "the server didn't hand
           out a code" ended up on screen together. */}
       {err && !showingCode && (
-        <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+        <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
           {hostDown ? "🔧 " : ""}
           {err}
         </p>

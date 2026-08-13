@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { sbSelectDark } from "@/lib/runtime-config";
+import { sbSelectDark, sbCountDark } from "@/lib/runtime-config";
 
 // Owner Command Center: one call that surfaces everything needing immediate
 // attention - real bugs, stuck queues, WhatsApp health, low trust scores,
@@ -21,8 +21,30 @@ export async function GET() {
   const dayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
-  const [feedback, outbox, reputation, sessions, billing, replies, offers, aiErrors, agentEvents] =
-    await Promise.all([
+  // THE TILES ARE EXACT COUNTS, THE ALERTS KEEP THEIR SLICES (3.5).
+  // Every headline stat used to be `.length` over a LIMITED slice - replies
+  // and offers capped at 200, sessions at 100 - so a busy day silently
+  // plateaued at the cap and the owner's topline read "200" forever.
+  // sbCountDark asks PostgREST for the real count (HEAD + count=exact) and
+  // answers null, not zero, when it cannot ask. The bounded row reads stay:
+  // the alert logic needs actual rows, and 50 overdue rows is plenty to say
+  // "the drain is stuck".
+  const [
+    feedback,
+    outbox,
+    reputation,
+    sessions,
+    billing,
+    replies,
+    offers,
+    aiErrors,
+    agentEvents,
+    waLiveCount,
+    replyCount,
+    offerCount,
+    queuedCount,
+    issueCount,
+  ] = await Promise.all([
       sbSelectDark<{ id: number; severity: string; summary: string; created_at: string }>(
         "feedback",
         `select=id,severity,summary,created_at&is_real_issue=eq.true&or=(status.is.null,status.eq.open,status.eq.in-progress)&order=created_at.desc&limit=20`
@@ -60,6 +82,14 @@ export async function GET() {
       sbSelectDark<{ id: number; kind: string; vendor_name: string; detail: string }>(
         "agent_events",
         `select=id,kind,vendor_name,detail&handled=eq.false&created_at=gte.${encodeURIComponent(weekAgo)}&order=created_at.desc&limit=30`
+      ),
+      sbCountDark("wa_sessions", "status=eq.open"),
+      sbCountDark("vendor_replies", `created_at=gte.${encodeURIComponent(dayAgo)}`),
+      sbCountDark("offers", `created_at=gte.${encodeURIComponent(dayAgo)}`),
+      sbCountDark("wa_outbox", ""),
+      sbCountDark(
+        "feedback",
+        "is_real_issue=eq.true&or=(status.is.null,status.eq.open,status.eq.in-progress)"
       ),
     ]);
 
@@ -171,7 +201,9 @@ export async function GET() {
           .slice(0, 3)
           .map((e) => `${e.vendor_name || "shop"}: "${(e.detail || "").slice(0, 60)}"`)
           .join(" · ") + " - consider a new funnel branch for these.",
-      href: "agents",
+      // The graph-era "agents" tab is deleted; the Engine tab is where the
+      // live composition behaviour is inspected now.
+      href: "engine",
     });
   }
 
@@ -246,18 +278,23 @@ export async function GET() {
   // This is the same rule as the alerts, applied to the numbers the panel puts
   // in large type. "0 replies today" and "we could not read replies today" look
   // identical as a zero and mean opposite things - the first is a quiet day,
-  // the second is an outage. `null` forces the UI to render a dash.
-  const stat = (rows: readonly unknown[] | null, n: () => number) => (rows === null ? null : n());
+  // the second is an outage. `null` forces the UI to render a dash. The counts
+  // themselves are sbCountDark (exact, never a capped slice); a null count
+  // joins `degraded` so a dashed tile is always explained by the strip above.
+  const countStat = (n: number | null, label: string): number | null => {
+    if (n === null && !degraded.includes(label)) degraded.push(label);
+    return n;
+  };
 
   return NextResponse.json({
     alerts,
     degraded,
     stats: {
-      waSessions: stat(sessions, () => sessionRows.filter((s) => s.status === "open").length),
-      repliesToday: stat(replies, () => replyRows.length),
-      offersToday: stat(offers, () => offerRows.length),
-      queuedMessages: stat(outbox, () => outboxRows.length),
-      openIssues: stat(feedback, () => feedbackRows.length),
+      waSessions: countStat(waLiveCount, "WhatsApp sessions"),
+      repliesToday: countStat(replyCount, "shop replies"),
+      offersToday: countStat(offerCount, "offers"),
+      queuedMessages: countStat(queuedCount, "queued messages"),
+      openIssues: countStat(issueCount, "feedback"),
     },
   });
 }

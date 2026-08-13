@@ -63,10 +63,14 @@ describe("pairing: a live handshake is never destroyed by a code refresh", () =>
   it("connectInstance re-issues on the SAME instance for a non-fresh connecting session", () => {
     const evo = readCode("src/lib/evolution.ts");
     // The guard is reachable (gated on !opts.fresh, not on a code-age window
-    // that expired into the destructive path).
-    expect(evo).toMatch(/existing === "connecting" && !opts\?\.fresh/);
-    // ...and the destructive pair still exists only BELOW it, as the last resort.
+    // that expired into the destructive path) - and since the 3.4 churn guard,
+    // a "Try again" INSIDE the teardown cooldown also takes this
+    // non-destructive branch instead of rebuilding twice in 90 seconds.
+    expect(evo).toMatch(/existing === "connecting" && \(!opts\?\.fresh \|\| inTeardownCooldown\(email\)\)/);
+    // ...and the destructive pair still exists only BELOW it, as the last
+    // resort - stamped into the risk ledger each time it fires.
     expect(evo).toMatch(/instance\/logout\//);
+    expect(evo).toMatch(/markTeardown\(email, opts\?\.fresh \? "user-try-again"/);
   });
 
   it("the client's automatic code refresh never asks for a hard reset", () => {

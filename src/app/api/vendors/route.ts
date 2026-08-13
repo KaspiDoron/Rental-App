@@ -18,6 +18,9 @@ interface Body {
   rfq?: Record<string, unknown>;
   /** Panel-built fields, sent when discovery starts BEFORE the RFQ exists. */
   fields?: Record<string, unknown>;
+  /** The traveller's app language - Google localises addresses and opening
+   *  hours to it (owner report 3, item 10). Validated in findRealVendors. */
+  lang?: string;
 }
 
 // Vendor discovery. With a Google Maps key this returns REAL rental businesses
@@ -74,7 +77,7 @@ export async function POST(req: Request) {
     }
   }
 
-  const real = await findRealVendors(body.origin, radius, vClass);
+  const real = await findRealVendors(body.origin, radius, vClass, body.lang);
   let vendors: Vendor[];
   let source: "google" | "demo" | "google-error";
   let sourceError: string | undefined;

@@ -353,6 +353,47 @@ export function instanceNameFor(email: string): string {
   return `wd-${createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Teardown churn guard (owner report 3, 3.4 #8)
+// ---------------------------------------------------------------------------
+//
+// A destructive logout+delete+recreate is not free: WhatsApp sees the same
+// number re-registering from a fresh session, and rapid re-registration is a
+// known restriction vector. The connecting-branch above already removed the
+// 55s auto-refresh storm; this cooldown catches what remains - a user
+// hammering "Try again", a retried request, two tabs - and turns each rebuild
+// into a LEDGER FACT (`instance_recreated`) so churn is visible on the risk
+// dashboard instead of leaving no trace at all. In-process by design: the
+// storm it guards against is a rapid same-instance loop, and a durable stamp
+// would put a Supabase read on the pairing path for marginal extra coverage.
+const TEARDOWN_COOLDOWN_MS = 90_000;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_teardown_at__: Map<string, number> | undefined;
+}
+
+function teardownStore(): Map<string, number> {
+  if (!globalThis.__wd_teardown_at__) globalThis.__wd_teardown_at__ = new Map();
+  return globalThis.__wd_teardown_at__;
+}
+
+function inTeardownCooldown(email: string): boolean {
+  const at = teardownStore().get(email.trim().toLowerCase()) ?? 0;
+  return Date.now() - at < TEARDOWN_COOLDOWN_MS;
+}
+
+/** Stamp a destructive rebuild and feed the churn into the risk ledger. */
+function markTeardown(email: string, trigger: string): void {
+  const key = email.trim().toLowerCase();
+  const store = teardownStore();
+  if (store.size > 2000) store.clear();
+  store.set(key, Date.now());
+  void import("./wa/risk-events")
+    .then(({ noteRisk }) => noteRisk({ senderKey: key, kind: "instance_recreated", detail: { trigger } }))
+    .catch(() => {});
+}
+
 /** Webhook token derived from a stable secret so it works across all hosts.
  * Derivation lives in the pure `wa/webhook-token` module (unit-tested); this
  * wrapper keeps the no-hosts gate. There is deliberately NO previous-secret
@@ -1226,7 +1267,10 @@ export async function connectInstance(
   // rebuilds per pairing) - the same churn that hammers the Evolution
   // container. Only an explicit user "Try again" (opts.fresh) or an instance
   // that hands back NO code at all falls through to the destructive recreate.
-  if (existing === "connecting" && !opts?.fresh) {
+  // A "Try again" DURING the teardown cooldown re-enters the non-destructive
+  // re-issue below instead of rebuilding again: the previous rebuild is still
+  // settling, and a second one inside 90s is pure churn (see markTeardown).
+  if (existing === "connecting" && (!opts?.fresh || inTeardownCooldown(email))) {
     const row = await sbSelect<{ updated_at: string | null; pairing_code_issued_at?: string | null }>(
       "wa_sessions",
       `select=updated_at,pairing_code_issued_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
@@ -1287,6 +1331,18 @@ export async function connectInstance(
   // previous attempt, common in the signup funnel) hands WhatsApp a stale
   // pairing code, which WhatsApp rejects as "Incorrect code". Deleting first
   // guarantees the code we show is the current, valid one.
+  //
+  // ...unless we JUST did this. Inside the cooldown a second rebuild buys
+  // nothing but re-registration churn - the honest answer is "the new link is
+  // still settling", not another teardown.
+  if (inTeardownCooldown(email)) {
+    return {
+      ok: false,
+      error:
+        "We just rebuilt your WhatsApp link and it is still settling. Give it a minute, then tap Try again.",
+    };
+  }
+  markTeardown(email, opts?.fresh ? "user-try-again" : `state-${existing ?? "unknown"}`);
   await evoFetch(host, `/instance/logout/${instance}`, { method: "DELETE" });
   await evoFetch(host, `/instance/delete/${instance}`, { method: "DELETE" });
   // Settle window so Evolution finishes tearing the instance down before we
@@ -1303,6 +1359,25 @@ export async function connectInstance(
   //  - a residential proxy (if configured) routes the WebSocket through a
   //    non-datacenter IP - datacenter IPs are a top-weighted ban signal.
   const proxy = await parseProxy(email);
+  // EVOLUTION_PROXY_REQUIRED (owner decision 4): BUILT, and built DEFAULT OFF.
+  // When the owner flips it on (after confirming the prod proxy config), a
+  // link that cannot resolve a residential exit is REFUSED here - fail closed
+  // at link time - instead of silently pairing through the datacenter IP the
+  // proxy exists to avoid. Default off because flipping it blind bricks
+  // linking for every user the moment the template is missing or the token
+  // table is unreadable; an UNREADABLE flag keeps the default (off), so a
+  // config blip can never lock the front door by itself.
+  if (!proxy) {
+    const { parseFlag } = await import("./config-flags");
+    const required = parseFlag(await getConfig("EVOLUTION_PROXY_REQUIRED").catch(() => undefined), false);
+    if (required) {
+      return {
+        ok: false,
+        error:
+          "Linking is paused: this deployment requires a residential proxy and none could be resolved. The owner can fix the proxy settings (or turn EVOLUTION_PROXY_REQUIRED off) in Admin - Keys.",
+      };
+    }
+  }
   const hardening = {
     rejectCall: false,
     groupsIgnore: true,
@@ -1451,6 +1526,11 @@ export async function connectInstance(
   // number passed at create).
   let pairingCode = pickPairing(created.data);
   let qr = pickQr(created.data);
+  // WHEN the code actually arrived - the TTL anchor. Stamping at saveSession
+  // (after the poll backoff and a connectionState round trip) over-stated the
+  // code's life by several seconds, so the client's countdown promised time
+  // the code no longer had - the tail of the first-attempt "Incorrect code".
+  let mintedAt = pairingCode ? Date.now() : null;
 
   // Otherwise poll the connect endpoint a few times. Baileys sometimes needs a
   // moment to mint the code; we DON'T recreate the instance (that would
@@ -1467,19 +1547,25 @@ export async function connectInstance(
       host,
       `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
     );
-    pairingCode = pairingCode ?? pickPairing(conn.data);
+    const got = pickPairing(conn.data);
+    if (got && !pairingCode) {
+      pairingCode = got;
+      mintedAt = Date.now();
+    }
     qr = qr ?? pickQr(conn.data);
   }
 
   const state = await connectionState(email);
   // Stamp WHEN this fresh code was minted so retries can tell live from dead
-  // (the whole B1 "Invalid code" class). No code -> clear the stamp.
+  // (the whole B1 "Invalid code" class). The stamp is the MINT moment, not
+  // "now" - the connectionState round trip above already spent part of the
+  // code's life. No code -> clear the stamp.
   await saveSession(
     email,
     instance,
     state ?? "connecting",
     host.url,
-    pairingCode ? new Date() : null
+    pairingCode && mintedAt ? new Date(mintedAt) : null
   );
 
   return {
@@ -1487,7 +1573,9 @@ export async function connectInstance(
     state: state ?? "connecting",
     qr,
     pairingCode,
-    ...(pairingCode ? { pairingExpiresInMs: PAIRING_TTL_MS } : {}),
+    ...(pairingCode && mintedAt
+      ? { pairingExpiresInMs: Math.max(1_000, PAIRING_TTL_MS - (Date.now() - mintedAt)) }
+      : {}),
     error:
       !pairingCode && !qr
         ? "The WhatsApp server didn't hand out a code - wait ~30 seconds and tap Try again."
@@ -1500,24 +1588,18 @@ export async function connectInstance(
 /** Force a brand-new session (used by the 'New code' button when linking fails). */
 export async function resetInstance(email: string): Promise<void> {
   const instance = instanceNameFor(email);
+  markTeardown(email, "reset");
   await evo(email, `/instance/logout/${instance}`, { method: "DELETE" });
   await evo(email, `/instance/delete/${instance}`, { method: "DELETE" });
   await saveSession(email, instance, "disconnected");
 }
 
-/** True when this number is actually on WhatsApp (checked via the session). */
-export async function numberOnWhatsApp(
-  email: string,
-  number: string
-): Promise<boolean | null> {
-  const instance = instanceNameFor(email);
-  const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
-    method: "POST",
-    body: JSON.stringify({ numbers: [digitsOnly(number)] }),
-  });
-  if (!res.ok || !Array.isArray(res.data)) return null; // unknown - don't block
-  return Boolean(res.data[0]?.exists ?? res.data[0]?.numberExists);
-}
+// `numberOnWhatsApp` was deleted here (owner report 3, 3.4 #7): a repo-wide
+// grep (static AND dynamic imports) found ZERO call sites, and an existence
+// probe with no caller is exactly the "is this number on WhatsApp" pattern
+// Meta meters as contact scraping - dead code that only a future bug could
+// resurrect. resolveChatJid below is the one surviving prober, cache-first
+// and budgeted.
 
 // ---- Chat history (for auto-teaching the bargaining agents) --------------------
 
@@ -1594,6 +1676,41 @@ async function findMessagesRecords(
   return [];
 }
 
+// JID PROBE HYGIENE (owner report 3, 3.4 #7). `/chat/whatsappNumbers` is a
+// contact-EXISTENCE check against WhatsApp's directory - the exact query
+// pattern Meta meters as contact scraping when it arrives in volume. Before
+// this, every recovery sweep re-probed every shop on every pass. Now a
+// resolution is answered from memory first (the lid-alias store, then a
+// per-instance memo of past resolutions), and the live probe itself draws
+// from a bounded hourly discovery budget - past the budget the resolver falls
+// through to the synced chat list and the default form, which cost nothing.
+const JID_MEMO_TTL_MS = 24 * 3600_000;
+const JID_PROBES_PER_HOUR = 30;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_jid_memo__: Map<string, { jid: string; at: number }> | undefined;
+  // eslint-disable-next-line no-var
+  var __wd_jid_probes__: Map<string, number[]> | undefined;
+}
+
+/** Consume one discovery-probe slot for this sender; false = budget spent. */
+function takeJidProbeSlot(email: string): boolean {
+  if (!globalThis.__wd_jid_probes__) globalThis.__wd_jid_probes__ = new Map();
+  const store = globalThis.__wd_jid_probes__;
+  const key = email.trim().toLowerCase();
+  const now = Date.now();
+  const recent = (store.get(key) ?? []).filter((t) => now - t < 3600_000);
+  if (recent.length >= JID_PROBES_PER_HOUR) {
+    store.set(key, recent);
+    return false;
+  }
+  recent.push(now);
+  if (store.size > 500) store.clear();
+  store.set(key, recent);
+  return true;
+}
+
 /**
  * Resolve a pasted phone number to the exact JID WhatsApp stores for it. This
  * fixes "no chat found" when the owner types the number in a slightly different
@@ -1606,28 +1723,53 @@ export async function resolveChatJid(
 ): Promise<string | null> {
   const digits = digitsOnly(rawNumber);
   if (digits.length < 7) return null;
-  const instance = instanceNameFor(email);
-  // 1) Ask WhatsApp for the canonical JID of this number.
+  const memoKey = `${email.trim().toLowerCase()}|${digits}`;
+  if (!globalThis.__wd_jid_memo__) globalThis.__wd_jid_memo__ = new Map();
+  const memo = globalThis.__wd_jid_memo__;
+  const hit = memo.get(memoKey);
+  if (hit && Date.now() - hit.at < JID_MEMO_TTL_MS) return hit.jid;
+  const remember = (jid: string): string => {
+    if (memo.size > 2000) memo.clear();
+    memo.set(memoKey, { jid, at: Date.now() });
+    return jid;
+  };
+
+  // 0) THE ALIAS STORE FIRST. A shop the fleet has already exchanged messages
+  //    with under an @lid privacy JID has its canonical identity on record -
+  //    answering from memory costs nothing and skips the directory probe.
   try {
-    const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
-      method: "POST",
-      body: JSON.stringify({ numbers: [digits] }),
-    });
-    const jid = res.data?.[0]?.jid ?? res.data?.[0]?.remoteJid;
-    if (typeof jid === "string" && jid.includes("@")) return jid;
+    const { lidAliasForShop } = await import("./wa/lid-alias");
+    const lid = await lidAliasForShop(email, digits);
+    if (lid) return remember(`${lid}@lid`);
   } catch {
-    /* fall through */
+    /* fall through to the probe */
+  }
+
+  const instance = instanceNameFor(email);
+  // 1) Ask WhatsApp for the canonical JID of this number - under the budget.
+  if (takeJidProbeSlot(email)) {
+    try {
+      const res = await evo(email, `/chat/whatsappNumbers/${instance}`, {
+        method: "POST",
+        body: JSON.stringify({ numbers: [digits] }),
+      });
+      const jid = res.data?.[0]?.jid ?? res.data?.[0]?.remoteJid;
+      if (typeof jid === "string" && jid.includes("@")) return remember(jid);
+    } catch {
+      /* fall through */
+    }
   }
   // 2) Otherwise match against the synced chat list by trailing digits.
   try {
     const chats = await fetchChats(email);
     const tail = digits.slice(-9);
-    const hit = chats.find((c) => digitsOnly(c.jid).endsWith(tail));
-    if (hit) return hit.jid;
+    const found = chats.find((c) => digitsOnly(c.jid).endsWith(tail));
+    if (found) return remember(found.jid);
   } catch {
     /* fall through */
   }
-  // 3) Best-effort default form.
+  // 3) Best-effort default form. NOT memoised - it is a guess, not a
+  //    resolution, and remembering it would mask a later successful probe.
   return `${digits}@s.whatsapp.net`;
 }
 

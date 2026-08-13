@@ -119,9 +119,11 @@ async function loadWithOutage(path: string) {
     getSession: async () => ({ email: "owner@example.com", isAdmin: true }),
   }));
   vi.doMock("@/lib/runtime-config", () => ({
-    // Every read is a hard outage. `sbSelectDark` answers null; anything still
-    // using `sbSelect` answers [] - which is exactly the difference under test.
+    // Every read is a hard outage. `sbSelectDark`/`sbCountDark` answer null;
+    // anything still using `sbSelect` answers [] - which is exactly the
+    // difference under test.
     sbSelectDark: async () => null,
+    sbCountDark: async () => null,
     sbSelect: async () => [],
     sbSelectStrict: async () => ({ error: "unavailable" as const }),
     sbCount: async () => 0,

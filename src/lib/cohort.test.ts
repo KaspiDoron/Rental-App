@@ -140,8 +140,14 @@ describe("the lifecycle report fails DARK, never green", () => {
   });
 
   it("the panel says out loud which figures could not be read", () => {
-    expect(panel).toMatch(/d\.degraded\.length > 0/);
-    expect(panel).toMatch(/is unknown, not zero/);
+    // The strip is the SHARED DegradedBanner since 3.5 - same sentence, one
+    // implementation, adopted by every management surface.
+    expect(panel).toMatch(/<DegradedBanner degraded=\{d\.degraded\} \/>/);
+    const prim = readFileSync(
+      join(process.cwd(), "src/components/admin/primitives.tsx"),
+      "utf8"
+    );
+    expect(prim).toMatch(/is unknown,\s*\n?\s*not zero/);
   });
 });
 

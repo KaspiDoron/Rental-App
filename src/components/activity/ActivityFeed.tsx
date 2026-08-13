@@ -82,7 +82,7 @@ export function ActivityFeed({
             : it.kind === "alert"
             ? "bg-brandred-soft text-brandred"
             : it.kind === "wait" || it.kind === "queued" || it.kind === "drop"
-            ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+            ? "bg-brandyellow-soft text-warn"
             : it.kind === "reply"
             ? "bg-card2 text-soft"
             : "bg-brandblue-soft text-brandblue";

@@ -4,6 +4,14 @@ import type { Config } from "tailwindcss";
 // playful white-gray) and dark (gray palette) themes swap without class churn.
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
+  // THE ONE SWITCH BOTH HALVES OBEY. Without this key Tailwind's `dark:`
+  // utilities follow the OS (`media`), while every token above follows the
+  // `data-theme` attribute - so a dark-device user with a stored "light"
+  // choice (or vice versa) got a SPLIT-BRAIN screen: token surfaces one
+  // theme, `dark:` utilities the other. That is the owner's "find deals is
+  // white while the whole app is dark" screenshot. Keyed to the attribute,
+  // the prehydrate script and the toggle drive both systems at once.
+  darkMode: ["selector", '[data-theme="dark"]'],
   theme: {
     extend: {
       colors: {
@@ -22,6 +30,10 @@ const config: Config = {
         brandred: { DEFAULT: "var(--red)", soft: "var(--red-soft)" },
         brandyellow: { DEFAULT: "var(--yellow)", soft: "var(--yellow-soft)" },
         savings: { DEFAULT: "var(--green)", soft: "var(--green-soft)" },
+        // Caution text/badges. Existed as class NAMES (bg-warn, text-warn)
+        // long before it existed as a color - Tailwind silently compiled
+        // them to nothing, so every warning badge rendered unstyled.
+        warn: { DEFAULT: "var(--warn)", soft: "var(--warn-soft)" },
         wagreen: {
           DEFAULT: "var(--wa-green)",
           deep: "var(--wa-green-deep)",

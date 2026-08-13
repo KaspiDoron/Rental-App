@@ -19,6 +19,7 @@ import { ShopAvatar } from "./ShopAvatar";
 import { ShopPhoto } from "./ShopPhoto";
 import { moneyLocal } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
+import { useAppTheme } from "@/lib/client/theme";
 
 // Google-Maps-style map: Voyager cartography, price-bubble pins, and a
 // booking.com-style swipeable shop list along the bottom (in BOTH the compact
@@ -223,7 +224,7 @@ function ShopCard({
         {v.stage && v.stage !== "offer-received" && v.stage !== "queued" && (
           <div className="mt-1.5 flex items-start gap-1 rounded-lg bg-card2 p-1.5 text-[10px] font-bold text-soft">
             <span className="shrink-0">{stageCaption(v.stage).emoji}</span>
-            <span className="leading-snug">{stageCaption(v.stage).text}</span>
+            <span className="leading-snug">{t(stageCaption(v.stage).text)}</span>
           </div>
         )}
         {onOpen && (
@@ -259,6 +260,10 @@ export default function MapView({
 }) {
   const [full, setFull] = useState(false);
   const stripRef = useRef<HTMLDivElement>(null);
+  // CSS variables restyle every OTHER surface on a theme flip; raster tiles
+  // are pixels, so the map needs its own dark cartography (same CARTO host,
+  // dark_all style). Keyed below so react-leaflet recreates the layer.
+  const theme = useAppTheme();
 
   // Lock the page behind the fullscreen map so touch-scroll doesn't move it.
   useEffect(() => {
@@ -304,8 +309,13 @@ export default function MapView({
       zoomControl={false}
     >
       <TileLayer
+        key={theme}
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+        url={
+          theme === "dark"
+            ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+        }
       />
       <Recenter origin={origin} radiusKm={radiusKm} vendors={spread} focus={selected} />
       <Controls origin={origin} />

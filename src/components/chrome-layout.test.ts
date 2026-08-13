@@ -35,7 +35,11 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("the canvas actually wraps the pages", () => {
-    expect(read("src/app/layout.tsx")).toMatch(/className="app-canvas[^"]*"/);
+    // The canvas div moved into PageFade (keyed per pathname so the fade
+    // re-runs on client navigations); the layout must still mount it around
+    // the route children.
+    expect(read("src/app/layout.tsx")).toMatch(/<PageFade>\{children\}<\/PageFade>/);
+    expect(read("src/components/PageFade.tsx")).toMatch(/className="app-canvas[^"]*"/);
   });
 
   it("NOTHING on the canvas may create a containing block", () => {
@@ -56,9 +60,12 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("...and the classes it wears are only the two safe ones", () => {
-    const el = read("src/app/layout.tsx").match(/className="(app-canvas[^"]*)"/);
+    const el = read("src/components/PageFade.tsx").match(/className="(app-canvas[^"]*)"/);
     expect(el).toBeTruthy();
     expect(el![1].trim().split(/\s+/).sort()).toEqual(["app-canvas", "page-fade"]);
+    // ...and it is keyed on the pathname - that is the whole reason the
+    // wrapper exists as a client component.
+    expect(read("src/components/PageFade.tsx")).toMatch(/key=\{pathname\}/);
   });
 
   it("the page arrival animates OPACITY only - opacity creates no containing block", () => {
@@ -72,7 +79,7 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   it("the liquid rise stays on CONTENT, which never holds fixed chrome", () => {
     // `fluid-in` genuinely does set a transform and a blur - that is what makes
     // it read as liquid. It is fine on cards and rows; it is a trap on a wrapper.
-    expect(read("src/app/layout.tsx")).not.toMatch(/app-canvas[^"]*fluid-in/);
+    expect(read("src/components/PageFade.tsx")).not.toMatch(/app-canvas[^"]*fluid-in/);
   });
 
   it("Will is portalled too, on a host that carries no transform of its own", () => {
@@ -82,7 +89,12 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
     const w = read("src/components/will/WillGuideOverlay.tsx");
     expect(w).toMatch(/<FixedLayer hostIsFixed=\{false\}>/);
     const f = read("src/components/FixedLayer.tsx");
-    expect(f).toMatch(/hostIsFixed \? \{ transform: "translateZ\(0\)", \.\.\.style \} : style/);
+    // The shape changed with the keyboard fix but the CLAIM is intact: a
+    // hostIsFixed layer composites itself (translateZ), a non-fixed host
+    // passes `style` through UNTOUCHED - any transform on it would become its
+    // fixed children's containing block and re-create the mid-screen bug.
+    expect(f).toMatch(/hostIsFixed\s*\?\s*\{[\s\S]{0,600}translateZ\(0\)[\s\S]{0,600}\}\s*:\s*style/);
+    expect(f).not.toMatch(/hostIsFixed\s*\?[\s\S]{0,600}:\s*\{[\s\S]{0,60}transform/);
   });
 
   it("chrome that must stay on screen still portals out of the canvas", () => {
@@ -238,5 +250,36 @@ describe("the bar looks like glass, and degrades to something solid", () => {
     const bar = read("src/components/TabBar.tsx");
     expect(bar).toMatch(/bottom-0 z-50 pb-safe/);
     expect(bar).not.toMatch(/className="tabbar pb-safe"/);
+  });
+});
+
+describe("the bottom-right stack has named slots, like the z ladder", () => {
+  const css = () => read("src/app/globals.css").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("the slots exist beside the layer ladder", () => {
+    for (const t of ["--stack-bottom-0", "--stack-bottom-1", "--stack-bottom-2"]) {
+      expect(css(), t).toContain(`${t}: calc(env(safe-area-inset-bottom, 0px)`);
+    }
+  });
+
+  it("the FAB and the Ask Will chip consume slots, not hand-picked rems", () => {
+    // Hard-coded offsets are how two elements ended up in one band with no
+    // owner: each guessed a bigger number than whatever it lost to last time.
+    expect(read("src/components/StatusFab.tsx")).toMatch(/bottom: "var\(--stack-bottom-1\)"/);
+    const page = read("src/app/page.tsx");
+    expect(page).toMatch(/"var\(--stack-bottom-2\)"/);
+    expect(page).toMatch(/"var\(--stack-bottom-0\)"/);
+    expect(page).not.toMatch(/bottom:\s*"calc\(env\(safe-area-inset-bottom, 0px\) \+ 8\.5rem\)"/);
+  });
+
+  it("the upgrade pill yields its band to the status FAB", () => {
+    // The centered pill and the right-aligned FAB share one vertical band;
+    // at 320px their widths met in the middle and the FAB could not be
+    // pressed. One occupant per band: while the FAB can mount, the pill
+    // stands down (pricing stays reachable in the tab bar).
+    const page = read("src/app/page.tsx");
+    expect(page).toMatch(
+      /showUpgrade=\{\s*!upgradeOpen && !paidPlan && !onboarding && !\(vendors\.length > 0 && view === "list"\)\s*\}/
+    );
   });
 });

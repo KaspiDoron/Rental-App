@@ -81,6 +81,66 @@ describe("the pre-search step is derived from what the traveller entered", () =>
   });
 });
 
+describe("found is not contacted", () => {
+  // Owner report 3, item 9: shops found, ZERO messages sent - and Will said
+  // "Shops are reading your request... See it live" while the status panel on
+  // the same screen truthfully said 0 contacted. Discovery fills the board
+  // without sending anything, so vendorCount alone cannot mean negotiating.
+
+  it("a full board with zero contacted is SHOPS_FOUND, not NEGOTIATING", () => {
+    expect(deriveWillStep({ ...linked, vendorCount: 12, contactedCount: 0 })).toBe("SHOPS_FOUND");
+  });
+
+  it("one message on the wire is negotiating", () => {
+    expect(deriveWillStep({ ...linked, vendorCount: 12, contactedCount: 1 })).toBe("NEGOTIATING");
+  });
+
+  it("INVARIANT: zero contacted can never read as negotiating", () => {
+    for (const vendorCount of [1, 5, 18, 40]) {
+      expect(deriveWillStep({ ...linked, vendorCount, contactedCount: 0 })).not.toBe("NEGOTIATING");
+    }
+  });
+
+  it("a caller that cannot see the board keeps the old lumped step", () => {
+    // Same opt-in rule as hasRequest/hasStay: a legacy caller must not be
+    // told its board is untouched when it simply cannot see the board.
+    expect(deriveWillStep({ ...linked, vendorCount: 8 })).toBe("NEGOTIATING");
+  });
+
+  it("offers outrank everything - a board with a price is RESULTS_READY", () => {
+    expect(
+      deriveWillStep({ ...linked, vendorCount: 8, offerCount: 1, contactedCount: 0 })
+    ).toBe("RESULTS_READY");
+  });
+
+  it("the page feeds the panel's own arithmetic, so the two cannot disagree", () => {
+    const page = readCode("src/app/page.tsx");
+    const call = /deriveWillStep\(\{[\s\S]*?\}\)/.exec(page)!;
+    expect(call[0]).toMatch(/contactedCount:/);
+    expect(call[0]).toMatch(
+      /stageCounts\.messaged \+ stageCounts\.replied \+ stageCounts\.queued \+ stageCounts\.offers/
+    );
+    const deps = /deriveWillStep\(\{[\s\S]*?\}\),\s*\[([\s\S]*?)\]/.exec(page)!;
+    for (const d of ["stageCounts.messaged", "stageCounts.replied", "stageCounts.queued", "stageCounts.offers"]) {
+      expect(deps[1], `${d} is not a dependency`).toContain(d);
+    }
+  });
+
+  it("the SHOPS_FOUND advice makes something live instead of claiming it is", () => {
+    const page = readCode("src/app/page.tsx");
+    // Bounded at the next branch - NEGOTIATING legitimately says "See it
+    // live" because by then messages really are out.
+    const branch = /step === "SHOPS_FOUND"[\s\S]*?step === "NEGOTIATING"/.exec(page);
+    expect(branch, "the SHOPS_FOUND branch moved").toBeTruthy();
+    expect(branch![0]).toMatch(/anchor: "\[data-tour='vendors'\]"/);
+    expect(branch![0]).toMatch(/runAction\("mass-bargain"\)/);
+    // And the false claims are gone from the pre-send states.
+    expect(branch![0]).not.toMatch(/See it live/);
+    const dispatched = /step === "AGENTS_DISPATCHED"[\s\S]{0,900}/.exec(page)!;
+    expect(dispatched[0]).not.toMatch(/reaching out to the shops from your WhatsApp/);
+  });
+});
+
 describe("the funnel steps still win over the input steps", () => {
   it("an unlinked user is on the link step even with a complete form", () => {
     expect(

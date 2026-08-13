@@ -974,6 +974,16 @@ alter table public.wa_send_claims enable row level security;
 -- Exact ownership scoping for the risk feed (replaces a LIKE substring
 -- filter on detail that could match across users).
 alter table public.agent_events add column if not exists user_email text;
+
+-- Message-path observability (owner report 3, items 4+8): join a delivery
+-- back to the decision that composed it, and index the shop's number so
+-- "where is this message stuck?" is one query. Writers degrade without these
+-- columns (retry-without-columns), so an un-migrated database loses only the
+-- join, never the event.
+alter table public.agent_events add column if not exists decision_id text;
+alter table public.agent_events add column if not exists to_number text;
+create index if not exists agent_events_to_number_idx
+  on public.agent_events (to_number, created_at desc);
 create index if not exists agent_events_user_idx
   on public.agent_events (user_email, kind, created_at desc);
 
@@ -1316,6 +1326,13 @@ alter table public.wa_recipient_state
   add column if not exists first_intro_at timestamptz;
 alter table public.wa_recipient_state
   add column if not exists first_reply_at timestamptz;
+
+-- "STOP MESSAGING ME" IS PERMANENT. Once stamped, guardOutbound refuses every
+-- future send to this number from this sender - automated, manual, and any
+-- later hunt that rediscovers the same shop. There is deliberately no unset
+-- path in the product: a shop that asked to be left alone stays left alone.
+alter table public.wa_recipient_state
+  add column if not exists opted_out_at timestamptz;
 
 -- The open-thread query: this sender's introductions that have not been
 -- answered. Partial, so it stays small no matter how much history accrues.

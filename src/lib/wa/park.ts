@@ -1,6 +1,7 @@
 import { sbInsert, sbDelete, sbSelect } from "../runtime-config";
 import { tableReady } from "../schema-probe";
 import { outboxKey } from "./phone-key";
+import { REPLY_KIND_FILTER, humanizeForOutbound } from "../wa-guard";
 
 /**
  * Park an auto-composed WhatsApp message in wa_outbox with STRICT
@@ -32,7 +33,14 @@ import { outboxKey } from "./phone-key";
  * `wa-park-failed` event so a lost park is never silent (a future inbound/tick
  * recomposes - the thread is not stuck).
  */
-const PENDING_AUTO = "meta->>kind=not.in.(rfq,custom,human-manual)";
+// THE SAME NULL TRAP W-14 FIXED ON THE REPLY LANE, HERE ON THE DEDUP SCOPE.
+// The old local `meta->>kind=not.in.(...)` predicate evaluates NULL for a
+// row that never stamped a kind, and PostgREST keeps only TRUE - so a
+// kind-less pending auto row was invisible to this delete and the
+// one-row-per-shop invariant silently admitted zombies. REPLY_KIND_FILTER
+// (imported above) spells the NULL case out - "no kind means auto" - and
+// sharing it means the park's idea of an auto row can never drift from the
+// drain's again.
 
 // `robustRequeue` used to live here: the drain claimed a row by DELETING it, so
 // a failed re-insert after a failed send meant permanent, silent loss, and the
@@ -78,6 +86,10 @@ export async function parkOutboxOnce(row: {
   body: string;
   notBeforeMs: number;
   meta?: Record<string, unknown>;
+  /** The body already went through guardOutbound's humanize pass (e.g. a
+   *  failed send being re-parked). Park it verbatim - a second pass would
+   *  re-word text that was already delivery-ready. */
+  alreadyHumanized?: boolean;
 }): Promise<void> {
   // SCOPED BY THE SHOP, NOT BY THE SPELLING. This used to match to_number as an
   // exact string, so a shop stored once as "639661952196" and once as
@@ -101,14 +113,23 @@ export async function parkOutboxOnce(row: {
   // risk - and a duplicate is enormously better than silence.
   const hasToKey = (await tableReady("wa_outbox", "to_key")) === "ready";
   const scope = hasToKey
-    ? `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(key)}&${PENDING_AUTO}`
-    : `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(row.toNumber)}&${PENDING_AUTO}`;
+    ? `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(key)}${REPLY_KIND_FILTER}`
+    : `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(row.toNumber)}${REPLY_KIND_FILTER}`;
   await sbDelete("wa_outbox", scope).catch(() => {});
+  // HUMANIZE AT PARK (owner report 3, 3.4 #2). The drain re-guards every
+  // parked row with `alreadyHumanized: true` - a promise this path never kept:
+  // rows parked here went out with the raw composer text, so the dominant
+  // automated lane skipped the anti-fingerprinting pass entirely. The pass is
+  // seeded from the message identity, so a wakeup-retry re-park of the same
+  // composed turn produces a byte-identical body and the dedup/idempotency
+  // hashes stay stable. Everything this function parks is auto-composed (the
+  // dedup scope above is auto-kind by definition), so no user-typed text can
+  // reach this rewording.
   const record = {
     sender_key: row.senderKey,
     to_number: row.toNumber,
     ...(hasToKey ? { to_key: key } : {}),
-    body: row.body,
+    body: row.alreadyHumanized ? row.body : humanizeForOutbound(row.senderKey, row.toNumber, row.body),
     not_before: new Date(row.notBeforeMs).toISOString(),
     meta: row.meta ?? {},
   };

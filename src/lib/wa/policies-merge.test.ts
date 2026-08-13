@@ -6,27 +6,53 @@ vi.mock("server-only", () => ({}));
 const state = {
   rows: [] as Array<{ key: string; value: string }>,
   config: {} as Record<string, string | undefined>,
+  /** Simulate a Supabase outage on the policies table (strict read). */
+  policiesDown: false,
+  /** Simulate the config store throwing (PACING_MODE / FAST_DISPATCH reads). */
+  configThrows: false,
 };
 vi.mock("../runtime-config", () => ({
   sbSelect: async (table: string) =>
     table === "whatsapp_security_policies" ? state.rows : [],
-  sbSelectStrict: async () => ({ error: "missing" }),
+  // getPolicies reads its rows STRICTLY now (owner report 3, 3.4 #5) so an
+  // outage is distinguishable from "no overrides" - the mock must answer the
+  // policies table on the strict helper or every merge test reads vacuous.
+  sbSelectStrict: async (table: string) => {
+    if (table === "whatsapp_security_policies") {
+      if (state.policiesDown) return { error: "unavailable" as const };
+      return { rows: state.rows };
+    }
+    return { error: "missing" as const };
+  },
   sbInsert: async () => true,
   sbUpdate: async () => true,
   sbDelete: async () => true,
   sbDeleteReturning: async () => [],
   sbInsertClaim: async () => "won",
-  getConfig: async (name: string) => state.config[name],
+  getConfig: async (name: string) => {
+    if (state.configThrows) throw new Error("config store down");
+    return state.config[name];
+  },
   setConfig: async () => ({ ok: true, persistent: false }),
   supabaseConfigured: () => true,
 }));
 
 import { getPolicies } from "../wa-guard";
 
+const g = globalThis as unknown as {
+  __wd_wa_policies__?: unknown;
+  __wd_wa_policies_lastgood__?: unknown;
+  __wd_wa_pacing_raw__?: unknown;
+};
+
 beforeEach(() => {
   state.rows = [];
   state.config = {};
-  (globalThis as unknown as { __wd_wa_policies__?: unknown }).__wd_wa_policies__ = undefined;
+  state.policiesDown = false;
+  state.configThrows = false;
+  g.__wd_wa_policies__ = undefined;
+  g.__wd_wa_policies_lastgood__ = undefined;
+  g.__wd_wa_pacing_raw__ = undefined;
 });
 
 // The exact production failure: the owner's switch, inverted by a spelling.
@@ -105,5 +131,42 @@ describe("getPolicies - the merged truth cannot be flipped by a spelling", () =>
     const p = await getPolicies();
     expect(p.fast_dispatch).toBe(true);
     expect(p.ignore_business_hours).toBe(false);
+  });
+});
+
+// THE FAIL DIRECTION (owner report 3, 3.4 #5). sbSelect used to collapse an
+// outage to [] - the same value as "the owner set no overrides" - so every
+// cautious dial evaporated for a 60s cache window whenever Supabase wobbled.
+// The policy layer must fail toward CAUTION, never toward the mid-band.
+describe("the policy layer fails toward caution, never toward looser defaults", () => {
+  it("an outage with NO memory serves the CAUTIOUS preset, not balanced", async () => {
+    state.policiesDown = true;
+    const p = await getPolicies();
+    expect(p.min_gap_seconds).toBe(30); // cautious preset
+    expect(p.warmup_days).toBe(14);
+    expect(p.fast_dispatch).toBe(false);
+    expect(p.ignore_business_hours).toBe(false);
+  });
+
+  it("an outage WITH memory serves the owner's last-resolved dials", async () => {
+    state.rows = [{ key: "min_gap_seconds", value: "20" }];
+    expect((await getPolicies()).min_gap_seconds).toBe(20); // resolves + remembers
+    g.__wd_wa_policies__ = undefined; // expire the TTL cache, keep last-good
+    state.policiesDown = true;
+    expect((await getPolicies()).min_gap_seconds).toBe(20); // remembered, not defaulted
+  });
+
+  it("the emergency stance is never stored as last-good (it is a stance, not a reading)", async () => {
+    state.policiesDown = true;
+    await getPolicies();
+    expect(g.__wd_wa_policies_lastgood__).toBeUndefined();
+  });
+
+  it("a PACING_MODE read failure holds the owner's last-resolved mode", async () => {
+    state.config = { PACING_MODE: "cautious" };
+    expect((await getPolicies()).min_gap_seconds).toBe(30); // cautious resolved + remembered
+    g.__wd_wa_policies__ = undefined;
+    state.configThrows = true; // rows still readable, config store down
+    expect((await getPolicies()).min_gap_seconds).toBe(30); // mode held, not reverted to balanced
   });
 });

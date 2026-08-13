@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Session } from "@/lib/types";
 import { Icon } from "@/components/icons";
 import { OrbitDots } from "@/components/OrbitDots";
@@ -9,6 +10,8 @@ import { PasswordInput } from "@/components/PasswordInput";
 import { LoadingDots } from "@/components/LoadingDots";
 import { Skeleton, SkeletonCard } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { readTheme, applyTheme } from "@/lib/client/theme";
 import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { probeWaStatus } from "@/lib/wa-status";
@@ -41,6 +44,9 @@ interface ChatMsg {
 }
 
 export default function ProfilePage() {
+  // Client-side navigation: the tab hop keeps the React tree alive, so the
+  // destination paints from cache instead of re-parsing the whole bundle.
+  const router = useRouter();
   const { t } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<{ phone?: string; name?: string } | null>(null);
@@ -121,7 +127,9 @@ export default function ProfilePage() {
       })
       .catch(() => {});
     try {
-      const t2 = (localStorage.getItem("wd_theme") as "light" | "dark") || "light";
+      // readTheme prefers the stamped attribute, so this agrees with what is
+      // actually on screen even when storage is blocked or stale.
+      const t2 = readTheme();
       setTheme(t2);
       const p = localStorage.getItem("wd_prefs");
       if (p) setPrefs(JSON.parse(p));
@@ -155,10 +163,10 @@ export default function ProfilePage() {
 
   function switchTheme(t2: "light" | "dark") {
     setTheme(t2);
-    document.documentElement.setAttribute("data-theme", t2);
-    try {
-      localStorage.setItem("wd_theme", t2);
-    } catch {}
+    // The one shared implementation (attribute + storage + live theme-color
+    // meta) - the topbar ThemeToggle calls the same function, so the two
+    // controls cannot drift.
+    applyTheme(t2);
   }
 
   function savePrefs(next: typeof prefs) {
@@ -248,6 +256,7 @@ export default function ProfilePage() {
             <h1 className="font-display text-lg font-extrabold text-strong">{t("Profile")}</h1>
           </div>
           <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             <LanguageButton />
             <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
               ← {t("Search")}
@@ -515,7 +524,7 @@ export default function ProfilePage() {
                   <button
                     onClick={() => ask()}
                     disabled={thinking}
-                    className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow"
+                    className="btn btn-sm w-full rounded-xl bg-brandyellow-soft py-2.5 text-[13px] font-extrabold text-warn"
                   >
                     {thinking ? (
                       <LoadingDots label={isOwner ? "Analysing the business" : "Checking your orders"} />
@@ -822,8 +831,8 @@ export default function ProfilePage() {
       <TabBar
         active="profile"
         onSelect={(tab) => {
-          if (tab === "home") window.location.href = "/";
-          else if (tab === "deals") window.location.href = "/deals";
+          if (tab === "home") router.push("/");
+          else if (tab === "deals") router.push("/deals");
         }}
         onFeedback={() => setFeedbackOpen(true)}
         onUpgrade={() => setUpgradeOpen(true)}

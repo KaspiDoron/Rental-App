@@ -6,10 +6,12 @@
 // needs the traveller. Think Linear dashboard, not an e-commerce list.
 
 import { useEffect, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { Icon } from "@/components/icons";
 import { WillAvatar } from "@/components/will/WillAvatar";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SkeletonCard } from "@/components/Skeleton";
 import { useReadiness } from "@/lib/client/readiness";
@@ -21,7 +23,7 @@ import { saveSearch } from "@/lib/client/search-persist";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { UpgradeSheet } from "@/components/UpgradeSheet";
 import { startNav } from "@/components/NavVeil";
-import { OrbitDots } from "@/components/OrbitDots";
+import { LoadingDots } from "@/components/LoadingDots";
 import { moneyLocal } from "@/lib/currency";
 import { can } from "@/lib/entitlements";
 import { previewTrip, partitionHunts } from "@/lib/trips";
@@ -59,6 +61,9 @@ interface SessionSummary {
   shopsFound: number;
   status: "booked" | "live" | "waiting" | "wrapped";
   paused: boolean;
+  /** The traveller cleared this hunt - restore will refuse, so the list must
+   *  not offer a live Re-open that can only 404. */
+  closed: boolean;
   contacted: number;
   replied: number;
   waiting: number;
@@ -132,6 +137,9 @@ const TIMELINE_ICON: Record<TimelineEvent["kind"], string> = {
 };
 
 export default function DealsPage() {
+  // Client-side navigation: the tab hop keeps the React tree alive, so the
+  // destination paints from cache instead of re-parsing the whole bundle.
+  const router = useRouter();
   const { t } = useI18n();
   // READY MEANS EVERY SOURCE HAS ANSWERED. `loading` used to belong to the
   // trips fetch alone, so whichever of the two requests finished first took the
@@ -221,6 +229,14 @@ export default function DealsPage() {
         setUpgradeOpen(true);
         return;
       }
+      // A cleared hunt is a DIFFERENT answer from a failed read. Collapsing
+      // this 404 into "Try again" told the traveller to retry an action the
+      // server will refuse forever - the honest copy names what happened.
+      if (d?.error === "session-closed") {
+        setRestoring(null);
+        setRestoreErr(t("You cleared this hunt - it stays in your history, but the agents are done with it."));
+        return;
+      }
       if (!r.ok || !d?.payload) {
         setRestoring(null);
         setRestoreErr(t("Could not re-open that hunt. Try again."));
@@ -238,7 +254,7 @@ export default function DealsPage() {
         return;
       }
       startNav();
-      window.location.href = "/";
+      router.push("/");
     } catch {
       setRestoring(null);
       setRestoreErr(t("Could not re-open that hunt. Try again."));
@@ -362,7 +378,7 @@ export default function DealsPage() {
       );
     if (s.paused)
       return (
-        <span className="flex items-center gap-1 rounded-full bg-brandyellow-soft px-2.5 py-1 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+        <span className="flex items-center gap-1 rounded-full bg-brandyellow-soft px-2.5 py-1 text-[10px] font-extrabold text-warn">
           <Icon name="pause" className="h-3 w-3" /> {t("Paused")}
         </span>
       );
@@ -400,6 +416,7 @@ export default function DealsPage() {
             </h1>
           </div>
           <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             <LanguageButton />
             <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
               ← {t("Search")}
@@ -842,7 +859,16 @@ export default function DealsPage() {
                           latest hunt is always free; earlier ones need trip
                           history (Pro), which surfaces the upgrade sheet. */}
                       <div className="flex flex-col gap-1.5 pt-0.5">
-                        {s.isLatest ? (
+                        {/* A CLEARED HUNT GETS NO LIVE BUTTON. Restore refuses
+                            these with a 404, so offering Re-open (or "Open live
+                            workspace" - there is no live workspace) is a button
+                            that can only fail. Checked FIRST: the newest hunt
+                            can be the cleared one. */}
+                        {s.closed ? (
+                          <p className="rounded-2xl bg-card2 px-3 py-2.5 text-center text-[11.5px] font-bold text-faint">
+                            {t("You cleared this hunt - it stays here as history.")}
+                          </p>
+                        ) : s.isLatest ? (
                           <a
                             href="/"
                             onClick={() => startNav()}
@@ -858,7 +884,7 @@ export default function DealsPage() {
                           >
                             {restoring === s.startedAt ? (
                               <>
-                                <OrbitDots size={16} light label={t("Re-opening")} />
+                                <LoadingDots light />
                                 {t("Re-opening…")}
                               </>
                             ) : (
@@ -884,7 +910,7 @@ export default function DealsPage() {
                             then message ten shops by hand to find out whether any
                             of it still stands. One tap asks all of them, with
                             each shop's own quote read back to them. */}
-                        {s.contacted > 0 && (
+                        {s.contacted > 0 && !s.closed && (
                           <button
                             onClick={() => recheckPrices(s.startedAt, s.sid)}
                             disabled={rechecking === s.startedAt}
@@ -892,7 +918,7 @@ export default function DealsPage() {
                           >
                             {rechecking === s.startedAt ? (
                               <>
-                                <OrbitDots size={15} label={t("Asking")} />
+                                <LoadingDots />
                                 {t("Asking your shops…")}
                               </>
                             ) : (
@@ -1003,8 +1029,8 @@ export default function DealsPage() {
       <TabBar
         active="deals"
         onSelect={(tab) => {
-          if (tab === "home") window.location.href = "/";
-          else if (tab === "profile") window.location.href = "/profile";
+          if (tab === "home") router.push("/");
+          else if (tab === "profile") router.push("/profile");
         }}
         onFeedback={() => setFeedbackOpen(true)}
         onUpgrade={() => setUpgradeOpen(true)}

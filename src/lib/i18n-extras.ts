@@ -16,6 +16,40 @@
 // The generator picks up every two-space-indented quoted line below, so keep
 // the plain array shape. Run `node scripts/gen-i18n-catalog.js` after editing.
 export const I18N_EXTRAS: string[] = [
+  // src/components/Tracker.tsx - StageBadge + stageCaption. Rendered as
+  // t(s.text) / t(stageCaption(...).text), so no literal exists for the grep.
+  // Owner report 3, item 10: every stage chip and caption stayed English in a
+  // Hebrew app because none of these ever entered the pipeline.
+  "Queued",
+  "Locating",
+  "Ready",
+  "No WhatsApp",
+  "Sending",
+  "RFQ sent",
+  "Awaiting reply",
+  "Negotiating",
+  "Offer in",
+  "Counter sent",
+  "No response",
+  "Out of stock",
+  "Declined",
+  "Queued - your agent starts on this shop in a moment.",
+  "Your agent is finding this shop's WhatsApp number.",
+  "Shop found - ask for the price and your agent takes it from there.",
+  "No WhatsApp number found for this shop - a nearby shop may work better.",
+  "Your agent messaged the shop asking for the best price.",
+  "Waiting for the shop to reply - your agent is watching for it.",
+  "Your agent is haggling with the shop for a lower price.",
+  "Price is in - review the shop's offer below.",
+  "Your agent countered the shop's quote - pushing for a better price.",
+  "No reply yet. Your agent will keep watching for one.",
+  "No vehicle available here right now - your agent asked when one is back.",
+  "This shop passed - other shops are still negotiating.",
+  "Your agent is on it.",
+  // src/components/PhotoGallery.tsx - the count line is a {n} template
+  // (translated WHOLE, number substituted after - RTL puts it on the other
+  // side of a concatenation).
+  "{n} photos",
   // src/lib/queue-reason.ts - queueReasonWhy(). Rendered as
   // t(queueReasonWhy(...)), so there is no literal for the grep to find. These
   // explain WHY a first message waits, which matters more since cold intros
@@ -118,4 +152,7 @@ export const I18N_EXTRAS: string[] = [
   "high",
   "medium",
   "low",
+
+  // src/components/SiteFooter.tsx - the public guides hub link (wave 4.4)
+  "Guides",
 ];

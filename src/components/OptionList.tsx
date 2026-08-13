@@ -31,7 +31,7 @@ function conditionChip(o: VehicleOption): { text: string; cls: string } | null {
   if (o.condition === "new")
     return { text: "Newer", cls: "bg-savings-soft text-savings" };
   if (o.condition === "older")
-    return { text: "Older", cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow" };
+    return { text: "Older", cls: "bg-brandyellow-soft text-warn" };
   return null;
 }
 

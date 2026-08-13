@@ -52,7 +52,20 @@ export function WillGuideOverlay({
   onOpenChat?: () => void;
 }) {
   const { t } = useI18n();
+  // STATE, not a bare ref, deliberately (wave 4.1 found this in the browser):
+  // the placement effect below must RE-RUN when the card's DOM node actually
+  // attaches, and `ref.current` is not reactive. When the portalled card
+  // mounted on a later render than the one that set `anchorRect`, the effect's
+  // deps had not changed, placement never ran, and the card sat permanently
+  // at visibility:hidden - Will was invisible until the first scroll happened
+  // to nudge the anchor rect. A callback-ref through state makes the node's
+  // arrival a dependency like any other.
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const attachCard = (el: HTMLDivElement | null) => {
+    cardRef.current = el;
+    setCardEl(el);
+  };
   // The label of the chip whose action is currently running, if any. While it
   // is set every chip is disabled - a second tap during a slow outbound is the
   // same intent, not a new instruction.
@@ -123,18 +136,18 @@ export function WillGuideOverlay({
 
   // Position after the card has real dimensions (text/i18n can change them).
   useLayoutEffect(() => {
-    if (!anchorRect || !cardRef.current) {
+    if (!anchorRect || !cardEl) {
       setPos(null);
       return;
     }
-    const c = cardRef.current.getBoundingClientRect();
+    const c = cardEl.getBoundingClientRect();
     setPos(
       placeBubble(anchorRect, { width: c.width, height: c.height }, {
         width: window.innerWidth,
         height: window.innerHeight,
       })
     );
-  }, [anchorRect, text, actions.length]);
+  }, [anchorRect, cardEl, text, actions.length]);
 
   if (!anchorRect) return null;
 
@@ -167,10 +180,15 @@ export function WillGuideOverlay({
         }}
       />
 
-      {/* The speech card. Invisible until measured+placed to avoid a jump. */}
+      {/* The speech card. Invisible until measured+placed to avoid a jump.
+          data-tour="will": the onboarding tour's "Meet Will" step anchors on
+          this - the step shipped pointing at an attribute NO element carried
+          (owner report 3, re-verification item 10), so it silently degraded to
+          an unanchored centered card. This card IS Will on screen. */}
       <div
-        ref={cardRef}
+        ref={attachCard}
         role="status"
+        data-tour="will"
         className={`pop-in fixed z-[999] w-[min(21rem,calc(100vw-24px))] rounded-2xl border-2 bg-card p-3 shadow-2xl ${
           celebrate ? "border-[#25D366]/60" : "border-brandblue/50"
         }`}

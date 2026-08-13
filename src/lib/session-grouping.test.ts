@@ -116,4 +116,58 @@ describe("all three routes share the grouping, so they cannot drift again", () =
     expect(readCode("src/app/api/deals/route.ts")).toMatch(/sid: group\[0\]\.id \?\? null/);
     expect(readCode("src/app/deals/page.tsx")).toMatch(/sid\?: number \| null/);
   });
+
+  it("nobody reverses the grouper's output a second time", () => {
+    // groupSearchSessions already ends with its own reverse ("newest session
+    // first" - session-life.ts). The deals route reversed AGAIN, so Trips
+    // rendered the OLDEST five hunts, pinned `isLatest` and the free-plan
+    // unlock to the oldest one, and disagreed with restore/recheck - which do
+    // not reverse - about which hunt `gi === 0` means. `oldestStart` was then
+    // taken from the wrong end, so the activity reads only covered the newest
+    // hunt and every older card rendered empty.
+    for (const f of files) {
+      const code = readCode(f);
+      // `[...group].reverse()` copies for a within-group newest-value pick and
+      // is fine; a bare `groups.reverse()` on the grouper's output is the bug.
+      expect(code, `${f} re-reverses the group list`).not.toMatch(/\bgroups\.reverse\(\)/);
+    }
+  });
+});
+
+describe("a cleared hunt is recognisable everywhere, not just at the restore gate", () => {
+  it("the list computes a per-group closed flag with the restore route's bounds", () => {
+    const code = readCode("src/app/api/deals/route.ts");
+    // After this group's newest row, before the next group begins - comparing
+    // against the group's FIRST row would mark the search-clear-search-again
+    // sequence (one 30-minute group with the clear in the middle) as closed.
+    expect(code).toMatch(/closedStamps\.some\(\(t\) => t > groupEnd && t < end\)/);
+    expect(code).toMatch(/raw->>kind=eq\.session-closed/);
+  });
+
+  it("recheck refuses a cleared hunt instead of reporting phantom sends", () => {
+    // Without the gate, every send it queued died at the guard's tombstones
+    // while the response reported "Asking N shops".
+    const code = readCode("src/app/api/deals/recheck/route.ts");
+    expect(code).toMatch(/raw->>kind=eq\.session-closed/);
+    expect(code).toMatch(/You cleared this hunt/);
+    // STRICT read: unknown must refuse to message, never default to sending.
+    expect(code).toMatch(/sbSelectStrict<\{ received_at: string \}>/);
+  });
+
+  it("the client offers no live button on a cleared hunt", () => {
+    const page = readCode("src/app/deals/page.tsx");
+    expect(page).toMatch(/s\.closed \?/);
+    expect(page).toMatch(/s\.contacted > 0 && !s\.closed &&/);
+    // And the restore 404 is no longer collapsed into a retryable error.
+    expect(page).toMatch(/d\?\.error === "session-closed"/);
+  });
+
+  it("the list's pause read uses the canonical marker family", () => {
+    // Unfiltered, the newest session row of ANY kind answered - a pause
+    // followed by a clear read as "not paused" while sessionPauseState (which
+    // filters the family) still said paused. Two surfaces, one fact.
+    expect(readCode("src/app/api/deals/route.ts")).toMatch(
+      /raw->>kind=in\.\(session-paused,session-resumed\)/
+    );
+  });
 });

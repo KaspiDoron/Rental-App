@@ -4,7 +4,15 @@ import { join } from "path";
 
 vi.mock("server-only", () => ({}));
 
-import { massBargainTargets, massBargainCap, isMassEligible, MASS_BARGAIN_MAX } from "./mass-bargain";
+import {
+  massBargainTargets,
+  massBargainCap,
+  isMassEligible,
+  MASS_BARGAIN_MAX,
+  sortTargets,
+  filterTargets,
+  visibleTargets,
+} from "./mass-bargain";
 import type { Vendor } from "./types";
 
 const readCode = (p: string) =>
@@ -127,7 +135,9 @@ describe("nothing is sent before the traveller has seen who", () => {
   });
 
   it("...and any shop can be dropped before sending", () => {
-    expect(preview).toMatch(/const chosen = targets\.filter\(\(v\) => !dropped\.has\(v\.id\)\);/);
+    // `chosen` derives from VISIBLE, not from the raw targets - a shop hidden
+    // by the 4.3+ chip or a sort must never ride along invisibly.
+    expect(preview).toMatch(/const chosen = visible\.filter\(\(v\) => !dropped\.has\(v\.id\)\);/);
     expect(preview).toMatch(/onConfirm\(chosen\.map\(\(v\) => v\.id\)\)/);
     expect(preview).toMatch(/disabled=\{sending \|\| chosen\.length === 0\}/);
   });
@@ -135,5 +145,75 @@ describe("nothing is sent before the traveller has seen who", () => {
   it("REPRODUCTION: the cap message stops claiming a 10-shop beta limit", () => {
     expect(page).not.toMatch(/10-shop beta limit/);
     expect(page).toMatch(/d\.cap \?\? massBargainCap\(session\?\.plan\)/);
+  });
+});
+
+describe("the confirm sheet's view controls (owner report 3)", () => {
+  // The sheet showed the ranked list and nothing else, so finding "the open,
+  // well-reviewed ones" in eighteen rows meant reading all eighteen. These
+  // helpers reorder and narrow the VIEW of the already ranked-and-capped set -
+  // they must never widen it, and never mutate the ranking they were given.
+
+  const ranked = [
+    shop({ id: "top", rating: 4.9, reviews: 500, distanceKm: 5, openNow: false }),
+    shop({ id: "second", rating: 4.6, reviews: 300, distanceKm: 1.2, openNow: true }),
+    shop({ id: "third", rating: 4.4, reviews: 90, openNow: true }), // distance unknown
+    shop({ id: "unrated", rating: 0, reviews: 0, distanceKm: 0.4 }), // openNow unknown
+  ];
+
+  it("'best' keeps the server ranking untouched - no second opinion", () => {
+    expect(sortTargets(ranked, "best").map((v) => v.id)).toEqual(["top", "second", "third", "unrated"]);
+  });
+
+  it("'nearest' walks distance with unknowns LAST - a shop we cannot place is not near", () => {
+    expect(sortTargets(ranked, "nearest").map((v) => v.id)).toEqual(["unrated", "second", "top", "third"]);
+  });
+
+  it("'open' floats Google-open shops and keeps the rank inside each half", () => {
+    // second and third are open, in rank order; top (closed) and unrated
+    // (unknown) follow, also in rank order - unknown is NOT treated as open.
+    expect(sortTargets(ranked, "open").map((v) => v.id)).toEqual(["second", "third", "top", "unrated"]);
+  });
+
+  it("sorting returns a COPY - the ranked set the cap was computed on is never reordered", () => {
+    const before = ranked.map((v) => v.id);
+    sortTargets(ranked, "nearest");
+    sortTargets(ranked, "open");
+    expect(ranked.map((v) => v.id)).toEqual(before);
+  });
+
+  it("the rating chip excludes a shop with NO reviews - no rating clears no bar", () => {
+    expect(filterTargets(ranked, { minRating: 4.3 }).map((v) => v.id)).toEqual(["top", "second", "third"]);
+    expect(filterTargets(ranked, { minRating: 4.7 }).map((v) => v.id)).toEqual(["top"]);
+  });
+
+  it("no min rating means everything, as a copy", () => {
+    const all = filterTargets(ranked, {});
+    expect(all.map((v) => v.id)).toEqual(ranked.map((v) => v.id));
+    expect(all).not.toBe(ranked);
+  });
+
+  it("visibleTargets composes filter-then-sort", () => {
+    // 4.3+ drops `unrated`; nearest then orders by distance with third
+    // (unknown distance) last.
+    expect(visibleTargets(ranked, { sort: "nearest", minRating: 4.3 }).map((v) => v.id)).toEqual([
+      "second",
+      "top",
+      "third",
+    ]);
+  });
+
+  it("the sheet renders VISIBLE and offers the controls in their own scroller", () => {
+    const preview = readCode("src/components/MassBargainPreview.tsx");
+    // The list is the visible set...
+    expect(preview).toMatch(/visibleTargets\(targets, \{ sort, minRating: fourPlus \? 4\.3 : undefined \}\)/);
+    expect(preview).toMatch(/\{visible\.map\(\(v\) => \{/);
+    // ...the controls row is its own horizontal scroller (320px rule - the
+    // page itself never scrolls sideways)...
+    expect(preview).toMatch(/overflow-x-auto overscroll-x-contain/);
+    // ...Select all / Clear operate on the visible set only...
+    expect(preview).toMatch(/setDropped\(new Set\(visible\.map\(\(v\) => v\.id\)\)\)/);
+    // ...and an over-tight filter says so instead of showing a silent void.
+    expect(preview).toMatch(/No shops match this filter - loosen it to keep going\./);
   });
 });

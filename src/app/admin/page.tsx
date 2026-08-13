@@ -7,16 +7,16 @@ import { BrandMark } from "@/components/BrandMark";
 import { LoadingDots } from "@/components/LoadingDots";
 import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 
-// The agents + keys sub-panels are heavy (trace viewer, simulator, health
-// probes) and only appear on two tabs, so code-split them out of the initial
-// admin bundle - first paint of the common tabs no longer pays for them.
-const OrchestratorPanel = dynamic(
-  () => import("@/components/studio/PipelineStudio").then((m) => m.PipelineStudio),
-  { ssr: false, loading: () => <LoadingDots label="Loading the Pipeline Studio" /> }
-);
+// The keys sub-panels are heavy (health probes, doctors) and only appear on
+// one tab, so code-split them out of the initial admin bundle - first paint of
+// the common tabs no longer pays for them. (The graph-era "agents" tab and its
+// Pipeline Studio mount are DELETED, not hidden: the app runs on the
+// single-pass engine, and a tab that renders retired machinery is exactly the
+// kind of dead surface the dead-code purge exists to keep out.)
 const HealthPanel = dynamic(
   () => import("@/components/HealthPanel").then((m) => m.HealthPanel),
   { ssr: false, loading: () => <LoadingDots label="Loading service health" /> }
@@ -24,6 +24,10 @@ const HealthPanel = dynamic(
 const WaDoctorCard = dynamic(
   () => import("@/components/admin/WaDoctorCard").then((m) => m.WaDoctorCard),
   { ssr: false, loading: () => <LoadingDots label="Loading WA doctor" /> }
+);
+const PaypalDoctorCard = dynamic(
+  () => import("@/components/admin/PaypalDoctorCard").then((m) => m.PaypalDoctorCard),
+  { ssr: false, loading: () => <LoadingDots label="Loading PayPal doctor" /> }
 );
 const DeployInfoCard = dynamic(() => import("@/components/admin/DeployInfoCard"), {
   ssr: false,
@@ -64,6 +68,39 @@ const EngineInspectorPanel = dynamic(
   { ssr: false, loading: () => <LoadingDots label="Reading the live blackboard" /> }
 );
 import type { AnalyticsSnapshot } from "@/lib/types";
+import { StatTile, DegradedBanner, type StatHelp } from "@/components/admin/primitives";
+import { InfoTipProvider } from "@/components/InfoTip";
+
+// Every Command KPI carries an "i" that explains it - enforced by StatTile's
+// type (a tile without a catalogue entry does not compile). ENGINE_HELP's
+// pattern, applied to the tab the owner opens first.
+const COMMAND_HELP = {
+  waSessions: {
+    label: "WA sessions live",
+    what: "How many users (including you) currently have a live, linked WhatsApp session sending through the app right now.",
+    drift: "A sudden drop across the fleet usually means the Evolution host restarted - check Keys - WhatsApp doctor.",
+  },
+  repliesToday: {
+    label: "Shop replies (24h)",
+    what: "Messages rental shops sent back to your agents in the last 24 hours. An exact count, not a capped sample.",
+    drift: "Zero with sessions live and sends going out means inbound is broken - check the webhook in the WA doctor.",
+  },
+  offersToday: {
+    label: "Offers landed (24h)",
+    what: "Real prices captured from shop replies in the last 24 hours.",
+    drift: "Replies without offers means extraction is failing - check AI keys and the Engine tab.",
+  },
+  queuedMessages: {
+    label: "Queued messages",
+    what: "Messages the anti-ban engine is holding to send later (shop closed, rate limit, human pacing).",
+    drift: "A large, growing queue with nothing overdue is pacing at work; overdue rows raise their own critical alert.",
+  },
+  openIssues: {
+    label: "Open issues",
+    what: "Feedback the AI triaged as a genuine bug or usability issue that is still open.",
+    drift: "Work them from the Feedback tab - high severity first.",
+  },
+} satisfies Record<string, StatHelp>;
 
 interface KeyInfo {
   name: string;
@@ -197,7 +234,6 @@ export default function AdminPage() {
     | "command"
     | "analytics"
     | "engine"
-    | "agents"
     | "ops"
     | "money"
     | "waba"
@@ -208,6 +244,7 @@ export default function AdminPage() {
     | "feedback"
     | "billing"
     | "data"
+    | "settings"
   >("command");
   // Keys page: collapse each scope group so the long page is easy to walk.
   const [collapsedScopes, setCollapsedScopes] = useState<Record<string, boolean>>({
@@ -344,16 +381,30 @@ export default function AdminPage() {
     }
   }
 
+  // Which Command-tab legs failed on the last load. Each entry renders its own
+  // error card with a Retry - never a permanent skeleton.
+  const [commandErrs, setCommandErrs] = useState<string[]>([]);
   // Command also hosts the foldable Anti-Ban + Sponsored sections (item #16).
+  //
+  // allSettled, NOT all (owner report 3, 3.5): the old Promise.all meant ONE
+  // failed fetch (or one non-JSON error page) rejected the whole load, nothing
+  // called setCommand, and the tab sat on its skeleton forever - the owner's
+  // screenshot. Each leg now lands or fails independently, and a failed leg is
+  // an error card with a Retry, not a silent hole.
   async function loadCommand() {
-    const [r, s, sp] = await Promise.all([
-      (await fetch("/api/admin/command")).json(),
-      (await fetch("/api/admin/wa-security")).json(),
-      (await fetch("/api/admin/sponsored")).json(),
+    const [r, s, sp] = await Promise.allSettled([
+      fetch("/api/admin/command").then((x) => x.json()),
+      fetch("/api/admin/wa-security").then((x) => x.json()),
+      fetch("/api/admin/sponsored").then((x) => x.json()),
     ]);
-    if (r.alerts) setCommand(r);
-    if (s.policies) setWaSec(s);
-    if (sp.rows) setSponsors(sp.rows);
+    const errs: string[] = [];
+    if (r.status === "fulfilled" && r.value?.alerts) setCommand(r.value);
+    else errs.push("command overview");
+    if (s.status === "fulfilled" && s.value?.policies) setWaSec(s.value);
+    else errs.push("anti-ban policies");
+    if (sp.status === "fulfilled" && sp.value?.rows) setSponsors(sp.value.rows);
+    else errs.push("sponsored shops");
+    setCommandErrs(errs);
   }
   // Analytics hosts the foldable market-floors table (item #16).
   async function loadFloors() {
@@ -364,10 +415,15 @@ export default function AdminPage() {
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [dataRows, setDataRows] = useState<Record<string, unknown>[]>([]);
   const [dataBusy, setDataBusy] = useState(false);
+  // Tables whose counts could not be read - the route already names them; the
+  // tab now actually shows it (the shared DegradedBanner) instead of quietly
+  // rendering those tables as if they were countable.
+  const [dataDegraded, setDataDegraded] = useState<string[]>([]);
 
   async function loadDataTables() {
     const r = await (await fetch("/api/admin/data")).json();
     setDataTables(r.tables ?? []);
+    setDataDegraded(r.degraded ?? []);
   }
   async function openDataTable(name: string) {
     setDataTable(name);
@@ -810,13 +866,28 @@ export default function AdminPage() {
   return (
     <Shell>
       <div className="surface-strong no-scrollbar mb-4 flex gap-1 overflow-x-auto rounded-2xl p-1">
-        {/* Legacy "Agents" (graph Pipeline Studio) and "Ops" (graph-era Ops
-            Center) tabs are RETIRED from the workspace nav - the app runs on the
-            single-pass engine now, so the old graph-pipeline surfaces are no
-            longer shown. Their code remains for data/learning continuity but is
-            not reachable from the UI. */}
-        {(["command", "analytics", "money", "waba", "risk", "engine", "i18n", "keys", "users", "feedback", "billing", "data"] as const)
-          .map((t) => (
+        {/* The graph-era "Agents" (Pipeline Studio) tab is DELETED - the app
+            runs on the single-pass engine. "Ops" (the cross-user AI Operations
+            Center with the real learning loop) is RESTORED, owner-only: it was
+            retired alongside agents in one sweep, but it is a live surface the
+            learning loop writes to, and hiding it only meant the owner could
+            not reach their own review queue (owner decision 5). */}
+        {([
+          "command",
+          "analytics",
+          "money",
+          "waba",
+          "risk",
+          "engine",
+          ...(isOwner ? (["ops"] as const) : []),
+          "i18n",
+          "keys",
+          "users",
+          "feedback",
+          "billing",
+          "data",
+          "settings",
+        ] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -828,15 +899,19 @@ export default function AdminPage() {
               ? "🎯 command"
               : t === "engine"
                 ? "🧠 engine"
-                : t === "money"
-                  ? "💸 money"
-                  : t === "waba"
-                    ? "📲 wa business"
-                    : t === "risk"
-                      ? "🛡 risk"
-                      : t === "i18n"
-                        ? "🌐 copy"
-                        : t}
+                : t === "ops"
+                  ? "🧭 ops"
+                  : t === "money"
+                    ? "💸 money"
+                    : t === "waba"
+                      ? "📲 wa business"
+                      : t === "risk"
+                        ? "🛡 risk"
+                        : t === "i18n"
+                          ? "🌐 copy"
+                          : t === "settings"
+                            ? "⚙️ settings"
+                            : t}
             {t === "feedback" && feedbackRows.length > 0 ? ` (${feedbackRows.length})` : ""}
             {t === "command" && (command?.alerts.filter((a) => a.level === "critical").length ?? 0) > 0
               ? ` (${command!.alerts.filter((a) => a.level === "critical").length}!)`
@@ -848,56 +923,42 @@ export default function AdminPage() {
       {!loaded && <SkeletonList count={4} />}
 
       {loaded && tab === "command" && (
+        <InfoTipProvider>
         <div className="space-y-3">
+          {/* A failed leg is an error card with a Retry, never a permanent
+              skeleton and never a silent hole (3.5 - the owner's screenshot
+              was this tab skeletal forever because ONE fetch had failed). */}
+          {commandErrs.length > 0 && (
+            <div className="rounded-blob border-2 border-brandred/40 bg-brandred-soft p-3">
+              <div className="text-[12px] font-extrabold text-brandred">
+                Could not load: {commandErrs.join(", ")}
+              </div>
+              <button
+                onClick={() => loadCommand()}
+                className="btn btn-sm mt-2 rounded-xl border-2 border-brandred/40 px-3 text-[11px] font-extrabold text-brandred"
+              >
+                ↻ Retry
+              </button>
+            </div>
+          )}
           {/* Live pulse */}
           {command ? (
             <>
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                {[
-                  { k: "waSessions", label: "WA sessions live", emoji: "🟢", hint: "How many users (including you) currently have a live, linked WhatsApp session sending through the app right now." },
-                  { k: "repliesToday", label: "Shop replies (24h)", emoji: "📥", hint: "Messages rental shops sent back to your agents in the last 24 hours." },
-                  { k: "offersToday", label: "Offers landed (24h)", emoji: "🤝", hint: "Real prices captured from shop replies in the last 24 hours." },
-                  { k: "queuedMessages", label: "Queued messages", emoji: "🕘", hint: "Messages the anti-ban engine is holding to send later (shop closed, rate limit, human pacing). Tap below to see and flush them." },
-                  { k: "openIssues", label: "Open issues", emoji: "🐛", hint: "Feedback the AI triaged as a genuine bug/usability issue that is still open." },
-                ].map((s) => (
-                  <div key={s.k} title={s.hint} className="surface rounded-2xl p-3 text-center">
-                    <div className="text-xl font-extrabold text-strong">
-                      {/* `?? 0` WAS THE SAME LIE ONE LAYER UP. The route now
-                          returns null for a stat whose source read failed, and
-                          coercing that to 0 here would put "0 shop replies" in
-                          large type during a total outage - which is exactly
-                          what the fail-dark work exists to prevent. A dash
-                          means "we do not know", and that is the truth. */}
-                      {s.emoji}{" "}
-                      {command.stats[s.k] === null || command.stats[s.k] === undefined ? (
-                        <span className="text-faint" title="Could not be read">
-                          -
-                        </span>
-                      ) : (
-                        command.stats[s.k]
-                      )}
-                    </div>
-                    <div className="text-[10px] font-bold text-faint">{s.label} ⓘ</div>
-                  </div>
-                ))}
-              </div>
-
               {/* A read that failed is the most urgent thing on this page:
-                  every figure above it is computed over a subset we cannot
-                  describe. Rendered as its own strip so it cannot be mistaken
-                  for one more alert among many. */}
-              {command.degraded && command.degraded.length > 0 && (
-                <div className="surface rounded-2xl border border-brandred/40 p-3">
-                  <div className="text-xs font-extrabold text-strong">
-                    ⚠ {command.degraded.length} data source
-                    {command.degraded.length > 1 ? "s" : ""} unreadable
-                  </div>
-                  <div className="mt-1 text-[11px] text-faint">
-                    {command.degraded.join(", ")} - the figures above are incomplete. They are
-                    not zero, they are unknown.
-                  </div>
-                </div>
-              )}
+                  every figure below is computed over a subset we cannot
+                  describe - so the banner renders ABOVE the numbers. */}
+              <DegradedBanner degraded={command.degraded} />
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                {/* StatTile renders null as a dash - "0 shop replies" in large
+                    type during a total outage is the exact lie the fail-dark
+                    work exists to prevent - and its type demands a
+                    COMMAND_HELP entry, so a KPI cannot ship unexplained. */}
+                <StatTile help={COMMAND_HELP} helpId="waSessions" emoji="🟢" value={command.stats.waSessions} />
+                <StatTile help={COMMAND_HELP} helpId="repliesToday" emoji="📥" value={command.stats.repliesToday} />
+                <StatTile help={COMMAND_HELP} helpId="offersToday" emoji="🤝" value={command.stats.offersToday} />
+                <StatTile help={COMMAND_HELP} helpId="queuedMessages" emoji="🕘" value={command.stats.queuedMessages} />
+                <StatTile help={COMMAND_HELP} helpId="openIssues" emoji="🐛" value={command.stats.openIssues} />
+              </div>
 
               {/* Queued messages now live in the user-facing find-deals page
                   (item #2) - every traveller manages their own queue there. */}
@@ -933,7 +994,7 @@ export default function AdminPage() {
                             a.level === "critical"
                               ? "text-brandred"
                               : a.level === "warning"
-                              ? "text-[#8a6100] dark:text-brandyellow"
+                              ? "text-warn"
                               : "text-strong"
                           }`}
                         >
@@ -1017,10 +1078,11 @@ export default function AdminPage() {
                 </div>
               </div>
             </>
-          ) : (
+          ) : commandErrs.length === 0 ? (
             <SkeletonList count={3} />
-          )}
+          ) : null}
         </div>
+        </InfoTipProvider>
       )}
 
       {loaded && tab === "engine" && <EngineInspectorPanel />}
@@ -1033,13 +1095,19 @@ export default function AdminPage() {
 
       {loaded && tab === "ops" && isOwner && <OpsCenterPanel />}
 
-      {loaded && tab === "agents" && (
+      {loaded && tab === "settings" && (
         <div className="space-y-3">
-
-          {/* The owner's full-control agent pipeline: stages, custom agents,
-              edge rules and live decision traces (replaces the old funnel map
-              + core-prompts editors). */}
-          <OrchestratorPanel isOwner={isOwner} />
+          <div className="surface rounded-blob p-4">
+            <div className="mb-1 text-[13px] font-extrabold text-strong">⚙️ Workspace settings</div>
+            <p className="mb-3 text-[11px] text-faint">
+              Theme and language for this device - the same controls travellers have, gathered in
+              one place so they are never hunted for across tabs.
+            </p>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <LanguageButton />
+            </div>
+          </div>
         </div>
       )}
 
@@ -1212,7 +1280,7 @@ export default function AdminPage() {
                                 risk >= 70
                                   ? "bg-brandred text-white"
                                   : risk >= 40
-                                  ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                                  ? "bg-brandyellow-soft text-warn"
                                   : "bg-savings-soft text-savings"
                               }`}
                             >
@@ -1564,12 +1632,15 @@ export default function AdminPage() {
             </div>
           )}
 
-          {/* Real durable stats (this month, from Supabase) */}
+          {/* Real durable stats (this month, from Supabase). `?? 0` was the
+              fail-green lie: the route now sends exact counts that are null
+              when unreadable, and a dash is the only honest render for null. */}
+          <DegradedBanner degraded={costs?.degraded} />
           <div className="grid grid-cols-2 gap-2">
-            <Metric label="Searches this month" value={String(costs?.stats?.searchesThisMonth ?? 0)} accent />
-            <Metric label="Offers received" value={String(costs?.stats?.offersThisMonth ?? 0)} />
-            <Metric label="Messages sent" value={String(costs?.stats?.messagesSent ?? 0)} />
-            <Metric label="Total users" value={String(costs?.stats?.totalUsers ?? 0)} />
+            <Metric label="Searches this month" value={costs?.stats?.searchesThisMonth == null ? "-" : String(costs.stats.searchesThisMonth)} accent />
+            <Metric label="Offers received" value={costs?.stats?.offersThisMonth == null ? "-" : String(costs.stats.offersThisMonth)} />
+            <Metric label="Messages sent" value={costs?.stats?.messagesSent == null ? "-" : String(costs.stats.messagesSent)} />
+            <Metric label="Total users" value={costs?.stats?.totalUsers == null ? "-" : String(costs.stats.totalUsers)} />
           </div>
           <div className="surface rounded-blob p-4">
             <div className="mb-3 flex items-center gap-1.5 text-sm font-extrabold text-strong">
@@ -1579,13 +1650,34 @@ export default function AdminPage() {
               Best performer:{" "}
               <span className="font-extrabold text-brandblue">{analytics.bestTactic ?? "-"}</span>
             </p>
+            {/* Priors are not results. Every tactic still at its shipped
+                baseline says so, and while ALL of them are, the panel says it
+                once, loudly - "7/12 wins" on a fresh install is an invented
+                number, and presenting it as evidence poisons every decision
+                the owner makes against this screen. */}
+            {analytics.allSeeded && (
+              <p className="mb-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-warn">
+                These are the shipped starter priors - no live negotiation has been measured yet.
+                The numbers below are a ranking aid, not results.
+              </p>
+            )}
             <div className="space-y-2">
               {analytics.tactics.map((t) => {
                 const winRate = t.uses ? Math.round((t.wins / t.uses) * 100) : 0;
                 return (
                   <div key={t.id} className="rounded-2xl bg-card2 p-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-[13px] font-extrabold text-strong">{t.label}</span>
+                      <span className="flex items-center gap-1.5 text-[13px] font-extrabold text-strong">
+                        {t.label}
+                        {t.seeded && (
+                          <span
+                            title="Still at the shipped starter priors - not yet measured in a live negotiation"
+                            className="rounded-full bg-card px-1.5 py-0.5 text-[9px] font-extrabold uppercase text-faint"
+                          >
+                            seeded
+                          </span>
+                        )}
+                      </span>
                       <span className="text-[11px] text-faint">
                         {t.wins}/{t.uses} wins · {t.avgDiscountPct}% avg cut
                       </span>
@@ -1618,13 +1710,17 @@ export default function AdminPage() {
           {/* WA doctor: one-tap inbound incident tracer + webhook re-arm */}
           <WaDoctorCard />
 
+          {/* PayPal doctor: register/repair the billing webhook + reconcile
+              plans against PayPal (4.3 - cancellations finally reach us). */}
+          <PaypalDoctorCard />
+
           <div
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
               persistent === null
                 ? "border-line bg-card2 text-soft"
                 : persistent
                   ? "border-savings bg-savings-soft text-savings"
-                  : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                  : "border-brandyellow bg-brandyellow-soft text-warn"
             }`}
           >
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
@@ -1800,7 +1896,14 @@ export default function AdminPage() {
                     <div className="mt-0.5 font-mono text-[10px] text-faint">{p.model}</div>
                   )}
                   <div className="mt-0.5 text-[11px] text-soft">
-                    Used here: {p.tokensUsed.toLocaleString()} tokens · {p.requests} calls
+                    {/* HONEST SCOPE LABEL (3.5): these counters live in process
+                        memory, so on serverless they cover THIS INSTANCE since
+                        its last cold start - not the fleet, not the cycle.
+                        "Used here" read as a total; it is not one. The durable
+                        cross-instance number is the "This day/month" line
+                        below, from the ai_usage table. */}
+                    This instance (since restart): {p.tokensUsed.toLocaleString()} tokens ·{" "}
+                    {p.requests} calls
                     {p.failures > 0 ? ` · ${p.failures} failovers` : ""}
                   </div>
                   {p.cadence && p.cadence !== "none" && (
@@ -2217,6 +2320,7 @@ export default function AdminPage() {
 
       {loaded && tab === "data" && (
         <div className="space-y-3">
+          <DegradedBanner degraded={dataDegraded} />
           <div className="surface rounded-blob p-4">
             <div className="text-[13px] font-extrabold text-strong">🗄 Data explorer</div>
             <p className="mb-2 text-[11px] text-faint">
@@ -2387,7 +2491,7 @@ export default function AdminPage() {
                             : st === "dismissed"
                             ? "border-line bg-card2 text-faint"
                             : st === "in-progress"
-                            ? "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                            ? "border-brandyellow bg-brandyellow-soft text-warn"
                             : "border-brandblue bg-brandblue-soft text-brandblue"
                           : "border-line text-faint"
                       }`}
@@ -2454,7 +2558,7 @@ export default function AdminPage() {
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
               billingOn
                 ? "border-savings bg-savings-soft text-savings"
-                : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                : "border-brandyellow bg-brandyellow-soft text-warn"
             }`}
           >
             <Icon name="card" className="mr-1 inline h-4 w-4" />
@@ -2486,6 +2590,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             <LanguageButton />
             <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
               ← App

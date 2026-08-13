@@ -1723,6 +1723,8 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         body: verdict.text,
         notBeforeMs: Date.now() + 30_000,
         meta: { ...(meta as Record<string, unknown>), reason: "reconnecting - reply resumes automatically" },
+        // verdict.text already carries the guard's humanize pass - verbatim.
+        alreadyHumanized: true,
       }).catch(() => {});
       return {
         delivered: "queued",

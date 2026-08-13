@@ -178,9 +178,17 @@ export async function handleCallEvent(args: {
   // 2) ANSWER THE SHOP, through the ordinary guarded path - same pacing, same
   //    mutex, same outbox. A call is urgent to the traveller; it is not a
   //    licence to bypass the anti-ban machinery.
+  //
+  //    AND THEN ACTUALLY SEND (owner report 3, 3.4 severity #1). guardOutbound
+  //    only DECIDES - every other allow-site performs the transport call
+  //    itself. This one reported "sent" on a verdict and stopped, so the shop
+  //    holding a ringing phone never received the one message this whole
+  //    module exists to deliver. Same shape as agent-loop's inline path:
+  //    atomic claim -> sendFromUser (reply lane, fast) -> release on failure
+  //    -> durable outbound row on success.
   let detail = "queued";
   try {
-    const { guardOutbound } = await import("../wa-guard");
+    const { guardOutbound, claimForSend, releaseSendClaim, afterSend } = await import("../wa-guard");
     const verdict = await guardOutbound({
       senderKey: email,
       toDigits: known,
@@ -189,7 +197,35 @@ export async function handleCallEvent(args: {
       queueIfBlocked: true,
       meta: { kind: "auto-answer", reason: "missed call" },
     });
-    detail = verdict.allow ? "sent" : `held: ${verdict.reason ?? "guard"}`;
+    if (!verdict.allow) {
+      detail = `held: ${verdict.reason ?? "guard"}`;
+    } else {
+      const claim = await claimForSend(email, known, verdict.text, true, true);
+      if (!claim.ok) {
+        detail = claim.kind === "duplicate" ? "held: duplicate in flight" : "held: pacing slot";
+      } else {
+        const { sendFromUser } = await import("../evolution");
+        const result = await sendFromUser(email, known, verdict.text, true, { lane: "reply" });
+        if (!result.ok) {
+          await releaseSendClaim(email, known, verdict.text).catch(() => {});
+          detail = `send-failed: ${result.error ?? "unknown"}`;
+        } else {
+          await afterSend(email, known).catch(() => {});
+          const { sbInsert } = await import("../runtime-config");
+          await sbInsert("whatsapp_messages", [
+            {
+              wa_message_id: (result as { messageId?: string }).messageId ?? null,
+              to_number: known,
+              body: verdict.text,
+              type: "text",
+              direction: "outbound",
+              raw: { sender: email, kind: "auto-answer", reason: "missed call", auto: true },
+            },
+          ]).catch(() => {});
+          detail = "sent";
+        }
+      }
+    }
   } catch (e) {
     detail = `failed: ${(e as Error)?.message ?? "unknown"}`;
   }

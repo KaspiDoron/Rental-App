@@ -73,7 +73,7 @@ export function OpsCenter() {
           become director priors. Owner-only.
         </p>
         {detected !== null && detected > 0 && (
-          <p className="mt-1.5 text-[11px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+          <p className="mt-1.5 text-[11px] font-extrabold text-warn">
             🤖 The detector just flagged {detected} conversation{detected === 1 ? "" : "s"} for
             review - they are in the inbox.
           </p>
@@ -160,7 +160,7 @@ function InboxPanel({ onOpen }: { onOpen: (threadKey: string, vendorName: string
             <span
               className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[9px] font-extrabold ${
                 r.status === "auto_flagged"
-                  ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                  ? "bg-brandyellow-soft text-warn"
                   : r.status === "flagged"
                     ? "bg-brandred-soft text-brandred"
                     : "bg-brandblue-soft text-brandblue"
@@ -250,7 +250,7 @@ function ThreadsPanel({ onOpen }: { onOpen: (threadKey: string, vendorName: stri
               {t.vendorName}
             </span>
             {t.drill && (
-              <span className="shrink-0 rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+              <span className="shrink-0 rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-extrabold text-warn">
                 🧪 drill
               </span>
             )}
@@ -276,7 +276,7 @@ function ThreadsPanel({ onOpen }: { onOpen: (threadKey: string, vendorName: stri
             <span className="ml-auto text-faint">{new Date(t.updatedAt).toLocaleDateString()}</span>
           </div>
           {t.autoReasons.length > 0 && (
-            <p className="mt-1 truncate text-[10px] text-[#8a6100] dark:text-brandyellow">
+            <p className="mt-1 truncate text-[10px] text-warn">
               🤖 {t.autoReasons[0]}
             </p>
           )}

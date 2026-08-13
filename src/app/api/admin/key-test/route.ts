@@ -195,21 +195,34 @@ export async function GET(req: Request) {
           })
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null);
-          const ids: string[] = Array.isArray(listed?.webhooks)
+          // AN EMPTY LIST IS A FAILURE, NOT A PASS (wave 4.3). The old
+          // `ids.length && !ids.includes(...)` skipped the check entirely
+          // when the app had NO webhooks - precisely the broken state this
+          // check exists to catch (an id that matches nothing can never
+          // verify a signature). An unreadable list is reported as unknown
+          // rather than silently waved through.
+          const readable = Array.isArray(listed?.webhooks);
+          const ids: string[] = readable
             ? listed.webhooks.map((w: { id?: string }) => String(w?.id ?? ""))
             : [];
-          if (ids.length && !ids.includes(String(webhookId).trim())) {
+          if (readable && !ids.includes(String(webhookId).trim())) {
             result = {
               ok: false,
               detail:
                 `PAYPAL_WEBHOOK_ID is not a webhook on this PayPal app` +
                 ` (${(env ?? "live").trim().toLowerCase() === "sandbox" ? "sandbox" : "live"}).` +
                 ` Every event will fail signature verification and no plan will be granted.` +
-                (ids.length === 1 ? ` The app's only webhook id is ${ids[0]}.` : ""),
+                (ids.length === 0
+                  ? ` The app has NO webhooks at all - open Admin -> Keys -> PayPal webhook doctor and press Connect.`
+                  : ids.length === 1
+                    ? ` The app's only webhook id is ${ids[0]}.`
+                    : ""),
             };
             break;
           }
-          webhookDetail = ids.length ? " - webhook id verified with PayPal" : "";
+          webhookDetail = readable
+            ? " - webhook id verified with PayPal"
+            : " - webhook id COULD NOT be verified (webhook list unreadable)";
         }
 
         const missing = [

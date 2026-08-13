@@ -89,7 +89,7 @@ export function LanguageButton({ flashy = false }: { flashy?: boolean }) {
             </div>
           )}
           {(unavailable || error) && (
-            <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
               {unavailable ?? error}
             </p>
           )}

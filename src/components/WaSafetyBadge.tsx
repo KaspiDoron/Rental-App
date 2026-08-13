@@ -37,7 +37,7 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
         }
       : safety.state === "pacing"
       ? {
-          cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+          cls: "bg-brandyellow-soft text-warn",
           icon: "clock",
           label: `${safety.queued} ${t("in line - sending automatically")}`,
         }
@@ -49,7 +49,7 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
         }
       : safety.state === "attention"
       ? {
-          cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+          cls: "bg-brandyellow-soft text-warn",
           icon: "shield",
           label: t("Some messages need a look"),
         }

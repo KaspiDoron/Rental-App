@@ -197,7 +197,7 @@ export function ConversationPanel({
               </span>
             )}
             {(f.firmCount ?? 0) > 0 && (
-              <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+              <span className="rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-warn">
                 firm ×{f.firmCount}
               </span>
             )}
@@ -428,7 +428,7 @@ function DecisionRecord({
               <div className="flex items-center gap-1.5">
                 <span className="font-extrabold text-strong">{s.stage}</span>
                 {s.verdict && (
-                  <span className="rounded-full bg-brandyellow-soft px-1.5 text-[9px] font-bold text-[#8a6100] dark:text-brandyellow">
+                  <span className="rounded-full bg-brandyellow-soft px-1.5 text-[9px] font-bold text-warn">
                     {s.verdict}
                   </span>
                 )}

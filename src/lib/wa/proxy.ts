@@ -30,9 +30,11 @@
 // - Nothing here claims "fail-closed" or "impossible by construction" - the
 //   challenge pass refuted both phrasings (Part 7.6). Two egress paths exist
 //   that no env default covers.
-// - `EVOLUTION_PROXY_REQUIRED` is deliberately NOT built. The owner decision
-//   keeps proxying non-gating, and a config key that exists but enforces
-//   nothing is a dead knob - the exact artifact this plan keeps deleting.
+// - `EVOLUTION_PROXY_REQUIRED` exists and defaults OFF (owner decision 4,
+//   report 3). Enforced at ONE point - connectInstance refuses a link when the
+//   flag is on and no exit resolves - so it is a real gate, not a dead knob.
+//   It ships off because flipping it blind bricks linking; the owner turns it
+//   on only after the prod proxy config is confirmed carrying traffic.
 
 import { randomBytes } from "crypto";
 import { getConfig, sbSelect, sbUpdate } from "../runtime-config";

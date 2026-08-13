@@ -1,6 +1,7 @@
 "use client";
 
 import type { TrackerStage } from "@/lib/types";
+import { useI18n } from "@/lib/i18n";
 
 const FLOW: { key: TrackerStage; label: string }[] = [
   { key: "locating-contact", label: "Locating" },
@@ -22,6 +23,11 @@ const ORDER: TrackerStage[] = [
 ];
 
 export function StageBadge({ stage }: { stage: TrackerStage }) {
+  // THE BADGES NEVER ENTERED THE t() PIPELINE (owner report 3, item 10):
+  // every stage chip on every card stayed English in a Hebrew app. The texts
+  // live in i18n-extras.ts (they reach t() through a variable, so the
+  // catalogue grep cannot see them here).
+  const { t } = useI18n();
   const map: Record<TrackerStage, { text: string; cls: string }> = {
     queued: { text: "Queued", cls: "bg-card2 text-faint" },
     "locating-contact": { text: "Locating", cls: "bg-brandblue-soft text-brandblue" },
@@ -33,7 +39,7 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     "rfq-sent": { text: "RFQ sent", cls: "bg-brandblue-soft text-brandblue" },
     "awaiting-response": {
       text: "Awaiting reply",
-      cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+      cls: "bg-brandyellow-soft text-warn",
     },
     negotiating: { text: "Negotiating", cls: "bg-brandred-soft text-brandred" },
     "offer-received": { text: "Offer in", cls: "bg-savings-soft text-savings" },
@@ -43,7 +49,7 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     // one reopens the moment they restock, and the agent has asked when.
     "out-of-stock": {
       text: "Out of stock",
-      cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+      cls: "bg-brandyellow-soft text-warn",
     },
     declined: { text: "Declined", cls: "bg-brandred-soft text-brandred" },
   };
@@ -63,7 +69,7 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
         </span>
       )}
-      {s.text}
+      {t(s.text)}
     </span>
   );
 }

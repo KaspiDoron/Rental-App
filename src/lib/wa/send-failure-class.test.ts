@@ -160,13 +160,20 @@ describe("the Command Center can go dark", () => {
   });
 
   it("stats from a dark source are null, not 0", () => {
-    expect(route).toMatch(/rows === null \? null : n\(\)/);
+    // Since 3.5 the tiles are EXACT sbCountDark counts; a null count rides
+    // through AND names itself in `degraded`, so a dashed tile is explained.
+    expect(route).toMatch(/const countStat = \(n: number \| null, label: string\)/);
+    expect(route).toMatch(/if \(n === null && !degraded\.includes\(label\)\) degraded\.push\(label\)/);
   });
 
   it("the UI renders a dash, not a zero", () => {
+    // The dash contract moved into the SHARED StatTile/Num primitives (3.5) -
+    // one implementation every management surface uses.
     const page = readCode("src/app/admin/page.tsx");
-    // `?? 0` here would have re-introduced the same lie one layer up.
+    expect(page).toMatch(/<StatTile help=\{COMMAND_HELP\}/);
     expect(page).not.toMatch(/command\.stats\[s\.k\] \?\? 0/);
-    expect(page).toMatch(/command\.stats\[s\.k\] === null/);
+    const prim = readCode("src/components/admin/primitives.tsx");
+    expect(prim).toMatch(/v === null \|\| v === undefined/);
+    expect(prim).toMatch(/&mdash;/);
   });
 });

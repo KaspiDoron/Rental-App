@@ -116,10 +116,12 @@ describe("REGRESSION: opacity belongs to the theme again", () => {
   });
 
   it("so the dark-mode overrides can actually win", () => {
-    // Two selectors per rule (`[data-theme="dark"]` and `html.dark`), so the
-    // opacity sits on the SECOND line of each group.
-    expect(css).toMatch(/\[data-theme="dark"\] \.aurora::before,\s*\n\s*html\.dark \.aurora::before \{ opacity: 0\.62; \}/);
-    expect(css).toMatch(/\[data-theme="dark"\] \.aurora::after,\s*\n\s*html\.dark \.aurora::after \{ opacity: 0\.75; \}/);
+    // One selector per rule: `data-theme` is the single theme switch now -
+    // the dead `html.dark` halves were deleted with the 2.1 activation
+    // (nothing ever set that class).
+    expect(css).toMatch(/\[data-theme="dark"\] \.aurora::before \{ opacity: 0\.62; \}/);
+    expect(css).toMatch(/\[data-theme="dark"\] \.aurora::after \{ opacity: 0\.75; \}/);
+    expect(css).not.toMatch(/html\.dark/);
   });
 });
 
@@ -183,8 +185,10 @@ describe("COVERAGE: the complaint was that it is not everywhere", () => {
   });
 
   it("the nav veil shows the SAME loader, so a route change reads like a search", () => {
-    expect(veil).toMatch(/<BrandPulse/);
-    expect(veil).toMatch(/wd-loader-veil/);
+    // One step further than the original claim: NavVeil now renders the exact
+    // BrandPulseVeil component the route loading.tsx files use (which itself
+    // carries wd-loader-veil), so the vocabularies cannot fork again.
+    expect(veil).toMatch(/<BrandPulseVeil/);
     // The old flat black scrim + orbiting dots was a second loading vocabulary.
     expect(veil).not.toMatch(/bg-black\/35/);
     expect(veil).not.toMatch(/OrbitDots/);

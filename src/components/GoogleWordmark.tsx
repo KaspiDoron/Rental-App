@@ -8,8 +8,13 @@ const LETTER_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#4285F4", "#34A853", "#
 
 export function GoogleWordmark({ className = "" }: { className?: string }) {
   return (
+    // dir="ltr" + the ltr-island class: the wordmark is six per-letter flex
+    // items, and under an RTL document flex reverses their visual order -
+    // which is the "elgooG" in the owner's Hebrew screenshot. A brand mark is
+    // a picture, not text; it never flips.
     <span
-      className={`inline-flex select-none items-baseline font-bold leading-none tracking-tight ${className}`}
+      dir="ltr"
+      className={`ltr-island inline-flex select-none items-baseline font-bold leading-none tracking-tight ${className}`}
       style={{ fontFamily: "Arial, Helvetica, sans-serif" }}
       aria-label="Google"
       role="img"

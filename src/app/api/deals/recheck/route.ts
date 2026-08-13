@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect, sbInsert } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict, sbInsert } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
 import { killSwitchOn } from "@/lib/usage";
 import { groupSearchSessions, sessionIdOf } from "@/lib/session-life";
@@ -80,6 +80,27 @@ export async function POST(req: Request) {
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
   const start = Date.parse(groups[gi][0].created_at);
   const end = gi === 0 ? Infinity : Date.parse(groups[gi - 1][0].created_at);
+
+  // A CLEARED HUNT CANNOT BE RE-CHECKED - the clear tombstoned its recipients,
+  // so every send this route queued would die at the guard while the response
+  // cheerfully reported "Asking N shops". Same gate as restore, same bounds
+  // (marker after this group's newest row, before the next group), and STRICT
+  // for the same reason: unknown must refuse, not message.
+  const groupEndIso = groups[gi][groups[gi].length - 1].created_at;
+  const nextGroupIso = gi > 0 ? groups[gi - 1][0].created_at : null;
+  const closedRead = await sbSelectStrict<{ received_at: string }>(
+    "whatsapp_messages",
+    `select=received_at&to_number=eq.session&raw->>sender=eq.${enc}&raw->>kind=eq.session-closed` +
+      `&received_at=gt.${encodeURIComponent(groupEndIso)}` +
+      (nextGroupIso ? `&received_at=lt.${encodeURIComponent(nextGroupIso)}` : "") +
+      `&order=received_at.desc&limit=1`
+  );
+  if ("error" in closedRead && closedRead.error === "unavailable") {
+    return NextResponse.json({ error: "Could not reach your shops just now. Try again." }, { status: 503 });
+  }
+  if ("rows" in closedRead && closedRead.rows.length) {
+    return NextResponse.json({ error: "You cleared this hunt - its shops are no longer messaged." }, { status: 404 });
+  }
   const days =
     [...groups[gi]].reverse().find((r) => typeof r.rfq?.durationDays === "number")?.rfq
       ?.durationDays ?? null;

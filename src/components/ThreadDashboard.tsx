@@ -180,7 +180,7 @@ export function ThreadDashboard({
             <StageBadge stage={vendor.stage ?? "queued"} />
           </div>
           <p className="truncate text-[11px] text-faint">
-            {stageCaption(vendor.stage ?? "queued").emoji} {stageCaption(vendor.stage ?? "queued").text}
+            {stageCaption(vendor.stage ?? "queued").emoji} {t(stageCaption(vendor.stage ?? "queued").text)}
           </p>
         </div>
         <button
@@ -282,7 +282,7 @@ export function ThreadDashboard({
           <Pipeline stage={vendor.stage ?? "queued"} />
           <div className="mt-2 flex items-center justify-between gap-2">
             <p className="text-[11px] font-bold text-soft">
-              {stageCaption(vendor.stage ?? "queued").emoji} {stageCaption(vendor.stage ?? "queued").text}
+              {stageCaption(vendor.stage ?? "queued").emoji} {t(stageCaption(vendor.stage ?? "queued").text)}
             </p>
             {(whyDecisionId ?? "") && onWhy && (
               <button
@@ -297,7 +297,7 @@ export function ThreadDashboard({
 
         {/* Queue / ETA (when a message is still waiting) */}
         {queueItem && (
-          <div className="rounded-2xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <div className="rounded-2xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-warn">
             🕘{" "}
             {queueItem.due
               ? t("sending at the next safe slot - paced to protect your number")

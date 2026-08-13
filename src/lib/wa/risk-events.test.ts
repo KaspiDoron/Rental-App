@@ -40,8 +40,8 @@ beforeEach(() => {
 
 describe("the vocabulary", () => {
   it("is exactly twenty-two kinds", () => {
-    expect(RISK_KINDS).toHaveLength(22);
-    expect(new Set(RISK_KINDS).size).toBe(22);
+    expect(RISK_KINDS).toHaveLength(23);
+    expect(new Set(RISK_KINDS).size).toBe(23);
   });
 
   it("EVERY kind is assigned an axis - a kind with no axis is unaggregatable", () => {

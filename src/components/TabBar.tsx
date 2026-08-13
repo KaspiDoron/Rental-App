@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Icon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 import { startNav } from "./NavVeil";
@@ -24,6 +26,15 @@ export function TabBar({
   showUpgrade: boolean;
 }) {
   const { t } = useI18n();
+  // PREFETCH THE OTHER TABS (owner report 3, item 11 - the ~1s dead tap).
+  // Every tab hop used to be a full-document navigation: the old page held
+  // until the destination's whole JS bundle re-parsed. The pages now navigate
+  // with router.push, and this warms the two routes the traveller is not on,
+  // so the hop paints from cache instead of the network.
+  const router = useRouter();
+  useEffect(() => {
+    for (const path of ["/", "/deals", "/profile"]) router.prefetch(path);
+  }, [router]);
   // "My deals" is retired (V2-5): its slot is now "Trips" - your locked
   // bookings + hand-offs. The route path stays /deals so middleware, Will
   // commands and the privacy source-scan test keep working; only the identity

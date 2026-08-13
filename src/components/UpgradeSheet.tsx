@@ -347,7 +347,7 @@ export function UpgradeSheet({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       {msg && (
-        <div className="mb-2 rounded-xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+        <div className="mb-2 rounded-xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-warn">
           {msg}
         </div>
       )}
