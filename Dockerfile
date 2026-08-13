@@ -19,7 +19,6 @@ WORKDIR /app
 # package.json.
 COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
-COPY packages/db/package.json packages/db/
 COPY packages/queues/package.json packages/queues/
 COPY packages/redis/package.json packages/redis/
 COPY packages/shared/package.json packages/shared/
