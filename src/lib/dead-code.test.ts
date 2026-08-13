@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 // WAVE 4.2 - STAYS-DELETED ASSERTIONS.
@@ -39,6 +39,21 @@ describe("dead code stays deleted", () => {
 
   // The survivors the sweep explicitly KEPT because the confirm-grep proved
   // them alive - documented so a future sweep does not re-litigate them.
+  // THE GREP SCOPE THAT BIT US (deploy run #247): the 4.2 zero-reference
+  // sweep covered src/packages/apps/services/scripts but NOT the build
+  // artifacts - the Dockerfile still COPY'd packages/db/package.json and the
+  // Docker build died in CI, three minutes after a fully green verify. Every
+  // deleted cluster must be absent from the build/deploy surface too.
+  const BUILD_SURFACE = ["Dockerfile", ".dockerignore", "render.yaml"];
+  for (const rel of BUILD_SURFACE) {
+    it(`${rel} references no deleted cluster`, () => {
+      const body = readFileSync(path.join(ROOT, rel), "utf8");
+      for (const dead of DELETED) {
+        expect(body, `${rel} still references deleted ${dead}`).not.toContain(dead);
+      }
+    });
+  }
+
   const KEPT = [
     "src/lib/spte/index.ts", // dynamically imported: engine-route.ts `await import("./spte")`
     "src/lib/simulate.ts", // ops golden replay (replayConversation)
