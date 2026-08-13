@@ -99,12 +99,15 @@ describe("the brand faces are ours, not a third party's", () => {
   });
 
   it("the fallback face is metric-matched, so the swap shifts nothing", () => {
-    expect(layout.match(/adjustFontFallback: true/g)?.length).toBe(2);
-    expect(layout.match(/display: "swap"/g)?.length).toBe(2);
+    // Four faces now: Nunito/Baloo (Latin) + Rubik/Secular One (Hebrew, 3.2).
+    expect(layout.match(/adjustFontFallback: true/g)?.length).toBe(4);
+    expect(layout.match(/display: "swap"/g)?.length).toBe(4);
   });
 
   it("the variables reach the stylesheet that actually uses them", () => {
-    expect(layout).toMatch(/className=\{`\$\{nunito\.variable\} \$\{baloo\.variable\}`\}/);
+    expect(layout).toMatch(
+      /className=\{`\$\{nunito\.variable\} \$\{baloo\.variable\} \$\{rubik\.variable\} \$\{secular\.variable\}`\}/
+    );
     expect(css).toMatch(/--font-body: var\(--wd-font-body\)/);
     expect(css).toMatch(/--font-display: var\(--wd-font-display\)/);
   });

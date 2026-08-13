@@ -207,12 +207,13 @@ describe("the translate route honours the corrections", () => {
     expect(route).toMatch(/const missing = texts\.filter\(\(t\) => !cached\[t\] && !overrides\[t\]\)/);
   });
 
-  it("BOTH return paths apply the overrides", () => {
+  it("EVERY return path applies the overrides", () => {
     // The no-AI-provider path and the normal path built the response map
     // inline, and only one of them was updated the last two times this shape
-    // changed. One helper, used twice, is the fix.
+    // changed. One helper is the fix - now used THREE times, the third being
+    // the learned path that also carries the `rejected` reasons (3.2).
     const uses = route.match(/pickTranslated\(texts, applyOverrides\(cached, overrides\)\)/g) ?? [];
-    expect(uses.length).toBe(2);
+    expect(uses.length).toBe(3);
   });
 
   it("corrections need no AI provider to serve", () => {

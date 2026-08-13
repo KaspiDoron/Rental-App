@@ -224,7 +224,7 @@ function ShopCard({
         {v.stage && v.stage !== "offer-received" && v.stage !== "queued" && (
           <div className="mt-1.5 flex items-start gap-1 rounded-lg bg-card2 p-1.5 text-[10px] font-bold text-soft">
             <span className="shrink-0">{stageCaption(v.stage).emoji}</span>
-            <span className="leading-snug">{stageCaption(v.stage).text}</span>
+            <span className="leading-snug">{t(stageCaption(v.stage).text)}</span>
           </div>
         )}
         {onOpen && (

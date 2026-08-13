@@ -97,6 +97,39 @@ export function placeholders(s: string): string[] {
   return (s.match(/\{[a-zA-Z0-9_]+\}/g) ?? []).sort();
 }
 
+/**
+ * BRAND WORDS AS PLACEHOLDERS (owner report 3, item 10).
+ *
+ * The brand-lost check rejected TRANSLITERATIONS: Hebrew naturally writes
+ * "WheelDeal" as its own letters, the validator demanded the Latin word
+ * verbatim, and the rejected string then sat in the client's `failed` set -
+ * permanently English. Swapping each brand word for a `{brandN}` token BEFORE
+ * the model sees it makes the outcome structural instead of behavioural: a
+ * token is not a word, so the model cannot translate it, and the existing
+ * placeholder-drift check (same tokens, same count) enforces its survival.
+ * After validation the token is substituted back - the brand renders in Latin
+ * inside the translated sentence, which is how app-store-grade Hebrew UIs
+ * write foreign brand names anyway.
+ */
+export function protectBrands(source: string): string {
+  let out = source;
+  DO_NOT_TRANSLATE.forEach((word, i) => {
+    // Same word-ish boundary as containsWord, applied globally.
+    const re = new RegExp(`(^|[^A-Za-z])${word}(?=[^A-Za-z]|$)`, "g");
+    out = out.replace(re, (_m, pre: string) => `${pre}{brand${i}}`);
+  });
+  return out;
+}
+
+/** The inverse - exact token back to the exact brand word. */
+export function restoreBrands(text: string): string {
+  let out = text;
+  DO_NOT_TRANSLATE.forEach((word, i) => {
+    out = out.split(`{brand${i}}`).join(word);
+  });
+  return out;
+}
+
 function sameMultiset(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;

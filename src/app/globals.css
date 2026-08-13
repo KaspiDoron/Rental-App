@@ -13,9 +13,14 @@
      metric-matched fallbacks). The literal family names stay behind them so a
      page rendered outside that layout - an error boundary, a static export -
      still gets the brand face if the browser happens to have it. */
-  --font-body: var(--wd-font-body), "Nunito", ui-rounded, "SF Pro Rounded", system-ui,
-    -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: var(--wd-font-display), "Baloo 2", var(--font-body);
+  /* Hebrew faces sit AFTER the Latin families: font fallback is
+     per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo while
+     Hebrew glyphs (which neither carries) resolve to Rubik / Secular One
+     instead of an arbitrary system face (owner report 3, item 10). */
+  --font-body: var(--wd-font-body), "Nunito", var(--wd-font-body-he), "Rubik", ui-rounded,
+    "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--wd-font-display), "Baloo 2", var(--wd-font-display-he), "Secular One",
+    var(--font-body);
 
   --bg: #f4f6f9;
   --card: #ffffff;
@@ -213,6 +218,9 @@ body {
 
 h1, h2, h3, .font-display {
   font-family: var(--font-display);
+  /* Secular One ships ONE weight - never let the browser smear a synthetic
+     bold onto the Hebrew display glyphs. */
+  font-synthesis-weight: none;
 }
 
 /* Keep form controls >= 16px so iOS never zooms on focus */

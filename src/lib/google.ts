@@ -494,14 +494,24 @@ function newPlaceToVendor(
 export async function findRealVendors(
   origin: { lat: number; lng: number },
   radiusKm: number,
-  vehicleClass: VehicleClass
+  vehicleClass: VehicleClass,
+  /** The traveller's app language (BCP-47-ish, e.g. "he"). Google localises
+   *  formattedAddress and opening hours to it - without this a Hebrew app
+   *  showed "Wednesday: Open 24 hours" inside an otherwise translated card. */
+  lang?: string
 ): Promise<VendorDiscovery> {
   const key = await mapsKey();
   if (!key) return { vendors: null };
 
+  // Only a sane language tag reaches Google or the cache key.
+  const langCode = lang && /^[a-zA-Z-]{2,8}$/.test(lang) ? lang : undefined;
+
   // ~110m coordinate rounding + 10 min TTL: repeated searches around the same
-  // stay cost ZERO extra Places requests.
-  const ck = `fv:${origin.lat.toFixed(3)},${origin.lng.toFixed(3)},${Math.round(radiusKm)},${vehicleClass}`;
+  // stay cost ZERO extra Places requests. The LANGUAGE is part of the key -
+  // localised fields make the cached payload language-specific, and without
+  // it a Hebrew search within 10 minutes of an English one (or vice versa)
+  // served the other locale's strings to everyone nearby.
+  const ck = `fv:${origin.lat.toFixed(3)},${origin.lng.toFixed(3)},${Math.round(radiusKm)},${vehicleClass},${langCode ?? "en"}`;
   const cached = cacheGet<VendorDiscovery>(ck);
   if (cached) return cached;
 
@@ -511,6 +521,7 @@ export async function findRealVendors(
     {
       textQuery: KEYWORDS[vehicleClass],
       maxResultCount: 20,
+      ...(langCode ? { languageCode: langCode } : {}),
       locationBias: {
         circle: {
           center: { latitude: origin.lat, longitude: origin.lng },

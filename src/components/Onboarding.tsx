@@ -8,6 +8,7 @@
 // "add to Home Screen" guide. Next / Back / Skip; works from 320px up.
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import { createPortal } from "react-dom";
 
 // AN OVERLAY IS SOMETHING THAT ESCAPES THE CANVAS, not something that picks a
@@ -124,6 +125,7 @@ interface Rect {
 }
 
 export function Onboarding({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [osStep, setOsStep] = useState(false);
   const [os, setOs] = useState<OS>("ios");
@@ -275,7 +277,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
             <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-3xl bg-brandyellow-soft text-3xl">
               📲
             </div>
-            <h2 className="font-display text-xl font-extrabold text-strong">Install WheelDeal like an app</h2>
+            <h2 className="font-display text-xl font-extrabold text-strong">{t("Install WheelDeal like an app")}</h2>
             <p className="mt-1 text-[13px] text-soft">
               Add it to your Home Screen - it opens full-screen with its own icon, just like from the App Store.
             </p>
@@ -303,17 +305,17 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           <ol className="space-y-2 rounded-2xl bg-card2 p-4 text-[13px] leading-relaxed text-soft">
             {os === "ios" ? (
               <>
-                <li>1. Open this site in Safari.</li>
-                <li>2. Tap the Share button (square with an up arrow).</li>
-                <li>3. Scroll and tap &quot;Add to Home Screen&quot;.</li>
-                <li>4. Tap &quot;Add&quot; - done! Launch it from your Home Screen.</li>
+                <li>{t("1. Open this site in Safari.")}</li>
+                <li>{t("2. Tap the Share button (square with an up arrow).")}</li>
+                <li>{t('3. Scroll and tap "Add to Home Screen".')}</li>
+                <li>{t('4. Tap "Add" - done! Launch it from your Home Screen.')}</li>
               </>
             ) : (
               <>
-                <li>1. Open this site in Chrome.</li>
-                <li>2. Tap the ⋮ menu (top right).</li>
-                <li>3. Tap &quot;Add to Home screen&quot; (or &quot;Install app&quot;).</li>
-                <li>4. Confirm - done! Launch it from your Home Screen.</li>
+                <li>{t("1. Open this site in Chrome.")}</li>
+                <li>{t("2. Tap the ⋮ menu (top right).")}</li>
+                <li>{t('3. Tap "Add to Home screen" (or "Install app").')}</li>
+                <li>{t("4. Confirm - done! Launch it from your Home Screen.")}</li>
               </>
             )}
           </ol>

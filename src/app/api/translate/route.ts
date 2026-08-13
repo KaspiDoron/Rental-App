@@ -15,20 +15,32 @@ const MAX_TEXTS = 500;
 // full attention) and safer JSON output.
 const CHUNK = 14;
 
+interface ChunkOutcome {
+  /** Per input string: the validated translation, or null. */
+  out: (string | null)[];
+  /** WHY each null happened - surfaced to the caller and the response so a
+   *  rejection is never a silent English string. */
+  rejected: { text: string; reason: string }[];
+}
+
 async function translateChunk(
   langName: string,
-  texts: string[]
-): Promise<(string | null)[] | null> {
-  // The do-not-translate list is imported so the prompt and the VALIDATOR name
-  // the same words - "Will" chief among them, the assistant's own name and a
-  // high-frequency English auxiliary that a context-free localiser translates
-  // every time.
-  const { DO_NOT_TRANSLATE, translationBrief } = await import("@/lib/i18n-validate");
+  texts: string[],
+  /** Second attempt: repeat the placeholder rule as its own reminder. */
+  strict = false
+): Promise<ChunkOutcome | null> {
+  // BRAND WORDS TRAVEL AS {brandN} TOKENS. The model cannot translate a
+  // token, and the placeholder-drift validator enforces its survival - so a
+  // Hebrew transliteration of "WheelDeal" can no longer get a string
+  // permanently rejected (owner report 3, item 10). Tokens are substituted
+  // back after validation.
+  const { translationBrief, protectBrands, restoreBrands } = await import("@/lib/i18n-validate");
+  const protectedTexts = texts.map(protectBrands);
   const system =
     `You are a senior product localiser translating UI strings for "WheelDeal", a mobile app where AI agents bargain for vehicle rentals, from English to ${langName}. ` +
     "Rules: (1) translate MEANING, not word-by-word - use the natural phrasing a native mobile app in that language would use; " +
     "(2) match register: buttons/labels stay short and imperative, sentences stay friendly and simple; " +
-    `(3) NEVER translate these brand/product words, keep them verbatim: ${DO_NOT_TRANSLATE.join(", ")}. "Will" is the name of the assistant, never the English verb; ` +
+    "(3) {brandN} tokens are protected brand names - keep every one exactly as written; " +
     "(4) keep emoji, numbers, currency symbols, punctuation and every {placeholder} token exactly as written, same spelling, same count; " +
     "(5) no explanations, no quotes added; " +
     // M23: the model used to receive a BARE ARRAY of unrelated strings and had
@@ -37,10 +49,13 @@ async function translateChunk(
     // localiser picks whichever is more common in its own language.
     '(6) each item carries a role: "label" is a button or control caption - keep it short, imperative, and within maxChars; "sentence" is prose - natural and complete. ' +
     'Input is a JSON array of { text, role, maxChars }. ' +
-    'Reply ONLY as JSON: { "t": ["..."] } with translations in the exact same order and count.';
+    'Reply ONLY as JSON: { "t": ["..."] } with translations in the exact same order and count.' +
+    (strict
+      ? " REMINDER, second attempt: your previous output dropped or altered {tokens}. Copy every {token} character-for-character into the translation."
+      : "");
   const out = await chat([
     { role: "system", content: system },
-    { role: "user", content: JSON.stringify(texts.map(translationBrief)) },
+    { role: "user", content: JSON.stringify(protectedTexts.map(translationBrief)) },
   ]);
   if (!out) return null;
   const start = out.indexOf("{");
@@ -56,10 +71,19 @@ async function translateChunk(
       // wrong one is invisible until a user complains and unfixable while it
       // sits in the shared cache. null (JSON or coerced) is the first thing
       // this rejects, so the "null" button-label bug cannot recur.
-      return parsed.t.map((cand, i) => {
-        const v = validateTranslation(texts[i], cand);
-        return v.ok ? (cand as string).trim() : null;
+      const rejected: { text: string; reason: string }[] = [];
+      const mapped = parsed.t.map((cand, i) => {
+        // Validated against the PROTECTED source: the {brandN} tokens ride
+        // the placeholder multiset check, which is exactly the enforcement
+        // brand-lost used to attempt behaviourally.
+        const v = validateTranslation(protectedTexts[i], cand);
+        if (!v.ok) {
+          rejected.push({ text: texts[i], reason: v.reason ?? "invalid" });
+          return null;
+        }
+        return restoreBrands((cand as string).trim());
       });
+      return { out: mapped, rejected };
     }
   } catch {}
   return null;
@@ -162,14 +186,31 @@ export async function POST(req: Request) {
       });
     }
     let learned = false;
+    const rejectedAll: { text: string; reason: string }[] = [];
     for (let i = 0; i < missing.length; i += CHUNK) {
       const chunk = missing.slice(i, i + CHUNK);
-      const out = await translateChunk(langName, chunk);
-      if (out) {
+      const res = await translateChunk(langName, chunk);
+      if (res) {
         chunk.forEach((src, j) => {
-          if (out[j]) cached[src] = out[j];
+          if (res.out[j]) cached[src] = res.out[j] as string;
         });
         learned = true;
+        // ONE strict retry for the rejects before the client retires them:
+        // most drift is the model paraphrasing a {token}, and a pointed
+        // reminder recovers it. A second failure is surfaced, not retried -
+        // the daily cap is not a fuzzing budget.
+        if (res.rejected.length > 0) {
+          const again = res.rejected.map((r) => r.text);
+          const retryRes = await translateChunk(langName, again, true);
+          if (retryRes) {
+            again.forEach((src, j) => {
+              if (retryRes.out[j]) cached[src] = retryRes.out[j] as string;
+            });
+            rejectedAll.push(...retryRes.rejected);
+          } else {
+            rejectedAll.push(...res.rejected);
+          }
+        }
       }
     }
     if (learned) {
@@ -198,6 +239,13 @@ export async function POST(req: Request) {
     // Count this LLM sweep against the daily cap (a cache hit costs nothing).
     const { recordApi } = await import("@/lib/usage");
     await recordApi("translate", 1, session.email);
+
+    return NextResponse.json({
+      map: pickTranslated(texts, applyOverrides(cached, overrides)),
+      // WHY a string stayed English - for the admin translation panel and the
+      // client's retry policy. Never silent.
+      ...(rejectedAll.length > 0 ? { rejected: rejectedAll } : {}),
+    });
   }
 
   return NextResponse.json({

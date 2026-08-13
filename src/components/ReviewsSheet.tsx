@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import type { Vendor, VendorReview } from "@/lib/types";
 import { Modal } from "./Modal";
 import { Icon, Stars } from "./icons";
@@ -13,6 +14,7 @@ export function ReviewsSheet({
   vendor: Vendor;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [reviews, setReviews] = useState<VendorReview[]>([]);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [note, setNote] = useState("");
@@ -94,9 +96,9 @@ export function ReviewsSheet({
               onChange={(e) => setSort(e.target.value as typeof sort)}
               className="rounded-xl border-2 border-line bg-card px-2 text-[13px] font-bold text-soft"
             >
-              <option value="newest">Newest</option>
-              <option value="highest">Highest</option>
-              <option value="lowest">Lowest</option>
+              <option value="newest">{t("Newest")}</option>
+              <option value="highest">{t("Highest")}</option>
+              <option value="lowest">{t("Lowest")}</option>
             </select>
           </div>
 

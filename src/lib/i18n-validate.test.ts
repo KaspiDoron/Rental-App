@@ -9,6 +9,8 @@ import {
   roleOf,
   translationBrief,
   LABEL_MAX_CHARS,
+  protectBrands,
+  restoreBrands,
 } from "./i18n-validate";
 
 vi.mock("server-only", () => ({}));
@@ -163,25 +165,62 @@ describe("copy role is derived from the string itself", () => {
   });
 });
 
+describe("brand tokens round-trip", () => {
+  it("every DNT word becomes its own token and comes back exactly", () => {
+    const src = "Ask Will to compare WheelDeal Pro with PayPal checkout";
+    const prot = protectBrands(src);
+    expect(prot).not.toMatch(/WheelDeal|PayPal|\bWill\b|\bPro\b/);
+    expect(prot).toMatch(/\{brand\d+\}/);
+    expect(restoreBrands(prot)).toBe(src);
+  });
+
+  it("word boundaries hold - Pro never tokenises inside Product", () => {
+    expect(protectBrands("Products from professionals")).toBe("Products from professionals");
+  });
+
+  it("a translation that keeps the tokens passes the placeholder check", () => {
+    const prot = protectBrands("Upgrade to Pro today!");
+    // A pretend Hebrew translation keeping the token verbatim:
+    const cand = prot.replace("Upgrade to", "שדרגו אל").replace("today!", "היום!");
+    expect(validateTranslation(prot, cand).ok).toBe(true);
+  });
+
+  it("a translation that translates the token away is placeholder-drift", () => {
+    const prot = protectBrands("Upgrade to Pro today!");
+    expect(validateTranslation(prot, "שדרגו אל פרו היום!").reason).toBe("placeholder-drift");
+  });
+});
+
 describe("the route uses the validator, not String() coercion", () => {
   const route = readCode("src/app/api/translate/route.ts");
 
   it("maps through validateTranslation and drops rejects to null", () => {
-    expect(route).toMatch(/validateTranslation\(texts\[i\], cand\)/);
-    expect(route).toMatch(/v\.ok \? \(cand as string\)\.trim\(\) : null/);
+    // Validated against the PROTECTED source: {brandN} tokens ride the
+    // placeholder multiset, then restoreBrands puts the words back.
+    expect(route).toMatch(/validateTranslation\(protectedTexts\[i\], cand\)/);
+    expect(route).toMatch(/restoreBrands\(\(cand as string\)\.trim\(\)\)/);
   });
 
   it("the OLD String() coercion is gone", () => {
     expect(route).not.toMatch(/parsed\.t\.map\(\(s\) => String\(s\)\)/);
   });
 
-  it("the prompt names the do-not-translate list, including Will", () => {
-    expect(route).toMatch(/DO_NOT_TRANSLATE\.join/);
-    expect(route).toMatch(/"Will" is the name of the assistant/);
+  it("brand words travel as tokens, so a transliteration cannot retire a string", () => {
+    // The old behavioural rule ("keep these words verbatim" + brand-lost
+    // rejection) rejected Hebrew transliterations of WheelDeal and left those
+    // strings permanently English. Structural now: the model never sees the
+    // word, only a token it cannot translate.
+    expect(route).toMatch(/texts\.map\(protectBrands\)/);
+    expect(route).toMatch(/\{brandN\} tokens are protected brand names/);
+  });
+
+  it("a rejected chunk gets ONE stricter retry, and the reasons are surfaced", () => {
+    expect(route).toMatch(/translateChunk\(langName, again, true\)/);
+    expect(route).toMatch(/rejected: rejectedAll/);
   });
 
   it("M23: it sends a structured brief, NOT a bare array of strings", () => {
-    expect(route).toMatch(/JSON\.stringify\(texts\.map\(translationBrief\)\)/);
+    expect(route).toMatch(/JSON\.stringify\(protectedTexts\.map\(translationBrief\)\)/);
     // And the prompt explains what the role means, or the field is decoration.
     expect(route).toMatch(/"label" is a button or control caption/);
     expect(route).toMatch(/Input is a JSON array of \{ text, role, maxChars \}/);
@@ -195,8 +234,8 @@ describe("the route uses the validator, not String() coercion", () => {
   });
 
   it("a rejected element keeps the English source (caller guards on truthiness)", () => {
-    // The cache write is `if (out[j]) cached[src] = out[j]` - a null is skipped,
-    // so the source stays untranslated rather than caching a bad value.
-    expect(route).toMatch(/if \(out\[j\]\) cached\[src\] = out\[j\];/);
+    // The cache write skips nulls, so the source stays untranslated rather
+    // than caching a bad value.
+    expect(route).toMatch(/if \(res\.out\[j\]\) cached\[src\] = res\.out\[j\] as string;/);
   });
 });

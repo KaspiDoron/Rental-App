@@ -133,6 +133,101 @@ describe("the sort/filter rail is translated", () => {
   });
 });
 
+// OWNER REPORT 3, ITEM 10: "a lot of places around the app stayed in
+// English". The drift scan below is the generalised answer - a JSX-text
+// literal scan over the high-traffic user components, so a new bare English
+// sentence in any of them fails CI instead of shipping to a Hebrew phone.
+describe("no scanned user surface ships bare English JSX text", () => {
+  const SCAN = [
+    "src/components/Onboarding.tsx",
+    "src/components/AlertsToggle.tsx",
+    "src/components/FeedbackModal.tsx",
+    "src/components/WaitGame.tsx",
+    "src/components/QuotesRail.tsx",
+    "src/components/ReviewsSheet.tsx",
+    "src/components/BatchProgressBar.tsx",
+    "src/components/TermsModal.tsx",
+    "src/components/Tracker.tsx",
+    "src/components/PhotoGallery.tsx",
+    "src/components/MassBargainPreview.tsx",
+    "src/components/HorizontalVendorRail.tsx",
+  ];
+  // Strings that are legitimately language-neutral: brand names, punctuation
+  // around expressions, game branding rendered as a logo.
+  const ALLOW = new Set(["🛵 Scooter Dash", "(step", "OK"]);
+
+  it.each(SCAN)("%s has no unwrapped English text nodes", (p) => {
+    const src = read(p)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    const bare: string[] = [];
+    for (const m of src.matchAll(/>([^<>{}\n]*[A-Za-z]{3}[^<>{}\n]*)</g)) {
+      const text = m[1].trim();
+      if (text && !ALLOW.has(text)) bare.push(text);
+    }
+    expect(bare, `bare literals in ${p}: ${bare.join(" | ")}`).toEqual([]);
+  });
+});
+
+describe("the stage vocabulary reaches every surface translated (3.2)", () => {
+  it("StageBadge renders through t() and its texts are catalogued", () => {
+    const tracker = read("src/components/Tracker.tsx");
+    expect(tracker).toMatch(/\{t\(s\.text\)\}/);
+    for (const s of ["Awaiting reply", "Out of stock", "Counter sent", "Offer in"]) {
+      expect(I18N_CATALOG, s).toContain(s);
+    }
+  });
+
+  it("every stageCaption render site wraps with t()", () => {
+    for (const p of [
+      "src/components/VendorCard.tsx",
+      "src/components/MapView.tsx",
+      "src/components/ThreadDashboard.tsx",
+    ]) {
+      const src = read(p);
+      // Every .text render goes through t(...) - a bare interpolation of the
+      // caption is the exact regression this pins against.
+      expect(src, p).not.toMatch(/\{stageCaption\([^)]*\)\.text\}/);
+    }
+    expect(I18N_CATALOG).toContain("Your agent is haggling with the shop for a lower price.");
+  });
+});
+
+describe("RTL structural fixes hold (3.2)", () => {
+  it("the Google wordmark is an LTR island - never elgooG again", () => {
+    const wm = read("src/components/GoogleWordmark.tsx");
+    expect(wm).toMatch(/dir="ltr"/);
+    expect(wm).toMatch(/ltr-island/);
+  });
+
+  it("the search summary uses ONE truncation mechanism and isolates free text", () => {
+    const bar = read("src/components/SearchSummaryBar.tsx");
+    expect(bar).not.toMatch(/slice\(0, 48\)/);
+    expect(bar).toMatch(/<bdi dir="auto">\{req\}<\/bdi>/);
+    expect(bar).toMatch(/<bdi dir="auto">\{originLabel\}<\/bdi>/);
+  });
+
+  it("Places speaks the traveller's language, and the cache knows it", () => {
+    const g = read("src/lib/google.ts");
+    expect(g).toMatch(/languageCode: langCode/);
+    // The lang is part of the discovery cache key - without it a Hebrew
+    // search poisons the next English one for 10 minutes (and vice versa).
+    expect(g).toMatch(/\$\{vehicleClass\},\$\{langCode \?\? "en"\}/);
+    expect(read("src/app/api/vendors/route.ts")).toMatch(/findRealVendors\(body\.origin, radius, vClass, body\.lang\)/);
+  });
+
+  it("Hebrew glyphs get the premium faces, after the Latin ones", () => {
+    const layout = read("src/app/layout.tsx");
+    expect(layout).toMatch(/Rubik\(\{/);
+    expect(layout).toMatch(/Secular_One\(\{/);
+    expect(layout).toMatch(/subsets: \["hebrew", "latin"\]/);
+    const css = read("src/app/globals.css");
+    expect(css).toMatch(/var\(--wd-font-body\), "Nunito", var\(--wd-font-body-he\)/);
+    expect(css).toMatch(/var\(--wd-font-display\), "Baloo 2", var\(--wd-font-display-he\)/);
+    expect(css).toMatch(/font-synthesis-weight: none/);
+  });
+});
+
 describe("the extras file stays the mechanism it claims to be", () => {
   it("it still exists - the generator degrades silently without it", () => {
     // It was deleted once by a dead-code sweep (nothing imports it; the

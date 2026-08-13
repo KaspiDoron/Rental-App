@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Baloo_2, Nunito } from "next/font/google";
+import { Baloo_2, Nunito, Rubik, Secular_One } from "next/font/google";
 import { I18nProvider } from "@/lib/i18n";
 import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
@@ -38,6 +38,30 @@ const baloo = Baloo_2({
   subsets: ["latin"],
   weight: ["600", "700", "800"],
   variable: "--wd-font-display",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// THE HEBREW FACES (owner report 3, item 10). Neither brand font carries
+// Hebrew glyphs, so Hebrew fell through to an arbitrary system face - the
+// "not premium enough" in the owner's screenshots. These sit AFTER the Latin
+// families in the --font-body/--font-display ladders (globals.css): font
+// fallback is per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo
+// while Hebrew glyphs resolve to Rubik (body) and Secular One (display).
+const rubik = Rubik({
+  subsets: ["hebrew", "latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--wd-font-body-he",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const secular = Secular_One({
+  // Secular One ships ONE weight; .font-display gets font-synthesis-weight:
+  // none so browsers never smear a fake bold onto it.
+  subsets: ["hebrew", "latin"],
+  weight: "400",
+  variable: "--wd-font-display-he",
   display: "swap",
   adjustFontFallback: true,
 });
@@ -177,7 +201,7 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       // The two font variables land on the root, where globals.css reads them.
-      className={`${nunito.variable} ${baloo.variable}`}
+      className={`${nunito.variable} ${baloo.variable} ${rubik.variable} ${secular.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />

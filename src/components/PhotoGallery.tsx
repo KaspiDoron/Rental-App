@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { lockBodyScroll } from "@/lib/scroll-lock";
+import { useI18n } from "@/lib/i18n";
 
 // Full-screen swipeable photo carousel (Google Maps place photos). Snap
 // scrolling + arrows + a live counter, and it silently drops any photo that
@@ -16,6 +17,7 @@ export function PhotoGallery({
   photos: string[];
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [ok, setOk] = useState<boolean[]>(() => photos.map(() => true));
   const [idx, setIdx] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -53,11 +55,11 @@ export function PhotoGallery({
     <div className="fixed inset-0 z-[1300] flex flex-col bg-black/90 backdrop-blur-sm pop-in">
       <div className="flex items-center justify-between px-4 pt-safe">
         <span className="truncate py-3 text-[13px] font-extrabold text-white">
-          {name} · {visible.length} photos
+          <bdi>{name}</bdi> · {t("{n} photos").replace("{n}", String(visible.length))}
         </span>
         <button
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t("Close")}
           className="btn btn-sm rounded-xl bg-white/15 px-3 text-white"
         >
           ✕
@@ -71,11 +73,10 @@ export function PhotoGallery({
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-8 text-center">
           <span className="text-3xl opacity-50">🖼</span>
           <p className="text-[13px] font-extrabold text-white/90">
-            Photos are not loading right now
+            {t("Photos are not loading right now")}
           </p>
           <p className="max-w-[16rem] text-[11px] text-white/60">
-            This is only the pictures - the shop, its rating and your negotiation
-            are all unaffected.
+            {t("This is only the pictures - the shop, its rating and your negotiation are all unaffected.")}
           </p>
         </div>
       ) : (
@@ -109,14 +110,14 @@ export function PhotoGallery({
           <>
             <button
               onClick={() => go(-1)}
-              aria-label="Previous"
+              aria-label={t("Previous")}
               className="btn absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/20 px-3 py-2 text-lg font-extrabold text-white"
             >
               ‹
             </button>
             <button
               onClick={() => go(1)}
-              aria-label="Next"
+              aria-label={t("Next")}
               className="btn absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/20 px-3 py-2 text-lg font-extrabold text-white"
             >
               ›

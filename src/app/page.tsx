@@ -124,6 +124,7 @@ import { massBargainTargets, massBargainCap } from "@/lib/mass-bargain";
 import { MassBargainPreview } from "@/components/MassBargainPreview";
 import { VirtualVendorList } from "@/components/VirtualVendorList";
 import { QuotesRail } from "@/components/QuotesRail";
+import { HorizontalVendorRail } from "@/components/HorizontalVendorRail";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -189,7 +190,7 @@ export default function Home() {
   // Client-side navigation: the tab hop keeps the React tree alive, so the
   // destination paints from cache instead of re-parsing the whole bundle.
   const router = useRouter();
-  const { t, tShared } = useI18n();
+  const { t, tShared, lang } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [originHint, setOriginHint] = useState<string | null>(null);
@@ -207,6 +208,21 @@ export default function Home() {
     "idle" | "profiling" | "discovering" | "running" | "done"
   >("idle");
   const [view, setView] = useState<"list" | "map" | "activity">("list");
+  // THE LIST'S AXIS (owner report 3, item 12): the same vendor cards, swiped
+  // sideways or scrolled down - the traveller's choice, remembered across
+  // sessions like the language (wd_local_lang pattern). Default vertical.
+  const [listAxis, setListAxisState] = useState<"vertical" | "horizontal">("vertical");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("wd_list_axis") === "horizontal") setListAxisState("horizontal");
+    } catch {}
+  }, []);
+  const setListAxis = (a: "vertical" | "horizontal") => {
+    setListAxisState(a);
+    try {
+      localStorage.setItem("wd_list_axis", a);
+    } catch {}
+  };
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [bookingVendor, setBookingVendor] = useState<Vendor | null>(null);
@@ -455,6 +471,19 @@ export default function Home() {
   function scrollToVendor(id: string) {
     setView("list");
     setSelectedId(id);
+    // HORIZONTAL MODE: every card is mounted (plain flex, no windowing), and
+    // the movement is the STRIP's, not the page's - inline centring inside
+    // the rail, block "nearest" so the page never jumps vertically.
+    if (listAxis === "horizontal") {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          document
+            .getElementById(`vendor-${id}`)
+            ?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+        })
+      );
+      return;
+    }
     // THE TARGET MAY NOT BE MOUNTED. The list is windowed, so a card far down
     // it has no DOM node to scroll to - the old fix was to grow a "show more"
     // window past the index, which the virtualizer replaced. Scroll the page to
@@ -2034,6 +2063,7 @@ export default function Home() {
           origin: { lat: origin.lat, lng: origin.lng },
           radiusKm,
           vehicleClass,
+          lang,
           fulfillment: rfqSnap?.fulfillment === "any" ? undefined : rfqSnap?.fulfillment,
           // Snapshot-forward: hand the full RFQ so the search row can store it
           // and this hunt is restorable later from Trips (issue 8). On the fast
@@ -2886,6 +2916,45 @@ export default function Home() {
   // Give the listing back the ~100px the brand row costs while the traveller is
   // reading down the results, and return it the moment they scroll up.
   useHeaderCollapse();
+
+  // ONE card renderer for BOTH list axes (owner report 3, item 12). The
+  // vertical feed and the horizontal rail render this same closure, so the
+  // two modes can never drift apart in what a shop card shows or does.
+  const renderVendorCard = (v: Vendor, i: number) => (
+    <div
+      id={`vendor-${v.id}`}
+      className={`rise-in scroll-mt-24 mb-3 rounded-blob transition-shadow ${
+        selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
+      }`}
+      // The stagger was uncapped, so the twentieth card started animating
+      // 1.14s after the first - a flourish for the first few rows; past that
+      // it is just work.
+      style={{ ["--i" as string]: staggerIndex(i) }}
+    >
+      <VendorCard
+        vendor={v}
+        rfq={rfq}
+        plan={session?.plan}
+        waConnected={waConnected}
+        localLang={localLangActive}
+        region={origin?.label ?? ""}
+        searchEpoch={epochOnServerClock()}
+        onBook={onBookVendor}
+        onReviews={setReviewsVendor}
+        onBargain={onBargainVendor}
+        onStage={handleStage}
+        onQueued={handleQueued}
+        onCustomMessage={customMessage}
+        onPickupConsent={pickupConsent}
+        onLocationRequest={onLocationRequest}
+        whyDecisionId={whyByVendor[v.id]}
+        onWhy={openWhy}
+        onOpenThread={onOpenThread}
+        riskNote={riskByVendor[v.id]}
+        agentPending={agentPending[v.id]}
+      />
+    </div>
+  );
 
   return (
     <main className="mx-auto min-h-[100dvh] max-w-md pb-32 sm:max-w-lg md:max-w-3xl">
@@ -3875,6 +3944,7 @@ export default function Home() {
                 isUltra={session?.plan === "ultra"}
                 onUpgrade={() => setUpgradeOpen(true)}
                 tagCounts={tagCounts}
+                {...(view === "list" ? { axis: listAxis, onAxis: setListAxis } : {})}
               />
             </div>
           </>
@@ -3917,60 +3987,31 @@ export default function Home() {
                 drives this same feed through the jump the status panel and the
                 push deep-links already use. Two axes, one list, one selection
                 - it derives nothing of its own. */}
-            <QuotesRail
-              vendors={filtered}
-              selectedId={selectedId}
-              onPick={scrollToVendor}
-              t={t}
-            />
-            {/* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
-                tracker, options, composer, a thread peek with its own poll -
-                all mounted and all re-rendering on every activity tick, on a
-                phone. "Show 20 more" was the old defence and it was a bad one
-                twice: it made the traveller work to see shops the app already
-                had, and it did nothing once tapped, which is exactly when the
-                list is heaviest. Only the rows near the viewport exist now. */}
-            <VirtualVendorList
-              vendors={filtered}
-              scrollRequest={scrollRequest}
-              renderCard={(v, i) => (
-              <div
-                id={`vendor-${v.id}`}
-                className={`rise-in scroll-mt-24 mb-3 rounded-blob transition-shadow ${
-                  selectedId === v.id ? "ring-2 ring-brandblue ring-offset-2 ring-offset-[color:var(--bg)]" : ""
-                }`}
-                // The stagger was uncapped, so the twentieth card started
-                // animating 1.14s after the first and the last finished at
-                // 2.34s - two and a half seconds of compositing while the
-                // traveller was already scrolling. It is a flourish for the
-                // first few rows; past that it is just work.
-                style={{ ["--i" as string]: staggerIndex(i) }}
-              >
-                <VendorCard
-                  vendor={v}
-                  rfq={rfq}
-                  plan={session?.plan}
-                  waConnected={waConnected}
-                  localLang={localLangActive}
-                  region={origin?.label ?? ""}
-                  searchEpoch={epochOnServerClock()}
-                  onBook={onBookVendor}
-                  onReviews={setReviewsVendor}
-                  onBargain={onBargainVendor}
-                  onStage={handleStage}
-                  onQueued={handleQueued}
-                  onCustomMessage={customMessage}
-                  onPickupConsent={pickupConsent}
-                  onLocationRequest={onLocationRequest}
-                  whyDecisionId={whyByVendor[v.id]}
-                  onWhy={openWhy}
-                  onOpenThread={onOpenThread}
-                  riskNote={riskByVendor[v.id]}
-                  agentPending={agentPending[v.id]}
-                />
-              </div>
-              )}
-            />
+            {listAxis === "vertical" && (
+              <QuotesRail
+                vendors={filtered}
+                selectedId={selectedId}
+                onPick={scrollToVendor}
+                t={t}
+              />
+            )}
+            {listAxis === "horizontal" ? (
+              // THE SIDEWAYS LIST (owner report 3, item 12): the SAME cards,
+              // one per snap stop, on the rail's own scroller. QuotesRail is
+              // hidden here - a quotes strip above a horizontal list would be
+              // two rails stacked, and the cards already carry the prices.
+              <HorizontalVendorRail vendors={filtered} renderCard={renderVendorCard} />
+            ) : (
+              /* WINDOWED. Forty shops is forty heavy cards - photo, avatar,
+                 tracker, options, composer, a thread peek with its own poll -
+                 all mounted and all re-rendering on every activity tick, on a
+                 phone. Only the rows near the viewport exist. */
+              <VirtualVendorList
+                vendors={filtered}
+                scrollRequest={scrollRequest}
+                renderCard={renderVendorCard}
+              />
+            )}
             {phase === "running" && filtered.length < vendors.length && (
               <div className="surface flex justify-center rounded-blob p-4">
                 <LoadingDots label={t("More agents reporting in")} />

@@ -6,12 +6,14 @@
 // keyboard, high score in localStorage, and it respects reduced-motion.
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import { createPortal } from "react-dom";
 import { lockBodyScroll } from "@/lib/scroll-lock";
 
 type Phase = "ready" | "running" | "over";
 
 export function WaitGame({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<Phase>("ready");
   const [score, setScore] = useState(0);
@@ -344,7 +346,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
                 </div>
               </>
             ) : (
-              <div className="text-[12px] font-bold text-soft">Publishing...</div>
+              <div className="text-[12px] font-bold text-soft">{t("Publishing...")}</div>
             )}
           </div>
         )}
@@ -370,7 +372,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
             onPointerDown={(e) => e.stopPropagation()}
           >
             {board === null ? (
-              <div className="p-1 text-[11px] text-faint">Loading the board...</div>
+              <div className="p-1 text-[11px] text-faint">{t("Loading the board...")}</div>
             ) : board.length === 0 ? (
               <div className="p-1 text-[11px] text-faint">
                 No published scores yet - be the first on the board!

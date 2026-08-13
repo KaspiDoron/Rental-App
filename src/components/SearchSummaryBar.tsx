@@ -54,11 +54,24 @@ export function SearchSummaryBar({
         <Icon name="bolt" className="h-5 w-5" />
       </span>
       <span className="min-w-0 flex-1">
+        {/* ONE truncation mechanism. The manual head-slice stacked on the CSS
+            end-truncation ate BOTH ends of the line under RTL (the JS cut the
+            logical head, the ellipsis hid the visual end). CSS `truncate`
+            alone clips the correct end in either direction; <bdi> isolates
+            the free-text query so a Latin request inside a Hebrew line keeps
+            its own reading order. */}
         <span className="block truncate text-[13px] font-extrabold text-strong">
-          {req.length > 48 ? req.slice(0, 48) + "..." : req || t("Your search")}
+          {req ? <bdi dir="auto">{req}</bdi> : t("Your search")}
         </span>
         <span className="block truncate text-[11px] font-bold text-faint">
-          {originLabel ? `${originLabel} · ` : ""}
+          {originLabel ? (
+            <>
+              <bdi dir="auto">{originLabel}</bdi>
+              {" · "}
+            </>
+          ) : (
+            ""
+          )}
           {radiusKm} km
           {dates ? ` · 📅 ${dates}` : ""}
           {days ? ` · ${days} ${days === 1 ? t("day") : t("days")}` : ""}
