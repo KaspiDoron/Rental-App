@@ -125,6 +125,80 @@ describe("there is an ambient layer at the page level", () => {
   it("...and it sits BEHIND the content, not over it", () => {
     expect(/\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/z-index: 0/);
   });
+
+  // OWNER REPORT 3, ITEM 5. The layer above shipped once before as DEAD CSS -
+  // the stylesheet was pinned, the class was mounted by nothing, and the
+  // premium loading wash never painted a frame. These pins hold the WIRING.
+
+  it("THE MOUNT EXISTS: the root layout renders AmbientGlow", () => {
+    const layout = read("src/app/layout.tsx");
+    expect(layout).toMatch(/import \{ AmbientGlow \} from "@\/components\/AmbientGlow"/);
+    expect(layout).toMatch(/<AmbientGlow \/>/);
+    const glow = readCode("src/components/AmbientGlow.tsx");
+    expect(glow).toMatch(/wd-ambient/);
+    // Always mounted; visibility is the class toggle so the ease-out has an
+    // element to run on.
+    expect(glow).toMatch(/wd-ambient-on/);
+  });
+
+  it("top-heavy and fading down, like the owner asked", () => {
+    const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
+    // The main lobes hang ABOVE the viewport...
+    expect(amb).toMatch(/at 22% -6%/);
+    expect(amb).toMatch(/at 78% 4%/);
+    // ...and the mask kills everything by ~85% down.
+    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*transparent 85%\)/);
+  });
+
+  it("no blur pass - the low-end-Android budget rule", () => {
+    const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
+    expect(amb).not.toMatch(/filter:/);
+    // The breath animates transform only; visibility is the opacity
+    // transition (instant in, eased out).
+    const kf = css.slice(css.indexOf("@keyframes wd-ambient-breathe"));
+    const body = kf.slice(0, kf.indexOf("\n}") + 2);
+    expect(body).toMatch(/scale/);
+    expect(body).not.toMatch(/opacity/);
+    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/transition: none/);
+  });
+
+  it("the real waits raise it, and every raise has a matching lower", () => {
+    const page = readCode("src/app/page.tsx");
+    // Search dispatch + mass bargain.
+    expect((page.match(/raiseAmbient\(\)/g) ?? []).length).toBe(2);
+    expect((page.match(/lowerAmbient\(\)/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    // Route transitions ride the NavVeil pair.
+    const nav = readCode("src/components/NavVeil.tsx");
+    expect(nav).toMatch(/raiseAmbient\(\);/);
+    expect(nav).toMatch(/lowerAmbient\(\);/);
+  });
+});
+
+describe("one loading vocabulary", () => {
+  it("NavVeil renders the same BrandPulseVeil the route loaders use", () => {
+    const nav = readCode("src/components/NavVeil.tsx");
+    expect(nav).toMatch(/<BrandPulseVeil size=\{58\} layer="layer-veil" \/>/);
+    expect(nav).not.toMatch(/<BrandPulse\s/);
+  });
+
+  it("the mass-bargain confirm shows its sending state", () => {
+    const preview = readCode("src/components/MassBargainPreview.tsx");
+    expect(preview).toMatch(/sending \? \(/);
+    expect(preview).toMatch(/<LoadingDots light label=\{t\("Sending"\)\}/);
+  });
+
+  it("the shop photo placeholder is the shared skeleton shimmer", () => {
+    const photo = readCode("src/components/ShopPhoto.tsx");
+    expect(photo).toMatch(/className="skeleton absolute inset-0"/);
+    expect(photo).not.toMatch(/animate-pulse bg-card2/);
+  });
+
+  it("the WhatsApp gate's checking state is de-flickered and on-brand", () => {
+    const veil = readCode("src/components/WaLockVeil.tsx");
+    expect(veil).toMatch(/useSteadyLoading\(checking\)/);
+    expect(veil).toMatch(/<BrandPulse size=\{40\}/);
+    expect(veil).not.toMatch(/OrbitDots/);
+  });
 });
 
 describe("the shop photo holds its space while it loads", () => {

@@ -14,20 +14,28 @@
 // the onboarding tour anchors and layout stay stable.
 
 import { Icon } from "./icons";
-import { OrbitDots } from "./OrbitDots";
+import { BrandPulse } from "./BrandPulse";
 import { startNav } from "./NavVeil";
 import { useI18n } from "@/lib/i18n";
+import { useSteadyLoading } from "@/lib/client/min-duration";
 
 export function WaLockVeil({ checking = false }: { checking?: boolean }) {
   const { t } = useI18n();
+  // De-flickered: a status read that answers in 80ms must not flash this
+  // veil, and one that was shown must stay readable (W-12's two rules).
+  const showChecking = useSteadyLoading(checking);
 
-  if (checking) {
+  if (checking || showChecking) {
     return (
       <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/80 p-5 text-center backdrop-blur-xl">
-        <OrbitDots size={34} className="text-brandblue" label={t("Checking WhatsApp")} />
-        <div className="text-[13px] font-extrabold text-soft">
-          {t("Checking your WhatsApp link…")}
-        </div>
+        {showChecking && (
+          <>
+            <BrandPulse size={40} label={t("Checking WhatsApp")} />
+            <div className="text-[13px] font-extrabold text-soft">
+              {t("Checking your WhatsApp link…")}
+            </div>
+          </>
+        )}
       </div>
     );
   }

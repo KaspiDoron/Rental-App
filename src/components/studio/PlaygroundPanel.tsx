@@ -480,7 +480,7 @@ export function PlaygroundPanel() {
                             <span className="font-extrabold text-strong">{s.stage}</span>
                             <span className="flex shrink-0 items-center gap-1">
                               {s.verdict === "deterministic" && (
-                                <span className="rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-bold text-[#8a6100] dark:text-brandyellow">
+                                <span className="rounded-full bg-brandyellow-soft px-1.5 py-0.5 text-[9px] font-bold text-warn">
                                   no-AI fallback
                                 </span>
                               )}

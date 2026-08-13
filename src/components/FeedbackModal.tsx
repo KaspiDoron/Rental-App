@@ -21,7 +21,7 @@ const SEEN_KEY = "wd_fb_seen";
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   open: { label: "Open", cls: "bg-brandblue-soft text-brandblue" },
-  "in-progress": { label: "In progress", cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow" },
+  "in-progress": { label: "In progress", cls: "bg-brandyellow-soft text-warn" },
   resolved: { label: "Resolved", cls: "bg-savings-soft text-savings" },
   dismissed: { label: "Closed", cls: "bg-card2 text-faint" },
 };

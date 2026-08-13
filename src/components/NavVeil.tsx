@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { BrandPulse } from "./BrandPulse";
+import { BrandPulseVeil } from "./BrandPulse";
+import { raiseAmbient, lowerAmbient } from "./AmbientGlow";
 
 // Global navigation veil: instant visual feedback the moment ANY page change
 // or heavy button action starts. Mounted once in the root layout; triggered
@@ -15,11 +16,16 @@ const listeners = new Set<Listener>();
 
 /** Show the global loading veil (auto-clears on route change / timeout). */
 export function startNav() {
+  // The whole-screen wash rides along: a navigation is exactly the wait the
+  // ambient exists for. AmbientGlow clears itself on route-landed/pageshow,
+  // so the pair cannot leak even when stopNav is never called.
+  raiseAmbient();
   listeners.forEach((l) => l(true));
 }
 
 /** Hide the veil immediately (e.g. an action failed and we stay put). */
 export function stopNav() {
+  lowerAmbient();
   listeners.forEach((l) => l(false));
 }
 
@@ -52,16 +58,8 @@ export function NavVeil() {
   }, [on]);
 
   if (!on) return null;
-  return (
-    <div className="wd-loader-veil layer-veil fixed inset-0 flex items-center justify-center">
-      {/* ONE ANSWER TO "SOMETHING IS HAPPENING", EVERYWHERE.
-          This used to be orbiting dots inside the glow, on a flat black scrim -
-          a second loading vocabulary sitting next to the skeletons' one. It is
-          now the same heartbeat the search screen shows, on the same blurred
-          veil, so a route change and a search read as the same system working
-          rather than as two different apps. The veil blurs the page instead of
-          blacking it out: the app is still there, just out of focus. */}
-      <BrandPulse size={58} />
-    </div>
-  );
+  // ONE ANSWER TO "SOMETHING IS HAPPENING", EVERYWHERE. The exact component
+  // the route-level loading.tsx files render, at the veil rung (a navigation
+  // veil must cover open dialogs - the page under them is leaving).
+  return <BrandPulseVeil size={58} layer="layer-veil" />;
 }

@@ -73,12 +73,17 @@ export function BrandPulse({
 export function BrandPulseVeil({
   label,
   size = 64,
+  layer = "layer-panel",
 }: {
   label?: string;
   size?: number;
+  /** Ladder rung. NavVeil passes "layer-veil" - a NAVIGATION veil must sit
+   *  above open dialogs (the page under them is leaving); everything else
+   *  stays at panel, below dialogs. */
+  layer?: "layer-panel" | "layer-veil";
 }) {
   return (
-    <div className="wd-loader-veil layer-panel fixed inset-0 flex items-center justify-center px-6">
+    <div className={`wd-loader-veil ${layer} fixed inset-0 flex items-center justify-center px-6`}>
       <BrandPulse size={size} label={label} />
     </div>
   );

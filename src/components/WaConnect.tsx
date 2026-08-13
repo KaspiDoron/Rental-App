@@ -340,7 +340,7 @@ export function WaConnect({
 
   if (wa && !wa.available) {
     return (
-      <p className="rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+      <p className="rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-warn">
         {t("The WhatsApp connector is not set up yet (owner: Admin -> Keys -> Evolution API).")}
       </p>
     );
@@ -352,7 +352,7 @@ export function WaConnect({
         <div className="flex items-center justify-between">
           <span
             className={`text-[13px] font-extrabold ${
-              wa.reconnecting ? "text-[#8a6100] dark:text-brandyellow" : "text-savings"
+              wa.reconnecting ? "text-warn" : "text-savings"
             }`}
           >
             {wa.reconnecting
@@ -542,7 +542,7 @@ export function WaConnect({
                 </p>
               )}
               {!pairingCode && (
-                <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+                <p className="rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn">
                   {hostDown ? "🔧 " : ""}
                   {err ||
                     t("Preparing your code... tap Try again in a few seconds. If it keeps failing, use the QR tab from a computer.")}
@@ -583,7 +583,7 @@ export function WaConnect({
               what was actually happening - it cheerfully said "Almost there"
               while the screen was showing an error. */}
           {phase === "FAILED" ? (
-            <div className="mt-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <div className="mt-2 rounded-xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-warn">
               {hostDown
                 ? t("Our WhatsApp server is restarting - nothing is wrong on your side. Give it a minute, then tap Try again.")
                 : t("This is taking longer than it should. Tap Try again for a fresh code, or use the QR tab from a computer.")}
@@ -632,7 +632,7 @@ export function WaConnect({
           unconditionally, which is how a valid code and "the server didn't hand
           out a code" ended up on screen together. */}
       {err && !showingCode && (
-        <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+        <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
           {hostDown ? "🔧 " : ""}
           {err}
         </p>

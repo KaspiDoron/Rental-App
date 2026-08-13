@@ -297,7 +297,7 @@ export function ThreadDashboard({
 
         {/* Queue / ETA (when a message is still waiting) */}
         {queueItem && (
-          <div className="rounded-2xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <div className="rounded-2xl bg-brandyellow-soft p-2.5 text-[11px] font-bold text-warn">
             🕘{" "}
             {queueItem.due
               ? t("sending at the next safe slot - paced to protect your number")

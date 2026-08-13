@@ -446,7 +446,6 @@ export const I18N_CATALOG: string[] = [
   "Rating",
   "Re-open this hunt",
   "Re-open this hunt (Pro)",
-  "Re-opening",
   "Re-opening…",
   "Reaching shops",
   "Read",

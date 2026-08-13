@@ -33,7 +33,7 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     "rfq-sent": { text: "RFQ sent", cls: "bg-brandblue-soft text-brandblue" },
     "awaiting-response": {
       text: "Awaiting reply",
-      cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+      cls: "bg-brandyellow-soft text-warn",
     },
     negotiating: { text: "Negotiating", cls: "bg-brandred-soft text-brandred" },
     "offer-received": { text: "Offer in", cls: "bg-savings-soft text-savings" },
@@ -43,7 +43,7 @@ export function StageBadge({ stage }: { stage: TrackerStage }) {
     // one reopens the moment they restock, and the agent has asked when.
     "out-of-stock": {
       text: "Out of stock",
-      cls: "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow",
+      cls: "bg-brandyellow-soft text-warn",
     },
     declined: { text: "Declined", cls: "bg-brandred-soft text-brandred" },
   };

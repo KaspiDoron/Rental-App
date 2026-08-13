@@ -425,7 +425,7 @@ function VendorCardInner({
               <ShopAvatar name={vendor.name} phone={vendor.whatsapp} retryKey={vendor.stage} photoUrl={vendor.photoUrl} />
               <h3 className="truncate text-[16px] font-extrabold text-strong">{vendor.name}</h3>
               {vendor.demo && (
-                <span className="shrink-0 rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                <span className="shrink-0 rounded-full bg-brandyellow-soft px-2 py-0.5 text-[10px] font-extrabold text-warn">
                   {t("Demo")}
                 </span>
               )}
@@ -471,7 +471,7 @@ function VendorCardInner({
                 </span>
               )}
               {vendor.fastResponder && (
-                <span className="rounded-md bg-brandyellow-soft px-1.5 py-0.5 text-[10px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                <span className="rounded-md bg-brandyellow-soft px-1.5 py-0.5 text-[10px] font-extrabold text-warn">
                   ⚡ {t("Fast responder")}
                 </span>
               )}
@@ -503,7 +503,7 @@ function VendorCardInner({
               pacing / daily limit) + an honest ETA. The user can remove it
               from the status panel above. */}
           {vendor.queuedUntil && !offer && (
-            <div className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <div className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
               <div className="flex items-center gap-1.5">
                 🕘 {t(queueReasonLabel(vendor.queuedReason))}
                 {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
@@ -811,7 +811,7 @@ function VendorCardInner({
                 className={`mt-2 rounded-xl p-2 text-[11px] font-bold ${
                   offer.vehicleStatus === "wrong-vehicle"
                     ? "bg-brandred-soft text-brandred"
-                    : "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                    : "bg-brandyellow-soft text-warn"
                 }`}
               >
                 {offer.vehicleStatus === "wrong-vehicle" ? "🚫 " : "🔎 "}
@@ -870,7 +870,7 @@ function VendorCardInner({
                 onClick={() => onLocationRequest(vendor)}
                 className="mt-2 w-full rounded-xl border-2 border-brandyellow/40 bg-brandyellow-soft p-2.5 text-left"
               >
-                <div className="text-[12px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                <div className="text-[12px] font-extrabold text-warn">
                   📍 {t("This shop asked where you are")}
                 </div>
                 <div className="mt-0.5 line-clamp-2 text-[11px] italic text-soft">
@@ -1055,7 +1055,7 @@ function VendorCardInner({
               </div>
             )}
             {rfqState === "not-connected" && (
-              <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
                 {t("Nothing was sent. Connect your WhatsApp first - it takes 30 seconds and the agents handle everything after that.")}
                 <a
                   href="/profile"
@@ -1066,7 +1066,7 @@ function VendorCardInner({
               </div>
             )}
             {rfqState === "rate-limited" && (
-              <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <div className="mt-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
                 {rfqError ?? t("Taking a short break - try again in a few minutes.")}
               </div>
             )}

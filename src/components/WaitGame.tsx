@@ -294,7 +294,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
                 {phase === "over" ? `Crash! Score ${score}` : "Tap or press Space to hop"}
               </div>
               {phase === "over" && badgeFor(score) && (
-                <div className="mt-0.5 rounded-full bg-brandyellow-soft px-2.5 py-0.5 text-[11px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+                <div className="mt-0.5 rounded-full bg-brandyellow-soft px-2.5 py-0.5 text-[11px] font-extrabold text-warn">
                   {badgeFor(score)}
                 </div>
               )}

@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Modal";
 import { Icon } from "../icons";
 import { LoadingDots } from "../LoadingDots";
-import { OrbitDots } from "../OrbitDots";
 import { WillMessage } from "./WillMessage";
 import { WillAvatar } from "./WillAvatar";
 import { getRecognizer, type SpeechRecognitionLike } from "@/lib/speech";
@@ -98,10 +97,10 @@ export function WillSheet({
 
       {notes.length > 0 && (
         <div className="mb-2 rounded-2xl bg-brandyellow-soft p-2.5">
-          <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a6100] dark:text-brandyellow">
+          <div className="text-[10px] font-extrabold uppercase tracking-wide text-warn">
             {t("Standing instructions")}
           </div>
-          <ul className="mt-0.5 space-y-0.5 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <ul className="mt-0.5 space-y-0.5 text-[11px] font-bold text-warn">
             {notes.map((n) => (
               <li key={n}>· {n}</li>
             ))}
@@ -183,7 +182,7 @@ export function WillSheet({
           aria-busy={busy}
         >
           {busy ? (
-            <OrbitDots size={16} light label={t("Sending...")} />
+            <LoadingDots light />
           ) : (
             <Icon name="send" className="h-5 w-5" />
           )}

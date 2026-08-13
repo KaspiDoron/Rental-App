@@ -35,7 +35,11 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("the canvas actually wraps the pages", () => {
-    expect(read("src/app/layout.tsx")).toMatch(/className="app-canvas[^"]*"/);
+    // The canvas div moved into PageFade (keyed per pathname so the fade
+    // re-runs on client navigations); the layout must still mount it around
+    // the route children.
+    expect(read("src/app/layout.tsx")).toMatch(/<PageFade>\{children\}<\/PageFade>/);
+    expect(read("src/components/PageFade.tsx")).toMatch(/className="app-canvas[^"]*"/);
   });
 
   it("NOTHING on the canvas may create a containing block", () => {
@@ -56,9 +60,12 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   });
 
   it("...and the classes it wears are only the two safe ones", () => {
-    const el = read("src/app/layout.tsx").match(/className="(app-canvas[^"]*)"/);
+    const el = read("src/components/PageFade.tsx").match(/className="(app-canvas[^"]*)"/);
     expect(el).toBeTruthy();
     expect(el![1].trim().split(/\s+/).sort()).toEqual(["app-canvas", "page-fade"]);
+    // ...and it is keyed on the pathname - that is the whole reason the
+    // wrapper exists as a client component.
+    expect(read("src/components/PageFade.tsx")).toMatch(/key=\{pathname\}/);
   });
 
   it("the page arrival animates OPACITY only - opacity creates no containing block", () => {
@@ -72,7 +79,7 @@ describe("the viewport keeps its scrolling, so fixed chrome stays fixed", () => 
   it("the liquid rise stays on CONTENT, which never holds fixed chrome", () => {
     // `fluid-in` genuinely does set a transform and a blur - that is what makes
     // it read as liquid. It is fine on cards and rows; it is a trap on a wrapper.
-    expect(read("src/app/layout.tsx")).not.toMatch(/app-canvas[^"]*fluid-in/);
+    expect(read("src/components/PageFade.tsx")).not.toMatch(/app-canvas[^"]*fluid-in/);
   });
 
   it("Will is portalled too, on a host that carries no transform of its own", () => {

@@ -7,6 +7,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { LoadingDots } from "@/components/LoadingDots";
 import { SkeletonList } from "@/components/Skeleton";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { PlanCard, type PlanView } from "@/components/UpgradeSheet";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
 
@@ -933,7 +934,7 @@ export default function AdminPage() {
                             a.level === "critical"
                               ? "text-brandred"
                               : a.level === "warning"
-                              ? "text-[#8a6100] dark:text-brandyellow"
+                              ? "text-warn"
                               : "text-strong"
                           }`}
                         >
@@ -1212,7 +1213,7 @@ export default function AdminPage() {
                                 risk >= 70
                                   ? "bg-brandred text-white"
                                   : risk >= 40
-                                  ? "bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                                  ? "bg-brandyellow-soft text-warn"
                                   : "bg-savings-soft text-savings"
                               }`}
                             >
@@ -1624,7 +1625,7 @@ export default function AdminPage() {
                 ? "border-line bg-card2 text-soft"
                 : persistent
                   ? "border-savings bg-savings-soft text-savings"
-                  : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                  : "border-brandyellow bg-brandyellow-soft text-warn"
             }`}
           >
             <Icon name="shield" className="mr-1 inline h-4 w-4" />
@@ -2387,7 +2388,7 @@ export default function AdminPage() {
                             : st === "dismissed"
                             ? "border-line bg-card2 text-faint"
                             : st === "in-progress"
-                            ? "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                            ? "border-brandyellow bg-brandyellow-soft text-warn"
                             : "border-brandblue bg-brandblue-soft text-brandblue"
                           : "border-line text-faint"
                       }`}
@@ -2454,7 +2455,7 @@ export default function AdminPage() {
             className={`rounded-2xl border-2 p-3 text-[12px] font-bold ${
               billingOn
                 ? "border-savings bg-savings-soft text-savings"
-                : "border-brandyellow bg-brandyellow-soft text-[#8a6100] dark:text-brandyellow"
+                : "border-brandyellow bg-brandyellow-soft text-warn"
             }`}
           >
             <Icon name="card" className="mr-1 inline h-4 w-4" />
@@ -2486,6 +2487,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             <LanguageButton />
             <a href="/" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
               ← App

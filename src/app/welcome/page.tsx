@@ -224,7 +224,7 @@ export default function WelcomePage() {
                   f.tone === "offer"
                     ? "bg-savings-soft text-savings"
                     : f.tone === "wait"
-                    ? "bg-brandyellow-soft text-[#8a6100]"
+                    ? "bg-warn-soft text-warn"
                     : "bg-brandblue-soft text-brandblue"
                 }`}
               >

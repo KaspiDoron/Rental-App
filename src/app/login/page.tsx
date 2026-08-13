@@ -8,6 +8,7 @@ import { CountryPhoneInput } from "@/components/CountryPhoneInput";
 import { WaConnect } from "@/components/WaConnect";
 import { PasswordInput } from "@/components/PasswordInput";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { LoadingDots } from "@/components/LoadingDots";
 import { CURRENCIES, savedCurrency, setSavedCurrency } from "@/lib/currency";
 import { startNav } from "@/components/NavVeil";
@@ -348,7 +349,10 @@ export default function LoginPage() {
         className="fixed right-4 z-40"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
       >
-        <LanguageButton flashy />
+        <div className="flex items-center gap-1.5">
+          <ThemeToggle />
+          <LanguageButton flashy />
+        </div>
       </div>
 
       {/* Hero */}

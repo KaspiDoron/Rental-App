@@ -201,7 +201,7 @@ export function BargainDraftModal({
         </div>
       )}
       {upgradeNote && (
-        <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+        <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-warn">
           {t("Bargaining in the local language is an Ultra perk - locals get local prices. Upgrade to unlock it.")}
         </p>
       )}
@@ -218,7 +218,7 @@ export function BargainDraftModal({
             </div>
           )}
           {wasFallback && !edited && (
-            <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <p className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
               {t("The AI was unreachable, so this is a simple template - tap Rewrite to try the full agent again, or edit it yourself.")}
             </p>
           )}
@@ -283,7 +283,7 @@ export function BargainDraftModal({
             </p>
           )}
           {(sendState === "reconnecting" || sendState === "ratelimited") && statusMsg && (
-            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn">
               {statusMsg}
             </p>
           )}
@@ -295,7 +295,7 @@ export function BargainDraftModal({
           {sendState === "manual" && (
             <a
               href="/profile"
-              className="mt-2 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow"
+              className="mt-2 block rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn"
             >
               {statusMsg ?? t("Not sent - connect your WhatsApp in Profile first.")} →
             </a>

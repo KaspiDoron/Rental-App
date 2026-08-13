@@ -19,7 +19,7 @@ import { useCallback, useMemo } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useVersionedToggle } from "@/lib/client/versioned-toggle";
 import { Icon } from "./icons";
-import { OrbitDots } from "./OrbitDots";
+import { LoadingDots } from "./LoadingDots";
 
 export function AgentKillSwitch({
   className = "",
@@ -140,7 +140,7 @@ export function AgentKillSwitch({
             {busy ? (
               /* The second and last bare border spinner - same primitive as
                  everywhere else now. */
-              <OrbitDots size={12} label={t("Working")} />
+              <LoadingDots />
             ) : (
               <Icon name={isPaused ? "play" : "pause"} className="h-3 w-3" />
             )}

@@ -72,7 +72,7 @@ export function ReviewsSheet({
       {available === null && <div className="skeleton h-20 rounded-2xl" />}
 
       {available === false && (
-        <div className="rounded-2xl bg-brandyellow-soft p-3 text-[13px] font-semibold text-[#8a6100] dark:text-brandyellow">
+        <div className="rounded-2xl bg-brandyellow-soft p-3 text-[13px] font-semibold text-warn">
           {note}
         </div>
       )}

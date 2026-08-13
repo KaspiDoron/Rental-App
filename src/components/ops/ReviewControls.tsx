@@ -234,7 +234,7 @@ export function ReviewControls({
           this judges our COMPREHENSION, which is where the failures start. */}
       {pinnedMessage ? (
         <div className="rounded-xl border-2 border-brandyellow/40 bg-brandyellow-soft p-2.5">
-          <div className="text-[11px] font-extrabold uppercase tracking-wide text-[#8a6100] dark:text-brandyellow">
+          <div className="text-[11px] font-extrabold uppercase tracking-wide text-warn">
             The agent misread this
           </div>
           <p className="mt-1 line-clamp-3 border-l-2 border-line pl-2 text-[11px] italic text-soft">

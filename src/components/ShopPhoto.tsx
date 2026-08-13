@@ -47,9 +47,12 @@ export function ShopPhoto({
   return (
     <span className={`relative block overflow-hidden ${className}`}>
       {!loaded && (
+        // The SHARED shimmer, not a bespoke pulse - every placeholder in the
+        // app is the same LinkedIn-style skeleton so a loading photo and a
+        // loading row read as one system.
         <span
           aria-hidden
-          className="absolute inset-0 animate-pulse bg-card2"
+          className="skeleton absolute inset-0"
           data-testid="shop-photo-placeholder"
         />
       )}

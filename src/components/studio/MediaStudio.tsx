@@ -140,7 +140,7 @@ export function MediaStudio() {
       {result && (
         <div className="mt-3 space-y-2">
           {result.note && (
-            <div className="rounded-xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <div className="rounded-xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-warn">
               {result.note}
             </div>
           )}

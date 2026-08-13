@@ -157,10 +157,10 @@ export function WabaConsole() {
 
       {c.enabled && c.dryRun && (
         <div className="rounded-blob border-2 border-brandyellow/50 bg-brandyellow-soft p-3">
-          <div className="text-[13px] font-extrabold text-[#8a6100] dark:text-brandyellow">
+          <div className="text-[13px] font-extrabold text-warn">
             DRY RUN - nothing is being sent
           </div>
-          <p className="mt-1 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <p className="mt-1 text-[12px] font-bold text-warn">
             Every message below was rendered and discarded. Turn WABA_DRY_RUN off in Keys
             when you are ready for the first real send.
           </p>

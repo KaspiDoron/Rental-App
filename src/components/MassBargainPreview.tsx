@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { Modal } from "./Modal";
 import { ShopPhoto } from "./ShopPhoto";
+import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
 import { visibleTargets, type MassSort } from "@/lib/mass-bargain";
 import type { Vendor } from "@/lib/types";
@@ -178,9 +179,15 @@ export function MassBargainPreview({
         disabled={sending || chosen.length === 0}
         className="btn btn-primary mt-3 w-full rounded-2xl py-3 text-sm font-extrabold disabled:opacity-60"
       >
-        {chosen.length === 0
-          ? t("Pick at least one shop")
-          : t("Message {n} shops").replace("{n}", String(chosen.length))}
+        {sending ? (
+          // The button used to keep its idle label while disabled - the one
+          // moment the traveller most wants proof something is happening.
+          <LoadingDots light label={t("Sending")} className="justify-center" />
+        ) : chosen.length === 0 ? (
+          t("Pick at least one shop")
+        ) : (
+          t("Message {n} shops").replace("{n}", String(chosen.length))
+        )}
       </button>
       <p className="mt-2 text-center text-[11px] text-faint">
         {t("Your plan can start up to {cap} new conversations at once.").replace("{cap}", String(cap))}

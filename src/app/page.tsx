@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallbackRef } from "@/components/useCallbackRef";
+import { useRouter } from "next/navigation";
 import { useHeaderCollapse } from "@/components/useHeaderCollapse";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -84,7 +85,12 @@ function etaRangeLabel(
 import { ActivityFeed, type FeedItem } from "@/components/activity/ActivityFeed";
 import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
-import { ThreadDashboard } from "@/components/ThreadDashboard";
+// Heavy full-screen surface, opened on demand - out of the route's first
+// parse, like MapView below. No ssr: it renders only after a tap.
+const ThreadDashboard = dynamic(
+  () => import("@/components/ThreadDashboard").then((m) => m.ThreadDashboard),
+  { ssr: false }
+);
 import { LocationShareSheet } from "@/components/LocationShareSheet";
 import { WaSafetyBadge, type WaSafety } from "@/components/WaSafetyBadge";
 import { useWill } from "@/lib/useWill";
@@ -105,8 +111,10 @@ import { AlertsChip } from "@/components/AlertsChip";
 import { WaLockVeil } from "@/components/WaLockVeil";
 import { probeWaStatus } from "@/lib/wa-status";
 import { startNav } from "@/components/NavVeil";
+import { raiseAmbient, lowerAmbient } from "@/components/AmbientGlow";
 import { WaitGame } from "@/components/WaitGame";
 import { LanguageButton } from "@/components/LanguageButton";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
@@ -178,6 +186,9 @@ function pickExamples(plan?: string): string[] {
 }
 
 export default function Home() {
+  // Client-side navigation: the tab hop keeps the React tree alive, so the
+  // destination paints from cache instead of re-parsing the whole bundle.
+  const router = useRouter();
   const { t, tShared } = useI18n();
   const [session, setSession] = useState<Session | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
@@ -1933,6 +1944,10 @@ export default function Home() {
     setOriginHint(null);
     // A search starting is the celebration's natural end.
     clearJustLinked();
+    // The whole-screen wash answers the tap on this very frame and holds
+    // through profiling + discovery. Every exit below lowers it; a thrown
+    // fetch is caught by AmbientGlow's own timeout escape.
+    raiseAmbient();
     setPhase("profiling");
     setVendors([]);
     setRfq(null);
@@ -2038,6 +2053,7 @@ export default function Home() {
     const pRes = await profileP;
     const pData = await pRes.json();
     if (!pRes.ok) {
+      lowerAmbient();
       setPhase("idle");
       alert(pData.error ?? "Could not parse your request.");
       return;
@@ -2067,6 +2083,7 @@ export default function Home() {
       // A failed discovery call must NEVER masquerade as "no shops found
       // near your stay" - that sends users widening the radius for nothing.
       const err = await vRes.json().catch(() => ({}));
+      lowerAmbient();
       setPhase("idle");
       setSourceError(
         err.error ?? t("The shop search hiccuped - tap Find my deal to try again.")
@@ -2093,6 +2110,10 @@ export default function Home() {
 
     // A declaration is made about THIS request. The next search asks again.
     setIdpConsent(false);
+    // The shops are on screen - the WAIT is over even though the funnel keeps
+    // working. Holding the wash through the whole negotiation would teach
+    // travellers to ignore it.
+    lowerAmbient();
     setPhase("running");
     runFunnel(list, pData.rfq);
   }
@@ -2415,6 +2436,9 @@ export default function Home() {
     setMassPreview(null);
     setMassState("running");
     setMassNote(null);
+    // The wash covers the whole compose-and-queue round trip; the finally
+    // below is its guaranteed lower.
+    raiseAmbient();
     try {
       const chosen = new Set(vendorIds);
       const targets = filtered
@@ -2542,6 +2566,7 @@ export default function Home() {
         if (d.upgrade) setUpgradeOpen(true);
       }
     } finally {
+      lowerAmbient();
       setMassState("done");
     }
   });
@@ -2903,6 +2928,7 @@ export default function Home() {
                 {session.plan}
               </span>
             )}
+            <ThemeToggle />
             <LanguageButton />
           </div>
         </div>
@@ -3164,7 +3190,7 @@ export default function Home() {
         )}
 
         {source === "demo" && (
-          <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow animate-slide-up">
+          <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-warn animate-slide-up">
             {t("Demo shop list - no Google Maps key is set yet (owner: Admin -> Keys). Prices are never invented either way: we first ask each shop.")}
           </div>
         )}
@@ -3210,7 +3236,7 @@ export default function Home() {
         )}
 
         {feedStale && vendors.length > 0 && (
-          <p className="mt-3 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+          <p className="mt-3 rounded-xl bg-brandyellow-soft p-2 text-center text-[11px] font-bold text-warn">
             ⏳ {t("Reconnecting - live updates paused for a moment. Your agents keep working.")}
           </p>
         )}
@@ -3600,7 +3626,7 @@ export default function Home() {
               <span className="text-[10px] font-bold text-faint">{t("auto-sends")}</span>
             </div>
             {queueStalled && (
-              <p className="mb-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-[#8a6100] dark:text-brandyellow">
+              <p className="mb-1.5 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
                 ⏱ {t("Sending fell behind while the app was away - catching up now, one message at a time.")}
               </p>
             )}
@@ -4216,7 +4242,7 @@ export default function Home() {
                   primary: true,
                   onAction: () => {
                     startNav();
-                    window.location.href = "/profile";
+                    router.push("/profile");
                   },
                 },
               ],
@@ -4517,8 +4543,8 @@ export default function Home() {
       <TabBar
         active="home"
         onSelect={(t) => {
-          if (t === "profile") window.location.href = "/profile";
-          else if (t === "deals") window.location.href = "/deals";
+          if (t === "profile") router.push("/profile");
+          else if (t === "deals") router.push("/deals");
           else {
             setView("list");
             window.scrollTo({ top: 0, behavior: "smooth" });

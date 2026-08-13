@@ -398,7 +398,7 @@ export function BookingSheet({
           </div>
 
           {freePlan && (
-            <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-warn">
               Free plan: pickup can be scheduled for TODAY only. Upgrade to Pro
               to book future days.
             </div>
@@ -526,7 +526,7 @@ export function BookingSheet({
             </p>
           )}
           {notify === "failed" && (
-            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-[#8a6100] dark:text-brandyellow">
+            <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-warn">
               {notifyReason
                 ? `Booking saved, but the confirmation couldn't be sent (${notifyReason}) - open the chat below and tell the shop yourself.`
                 : "Booking saved, but the message could not be sent - open the chat below and tell the shop yourself."}
