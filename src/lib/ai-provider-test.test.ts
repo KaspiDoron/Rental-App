@@ -77,6 +77,15 @@ describe("testAllProviders contract (source pins)", () => {
     expect(ai).toMatch(/configured: false, ok: false, detail: "no key set"/);
   });
 
+  it("a congested primary (429) tries its fallback model, like a dead id does", () => {
+    // The owner's live sweep: SambaNova 429 "high demand" on Llama-3.3-70B
+    // and OpenRouter 429 "temporarily rate-limited upstream" on the :free
+    // primary. Both providers throttle PER MODEL, so the sibling fallback
+    // on the same key is the correct next move - gating the rescue on
+    // 400/404 alone left both providers red while their fallbacks idled.
+    expect(ai).toMatch(/\\b\(400\|404\|429\)\\b/);
+  });
+
   it("one hung provider cannot stall the whole sweep past an infra timeout", () => {
     // Real keys mean real calls: without a hard per-provider deadline the
     // response could take primary+fallback (20s+20s), long enough for the
