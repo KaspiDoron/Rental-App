@@ -152,4 +152,7 @@ export const I18N_EXTRAS: string[] = [
   "high",
   "medium",
   "low",
+
+  // src/components/SiteFooter.tsx - the public guides hub link (wave 4.4)
+  "Guides",
 ];

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { GUIDES, guideBySlug } from "./guides";
+import { GUIDES, guideBySlug, guideText, GUIDE_CATEGORY_LABELS } from "./guides";
 
 const readCode = (p: string) =>
   readFileSync(join(process.cwd(), p), "utf8")
@@ -21,20 +21,19 @@ const readCode = (p: string) =>
 // questions this app's own users ask before they rent anything.
 
 describe("the public surface is no longer four pages", () => {
-  it("there are real guides, not a stub", () => {
-    expect(GUIDES.length).toBeGreaterThanOrEqual(4);
+  it("there is a real library now - twenty guides, five clusters (wave 4.4)", () => {
+    expect(GUIDES.length).toBeGreaterThanOrEqual(20);
+    const cats = new Set(GUIDES.map((g) => g.category));
+    expect(cats.size).toBeGreaterThanOrEqual(5);
   });
 
   it("each one is substantive rather than a placeholder", () => {
     for (const g of GUIDES) {
       expect(g.sections.length, `${g.slug} has too few sections`).toBeGreaterThanOrEqual(3);
-      const words = g.sections
-        .flatMap((s) => s.body)
-        .join(" ")
-        .split(/\s+/).length;
-      // Thin content is the exact rejection reason. A guide under ~300 words is
-      // a stub with a heading on it.
-      expect(words, `${g.slug} is only ${words} words`).toBeGreaterThan(300);
+      const words = guideText(g).split(/\s+/).length;
+      // Thin content is the exact rejection reason. The floor moved from 300
+      // to 600 with the 4.4 library - a guide under that is a stub.
+      expect(words, `${g.slug} is only ${words} words`).toBeGreaterThan(600);
     }
   });
 
@@ -56,6 +55,79 @@ describe("the public surface is no longer four pages", () => {
       expect(g.summary.length, g.slug).toBeGreaterThan(40);
       expect(g.title.length, g.slug).toBeGreaterThan(10);
     }
+  });
+
+  it("every related slug resolves and no guide relates to itself", () => {
+    for (const g of GUIDES) {
+      expect(g.related.length, `${g.slug} has no related rail`).toBeGreaterThan(0);
+      for (const r of g.related) {
+        expect(guideBySlug(r), `${g.slug} relates to missing ${r}`).toBeDefined();
+        expect(r, `${g.slug} relates to itself`).not.toBe(g.slug);
+      }
+    }
+  });
+
+  it("categories are real and dates are ISO", () => {
+    for (const g of GUIDES) {
+      expect(GUIDE_CATEGORY_LABELS[g.category], `${g.slug} category`).toBeTruthy();
+      expect(g.updated, `${g.slug} updated`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  it("cross-guide originality: no paragraph is copy-pasted between guides", () => {
+    // Duplicated content across pages is its own AdSense rejection reason
+    // ("scraped or duplicated"). Paragraph-level identity is the honest bar -
+    // shared short phrases are fine, shared paragraphs are not.
+    const seen = new Map<string, string>();
+    for (const g of GUIDES) {
+      for (const s of g.sections) {
+        for (const b of s.blocks) {
+          if (b.kind !== "p") continue;
+          const key = b.text.trim();
+          if (key.length < 80) continue;
+          const owner = seen.get(key);
+          expect(owner, `paragraph shared by ${owner} and ${g.slug}: "${key.slice(0, 60)}..."`).toBeUndefined();
+          seen.set(key, g.slug);
+        }
+      }
+    }
+  });
+
+  it("only short hyphens in guide prose (the CLAUDE.md rule)", () => {
+    for (const g of GUIDES) {
+      expect(guideText(g), `${g.slug} contains an em/en dash`).not.toMatch(/[–—]/);
+    }
+  });
+});
+
+describe("structured data + discoverability (wave 4.4)", () => {
+  const detail = readCode("src/app/guides/[slug]/page.tsx");
+
+  it("Article + BreadcrumbList JSON-LD derive from the same guide object", () => {
+    expect(detail).toMatch(/application\/ld\+json/);
+    expect(detail).toMatch(/"Article"/);
+    expect(detail).toMatch(/"BreadcrumbList"/);
+  });
+
+  it("FAQPage markup exists exactly when the guide carries a faq", () => {
+    expect(detail).toMatch(/guide\.faq && guide\.faq\.length > 0/);
+    expect(detail).toMatch(/"FAQPage"/);
+    // ...and at least some guides actually carry one.
+    expect(GUIDES.some((g) => (g.faq?.length ?? 0) > 0)).toBe(true);
+  });
+
+  it("the related rail renders from resolvable slugs", () => {
+    expect(detail).toMatch(/guide\.related/);
+  });
+
+  it("guides are reachable from the public chrome, not only the sitemap", () => {
+    expect(readCode("src/components/SiteFooter.tsx")).toMatch(/href="\/guides"/);
+    expect(readCode("src/app/welcome/page.tsx")).toMatch(/href="\/guides"/);
+    expect(readCode("src/app/pricing/page.tsx")).toMatch(/href="\/guides"/);
+  });
+
+  it("guide tables are their own scrollers - the page never scrolls sideways", () => {
+    expect(detail).toMatch(/overflow-x-auto overscroll-x-contain/);
   });
 });
 

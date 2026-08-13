@@ -247,6 +247,7 @@ export const I18N_CATALOG: string[] = [
   "Google sign-in failed.",
   "Google verified",
   "Got it. Now drop your hotel or area - I search outward from there, so this is the one thing I can't guess.",
+  "Guides",
   "Hand back to Will",
   "Has offer",
   "Having trouble? Connect later from Profile",

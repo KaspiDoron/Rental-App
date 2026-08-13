@@ -91,6 +91,9 @@ export default function WelcomePage() {
           </span>
         </div>
         <div className="flex items-center gap-2 py-3">
+          <a href="/guides" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
+            Guides
+          </a>
           <a href="/pricing" className="btn btn-sm btn-ghost rounded-xl px-3 py-1.5 text-[12px]">
             Pricing
           </a>

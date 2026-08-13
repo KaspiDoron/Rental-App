@@ -1,14 +1,23 @@
 import Link from "next/link";
-import { GUIDES } from "@/lib/guides";
+import { GUIDES, GUIDE_CATEGORY_LABELS, type GuideCategory } from "@/lib/guides";
 
 // The public guides hub. Crawlable, outside the middleware matcher, and listed
-// in the sitemap - see src/lib/guides.ts for why this exists at all.
+// in the sitemap - see src/lib/guides/index.ts for why this exists at all.
+// Grouped by category so twenty guides read as a library, not a wall.
 export const metadata = {
   title: "Rental guides - WheelDeal",
   description:
     "Honest, practical guides to renting a scooter or car in Southeast Asia: what prices are real, what deposits are normal, and what to check before you ride away.",
   robots: { index: true, follow: true },
 };
+
+const CATEGORY_ORDER: GuideCategory[] = [
+  "prices",
+  "negotiation-logistics",
+  "deposits-paperwork",
+  "licence-insurance",
+  "risk-safety",
+];
 
 export default function GuidesPage() {
   return (
@@ -25,19 +34,32 @@ export default function GuidesPage() {
         genuinely worth checking before you ride away. No affiliate links, no
         &ldquo;top 10 shops&rdquo;.
       </p>
-      <ul className="mt-6 space-y-3">
-        {GUIDES.map((g) => (
-          <li key={g.slug}>
-            <Link
-              href={`/guides/${g.slug}`}
-              className="block rounded-2xl border-2 border-line bg-card p-4 transition hover:border-brandblue/50"
-            >
-              <span className="block text-[15px] font-extrabold text-strong">{g.title}</span>
-              <span className="mt-1 block text-[13px] leading-relaxed text-soft">{g.summary}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {CATEGORY_ORDER.map((cat) => {
+        const inCat = GUIDES.filter((g) => g.category === cat);
+        if (inCat.length === 0) return null;
+        return (
+          <section key={cat} className="mt-8">
+            <h2 className="text-[13px] font-extrabold uppercase tracking-wide text-faint">
+              {GUIDE_CATEGORY_LABELS[cat]}
+            </h2>
+            <ul className="mt-3 space-y-3">
+              {inCat.map((g) => (
+                <li key={g.slug}>
+                  <Link
+                    href={`/guides/${g.slug}`}
+                    className="block rounded-2xl border-2 border-line bg-card p-4 transition hover:border-brandblue/50"
+                  >
+                    <span className="block text-[15px] font-extrabold text-strong">{g.title}</span>
+                    <span className="mt-1 block text-[13px] leading-relaxed text-soft">
+                      {g.summary}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </main>
   );
 }

@@ -62,6 +62,9 @@ export function SiteFooter() {
 
         <div className="mt-4 flex items-center justify-between text-[11px] font-bold text-faint">
           <div className="flex gap-3">
+            <a href="/guides" className="hover:text-soft">
+              {t("Guides")}
+            </a>
             <a href="/terms" className="hover:text-soft">
               {t("Terms")}
             </a>
