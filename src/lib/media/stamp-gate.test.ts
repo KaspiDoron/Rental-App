@@ -86,7 +86,10 @@ describe("the vision ladder is current and hot-fixable", () => {
 
   it("retired model ids are gone; the current ones lead", () => {
     expect(ai).toMatch(/qwen\/qwen3\.6-27b/);
-    expect(ai).toMatch(/gemini-3-flash-preview/);
+    // The pinned Gemini generation moved to 3.5-flash (2.5-flash retires
+    // 2026-10-16); the preview id it replaced must not linger as a dead rung.
+    expect(ai).toMatch(/"gemini-3\.5-flash"/);
+    expect(ai).not.toMatch(/gemini-3-flash-preview/);
     // Google retired this one - a dead rung is pure wasted latency.
     expect(ai).not.toMatch(/"gemini-2\.0-flash"/);
   });

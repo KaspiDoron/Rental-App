@@ -93,28 +93,31 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "groq",
       token: groq,
       endpoint: "https://api.groq.com/openai/v1/chat/completions",
-      // Kimi-K2: a frontier-class open model, served fast on Groq's free tier.
-      model: pick(groqM, "moonshotai/kimi-k2-instruct"),
-      // Llama-3.3-70B is always live on Groq - a rock-solid fallback.
-      fallbackModel: "llama-3.3-70b-versatile",
+      // Groq deprecated kimi-k2 (2026-03) AND llama-3.3-70b-versatile for
+      // free/dev tiers (2026-06) - both 404 now. gpt-oss-120b is Groq's own
+      // recommended migration target (console.groq.com/docs/deprecations).
+      model: pick(groqM, "openai/gpt-oss-120b"),
+      fallbackModel: "openai/gpt-oss-20b",
     },
     {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      // llama-3.3-70b is Cerebras' flagship; Llama-4 Scout is the current
-      // fallback (the old llama3.1-70b was retired -> 404).
-      model: pick(cerM, "llama-3.3-70b"),
-      fallbackModel: "llama-4-scout-17b-16e-instruct",
+      // llama-3.3-70b was retired 2026-02 (-> 404); Cerebras' official
+      // migration target is gpt-oss-120b. llama3.1-8b remains the small
+      // always-on fallback (inference-docs.cerebras.ai/support/deprecation).
+      model: pick(cerM, "gpt-oss-120b"),
+      fallbackModel: "llama3.1-8b",
     },
     {
       name: "sambanova",
       token: sambanova,
       endpoint: "https://api.sambanova.ai/v1/chat/completions",
-      // Meta-Llama-3.1-* were deprecated on SambaNova Cloud (HTTP 410).
-      // 3.3-70B is current; Llama-4 Maverick is the newer fallback.
+      // Meta-Llama-3.3-70B-Instruct is still current on SambaNova Cloud (the
+      // panel's 429 was a rate limit, not a dead id). gpt-oss-120b is the
+      // newer catalog entry used as fallback.
       model: pick(sambaM, "Meta-Llama-3.3-70B-Instruct"),
-      fallbackModel: "Llama-4-Maverick-17B-128E-Instruct",
+      fallbackModel: "gpt-oss-120b",
     },
     {
       name: "deepseek",
@@ -130,37 +133,44 @@ async function allProviders(): Promise<ProviderConfig[]> {
       token: together,
       endpoint: "https://api.together.xyz/v1/chat/completions",
       model: pick(togM, "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"),
-      fallbackModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      // The old 3.1-8B-Turbo fallback is a PAID endpoint - useless as a
+      // rescue for a free-tier key. R1-Distill-70B-free is the free sibling.
+      fallbackModel: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
     },
     {
       name: "openrouter",
       token: openrouter,
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
-      // Frontier open model, free tier on OpenRouter.
-      model: pick(orM, "deepseek/deepseek-chat-v3.1:free"),
-      fallbackModel: "meta-llama/llama-3.3-70b-instruct:free",
+      // OpenRouter delisted the DeepSeek AND Llama :free tiers (July 2026);
+      // the :free roster churns weekly, so if this 404s paste a current id
+      // from openrouter.ai/collections/free-models as OPENROUTER_MODEL.
+      model: pick(orM, "openai/gpt-oss-20b:free"),
+      fallbackModel: "google/gemma-4-31b-it:free",
     },
     {
       name: "mistral",
       token: mistral,
       endpoint: "https://api.mistral.ai/v1/chat/completions",
+      // mistral-large-latest remains valid (now routes to Large 3); the old
+      // open-mistral-nemo fallback is legacy - small-latest is the safe one.
       model: pick(misM, "mistral-large-latest"),
-      fallbackModel: "open-mistral-nemo",
+      fallbackModel: "mistral-small-latest",
     },
     {
       name: "huggingface",
       token: huggingface,
       endpoint: "https://router.huggingface.co/v1/chat/completions",
       model: pick(hfM, "meta-llama/Llama-3.3-70B-Instruct"),
+      fallbackModel: "openai/gpt-oss-120b",
     },
     {
       name: "gemini",
       token: gemini,
       endpoint:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-      // gemini-2.0-flash lost its free tier (limit 0). 2.5-flash still has a
-      // free tier; gemini-flash-latest is the higher-quota rolling fallback.
-      model: pick(gemM, "gemini-2.5-flash"),
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+      // gemini-2.5-flash retires 2026-10-16; 3.5-flash is the GA successor
+      // with a free tier. gemini-flash-latest is the rolling-alias rescue.
+      model: pick(gemM, GEMINI_MODEL),
       fallbackModel: "gemini-flash-latest",
     },
   ];
@@ -233,7 +243,9 @@ async function cycleUsage(): Promise<{ byProvider: Record<string, number>; unrea
 }
 
 // Current Gemini model used by every Gemini call (chat + vision).
-export const GEMINI_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash is scheduled for retirement 2026-10-16; 3.5-flash is the
+// GA successor on the free tier. This const also seeds the vision ladder.
+export const GEMINI_MODEL = "gemini-3.5-flash";
 
 /** Configured providers, preferred one first (automatic failover order). */
 async function providers(): Promise<ProviderConfig[]> {
@@ -586,6 +598,60 @@ async function callProvider(
   }
 }
 
+// ---- test ALL providers in one sweep (Admin -> AI providers) ----------------
+//
+// The per-key test (key-test route) exercises one provider at a time; this
+// fires a tiny real completion at EVERY configured provider concurrently and
+// reports which MODEL actually answered - primary or fallback - so a drifted
+// model id shows up as "answered by the fallback" instead of hiding behind a
+// successful rescue. Failures return the provider's own trimmed error.
+export interface ProviderTestResult {
+  name: ProviderName;
+  configured: boolean;
+  ok: boolean;
+  /** The model that actually ANSWERED (fallback if the primary 404'd). */
+  model?: string;
+  /** The configured primary - when ok && model !== configuredModel, the
+   *  primary id is drifted and should be fixed or overridden in the vault. */
+  configuredModel?: string;
+  ms?: number;
+  detail?: string;
+}
+
+export async function testAllProviders(): Promise<ProviderTestResult[]> {
+  const providers = await allProviders();
+  const probe: ChatMessage[] = [
+    { role: "user", content: "Reply with exactly the two letters: OK" },
+  ];
+  return Promise.all(
+    providers.map(async (p): Promise<ProviderTestResult> => {
+      if (!p.token) return { name: p.name, configured: false, ok: false, detail: "no key set" };
+      const t0 = Date.now();
+      try {
+        const r = await callProvider(p, probe, 16, 20_000);
+        return {
+          name: p.name,
+          configured: true,
+          ok: true,
+          model: r.model,
+          configuredModel: p.model,
+          ms: Date.now() - t0,
+        };
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        return {
+          name: p.name,
+          configured: true,
+          ok: false,
+          configuredModel: p.model,
+          ms: Date.now() - t0,
+          detail: reason.slice(0, 300),
+        };
+      }
+    })
+  );
+}
+
 /**
  * Run a chat completion against the first healthy provider.
  * Returns null when no provider is configured (caller should fall back to mock).
@@ -721,11 +787,10 @@ const GROQ_VISION_FALLBACKS = [
 ];
 // gemini-2.5-flash-lite 404s for NEW API keys ("no longer available to new
 // users" - seen verbatim in the owner's Media Lab), so the rolling aliases
-// come right after the pinned primary. gemini-3-flash-preview is the current
-// generation; the `-latest` aliases keep working when a pin is retired.
+// come right after the pinned primary (now 3.5-flash, the GA generation);
+// the `-latest` aliases keep working when a pin is retired.
 const GEMINI_VISION_FALLBACKS = [
   GEMINI_MODEL,
-  "gemini-3-flash-preview",
   "gemini-flash-latest",
   "gemini-flash-lite-latest",
 ];
