@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { Modal } from "./Modal";
 import { ShopPhoto } from "./ShopPhoto";
 import { useI18n } from "@/lib/i18n";
+import { visibleTargets, type MassSort } from "@/lib/mass-bargain";
 import type { Vendor } from "@/lib/types";
 
 export function MassBargainPreview({
@@ -36,6 +37,11 @@ export function MassBargainPreview({
   const { t } = useI18n();
   const [dropped, setDropped] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
+  // THE VIEW CONTROLS (owner report 3, mass-bargain filters). They reorder
+  // and narrow the traveller's view of the server-ranked set - eligibility
+  // and the plan cap were decided before this sheet ever opened.
+  const [sort, setSort] = useState<MassSort>("best");
+  const [fourPlus, setFourPlus] = useState(false);
 
   // A new set of targets is a new decision - never carry a previous run's
   // deselections onto shops the traveller has not seen yet.
@@ -43,7 +49,10 @@ export function MassBargainPreview({
     setDropped(new Set());
   }, [targets]);
 
-  const chosen = targets.filter((v) => !dropped.has(v.id));
+  const visible = visibleTargets(targets, { sort, minRating: fourPlus ? 4.3 : undefined });
+  // ONLY what is on screen can be messaged. A shop hidden by the 4.3+ filter
+  // must never ride along invisibly in the confirm.
+  const chosen = visible.filter((v) => !dropped.has(v.id));
 
   const toggle = (id: string) =>
     setDropped((prev) => {
@@ -64,8 +73,64 @@ export function MassBargainPreview({
           : t("Every shop here has not been contacted yet - highest rated first.")}
       </p>
 
-      <div className="mt-3 max-h-[52vh] space-y-2 overflow-y-auto">
-        {targets.map((v) => {
+      {/* THE CONTROLS. One sort segment + one quality chip + select-all, so
+          "the open, well-reviewed ones" is two taps instead of reading
+          eighteen rows. Own horizontal scroller at 320px - the page never
+          scrolls sideways. */}
+      <div className="no-scrollbar mt-3 flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5">
+        {(
+          [
+            ["best", t("Best rated")],
+            ["nearest", t("Nearest")],
+            ["open", t("Open now")],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setSort(key)}
+            aria-pressed={sort === key}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-extrabold transition ${
+              sort === key ? "bg-brandblue text-white" : "bg-card2 text-soft"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setFourPlus((f) => !f)}
+          aria-pressed={fourPlus}
+          className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-extrabold transition ${
+            fourPlus ? "bg-savings text-white" : "bg-card2 text-soft"
+          }`}
+        >
+          ⭐ 4.3+
+        </button>
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden />
+        <button
+          type="button"
+          onClick={() => setDropped(new Set())}
+          className="shrink-0 rounded-full bg-card2 px-3 py-1.5 text-[11px] font-extrabold text-soft"
+        >
+          {t("Select all")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDropped(new Set(visible.map((v) => v.id)))}
+          className="shrink-0 rounded-full bg-card2 px-3 py-1.5 text-[11px] font-extrabold text-soft"
+        >
+          {t("Clear")}
+        </button>
+      </div>
+      {visible.length === 0 && (
+        <p className="mt-2 rounded-2xl bg-card2 px-3 py-2.5 text-center text-[12px] font-bold text-faint">
+          {t("No shops match this filter - loosen it to keep going.")}
+        </p>
+      )}
+
+      <div className="mt-3 max-h-[46vh] space-y-2 overflow-y-auto">
+        {visible.map((v) => {
           const out = dropped.has(v.id);
           return (
             <button

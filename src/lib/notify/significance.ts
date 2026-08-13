@@ -78,6 +78,20 @@ export interface NotifyState {
    * again. Sky Light did exactly this at 12:48 and the phone stayed silent.
    */
   vendorPreviousPricePerDay?: number;
+  /**
+   * IS THE HUNT STILL ON? The fact the whole gate was missing: the owner's
+   * phone buzzed hours after the search ended, every time a shop got around
+   * to replying. A hunt that is over (cleared, or past its TTL) has nothing
+   * push-worthy left in it - the reply is stored and visible in Trips, and
+   * that is where it belongs.
+   *
+   * Tri-state: `null` means the store could not answer, and the gate leans
+   * toward pushing (a missed suppression is one unwanted buzz; a suppression
+   * on a store blip is a real price the traveller never hears about).
+   * Optional so the pure tests and legacy callers keep working - undefined
+   * behaves like "unknown".
+   */
+  huntLive?: boolean | null;
 }
 
 /**
@@ -103,6 +117,16 @@ export interface Significance {
  * just as unwelcome spread over an hour.
  */
 export function worthAnInterruption(event: NotifyEvent, state: NotifyState): Significance {
+  // A HUNT THAT IS OVER HAS NOTHING PUSH-WORTHY IN IT. Checked before every
+  // other rule, including the always-through handovers: a risk flag or a
+  // takeover on a dead hunt is history, not a decision. Two exceptions only -
+  // a ringing phone is happening to the traveller RIGHT NOW whatever the
+  // hunt's state, and `agent-blocked` carries the account-scoped failures
+  // (a dropped WhatsApp link) that outlive any single search.
+  if (state.huntLive === false && event.kind !== "call" && event.kind !== "agent-blocked") {
+    return { notify: false, reason: "the hunt is over" };
+  }
+
   // Things only the traveller can decide always get through, and are not
   // counted against the budget - they are not news, they are a handover.
   if (event.kind === "risk") return { notify: true, reason: "the traveller has to read this one" };

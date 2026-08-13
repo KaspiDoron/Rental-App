@@ -415,8 +415,10 @@ with the code:
 business hours; the whole batch no longer fires at 03:00.
 
 What this does NOT slow down: **agent replies**. They skip the business-hours
-clamp entirely and always did - reciprocal traffic is the side WhatsApp does not
-meter. A shop that writes to you is still answered in seconds, at any hour.
+clamp entirely - the block is gated on `isNewContact`, which closed the stall
+where a reply re-guarded more than 30 minutes after the shop's last inbound
+parked until 08:00 local. Reciprocal traffic is the side WhatsApp does not
+meter: a shop that writes to you is answered in seconds, at any hour.
 
 An unreadable `FAST_DISPATCH` config now keeps the OFF default
 (`parseFlag(fastRaw, DEFAULTS.fast_dispatch)`), rather than the old hardcoded

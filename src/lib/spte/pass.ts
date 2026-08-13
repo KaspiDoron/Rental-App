@@ -501,7 +501,7 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
     case "momentum":
       return `Hi again! Just checking in - any chance on that better rate for ${days} days?`;
     default:
-      return undefined; // present / closing-message / pickup-location / silent
+      return undefined; // present / closing-message / silent
   }
 }
 

@@ -171,8 +171,13 @@ describe("the way back to the status panel", () => {
   });
 
   it("it respects the safe area and sits above the tab bar", () => {
-    expect(fab).toMatch(/env\(safe-area-inset-bottom, 0px\)/);
+    // The FAB parks on a NAMED slot of the bottom-right stack now; the slot
+    // token (globals.css) is what carries the safe-area inset, so the claim
+    // is pinned across both files.
+    expect(fab).toMatch(/bottom: "var\(--stack-bottom-1\)"/);
     expect(fab).toMatch(/layer-chrome/);
+    const css = readCode("src/app/globals.css");
+    expect(css).toMatch(/--stack-bottom-1: calc\(env\(safe-area-inset-bottom, 0px\)/);
   });
 
   it("the glass has an honest fallback where color-mix is unsupported", () => {

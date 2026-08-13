@@ -100,7 +100,7 @@ export interface SecurityPolicies {
   burst_cooldown_minutes: number;   // enforced rest after a burst
   require_number_on_whatsapp: boolean; // validate the number exists on WA first
   daily_cap_jitter_pct: number;     // ± random daily-cap wobble (anti-pattern)
-  ignore_business_hours: boolean;   // 24/7 dial: lift the recipient business-hours CLOCK gate for COLD intros (active replies already skip it). PACING_MODE=fast turns this on.
+  ignore_business_hours: boolean;   // 24/7 dial: lift the recipient business-hours CLOCK gate for COLD intros (the whole clamp is cold-only - replies are exempt by the isNewContact gate). PACING_MODE=fast turns this on.
   fast_dispatch: boolean;           // owner directive: new users must dispatch their whole intro batch within ~10 min. Lifts BOTH the clock gate AND the Google "closed now" park for COLD intros, so a search fires immediately regardless of shop hours (the message waits unread until the shop opens). Config FAST_DISPATCH; DEFAULT ON.
 }
 
@@ -171,9 +171,10 @@ const DEFAULTS: SecurityPolicies = {
   // send changes is our risk profile.
   //
   // Cold introductions now wait for the recipient's business hours. Agent
-  // REPLIES are unaffected and never were: they skip this clamp entirely
-  // (reciprocal traffic is the side WhatsApp does not meter), so answering an
-  // engaged shop is exactly as fast as before.
+  // REPLIES skip this clamp entirely - since owner report 3 the whole block is
+  // gated on `isNewContact`, closing the gap where a reply re-guarded more
+  // than 30 minutes after the shop's last inbound parked until morning
+  // (reciprocal traffic is the side WhatsApp does not meter).
   //
   // Set FAST_DISPATCH=on in Admin -> Keys to restore 24/7 cold dispatch.
   fast_dispatch: false,
@@ -2001,7 +2002,15 @@ export async function guardOutbound(rawOpts: {
   //         string first, then the phone prefix.
   //      c) If the timezone is genuinely unknown, DO NOT queue - a false
   //         "closed" on an open shop is the worse bug (issue #21).
-  if (opts.auto && shopOpenNow !== true) {
+  // COLD INTROS ONLY (owner report 3, reply-latency stall). This block used to
+  // key on `opts.auto` alone, so a REPLY re-guarded more than 30 minutes after
+  // the shop's last inbound - a parked row draining, a shop that stepped away
+  // for lunch - parked until 08:00 local, while the config comment promised
+  // "active replies already skip it". A reply continues a thread the shop
+  // opened; answering it late at night is what humans do, and it is the one
+  // send class WhatsApp does not meter. `isNewContact` fails WARM on an
+  // unreadable read (W-14), so an outage lands replies in the exempt lane.
+  if (opts.auto && isNewContact && shopOpenNow !== true) {
     // ACTIVE-CONVERSATION OVERRIDE: if this shop wrote to THIS user within the
     // last 30 minutes, they are demonstrably at the phone RIGHT NOW - queuing
     // a reply "until the shop opens" would be absurd (and was: a deal-close on

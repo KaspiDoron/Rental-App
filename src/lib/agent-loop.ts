@@ -418,14 +418,43 @@ export async function processVendorReply(opts: {
   // session must never keep talking to shops. A new search re-opens the shop
   // with a fresh outbound, which then postdates the marker.
   let sessionClosed = false;
+  // WHY closed, for the drop trace: a user-cleared hunt and a quietly expired
+  // one are different stories when the owner asks "why did the agent go quiet".
+  let sessionClosedReason: "session-terminated" | "session-expired" = "session-terminated";
   if (ctx.sender && priorAt) {
     const marker = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
-      `select=received_at&to_number=eq.session&raw->>sender=eq.${encodeURIComponent(
+      `select=received_at&raw->>sender=eq.${encodeURIComponent(
         ctx.sender
-      )}&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
+      )}&to_number=eq.session&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
     );
     sessionClosed = Boolean(marker[0] && marker[0].received_at > priorAt);
+  }
+  // ...OR THE HUNT SIMPLY EXPIRED. The 3h TTL was enforced only by the CLIENT
+  // dropping sessionStorage - the server kept no tombstone, so a shop replying
+  // five hours later found an agent happy to keep negotiating a search the
+  // traveller had forgotten about, and a push pipeline happy to buzz them
+  // about it. Fail toward LIVE: an unreadable liveness read must not mute a
+  // real negotiation mid-flight.
+  if (ctx.sender && !sessionClosed) {
+    try {
+      const { huntState } = await import("./notify/liveness");
+      const hunt = await huntState(ctx.sender);
+      if (hunt.live === false && hunt.reason === "ttl-expired") {
+        sessionClosed = true;
+        sessionClosedReason = "session-expired";
+        // MAKE IT DURABLE, once. The full close (outbox purge, wakeup purge,
+        // recipient tombstones, the marker) runs exactly like a user clear -
+        // and because the marker now postdates the hunt, huntState answers
+        // "cleared" from here on, so this branch cannot re-fire. Without it,
+        // the stand-down lived only in this turn's memory while strategic
+        // waits and queued sends stayed armed against a dead hunt.
+        const { closeSearchSession } = await import("./session-close");
+        void closeSearchSession(ctx.sender, { reason: "ttl-expired" }).catch(() => {});
+      }
+    } catch {
+      // Unreadable -> live. The marker gate above still stands on its own.
+    }
   }
 
   const rfq = ctx.rfq as StructuredRFQ;
@@ -1264,7 +1293,13 @@ export async function processVendorReply(opts: {
   // what an event CHANGES for them - a first price, a new best price, the
   // moment the hunt comes alive - and everything else stays in the app, where
   // it is still perfectly visible.
-  if (ctx.sender) {
+  if (ctx.sender && !sessionClosed) {
+    // ^ THE OWNER'S "buzzed hours after the hunt ended" BUG. This push fired
+    // ~250 lines BEFORE the session-terminated gate stood the agent down, so
+    // a late reply to a dead hunt was silenced in chat and loud on the lock
+    // screen. The significance gate now also refuses on `huntLive === false`
+    // (belt), but a marker-closed session can still be inside a fresh TTL -
+    // this early skip is the half the gate cannot see from liveness alone.
     await finishBeforeResponse("reply-push", async () => {
       try {
         const { classifyReply, worthAnInterruption } = await import("./notify/significance");
@@ -1521,7 +1556,7 @@ export async function processVendorReply(opts: {
   // above (data is never lost); the agent simply says nothing more. A new
   // search re-opens the shop with a fresh RFQ that postdates the marker.
   if (sessionClosed) {
-    void noteInboundDropped(opts.senderEmail, from, "session-terminated");
+    void noteInboundDropped(opts.senderEmail, from, sessionClosedReason);
     return;
   }
 

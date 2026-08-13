@@ -28,12 +28,54 @@ const css = () => read("src/app/globals.css").replace(/\/\*[\s\S]*?\*\//g, "");
 //      moving the sticky row below it.
 
 describe("nothing does React work per scroll event", () => {
-  it("the fixed layer no longer re-renders on scroll", () => {
+  it("the fixed layer does no React work on a plain scroll", () => {
+    // The claim EVOLVED with the keyboard fix. The layer now listens to
+    // visualViewport scroll - it must, because iOS pans the visual viewport
+    // while the keyboard is open and `offsetTop` (half the inset math) changes
+    // on those pans without a resize. What is still forbidden is the original
+    // sin: unconditional setState per scroll frame. The listener is rAF
+    // throttled and its setState bails when the inset has not moved, so a
+    // plain no-keyboard scroll re-renders nothing.
     const f = readCode("src/components/FixedLayer.tsx");
-    expect(f).not.toMatch(/addEventListener\("scroll"/);
-    // The artifact it guards is a viewport RESIZE effect; those still fire.
+    expect(f).toMatch(/addEventListener\("scroll", onVvScroll/);
+    expect(f).toMatch(/if \(raf\) return;/);
+    expect(f).toMatch(/Math\.abs\(prev - kb\) < 1 \? prev : kb/);
+    // The beat-bumper must never ride the scroll event - that combination is
+    // the exact per-frame recalc this suite was written against.
+    expect(f).not.toMatch(/addEventListener\("scroll", nudge/);
     expect(f).toMatch(/addEventListener\("resize"/);
     expect(f).toMatch(/orientationchange/);
+  });
+
+  it("the fixed layer answers the keyboard by MOVING, not by a recalc ritual", () => {
+    const f = readCode("src/components/FixedLayer.tsx");
+    // The old defence bumped a `data-beat` attribute no CSS selected - a style
+    // recalculation that repositioned nothing, which is why the mid-screen bar
+    // came back on a real phone. Hidden chrome is chrome that cannot float.
+    expect(f).not.toMatch(/data-beat/);
+    expect(f).toMatch(/translateY\(120%\)/);
+    expect(f).toMatch(/KEYBOARD_MIN_PX/);
+    // And the engines with no visualViewport still get an answer.
+    expect(f).toMatch(/focusin/);
+    expect(f).toMatch(/focusout/);
+  });
+
+  it("no component locks the body by hand", () => {
+    // scroll-lock.ts exists because flipping `body.overflow` on a scrolled
+    // page is the documented WebKit trigger for fixed chrome compositing mid
+    // screen. FirstTouchTerms mounts on EVERY page and carried its own toggle.
+    const files = [
+      "src/components/FirstTouchTerms.tsx",
+      "src/components/Modal.tsx",
+      "src/components/MapView.tsx",
+      "src/components/ThreadDashboard.tsx",
+    ];
+    for (const p of files) {
+      expect(readCode(p), `${p} sets body.style.overflow by hand`).not.toMatch(
+        /body\.style\.overflow\s*=/
+      );
+    }
+    expect(readCode("src/components/FirstTouchTerms.tsx")).toMatch(/lockBodyScroll\(\)/);
   });
 
   it("Will's overlay measures at most once per frame", () => {

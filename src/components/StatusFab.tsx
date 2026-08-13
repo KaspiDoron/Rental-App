@@ -98,7 +98,9 @@ export function StatusFab({
       // the navigation that owns the bottom of every screen.
       className="wd-status-fab layer-chrome fixed rounded-full px-4 py-2.5 text-[12px] font-extrabold text-strong shadow-lg pop-in"
       style={{
-        bottom: "calc(env(safe-area-inset-bottom, 0px) + 5.25rem)",
+        // A SLOT, not a hand-picked rem - see the bottom-right stack tokens
+        // beside the z ladder in globals.css.
+        bottom: "var(--stack-bottom-1)",
         right: "calc(env(safe-area-inset-right, 0px) + 1rem)",
       }}
     >

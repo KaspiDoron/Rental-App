@@ -59,6 +59,9 @@ interface SessionSummary {
   shopsFound: number;
   status: "booked" | "live" | "waiting" | "wrapped";
   paused: boolean;
+  /** The traveller cleared this hunt - restore will refuse, so the list must
+   *  not offer a live Re-open that can only 404. */
+  closed: boolean;
   contacted: number;
   replied: number;
   waiting: number;
@@ -219,6 +222,14 @@ export default function DealsPage() {
       if (r.status === 402 || d?.error === "upgrade-required") {
         setRestoring(null);
         setUpgradeOpen(true);
+        return;
+      }
+      // A cleared hunt is a DIFFERENT answer from a failed read. Collapsing
+      // this 404 into "Try again" told the traveller to retry an action the
+      // server will refuse forever - the honest copy names what happened.
+      if (d?.error === "session-closed") {
+        setRestoring(null);
+        setRestoreErr(t("You cleared this hunt - it stays in your history, but the agents are done with it."));
         return;
       }
       if (!r.ok || !d?.payload) {
@@ -842,7 +853,16 @@ export default function DealsPage() {
                           latest hunt is always free; earlier ones need trip
                           history (Pro), which surfaces the upgrade sheet. */}
                       <div className="flex flex-col gap-1.5 pt-0.5">
-                        {s.isLatest ? (
+                        {/* A CLEARED HUNT GETS NO LIVE BUTTON. Restore refuses
+                            these with a 404, so offering Re-open (or "Open live
+                            workspace" - there is no live workspace) is a button
+                            that can only fail. Checked FIRST: the newest hunt
+                            can be the cleared one. */}
+                        {s.closed ? (
+                          <p className="rounded-2xl bg-card2 px-3 py-2.5 text-center text-[11.5px] font-bold text-faint">
+                            {t("You cleared this hunt - it stays here as history.")}
+                          </p>
+                        ) : s.isLatest ? (
                           <a
                             href="/"
                             onClick={() => startNav()}
@@ -884,7 +904,7 @@ export default function DealsPage() {
                             then message ten shops by hand to find out whether any
                             of it still stands. One tap asks all of them, with
                             each shop's own quote read back to them. */}
-                        {s.contacted > 0 && (
+                        {s.contacted > 0 && !s.closed && (
                           <button
                             onClick={() => recheckPrices(s.startedAt, s.sid)}
                             disabled={rechecking === s.startedAt}

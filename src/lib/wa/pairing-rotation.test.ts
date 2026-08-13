@@ -95,3 +95,39 @@ describe("a rotation re-anchors the window", () => {
     );
   });
 });
+
+describe("the CLIENT learns about a rotation before the countdown lapses", () => {
+  const read = (p: string) =>
+    readFileSync(join(process.cwd(), p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+
+  it("the pairing poll carries the mint stamp", () => {
+    // Without it, a server-side Baileys rotation (stamped by QRCODE_UPDATED)
+    // was invisible: the dead code stayed on screen for up to 55s and the
+    // first entry attempt got "Incorrect code".
+    const route = read("src/app/api/wa/status/route.ts");
+    expect(route).toMatch(/pairing_code_issued_at/);
+    expect(route).toMatch(/\.\.\.\(pairing \? \{ pairingIssuedAt \} : \{\}\)/);
+  });
+
+  it("WaConnect re-issues on a NEWER stamp, within the same reissue budget", () => {
+    const c = read("src/components/WaConnect.tsx");
+    expect(c).toMatch(/s\.pairingIssuedAt > shownIssuedAt\.current/);
+    expect(c).toMatch(/autoReissues\.current < MAX_AUTO_REISSUES/);
+    // And a fresh code RESETS the baseline - otherwise the fresh code's own
+    // newer stamp reads as another rotation and the re-issue loops until the
+    // budget is spent.
+    expect(c).toMatch(/shownIssuedAt\.current = null/);
+  });
+
+  it("the TTL is anchored at the MINT, not after the round trips", () => {
+    // Stamping at saveSession - after the poll backoff and a connectionState
+    // read - over-stated the code's life by several seconds, so the countdown
+    // promised time the code no longer had.
+    const evo = read("src/lib/evolution.ts");
+    expect(evo).toMatch(/let mintedAt = pairingCode \? Date\.now\(\) : null;/);
+    expect(evo).toMatch(/PAIRING_TTL_MS - \(Date\.now\(\) - mintedAt\)/);
+    expect(evo).not.toMatch(/\{ pairingExpiresInMs: PAIRING_TTL_MS \}/);
+  });
+});

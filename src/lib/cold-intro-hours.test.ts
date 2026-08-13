@@ -104,3 +104,25 @@ describe("the explanation actually reaches the screen", () => {
     expect(catalog).toContain("This shop is closed right now.");
   });
 });
+
+describe("the clamp binds cold intros ONLY - a reply never waits for the clock", () => {
+  it("the whole business-hours block is gated on isNewContact", () => {
+    // THE STALL THE OWNER KEPT HITTING: the block keyed on `opts.auto` alone,
+    // so a REPLY re-guarded more than 30 minutes after the shop's last
+    // inbound - a parked row draining, a shop that stepped away for lunch -
+    // parked until 08:00 local, while the config comment promised "replies
+    // already skip it". Fast for some shops, silent for hours for others.
+    const g = readCode("src/lib/wa-guard.ts");
+    expect(g).toMatch(/if \(opts\.auto && isNewContact && shopOpenNow !== true\) \{/);
+    // And no other clock/open-now park may reappear keyed on `opts.auto` alone.
+    expect(g).not.toMatch(/if \(opts\.auto && shopOpenNow !== true\)/);
+  });
+
+  it("the exemption inherits W-14's fail direction", () => {
+    // `isNewContact` is `contactState === "new"`, and an unreadable state
+    // reads as unknown-leaning-warm - so a store outage lands replies in the
+    // exempt lane instead of parking them until morning.
+    const g = readCode("src/lib/wa-guard.ts");
+    expect(g).toMatch(/const isNewContact = contactState === "new";/);
+  });
+});

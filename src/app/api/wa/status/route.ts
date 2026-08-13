@@ -130,6 +130,24 @@ export async function GET(req: Request) {
     }
   }
 
+  // THE ROTATION SIGNAL (owner report 3, first-code-rejected). Baileys rotates
+  // the pairing code server-side and the QRCODE_UPDATED webhook stamps
+  // `pairing_code_issued_at` - but this poll never carried the stamp, so the
+  // client kept a dead code on screen until its LOCAL 55s countdown lapsed.
+  // With the stamp in the poll, WaConnect re-issues the moment the server
+  // rotates, and "Incorrect code" on the first attempt stops happening.
+  let pairingIssuedAt: string | null = null;
+  if (pairing) {
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const row = await sbSelect<{ pairing_code_issued_at: string | null }>(
+      "wa_sessions",
+      `select=pairing_code_issued_at&email=eq.${encodeURIComponent(
+        session.email.toLowerCase()
+      )}&limit=1`
+    ).catch(() => [] as { pairing_code_issued_at: string | null }[]);
+    pairingIssuedAt = row[0]?.pairing_code_issued_at ?? null;
+  }
+
   return NextResponse.json({
     available: true,
     state: state ?? "disconnected",
@@ -137,6 +155,7 @@ export async function GET(req: Request) {
     connected: state === "open" || paired,
     live: state === "open",
     reconnecting: paired && state !== "open",
+    ...(pairing ? { pairingIssuedAt } : {}),
     // Server-side phase for callers with no credential context (e.g. the
     // Profile pill). The connect screen re-derives with the same pure function,
     // adding what only it knows: whether a code is on screen and its remaining

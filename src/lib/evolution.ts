@@ -1451,6 +1451,11 @@ export async function connectInstance(
   // number passed at create).
   let pairingCode = pickPairing(created.data);
   let qr = pickQr(created.data);
+  // WHEN the code actually arrived - the TTL anchor. Stamping at saveSession
+  // (after the poll backoff and a connectionState round trip) over-stated the
+  // code's life by several seconds, so the client's countdown promised time
+  // the code no longer had - the tail of the first-attempt "Incorrect code".
+  let mintedAt = pairingCode ? Date.now() : null;
 
   // Otherwise poll the connect endpoint a few times. Baileys sometimes needs a
   // moment to mint the code; we DON'T recreate the instance (that would
@@ -1467,19 +1472,25 @@ export async function connectInstance(
       host,
       `/instance/connect/${instance}${digits ? `?number=${digits}` : ""}`
     );
-    pairingCode = pairingCode ?? pickPairing(conn.data);
+    const got = pickPairing(conn.data);
+    if (got && !pairingCode) {
+      pairingCode = got;
+      mintedAt = Date.now();
+    }
     qr = qr ?? pickQr(conn.data);
   }
 
   const state = await connectionState(email);
   // Stamp WHEN this fresh code was minted so retries can tell live from dead
-  // (the whole B1 "Invalid code" class). No code -> clear the stamp.
+  // (the whole B1 "Invalid code" class). The stamp is the MINT moment, not
+  // "now" - the connectionState round trip above already spent part of the
+  // code's life. No code -> clear the stamp.
   await saveSession(
     email,
     instance,
     state ?? "connecting",
     host.url,
-    pairingCode ? new Date() : null
+    pairingCode && mintedAt ? new Date(mintedAt) : null
   );
 
   return {
@@ -1487,7 +1498,9 @@ export async function connectInstance(
     state: state ?? "connecting",
     qr,
     pairingCode,
-    ...(pairingCode ? { pairingExpiresInMs: PAIRING_TTL_MS } : {}),
+    ...(pairingCode && mintedAt
+      ? { pairingExpiresInMs: Math.max(1_000, PAIRING_TTL_MS - (Date.now() - mintedAt)) }
+      : {}),
     error:
       !pairingCode && !qr
         ? "The WhatsApp server didn't hand out a code - wait ~30 seconds and tap Try again."

@@ -2804,6 +2804,12 @@ export default function Home() {
         hasRequest: Boolean(rawText.trim()) || Boolean(builderFields?.vehicleClass),
         hasStay: Boolean(origin),
         idpDeclared: idpConsent,
+        // FOUND IS NOT CONTACTED (owner report 3, item 9). The panel's own
+        // arithmetic, so Will and the status panel cannot disagree: without
+        // this, a board full of discovered-but-unmessaged shops read as
+        // NEGOTIATING and Will offered "See it live" with nothing live.
+        contactedCount:
+          stageCounts.messaged + stageCounts.replied + stageCounts.queued + stageCounts.offers,
       }),
     [
       waConnected,
@@ -2815,6 +2821,10 @@ export default function Home() {
       builderFields,
       origin,
       idpConsent,
+      stageCounts.messaged,
+      stageCounts.replied,
+      stageCounts.queued,
+      stageCounts.offers,
     ]
   );
   const assistant = useWillAssistant();
@@ -4113,7 +4123,7 @@ export default function Home() {
                 This screen hardcoded the LITERAL STRING "Up to 10 shops per
                 hunt" - dead beta copy that no longer matched any code path.
                 The next screen computes the truth from `massBargainTargets`,
-                which caps at `massBargainCap(plan)` (free 10 / pro 15 / ultra
+                which caps at `massBargainCap(plan)` (free 10 / pro 20 / ultra
                 24). So an Ultra traveller was told 10 and then offered all 18
                 shops the search had found, and reasonably read that as a bug
                 in the cap rather than a bug in the sentence.
@@ -4296,16 +4306,38 @@ export default function Home() {
             // ever open the chat instead of guiding me around the app".
             guidance = {
               anchor: "[data-tour='status']",
-              text: t("I'm reaching out to the shops from your WhatsApp now. You can close the app - I keep working."),
+              // HONEST TENSE. The old copy claimed "I'm reaching out to the
+              // shops from your WhatsApp now" during a phase that sends
+              // nothing - discovery only FINDS shops; messages go out when the
+              // traveller picks them.
+              text: t("Scanning the area for real rental shops near your stay - a few seconds."),
               actions: [
                 {
                   label: t("Watch live"),
                   primary: true,
                   onAction: () => goToSection("[data-tour='views']", "activity"),
                 },
+              ],
+            };
+          } else if (step === "SHOPS_FOUND") {
+            // THE STATE THE OWNER CAUGHT (report 3, item 9): shops found, zero
+            // messages sent - and Will offered "See it live" with nothing live,
+            // while the status panel on the same screen truthfully said 0
+            // contacted. The honest advice is the actions that MAKE something
+            // live: pick a shop, or let the mass bargain contact the best ones.
+            guidance = {
+              anchor: "[data-tour='vendors']",
+              text: t("Found your shops. Tap 'Ask for price' on the ones you like - or I can message the best ones for you at once."),
+              actions: [
                 {
-                  label: t("See the queue"),
-                  onAction: () => goToSection("[data-tour='queue']"),
+                  label: t("Message the best shops"),
+                  primary: true,
+                  dismissOnDone: true,
+                  onAction: () => void runAction("mass-bargain"),
+                },
+                {
+                  label: t("Let me pick"),
+                  onAction: () => goToSection("[data-tour='vendors']", "list"),
                 },
               ],
             };
@@ -4412,12 +4444,13 @@ export default function Home() {
           aria-label={t("Ask Will")}
           className="layer-chrome fixed right-3 flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
           style={{
+            // SLOTS from the shared bottom-right stack (globals.css, beside
+            // the z ladder): slot 2 clears the status FAB in slot 1; slot 0
+            // hugs the tab bar when no FAB can mount.
             bottom:
               vendors.length > 0 && view === "list"
-                ? // Clear of the status FAB: its top edge is 5.25rem + its own
-                  // height, plus a thumb-sized gap.
-                  "calc(env(safe-area-inset-bottom, 0px) + 8.5rem)"
-                : "calc(72px + env(safe-area-inset-bottom, 0px))",
+                ? "var(--stack-bottom-2)"
+                : "var(--stack-bottom-0)",
           }}
         >
           <WillAvatar size={22} wave={false} />
@@ -4493,7 +4526,15 @@ export default function Home() {
         }}
         onFeedback={() => setFeedbackOpen(true)}
         onUpgrade={() => setUpgradeOpen(true)}
-        showUpgrade={!upgradeOpen && !paidPlan && !onboarding}
+        // THE THIRD OCCUPANT OF THE BOTTOM BAND. The centered upgrade pill
+        // shares its vertical band with the status FAB, and at 320px their
+        // widths met in the middle - a free-plan hunt could not press "Live
+        // status". One owner (this page) decides occupancy: while the FAB can
+        // mount, the pill yields; it returns the moment the hunt leaves the
+        // list view. Pricing stays one tap away in the tab bar throughout.
+        showUpgrade={
+          !upgradeOpen && !paidPlan && !onboarding && !(vendors.length > 0 && view === "list")
+        }
       />
     </main>
   );

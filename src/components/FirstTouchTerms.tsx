@@ -21,6 +21,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { INDEMNITY_CLAUSES, TERMS_VERSION, withOperatorText } from "@/lib/legal";
+import { lockBodyScroll } from "@/lib/scroll-lock";
 import { useI18n } from "@/lib/i18n";
 import { TermsModal } from "./TermsModal";
 
@@ -58,14 +59,14 @@ export function FirstTouchTerms() {
   }, []);
 
   // Scroll lock while the gate is up. Modal does this for itself; this one is
-  // not a Modal precisely because Modal can be dismissed.
+  // not a Modal precisely because Modal can be dismissed. THE SHARED LOCK, not
+  // a hand-rolled overflow toggle: scroll-lock.ts exists because flipping
+  // `body.overflow` on a scrolled page is the documented WebKit trigger for
+  // fixed chrome compositing mid-screen - and this component mounts on every
+  // page, so its private toggle put that trigger everywhere.
   useEffect(() => {
     if (!show) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
+    return lockBodyScroll();
   }, [show]);
 
   if (!show) return null;

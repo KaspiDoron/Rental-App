@@ -235,6 +235,17 @@ input, textarea, select, button {
   --z-overlay: 1200; /* modals, sheets, onboarding: they own the screen */
   --z-veil: 1400; /* route-change veil - covers a dialog mid-navigation */
   --z-alert: 2000; /* offline / test-mode banners - always legible */
+  /* THE BOTTOM-RIGHT STACK, AS NAMED SLOTS - the vertical twin of the z
+     ladder above, and for the same reason: "Ask Will", "Live status" and the
+     upgrade pill each hard-coded their own bottom offset with no knowledge of
+     the others, and at 320px two of them overlapped and ate each other's
+     taps. A slot is a place in the ORDER; an element that hard-codes its own
+     rem value is guessing a bigger number than whatever it lost to last time.
+     Slot 0 hugs the tab bar; each higher slot clears the one below it plus a
+     thumb-sized gap. */
+  --stack-bottom-0: calc(env(safe-area-inset-bottom, 0px) + 4.5rem);
+  --stack-bottom-1: calc(env(safe-area-inset-bottom, 0px) + 5.25rem);
+  --stack-bottom-2: calc(env(safe-area-inset-bottom, 0px) + 8.5rem);
   /* THE BAR'S HEIGHT IS A CONTRACT, NOT AN OBSERVATION.
    *
    * This used to be a pre-hydration guess that a mounted <TopbarMetrics>

@@ -101,3 +101,56 @@ export function massBargainTargets(
   const eligible = vendors.filter(isMassEligible).sort(rankForMassBargain);
   return { targets: eligible.slice(0, cap), eligible, cap };
 }
+
+// ---------------------------------------------------------------------------
+// THE CONFIRM SHEET'S VIEW CONTROLS (owner report 3).
+//
+// The sheet showed the ranked list with per-row toggles and nothing else, so
+// finding "the open, well-reviewed ones" in eighteen rows meant reading all
+// eighteen. These reorder and narrow the traveller's VIEW of the already
+// ranked-and-capped set - eligibility and the plan cap were decided above,
+// and nothing here can widen them.
+// ---------------------------------------------------------------------------
+
+export type MassSort = "best" | "nearest" | "open";
+
+/**
+ * Reorder a COPY of the ranked targets. "best" is the ranking above (a second
+ * opinion here would drift); "nearest" walks distance with unknowns last (a
+ * shop we cannot place is not "near"); "open" floats Google-open shops,
+ * keeping the rank inside each half, with unknown treated as not-open.
+ */
+export function sortTargets(targets: readonly Vendor[], sort: MassSort): Vendor[] {
+  const copy = [...targets];
+  if (sort === "nearest") {
+    return copy.sort(
+      (a, b) =>
+        (typeof a.distanceKm === "number" ? a.distanceKm : Number.POSITIVE_INFINITY) -
+        (typeof b.distanceKm === "number" ? b.distanceKm : Number.POSITIVE_INFINITY)
+    );
+  }
+  if (sort === "open") {
+    return [...copy.filter((v) => v.openNow === true), ...copy.filter((v) => v.openNow !== true)];
+  }
+  return copy;
+}
+
+/** The one narrowing filter worth a chip: well-reviewed shops only. A shop
+ *  with no reviews has no rating to clear the bar with. */
+export function filterTargets(
+  targets: readonly Vendor[],
+  opts: { minRating?: number }
+): Vendor[] {
+  const min = opts.minRating;
+  if (!min) return [...targets];
+  return targets.filter((v) => v.rating >= min);
+}
+
+/** The list the sheet renders, and therefore the ONLY list that can be
+ *  messaged - a shop hidden by a filter must never ride along invisibly. */
+export function visibleTargets(
+  targets: readonly Vendor[],
+  view: { sort: MassSort; minRating?: number }
+): Vendor[] {
+  return sortTargets(filterTargets(targets, { minRating: view.minRating }), view.sort);
+}
