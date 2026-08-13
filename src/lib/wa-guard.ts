@@ -1546,6 +1546,24 @@ export async function guardOutbound(rawOpts: {
   };
 
   const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
+    // THE DURABLE HOLD TRAIL (owner report 3, items 4+8): the reason used to
+    // live only on the mutable outbox row - overwritten per re-park, deleted
+    // on send. Append-only + throttled, so "why did this sit for six hours"
+    // has a history the message-path view can read back. Never the send path:
+    // fire-and-forget, and the helper swallows every failure.
+    {
+      const { recordHoldEvent } = await import("./wa/hold-events");
+      void recordHoldEvent({
+        senderKey: opts.senderKey,
+        toNumber: opts.toDigits,
+        reason,
+        until: notBefore,
+        outboxRowId: opts.outboxRowId,
+        decisionId:
+          typeof opts.meta?.decisionId === "string" ? (opts.meta.decisionId as string) : undefined,
+        msgKind: typeof opts.meta?.kind === "string" ? (opts.meta.kind as string) : undefined,
+      });
+    }
     if (opts.queueIfBlocked !== false) {
       // ALREADY A ROW: this send came off the queue and is only being re-timed.
       // Patching it keeps one row per message, so the shop stays continuously
@@ -2874,6 +2892,25 @@ export async function drainOutbox(
         await import("./wa/send-classify");
       const recipientFail = isRecipientSendFailure(r.error);
       const transient = !recipientFail; // reconnecting / timeout / 5xx / empty / unknown host error
+      // EVERY failed attempt leaves a durable trace (owner report 3, item 8).
+      // wa-send-dropped fires only at give-up and wa-send-unconfirmed only on
+      // a 2xx-without-receipt - the ATTEMPTS in between were invisible, which
+      // is exactly the "where is my message stuck" hole. Throttled per
+      // (sender, shop, error) by the same helper the holds use.
+      {
+        const { recordHoldEvent } = await import("./wa/hold-events");
+        void recordHoldEvent({
+          senderKey: row.sender_key,
+          toNumber: row.to_number,
+          reason: `send-attempt-failed: ${String(r.error ?? "unknown").slice(0, 160)}`,
+          outboxRowId: row.id,
+          decisionId:
+            typeof (row.meta as { decisionId?: string } | null)?.decisionId === "string"
+              ? ((row.meta as { decisionId?: string }).decisionId as string)
+              : undefined,
+          msgKind: r.rateLimited ? "rate-limited" : transient ? "transient" : "recipient",
+        });
+      }
       const dropEvent = (detail: string) =>
         sbInsert("agent_events", [
           {

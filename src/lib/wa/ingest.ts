@@ -993,6 +993,27 @@ export async function processEvolutionWebhook(
         } catch {
           /* transcription is best-effort - engine sends a polite fallback */
         }
+        // STAMP THE TRANSCRIPT ON THE STORED ROW (owner report 3, item 8).
+        // The transcript used to exist for exactly one turn - fed to the
+        // engine, then gone - so "Full conversation", Ops and the message-path
+        // view could only ever show "[voice note]". Read-merge-patch keeps
+        // the existing raw (receiver scoping, media key, lid) intact.
+        if (transcript?.text && msgId) {
+          try {
+            const { sbUpdate } = await import("@/lib/runtime-config");
+            const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+              "whatsapp_messages",
+              `select=id,raw&wa_message_id=eq.${encodeURIComponent(msgId)}&direction=eq.inbound&order=id.desc&limit=1`
+            );
+            if (rows[0]) {
+              await sbUpdate("whatsapp_messages", `id=eq.${rows[0].id}`, {
+                raw: { ...(rows[0].raw ?? {}), transcript },
+              });
+            }
+          } catch {
+            /* the durable stamp is a bonus - never the turn */
+          }
+        }
       }
 
       await processVendorReply({

@@ -1,6 +1,7 @@
 import { sbInsert, sbDelete, sbSelect } from "../runtime-config";
 import { tableReady } from "../schema-probe";
 import { outboxKey } from "./phone-key";
+import { REPLY_KIND_FILTER } from "../wa-guard";
 
 /**
  * Park an auto-composed WhatsApp message in wa_outbox with STRICT
@@ -32,7 +33,14 @@ import { outboxKey } from "./phone-key";
  * `wa-park-failed` event so a lost park is never silent (a future inbound/tick
  * recomposes - the thread is not stuck).
  */
-const PENDING_AUTO = "meta->>kind=not.in.(rfq,custom,human-manual)";
+// THE SAME NULL TRAP W-14 FIXED ON THE REPLY LANE, HERE ON THE DEDUP SCOPE.
+// The old local `meta->>kind=not.in.(...)` predicate evaluates NULL for a
+// row that never stamped a kind, and PostgREST keeps only TRUE - so a
+// kind-less pending auto row was invisible to this delete and the
+// one-row-per-shop invariant silently admitted zombies. REPLY_KIND_FILTER
+// (imported above) spells the NULL case out - "no kind means auto" - and
+// sharing it means the park's idea of an auto row can never drift from the
+// drain's again.
 
 // `robustRequeue` used to live here: the drain claimed a row by DELETING it, so
 // a failed re-insert after a failed send meant permanent, silent loss, and the
@@ -101,8 +109,8 @@ export async function parkOutboxOnce(row: {
   // risk - and a duplicate is enormously better than silence.
   const hasToKey = (await tableReady("wa_outbox", "to_key")) === "ready";
   const scope = hasToKey
-    ? `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(key)}&${PENDING_AUTO}`
-    : `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(row.toNumber)}&${PENDING_AUTO}`;
+    ? `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_key=eq.${encodeURIComponent(key)}${REPLY_KIND_FILTER}`
+    : `sender_key=eq.${encodeURIComponent(row.senderKey)}&to_number=eq.${encodeURIComponent(row.toNumber)}${REPLY_KIND_FILTER}`;
   await sbDelete("wa_outbox", scope).catch(() => {});
   const record = {
     sender_key: row.senderKey,
