@@ -3272,6 +3272,16 @@ export default function Home() {
             </div>
           </div>
         )}
+        {/* A failed DISCOVERY CALL (500/network) sets sourceError without a
+            source verdict - it must still be said out loud. Without this the
+            error string lived in state and rendered nowhere: the funnel
+            silently snapped back to idle, which is the "healthy-looking
+            failure" defect class this repo keeps fighting. */}
+        {sourceError && source !== "google-error" && (
+          <div className="mt-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred animate-slide-up">
+            {sourceError}
+          </div>
+        )}
         {source === "google" && (
           <div className="mt-3 flex items-center gap-2 rounded-2xl bg-savings-soft p-3 text-[12px] font-bold text-savings animate-slide-up">
             <GoogleWordmark className="shrink-0 text-[13px]" />
@@ -4509,6 +4519,11 @@ export default function Home() {
         <button
           onClick={() => setWillOpen(true)}
           aria-label={t("Ask Will")}
+          // The other half of the onboarding "Meet Will" anchor: when the
+          // guide banner is dismissed for this stage, the summon chip is what
+          // "Will on the edge of your screen" IS. The two mounts are mutually
+          // exclusive, so the attribute is never duplicated.
+          data-tour="will"
           className="layer-chrome fixed right-3 flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
           style={{
             // SLOTS from the shared bottom-right stack (globals.css, beside
