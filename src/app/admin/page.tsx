@@ -470,14 +470,45 @@ export default function AdminPage() {
     | null
   >(null);
   const [aiTestBusy, setAiTestBusy] = useState(false);
+  // When the sweep itself fails, the WHICH LAYER failed is the diagnosis:
+  // an HTTP status means the server (or something in front of it) answered,
+  // a browser error means the request never completed. Collapsing them all
+  // into one blanket line made the button undebuggable in production.
+  const [aiTestError, setAiTestError] = useState<string | null>(null);
   async function runAiTest() {
     setAiTestBusy(true);
+    setAiTestError(null);
+    setAiTest(null);
     try {
-      const r = await fetch("/api/admin/ai-test", { method: "POST" });
-      const d = await r.json();
-      setAiTest(Array.isArray(d?.results) ? d.results : []);
-    } catch {
-      setAiTest([]);
+      const r = await fetch("/api/admin/ai-test", {
+        method: "POST",
+        // The server bounds the sweep at ~12s; 60s here means a hang is
+        // reported as a timeout instead of spinning forever.
+        signal:
+          typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+            ? AbortSignal.timeout(60_000)
+            : undefined,
+      });
+      const text = await r.text();
+      let d: { results?: unknown; error?: string } | null = null;
+      try {
+        d = JSON.parse(text);
+      } catch {
+        /* non-JSON body - reported below with the status */
+      }
+      if (r.ok && Array.isArray(d?.results)) {
+        setAiTest(d.results as typeof aiTest);
+      } else {
+        setAiTestError(
+          `The server answered HTTP ${r.status} - ${(d?.error || text || "empty body").slice(0, 200)}`
+        );
+      }
+    } catch (e) {
+      setAiTestError(
+        e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")
+          ? "Timed out after 60s - the server never answered. That is a hosting problem, not a provider problem."
+          : `The request failed in the browser: ${e instanceof Error ? e.message : String(e)}`
+      );
     } finally {
       setAiTestBusy(false);
     }
@@ -1906,13 +1937,14 @@ export default function AdminPage() {
             >
               {aiTestBusy ? "Testing every provider…" : "🧪 Test AI providers"}
             </button>
+            {aiTestError && (
+              <p className="mb-3 break-words text-[11.5px] font-bold text-brandred">
+                The test call itself failed - that is unknown, not healthy.
+                <span className="mt-0.5 block font-mono text-[10px]">{aiTestError}</span>
+              </p>
+            )}
             {aiTest !== null && (
               <div className="mb-3 space-y-1.5">
-                {aiTest.length === 0 && (
-                  <p className="text-[11.5px] font-bold text-brandred">
-                    The test call itself failed - that is unknown, not healthy.
-                  </p>
-                )}
                 {aiTest.map((t) => {
                   const drifted = t.ok && t.model && t.configuredModel && t.model !== t.configuredModel;
                   return (
