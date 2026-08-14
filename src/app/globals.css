@@ -378,38 +378,32 @@ input, textarea, select, button {
    the report. Identical transform, identical duration, identical easing, and
    the hook only marks the sub-nav collapsed once it is actually pinned, so it
    can never jump while it is still scrolling in flow. */
-.topbar,
-.substick {
+.topbar {
   transition: transform 260ms var(--fluid, cubic-bezier(0.32, 0.72, 0, 1));
 }
-.topbar[data-collapsed="true"],
-.substick[data-collapsed="true"] {
-  /* Up by the bar's own height, so no sliver is left behind and the sub-nav
-     lands flush against the top edge. */
+.topbar[data-collapsed="true"] {
+  /* Up by the bar's own height, so no sliver is left behind. Only the brand
+     row collapses now; the views bar below scrolls off in flow. */
   transform: translate3d(0, calc(-1 * var(--topbar-h)), 0);
 }
 @media (prefers-reduced-motion: reduce) {
-  .topbar,
-  .substick { transition: none; }
-  .topbar[data-collapsed="true"],
-  .substick[data-collapsed="true"] { transform: none; }
+  .topbar { transition: none; }
+  .topbar[data-collapsed="true"] { transform: none; }
 }
 
-/* Anything that sticks BELOW the top bar. Opaque for the same reason; always
-   exactly one layer down; and parked at the bar's DECLARED height, so there is
-   never a strip of scrolling page visible between the two and never a value
-   that changes underneath a pinned element. All of it is a property of the
-   class, not of each call site. */
+/* THE VIEWS BAR NO LONGER STICKS. List/Map/Activity + Feed/Swipe used to pin
+   below the top bar and eat ~89px of every screen while scrolling nothing away
+   - the owner's "it blocks the whole screen, we need that space". It is now a
+   normal in-flow surface that scrolls off with the page. What stays: opaque
+   (var(--card)) and backdrop-filter:none, so it never smuggles a per-frame blur
+   over the scrolling list underneath; and a scroll-margin so the three
+   jump-to-views links land BELOW the sticky top bar instead of under it (a
+   plain scrollIntoView on a formerly-sticky target was a near no-op). */
 .substick {
-  position: sticky;
-  top: var(--topbar-h);
-  z-index: calc(var(--topbar-z) - 1);
   background: var(--card);
-  /* A sticky element is repainted for the whole length of the list; a
-     backdrop-filter arriving from a utility class would be re-sampled every
-     frame of every scroll. Chrome material, not content material. */
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  scroll-margin-top: var(--topbar-h);
 }
 
 /* Bottom global navigation - a floating glass capsule.

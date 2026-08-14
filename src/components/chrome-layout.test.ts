@@ -126,13 +126,14 @@ describe("the top bar is the top", () => {
     expect(i, `${sel} block not found`).toBeGreaterThan(-1);
     return src.slice(i, src.indexOf("}", i) + 1);
   };
-  /** The `.substick` rule that positions it - not the shared transition rule
-   *  it now co-signs with `.topbar`. */
-  const stickyBlock = () => {
+  /** The `.substick` rule - the views bar's surface styling. It is deliberately
+   *  NOT sticky any more (the owner reported it blocked the screen), so this
+   *  grabs the block to assert the ABSENCE of positioning. */
+  const substickBlock = () => {
     const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
-    const m = src.match(/\.substick\s*\{[^}]*position:\s*sticky[^}]*\}/);
-    expect(m, ".substick positioning block not found").toBeTruthy();
-    return m![0];
+    const i = src.indexOf(".substick {");
+    expect(i, ".substick block not found").toBeGreaterThan(-1);
+    return src.slice(i, src.indexOf("}", i) + 1);
   };
 
   it("is opaque - the page does not read through it", () => {
@@ -158,31 +159,35 @@ describe("the top bar is the top", () => {
     expect(block(".topbar")).toMatch(/z-index:\s*var\(--topbar-z\)/);
   });
 
-  it("anything that sticks below is strictly one layer down, by construction", () => {
-    const b = stickyBlock();
-    expect(b).toMatch(/z-index:\s*calc\(var\(--topbar-z\) - 1\)/);
-    // Opaque too: a translucent second sticky row was the other half of it.
+  it("the views bar is NOT sticky - it scrolls off with the page", () => {
+    // The owner's report: the List/Map/Activity + Feed/Swipe bar pinned below
+    // the top bar and ate ~89px of every screen. It is in-flow now. Pin the
+    // ABSENCE of every positioning declaration so a future 'make it sticky
+    // again' cannot pass silently.
+    const b = substickBlock();
+    expect(b).not.toMatch(/position:\s*sticky/);
+    // A bare `top:` property (not `scroll-margin-top`, which is kept): the char
+    // before a real positioning `top:` is whitespace or `{`, never a hyphen.
+    expect(b).not.toMatch(/[^-]top:/);
+    expect(b).not.toMatch(/z-index/);
+    // Still opaque with no per-frame blur (it sits over the scrolling list),
+    // and it carries a scroll-margin so the jump-to-views links land BELOW the
+    // sticky top bar rather than under it.
     expect(b).toMatch(/background:\s*var\(--card\)/);
-    // ...and a utility class must not smuggle a per-frame blur back in. A
-    // STICKY element with a backdrop-filter re-samples its backdrop on every
-    // frame of every scroll - the exact cost the top bar was made opaque to
-    // remove, and the sub-nav sits over the same scrolling list.
     expect(b).toMatch(/backdrop-filter:\s*none/);
+    expect(b).toMatch(/scroll-margin-top:\s*var\(--topbar-h\)/);
+    // ...and it is out of the collapse transform entirely - a non-sticky
+    // element must never receive the top bar's collapse translate.
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(src).not.toMatch(/\.substick\[data-collapsed="true"\]/);
   });
 
-  it("...and lands on the bar's DECLARED height, which nothing measures", () => {
-    // `top-16` was a 64px guess. Too small hides the row under the bar; too
-    // large leaves a strip of the scrolling page showing between them.
-    expect(stickyBlock()).toMatch(/top:\s*var\(--topbar-h\)/);
+  it("the top bar height is still a CSS contract, measured by nothing", () => {
+    // Unchanged by the un-stick: the TOP bar stays sticky at its declared
+    // height. It used to be measured by a mounted <TopbarMetrics> with a
+    // ResizeObserver, written to documentElement as a custom property - a loop
+    // that is gone by construction.
     expect(read("src/app/page.tsx")).not.toMatch(/substick top-\d/);
-
-    // THE HEIGHT IS A CONTRACT NOW, NOT AN OBSERVATION. It used to be measured
-    // by a mounted <TopbarMetrics> with a ResizeObserver, written to
-    // documentElement as a custom property. Custom properties INHERIT, so every
-    // write invalidated style for the whole document; worse, `.substick` parks
-    // at that value, so a write moved the pinned sub-nav mid-scroll - and on a
-    // phone `resize` fires continuously while the URL bar collapses DURING a
-    // scroll. That loop is the reported jump, and it is gone by construction.
     const src = css();
     expect(src).toMatch(/--topbar-row-h:\s*[\d.]+rem/);
     expect(src).toMatch(/--topbar-h:\s*calc\(var\(--safe-top\) \+ var\(--topbar-row-h\)\)/);
