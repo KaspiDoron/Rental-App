@@ -278,7 +278,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
       <div className="surface-strong w-full max-w-[480px] rounded-blob p-4">
         <div className="mb-2 flex items-center justify-between">
           <div className="text-[15px] font-extrabold text-strong">🛵 Scooter Dash</div>
-          <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close game">
+          <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label={t("Close game")}>
             ✕
           </button>
         </div>
@@ -324,7 +324,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
                     value={publishName}
                     onChange={(e) => setPublishName(e.target.value)}
                     maxLength={24}
-                    placeholder="Your name (public)"
+                    placeholder={t("Your name (public)")}
                     className="h-9 min-w-0 flex-1 rounded-xl border-2 border-line bg-card px-2.5 text-[13px] text-strong placeholder:text-faint focus:border-brandblue focus:outline-none"
                   />
                   <button

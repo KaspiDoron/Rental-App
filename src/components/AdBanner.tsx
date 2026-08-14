@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 declare global {
   interface Window {
@@ -22,6 +23,7 @@ export function AdBanner({
    *  from the Key Vault so it can change without a redeploy. */
   slot?: string;
 }) {
+  const { t } = useI18n();
   const [client, setClient] = useState<string | null>(null);
   const [unit, setUnit] = useState<string | null>(null);
   const pushed = useRef(false);
@@ -82,7 +84,7 @@ export function AdBanner({
   return (
     <div className="mt-3 overflow-hidden rounded-blob border-2 border-line">
       <div className="bg-card2 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-faint">
-        Sponsored
+        {t("Sponsored")}
       </div>
       <div className="relative" style={{ minHeight: 100 }}>
         {client && adSlot && (

@@ -623,7 +623,7 @@ function VendorCardInner({
                     onClick={() => onOpenThread(vendor)}
                     className="mt-1.5 w-full rounded-xl border-2 border-line py-1.5 text-[11px] font-extrabold text-brandblue lift"
                   >
-                    💬 Full conversation
+                    💬 {t("Full conversation")}
                   </button>
                 )}
               </>

@@ -204,16 +204,23 @@ describe("the translate route honours the corrections", () => {
   it("a corrected string is NOT re-sent to the model", () => {
     // Re-translating it would spend tokens re-deriving an answer a human has
     // already overruled, and would cache the machine's version underneath.
-    expect(route).toMatch(/const missing = texts\.filter\(\(t\) => !cached\[t\] && !overrides\[t\]\)/);
+    // (Since the shared scope landed, the filter runs per scope - the
+    // override exclusion must hold for BOTH the catalogue and the FAQ rows.)
+    expect(route).toMatch(
+      /const missing = scope\.texts\.filter\(\(t\) => !cached\[t\] && !overrides\[t\]\)/
+    );
   });
 
   it("EVERY return path applies the overrides", () => {
     // The no-AI-provider path and the normal path built the response map
     // inline, and only one of them was updated the last two times this shape
-    // changed. One helper is the fix - now used THREE times, the third being
-    // the learned path that also carries the `rejected` reasons (3.2).
-    const uses = route.match(/pickTranslated\(texts, applyOverrides\(cached, overrides\)\)/g) ?? [];
-    expect(uses.length).toBe(3);
+    // changed. One helper is the fix - used on the no-AI early return AND on
+    // the per-scope merge that feeds the single final return, so a new scope
+    // cannot forget the corrections.
+    const uses = route.match(/pickTranslated\(scope\.texts, applyOverrides\(cached, overrides\)\)/g) ?? [];
+    expect(uses.length).toBe(2);
+    // The final response serves ONLY the merged, override-applied map.
+    expect(route).toMatch(/return NextResponse\.json\(\{\s*\n\s*map: mapOut,/);
   });
 
   it("corrections need no AI provider to serve", () => {
@@ -222,8 +229,9 @@ describe("the translate route honours the corrections", () => {
     expect(noAi.slice(0, 400)).toMatch(/applyOverrides\(cached, overrides\)/);
   });
 
-  it("the machine cache is still read and written by its own key only", () => {
-    expect(route).toMatch(/const cacheKey = `I18N_\$\{lang\}`/);
+  it("the machine cache is still read and written by its own keys only", () => {
+    expect(route).toMatch(/cacheKey: `I18N_\$\{lang\}`/);
+    expect(route).toMatch(/cacheKey: `I18N_SHARED_\$\{lang\}`/);
     expect(route).not.toMatch(/I18N_OVERRIDE/);
   });
 });

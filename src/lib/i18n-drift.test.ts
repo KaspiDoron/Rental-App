@@ -151,6 +151,13 @@ describe("no scanned user surface ships bare English JSX text", () => {
     "src/components/PhotoGallery.tsx",
     "src/components/MassBargainPreview.tsx",
     "src/components/HorizontalVendorRail.tsx",
+    // Owner report 4, item 2: "the whole app". The four highest-traffic
+    // surfaces that were never in the scan - which is exactly where the
+    // untranslated FAQ chips and "Full conversation" hid.
+    "src/components/PlaceAutocomplete.tsx",
+    "src/components/FaqSection.tsx",
+    "src/components/OfflineBanner.tsx",
+    "src/components/AdBanner.tsx",
   ];
   // Strings that are legitimately language-neutral: brand names, punctuation
   // around expressions, game branding rendered as a logo.
@@ -166,6 +173,21 @@ describe("no scanned user surface ships bare English JSX text", () => {
       if (text && !ALLOW.has(text)) bare.push(text);
     }
     expect(bare, `bare literals in ${p}: ${bare.join(" | ")}`).toEqual([]);
+  });
+
+  // The text-node regex above is blind to ATTRIBUTE copy - placeholder=,
+  // title=, aria-label= carried whole English sentences (the search box's
+  // own placeholder among them) through every language.
+  it.each(SCAN)("%s has no bare English string ATTRIBUTES", (p) => {
+    const src = read(p)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    const bare: string[] = [];
+    for (const m of src.matchAll(/(placeholder|title|aria-label)="([^"]*[A-Za-z]{3}[^"]*)"/g)) {
+      const text = m[2].trim();
+      if (text && !ALLOW.has(text)) bare.push(`${m[1]}="${text}"`);
+    }
+    expect(bare, `bare attribute literals in ${p}: ${bare.join(" | ")}`).toEqual([]);
   });
 });
 
