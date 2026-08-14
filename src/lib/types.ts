@@ -156,6 +156,18 @@ export interface Offer {
    * prompt, which explains WHY they asked before offering to share anything.
    */
   askedLocationQuote?: string;
+  /**
+   * WHERE THIS PRICE CAME FROM when it did not arrive as a plain confirmed
+   * quote. The status panel used to say "No price yet - your agent is asking
+   * for one" while the shop's photographed menu (raw.reading), its derived
+   * option menu, or the thread's own standing price already carried one - the
+   * app KNEW a price it refused to show. A sourced price renders with a
+   * provenance chip and stays unverified until the agent confirms it.
+   * Absent = the ordinary confirmed-reply path.
+   */
+  priceSource?: "menu" | "menu-photo" | "thread";
+  /** The vehicle/tier the sourced price belongs to, in the shop's own words. */
+  priceSourceVehicle?: string;
 }
 
 export interface Vendor {

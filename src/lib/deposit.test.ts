@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDeposit } from "./deposit";
+import { parseDeposit, depositSummary } from "./deposit";
 
 // The legacy fields are asserted with `toMatchObject` rather than `toEqual`,
 // because a deposit now also carries its full `options` structure. The flat
@@ -113,5 +113,44 @@ describe("a deposit is a SET OF ALTERNATIVES, each a BUNDLE", () => {
   it("a numbered list wins over an 'or' that appears inside one option", () => {
     const d = parseDeposit(INCIDENT, "THB")!;
     expect(d.options).toHaveLength(2);
+  });
+});
+
+describe("depositSummary - every alternative, never only the first (owner report 5)", () => {
+  const money = (amount: number, currency?: string) =>
+    `${currency === "THB" ? "฿" : currency ? currency + " " : ""}${amount.toLocaleString()}`;
+
+  it("THE FIELD CASE: 'passport or money4000' shows BOTH options", () => {
+    const s = depositSummary(
+      { deposit: "passport or money4000", depositType: "passport", depositAmount: 4000, currency: "THB" },
+      money
+    );
+    expect(s).toMatch(/passport/i);
+    expect(s).toMatch(/4,000/);
+    expect(s).toMatch(/ or /);
+  });
+
+  it("falls back to type + amount when the raw label is unreadable", () => {
+    const s = depositSummary(
+      { deposit: null, depositType: "passport", depositAmount: 3000, depositCurrency: "THB" },
+      money
+    );
+    expect(s).toBe("Passport or ฿3,000 cash");
+  });
+
+  it("a single-option deposit stays a single chip text", () => {
+    expect(depositSummary({ deposit: "passport only", depositType: "passport" }, money)).toMatch(
+      /passport/i
+    );
+    expect(depositSummary({ depositType: "none" }, money)).toBe("No deposit");
+  });
+
+  it("bundles stay bundles - '+' inside an option, 'or' only between options", () => {
+    const s = depositSummary(
+      { deposit: "Copy passport + 3000 THB, or original passport", depositType: "passport" },
+      money
+    )!;
+    expect(s).toContain(" + ");
+    expect(s).toContain(" or ");
   });
 });

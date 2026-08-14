@@ -8,6 +8,7 @@ import { Modal } from "../Modal";
 import { Icon } from "../icons";
 import type { Vendor } from "@/lib/types";
 import { moneyLocal } from "@/lib/currency";
+import { depositSummary } from "@/lib/deposit";
 import { isPresentableOffer } from "@/lib/offer-presentation";
 import { useI18n } from "@/lib/i18n";
 
@@ -61,17 +62,21 @@ export function CompareSheet({
       label: t("Deposit"),
       render: (v) => {
         const o = v.offer!;
-        return (
-          <span className="text-[11px] font-bold text-soft">
-            {o.depositType === "cash"
-              ? `${t("cash")}${o.depositAmount ? ` ${moneyLocal(o.depositAmount, o.depositCurrency ?? o.currency)}` : ""}`
-              : o.depositType === "passport"
-              ? t("passport")
-              : o.depositType === "none"
-              ? t("none")
-              : "?"}
-          </span>
+        // EVERY alternative, never only the enum's first pick. "passport or
+        // money4000" rendered here as the bare word "passport" while the cash
+        // amount sat two lines above in depositAmount - the same field failure
+        // as the status-panel chip, fixed with the same shared summary.
+        const text = depositSummary(
+          {
+            deposit: o.deposit,
+            depositType: o.depositType,
+            depositAmount: o.depositAmount,
+            depositCurrency: o.depositCurrency,
+            currency: o.currency,
+          },
+          moneyLocal
         );
+        return <span className="text-[11px] font-bold text-soft">{text ?? "?"}</span>;
       },
     },
     {

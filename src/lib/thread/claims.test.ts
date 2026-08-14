@@ -277,3 +277,15 @@ describe("handover parses without articles", () => {
     expect(handover("we can deliver it to your hotel")?.detail).toBe("delivery");
   });
 });
+
+describe("glued amounts still read as cash (owner report 5)", () => {
+  it("THE FIELD CASE: 'deposit passport or money4000' carries BOTH parts", () => {
+    // `\bmoney\b` and `\b\d` both fail on "money4000" (y->4 is not a word
+    // boundary), so the ledger filed a passport-ONLY deposit and armed the
+    // cash counter for a cash option the shop had already offered.
+    const c = deposit("We have deposit passport or money4000")!;
+    expect(c.details).toContain("passport");
+    expect(c.details).toContain("cash");
+    expect(c.combinator).toBe("or");
+  });
+});

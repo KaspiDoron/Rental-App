@@ -244,3 +244,55 @@ export function describePart(part: DepositPart, money?: (amount: number, currenc
         : "Cash";
   }
 }
+
+/**
+ * ONE-LINE SUMMARY FOR CHIPS - every alternative the shop stated, never only
+ * the first.
+ *
+ * The status panel used to render the legacy enum alone
+ * (`depositType === "passport" -> "Passport deposit"`), which by construction
+ * reports the FIRST option and discards the rest: "deposit passport or
+ * money4000" showed as Passport-only while the 4000 sat, already parsed, in
+ * `depositAmount`. The alternatives are re-derived from the shop's own words
+ * (parseDeposit) first; the structured type+amount pair is the fallback; the
+ * raw label is the last resort. Output is the shop's factual terms - amounts
+ * via the caller's money formatter so the chip shows real local currency.
+ */
+export function depositSummary(
+  input: {
+    deposit?: string | null;
+    depositType?: DepositType | null;
+    depositAmount?: number | null;
+    depositCurrency?: string | null;
+    /** The offer's currency - the amount's default when the shop named none. */
+    currency?: string | null;
+  },
+  money?: (amount: number, currency?: string) => string
+): string | null {
+  const cur = input.depositCurrency || input.currency || undefined;
+  const parsed = parseDeposit(input.deposit, cur);
+  if (parsed?.options.length) {
+    return parsed.options
+      .map((o) => o.parts.map((p) => describePart(p, money)).join(" + "))
+      .join(" or ");
+  }
+  const parts: string[] = [];
+  const doc =
+    input.depositType === "passport"
+      ? "Passport"
+      : input.depositType === "id"
+        ? "ID card"
+        : input.depositType === "license"
+          ? "Licence"
+          : null;
+  if (doc) parts.push(doc);
+  if (typeof input.depositAmount === "number" && input.depositAmount > 0) {
+    const amt = money
+      ? money(input.depositAmount, cur)
+      : `${input.depositAmount}${cur ? " " + cur : ""}`;
+    parts.push(`${amt} cash`);
+  }
+  if (parts.length) return parts.join(" or ");
+  if (input.depositType === "none") return "No deposit";
+  return input.deposit ?? null;
+}

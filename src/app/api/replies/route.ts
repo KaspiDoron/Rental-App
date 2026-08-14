@@ -189,15 +189,26 @@ export async function GET(req: Request) {
   // `raw->>receiver` predicate /api/thread uses (the privacy keystone), then
   // grouped per shop in memory.
   const optionsByVendor = new Map<string, import("@/lib/types").VehicleOption[]>();
+  /** vendorId -> prices read off the shop's PHOTOGRAPHED board (raw.reading).
+   *  These are already persisted and already used as rival leverage in OTHER
+   *  shops' negotiations - but no card-facing route ever read them, which is
+   *  how a priced menu photo coexisted with "No price yet" on its own card. */
+  const readingPricesByVendor = new Map<string, import("@/lib/media/reading").ReadPrice[]>();
   /** vendorId -> the shop's own words when they asked where the traveller is. */
   const askedLocationByVendor = new Map<string, string>();
   try {
     const { optionsFromThread } = await import("@/lib/offer-options");
     const numberByVendor = new Map<string, string>();
     for (const r of rows) if (r.vendor_id) numberByVendor.set(r.vendor_id, "");
-    const inbound = await sbSelect<{ from_number: string; body: string }>(
+    // `reading:raw->reading` is a JSON-path projection on a column every deploy
+    // has, so it degrades to null on rows without media - never a blanked feed.
+    const inbound = await sbSelect<{
+      from_number: string;
+      body: string;
+      reading?: { prices?: import("@/lib/media/reading").ReadPrice[] } | null;
+    }>(
       "whatsapp_messages",
-      `select=from_number,body&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+      `select=from_number,body,reading:raw->reading&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
         session.email
       )}${
         sinceMs > 0
@@ -210,13 +221,22 @@ export async function GET(req: Request) {
     // text silently matched nothing, so a shop's option menu and its
     // "where are you staying?" never reached the card.
     const bodiesByNumber = new Map<string, string[]>();
+    const readingsByNumber = new Map<string, import("@/lib/media/reading").ReadPrice[]>();
     for (const m of inbound) {
-      if (!m.from_number || !m.body) continue;
+      if (!m.from_number) continue;
       const key = identityKey(m.from_number);
       if (!key) continue;
-      const arr = bodiesByNumber.get(key) ?? [];
-      arr.push(m.body);
-      bodiesByNumber.set(key, arr);
+      if (m.body) {
+        const arr = bodiesByNumber.get(key) ?? [];
+        arr.push(m.body);
+        bodiesByNumber.set(key, arr);
+      }
+      if (Array.isArray(m.reading?.prices) && m.reading.prices.length) {
+        const arr = readingsByNumber.get(key) ?? [];
+        // Newest photo wins per vehicle label later; keep arrival order here.
+        arr.push(...m.reading.prices.filter((p) => Number(p?.pricePerDay) > 0));
+        readingsByNumber.set(key, arr);
+      }
     }
     // vendor_id -> the digits we actually messaged, via this user's outbound rows.
     const out = await sbSelect<{ to_number: string; raw: { vendorId?: string } | null }>(
@@ -231,6 +251,10 @@ export async function GET(req: Request) {
     }
     const { shopAskedLocation } = await import("@/lib/wa/detectors");
     for (const [vendorId, digits] of numberByVendor) {
+      if (digits) {
+        const reads = readingsByNumber.get(identityKey(digits));
+        if (reads?.length) readingPricesByVendor.set(vendorId, reads);
+      }
       const bodies = digits ? bodiesByNumber.get(identityKey(digits)) : undefined;
       if (!bodies?.length) continue;
       const opts = optionsFromThread(bodies, {
@@ -305,6 +329,53 @@ export async function GET(req: Request) {
       // gate re-judges that text alone as unconfirmed and the card freezes on
       // the old price. What the conversation established travels with every
       // later row.
+      // THE EFFECTIVE PRICE - every place the app already knows a price for
+      // this shop, consulted in trust order, when the row itself carries none.
+      // "No price yet" was a report on ONE boolean (vendor_replies.found), not
+      // on the shop: the thread's standing price, the photographed board and
+      // the derived option menu were all invisible to the card. Each source is
+      // tagged so the UI can say WHERE the number came from and keep it
+      // honestly unverified until the agent confirms it.
+      const effectivePrice = (() => {
+        if (r.found && r.price_per_day) return null; // the row has the real thing
+        // 1. The thread's own standing price (the engine's durable field).
+        if (typeof st?.pricePerDay === "number" && st.pricePerDay > 0) {
+          return {
+            pricePerDay: st.pricePerDay,
+            currency: r.currency ?? null,
+            source: "thread" as const,
+            vehicle: null as string | null,
+          };
+        }
+        // 2. The photographed board, preferring a row naming the declared cc.
+        const reads = readingPricesByVendor.get(r.vendor_id);
+        if (reads?.length) {
+          const cc = specCc > 0 ? String(specCc) : null;
+          const onSpec = cc
+            ? reads.filter((p) => `${p.vehicle ?? ""} ${p.line ?? ""}`.includes(cc))
+            : [];
+          const pool = onSpec.length ? onSpec : reads;
+          const pick = pool.reduce((a, b) => (a.pricePerDay <= b.pricePerDay ? a : b));
+          return {
+            pricePerDay: pick.pricePerDay,
+            currency: pick.currency ?? null,
+            source: "menu-photo" as const,
+            vehicle: pick.vehicle ?? null,
+          };
+        }
+        // 3. The option menu derived from the shop's own text.
+        const opts = optionsByVendor.get(r.vendor_id);
+        if (opts?.length) {
+          const pick = opts.reduce((a, b) => (a.pricePerDay <= b.pricePerDay ? a : b));
+          return {
+            pricePerDay: pick.pricePerDay,
+            currency: pick.currency ?? null,
+            source: "menu" as const,
+            vehicle: pick.label ?? null,
+          };
+        }
+        return null;
+      })();
       const rowGate = gateFor(r.reply_text, r.price_per_day);
       const conf = st?.vehicleConfirmation?.status;
       const vehicleStatus =
@@ -369,6 +440,10 @@ export async function GET(req: Request) {
       // The shop asked where we are. The card explains why and lets the
       // traveller choose WHICH place to share - it is never sent automatically.
       askedLocationQuote: askedLocationByVendor.get(r.vendor_id) ?? null,
+      // A price the app already knows from ANOTHER source (thread state, a
+      // photographed board, the derived menu) when this row has none - tagged
+      // with its provenance. Null when the row carries the real price.
+      effectivePrice,
       createdAt: r.created_at,
       };
     }),
