@@ -16,6 +16,19 @@ export function pickSweepEmails(emails: string[], minute: number, n: number): st
   return out;
 }
 
+/**
+ * How many senders to sweep per minute, PROPORTIONAL to the fleet (owner report
+ * 4, scale #9). A fixed 3/min meant a full rotation of the sender list took
+ * `ceil(fleet/3)` minutes - fine at a dozen users, but at 300 that is a
+ * 100-minute worst-case gap between app-closed recovery sweeps for any one
+ * shop. Scale it to ceil(fleet/20) so the whole fleet is covered within ~20
+ * minutes regardless of size, floored at 3 (never regress small deployments)
+ * and capped at 10 (one cron minute cannot fan out unbounded work). Pure.
+ */
+export function sweepCapForFleet(fleetSize: number): number {
+  return Math.min(10, Math.max(3, Math.ceil(fleetSize / 20)));
+}
+
 /** Rotate a WINDOW of `size` items across `items`, advancing a full window per
  * tick - so over ceil(len/size) ticks EVERY item is visited. The per-thread
  * sweep uses this: always taking the newest N meant the older shops of a big

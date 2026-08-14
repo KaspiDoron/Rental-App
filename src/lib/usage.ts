@@ -68,6 +68,32 @@ export async function recordApi(kind: string, count = 1, userEmail?: string) {
   ]).catch(() => {});
 }
 
+/** Today's total for one usage kind (UTC day). Used by the Whisper meter. */
+export async function usageTodayFor(kind: string): Promise<number> {
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const rows = await sbSelect<{ count: number }>(
+    "api_usage",
+    `select=count&kind=eq.${encodeURIComponent(kind)}&created_at=gte.${encodeURIComponent(
+      start.toISOString()
+    )}&limit=10000`
+  ).catch(() => []);
+  return rows.reduce((n, r) => n + (r.count ?? 1), 0);
+}
+
+// Groq Whisper's free tier is a GLOBAL ~2k requests/day, shared across the
+// whole fleet (owner report 4, scale #5) - not a per-user cap. Past 80% we
+// stop spending the last of it on new transcriptions and let Gemini audio
+// carry them, so the cheap-but-scarce rung is not exhausted by mid-afternoon.
+export const WHISPER_DAILY_CAP = 2_000;
+export const WHISPER_SOFT_FRACTION = 0.8;
+
+/** True when today's Groq-Whisper use is at/over 80% of the daily cap. */
+export async function whisperOverSoftCap(): Promise<boolean> {
+  const used = await usageTodayFor("groq_whisper");
+  return used >= WHISPER_DAILY_CAP * WHISPER_SOFT_FRACTION;
+}
+
 /** Usage this calendar month per kind (for the cost tracker). */
 export async function monthlyUsage(): Promise<Record<string, number>> {
   const start = new Date();

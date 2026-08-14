@@ -34,7 +34,7 @@ failover recreate, and the older-build flat-webhook retry):
 
 | Field | Value | Why |
 |---|---|---|
-| `browser` | `["Mac OS", "Chrome", "122.0.0"]` | Presents a **standard desktop WhatsApp-Web** fingerprint instead of the flagged library default. `CONNECT_FINGERPRINT` constant, spread into all create bodies. |
+| `browser` | `["Mac OS", "Chrome", "131.0.0"]` | Presents a **standard desktop WhatsApp-Web** fingerprint instead of the flagged library default. `CONNECT_FINGERPRINT` constant, spread into all create bodies. The version is refreshed to a current stable build (owner report 4); the platform + browser stay fleet-uniform on purpose — the unofficial-client axis is a full ban keyed on client *identity* that resolves 100%/0% for the whole fleet at once, so varying the name per account buys nothing. |
 | `mobile` | `false` | Pins the **WhatsApp Web protocol**, not the deprecated/flagged mobile API. |
 | `syncFullHistory` | `false` | Never backfills the user's past chats on connect (data minimization + removes the "pulls everything on link" bot signature). Already present; kept. |
 | `readMessages`, `readStatus` | `false` | Never auto-reads other chats / statuses on connect. |
@@ -51,6 +51,13 @@ failover recreate, and the older-build flat-webhook retry):
 > and restart it. Setting both the per-instance `browser` field and the server env
 > is belt-and-suspenders: the field is a harmless no-op on builds that read only the
 > env, and authoritative on forks that pass `browser` to `makeWASocket`.
+>
+> **These are now baked into `deploy/evolution/Dockerfile` as `ENV` (owner report
+> 4)** — the pairing-code path ignores the per-instance `browser` field entirely on
+> stock builds, so without the server env a code-link would fall back to Baileys'
+> generic default at the exact moment (pairing) that the ban fires. `render.yaml`
+> sets the same pair for the Render half; `wa/device-fingerprint.test.ts` pins that
+> the code constant, the render env and the docs all agree.
 
 The `hardening-invariants` test now pins the Mac-OS/Chrome fingerprint + `mobile:false`
 so a future edit cannot silently regress to the flagged default.
@@ -129,6 +136,61 @@ This is the honest core of "no-ban safeguards": not a promise that a ban can't
 happen, but a guarantee the system **stops the moment WhatsApp resists**, instead of
 digging the hole deeper. Dead numbers stay "soft" so a list-quality problem never
 trips a 12h halt.
+
+## New this change (owner report 4) — behavioural completeness + honest residuals
+
+The Aug-2026 anti-ban pass closed the behavioural gaps the audit named and, per
+this document's own rule, **writes down the risks it did not close** rather than
+pretending they are gone.
+
+**Shipped:**
+
+- **Read receipts (the largest behavioural tell we were missing).** A real linked
+  device reads a message before it answers; ours never did — `readMessages:false`
+  at the socket AND no `markMessageAsRead` anywhere, so every number presented the
+  same never-reads-then-replies pattern (a documented clustering signal).
+  `markMessageAsRead` now fires from ingest, **post-store, after a humanized 2-7s
+  "just glanced" delay** (`readReceiptDelayMs`), for the whole batch in parallel.
+  It is **counted, not swallowed** (`wa-read-failed` events) — the `@lid`
+  silent-failure class that bit presence cannot hide here.
+  - *Deliberate distinction:* the socket-level `readMessages:false` STAYS false. It
+    means "do not auto-read every chat and status on connect" (privacy + the
+    reads-everything bot signature). `markMessageAsRead` marks only the specific
+    rental-shop messages the agent actually handled — which is exactly what a human
+    does, and touches nothing personal.
+  - *Product note:* shops now see blue ticks. The pre-link consent copy says so.
+- **Presence failures are counted** (`wa-presence-failed`), not `catch {}`-swallowed
+  — the `@lid` `sendPresence` bug made lid recipients silently presence-less with no
+  trace. One throttled event per failing sequence surfaces it.
+- **Fingerprint refreshed + baked into the Evolution image** (see the pairing table
+  and the env note above).
+- **Datacenter-IP cluster banner** (`clusterWarning` / `transportSummary`): when
+  **≥5 unproxied numbers share one host**, the transport tile turns red and names
+  the host. Datacenter-IP clustering is the classic cluster-ban trigger, and it was
+  the one transport state worth a loud alarm (an unconfigured proxy at low numbers
+  is the expected, non-alarming baseline).
+- **Webhook re-arm throttle is now a shared config row** (`WH_REARM_<instance>`),
+  not a per-process map — N serverless instances no longer each re-arm once an hour
+  (N× the intended `/webhook/set` churn).
+
+**Accepted residual risks (honesty over theater):**
+
+- **Outbound media is 100% text.** We send no images, vCards or location replies, so
+  the outbound *media-type mix* is uniform where a human's is varied. Message length,
+  emoji and timing variance already exist; richer outbound media is a deliberate
+  non-goal for now, and this uniformity is an accepted residual signal, not a solved
+  one.
+- **Connect / disconnect churn is already hardened, not newly rewritten.** The
+  pairing flow re-issues codes on the **same instance** (no destructive
+  rebuild-per-refresh — see `connectInstance` and `/api/wa/connect`), and a genuine
+  unlink goes through the explicit logout/ban paths while a transient host outage
+  never regresses a durable "open". These invariants predate this pass; the audit
+  confirmed them rather than replacing them.
+- **Proxy support is built but OFF by default** (owner decision). The template
+  engine, sticky per-number sessions and `/proxy/set` verification all exist; flip
+  `EVOLUTION_PROXY_TEMPLATE` (and optionally `EVOLUTION_PROXY_REQUIRED`) on to
+  activate. Until then the cluster banner above is the standing reminder of the
+  datacenter-IP exposure.
 
 ## Operational runbook — what to do RIGHT NOW while restricted
 

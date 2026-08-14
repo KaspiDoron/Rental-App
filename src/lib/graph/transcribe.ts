@@ -79,7 +79,14 @@ export async function transcribeAudio(opts: {
   localLang?: boolean;
 }): Promise<Transcription | null> {
   const token = await getConfig("GROQ_TOKEN");
-  if (token) {
+  // WHISPER DAILY-CAP METERING (owner report 4, scale #5). Groq Whisper's free
+  // tier is a GLOBAL ~2k requests/day shared across the whole fleet; past 80%
+  // we skip Groq entirely and let Gemini audio carry the transcription, so the
+  // scarce rung is not burned out by mid-afternoon. A meter read that fails is
+  // treated as "under cap" - never let a metering blip disable transcription.
+  const { whisperOverSoftCap } = await import("../usage");
+  const groqBudgetLeft = !(await whisperOverSoftCap().catch(() => false));
+  if (token && groqBudgetLeft) {
     // ONE CLASSIFIED RETRY BEFORE FALLING TO GEMINI (owner report 4). Whisper
     // large-v3 is the strongest model on heavy accents - the whole reason it
     // is first - and any failure used to fall straight through to Gemini
