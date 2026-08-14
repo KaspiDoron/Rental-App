@@ -3931,19 +3931,35 @@ export default function Home() {
 
         {vendors.length > 0 && (
           <>
-            <div
-              data-tour="views"
-              className="surface-strong substick mt-4 flex items-center gap-1 rounded-2xl p-1"
-            >
-              <ToggleBtn active={view === "list"} onClick={() => setView("list")}>
-                <Icon name="list" className="h-4 w-4" /> {t("List")}
-              </ToggleBtn>
-              <ToggleBtn active={view === "map"} onClick={() => setView("map")}>
-                <Icon name="map" className="h-4 w-4" /> {t("Map")}
-              </ToggleBtn>
-              <ToggleBtn active={view === "activity"} onClick={() => setView("activity")}>
-                <Icon name="sparkles" className="h-4 w-4" /> {t("Activity")}
-              </ToggleBtn>
+            <div data-tour="views" className="surface-strong substick mt-4 rounded-2xl p-1">
+              <div className="flex items-center gap-1">
+                <ToggleBtn active={view === "list"} onClick={() => setView("list")}>
+                  <Icon name="list" className="h-4 w-4" /> {t("List")}
+                </ToggleBtn>
+                <ToggleBtn active={view === "map"} onClick={() => setView("map")}>
+                  <Icon name="map" className="h-4 w-4" /> {t("Map")}
+                </ToggleBtn>
+                <ToggleBtn active={view === "activity"} onClick={() => setView("activity")}>
+                  <Icon name="sparkles" className="h-4 w-4" /> {t("Activity")}
+                </ToggleBtn>
+              </div>
+              {/* The list's axis pair (owner report 4, item 5). It used to
+                  ride the END of the sort row's horizontal scroller - behind
+                  five sort chips, invisible at 320px without scrolling. The
+                  sticky views bar is the one surface that is ALWAYS on
+                  screen, and a second row inside the same sticky plate costs
+                  no width (three ToggleBtns + two chips cannot share 272px).
+                  List view only - map and activity have no axis to flip. */}
+              {view === "list" && (
+                <div className="mt-1 flex items-center gap-1 border-t border-line pt-1">
+                  <ToggleBtn active={listAxis !== "horizontal"} onClick={() => setListAxis("vertical")}>
+                    ↕ {t("Feed")}
+                  </ToggleBtn>
+                  <ToggleBtn active={listAxis === "horizontal"} onClick={() => setListAxis("horizontal")}>
+                    ↔ {t("Swipe")}
+                  </ToggleBtn>
+                </div>
+              )}
             </div>
             <WaSafetyBadge safety={waHealth} />
             <div className="mt-3">
@@ -3954,7 +3970,6 @@ export default function Home() {
                 isUltra={session?.plan === "ultra"}
                 onUpgrade={() => setUpgradeOpen(true)}
                 tagCounts={tagCounts}
-                {...(view === "list" ? { axis: listAxis, onAxis: setListAxis } : {})}
               />
             </div>
           </>

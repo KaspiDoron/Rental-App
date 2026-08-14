@@ -62,11 +62,22 @@ describe("both axes render the identical card", () => {
     expect(page).toMatch(/setScrollRequest\(\{ index: idx/);
   });
 
-  it("the toggle lives on the sort row, list view only", () => {
+  it("the toggle lives in the STICKY views bar, list view only (owner report 4)", () => {
+    // It used to ride the end of the sort row's horizontal scroller - behind
+    // five sort chips, off-screen at 320px. The views bar is always visible;
+    // the pair is its second row, rendered only when the list view is active.
+    expect(page).toMatch(/setListAxis\("vertical"\)/);
+    expect(page).toMatch(/setListAxis\("horizontal"\)/);
+    const views = page.indexOf('data-tour="views"');
+    const axisRow = page.indexOf('setListAxis("vertical")');
+    const filtersMount = page.indexOf("<Filters");
+    expect(views).toBeGreaterThan(0);
+    expect(axisRow, "the axis pair renders inside the views bar").toBeGreaterThan(views);
+    expect(axisRow, "the axis pair renders BEFORE the filters strip").toBeLessThan(filtersMount);
+    expect(page).toMatch(/\{view === "list" && \(\s*\n\s*<div className="mt-1 flex items-center gap-1 border-t/);
+    // And the sort row no longer carries it - one home, not two.
     const filters = readCode("src/components/Filters.tsx");
-    expect(filters).toMatch(/onAxis\("vertical"\)/);
-    expect(filters).toMatch(/onAxis\("horizontal"\)/);
-    expect(page).toMatch(/view === "list" \? \{ axis: listAxis, onAxis: setListAxis \}/);
+    expect(filters).not.toMatch(/onAxis/);
   });
 
   it("the quotes strip yields in horizontal mode - two stacked rails is not a layout", () => {
