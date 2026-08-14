@@ -52,6 +52,13 @@ export const DEFAULT_RPM: Record<string, number> = {
   mistral: 60,
   huggingface: 15,
   gemini: 15, // free tier; paid raises this (scale #5) - owner overrides
+  // PAID providers MUST have entries: "unknown -> unlimited" would silently
+  // disable the pre-429 spillover for exactly the rungs that cost money per
+  // call. Entry-paid-tier ceilings with headroom (Anthropic Start 1000 RPM,
+  // OpenAI T1 ~500, Moonshot T1 ~200).
+  anthropic: 300,
+  openai: 200,
+  kimi: 100,
 };
 
 const buckets = new Map<string, Bucket>();

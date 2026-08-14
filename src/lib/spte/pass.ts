@@ -554,7 +554,13 @@ export async function runSinglePass(ctx: TurnContext): Promise<{ artifact: TurnA
         { role: "system", content: system },
         { role: "user", content: userMsg },
       ],
-      { maxTokens: 500, budgetMs: 9000 }
+      // pickRoute's tier is REAL now (owner report 5 #13): Tier M (high-stakes
+      // - first push, farewell, close) runs the PAID providers first when the
+      // owner has keyed any; Tier F keeps the free chain with paid as the last
+      // resort. Before this, the computed tier reached nothing - every turn,
+      // including the ones the router itself classified as high-stakes, took
+      // the same default chain.
+      { maxTokens: 500, budgetMs: 9000, ...(route.tier === "M" ? { tier: "premium" as const } : {}) }
     );
     if (provider) route.provider = provider;
     if (!raw) {
