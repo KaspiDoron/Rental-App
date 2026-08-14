@@ -1,9 +1,15 @@
 # WheelDeal - Production Readiness & Scale Review
 
-Date: 2026-08-11 · Branch: `claude/rental-agents-legal-setup-o7rgcv`
+Date: 2026-08-14 (owner report 4 pass) · Branch: `claude/rental-agents-legal-setup-o7rgcv`
 Scope: queue architecture, concurrency, rate limiting, test mode,
 observability, cost control and the concrete path to hundreds of concurrent
 users. Complements `docs/ENTERPRISE-READINESS.md` (the earlier QA pass).
+
+> **READ THIS FIRST IF YOU ARE ABOUT TO CHANGE `wa-guard.ts`, the usage limits
+> or the outbox/wakeup draining.** That instruction (in `CLAUDE.md`) is only
+> worth following while this file is TRUE. Owner report 4 changed all three,
+> so the next section states exactly what moved; the sections below it have
+> been corrected in place.
 
 ## Executive summary
 
@@ -29,6 +35,50 @@ Verdict: **safe for the 25-tester beta today; complete the P1 runbook before
 paid public signups; the remaining P2 items before hundreds of concurrent
 users.**
 
+## What owner report 4 changed (Waves 1-3, 2026-08-14)
+
+Three waves shipped against this document's own P2 list and the anti-ban
+review. What follows is the delta; everything else below still stands.
+
+**Reply delivery (W2.1).** Every hold an ENGAGED reply could hit that exceeded
+~2 minutes is now lane-proportional - the daily-cap resume no longer snaps a
+reply to business hours, a risk-pause re-checks replies in 10-15 min instead
+of holding them the full 240, the five fail-closed `sync-retry` sites hold a
+reply 1-2 min (cold keeps 5-10), duplicate-claim holds are 30s for replies,
+and the inline claim-loss re-park is 20-40s. The engagement halt can no longer
+TERMINALLY drop a reply that was composed against a real inbound (a probe
+misread used to delete it). **The Next runtime now has its own drain armer**
+(`wa/drain-armer.ts`): a bounded in-process timer whose only action is an HTTP
+self-kick of the per-sender reply dispatcher, so a reply parked 20-40s out
+lands then rather than on the next cron minute.
+
+**The number that was missing.** `turn-latency` measures compose time plus the
+delay we INTENDED. The drain now also stamps `reply-latency` =
+`delivered - composedAgainst.inboundAt`, the latency that HAPPENED, so the gap
+between the two is the queue, visible in the WA doctor and the launch card.
+
+**Media (W2.3).** Multi-image bursts coalesce on the runtime that actually
+runs (`wa/image-burst.ts` - the DB is the buffer; the newest frame of a burst
+runs ONE turn holding every frame), with a per-frame/per-request byte budget
+and honest truncation events. Native video, PDF rate cards, captioned voice
+notes, the Whisper language hint, and audit copies of every fetched frame.
+
+**Local language (W2.4).** `countryForShop` replaced the 4-country ceiling, so
+localization is attempted for every country; failures name a true reason and
+an AI outage SUPPRESSES a local-language bargain rather than sending fluent
+English mid-negotiation.
+
+**Anti-ban (W3.1).** Read receipts (`markMessageAsRead` on a humanized 2-7s
+delay, batched in parallel, failures counted), presence failures traced,
+fingerprint refreshed and baked into `deploy/evolution/Dockerfile`, a
+datacenter-IP cluster banner, and the webhook re-arm throttle moved to a
+shared config row. `ANTI-BAN.md` carries the detail AND the accepted residual
+risks.
+
+**Scale (W3.2).** See the corrected P2 list below: the Cloud Run shape,
+`REDIS_URL` delivery, retention, the RPM budgeter, the inbound concurrency
+gate and the launch KPI card all landed.
+
 ## How work actually gets done (queues & workers)
 
 - **Outbound queue** (`wa_outbox`): rows are claimed with an atomic
@@ -39,9 +89,14 @@ users.**
 - **Strategic waits** (`graph_wakeups`): identical atomic-claim pattern. Rows
   are stamped with `user_email` so owner-scoped purges are exact matches (the
   old `thread_key LIKE email:%` pattern treated `_` in emails as a wildcard).
-- **Who drains**: every activity poll from any open app, every webhook tail,
-  the replies/status polls, and `/api/wa/ping` hit by an EXTERNAL cron
-  (cron-job.org). `/api/queue` (the queued-messages VIEWER) deliberately does
+- **Who drains** (corrected, owner report 4): every activity poll from any open
+  app, every webhook tail, the replies/status polls, `/api/wa/ping` hit by
+  **Cloud Scheduler** (provisioned by the deploy workflow itself - the external
+  cron-job.org pinger is now a redundant backstop, not the only timer), the
+  per-sender `/api/wa/reply-tick` dispatcher kicked by ingest, and the
+  **in-process drain armer** (`wa/drain-armer.ts`) that HTTP-self-kicks that
+  dispatcher at the exact moment a parked reply comes due.
+  `/api/queue` (the queued-messages VIEWER) deliberately does
   NOT drain - opening the list to review or remove messages must never be the
   event that sends them. On a serverless free tier a cron might run at most
   once per day, so the external pinger was the fallback there - but it is a single
@@ -140,11 +195,13 @@ opted out permanently - the guard refuses every future send, manual included.
 - Drain is capped at 2 sends per sender per invocation; excess DUE rows are
   re-spaced forward with jitter (a stale backlog trickles out, never bursts).
 - FAIL-CLOSED reads: the guard's reputation + 24h-history reads are strict -
-  a transient Supabase failure holds automated sends (`sync-retry`, 5-10
-  min) instead of reading as "fresh number, nothing sent today" (the old
-  behavior disabled the entire anti-ban engine exactly during outages).
-  Manual sends stay permissive. Missing tables (pre-migration) degrade to
-  today's behavior.
+  a transient Supabase failure holds automated sends (`sync-retry`) instead of
+  reading as "fresh number, nothing sent today" (the old behavior disabled the
+  entire anti-ban engine exactly during outages). The hold is LANE-PROPORTIONAL
+  since owner report 4: a reply re-checks in 1-2 min, a cold intro keeps 5-10.
+  The safety posture is identical (nothing sends while the state is unknown);
+  only the re-check cadence matches the lane. Manual sends stay permissive.
+  Missing tables (pre-migration) degrade to today's behavior.
 - Observability: `claim-lost` / `sync-retry` / `cancelled-send-blocked` /
   `takeover-send-blocked` agent_events; drain failures log tagged errors.
 - Dev harness: `node scripts/hammer-queue.mjs` fires parallel drain storms +
@@ -350,6 +407,10 @@ banner is gone from the public pages.
 1. **Dedicated worker for draining** (the GCE `scheduler.worker` drains every
    minute) + adaptive batch size (5 → 25) so the queue
    drains independently of user traffic.
+   **Partly addressed without the VM (owner report 4):** Cloud Scheduler is
+   provisioned by the deploy workflow, and `wa/drain-armer.ts` gives the Next
+   runtime exact-moment arming via an HTTP self-kick. The worker VM would still
+   raise throughput; nothing depends on it any more.
 2. ~~**Atomic counters for limits**~~ - **SHIPPED.** `reserveDailyUnit` in
    `src/lib/usage.ts` is an atomic Redis `INCR` on `usage:<kind>:<who>:<day>`,
    so concurrent callers get distinct totals and only one crosses the line; a
@@ -358,18 +419,29 @@ banner is gone from the public pages.
    **Caveat, deliberately not hidden: with no `REDIS_URL` this is a no-op** and
    the read-then-write window is exactly as wide as it always was. A deployment
    without Redis has not had this fixed. Tests: `src/lib/daily-cap-atomic.test.ts`.
+   **Owner report 4 delivery fix:** `REDIS_URL` is now passed through the Cloud
+   Run deploy's optional-env list, so the caveat is a matter of SETTING the
+   secret rather than of shipping code. Until it is set the caveat stands in
+   full - and it matters more than it did, because `--max-instances` is now 20.
    The WA volume caps were examined and did NOT need the same treatment -
    `claimSendSlots` already serialises sends per sender through an atomic
    unique-constraint insert, so two concurrent volume-cap reads cannot both
    proceed. The reasoning is recorded as executable assertions in that same file.
-3. **Queue inbound webhook work**: today each shop reply runs the full AI
-   pipeline synchronously inside the webhook invocation. Bursty replies =
-   unbounded concurrent AI spend. Enqueue → 200 immediately → worker
-   processes. (The per-user AI budget in #5 now bounds the SPEND; this is
-   still worth doing for latency and for connection pressure.)
-4. **Retention jobs**: `whatsapp_messages`, `agent_traces`, `api_usage`,
-   `negotiation_threads` grow unbounded; add TTL cleanup (90d) + monthly
-   rollups for the cost tracker.
+3. ~~**Queue inbound webhook work**~~ - **BOUNDED, not offloaded (owner report
+   4).** Each shop reply still runs the AI pipeline inside the webhook
+   invocation, but no longer without a ceiling: `wa/inbound-gate.ts` caps heavy
+   turns at 4 in flight PER INSTANCE, which is what stops `--concurrency 32`
+   from turning a reply burst into 32 concurrent LLM chains on one 1GB
+   instance. It is a smoother, not a limiter - a waiter past its patience
+   window proceeds ungated, because a gate must never eat a reply. Full BullMQ
+   offload remains the workers-VM upgrade path.
+4. ~~**Retention jobs**~~ - **SHIPPED as `supabase/retention.sql`** (owner
+   report 4). A 90-day pg_cron prune of `whatsapp_messages`, `agent_events`,
+   `agent_traces` and `api_usage`, which KEEPS priced/read message rows (a
+   photographed board is cross-thread leverage and golden-case material) and
+   rolls `api_usage` up into `api_usage_daily` before pruning so the cost
+   tracker keeps its history at ~1/1000th the rows. Idempotent; degrades to a
+   NOTICE when pg_cron is not installed. **Owner action: run it once.**
 5. ~~**Debit background AI**~~ - **SHIPPED, and it was worse than this entry
    said.** `LIMIT_AI_PER_DAY` was enforced at exactly ONE call site
    (`api/extract-offer`) and *that site never debited* - nothing anywhere wrote
@@ -485,6 +557,54 @@ npm run build && npm run check:mobile
 
 What it does not cover is stated in the script's own header - the transcript
 follow-scroll needs a live message stream and keeps unit coverage only.
+
+## Live verification after a deploy (owner, ~10 minutes)
+
+Automated gates prove the code does what the tests say. These prove the LIVE
+system does what this document says. Run them against production after a
+deploy; each one names the surface that answers it.
+
+1. **Providers** - Admin → Keys → *Test AI providers*. Every configured
+   provider answers or names a real reason. A timeout now reads as
+   `<provider> timed out after Nms`, never a bare platform abort.
+2. **Language** - switch to Hebrew (globe), then open the FAQ and the pricing
+   card. The FAQ translates (it rides its own `I18N_SHARED_<lang>` row) and the
+   plan chrome translates. The marketing prose on `/welcome` and `/guides`
+   stays English **by decision** - see the note below.
+3. **A five-photo burst** - from a test shop, send 5 price-board photos at
+   once. Expect ONE agent turn that references more than one board, not five
+   turns. Ops → the thread shows a single reading; the coalesced frames leave
+   `image-coalesced` traces rather than vanishing.
+4. **Accented voice note, with a caption** - both halves must reach the turn
+   (the caption used to silently discard the transcript).
+5. **A short video** - expect either a real reading or the honest "I could not
+   watch the video - could you send a photo of the price list?" Never silence.
+6. **Reply speed** - Admin → Ops → 🚦 Launch readiness. `reply p50/p95` are the
+   OBSERVED inbound→wire numbers. Compare against the WA doctor's
+   `turn-latency`: a large gap is queue time, not compose time.
+7. **Blue ticks** - the test shop should see its message marked read a few
+   seconds before the agent's reply arrives. `wa-read-failed` events mean the
+   receipt call is failing (check the Evolution build).
+8. **Cluster risk** - the same launch card turns red when ≥5 unproxied numbers
+   share one Evolution host. At the beta's size it should be silent.
+9. **Retention** - run `supabase/retention.sql` once, then confirm
+   `select public.prune_old_rows(90);` returns a JSON summary and that
+   `api_usage_daily` has rows.
+
+## Deliberate scope notes (so they are not re-litigated as bugs)
+
+- **The public marketing surface stays English.** `/welcome`, `/pricing` and
+  the 20-guide corpus are server components, statically prerendered, and are
+  the SEO/AdSense surface. Their CLIENT parts (trust panel, footer, plan cards)
+  DO translate, so a Hebrew visitor sees a localized frame around English
+  prose. Translating the guide corpus is ~1,500-2,500 strings *per language* -
+  a real cost decision for the owner, not a default. The mechanism is ready if
+  the owner wants it: a client island calling `tShared`, plus widening the
+  translate route's shared allowlist to the copy module.
+- **Outbound media is 100% text** - see `ANTI-BAN.md`; an accepted residual
+  uniformity signal, not an oversight.
+- **The workers VM is still unprovisioned** and nothing depends on it; it is a
+  throughput upgrade, not a correctness one.
 
 ## What is already right (do not re-solve)
 

@@ -2,6 +2,7 @@
 // Every literal t("...") string in the app, so a language switch can
 // translate ALL pages up front (not just the ones already mounted).
 export const I18N_CATALOG: string[] = [
+  "${s}",
   "- everything is unlocked.",
   "...",
   "1. Open this site in Chrome.",
@@ -163,6 +164,7 @@ export const I18N_CATALOG: string[] = [
   "Contact",
   "Contacting",
   "Copied",
+  "Copy number",
   "Could not get a code yet - tap Try again in a few seconds.",
   "Could not pause - the agents may still be sending. Try again.",
   "Could not pin that place on the map - check your connection.",
@@ -242,6 +244,7 @@ export const I18N_CATALOG: string[] = [
   "For",
   "Forgot password?",
   "Found your shops. Tap 'Ask for price' on the ones you like - or I can message the best ones for you at once.",
+  "Free",
   "Free delivery",
   "Free plan: pickups can be scheduled for today only.",
   "Free plan: same-day pickup scheduling only.",
@@ -462,6 +465,7 @@ export const I18N_CATALOG: string[] = [
   "Pickup offered",
   "Place a pin first",
   "Play while you wait",
+  "Popular",
   "Popular questions",
   "Prefer typing? Hide the tap builder",
   "Preferences",
@@ -695,6 +699,7 @@ export const I18N_CATALOG: string[] = [
   "Unavailable",
   "Unconfirmed",
   "Unlock every past trip",
+  "Unlocks as you use the app",
   "Up to",
   "Update password",
   "Updated everywhere we use it. Your WhatsApp connection below is tied to the phone that scans the QR - reconnect it if you switch numbers.",
@@ -841,6 +846,7 @@ export const I18N_CATALOG: string[] = [
   "e.g. Can you include 2 helmets at that price?",
   "e.g. automatic SUV 5 seats for 5 days, or 125cc scooter with phone mount",
   "economy cars from",
+  "every 3 months",
   "exact map pin",
   "for your offer",
   "h",

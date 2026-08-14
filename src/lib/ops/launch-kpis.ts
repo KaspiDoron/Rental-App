@@ -12,7 +12,7 @@ import "server-only";
 // confident zero on a launch dashboard is the fail-green shape this whole
 // review exists to undo.
 
-import { sbSelectStrict } from "../runtime-config";
+import { sbSelectStrict, sbCountDark } from "../runtime-config";
 import { replyLatencyStats } from "../wa/turn-latency";
 import { transportSummary } from "../wa/proxy";
 import { spentProviders } from "../ai-rpm";
@@ -36,17 +36,15 @@ export interface LaunchKpis {
   degraded: string[];
 }
 
-// STRICT read: the permissive reader answers [] for "unreadable" too, so a
-// degraded source would masquerade as a confident zero on a launch dashboard -
-// exactly the fail-green shape this card exists to undo. sbSelectStrict keeps
-// the two apart.
+// COUNT, DO NOT FETCH. This selected up to 100k rows and took `.length` -
+// correct, and absurd on a table that grows by design: five of those queries
+// per card load, moving megabytes to produce five integers. `sbCountDark` asks
+// PostgREST for the count header with `Range: 0-0`, so ONE row crosses the
+// wire, and it keeps the fail-dark contract this card is built on: `null`
+// means "could not be read", never a confident zero.
 async function count24h(table: string, tsColumn: string, extra = ""): Promise<number | null> {
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
-  const r = await sbSelectStrict<{ x: number }>(
-    table,
-    `select=${tsColumn}&${tsColumn}=gte.${encodeURIComponent(since)}${extra}&limit=100000`
-  );
-  return "error" in r ? null : r.rows.length;
+  return sbCountDark(table, `${tsColumn}=gte.${encodeURIComponent(since)}${extra}`);
 }
 
 export async function launchKpis(): Promise<LaunchKpis> {

@@ -153,7 +153,12 @@ describe("the verdict is wired into every surface (source pins)", () => {
 
   it("the activity feed reads drop events, filtered through dropFeedItem", () => {
     const activity = readCode("src/app/api/activity/route.ts");
-    expect(activity).toMatch(/kind=in\.\("inbound-risk","inbound-dropped","send-dropped"\)/);
+    // The three DROP kinds must stay in the filter - the list itself is open
+    // (owner report 4 added "contact-suggested", a lead rather than a drop),
+    // so this pins the membership that matters, not the exact closed set.
+    for (const kind of ["inbound-risk", "inbound-dropped", "send-dropped"]) {
+      expect(activity).toMatch(new RegExp(`kind=in\\.\\([^)]*"${kind}"`));
+    }
     expect(activity).toMatch(/dropFeedItem\(e\.kind, e\.detail\)/);
   });
 
