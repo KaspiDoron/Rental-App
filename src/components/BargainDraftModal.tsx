@@ -5,17 +5,20 @@ import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { Modal } from "./Modal";
 import { LoadingDots } from "./LoadingDots";
 import { useI18n } from "@/lib/i18n";
+import { can } from "@/lib/entitlements";
 
 // Adaptive Bargaining Agent UI: composes the next message and sends it to the
 // shop from INSIDE the app. The traveller can also WRITE or EDIT the message
 // themselves - every send is safety-screened by the server before it leaves.
-// Ultra members can flip the agent into the shop's local language.
+// Entitled members can flip the agent into the shop's local language - but
+// ONLY on a hunt that is running in the local language at all.
 export function BargainDraftModal({
   vendor,
   rfq,
   region,
   round,
   plan,
+  sessionLocalLang = false,
   currentPricePerDay,
   rivalPricePerDay,
   onClose,
@@ -25,14 +28,25 @@ export function BargainDraftModal({
   region?: string;
   round: number;
   plan?: string;
+  /** Is THIS HUNT running in the shop's local language? (owner report 5 #14:
+   *  an English-only session must not offer - or default to - a local draft.
+   *  The modal used to invent its own default from the plan tier with no
+   *  session context, so an Ultra owner's English hunt opened on a Thai
+   *  draft.) */
+  sessionLocalLang?: boolean;
   currentPricePerDay?: number;
   rivalPricePerDay?: number;
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const isUltra = plan === "ultra";
+  // The shared FEATURE predicate, not a hand-rolled tier literal - the exact
+  // anti-pattern entitlements.ts names for this very feature.
+  const localEntitled = can(plan, "local-language");
+  // The draft follows the HUNT's language. The server re-resolves against the
+  // thread's established mode either way, so this default can only ever be
+  // corrected toward reality, never away from it.
   const [language, setLanguage] = useState<"english" | "local">(
-    isUltra ? "local" : "english"
+    sessionLocalLang && localEntitled ? "local" : "english"
   );
   const [text, setText] = useState("");
   const [tacticLabel, setTacticLabel] = useState("");
@@ -69,6 +83,12 @@ export function BargainDraftModal({
         setTacticLabel(data.tacticLabel ?? "");
         setWasFallback(Boolean(data.fallback));
         setEdited(false);
+        // The server resolves the thread's ESTABLISHED language and may
+        // override the request (thread already in English, hunt not local).
+        // Reflect what was actually composed, never a stale chip.
+        if (data.languageUsed === "english" || data.languageUsed === "local") {
+          setLanguage(data.languageUsed);
+        }
       } else if (data.upgrade) setUpgradeNote(true);
     } finally {
       setBusy(false);
@@ -160,42 +180,48 @@ export function BargainDraftModal({
         </button>
       </div>
 
-      {/* Language: English / shop's local language (Ultra) */}
-      <div className="mb-3 flex gap-1.5">
-        <button
-          onClick={() => {
-            setLanguage("english");
-            setUpgradeNote(false);
-            compose("english");
-          }}
-          className={`btn btn-sm chip flex-1 rounded-xl border-2 py-2 text-[12px] font-extrabold ${
-            language === "english"
-              ? "border-brandblue bg-brandblue-soft text-brandblue"
-              : "border-line text-soft"
-          }`}
-        >
-          🇬🇧 {t("English")}
-        </button>
-        <button
-          onClick={() => {
-            if (!isUltra) {
-              setUpgradeNote(true);
-              return;
-            }
-            setLanguage("local");
-            compose("local");
-          }}
-          className={`btn btn-sm chip flex-1 rounded-xl border-2 py-2 text-[12px] font-extrabold ${
-            language === "local" && isUltra
-              ? "badge-ultra border-transparent"
-              : "border-line text-soft"
-          }`}
-        >
-          🌍 {t("Local language")}
-          {!isUltra && " 🔒"}
-        </button>
-      </div>
-      {language === "local" && isUltra && (
+      {/* Language chips render ONLY on a local-language hunt. An English-only
+          session gets no toggle at all - there is nothing to toggle to, and the
+          owner named the stray "Local language" chip on an English hunt as a
+          bug. On a local hunt the traveller may still flip ONE message to
+          English (e.g. quoting exact terms). */}
+      {sessionLocalLang && (
+        <div className="mb-3 flex gap-1.5">
+          <button
+            onClick={() => {
+              setLanguage("english");
+              setUpgradeNote(false);
+              compose("english");
+            }}
+            className={`btn btn-sm chip flex-1 rounded-xl border-2 py-2 text-[12px] font-extrabold ${
+              language === "english"
+                ? "border-brandblue bg-brandblue-soft text-brandblue"
+                : "border-line text-soft"
+            }`}
+          >
+            🇬🇧 {t("English")}
+          </button>
+          <button
+            onClick={() => {
+              if (!localEntitled) {
+                setUpgradeNote(true);
+                return;
+              }
+              setLanguage("local");
+              compose("local");
+            }}
+            className={`btn btn-sm chip flex-1 rounded-xl border-2 py-2 text-[12px] font-extrabold ${
+              language === "local" && localEntitled
+                ? "badge-ultra border-transparent"
+                : "border-line text-soft"
+            }`}
+          >
+            🌍 {t("Local language")}
+            {!localEntitled && " 🔒"}
+          </button>
+        </div>
+      )}
+      {sessionLocalLang && language === "local" && localEntitled && (
         <div className="badge-ultra mb-2 rounded-full px-3 py-1 text-center text-[11px] font-extrabold">
           ⚡ ULTRA · {t("Street-smart haggling in the shop's own language")}
         </div>

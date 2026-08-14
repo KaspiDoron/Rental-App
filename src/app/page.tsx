@@ -4202,6 +4202,7 @@ export default function Home() {
           region={origin?.label ?? ""}
           round={bargainVendor.offer ? bargainVendor.offer.round + 1 : 0}
           plan={session?.plan}
+          sessionLocalLang={localLangActive}
           currentPricePerDay={bargainVendor.offer?.pricePerDay}
           rivalPricePerDay={
             cheapest && cheapest.id !== bargainVendor.id

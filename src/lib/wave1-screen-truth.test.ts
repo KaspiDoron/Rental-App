@@ -89,3 +89,29 @@ describe("the deposit chip shows EVERY alternative (owner report 5 #9)", () => {
     expect(sheet).not.toMatch(/o\.depositType === "passport"\s*\?\s*t\("passport"\)/);
   });
 });
+
+describe("the draft popup's language belongs to the HUNT (owner report 5 #14)", () => {
+  it("the modal renders language chips only on a local-language hunt", () => {
+    const modal = read("src/components/BargainDraftModal.tsx");
+    // No more invented default from a tier literal...
+    expect(modal).not.toMatch(/isUltra \? "local" : "english"/);
+    expect(modal).not.toMatch(/const isUltra = plan === "ultra"/);
+    // ...the default follows the session, gated by the shared predicate...
+    expect(modal).toMatch(/sessionLocalLang && localEntitled \? "local" : "english"/);
+    expect(modal).toMatch(/can\(plan, "local-language"\)/);
+    // ...and the whole chip row is conditional on the hunt being local.
+    expect(modal).toMatch(/\{sessionLocalLang && \(/);
+  });
+
+  it("page.tsx passes the hunt's language state down", () => {
+    expect(read("src/app/page.tsx")).toMatch(/sessionLocalLang=\{localLangActive\}/);
+  });
+
+  it("/api/bargain-draft resolves the thread's established language like the send path", () => {
+    const route = read("src/app/api/bargain-draft/route.ts");
+    expect(route).toMatch(/threadLanguageMode/);
+    expect(route).toMatch(/resolveThreadLanguage/);
+    expect(route).toMatch(/localLanguage: composeLocal/);
+    expect(route).toMatch(/languageUsed/);
+  });
+});
