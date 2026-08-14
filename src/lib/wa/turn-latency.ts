@@ -43,6 +43,47 @@ export function percentile(sortedAsc: number[], p: number): number | null {
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, rank - 1))];
 }
 
+export interface ReplyLatencyStats {
+  samples: number;
+  /** Inbound message -> reply on the wire, WALL CLOCK, seconds. */
+  p50Sec: number | null;
+  p95Sec: number | null;
+}
+
+/**
+ * True end-to-end reply latency, from the drain's `reply-latency` events.
+ *
+ * `turnLatencyStats` above reports compose time plus the PLANNED pacing delay -
+ * the latency we intended. This one reports the latency that HAPPENED: the
+ * drain stamps `delivered - composedAgainst.inboundAt` at the moment a reply
+ * actually leaves, so every hold, re-park and lost claim in between is in the
+ * number. When the two disagree, the gap IS the queue - and that gap used to
+ * be unmeasurable.
+ */
+export function replyLatencyStats(details: Array<string | null | undefined>): ReplyLatencyStats {
+  const samples: number[] = [];
+  for (const d of details) {
+    if (!d) continue;
+    let row: { inboundToWireMs?: unknown };
+    try {
+      row = JSON.parse(d);
+    } catch {
+      continue;
+    }
+    const ms = Number(row.inboundToWireMs);
+    if (!Number.isFinite(ms) || ms < 0) continue;
+    samples.push(ms / 1000);
+  }
+  if (!samples.length) return { samples: 0, p50Sec: null, p95Sec: null };
+  samples.sort((a, b) => a - b);
+  const round = (n: number | null) => (n === null ? null : Math.round(n));
+  return {
+    samples: samples.length,
+    p50Sec: round(percentile(samples, 50)),
+    p95Sec: round(percentile(samples, 95)),
+  };
+}
+
 export function turnLatencyStats(details: Array<string | null | undefined>): TurnLatencyStats {
   const compose: number[] = [];
   const total: number[] = [];

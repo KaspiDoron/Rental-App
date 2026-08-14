@@ -99,8 +99,26 @@ describe("a parked reply is drained when it comes due, not when a heartbeat happ
   it("park arms a drain, without importing a queue into the Next bundle", () => {
     const park = readCode("src/lib/wa/park.ts");
     expect(park).toMatch(/export function setDrainArmer/);
-    expect(park).toMatch(/armDrainAt\?\.\(row\.notBeforeMs\)/);
+    // The arm carries the sender so the Next armer can kick the PER-SENDER
+    // reply dispatcher (a hop=0 kick at the global tick loses to a live cold
+    // chain - the exact starvation reply-tick was built to end).
+    expect(park).toMatch(/armDrainAt\(row\.notBeforeMs, row\.senderKey\)/);
+    expect(park).toMatch(/armReplyDrain\(row\.notBeforeMs, row\.senderKey\)/);
     expect(park).not.toMatch(/bullmq/);
+  });
+
+  it("the Next armer kicks over HTTP, never drains in a dying invocation", () => {
+    // Cloud Run freezes CPU once the response is flushed - a timer that tried
+    // to drain in-process would freeze mid-write. The timer's only action is a
+    // self-kick; the kicked dispatcher runs with its own CPU allocation.
+    const armer = readCode("src/lib/wa/drain-armer.ts");
+    expect(armer).toMatch(/kickDispatcher\(/);
+    expect(armer).toMatch(/api\/wa\/reply-tick/);
+    expect(armer).not.toMatch(/drainOutbox/);
+    // Bounded: beyond the cron's own cadence, arming buys nothing.
+    expect(armer).toMatch(/ARM_HORIZON_MS = 90_000/);
+    // Never keeps the process alive (tests, local dev, shutdown).
+    expect(armer).toMatch(/timer\.unref\?\.\(\)/);
   });
 
   it("the worker runtime supplies it, collapsing same-second arms to one job", () => {

@@ -1608,14 +1608,18 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           kind: (meta as { kind?: string } | undefined)?.kind,
         });
         if (stale.stale) {
-          await sbInsert("agent_events", [
-            {
-              kind: "wa-send-stale",
-              user_email: senderKey,
-              vendor_name: String((meta as { vendorName?: string } | undefined)?.vendorName ?? toNumber),
-              detail: `inline ${stale.reason}: ${stale.detail ?? ""}`.slice(0, 300),
-            },
-          ]).catch(() => {});
+          // to_number is the message-path join key; retried without it so an
+          // un-migrated database loses the join, never the event.
+          const staleEv = {
+            kind: "wa-send-stale",
+            user_email: senderKey,
+            vendor_name: String((meta as { vendorName?: string } | undefined)?.vendorName ?? toNumber),
+            detail: `inline ${stale.reason}: ${stale.detail ?? ""}`.slice(0, 300),
+          };
+          const staleOk = await sbInsert("agent_events", [{ ...staleEv, to_number: toNumber }]).catch(
+            () => false
+          );
+          if (!staleOk) await sbInsert("agent_events", [staleEv]).catch(() => {});
           await scheduleRecompose(senderKey, toNumber, "stale-draft-recompose");
           return {
             delivered: "blocked",
@@ -1648,13 +1652,8 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       // A reply/follow-up to an engaged shop paces per-recipient (distinct
       // shops never serialize on each other); a cold intro keeps per-sender.
       const sendKind = (meta as { kind?: string } | undefined)?.kind;
-      const claim = await claimForSend(
-        senderKey,
-        toNumber,
-        verdict.text,
-        true,
-        sendKind !== "rfq" && sendKind !== "custom"
-      );
+      const isReplySend = sendKind !== "rfq" && sendKind !== "custom";
+      const claim = await claimForSend(senderKey, toNumber, verdict.text, true, isReplySend);
       if (!claim.ok) {
         if (claim.kind === "duplicate") {
           return {
@@ -1664,7 +1663,13 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           };
         }
         const { jitteredHold } = await import("../wa/pacing");
-        const notBefore = jitteredHold(Date.now(), 1, 2);
+        // Lane-proportional: the lane a REPLY lost is measured in seconds (5s
+        // per-shop gap, fleet slot), so it re-parks 20-40s out; a cold intro
+        // keeps the minute-scale hold - velocity to new numbers is the ban
+        // vector, and its lane is 12s+ anyway.
+        const notBefore = isReplySend
+          ? new Date(Date.now() + 20_000 + Math.round(Math.random() * 20_000)).toISOString()
+          : jitteredHold(Date.now(), 1, 2);
         await sbInsert("wa_outbox", [
           {
             sender_key: senderKey,

@@ -206,15 +206,20 @@ describe("6. the turn itself stopped paying for a slow provider", () => {
 });
 
 describe("7. what is deployed is stated, not assumed", () => {
-  it("the drain armer says plainly that it is dark in production", () => {
+  it("the park comment states which armer is live and which is dark", () => {
     // Read RAW, comments and all - a documentation claim is the thing under
     // test here, and the stripping reader every other test uses would delete
     // exactly what we are checking.
     const park = readFileSync(join(process.cwd(), "src/lib/wa/park.ts"), "utf8");
-    expect(park).toMatch(/no Dockerfile CMD and no deploy manifest/);
-    // The old comment claimed the Next path was covered by the tick kick. It
-    // was - in code. In the field that kick was refused exactly when it
-    // mattered, and nothing said so.
-    expect(park).toMatch(/reply-tick/);
+    // The WORKER hook is still dark - and still says so.
+    expect(park).toMatch(/no Dockerfile CMD/);
+    expect(park).toMatch(/dark in production/);
+    // Since owner report 4 an unset hook is no longer a no-op: the Next
+    // runtime carries its own armer, and the comment must say which one runs.
+    expect(park).toMatch(/drain-armer/);
+    // ...and that armer kicks the per-sender reply dispatcher over HTTP - the
+    // lesson of the refused tick kick, stated where the kick is fired.
+    const armer = readFileSync(join(process.cwd(), "src/lib/wa/drain-armer.ts"), "utf8");
+    expect(armer).toMatch(/reply-tick/);
   });
 });

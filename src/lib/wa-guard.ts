@@ -1364,6 +1364,28 @@ async function recordSendDropped(
   ]).catch(() => {});
 }
 
+/**
+ * An agent_events write that carries the message-path join key (`to_number`)
+ * and survives databases where that column does not exist yet: attempted WITH
+ * it first, retried without - an un-migrated database loses the join, never
+ * the event (the same degradation contract as wa/hold-events).
+ *
+ * This exists because the send lane's fates - expired, stale, claim lost/error
+ * - used to write events the message-path view could not match: no user_email,
+ * no to_number, a vendor_name that might be a shop's display name. A trail
+ * that shows "queued" and then nothing is the hole the trail was built to
+ * close.
+ */
+async function insertPathEvent(
+  ev: Record<string, unknown> & { to_number?: string }
+): Promise<void> {
+  const ok = await sbInsert("agent_events", [ev]).catch(() => false);
+  if (!ok && "to_number" in ev) {
+    const { to_number: _dropped, ...rest } = ev;
+    await sbInsert("agent_events", [rest]).catch(() => {});
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Content variance - unique payload signature every time
 // ---------------------------------------------------------------------------
@@ -1792,12 +1814,27 @@ export async function guardOutbound(rawOpts: {
     return { allow: false, reason, text };
   };
 
+  // KIND-BASED reply test for the gates that run BEFORE the recipient row is
+  // read (isNewContact does not exist yet up here). Same rule as the drain's
+  // isReplyRow and REPLY_KIND_FILTER: an automated send whose kind is not a
+  // cold intro or a human message is a reply-lane send. Used to make every
+  // fail-closed hold LANE-PROPORTIONAL (owner report 4, item 3): the safety
+  // posture is identical - nothing sends while the state is unknown - but a
+  // reply re-checks in 1-2 minutes where a cold intro waits 5-10, because the
+  // drain's own re-park backoff already treats the lanes 15x apart and these
+  // holds disagreeing with it was pure added latency on an engaged shop.
+  const kindStr = String(opts.meta?.kind ?? "");
+  const replyKind =
+    opts.auto === true && kindStr !== "rfq" && kindStr !== "custom" && kindStr !== "human-manual";
+  const syncRetryHold = () =>
+    replyKind ? jitteredHold(now, 1, 1) : jitteredHold(now, 5, 5);
+
   // -3. FAIL CLOSED ON UNKNOWN SAFETY STATE. If the reputation row (pause
   //     state, trust, caps history) is unreadable, an automated send holds
   //     briefly instead of assuming "brand-new healthy number" - a Supabase
   //     blip must never disable the anti-ban engine.
   if (opts.auto && repStrict === null) {
-    return await queue(jitteredHold(now, 5, 5), "sync-retry");
+    return await queue(syncRetryHold(), "sync-retry");
   }
 
   // -2. CANCELLATION TOMBSTONE + HUMAN TAKEOVER - the two absolute vetoes.
@@ -1823,10 +1860,7 @@ export async function guardOutbound(rawOpts: {
       };
     }
     if (cancelled === null) {
-      return await queue(
-        new Date(now + (5 + Math.random() * 5) * 60_000).toISOString(),
-        "sync-retry"
-      );
+      return await queue(syncRetryHold(), "sync-retry");
     }
     {
       const { isThreadTakenOver } = await import("./session-flags");
@@ -1850,7 +1884,7 @@ export async function guardOutbound(rawOpts: {
         // veto, so an automated send fails CLOSED - hold and re-check later
         // rather than risk posting into a thread the human took over. Mirrors
         // the cancellation null-path above. (This block runs only for auto.)
-        return await queue(jitteredHold(now, 5, 5), "sync-retry");
+        return await queue(syncRetryHold(), "sync-retry");
       }
     }
   }
@@ -2039,8 +2073,23 @@ export async function guardOutbound(rawOpts: {
   // 0. GLOBAL ACCOUNT PAUSE - a number the risk engine (or a real WhatsApp
   //    restriction) has quarantined sends nothing until the pause expires.
   //    This is the graduated ban-recovery guard from the research.
+  //
+  //    REPLY CARVE-OUT (owner report 4, item 3): the pause still BINDS every
+  //    send - nothing goes out while it is on - but a parked REPLY re-checks
+  //    on a bounded 10-15min cadence instead of inheriting the pause's whole
+  //    horizon. The risk engine clears pauses early when the signal subsides,
+  //    and a reply stamped for the original 4h wall sat parked long after the
+  //    pause had lifted. A genuine BAN-RECOVERY pause (many hours out) keeps
+  //    holding replies at its own horizon until it enters its final stretch -
+  //    that one is account-level and the recovery schedule IS the treatment.
   if (rep.paused_until && Date.parse(rep.paused_until) > now) {
-    if (opts.auto) return await queue(rep.paused_until, "number paused (ban-risk recovery)");
+    if (opts.auto) {
+      const pauseLeftMs = Date.parse(rep.paused_until) - now;
+      const banRecovery = pauseLeftMs > 4 * 3600_000;
+      const until =
+        !isNewContact && !banRecovery ? jitteredHold(now, 10, 5) : rep.paused_until;
+      return await queue(until, "number paused (ban-risk recovery)");
+    }
     return { allow: false, reason: "This number is paused for safety recovery.", text };
   }
 
@@ -2089,7 +2138,7 @@ export async function guardOutbound(rawOpts: {
     if (paused === null) {
       // UNKNOWN pause state (store unreadable): "hold everything" is absolute,
       // so an automated send fails CLOSED - brief sync-retry hold, not a send.
-      return await queue(jitteredHold(now, 5, 5), "sync-retry");
+      return await queue(syncRetryHold(), "sync-retry");
     }
   }
 
@@ -2184,6 +2233,27 @@ export async function guardOutbound(rawOpts: {
       // last_reply_at for legacy rows that predate the receiver stamp.
       const engaged = inboundSince.length > 0 || Boolean(state[0]?.last_reply_at);
       if (!engaged) {
+        // INVARIANT: A REPLY CANNOT BE UNANSWERED SPAM. A row stamped
+        // `composedAgainst` a real inbound was, by construction, composed as an
+        // ANSWER to something this shop said - so when this probe reads "never
+        // replied", the probe is wrong (a number spelling both filters still
+        // missed, replication lag, a blipped read), not the thread. Falling
+        // through to terminal would DELETE a composed answer to a shop that
+        // demonstrably engaged - the same incident class the unreadable-probe
+        // branch above exists to prevent. Bounded re-park instead: the next
+        // drain re-asks, and the row's own expiry bounds the loop. Proactive
+        // follow-ups on silent threads carry no stamp and stay terminally
+        // halted below - unanswered-thread pressure is exactly what this gate
+        // meters.
+        const stamped = (
+          opts.meta as { composedAgainst?: { inboundId?: string; inboundAt?: string } } | undefined
+        )?.composedAgainst;
+        if (stamped && (stamped.inboundId || stamped.inboundAt)) {
+          return await queue(
+            jitteredHold(now, 1, 1),
+            "engagement probe disagrees with the reply's own inbound receipt - rechecking"
+          );
+        }
         // TERMINAL drop, not a re-park. A 2nd automated message to a shop that
         // has not REPLIED is the #1 spam signal, so we do not send it - and
         // we must not leave it perpetually re-parking in the queue either (that
@@ -2388,7 +2458,7 @@ export async function guardOutbound(rawOpts: {
     )}&order=received_at.desc&limit=300`
   );
   if ("error" in sentRes && sentRes.error === "unavailable" && opts.auto) {
-    return await queue(jitteredHold(now, 5, 5), "sync-retry");
+    return await queue(syncRetryHold(), "sync-retry");
   }
   const sentRows = "rows" in sentRes ? sentRes.rows : [];
   // Count messages ALREADY PARKED in the outbox for this sender toward the
@@ -2441,13 +2511,24 @@ export async function guardOutbound(rawOpts: {
     // QUEUE, never DROP: on the drain path the row was already claimed
     // (deleted), so a bare !allow would silently lose it (the "sent a few then
     // the rest vanished" bug). Anchor the hold to when the rolling 24h window
-    // actually frees - the oldest send ages out at oldest+24h - clamped into
-    // the shop's business hours, so a capped batch resumes instead of dying.
+    // actually frees - the oldest send ages out at oldest+24h.
+    //
+    // THE CLAMP IS COLD-LANE ONLY (owner report 4, item 3). This was the one
+    // remaining `clampToBusinessHours` on a path a REPLY could reach, and the
+    // module that owns the clamp names it as the cause of the "answer landed
+    // at 05:38 next morning" incident. A capped COLD batch resuming inside
+    // the shop's morning is politeness; a capped REPLY snapped to 08:00 is a
+    // dead negotiation - the shop already wrote to us, so the reply resumes
+    // the moment capacity frees, exactly like gate #2 already exempts replies
+    // from business hours.
     const oldest = sentRows.length
       ? Date.parse(sentRows[sentRows.length - 1].received_at)
       : now;
     const freeAt = Math.max(now + 5 * 60_000, oldest + 24 * 3600_000);
-    const until = clampToBusinessHours(new Date(freeAt).toISOString(), opts.toDigits, p, region);
+    const freeIso = new Date(freeAt).toISOString();
+    const until = isNewContact
+      ? clampToBusinessHours(freeIso, opts.toDigits, p, region)
+      : freeIso;
     return await queue(until, `daily cap reached (${dayCap}/day) - resumes as capacity frees`);
   }
 
@@ -2594,14 +2675,13 @@ async function staleDraftDropped(
 
     // The row is gone. Say so loudly - a silent drop is how a thread dies.
     await completeOutboxRow(row.id);
-    await sbInsert("agent_events", [
-      {
-        kind: "wa-send-stale",
-        user_email: row.sender_key,
-        vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
-        detail: `${verdict.reason}: ${verdict.detail ?? ""}`.slice(0, 300),
-      },
-    ]).catch(() => {});
+    await insertPathEvent({
+      kind: "wa-send-stale",
+      user_email: row.sender_key,
+      to_number: row.to_number,
+      vendor_name: String((row.meta as { vendorName?: string } | null)?.vendorName ?? row.to_number),
+      detail: `${verdict.reason}: ${verdict.detail ?? ""}`.slice(0, 300),
+    });
 
     // ...and make sure the shop still hears from us. The newer inbound may have
     // had no turn of its own; this schedules one, and the wakeup drain applies
@@ -2761,16 +2841,16 @@ export async function drainOutbox(
     // ancient "do you have one for tomorrow?" is judged fresh and goes out.
     if (outboxExpired(cand.not_before, Date.now())) {
       await completeOutboxRow(cand.id);
-      await sbInsert("agent_events", [
-        {
-          kind: "wa-send-expired",
-          vendor_id: String((cand.meta as { vendorId?: string } | null)?.vendorId ?? ""),
-          vendor_name: String(
-            (cand.meta as { vendorName?: string } | null)?.vendorName ?? cand.to_number
-          ),
-          detail: `Binned a message to +${cand.to_number} (sender ${cand.sender_key}) that had been due since ${cand.not_before} - older than the ${Math.round(OUTBOX_MAX_AGE_MS / 3600_000)}h ceiling. Sending it now would answer a question the traveller has moved on from.`,
-        },
-      ]).catch(() => {});
+      await insertPathEvent({
+        kind: "wa-send-expired",
+        user_email: cand.sender_key,
+        to_number: cand.to_number,
+        vendor_id: String((cand.meta as { vendorId?: string } | null)?.vendorId ?? ""),
+        vendor_name: String(
+          (cand.meta as { vendorName?: string } | null)?.vendorName ?? cand.to_number
+        ),
+        detail: `Binned a message to +${cand.to_number} (sender ${cand.sender_key}) that had been due since ${cand.not_before} - older than the ${Math.round(OUTBOX_MAX_AGE_MS / 3600_000)}h ceiling. Sending it now would answer a question the traveller has moved on from.`,
+      });
       continue;
     }
     const cold = isCold(cand);
@@ -2951,7 +3031,10 @@ export async function drainOutbox(
             },
           ]).catch(() => {});
         } else {
-          await release(120_000, { dupHolds: holds, reason: "human pacing gap" });
+          // Lane-proportional: a reply's rival claim is mid-delivery on a
+          // seconds-scale lane, so 30s is plenty to let it retire the row; the
+          // cold 2min hold stays - intro velocity is the ban vector.
+          await release(isReplyRow ? 30_000 : 120_000, { dupHolds: holds, reason: "human pacing gap" });
         }
         continue;
       }
@@ -2983,12 +3066,13 @@ export async function drainOutbox(
       // dashboard meant either "busy" or "broken" and there was no way to tell
       // which. A contention counter that can also mean an outage is not a
       // signal, and it is the input the adaptive pacing wants to read.
-      await sbInsert("agent_events", [
-        {
-          kind: claim.kind === "pacing" ? "claim-lost" : "claim-error",
-          detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}`,
-        },
-      ]).catch(() => {});
+      await insertPathEvent({
+        kind: claim.kind === "pacing" ? "claim-lost" : "claim-error",
+        user_email: row.sender_key,
+        to_number: row.to_number,
+        vendor_name: `+${row.to_number}`,
+        detail: `send slot ${claim.kind} for ${row.sender_key} -> +${row.to_number}`,
+      });
       continue;
     }
     // A THROW from send() (e.g. the transport rejected) must not abandon the
@@ -3058,6 +3142,29 @@ export async function drainOutbox(
       // briefly in both tables (every surface prefers "sent"), and never in
       // neither - which is what made it disappear mid-send.
       await completeOutboxRow(row.id);
+      // THE NUMBER THE PROMISE IS MADE OF: inbound -> wire, wall clock. The
+      // turn-latency stamp measures compose time plus the PLANNED delay, which
+      // is the latency we intended - not the latency that happened. Every hold,
+      // re-park and lost claim between compose and this send is invisible to
+      // it. A reply row carries what it was an answer to (composedAgainst), so
+      // the true end-to-end sample is one subtraction away. Fire-and-forget: a
+      // metric never delays the next row.
+      if (!cold) {
+        const inboundAtIso = (
+          row.meta as { composedAgainst?: { inboundAt?: string } } | null
+        )?.composedAgainst?.inboundAt;
+        const inboundAtMs = inboundAtIso ? Date.parse(inboundAtIso) : NaN;
+        if (Number.isFinite(inboundAtMs) && Date.now() > inboundAtMs) {
+          void sbInsert("agent_events", [
+            {
+              kind: "reply-latency",
+              user_email: row.sender_key,
+              vendor_name: row.to_number,
+              detail: JSON.stringify({ inboundToWireMs: Date.now() - inboundAtMs }),
+            },
+          ]).catch(() => {});
+        }
+      }
       if (r.unconfirmed) {
         await sbInsert("agent_events", [
           {

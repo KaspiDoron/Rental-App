@@ -18,7 +18,7 @@ import { isThreadTakenOver, isSessionPaused } from "@/lib/session-flags";
 import { digitsOnly } from "@/lib/phone";
 import { trustedRequestOrigin } from "@/lib/request-origin";
 import { pushDiagnostics } from "@/lib/push";
-import { turnLatencyStats } from "@/lib/wa/turn-latency";
+import { turnLatencyStats, replyLatencyStats } from "@/lib/wa/turn-latency";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +39,8 @@ export async function GET(req: Request) {
   // controls (site origin or TRUSTED_HOSTS); the canonicalizer prefers
   // APP_DOMAIN over it regardless.
   const reqOrigin = (await trustedRequestOrigin(req)) ?? undefined;
-  const [diag, sessionRow, waOk, wa403, push, latencyRows, claimsTable] = await Promise.all([
+  const [diag, sessionRow, waOk, wa403, push, latencyRows, replyLatencyRows, claimsTable] =
+    await Promise.all([
     webhookDiagnostics(email, reqOrigin).catch(() => null),
     sbSelect<{ status: string | null; host_url: string | null; updated_at: string | null }>(
       "wa_sessions",
@@ -63,6 +64,14 @@ export async function GET(req: Request) {
     sbSelect<{ detail: string | null }>(
       "agent_events",
       `select=detail&kind=eq.turn-latency&user_email=eq.${enc}&order=created_at.desc&limit=50`
+    ).catch(() => []),
+    // ...and how fast replies ACTUALLY hit the wire (inbound -> delivered,
+    // wall clock, stamped by the drain). turn-latency is the intended number;
+    // this is the observed one - the difference is time spent held in the
+    // queue, which the owner could previously only infer from screenshots.
+    sbSelect<{ detail: string | null }>(
+      "agent_events",
+      `select=detail&kind=eq.reply-latency&user_email=eq.${enc}&order=created_at.desc&limit=50`
     ).catch(() => []),
     // The atomic pacing table. Before it existed the guard failed OPEN, so a
     // deployment that skipped the migration silently lost every concurrency
@@ -88,7 +97,12 @@ export async function GET(req: Request) {
       last403At: wa403[0]?.created_at ?? null,
     },
     push,
-    speed: { ...turnLatencyStats(latencyRows.map((r) => r.detail)), claimsTable },
+    speed: {
+      ...turnLatencyStats(latencyRows.map((r) => r.detail)),
+      claimsTable,
+      // Observed inbound->wire percentiles - the queue's own testimony.
+      wire: replyLatencyStats(replyLatencyRows.map((r) => r.detail)),
+    },
   };
 
   // ---- Optional per-number thread trace (the "why no reply" answer) ---------
