@@ -12,13 +12,33 @@ import { moneyLocal } from "@/lib/currency";
 export interface FeedItem {
   id: string;
   at: string;
-  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert" | "drop";
+  kind:
+    | "trace"
+    | "sent"
+    | "reply"
+    | "offer"
+    | "queued"
+    | "wait"
+    | "judge"
+    | "alert"
+    | "drop"
+    // A shop handed us another shop's contact card. A lead the traveller can
+    // act on - never a thread we open for them (see the route that emits it).
+    | "contact";
   vendorId?: string;
   vendorName?: string;
   title: string;
   detail?: string;
   decisionId?: string;
-  meta?: { pricePerDay?: number; currency?: string; round?: number; verified?: boolean; risk?: string };
+  meta?: {
+    pricePerDay?: number;
+    currency?: string;
+    round?: number;
+    verified?: boolean;
+    risk?: string;
+    /** kind:"contact" - the shared number, digits only, for the copy chip. */
+    digits?: string;
+  };
 }
 
 const KIND_ICON: Record<FeedItem["kind"], string> = {
@@ -33,6 +53,8 @@ const KIND_ICON: Record<FeedItem["kind"], string> = {
   // A delivery drop is operational info, not a scam warning - it borrows the
   // alert glyph but never the red risk styling below.
   drop: "alert",
+  // It arrived inside a conversation, so it wears the conversation glyph.
+  contact: "chat",
 };
 
 function relTime(iso: string): string {
@@ -135,6 +157,20 @@ export function ActivityFeed({
                       className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandblue"
                     >
                       {t("Why this move?")}
+                    </button>
+                  )}
+                  {/* A SHARED NUMBER IS A LEAD, AND THE TRAVELLER DECIDES.
+                      One tap puts it on the clipboard - it deliberately does
+                      NOT open a thread: messaging a shop nobody chose is the
+                      exact thing the outreach consent flow exists to prevent. */}
+                  {it.kind === "contact" && it.meta?.digits && (
+                    <button
+                      onClick={() => {
+                        void navigator.clipboard?.writeText?.(`+${it.meta!.digits}`);
+                      }}
+                      className="chip rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold text-brandblue"
+                    >
+                      {t("Copy number")}
                     </button>
                   )}
                   {it.vendorId && (it.kind === "sent" || it.kind === "reply" || it.kind === "alert") && (

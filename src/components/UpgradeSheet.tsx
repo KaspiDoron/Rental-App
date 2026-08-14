@@ -86,6 +86,13 @@ export function PlanCard({
   /** Warm-up gate closed: show the tier as desirable and not yet purchasable. */
   locked?: boolean;
 }) {
+  // THE PRICING CARD SPOKE ENGLISH ON A TRANSLATED PAGE (owner report 4).
+  // PlanCard renders on /welcome and /pricing - the first two screens a
+  // non-English traveller sees - beside a footer and trust panel that DO
+  // translate, so the plan chrome was the odd English block on an otherwise
+  // localized page. It is already a client component, so this costs nothing
+  // but the wrapper.
+  const { t } = useI18n();
   const [currencyCode, setCurrencyCode] = useState("USD");
   const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => setCurrencyCode(savedCurrency()), []);
@@ -105,7 +112,7 @@ export function PlanCard({
             <span className="text-[15px] font-extrabold text-strong">{plan.name}</span>
             {plan.highlight && (
               <span className="rounded-full bg-brandblue px-2 py-0.5 text-[10px] font-extrabold text-white">
-                Popular
+                {t("Popular")}
               </span>
             )}
           </div>
@@ -113,11 +120,11 @@ export function PlanCard({
         </div>
         <div className="relative text-right">
           {plan.amount === 0 ? (
-            <div className="font-accent text-xl font-extrabold text-strong">Free</div>
+            <div className="font-accent text-xl font-extrabold text-strong">{t("Free")}</div>
           ) : (
             <>
               <div className="font-accent text-xl font-extrabold text-strong">{now}</div>
-              <div className="text-[10px] font-bold text-faint">every 3 months</div>
+              <div className="text-[10px] font-bold text-faint">{t("every 3 months")}</div>
               <button
                 type="button"
                 onClick={() => setPickerOpen((o) => !o)}
@@ -154,7 +161,7 @@ export function PlanCard({
           makes it feel withheld rather than earned. */}
       {locked && plan.amount > 0 && (
         <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-card2 px-2.5 py-1 text-[11px] font-extrabold text-brandblue">
-          <Icon name="sparkles" className="h-3 w-3" /> Unlocks as you use the app
+          <Icon name="sparkles" className="h-3 w-3" /> {t("Unlocks as you use the app")}
         </div>
       )}
       {/* R5: crystal-clear capacity meter - the 10/30/40 limits explained in

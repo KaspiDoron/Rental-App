@@ -12,6 +12,7 @@ import { ConversationPanel } from "./ConversationPanel";
 import { PolicyPanel } from "./PolicyPanel";
 import { AnalyticsPanel } from "./AnalyticsPanel";
 import { IntegrityPanel } from "./IntegrityPanel";
+import { LaunchKpiCard } from "./LaunchKpiCard";
 
 interface ThreadCard {
   threadKey: string;
@@ -88,6 +89,13 @@ export function OpsCenter() {
         />
       ) : (
         <>
+          {/* THE GO/NO-GO NUMBERS, ABOVE THE SUB-TABS. Launch readiness is not
+              one more thing to go looking for - it is the question the owner
+              opens this panel holding. Scoped to the dashboard view: reading
+              one conversation is a different job, and stapling fleet KPIs over
+              it would just be noise. */}
+          <LaunchKpiCard />
+
           <div className="surface-strong no-scrollbar flex gap-1 overflow-x-auto rounded-2xl p-1">
             {(
               [

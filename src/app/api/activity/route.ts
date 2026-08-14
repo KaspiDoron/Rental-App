@@ -20,7 +20,19 @@ import { searchSessionTtlMs } from "@/lib/session-life-config";
 export interface ActivityItem {
   id: string;
   at: string; // ISO
-  kind: "trace" | "sent" | "reply" | "offer" | "queued" | "wait" | "judge" | "alert" | "drop";
+  // Keep in step with FeedItem in components/activity/ActivityFeed - the two
+  // are the wire's two ends. "contact" = a shop shared another shop's card.
+  kind:
+    | "trace"
+    | "sent"
+    | "reply"
+    | "offer"
+    | "queued"
+    | "wait"
+    | "judge"
+    | "alert"
+    | "drop"
+    | "contact";
   vendorId?: string;
   vendorName?: string;
   title: string;
@@ -257,7 +269,11 @@ export async function GET(req: Request) {
       // so a message the guard refused or a reply the pipeline lost had a
       // durable trace no user surface ever showed. Benign drops (privacy
       // gate, user pause, coalesced turns) are filtered out downstream.
-      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=in.("inbound-risk","inbound-dropped","send-dropped")&user_email=eq.${encodeURIComponent(
+      // ...AND SO IS A SHARED CONTACT. `contact-suggested` is written at
+      // ingest when a shop sends another shop's card; it was a durable fact
+      // with no surface at all, which is the same invisibility the drops above
+      // were fixed for. It is a LEAD, not an alert - see the feed item below.
+      `select=id,kind,vendor_id,vendor_name,detail,created_at&kind=in.("inbound-risk","inbound-dropped","send-dropped","contact-suggested")&user_email=eq.${encodeURIComponent(
         email
       )}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=20`
     ).catch(() => []),
@@ -447,6 +463,29 @@ export async function GET(req: Request) {
   }
   const { dropFeedItem } = await import("@/lib/wa/safety-signals");
   for (const e of events) {
+    if (e.kind === "contact-suggested") {
+      // The shop shared someone's card. Show WHO shared it and the number, so
+      // the traveller can act - and nothing more: no thread is opened for
+      // them (the ingest writer is deliberately suggestion-only).
+      let shared: { name?: string | null; digits?: string } = {};
+      try {
+        shared = JSON.parse(e.detail ?? "{}");
+      } catch {
+        shared = {};
+      }
+      if (!shared.digits) continue; // a card with no number is nothing to act on
+      items.push({
+        id: `contact:${e.id}`,
+        at: e.created_at,
+        kind: "contact",
+        title: shared.name
+          ? `A shop shared a contact: ${shared.name}`
+          : "A shop shared a contact",
+        detail: `+${shared.digits} - shared by the shop you are talking to. Tap to copy if you want to ask them too; nothing was sent to them.`,
+        meta: { digits: shared.digits },
+      });
+      continue;
+    }
     if (e.kind === "inbound-dropped" || e.kind === "send-dropped") {
       const drop = dropFeedItem(e.kind, e.detail);
       if (!drop) continue; // benign, deliberate outcome - not an alert
