@@ -155,4 +155,9 @@ export const I18N_EXTRAS: string[] = [
 
   // src/components/SiteFooter.tsx - the public guides hub link (wave 4.4)
   "Guides",
+
+  // src/components/PlaceAutocomplete.tsx - the prop DEFAULT reaches t() as
+  // t(placeholder), so the literal lives in the parameter list, not in a
+  // t("...") call the grep can see.
+  "Search hotel, address or area...",
 ];

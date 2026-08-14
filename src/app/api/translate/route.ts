@@ -146,18 +146,37 @@ export async function POST(req: Request) {
         .filter((t: string) => allowed.has(t))
     : [];
 
+  // OWNER-AUTHORED GLOBAL COPY - today exactly the FAQ. It is not in the
+  // catalogue (the owner writes it live in Admin), but it is identical for
+  // every traveller, so a shared cache is correct by construction. It gets its
+  // OWN allowlist - the live FAQ contents, an owner-bounded set - and its OWN
+  // row, so the app-copy row stays exactly the size of the catalogue and the
+  // bounded-reads argument above survives untouched. Answers are paragraphs,
+  // so the cap is wider than the catalogue's 300.
+  //
+  // THE BREAK THIS CLOSES: FAQ strings used to arrive in `texts`, get filtered
+  // out by the catalogue allowlist above, and come back as a clean 200 with an
+  // empty map - which the client read as "the server declined" and permanently
+  // retired every FAQ string for the session. Hebrew FAQ showed English
+  // forever, with zero errors anywhere.
+  const sharedRaw: string[] = Array.isArray(body.shared)
+    ? body.shared.slice(0, 80).map((t: unknown) => String(t).slice(0, 600))
+    : [];
+  let shared: string[] = [];
+  if (sharedRaw.length > 0) {
+    const { listFaq } = await import("@/lib/faq");
+    const sharedAllowed = new Set(
+      (await listFaq()).flatMap((it) => [it.q.slice(0, 600), it.a.slice(0, 600)])
+    );
+    shared = sharedRaw.filter((t) => sharedAllowed.has(t));
+  }
+
   if (!LANG_RX.test(lang)) {
     return NextResponse.json({ error: "Invalid language." }, { status: 400 });
   }
-  if (lang === "en" || texts.length === 0) {
+  if (lang === "en" || (texts.length === 0 && shared.length === 0)) {
     return NextResponse.json({ map: {} });
   }
-
-  const cacheKey = `I18N_${lang}`;
-  let cached: Record<string, string> = {};
-  try {
-    cached = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
-  } catch {}
 
   // M23: THE OWNER'S CORRECTIONS, FROM THEIR OWN ROW.
   //
@@ -173,85 +192,102 @@ export async function POST(req: Request) {
   const { readOverrides, applyOverrides } = await import("@/lib/i18n-overrides");
   const overrides = await readOverrides(lang);
 
-  const missing = texts.filter((t) => !cached[t] && !overrides[t]);
+  const scopes: { texts: string[]; cacheKey: string }[] = [];
+  if (texts.length > 0) scopes.push({ texts, cacheKey: `I18N_${lang}` });
+  if (shared.length > 0) scopes.push({ texts: shared, cacheKey: `I18N_SHARED_${lang}` });
 
-  if (missing.length > 0) {
-    if (!(await aiEnabled())) {
-      return NextResponse.json({
-        // Corrections still apply on the no-AI path - they are already stored
-        // and need no provider to serve.
-        map: pickTranslated(texts, applyOverrides(cached, overrides)),
-        error:
-          "AI translation needs at least one AI provider key (Admin -> Keys). Showing English for now.",
-      });
-    }
-    let learned = false;
-    const rejectedAll: { text: string; reason: string }[] = [];
-    for (let i = 0; i < missing.length; i += CHUNK) {
-      const chunk = missing.slice(i, i + CHUNK);
-      const res = await translateChunk(langName, chunk);
-      if (res) {
-        chunk.forEach((src, j) => {
-          if (res.out[j]) cached[src] = res.out[j] as string;
+  const mapOut: Record<string, string> = {};
+  const rejectedAll: { text: string; reason: string }[] = [];
+  let sweptLlm = false;
+
+  for (const scope of scopes) {
+    const cacheKey = scope.cacheKey;
+    let cached: Record<string, string> = {};
+    try {
+      cached = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
+    } catch {}
+
+    const missing = scope.texts.filter((t) => !cached[t] && !overrides[t]);
+
+    if (missing.length > 0) {
+      if (!(await aiEnabled())) {
+        return NextResponse.json({
+          // Corrections still apply on the no-AI path - they are already stored
+          // and need no provider to serve.
+          map: { ...mapOut, ...pickTranslated(scope.texts, applyOverrides(cached, overrides)) },
+          error:
+            "AI translation needs at least one AI provider key (Admin -> Keys). Showing English for now.",
         });
-        learned = true;
-        // ONE strict retry for the rejects before the client retires them:
-        // most drift is the model paraphrasing a {token}, and a pointed
-        // reminder recovers it. A second failure is surfaced, not retried -
-        // the daily cap is not a fuzzing budget.
-        if (res.rejected.length > 0) {
-          const again = res.rejected.map((r) => r.text);
-          const retryRes = await translateChunk(langName, again, true);
-          if (retryRes) {
-            again.forEach((src, j) => {
-              if (retryRes.out[j]) cached[src] = retryRes.out[j] as string;
-            });
-            rejectedAll.push(...retryRes.rejected);
-          } else {
-            rejectedAll.push(...res.rejected);
+      }
+      let learned = false;
+      for (let i = 0; i < missing.length; i += CHUNK) {
+        const chunk = missing.slice(i, i + CHUNK);
+        const res = await translateChunk(langName, chunk);
+        if (res) {
+          chunk.forEach((src, j) => {
+            if (res.out[j]) cached[src] = res.out[j] as string;
+          });
+          learned = true;
+          sweptLlm = true;
+          // ONE strict retry for the rejects before the client retires them:
+          // most drift is the model paraphrasing a {token}, and a pointed
+          // reminder recovers it. A second failure is surfaced, not retried -
+          // the daily cap is not a fuzzing budget.
+          if (res.rejected.length > 0) {
+            const again = res.rejected.map((r) => r.text);
+            const retryRes = await translateChunk(langName, again, true);
+            if (retryRes) {
+              again.forEach((src, j) => {
+                if (retryRes.out[j]) cached[src] = retryRes.out[j] as string;
+              });
+              rejectedAll.push(...retryRes.rejected);
+            } else {
+              rejectedAll.push(...res.rejected);
+            }
           }
         }
       }
-    }
-    if (learned) {
-      // LAST WRITE WINS, AND EVERY OTHER WRITE IS LOST.
-      //
-      // The client fires its batches in parallel (i18n.tsx: one Promise.all over
-      // 42-string chunks), and every one of them lands here. Each read the SAME
-      // snapshot of the dictionary at the top of this handler, spent seconds in
-      // the LLM, then wrote the whole object back - so N concurrent batches kept
-      // only the translations of whichever finished last. The rest were paid for
-      // and discarded, and the next user in that language paid for them again,
-      // round after round, until the dictionary happened to converge.
-      //
-      // Re-read and merge immediately before the write. The window shrinks from
-      // "the length of an LLM call" to "the length of one Supabase round trip",
-      // and OURS wins on conflict for the keys we actually translated - a key
-      // another batch wrote in the meantime is kept, not clobbered.
-      let latest: Record<string, string> = {};
-      try {
-        latest = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
-      } catch {
-        /* an unreadable cache is an empty one; we still have our own work */
+      if (learned) {
+        // LAST WRITE WINS, AND EVERY OTHER WRITE IS LOST.
+        //
+        // The client fires its batches in parallel (i18n.tsx: one Promise.all over
+        // 42-string chunks), and every one of them lands here. Each read the SAME
+        // snapshot of the dictionary at the top of this handler, spent seconds in
+        // the LLM, then wrote the whole object back - so N concurrent batches kept
+        // only the translations of whichever finished last. The rest were paid for
+        // and discarded, and the next user in that language paid for them again,
+        // round after round, until the dictionary happened to converge.
+        //
+        // Re-read and merge immediately before the write. The window shrinks from
+        // "the length of an LLM call" to "the length of one Supabase round trip",
+        // and OURS wins on conflict for the keys we actually translated - a key
+        // another batch wrote in the meantime is kept, not clobbered.
+        let latest: Record<string, string> = {};
+        try {
+          latest = JSON.parse((await getConfigExact(cacheKey)) ?? "{}");
+        } catch {
+          /* an unreadable cache is an empty one; we still have our own work */
+        }
+        await setConfig(cacheKey, JSON.stringify({ ...latest, ...cached }));
       }
-      await setConfig(cacheKey, JSON.stringify({ ...latest, ...cached }));
     }
+
+    // OVERRIDES WIN. The owner's correction is the authoritative answer for a
+    // string; the machine cache is the fallback beneath it.
+    Object.assign(mapOut, pickTranslated(scope.texts, applyOverrides(cached, overrides)));
+  }
+
+  if (sweptLlm) {
     // Count this LLM sweep against the daily cap (a cache hit costs nothing).
     const { recordApi } = await import("@/lib/usage");
     await recordApi("translate", 1, session.email);
-
-    return NextResponse.json({
-      map: pickTranslated(texts, applyOverrides(cached, overrides)),
-      // WHY a string stayed English - for the admin translation panel and the
-      // client's retry policy. Never silent.
-      ...(rejectedAll.length > 0 ? { rejected: rejectedAll } : {}),
-    });
   }
 
   return NextResponse.json({
-    // OVERRIDES WIN. The owner's correction is the authoritative answer for a
-    // string; the machine cache is the fallback beneath it.
-    map: pickTranslated(texts, applyOverrides(cached, overrides)),
+    map: mapOut,
+    // WHY a string stayed English - for the admin translation panel and the
+    // client's retry policy. Never silent.
+    ...(rejectedAll.length > 0 ? { rejected: rejectedAll } : {}),
   });
 }
 

@@ -17,10 +17,22 @@
      per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo while
      Hebrew glyphs (which neither carries) resolve to Rubik / Secular One
      instead of an arbitrary system face (owner report 3, item 10). */
-  --font-body: var(--wd-font-body), "Nunito", var(--wd-font-body-he), "Rubik", ui-rounded,
-    "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: var(--wd-font-body), "Nunito", var(--wd-font-body-he), "Rubik",
+    var(--wd-font-body-ar), "IBM Plex Sans Arabic", var(--wd-font-body-hi), "Mukta",
+    var(--wd-font-body-th), "Sarabun", "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC",
+    "Malgun Gothic", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
   --font-display: var(--wd-font-display), "Baloo 2", var(--wd-font-display-he), "Secular One",
-    var(--font-body);
+    var(--wd-font-display-ar), "Baloo Bhaijaan 2", var(--wd-font-display-cy), "Comfortaa",
+    var(--wd-font-display-th), "Mitr", "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC",
+    "Malgun Gothic", var(--font-body);
+  /* The third premium role (owner report 4, item 2): prices, savings numbers,
+     counters, plan cards. Same per-character ladder discipline - the Latin
+     accent face leads, each script's accent face catches its own glyphs, and
+     anything else falls through to the body ladder. */
+  --font-accent: var(--wd-font-accent), "Space Grotesk", var(--wd-font-accent-he), "Heebo",
+    var(--wd-font-accent-ar), "Cairo", var(--wd-font-accent-hi), "Hind",
+    var(--wd-font-accent-th), "IBM Plex Sans Thai", var(--font-body);
 
   --bg: #f4f6f9;
   --card: #ffffff;
@@ -713,31 +725,17 @@ input, textarea, select, button {
   isolation: isolate;
 }
 
-/* THE ANGLE IS A PROPERTY, NOT A TRANSFORM. THIS IS THE WHOLE GEOMETRY FIX.
+/* ONE GEOMETRY FOR EVERY GLOW (owner report 4, item 9).
  *
- * The owner's report was that the glow reads as "a rounded square turning 360
- * degrees". It did, and it had to: the old animation was
- * `@keyframes aurora-drift { to { transform: rotate(1turn); } }` applied to the
- * pseudo-element itself. Rotating a NON-SQUARE box about its centre sweeps its
- * corners in and out of the rounded mask, so on any card wider than it is tall
- * - which is every card - the eye tracks the box spinning rather than the light
- * travelling. On the masked rim it is worse: the mask does not rotate with the
- * element, so the rim's own corners scrape across it.
- *
- * Registering the angle with @property makes it an ANIMATABLE <angle>, so the
- * conic gradient's start point sweeps while the element never moves. The light
- * travels; the box stays exactly where it was drawn.
- *
- * @property is Baseline (Chrome 85, Safari 16.4, Firefox 128). Where it is not
- * supported the declaration is ignored, the angle stays at its initial 0deg,
- * and the result is a static multi-hue gradient - which is a perfectly good
- * loading affordance and is also what prefers-reduced-motion gets.
+ * The component glow used to be a CONIC rainbow sweeping 360 degrees behind a
+ * blur pass, while the page-level `.wd-ambient` painted soft layered radial
+ * lobes - two visual languages for the same sentence, and the owner named the
+ * spinning rainbow as the amateur one. The aurora now speaks ambient: the
+ * same stacked radial lobes at box scale, no rotation, no blur filter (soft
+ * gradient stops carry the haze for free - the identical low-end-Android
+ * budget rule the ambient already lives by). Motion is the breath alone,
+ * which the heartbeat shares its rhythm with.
  */
-@property --wd-hue-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
 
 /* THE PALETTE, RE-SEEDED FROM THE BRAND.
  *
@@ -764,14 +762,16 @@ input, textarea, select, button {
 }
 
 .aurora::before {
-  /* THE BLOOM. Behind the content, escaping the box, never interactive. */
+  /* THE BLOOM. Behind the content, escaping the box, never interactive.
+   * Ambient-style layered lobes, box-scaled: cool crown up top, warm floor
+   * lobes below, the held violet in the middle so the set reads as light
+   * rather than as a traffic signal. NO blur filter - soft stops only. */
   content: "";
   position: absolute;
-  inset: -14%;
+  inset: -16%;
   z-index: -1;
   pointer-events: none;
   border-radius: inherit;
-  filter: blur(18px);
   /* OPACITY BELONGS TO THE THEME, AND ONLY TO THE THEME.
    *
    * `aurora-breathe` animated `opacity`, which outranks both the static value
@@ -780,34 +780,31 @@ input, textarea, select, button {
    * rides on `scale`, which nothing else claims, and opacity is a plain
    * declaration the theme can win. */
   opacity: 0.5;
-  background: conic-gradient(
-    from var(--wd-hue-angle),
-    var(--wd-hue-1),
-    var(--wd-hue-2),
-    var(--wd-hue-5),
-    var(--wd-hue-3),
-    var(--wd-hue-4),
-    var(--wd-hue-1)
-  );
-  animation: wd-hue-sweep 7.5s linear infinite, aurora-breathe 3.6s ease-in-out infinite;
+  background:
+    radial-gradient(60% 60% at 24% 16%, var(--wd-hue-1) 0%, transparent 70%),
+    radial-gradient(55% 55% at 78% 22%, var(--wd-hue-2) 0%, transparent 70%),
+    radial-gradient(58% 55% at 72% 84%, var(--wd-hue-3) 0%, transparent 72%),
+    radial-gradient(50% 50% at 20% 80%, var(--wd-hue-4) 0%, transparent 70%),
+    radial-gradient(46% 46% at 50% 50%, var(--wd-hue-5) 0%, transparent 76%);
+  animation: aurora-breathe 3.6s ease-in-out infinite;
 }
 .aurora::after {
   /* THE EDGE. A gradient ring, masked to the border only - no extra wrapper
-     element and no double-border artefact on a rounded card. */
+     element and no double-border artefact on a rounded card. Static by
+     design now: the breath on the bloom is the motion, and a still rim under
+     a breathing glow reads as a jewel setting, not a spinner. */
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
   padding: 1.5px;
-  background: conic-gradient(
-    from var(--wd-hue-angle),
+  background: linear-gradient(
+    135deg,
     var(--wd-hue-1),
-    var(--wd-hue-2),
-    var(--wd-hue-5),
-    var(--wd-hue-3),
-    var(--wd-hue-4),
-    var(--wd-hue-1)
+    var(--wd-hue-2) 35%,
+    var(--wd-hue-3) 68%,
+    var(--wd-hue-4)
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -817,7 +814,6 @@ input, textarea, select, button {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: wd-hue-sweep 7.5s linear infinite;
 }
 /* The bloom is what carries the effect in dark mode; the rim is what carries it
    in daylight. Trading their weight rather than shipping one washed-out
@@ -826,12 +822,22 @@ input, textarea, select, button {
 [data-theme="dark"] .aurora::before { opacity: 0.62; }
 [data-theme="dark"] .aurora::after { opacity: 0.75; }
 
-@keyframes wd-hue-sweep {
-  to { --wd-hue-angle: 360deg; }
-}
 @keyframes aurora-breathe {
   0%, 100% { scale: 1; }
   50% { scale: 1.045; }
+}
+
+/* THE DRAW-ON (outline BrandMark). Each stroke sketches itself in and then
+ * softly re-shimmers - the classic monoline luxury treatment, pure CSS. The
+ * dash length over-covers the longest path so every shape closes. */
+@keyframes wd-draw-on {
+  0% { stroke-dashoffset: 1200; opacity: 0.35; }
+  55% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+.wd-draw {
+  stroke-dasharray: 1200;
+  animation: wd-draw-on 2.6s ease-out infinite;
 }
 
 /* THE HEARTBEAT.
@@ -881,6 +887,12 @@ input, textarea, select, button {
   .aurora::after { animation: none; }
   .aurora::before { opacity: 0.4; }
   .wd-heartbeat { animation: none; }
+  /* The draw-on settles to the finished outline - never a half-sketched mark. */
+  .wd-draw {
+    animation: none;
+    stroke-dashoffset: 0;
+    stroke-dasharray: none;
+  }
 }
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -920,6 +932,16 @@ input, textarea, select, button {
 [data-theme="dark"] .leaflet-control-attribution a { color: #aab2bf !important; }
 
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* The accent face for the numbers that sell the product: offer prices, savings
+   tickers, plan cards, live counters. Tabular by construction - an animated
+   price must not wobble as digits change - and slightly tightened, because
+   Space Grotesk runs wide at display sizes. */
+.font-accent {
+  font-family: var(--font-accent);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
 
 /* ---- Flashy feature badges (Ultra, authentic bargain, translate intro) --- */
 @keyframes shine {
@@ -1324,12 +1346,20 @@ input, textarea, select, button {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  /* FIVE lobes now (owner report 4, item 9 - "more of the screen vertically,
+   * more colors, brighter"): the two hanging crown lobes and the mid wash
+   * keep their exact geometry; the yellow and red hues - previously unused
+   * here - join as low, wide side lobes so the wash reads around the WHOLE
+   * screen instead of only crowning it. Still top-heavy: the mask (below)
+   * carries real weight further down but never lets the bottom shout. */
   background:
     radial-gradient(70% 55% at 22% -6%, var(--wd-hue-1) 0%, transparent 70%),
     radial-gradient(60% 48% at 78% 4%, var(--wd-hue-2) 0%, transparent 70%),
-    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 72%);
-  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.55) 45%, transparent 85%);
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.55) 45%, transparent 85%);
+    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 72%),
+    radial-gradient(55% 38% at 12% 64%, var(--wd-hue-4) 0%, transparent 70%),
+    radial-gradient(58% 40% at 90% 78%, var(--wd-hue-5) 0%, transparent 70%);
+  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.28) 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.28) 78%, transparent 100%);
   opacity: 0;
   transform-origin: 50% 0%;
   transition: opacity 420ms ease;
@@ -1337,9 +1367,20 @@ input, textarea, select, button {
   animation-play-state: paused;
 }
 .wd-ambient-on {
-  opacity: 0.3;
+  opacity: 0.45;
   transition: none;
   animation-play-state: running;
+}
+/* Brightness is theme work: 0.45 over a near-white canvas is a wash, the same
+ * over #17191d is a glare. A RULE (not a token) so the prefers-color-scheme
+ * mirror test is untouched. */
+[data-theme="dark"] .wd-ambient-on {
+  opacity: 0.36;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .wd-ambient-on {
+    opacity: 0.36;
+  }
 }
 
 @keyframes wd-ambient-breathe {

@@ -623,7 +623,7 @@ function VendorCardInner({
                     onClick={() => onOpenThread(vendor)}
                     className="mt-1.5 w-full rounded-xl border-2 border-line py-1.5 text-[11px] font-extrabold text-brandblue lift"
                   >
-                    💬 Full conversation
+                    💬 {t("Full conversation")}
                   </button>
                 )}
               </>
@@ -669,7 +669,7 @@ function VendorCardInner({
                     drift={badge.next ? t(badge.next) : undefined}
                   />
                 </div>
-                <div className="text-2xl font-extrabold text-strong">
+                <div className="font-accent text-2xl font-extrabold text-strong">
                   {curSymbol}
                   <AnimatedNumber value={offer.pricePerDay} />
                   <span className="text-sm font-bold text-faint">/{t("day")}</span>

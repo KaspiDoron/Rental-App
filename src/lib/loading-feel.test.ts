@@ -115,9 +115,11 @@ describe("there is an ambient layer at the page level", () => {
     expect(amb![0]).toMatch(/pointer-events: none/);
   });
 
-  it("it uses the brand hue tokens, not invented colours", () => {
+  it("it uses ALL FIVE brand hue tokens, not invented colours", () => {
+    // Owner report 4, item 9: "more colors" - the yellow and red hues joined
+    // as low side lobes, so the full brand ramp paints the wash.
     const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
-    for (const v of ["--wd-hue-1", "--wd-hue-2", "--wd-hue-3"]) {
+    for (const v of ["--wd-hue-1", "--wd-hue-2", "--wd-hue-3", "--wd-hue-4", "--wd-hue-5"]) {
       expect(amb, v).toContain(v);
     }
   });
@@ -141,13 +143,27 @@ describe("there is an ambient layer at the page level", () => {
     expect(glow).toMatch(/wd-ambient-on/);
   });
 
-  it("top-heavy and fading down, like the owner asked", () => {
+  it("top-heavy and fading down, like the owner asked - now reaching further", () => {
     const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
-    // The main lobes hang ABOVE the viewport...
+    // The main lobes still hang ABOVE the viewport...
     expect(amb).toMatch(/at 22% -6%/);
     expect(amb).toMatch(/at 78% 4%/);
-    // ...and the mask kills everything by ~85% down.
-    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*transparent 85%\)/);
+    // ...the new side lobes sit LOW so the wash wraps the whole screen...
+    expect(amb).toMatch(/at 12% 64%/);
+    expect(amb).toMatch(/at 90% 78%/);
+    // ...and the mask carries real weight to ~78% before fading out entirely
+    // (owner report 4: "take more of the screen space vertically") - but the
+    // gradient still ENDS transparent, so the bottom never shouts.
+    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*rgba\(0, 0, 0, 0\.28\) 78%, transparent 100%\)/);
+  });
+
+  it("brightness is theme work: one raise level per canvas", () => {
+    // 0.45 over near-white is a wash; the same over #17191d is a glare. The
+    // dark values are RULES, not tokens, so the theme-mirror test stays out
+    // of it - but both dark selectors must agree with each other.
+    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/opacity: 0\.45/);
+    expect(css).toMatch(/\[data-theme="dark"\] \.wd-ambient-on \{\s*\n\s*opacity: 0\.36;/);
+    expect(css).toMatch(/:root:not\(\[data-theme\]\) \.wd-ambient-on \{\s*\n\s*opacity: 0\.36;/);
   });
 
   it("no blur pass - the low-end-Android budget rule", () => {
@@ -171,6 +187,24 @@ describe("there is an ambient layer at the page level", () => {
     const nav = readCode("src/components/NavVeil.tsx");
     expect(nav).toMatch(/raiseAmbient\(\);/);
     expect(nav).toMatch(/lowerAmbient\(\);/);
+  });
+
+  it("EVERY big loading state raises it - route fallbacks and the WA gate too", () => {
+    // Owner report 4, item 9: the loading.tsx files are server components,
+    // so hard navigations showed the heartbeat with no wash. AmbientRaiser
+    // is the client leaf that closes that - a raise on mount, a lower on
+    // unmount, with AmbientGlow's escape hatches covering any leak.
+    const raiser = readCode("src/components/AmbientRaiser.tsx");
+    expect(raiser).toMatch(/raiseAmbient\(\);/);
+    expect(raiser).toMatch(/return \(\) => lowerAmbient\(\);/);
+    for (const p of [
+      "src/app/loading.tsx",
+      "src/app/deals/loading.tsx",
+      "src/app/profile/loading.tsx",
+      "src/components/WaLockVeil.tsx",
+    ]) {
+      expect(readCode(p), `${p} must mount AmbientRaiser`).toMatch(/<AmbientRaiser \/>/);
+    }
   });
 });
 

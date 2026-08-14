@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { useI18n } from "@/lib/i18n";
 import { OrbitDots } from "./OrbitDots";
 
 export interface PlacePick {
@@ -79,6 +80,7 @@ export function PlaceAutocomplete({
   minChars?: number;
   className?: string;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState(value ?? "");
   const [results, setResults] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -110,7 +112,7 @@ export function PlaceAutocomplete({
     const hit = SUGGESTION_CACHE.get(q.toLowerCase());
     if (hit) {
       setResults(hit);
-      setNote(hit.length ? null : friendlyError(undefined, q));
+      setNote(hit.length ? null : friendlyError(t, undefined, q));
       setOpen(true);
       return;
     }
@@ -161,14 +163,14 @@ export function PlaceAutocomplete({
         if (SUGGESTION_CACHE.size > CACHE_MAX) SUGGESTION_CACHE.clear();
         if (list.length) SUGGESTION_CACHE.set(q.toLowerCase(), list);
         setResults(list);
-        setNote(list.length ? null : friendlyError(data.error, q));
+        setNote(list.length ? null : friendlyError(t, data.error, q));
         setOpen(true);
       } catch (e) {
         // An abort is us superseding ourselves, not a failure to report.
         if ((e as { name?: string })?.name === "AbortError") return;
         if (myTurn !== turnRef.current) return;
         setResults([]);
-        setNote("Could not reach location search. Check your connection and retry.");
+        setNote(t("Could not reach location search. Check your connection and retry."));
         setOpen(true);
       } finally {
         if (myTurn === turnRef.current) setBusy(false);
@@ -225,9 +227,9 @@ export function PlaceAutocomplete({
         commit({ label: s.label, lat: data.place.lat, lng: data.place.lng });
         return;
       }
-      setNote("Could not pin that place on the map - try another suggestion.");
+      setNote(t("Could not pin that place on the map - try another suggestion."));
     } catch {
-      setNote("Could not pin that place on the map - check your connection.");
+      setNote(t("Could not pin that place on the map - check your connection."));
     } finally {
       setResolving(null);
     }
@@ -242,7 +244,7 @@ export function PlaceAutocomplete({
         const lng = pos.coords.longitude;
         // Turn the raw GPS point into a REAL named place so local currency and
         // language resolve (never leave it as "My current location").
-        let lbl = "My current location";
+        let lbl = t("My current location");
         try {
           const res = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
           const data = await res.json();
@@ -265,10 +267,10 @@ export function PlaceAutocomplete({
         setLocating(false);
         setNote(
           err?.code === 1
-            ? "Location access is off for this site - type your hotel or area below instead and I'll use that."
+            ? t("Location access is off for this site - type your hotel or area below instead and I'll use that.")
             : err?.code === 3
-              ? "Your phone could not get a fix in time - type your hotel or area below instead."
-              : "Could not read your location - type your hotel or area below instead."
+              ? t("Your phone could not get a fix in time - type your hotel or area below instead.")
+              : t("Could not read your location - type your hotel or area below instead.")
         );
         setOpen(true);
         onDenied?.();
@@ -289,7 +291,7 @@ export function PlaceAutocomplete({
             onText?.(e.target.value);
           }}
           onFocus={() => (results.length || note) && setOpen(true)}
-          placeholder={placeholder}
+          placeholder={t(placeholder)}
           className="w-full bg-transparent py-3 text-[16px] text-strong placeholder:text-faint focus:outline-none"
         />
         {busy && (
@@ -310,7 +312,7 @@ export function PlaceAutocomplete({
               ) : (
                 <Icon name="spark" className="h-4 w-4" />
               )}
-              {locating ? "Finding your location..." : "Use my current location"}
+              {locating ? t("Finding your location...") : t("Use my current location")}
             </button>
           )}
           {results.map((r, i) => (
@@ -330,7 +332,7 @@ export function PlaceAutocomplete({
           ))}
           {results.length === 0 && (
             <div className="border-t border-line px-4 py-3 text-[13px] text-faint">
-              {note ?? "Keep typing to search places..."}
+              {note ?? t("Keep typing to search places...")}
             </div>
           )}
         </div>
@@ -342,19 +344,26 @@ export function PlaceAutocomplete({
 // Map the route's error codes / Google reasons to something a traveller can act
 // on. Unknown Google errors (key restrictions etc.) still show a hint so the
 // dropdown is never mutely empty.
-function friendlyError(error: string | undefined, q: string): string {
-  if (!error) return `No matches for "${q}" - keep typing or use your area name.`;
+function friendlyError(
+  t: (s: string) => string,
+  error: string | undefined,
+  q: string
+): string {
+  // The query rides OUTSIDE the translated sentence: the catalogue translates
+  // exact strings, and a sentence with a user-typed fragment inside it could
+  // never match one (and must never be uploaded - it is the user's own text).
+  if (!error) return `${t("No matches for")} "${q}" - ${t("keep typing or use your area name.")}`;
   switch (error) {
     case "signed-out":
-      return "Sign in to search locations.";
+      return t("Sign in to search locations.");
     case "paused":
-      return "Location search is paused right now - type your area name to continue.";
+      return t("Location search is paused right now - type your area name to continue.");
     case "daily-limit":
-      return "You have hit today's location-search limit - type your area name to continue.";
+      return t("You have hit today's location-search limit - type your area name to continue.");
     default:
       // A real Google/network reason (e.g. Places API not enabled). Keep it
       // short and non-technical for users; the exact text still appears so an
       // owner testing the app can diagnose the key.
-      return `Location search is limited right now (${error.slice(0, 80)}). Type your area name to continue.`;
+      return `${t("Location search is limited right now")} (${error.slice(0, 80)}). ${t("Type your area name to continue.")}`;
   }
 }

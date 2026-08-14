@@ -1,5 +1,21 @@
 import type { Metadata, Viewport } from "next";
-import { Baloo_2, Nunito, Rubik, Secular_One } from "next/font/google";
+import {
+  Baloo_2,
+  Baloo_Bhaijaan_2,
+  Cairo,
+  Comfortaa,
+  Heebo,
+  Hind,
+  IBM_Plex_Sans_Arabic,
+  IBM_Plex_Sans_Thai,
+  Mitr,
+  Mukta,
+  Nunito,
+  Rubik,
+  Sarabun,
+  Secular_One,
+  Space_Grotesk,
+} from "next/font/google";
 import { I18nProvider } from "@/lib/i18n";
 import { WillAssistantProvider } from "@/components/will/WillAssistantProvider";
 import { NavVeil } from "@/components/NavVeil";
@@ -25,8 +41,20 @@ import "./globals.css";
 // occupies the same space as the real face - the swap stops moving anything.
 // It also removes a third-party request from the critical path, which is the
 // part that mattered on a slow connection.
+// THE FONT MATRIX (owner report 4, item 2): every translated language gets at
+// least THREE premium faces - display (headings), body (prose), accent
+// (prices/numbers/badges) - via per-CHARACTER fallback ladders in globals.css.
+// Latin faces lead every ladder so Latin stays pixel-identical; each script's
+// faces sit behind them and only its own glyphs fall through. next/font emits
+// unicode-range @font-face per subset, so a browser downloads only the
+// subsets it actually paints - the Latin cold start pays nothing for Thai.
+// CJK (zh/ja/ko) deliberately uses native system stacks appended to the
+// ladders: a CJK webfont is 3-15MB even subsetted, and the native faces are
+// what those users' eyes expect anyway.
 const nunito = Nunito({
-  subsets: ["latin"],
+  // latin-ext covers Polish/Turkish diacritics; cyrillic covers ru/uk prose;
+  // vietnamese its tonal stack - all previously falling to a system face.
+  subsets: ["latin", "latin-ext", "cyrillic", "cyrillic-ext", "vietnamese"],
   weight: ["400", "600", "700", "800"],
   variable: "--wd-font-body",
   display: "swap",
@@ -35,9 +63,21 @@ const nunito = Nunito({
 });
 
 const baloo = Baloo_2({
-  subsets: ["latin"],
+  // Baloo 2 natively ships Devanagari - Hindi headings come free here.
+  subsets: ["latin", "latin-ext", "vietnamese", "devanagari"],
   weight: ["600", "700", "800"],
   variable: "--wd-font-display",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// The app-wide ACCENT face: prices, savings numbers, counters, plan cards.
+// A tabular-figured grotesk that reads "engineered" next to the rounded
+// brand faces - the third premium face for every Latin-script language.
+const grotesk = Space_Grotesk({
+  subsets: ["latin", "latin-ext", "vietnamese"],
+  weight: ["500", "700"],
+  variable: "--wd-font-accent",
   display: "swap",
   adjustFontFallback: true,
 });
@@ -49,7 +89,9 @@ const baloo = Baloo_2({
 // fallback is per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo
 // while Hebrew glyphs resolve to Rubik (body) and Secular One (display).
 const rubik = Rubik({
-  subsets: ["hebrew", "latin"],
+  // + cyrillic: Rubik doubles as the Cyrillic body/accent letterface, so
+  // ru/uk get a designed face even where Nunito's coverage thins.
+  subsets: ["hebrew", "latin", "cyrillic"],
   weight: ["400", "500", "600", "700", "800"],
   variable: "--wd-font-body-he",
   display: "swap",
@@ -65,6 +107,108 @@ const secular = Secular_One({
   display: "swap",
   adjustFontFallback: true,
 });
+
+const heebo = Heebo({
+  subsets: ["hebrew", "latin"],
+  weight: ["500", "700"],
+  variable: "--wd-font-accent-he",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// ARABIC trio (RTL already handled by the dir() plumbing).
+const balooArabic = Baloo_Bhaijaan_2({
+  subsets: ["arabic", "latin"],
+  weight: ["700"],
+  variable: "--wd-font-display-ar",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const plexArabic = IBM_Plex_Sans_Arabic({
+  subsets: ["arabic", "latin"],
+  weight: ["400", "700"],
+  variable: "--wd-font-body-ar",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const cairo = Cairo({
+  subsets: ["arabic", "latin"],
+  weight: ["500", "700"],
+  variable: "--wd-font-accent-ar",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// CYRILLIC display (Baloo 2 has no Cyrillic; Comfortaa is its rounded cousin).
+const comfortaa = Comfortaa({
+  subsets: ["cyrillic", "latin"],
+  weight: ["700"],
+  variable: "--wd-font-display-cy",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// DEVANAGARI body + accent (display rides Baloo 2's own devanagari subset).
+const mukta = Mukta({
+  subsets: ["devanagari", "latin"],
+  weight: ["400", "700"],
+  variable: "--wd-font-body-hi",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const hind = Hind({
+  subsets: ["devanagari", "latin"],
+  weight: ["500", "700"],
+  variable: "--wd-font-accent-hi",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+// THAI trio.
+const mitr = Mitr({
+  subsets: ["thai", "latin"],
+  weight: ["700"],
+  variable: "--wd-font-display-th",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const sarabun = Sarabun({
+  subsets: ["thai", "latin"],
+  weight: ["400", "700"],
+  variable: "--wd-font-body-th",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const plexThai = IBM_Plex_Sans_Thai({
+  subsets: ["thai", "latin"],
+  weight: ["500", "700"],
+  variable: "--wd-font-accent-th",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const FONT_VARS = [
+  nunito.variable,
+  baloo.variable,
+  grotesk.variable,
+  rubik.variable,
+  secular.variable,
+  heebo.variable,
+  balooArabic.variable,
+  plexArabic.variable,
+  cairo.variable,
+  comfortaa.variable,
+  mukta.variable,
+  hind.variable,
+  mitr.variable,
+  sarabun.variable,
+  plexThai.variable,
+].join(" ");
 
 const title = "WheelDeal - cheapest local rides, negotiated for you";
 const description =
@@ -200,8 +344,9 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      // The two font variables land on the root, where globals.css reads them.
-      className={`${nunito.variable} ${baloo.variable} ${rubik.variable} ${secular.variable}`}
+      // Every font variable lands on the root, where globals.css reads them
+      // into the three per-script ladders (display / body / accent).
+      className={FONT_VARS}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />

@@ -113,10 +113,10 @@ export function PlanCard({
         </div>
         <div className="relative text-right">
           {plan.amount === 0 ? (
-            <div className="text-xl font-extrabold text-strong">Free</div>
+            <div className="font-accent text-xl font-extrabold text-strong">Free</div>
           ) : (
             <>
-              <div className="text-xl font-extrabold text-strong">{now}</div>
+              <div className="font-accent text-xl font-extrabold text-strong">{now}</div>
               <div className="text-[10px] font-bold text-faint">every 3 months</div>
               <button
                 type="button"

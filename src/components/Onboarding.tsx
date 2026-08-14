@@ -219,7 +219,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Getting started tour"
+      aria-label={t("Getting started tour")}
       className={`surface-strong pointer-events-auto w-full max-w-md p-5 animate-slide-up ${
         spotlight ? "rounded-blob shadow-2xl" : "rounded-t-3xl pb-safe sm:rounded-blob"
       }`}

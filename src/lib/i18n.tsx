@@ -97,12 +97,19 @@ const I18nContext = createContext<I18nValue>({
   unavailable: null,
 });
 
-import { translateOutcome, unavailableNote, retriable, missedFrom } from "./i18n-retry";
+import { translateOutcome, unavailableNote, retriable, retirementsFrom } from "./i18n-retry";
 // The egress gate: which strings may be sent to the translator at all. It lives
 // in its own module because this one is "use client" and the rule it enforces -
 // no user text in the globally shared I18N_<lang> row - has to be executable in
 // a plain test, not merely read.
-import { pending, failed, catalogue, queueForTranslation, queueSharedText } from "./i18n-gate";
+import {
+  pending,
+  failed,
+  catalogue,
+  queueForTranslation,
+  queueSharedText,
+  translatable,
+} from "./i18n-gate";
 
 function cacheGet(lang: string): Dict {
   try {
@@ -129,6 +136,9 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   // captured when it was created.
   const stoppedRef = useRef(false);
   const langRef = useRef(lang);
+  // Consecutive entirely-empty answers per string - the bounded patience
+  // behind retirementsFrom's no-loop guarantee.
+  const emptyStrikes = useRef(new Map<string, number>());
   langRef.current = lang;
 
   const applyDirection = useCallback((code: string) => {
@@ -157,18 +167,26 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
         const results = await Promise.all(
           batches.map(async (batch) => {
+            // Two scopes, one request. Catalogue copy rides `texts`;
+            // owner-authored global text (the FAQ, queued via queueSharedText -
+            // the only way a non-catalogue string enters the sweep) rides
+            // `shared`, where the server validates it against the live FAQ and
+            // caches it in its own row. Sending it as `texts` got it silently
+            // filtered - the FAQ-stays-English bug.
             const res = await fetch("/api/translate", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 lang: code,
                 langName: LANGS.find((l) => l.code === code)?.name ?? code,
-                texts: batch,
+                texts: batch.filter((s) => translatable(s)),
+                shared: batch.filter((s) => !translatable(s)),
               }),
             });
             const data = (await res.json().catch(() => null)) as {
               map?: Record<string, string>;
               error?: string;
+              rejected?: { text: string }[];
             } | null;
             return { batch, status: res.status, data };
           })
@@ -186,8 +204,13 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
           }
           if (outcome === "retry") continue; // a transient miss stays retriable
           Object.assign(merged, r.data?.map ?? {});
-          // Retire what the server answered "no" to, so the sweep stops asking.
-          for (const miss of missedFrom(r.batch, r.data?.map)) failed.add(miss);
+          // Retire what the server answered "no" to, so the sweep stops asking
+          // - but an ENTIRELY empty answer only earns a strike (see
+          // retirementsFrom): retiring a whole batch on one empty 200 is how
+          // the FAQ stayed English for the rest of the session.
+          for (const miss of retirementsFrom(r.batch, r.data, emptyStrikes.current)) {
+            failed.add(miss);
+          }
         }
 
         if (Object.keys(merged).length > 0) {
@@ -229,6 +252,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       // previous one says nothing about this one, and a terminal stop must not
       // outlive the language that caused it.
       failed.clear();
+      emptyStrikes.current.clear();
       stoppedRef.current = false;
       setUnavailable(null);
       if (code === "en") {

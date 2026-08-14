@@ -657,7 +657,7 @@ export default function DealsPage() {
                           { n: s.waiting, label: t("waiting") },
                         ].map((st) => (
                           <div key={st.label} className="rounded-2xl bg-card2 p-2.5 text-center">
-                            <div className="text-[18px] font-extrabold tabular-nums text-strong">
+                            <div className="font-accent text-[18px] font-extrabold text-strong">
                               {st.n}
                             </div>
                             <div className="text-[10px] font-bold text-faint">{st.label}</div>
@@ -812,7 +812,7 @@ export default function DealsPage() {
                                     <Icon name="clock" className="h-3 w-3 shrink-0 text-brandyellow" />
                                   )}
                                 </div>
-                                <div className="shrink-0 text-[12px] font-extrabold tabular-nums text-strong">
+                                <div className="font-accent shrink-0 text-[12px] font-extrabold text-strong">
                                   {moneyLocal(o.current, o.currency)}
                                   <span className="text-[10px] font-bold text-faint">/{t("day")}</span>
                                 </div>

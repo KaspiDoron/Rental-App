@@ -82,3 +82,41 @@ export function missedFrom(asked: string[], map: Record<string, string> | null |
   if (!map) return [...asked];
   return asked.filter((s) => !map[s]);
 }
+
+/**
+ * Which of the asked strings should be RETIRED after this response.
+ *
+ * THE FAQ WENT PERMANENTLY ENGLISH THROUGH THIS DECISION. The server used to
+ * filter owner-authored FAQ strings out of the batch and answer a clean 200
+ * with an empty map - and an empty map was read as "declined everything", so
+ * every FAQ string was retired for the session on the very first sweep. A
+ * server-side filter, a transient LLM flop and a genuine "no" were all the
+ * same shape on the wire.
+ *
+ * The rule now: a response that translated SOMETHING (or names its rejects)
+ * has demonstrated the pipeline works, so its misses are real answers and are
+ * retired as before. An ENTIRELY empty answer earns a strike instead - only
+ * `emptyStrikeLimit` consecutive empty answers retire the string, which keeps
+ * the no-loop guarantee (bounded at ~3 sweeps) without making one filtered
+ * batch a life sentence.
+ */
+export function retirementsFrom(
+  asked: string[],
+  data: TranslateResponseShape & { rejected?: { text: string }[] } | null | undefined,
+  strikes: Map<string, number>,
+  emptyStrikeLimit = 3
+): string[] {
+  const map = data?.map ?? null;
+  const translated = map ? asked.filter((s) => map[s]) : [];
+  if (translated.length > 0 || (data?.rejected?.length ?? 0) > 0) {
+    for (const s of asked) strikes.delete(s);
+    return missedFrom(asked, map);
+  }
+  const out: string[] = [];
+  for (const s of asked) {
+    const n = (strikes.get(s) ?? 0) + 1;
+    strikes.set(s, n);
+    if (n >= emptyStrikeLimit) out.push(s);
+  }
+  return out;
+}

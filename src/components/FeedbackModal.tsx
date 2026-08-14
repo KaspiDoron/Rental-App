@@ -116,7 +116,7 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
           </div>
           <h2 className="text-lg font-extrabold text-strong">{t("Feedback")}</h2>
         </div>
-        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label={t("Close")}>
           ✕
         </button>
       </div>
@@ -139,7 +139,7 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
         >
           Your reports
           {hasUnread && tab !== "yours" && (
-            <span className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-brandred" aria-label="new reply" />
+            <span className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-brandred" aria-label={t("new reply")} />
           )}
         </button>
       </div>
@@ -296,7 +296,7 @@ function ComposeTab({
         onChange={(e) => setText(e.target.value)}
         rows={4}
         maxLength={4000}
-        placeholder="What happened? Steps to reproduce, what you expected..."
+        placeholder={t("What happened? Steps to reproduce, what you expected...")}
         className="w-full resize-none rounded-2xl border-2 border-line bg-card p-3 text-sm text-strong placeholder:text-faint transition-colors focus:border-brandblue focus:outline-none"
       />
 
@@ -325,7 +325,7 @@ function ComposeTab({
               <button
                 onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
                 className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center bg-black/60 text-[11px] text-white"
-                aria-label="Remove image"
+                aria-label={t("Remove image")}
               >
                 ✕
               </button>
@@ -334,7 +334,7 @@ function ComposeTab({
           {images.length < MAX_IMAGES && (
             <label
               className="btn flex h-16 w-16 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-line text-faint hover:border-brandblue hover:text-brandblue"
-              aria-label="Add screenshot"
+              aria-label={t("Add screenshot")}
             >
               <input
                 type="file"
@@ -518,7 +518,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
                   if (e.key === "Enter") sendReply();
                 }}
                 disabled={busy}
-                placeholder="Reply to the team..."
+                placeholder={t("Reply to the team...")}
                 className="h-10 min-w-0 flex-1 rounded-xl border-2 border-line bg-card px-3 text-sm text-strong placeholder:text-faint transition-colors focus:border-brandblue focus:outline-none disabled:opacity-60"
                 style={{ fontSize: "16px" }}
               />
@@ -526,7 +526,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
                 onClick={sendReply}
                 disabled={busy || !reply.trim()}
                 className="btn btn-primary h-10 shrink-0 rounded-xl px-3 disabled:opacity-50"
-                aria-label="Send reply"
+                aria-label={t("Send reply")}
               >
                 <Icon name="send" className="h-4 w-4" />
               </button>

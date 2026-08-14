@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Modal } from "./Modal";
+import { useI18n } from "@/lib/i18n";
 import { LegalDoc } from "./LegalDoc";
 import {
   PRIVACY_SECTIONS,
@@ -25,6 +26,7 @@ export function TermsModal({
    */
   operatorName?: string;
 }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<"terms" | "privacy">("terms");
   const terms = withOperator(TERMS_SECTIONS, operatorName);
   const privacy = withOperator(PRIVACY_SECTIONS, operatorName);
@@ -37,7 +39,7 @@ export function TermsModal({
             tab === "terms" ? "bg-brandblue text-white" : "border border-line text-soft"
           }`}
         >
-          Terms of Use
+          {t("Terms of Use")}
         </button>
         <button
           onClick={() => setTab("privacy")}
@@ -45,18 +47,18 @@ export function TermsModal({
             tab === "privacy" ? "bg-brandblue text-white" : "border border-line text-soft"
           }`}
         >
-          Privacy Policy
+          {t("Privacy Policy")}
         </button>
       </div>
       <div className="max-h-[60dvh] overflow-y-auto pr-1">
         {tab === "terms" ? (
-          <LegalDoc title="Terms of Use" version={TERMS_VERSION} sections={terms} />
+          <LegalDoc title={t("Terms of Use")} version={TERMS_VERSION} sections={terms} />
         ) : (
-          <LegalDoc title="Privacy Policy" version={TERMS_VERSION} sections={privacy} />
+          <LegalDoc title={t("Privacy Policy")} version={TERMS_VERSION} sections={privacy} />
         )}
       </div>
       <button onClick={onClose} className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm">
-        I understand
+        {t("I understand")}
       </button>
     </Modal>
   );

@@ -66,7 +66,7 @@ export function ReviewsSheet({
             <span>· {vendor.reviews} Google reviews</span>
           </div>
         </div>
-        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label={t("Close")}>
           ✕
         </button>
       </div>
@@ -87,7 +87,7 @@ export function ReviewsSheet({
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search reviews (e.g. helmet, deposit)..."
+                placeholder={t("Search reviews (e.g. helmet, deposit)...")}
                 className="w-full bg-transparent py-2 text-[14px] text-strong placeholder:text-faint focus:outline-none"
               />
             </div>

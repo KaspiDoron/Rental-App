@@ -86,6 +86,40 @@ describe("testAllProviders contract (source pins)", () => {
     expect(ai).toMatch(/\\b\(400\|404\|429\)\\b/);
   });
 
+  it("a TIMED-OUT primary earns the same rescue, with the same classifier vision trusts", () => {
+    // Third live round: SambaNova queued the probe past its socket budget and
+    // the panel showed the bare platform string "This operation was aborted" -
+    // no provider, no status, no rescue. A queue-timeout is congestion wearing
+    // a different mask, so it routes to the sibling id like a 429 does.
+    expect(ai).toMatch(/visionFailureFromThrown\(e\) === "timeout"/);
+    // And the abort itself is renamed at the fetch chokepoint so no surface
+    // ever shows the anonymous platform message again.
+    expect(ai).toMatch(/timed out after \$\{timeoutMs\}ms \(no response\)/);
+  });
+
+  it("the provider deadline is SPLIT across primary and fallback, never duplicated", () => {
+    // The reply path budgets 9s for the whole chain; a rescue that re-spends
+    // the full budget lets one provider consume 2x its share, and a HUNG
+    // primary would leave a timeout-rescue nothing to run with.
+    expect(ai).toMatch(/Math\.round\(timeoutMs \* 0\.6\)/);
+    expect(ai).toMatch(/Math\.max\(2_000, deadline - Date\.now\(\)\)/);
+  });
+
+  it("sambanova is demoted below the fast tiers in BOTH order tables", () => {
+    // Correct ids, slow free tier: on the 6-9s callers it either never gets
+    // reached or gets the 2s floor that guarantees an abort. It earns its
+    // keep on long-budget callers, so it moves behind deepseek/together
+    // rather than out of the chain.
+    const open = ai.indexOf("= [", ai.indexOf("PROVIDER_NAMES"));
+    const table = ai.slice(open, ai.indexOf("]", open));
+    expect(table.indexOf('"deepseek"')).toBeLessThan(table.indexOf('"sambanova"'));
+    expect(table.indexOf('"together"')).toBeLessThan(table.indexOf('"sambanova"'));
+    const dsBlock = ai.indexOf('name: "deepseek"');
+    const sambaBlock = ai.indexOf('name: "sambanova"');
+    expect(dsBlock).toBeGreaterThan(0);
+    expect(dsBlock, "allProviders() must list deepseek before sambanova").toBeLessThan(sambaBlock);
+  });
+
   it("EXECUTED: 429 primary -> fallback answers; both-fail names BOTH ids", async () => {
     // Live evidence this encodes: the owner's sweep showed SambaNova red with
     // ONLY the primary's "high demand" error, which was indistinguishable
@@ -120,6 +154,46 @@ describe("testAllProviders contract (source pins)", () => {
       expect(drowned?.ok).toBe(false);
       expect(drowned?.detail).toMatch(/primary gpt-oss-120b:/);
       expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct:/);
+    } finally {
+      delete process.env.SAMBANOVA_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("EXECUTED: an ABORTED primary is rescued; a double abort names both ids honestly", async () => {
+    // The exact live failure of round three: the fetch abort surfaced as the
+    // bare "This operation was aborted" and no fallback was ever tried.
+    process.env.SAMBANOVA_TOKEN = "fake-key";
+    try {
+      let mode: "rescue" | "both-fail" = "rescue";
+      const abortErr = () =>
+        Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: { body?: string }) => {
+          if (!String(url).includes("sambanova")) return new Response("{}", { status: 200 });
+          const model = JSON.parse(init?.body ?? "{}").model as string;
+          if (mode === "both-fail" || model === "gpt-oss-120b") throw abortErr();
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }),
+            { status: 200 }
+          );
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+
+      const rescued = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(rescued?.ok).toBe(true);
+      expect(rescued?.model).toBe("Meta-Llama-3.3-70B-Instruct");
+
+      mode = "both-fail";
+      const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(drowned?.ok).toBe(false);
+      // Both halves carry the provider's name and the honest timeout wording -
+      // never the anonymous platform string.
+      expect(drowned?.detail).toMatch(/primary gpt-oss-120b: sambanova timed out after \d+ms/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct: sambanova timed out/);
+      expect(drowned?.detail).not.toMatch(/This operation was aborted/);
     } finally {
       delete process.env.SAMBANOVA_TOKEN;
       vi.unstubAllGlobals();

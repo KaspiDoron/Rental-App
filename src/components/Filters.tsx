@@ -81,18 +81,12 @@ export function Filters({
   isUltra = false,
   onUpgrade,
   tagCounts = {},
-  axis,
-  onAxis,
 }: {
   filters: FilterState;
   onChange: (f: FilterState) => void;
   availableClasses: VehicleClass[];
   isUltra?: boolean;
   onUpgrade?: () => void;
-  /** The list's axis (owner report 3, item 12). Only the list view passes
-   *  these - map and activity have no axis to flip. */
-  axis?: "vertical" | "horizontal";
-  onAxis?: (a: "vertical" | "horizontal") => void;
   /**
    * How many shops on screen have actually CONFIRMED each term. A verified tag
    * only exists once a shop stated it in its own replies, so at the start of a
@@ -128,18 +122,6 @@ export function Filters({
               : t("Active first")}
           </Chip>
         ))}
-        {onAxis && (
-          // The axis pair rides the sort row's own scroller, pushed to the
-          // end - the one place every list-view control already lives.
-          <span className="ms-auto flex shrink-0 items-center gap-2 ps-2">
-            <Chip active={axis !== "horizontal"} onClick={() => onAxis("vertical")}>
-              ↕ {t("Feed")}
-            </Chip>
-            <Chip active={axis === "horizontal"} onClick={() => onAxis("horizontal")}>
-              ↔ {t("Swipe")}
-            </Chip>
-          </span>
-        )}
       </div>
 
       {/* Vehicle class: only classes that actually match the search */}
