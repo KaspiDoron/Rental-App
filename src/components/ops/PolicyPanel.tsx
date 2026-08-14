@@ -299,7 +299,12 @@ export function PolicyPanel() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[12px] font-bold text-strong">
                   <span className="font-extrabold">
-                    {v.kind === "graph_spec" ? "Graph" : "Overlay"} v{v.version}
+                    {v.kind === "graph_spec"
+                      ? "Graph"
+                      : v.kind === "ops_learning"
+                        ? "Learning"
+                        : "Overlay"}{" "}
+                    v{v.version}
                   </span>
                   {v.note ? ` - ${v.note}` : ""}
                 </p>

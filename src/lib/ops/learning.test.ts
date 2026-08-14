@@ -52,6 +52,22 @@ describe("compileOpsLearning", () => {
     expect(out.edgePriorLines[0]).toContain("worsened 1x");
   });
 
+  it("accepts the PRIMARY engine's spte:<move> identity - live traffic compiles", () => {
+    // WAVE 3 defect 6: SPTE stamps `spte:<move>` as its edge_id (live.ts).
+    // Before, the compiler only ever saw graph edge ids, and since SPTE wrote
+    // no edge_id at all, every production review was dropped and edgePriorLines
+    // was structurally dead on live traffic.
+    const reviews = [
+      R({ edge_id: "spte:bargain", branch_correct: true, outcome_impact: "improved" }),
+      R({ edge_id: "spte:bargain", branch_correct: true }),
+      R({ edge_id: "spte:bargain", branch_correct: false, outcome_impact: "worsened" }),
+    ];
+    const out = compileOpsLearning(reviews, [], "t");
+    expect(out.edgePriorLines).toHaveLength(1);
+    expect(out.edgePriorLines[0]).toContain("move bargain (primary engine)");
+    expect(out.edgePriorLines[0]).toContain("owner-correct 2/3");
+  });
+
   it("caps priors at 6 lines, exemplars at 2, calibration at 3", () => {
     const reviews = Array.from({ length: 40 }, (_, i) =>
       R({ edge_id: `e${i % 10}`, branch_correct: true, rating: 1, feedback: "too weak", verdict: "reject" })

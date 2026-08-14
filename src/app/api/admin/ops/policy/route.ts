@@ -3,7 +3,7 @@ import { requireOwner } from "@/lib/session";
 import { setConfig, sbSelect } from "@/lib/runtime-config";
 import { getPolicyOverlay, clampOverlay } from "@/lib/ops/overlay";
 import { saveVersionedSpec, activateVersion, listVersions } from "@/lib/policy";
-import { runGoldenSuite } from "@/lib/ops/golden";
+import { runGoldenSuite, goldenGateBlocks } from "@/lib/ops/golden";
 import { opsLearningEnabled, bustOpsLearningCache } from "@/lib/ops/learning";
 import { sanitizeGraphSpec } from "@/lib/graph/default-graph";
 import { getActiveRev } from "@/lib/ops/rev";
@@ -49,11 +49,13 @@ export async function POST(req: Request) {
 
   if (body.action === "save" && body.kind === "policy_overlay") {
     const candidate = clampOverlay(body.spec);
-    // EVAL GATE: the candidate must keep every golden case green.
+    // EVAL GATE: the candidate must keep every golden case green. Fails CLOSED
+    // on an unreadable golden store (goldenGateBlocks).
     const report = await runGoldenSuite({ overlay: candidate });
-    if (report.total > 0 && report.passed < report.total) {
+    const blocked = goldenGateBlocks(report);
+    if (blocked) {
       return NextResponse.json(
-        { error: "The golden suite failed under this overlay - not activated.", report },
+        { error: `${blocked} The overlay was not activated.`, report },
         { status: 409 }
       );
     }
@@ -75,13 +77,18 @@ export async function POST(req: Request) {
     ).catch(() => []);
     if (!rows[0]) return NextResponse.json({ error: "Version not found." }, { status: 404 });
     // Even a rollback passes the gate - an OLD spec can still break NEW cases.
+    // ops_learning is prompt-side only, so the deterministic suite runs as the
+    // baseline check; the gate still fails closed on an unreadable store.
     const report =
       rows[0].kind === "graph_spec"
         ? await runGoldenSuite({ spec: sanitizeGraphSpec(rows[0].spec as GraphSpec) })
-        : await runGoldenSuite({ overlay: clampOverlay(rows[0].spec) });
-    if (report.total > 0 && report.passed < report.total) {
+        : rows[0].kind === "policy_overlay"
+          ? await runGoldenSuite({ overlay: clampOverlay(rows[0].spec) })
+          : await runGoldenSuite();
+    const blocked = goldenGateBlocks(report);
+    if (blocked) {
       return NextResponse.json(
-        { error: "The golden suite fails under that version - rollback blocked.", report },
+        { error: `${blocked} Rollback blocked.`, report },
         { status: 409 }
       );
     }

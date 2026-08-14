@@ -121,11 +121,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not apply the feedback to any node." }, { status: 500 });
   }
 
+  // EVAL GATE (Wave 3): the Coach used to be the ONE spec-writing path with no
+  // golden replay in front of it - an LLM rewriting live node instructions
+  // shipped ungated while the owner's hand edit next door was gated. Same gate,
+  // same fail-closed rule as every other behavior change.
+  const { runGoldenSuite, goldenGateBlocks } = await import("@/lib/ops/golden");
+  const { sanitizeGraphSpec } = await import("@/lib/graph/default-graph");
+  const candidate = sanitizeGraphSpec(spec);
+  const report = await runGoldenSuite({ spec: candidate });
+  const blocked = goldenGateBlocks(report);
+  if (blocked) {
+    return NextResponse.json(
+      { error: `${blocked} The coach patch was NOT applied.`, report },
+      { status: 409 }
+    );
+  }
+
   const saved = await saveVersionedSpec({
     kind: "graph_spec",
-    spec,
+    spec: candidate,
     note: `Coach: ${(summary || feedback).slice(0, 200)}`,
     author: session.email,
+    replayReport: report,
   });
   if (!saved.ok) {
     return NextResponse.json(

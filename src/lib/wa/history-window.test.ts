@@ -109,6 +109,10 @@ describe("the engines consume the shared window", () => {
     expect(sim).not.toMatch(/maxRounds: 6/);
     expect(sim).toMatch(/maxRoundsPerShop/);
     expect(sim).toMatch(/if \(verified\.firm\) firmSoFar\+\+/);
-    expect(sim).toMatch(/firmCount: firmSoFar/);
+    // Wave 3: the stub accumulation is OR-ed (max) with the same text-derived
+    // count live computes in deriveThreadFacts - whichever source saw more
+    // firmness wins, exactly as live OR-s the extractor flag into the derived
+    // count.
+    expect(sim).toMatch(/firmCount: Math\.max\(firmSoFar, facts\.firmCount\)/);
   });
 });

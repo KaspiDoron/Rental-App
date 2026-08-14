@@ -119,6 +119,74 @@ export function compileMisreadLesson(
 }
 
 /**
+ * The FROZEN EXTRACTION for a misread golden case (pure - unit-tested).
+ *
+ * The freeze used to write an EMPTY stubExtraction (with a null floor and an
+ * empty rfq), erasing the very facts the misread was about: a menu correction
+ * replayed as a shop that said nothing, the probe failed, and the case was
+ * stored disabled - a dead end wearing a safety feature's name. The closed
+ * vocabulary already names which verified facts the misread implies, so the
+ * stub is derived from the label plus whatever the deterministic parser stored
+ * at the time (`parse`, the nearest vendor_replies row).
+ */
+export function misreadStubExtraction(
+  kind: MisreadKind,
+  parse?: {
+    found?: boolean | null;
+    pricePerDay?: number | null;
+    currency?: string | null;
+    confidence?: string | null;
+  } | null
+): Record<string, unknown> {
+  const stub: Record<string, unknown> = {
+    found: parse?.found === true,
+    confidence: parse?.confidence ?? "medium",
+  };
+  if (typeof parse?.pricePerDay === "number") stub.pricePerDay = parse.pricePerDay;
+  if (parse?.currency) stub.currency = parse.currency;
+  switch (kind) {
+    case "option-menu":
+      // A CHOICE of tiers - the fact the engine misread. variance is what makes
+      // option-probe legal; the menu itself is re-derived from the message text
+      // by optionsFromThread, exactly as live derives it.
+      stub.variance = true;
+      break;
+    case "photo-price-board":
+      if (typeof parse?.pricePerDay === "number") stub.sheetPricePerDay = parse.pricePerDay;
+      break;
+    case "location-request":
+      stub.askedLocation = true;
+      break;
+    case "clarifying-question":
+      stub.askedQuestion = true;
+      break;
+    case "decline":
+      stub.declined = true;
+      stub.found = false;
+      break;
+    case "firm":
+      stub.firm = true;
+      break;
+    case "list-price":
+      // The parse's price IS the list price - nothing extra to flag.
+      break;
+  }
+  return stub;
+}
+
+/** The whole frozen turn for a misread case - message + stub + media kind. */
+export function misreadTurn(
+  c: MisreadCorrection,
+  parse?: Parameters<typeof misreadStubExtraction>[1]
+): { shopSays: string; stubExtraction: Record<string, unknown>; imageKind?: string } {
+  return {
+    shopSays: c.shopMessage,
+    stubExtraction: misreadStubExtraction(c.actualMeaning, parse),
+    ...(c.actualMeaning === "photo-price-board" ? { imageKind: "price_sheet" } : {}),
+  };
+}
+
+/**
  * Which lessons apply to THIS turn. The whole reason corrections use a closed
  * vocabulary: a lesson about menus surfaces when a menu is on screen, instead
  * of every lesson being blended into one global tone block on every turn.

@@ -529,6 +529,15 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         vendorId: input.ctx.vendorId,
         vendorName: input.ctx.vendorName,
         stage: `spte:${outcome.move}`,
+        // A STABLE DECISION IDENTITY, so owner branch verdicts COMPILE. The
+        // learning compiler aggregates agent_reviews per edge_id, and the review
+        // route denormalizes edge_id from this very trace row - with it null,
+        // every review of a production (SPTE) turn was dropped by the compiler
+        // and edgePriorLines was dead on live traffic. `spte:<move>` is the
+        // engine's real branching unit; the compiler renders it as
+        // "move <x> (primary engine)".
+        nodeId: "spte",
+        edgeId: `spte:${outcome.move}`,
         input: JSON.stringify({
           inboundId: input.ctx.inboundId,
           inbound: tc.inbound.text,

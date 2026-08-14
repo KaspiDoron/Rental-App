@@ -22,6 +22,7 @@ function mockIo(overrides: Partial<GraphIO> = {}) {
   const sent: Array<{ via: string; text: string; meta: unknown }> = [];
   const events: Array<{ kind: string; detail: string }> = [];
   const wakeups: unknown[] = [];
+  const traces: Array<{ stage: string; nodeId?: string; edgeId?: string }> = [];
   const io = {
     now: () => 1_000_000,
     sessionTable: async () => [],
@@ -38,9 +39,12 @@ function mockIo(overrides: Partial<GraphIO> = {}) {
     recordEvent: async ({ kind, detail }: { kind: string; detail: string }) => {
       events.push({ kind, detail });
     },
+    writeTrace: async (rows: Array<{ stage: string; nodeId?: string; edgeId?: string }>) => {
+      traces.push(...rows);
+    },
     ...overrides,
   } as unknown as GraphIO;
-  return { io, sent, events, wakeups };
+  return { io, sent, events, wakeups, traces };
 }
 
 function input(partial: Partial<GraphTurnInput> = {}): GraphTurnInput {
@@ -116,6 +120,24 @@ describe("SPTE live glue", () => {
     );
     // farewell or silent - either way, a declined thread never keeps bargaining.
     expect(["silent", "farewell"]).toContain(res.move);
+  });
+
+  it("stamps a stable edge identity (spte:<move>) on the decision trace", async () => {
+    // WAVE 3 (eval-gate integrity, defect 6): the learning compiler aggregates
+    // owner reviews per agent_reviews.edge_id, which the review route copies
+    // from this trace row. With edgeId null, every review of a production SPTE
+    // turn was dropped and edgePriorLines was structurally dead on live
+    // traffic. Reverting the stamp fails this test.
+    const { io, traces } = mockIo();
+    const res = await runSpteLiveTurn(input(), io);
+    // The trace write is deliberately fire-and-forget (post-decision code may
+    // never throw); give the microtask a beat to land.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(res.move).toBe("bargain");
+    expect(traces.length).toBe(1);
+    expect(traces[0].stage).toBe("spte:bargain");
+    expect(traces[0].nodeId).toBe("spte");
+    expect(traces[0].edgeId).toBe("spte:bargain");
   });
 
   it("never throws after deciding a move even if the send path errors (no double-send risk)", async () => {

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
 import { sbSelect, sbInsertReturning, sbUpdate, sbDelete } from "@/lib/runtime-config";
-import { listGoldenCases } from "@/lib/ops/golden";
-import type { GoldenExpect, GoldenTurn } from "@/lib/ops/types";
+import { listGoldenCases, expectationFromOutbound, runGoldenCase } from "@/lib/ops/golden";
+import type { GoldenCase, GoldenExpect, GoldenTurn } from "@/lib/ops/types";
 
 // Golden regression cases - real conversations frozen into deterministic
 // replays. create-from-thread snapshots the ACTUAL shop messages, the stored
@@ -65,6 +65,11 @@ export async function POST(req: Request) {
         decisionId?: string;
         rfq?: Record<string, unknown>;
         region?: string;
+        // Stamped by runSpteLiveTurn's outbound meta - which engine composed
+        // this send, and which move it chose. The PRIMARY-engine expectation
+        // below is frozen from these.
+        engine?: string;
+        move?: string;
       } | null;
     }>(
       "whatsapp_messages",
@@ -124,13 +129,15 @@ export async function POST(req: Request) {
     };
   };
 
-  // Expectation per inbound = what actually happened: the next outbound's kind.
+  // Expectation per inbound = what actually happened: the next outbound's kind,
+  // PLUS the primary engine's move when that outbound ran SPTE (raw.engine
+  // "v3"). Without the move half, wantsMove stayed false and the SPTE replay
+  // was skipped for every real conversation the owner froze - the gate replayed
+  // only the dormant graph.
   const expectFor = (at: string): GoldenExpect => {
     const t = Date.parse(at);
     const next = outs.find((o) => Date.parse(o.received_at) > t);
-    const kind = next?.raw?.kind ?? "";
-    const action = kind.replace(/^auto-/, "");
-    return action ? { action } : {};
+    return expectationFromOutbound(next?.raw);
   };
 
   const inbound = ins.slice(0, 8);
@@ -162,18 +169,50 @@ export async function POST(req: Request) {
   }
 
   const newest = outs[outs.length - 1];
-  const rows = await sbInsertReturning<{ id: number }>("agent_golden_cases", [
-    {
-      name: String(body.name ?? "").trim().slice(0, 120) || `Golden - ${digits}`,
-      thread_key: threadKey,
-      rfq: newest?.raw?.rfq ?? {},
-      region: newest?.raw?.region ?? null,
-      floor,
-      turns,
-      expects,
-      enabled: true,
-    },
-  ]).catch(() => []);
+
+  // PROBE BEFORE FREEZING THE MOVE COLUMN. The live move was an LLM's free
+  // choice inside the legal set; the golden replay composes deterministically
+  // (first legal move with a template). Where the two legitimately differ, a
+  // frozen `move` would be red from birth and block every future activation -
+  // so the move expectations keep only what the deterministic replay actually
+  // reproduces, and the response says so. The action column is untouched.
+  let spteNote: string | null = null;
+  const candidate: Omit<GoldenCase, "id" | "created_at"> = {
+    name: String(body.name ?? "").trim().slice(0, 120) || `Golden - ${digits}`,
+    thread_key: threadKey,
+    rfq: newest?.raw?.rfq ?? {},
+    region: newest?.raw?.region ?? null,
+    floor,
+    turns,
+    expects,
+    enabled: true,
+  };
+  if (expects.some((e) => e.move)) {
+    try {
+      const probe = await runGoldenCase({
+        ...candidate,
+        id: 0,
+        created_at: new Date().toISOString(),
+      } as GoldenCase);
+      let dropped = 0;
+      probe.turns.forEach((t, i) => {
+        const want = expects[i]?.move;
+        if (want && t.got.move && t.got.move !== want) {
+          delete expects[i].move;
+          dropped++;
+        }
+      });
+      if (dropped > 0) {
+        spteNote = `${dropped} SPTE move expectation(s) dropped: the deterministic replay chooses differently than the live model did (the action column still gates).`;
+      }
+    } catch {
+      /* probing is a bonus - the case still freezes with its move column */
+    }
+  }
+
+  const rows = await sbInsertReturning<{ id: number }>("agent_golden_cases", [candidate]).catch(
+    () => []
+  );
 
   if (!rows[0]?.id) {
     return NextResponse.json(
@@ -181,7 +220,7 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-  return NextResponse.json({ ok: true, id: rows[0].id, turnCount: turns.length });
+  return NextResponse.json({ ok: true, id: rows[0].id, turnCount: turns.length, spteNote });
 }
 
 export const maxDuration = 60;
