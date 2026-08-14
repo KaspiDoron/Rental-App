@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
 import { sbSelect, sbInsert, sbInsertReturning, sbUpdate } from "@/lib/runtime-config";
 import type { ReviewInput, ReviewVerdict, OutcomeImpact, ReviewStatus } from "@/lib/ops/types";
-import { compileMisreadLesson, isMisreadKind, lessonNote, misreadTag } from "@/lib/ops/misread";
+import {
+  compileMisreadLesson,
+  isMisreadKind,
+  lessonNote,
+  misreadTag,
+  misreadTurn,
+} from "@/lib/ops/misread";
 
 // Ops Center: owner reviews of agent decisions - the feedback that actually
 // teaches the system. Upserted per (thread, decision). Two side effects make
@@ -175,13 +181,65 @@ export async function POST(req: Request) {
     // forever. Only assertable when the owner named the move it should have
     // made - otherwise there is nothing for the replay to check.
     if (misread.shouldHaveMoved) {
+      // CARRY THE REAL FACTS (Wave 3). This used to freeze an EMPTY
+      // stubExtraction with a null floor and an empty rfq - erasing exactly the
+      // facts the misread was about, so the probe failed and the case landed
+      // disabled. The stub now derives from the closed misread vocabulary plus
+      // the deterministic parse stored nearest the pinned message; rfq/region
+      // come from the thread's own outbound meta and the floor from the
+      // decision's comparator trace, the same sources create-from-thread uses.
+      // Every read is best-effort: a missing piece degrades to the old empty
+      // value, never blocks the correction.
+      const [outMeta, parses, comp] = await Promise.all([
+        sbSelect<{ raw: { rfq?: Record<string, unknown>; region?: string } | null }>(
+          "whatsapp_messages",
+          `select=raw&direction=eq.outbound&to_number=eq.${encodeURIComponent(
+            digits
+          )}&raw->>sender=eq.${encodeURIComponent(userEmail)}&order=received_at.desc&limit=1`
+        ).catch(() => []),
+        sbSelect<{
+          reply_text: string | null;
+          found: boolean | null;
+          price_per_day: number | null;
+          currency: string | null;
+          confidence: string | null;
+        }>(
+          "vendor_replies",
+          `select=reply_text,found,price_per_day,currency,confidence&user_email=eq.${encodeURIComponent(
+            userEmail
+          )}&order=created_at.desc&limit=30`
+        ).catch(() => []),
+        decisionId
+          ? sbSelect<{ input: string | null }>(
+              "agent_traces",
+              `select=input&stage=eq.comparator&decision_id=eq.${encodeURIComponent(
+                decisionId
+              )}&order=created_at.desc&limit=1`
+            ).catch(() => [])
+          : Promise.resolve([] as { input: string | null }[]),
+      ]);
+      // The parse OF the pinned message: match by normalized text, newest first.
+      const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 200);
+      const pinned = squash(misread.shopMessage);
+      const parseRow = parses.find((p) => squash(p.reply_text ?? "") === pinned) ?? null;
+      const parse = parseRow
+        ? {
+            found: parseRow.found,
+            pricePerDay: parseRow.price_per_day,
+            currency: parseRow.currency,
+            confidence: parseRow.confidence,
+          }
+        : null;
+      const floorMatch = (comp[0]?.input ?? "").match(/floor=(\d+)/);
       const candidate = {
         name: `misread ${misread.actualMeaning} - ${thread[0]?.vendor_name ?? "shop"}`.slice(0, 80),
         thread_key: threadKey,
-        rfq: {},
-        region: null,
-        floor: null,
-        turns: [{ shopSays: misread.shopMessage, stubExtraction: {} }],
+        rfq: outMeta[0]?.raw?.rfq ?? {},
+        region: outMeta[0]?.raw?.region ?? null,
+        floor: floorMatch
+          ? { floor: Number(floorMatch[1]), currency: parse?.currency ?? undefined }
+          : null,
+        turns: [misreadTurn(misread, parse)],
         expects: [{ move: misread.shouldHaveMoved }],
         // Enabled only if it PASSES right now. A case the engine already fails
         // would block every future activation on day one - an honest "we still
@@ -207,10 +265,13 @@ export async function POST(req: Request) {
 
     // ACTIVATE the lesson only behind a green suite, and version the change so
     // it has the same one-click rollback every other behaviour change has.
+    // goldenGateBlocks fails CLOSED on an unreadable store - a suite that could
+    // not see its cases reported 0/0 here and activated the lesson blind.
     try {
-      const { runGoldenSuite } = await import("@/lib/ops/golden");
+      const { runGoldenSuite, goldenGateBlocks } = await import("@/lib/ops/golden");
       const report = await runGoldenSuite();
-      if (report.passed === report.total && lessonRows[0]?.id) {
+      const blocked = goldenGateBlocks(report);
+      if (!blocked && report.passed === report.total && lessonRows[0]?.id) {
         await sbUpdate("agent_training", `id=eq.${lessonRows[0].id}`, {
           source: "ops-lesson",
         }).catch(() => {});
@@ -229,7 +290,9 @@ export async function POST(req: Request) {
         bustCoachingCache();
         lessonNoteOut = "Lesson is live - the suite still passes.";
       } else {
-        lessonNoteOut = `Lesson saved but NOT activated: ${report.total - report.passed} of ${report.total} golden cases would break.`;
+        lessonNoteOut = blocked
+          ? `Lesson saved but NOT activated: ${blocked}`
+          : `Lesson saved but NOT activated: ${report.total - report.passed} of ${report.total} golden cases would break.`;
       }
     } catch {
       lessonNoteOut = "Lesson saved. Activation check could not run.";

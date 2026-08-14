@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
 import { getGraphSpec } from "@/lib/graph/engine";
 import { saveVersionedSpec } from "@/lib/policy";
-import { runGoldenSuite } from "@/lib/ops/golden";
+import { runGoldenSuite, goldenGateBlocks } from "@/lib/ops/golden";
 import { sanitizeGraphSpec } from "@/lib/graph/default-graph";
 import type { EdgeSpec, GraphCondition, GraphSpec } from "@/lib/graph/types";
 
@@ -45,11 +45,14 @@ export async function POST(req: Request) {
     edges: [...spec.edges, newEdge],
   });
 
-  // EVAL GATE: the new rule must not break any golden case.
+  // EVAL GATE: the new rule must not break any golden case. Fails CLOSED on an
+  // unreadable golden store (goldenGateBlocks) - approving a rule the suite
+  // could not check is not a gate.
   const report = await runGoldenSuite({ spec: candidate });
-  if (report.total > 0 && report.passed < report.total) {
+  const blocked = goldenGateBlocks(report);
+  if (blocked) {
     return NextResponse.json(
-      { error: "The golden suite failed with this rule - not applied.", report },
+      { error: `${blocked} The rule was not applied.`, report },
       { status: 409 }
     );
   }

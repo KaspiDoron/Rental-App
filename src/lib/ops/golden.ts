@@ -6,17 +6,37 @@
 // suite runs server-side in one request with zero LLM calls.
 
 import "server-only";
-import { sbSelect } from "../runtime-config";
 import { replayConversation, replaySpteTurns } from "../simulate";
 import type { PlayedTurn } from "../simulate";
 import type { GraphSpec } from "../graph/types";
 import type { PolicyOverlay } from "./overlay";
+import { isMoveKind, normalizeMove } from "../spte/moves";
 import type { GoldenCase, GoldenExpect, ReplayCaseResult, ReplayReport } from "./types";
 
 // 48 (owner report 4/W2.2): 24 was already tight against the owner's frozen
 // conversations PLUS the authored coherence seeds below - a suite that stops
 // growing stops gating.
 const MAX_CASES = 48;
+
+// The authored coherence guards are name-keyed with this prefix
+// (golden-coherence.ts). They are PINNED into the replayed set: the newest-first
+// window used to apply to the whole suite, so every real conversation the owner
+// froze silently evicted one of the twelve authored guards - the suite got
+// bigger and guarded less.
+const COHERENCE_PREFIX = "coherence:";
+
+/** Does this turn's expectation exercise the GRAPH engine at all? The move /
+ *  moveNot / noMessageContains trio gates the PRIMARY engine (SPTE); these four
+ *  gate the dormant graph. Used to keep the graph-side assertions off cases
+ *  that only ever target the engine that ships. */
+function turnTargetsGraph(expected: GoldenExpect): boolean {
+  return Boolean(
+    expected.action ||
+      expected.edgeId ||
+      (expected.pathContains?.length ?? 0) > 0 ||
+      typeof expected.targetAtLeast === "number"
+  );
+}
 
 /** Pure expectation checker - unit-tested. */
 export function evaluateTurn(
@@ -62,9 +82,16 @@ export function evaluateTurn(
       failures.push(`target: expected >= ${expected.targetAtLeast}, got ${t ?? "(none)"}`);
     }
   }
-  for (const banned of expected.noMessageContains ?? []) {
-    if ((played.ourReply ?? "").toLowerCase().includes(banned.toLowerCase())) {
-      failures.push(`message contains banned "${banned}"`);
+  // GRAPH-side banned-substring check - ONLY when this turn actually targets the
+  // graph engine (or when no SPTE replay ran, which is the legacy graph-only
+  // shape). It used to run unconditionally, so an SPTE-only case was judged on
+  // the reply of an engine that does not ship, and a phrase banned in both got
+  // reported twice for one turn.
+  if (turnTargetsGraph(expected) || !spte) {
+    for (const banned of expected.noMessageContains ?? []) {
+      if ((played.ourReply ?? "").toLowerCase().includes(banned.toLowerCase())) {
+        failures.push(`graph message contains banned "${banned}"`);
+      }
     }
   }
   return failures;
@@ -104,12 +131,83 @@ export function evaluateCase(
   };
 }
 
-export async function listGoldenCases(onlyEnabled = true): Promise<GoldenCase[]> {
+/**
+ * Default expectation for a turn frozen from a real conversation: what the
+ * agent ACTUALLY did. `raw` is the next outbound whatsapp_messages row's meta.
+ * Pure - unit-tested; the create-from-thread route feeds it.
+ *
+ * The `action` half gates the dormant graph engine. The `move` half is new
+ * (Wave 3): when the source turn ran SPTE (meta.engine === "v3", stamped by
+ * runSpteLiveTurn), the frozen case also asserts the PRIMARY engine's move -
+ * without it, wantsMove stayed false and the SPTE replay was skipped for every
+ * real conversation the owner froze.
+ */
+export function expectationFromOutbound(
+  raw: { kind?: string; engine?: string; move?: string } | null | undefined
+): GoldenExpect {
+  const out: GoldenExpect = {};
+  const action = (raw?.kind ?? "").replace(/^auto-/, "");
+  if (action) out.action = action;
+  if (raw?.engine === "v3") {
+    // Old vocabulary ("close") normalizes to the current one; a string the
+    // engine does not know is dropped rather than frozen into a case that can
+    // never pass.
+    const m = normalizeMove(raw.move);
+    if (isMoveKind(m)) out.move = m;
+  }
+  return out;
+}
+
+export interface GoldenList {
+  cases: GoldenCase[];
+  /** The store answered nothing readable - the TRUTH about the suite is unknown. */
+  storeError?: "unavailable";
+}
+
+/**
+ * STRICT lister for the eval gate - "empty" and "unreadable" mean opposite
+ * things here (sbSelectStrict, the same pattern the wa-guard budgets use).
+ *
+ * Selection is PINNED + WINDOWED: every coherence-seeded case (the twelve
+ * authored guards, name-keyed "coherence: ") is ALWAYS in the replayed set
+ * regardless of age; the newest-first MAX_CASES window applies to the
+ * remainder. One window over everything let owner-frozen conversations evict
+ * the authored guards silently - and the seeder is additive-only, so nothing
+ * ever put them back.
+ */
+export async function listGoldenCasesStrict(onlyEnabled = true): Promise<GoldenList> {
+  const { sbSelectStrict } = await import("../runtime-config");
   const filter = onlyEnabled ? "enabled=eq.true&" : "";
-  return sbSelect<GoldenCase>(
-    "agent_golden_cases",
-    `select=*&${filter}order=created_at.desc&limit=${MAX_CASES}`
-  ).catch(() => []);
+  const [pinnedRead, restRead] = await Promise.all([
+    sbSelectStrict<GoldenCase>(
+      "agent_golden_cases",
+      `select=*&${filter}name=like.${COHERENCE_PREFIX}*&order=created_at.desc&limit=${MAX_CASES}`
+    ),
+    sbSelectStrict<GoldenCase>(
+      "agent_golden_cases",
+      `select=*&${filter}name=not.like.${COHERENCE_PREFIX}*&order=created_at.desc&limit=${MAX_CASES}`
+    ),
+  ]);
+  // "missing" = the table has never been migrated: vacuously empty, a fresh
+  // install must gate on nothing. "unavailable" = the truth is unknown, and a
+  // gate that cannot know must refuse - the caller checks storeError.
+  if (
+    ("error" in pinnedRead && pinnedRead.error === "unavailable") ||
+    ("error" in restRead && restRead.error === "unavailable")
+  ) {
+    return { cases: [], storeError: "unavailable" };
+  }
+  const pinned = "rows" in pinnedRead ? pinnedRead.rows : [];
+  const rest = "rows" in restRead ? restRead.rows : [];
+  return { cases: [...pinned, ...rest.slice(0, Math.max(0, MAX_CASES - pinned.length))] };
+}
+
+/** Soft lister for display surfaces (Admin list). NOT for gating - it collapses
+ *  an unreadable store to [], which is exactly what a gate must not do. */
+export async function listGoldenCases(onlyEnabled = true): Promise<GoldenCase[]> {
+  return listGoldenCasesStrict(onlyEnabled)
+    .then((r) => r.cases)
+    .catch(() => []);
 }
 
 export async function runGoldenCase(
@@ -120,6 +218,10 @@ export async function runGoldenCase(
     // Both engines replay the same frozen thread: the graph engine for the
     // action/edge assertions, SPTE - the one that actually answers shops - for
     // the move assertions. Only cases that ask for a move pay for the second.
+    //
+    // THE CANDIDATE GOES TO BOTH. replaySpteTurns used to run with no candidate
+    // at all, so in the one column that gates production, baseline and
+    // candidate agreed by construction - the gate could not fail there.
     const wantsMove = gc.expects.some((e) => e?.move || e?.moveNot?.length || e?.noMessageContains?.length);
     const [{ turns }, spte] = await Promise.all([
       replayConversation({
@@ -131,7 +233,13 @@ export async function runGoldenCase(
         overlay: opts.overlay,
       }),
       wantsMove
-        ? replaySpteTurns({ turns: gc.turns, rfq: gc.rfq, floor: gc.floor })
+        ? replaySpteTurns({
+            turns: gc.turns,
+            rfq: gc.rfq,
+            floor: gc.floor,
+            spec: opts.spec,
+            overlay: opts.overlay,
+          })
         : Promise.resolve({ turns: [] as Awaited<ReturnType<typeof replaySpteTurns>>["turns"] }),
     ]);
     return evaluateCase(gc, turns, spte.turns);
@@ -155,8 +263,9 @@ export async function runGoldenCase(
 /**
  * Run the whole enabled suite against a candidate (or the live baseline when
  * no candidate is given). This IS the eval gate: activation requires
- * report.passed === report.total. An empty suite passes trivially - the gate
- * tightens automatically as the owner freezes real conversations.
+ * goldenGateBlocks(report) === null. An empty-but-READABLE suite passes
+ * vacuously (with a note); an UNREADABLE store marks the report so every gate
+ * fails closed - the suite used to answer "0 of 0, all green" to an outage.
  */
 export async function runGoldenSuite(
   opts: { spec?: GraphSpec; overlay?: PolicyOverlay } = {}
@@ -170,13 +279,47 @@ export async function runGoldenSuite(
   } catch {
     /* seeding is an enrichment - the gate runs on whatever is stored */
   }
-  const cases = await listGoldenCases(true);
+  const list = await listGoldenCasesStrict(true);
+  if (list.storeError) {
+    return {
+      ranAt: new Date().toISOString(),
+      total: 0,
+      passed: 0,
+      cases: [],
+      storeError: list.storeError,
+      note: "The golden store could not be read - this report is not a verdict.",
+    };
+  }
   const results: ReplayCaseResult[] = [];
-  for (const gc of cases) results.push(await runGoldenCase(gc, opts));
+  for (const gc of list.cases) results.push(await runGoldenCase(gc, opts));
   return {
     ranAt: new Date().toISOString(),
     total: results.length,
     passed: results.filter((r) => r.pass).length,
     cases: results,
+    ...(results.length === 0
+      ? { note: "No golden cases exist yet - the gate passes vacuously and tightens as cases are frozen." }
+      : {}),
   };
+}
+
+/**
+ * THE gate verdict, in one place. Returns the human reason activation must be
+ * refused, or null when the change may proceed. Every activation path (graph
+ * save, ops rule, overlay save, rollback, coach, lesson/learning activation)
+ * uses this instead of a local `total > 0 && passed < total` - which is the
+ * exact shape that FAILED OPEN: an unreadable store reported total 0 and
+ * approved anything.
+ */
+export function goldenGateBlocks(report: ReplayReport): string | null {
+  if (report.storeError) {
+    return (
+      "The golden suite could not read its cases (store unavailable) - refusing to " +
+      "activate a behavior change blind. Retry when the database is reachable."
+    );
+  }
+  if (report.total > 0 && report.passed < report.total) {
+    return `Golden suite failed (${report.passed}/${report.total}).`;
+  }
+  return null;
 }

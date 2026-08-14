@@ -673,46 +673,95 @@ export interface PlayedSpteTurn {
   legalMoves: import("./spte/types").MoveKind[];
   ourReply: string | null;
   optionCount: number;
+  /** The session-low the turn was decided against (null = none yet). Exposed so
+   *  the gate's tests can pin the live-parity session model, not just moves. */
+  sessionLowest: number | null;
 }
 
 export async function replaySpteTurns(args: {
   turns: import("./ops/types").GoldenTurn[];
   rfq?: Partial<StructuredRFQ>;
   floor?: { floor?: number; typical?: number; currency?: string } | null;
+  /** Candidate graph spec - the source of the owner-editable round cap. */
+  spec?: GraphSpec;
+  /** Candidate policy overlay. Defaults to DEFAULT_OVERLAY (bit-stable), the
+   *  same pinned-default contract replayConversation uses - NOT live config. */
+  overlay?: import("./ops/overlay").PolicyOverlay;
 }): Promise<{ turns: PlayedSpteTurn[] }> {
   const { runTurn } = await import("./spte/orchestrator");
   const { emptyDigest } = await import("./spte/digest");
   const { optionsFromThread } = await import("./offer-options");
+  const { deriveThreadFacts } = await import("./spte/thread-facts");
+  const { buildLedger, stockState } = await import("./thread/ledger");
+  const { validRivals, sessionFloor } = await import("./negotiation/session-rivals");
+  const { DEFAULT_OVERLAY } = await import("./ops/overlay");
   const rfq: StructuredRFQ = { ...DEFAULT_RFQ, ...(args.rfq ?? {}) };
-  // REPLAY PARITY (owner report 4/W2.2): `maxRounds: 6` was a literal while
-  // the live engine resolves the graph spec's owner-editable maxRoundsPerShop
-  // (default 4) - so the golden gate validated 50% more bargaining rounds
-  // than production would ever run, and a round-cap regression could pass
-  // replay yet fire live. Same resolution as spte/live.ts resolvePolicy.
-  const maxRounds = await getGraphSpec()
-    .then((spec) => spec.settings.maxRoundsPerShop)
-    .catch(() => 4);
+  // THE CANDIDATE'S POLICY, NOT PRODUCTION'S SHADOW. The gate exists to answer
+  // "may this candidate ship?", so the SPTE replay runs under the candidate
+  // overlay (priceFarAboveFloor + bannedPhrases reach the guards below, exactly
+  // as live.ts resolvePolicy places them) and the candidate spec's round cap.
+  // It used to run with NO overlay at all: the move validator sat at the 1.25
+  // literal the overlay's own comment calls "far too soft" while live ran 1.08,
+  // and the banned-phrase scrub was never exercised by the gate.
+  const overlay = args.overlay ?? DEFAULT_OVERLAY;
+  const maxRounds = args.spec
+    ? args.spec.settings.maxRoundsPerShop
+    : await getGraphSpec()
+        .then((spec) => spec.settings.maxRoundsPerShop)
+        .catch(() => 4);
 
   let digest = emptyDigest();
   const inboundSoFar: string[] = [];
   const outbound: string[] = [];
+  // The stamped move of each outbound entry (undefined for case-carried ones).
+  // Live derives handoverAsks/rounds from stamps, so replay stamps its own.
+  const outboundKinds: (string | undefined)[] = [];
   const played: PlayedSpteTurn[] = [];
   // LIVE PARITY: the live glue derives firmCount from the WHOLE history
   // including the current inbound (live.ts deriveThreadFacts + the shopFirm
   // OR-in), while runTurn's outcome digest never carries it - so replay ran
   // every case at firmCount 0 and the two-firms-stop rule could not be
-  // exercised by the golden gate at all. Accumulate it here the way live
-  // counts it.
+  // exercised by the golden gate at all. Accumulate the stub flags the way
+  // live OR-s the extractor's read in; the text-derived count below joins via
+  // max(), the same "trust whichever source saw more" shape live uses.
   let firmSoFar = 0;
 
   for (const turn of args.turns.slice(0, 10)) {
     const stub = (turn.stubExtraction ?? {}) as Record<string, unknown>;
+    // OUR side of the frozen conversation (Wave 3, optional + additive): a case
+    // may carry the message we had sent before this shop turn, which is what
+    // makes the ask-once ledger gate and the at-floor lock reachable in replay.
+    if (typeof turn.ourReplyBefore === "string" && turn.ourReplyBefore.trim()) {
+      outbound.push(turn.ourReplyBefore);
+      outboundKinds.push(undefined);
+    }
+    const priorInbound = [...inboundSoFar];
     inboundSoFar.push(turn.shopSays);
     const currency = (stub.currency as string) || args.floor?.currency || "THB";
 
     // Options are DERIVED from the thread, exactly as the live glue derives
     // them - a frozen case cannot hand-wave a menu into existence.
     const options = optionsFromThread(inboundSoFar, { durationDays: rfq.durationDays });
+
+    // THREAD-DERIVED STATE, the same way live builds it (live.ts buildDigest):
+    // deposit/fulfillment/handover facts, the anti-repetition memory and the
+    // ledger all come from the message history the replay already holds. This
+    // is what makes the ask-once gate, the logistics close-out and the
+    // out-of-stock branch TESTABLE in the gate at all - the replayed context
+    // used to carry none of them. Cases whose turns contain no such signals
+    // derive today's values (false/empty), so existing cases replay identically.
+    const facts = deriveThreadFacts({
+      inbound: priorInbound,
+      outbound,
+      outboundKinds,
+      currentInbound: turn.shopSays,
+    });
+    const ledger = buildLedger({
+      inbound: priorInbound,
+      outbound,
+      currentInbound: turn.shopSays,
+    });
+    const stock = stockState(ledger);
 
     const verified: import("./spte/types").VerifiedExtraction = {
       found: Boolean(stub.found),
@@ -721,11 +770,27 @@ export async function replaySpteTurns(args: {
       declined: stub.declined === true,
       wrongVehicle: stub.vehicleVerdict === "mismatch",
       vehicleUnclear: stub.vehicleVerdict === "unclear",
+      // The identity gate's frozen verdict (Wave 3): live carries it via
+      // extraction.vehicleAssessment; a case may freeze it the same way. Absent
+      // on existing cases -> undefined, exactly as before.
+      vehicleStatus:
+        stub.vehicleStatus === "confirmed" ||
+        stub.vehicleStatus === "needs-confirmation" ||
+        stub.vehicleStatus === "wrong-vehicle"
+          ? stub.vehicleStatus
+          : undefined,
+      vehicleQuestion: typeof stub.vehicleQuestion === "string" ? stub.vehicleQuestion : undefined,
+      vehicleAsked: stub.vehicleAsked === true,
       askedQuestion: stub.askedQuestion === true,
       askedLocation: stub.askedLocation === true,
       askedLicense: stub.askedLicense === true,
       askedLicensePhoto: stub.askedLicensePhoto === true,
       firm: stub.firm === true,
+      // OUT OF STOCK IS A STATE, read from the thread's own claims exactly as
+      // live reads it (live.ts buildTurnContext -> stockState). A stub may also
+      // pin it explicitly.
+      shopUnavailable: stub.shopUnavailable === true || stock.state === "out-of-stock",
+      restockHint: stock.restockHint,
       options,
       variance: stub.variance === true,
       hadImage: Boolean(turn.imageKind),
@@ -736,22 +801,38 @@ export async function replaySpteTurns(args: {
 
     if (verified.firm) firmSoFar++;
 
-    const rivals = (turn.rivalOffers ?? [])
-      .filter((r) => typeof r.pricePerDay === "number" && r.currency === currency)
-      .map((r) => ({
-        vendorId: r.vendorId ?? "rival",
-        shop: r.vendorId ?? "Another shop",
-        pricePerDay: r.pricePerDay as number,
-        currency,
-      }));
-    if (!rivals.length && typeof turn.rivalPricePerDay === "number") {
-      rivals.push({
-        vendorId: "rival",
-        shop: "Another shop",
-        pricePerDay: turn.rivalPricePerDay,
-        currency,
-      });
-    }
+    // LIVE-PARITY SESSION (live.ts buildSession): the session table holds every
+    // stored quote INCLUDING this shop's own from earlier turns. rivals go
+    // through the same validRivals predicate (cheapest first - the replay used
+    // to anchor on whichever rival was listed FIRST) and lowest through
+    // sessionFloor, so the "one nudge at/below the session low, then lock" rule
+    // is reachable in the gate without an explicit rival. The current turn's
+    // quote is deliberately NOT in the rows - live's snapshot predates it too,
+    // which is exactly why atSessionLow compares with `<=`.
+    const sessionRows = [
+      ...(turn.rivalOffers ?? []).map((r, i) => ({
+        vendorId: r.vendorId || `rival-${i}`,
+        vendorName: "Another shop",
+        pricePerDay: r.pricePerDay,
+        currency: r.currency,
+      })),
+      ...(typeof turn.rivalPricePerDay === "number"
+        ? [{ vendorId: "rival", vendorName: "Another shop", pricePerDay: turn.rivalPricePerDay, currency }]
+        : []),
+      ...(typeof digest.quotedPricePerDay === "number"
+        ? [
+            {
+              vendorId: "replay-shop",
+              vendorName: "Golden Shop",
+              pricePerDay: digest.quotedPricePerDay,
+              currency,
+              isThisShop: true,
+            },
+          ]
+        : []),
+    ];
+    const rivals = validRivals(sessionRows, { excludeVendorId: "replay-shop", currency, limit: 4 });
+    const lowest = sessionFloor(sessionRows, currency);
 
     const ctx: import("./spte/types").TurnContext = {
       session: {
@@ -759,16 +840,36 @@ export async function replaySpteTurns(args: {
         rfq,
         currency,
         benchmark: null,
-        lowest: rivals[0]
-          ? { vendorId: rivals[0].vendorId, shop: rivals[0].shop, pricePerDay: rivals[0].pricePerDay }
-          : null,
+        lowest,
         rivals,
       },
       thread: {
         threadKey: "replay@wheeldeal:0000",
         vendorId: "replay-shop",
         shop: "Golden Shop",
-        digest: { ...digest, options, firmCount: firmSoFar },
+        digest: {
+          ...digest,
+          options,
+          // LIVE PARITY: live's buildDigest stamps THIS turn's verified quote
+          // into the digest (quotedPricePerDay: input.usablePrice), and
+          // dealComplete reads it - without this, a single-turn case that
+          // settles price+deposit+handover could never reach `present` in the
+          // gate. The prior quote is kept when this turn carries none.
+          quotedPricePerDay:
+            verified.found && typeof verified.pricePerDay === "number"
+              ? verified.pricePerDay
+              : digest.quotedPricePerDay,
+          firmCount: Math.max(firmSoFar, facts.firmCount),
+          // Same OR-shape as live.ts buildDigest: the ledger's typed claims
+          // widen the regex facts, never narrow them.
+          depositKnown: facts.depositKnown || ledger.known.includes("deposit"),
+          fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
+          deliveryOffered: facts.deliveryOffered,
+          fulfillmentCostKnown: facts.fulfillmentCostKnown,
+          handoverAsks: facts.handoverAsks,
+          lastOutbound: facts.lastOutbound,
+          ledger,
+        },
       },
       tail: [
         ...outbound.map((text) => ({ dir: "out" as const, text, at: "" })),
@@ -776,20 +877,32 @@ export async function replaySpteTurns(args: {
       ],
       inbound: { text: turn.shopSays, verified },
       legalMoves: [],
-      guards: { floorPerDay: args.floor?.floor, maxRounds },
+      guards: {
+        floorPerDay: args.floor?.floor,
+        maxRounds,
+        // The candidate's thresholds, placed where live places them
+        // (live.ts buildTurnContext guards) - the gate validates the policy
+        // that would actually ship, not the engine's outage literals.
+        priceFarAboveFloor: overlay.priceFarAboveFloor,
+        bannedPhrases: overlay.bannedPhrases,
+      },
       event: "shop-message",
       deterministic: true,
     };
 
     const outcome = await runTurn(ctx);
     digest = outcome.digest;
-    if (outcome.text) outbound.push(outcome.text);
+    if (outcome.text) {
+      outbound.push(outcome.text);
+      outboundKinds.push(outcome.move);
+    }
     played.push({
       shopSays: turn.shopSays,
       move: outcome.move,
       legalMoves: ctx.legalMoves,
       ourReply: outcome.text ?? null,
       optionCount: options.length,
+      sessionLowest: lowest?.pricePerDay ?? null,
     });
   }
   return { turns: played };

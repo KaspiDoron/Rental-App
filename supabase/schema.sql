@@ -901,7 +901,7 @@ alter table public.agent_reviews enable row level security;
 -- active row is what production runs, and rollback re-activates an old row.
 create table if not exists public.policy_versions (
   id           bigint generated always as identity primary key,
-  kind         text not null,          -- 'graph_spec' | 'policy_overlay'
+  kind         text not null,          -- 'graph_spec' | 'policy_overlay' | 'ops_learning'
   version      int  not null,          -- monotonic per kind
   spec         jsonb not null,         -- full snapshot
   note         text,                   -- why (audit trail)

@@ -42,7 +42,9 @@ export interface VersionedSaveResult {
 /**
  * Persist a behavior change AND record it as a policy_versions row in one
  * step. graph_spec goes through the engine's sanitize+validate (a bad spec
- * never lands); policy_overlay is hard-clamped. The new row becomes active.
+ * never lands); policy_overlay is hard-clamped; ops_learning (the compiled
+ * learning blob the live prompts read) is written to its config key. The new
+ * row becomes active.
  */
 export async function saveVersionedSpec(args: {
   kind: PolicyKind;
@@ -56,6 +58,18 @@ export async function saveVersionedSpec(args: {
     const res = await saveGraphSpec(clean);
     if (!res.ok) return { ...res, versionId: null };
     const versionId = await recordVersion(args.kind, clean, args.note, args.author, args.replayReport);
+    return { ok: true, problems: [], versionId };
+  }
+  if (args.kind === "ops_learning") {
+    // The compiled learning blob is behavior-affecting config (it reaches every
+    // director/judge prompt), so it goes through THIS chokepoint like the other
+    // two kinds - the learning loop used to setConfig it directly, with no
+    // version row, no gate and no rollback, contradicting the contract at the
+    // top of this file. Dynamic import: learning.ts calls back into this module.
+    await setConfig("ops_learning", JSON.stringify(args.spec ?? null)).catch(() => {});
+    const { bustOpsLearningCache } = await import("./ops/learning");
+    bustOpsLearningCache();
+    const versionId = await recordVersion(args.kind, args.spec, args.note, args.author, args.replayReport);
     return { ok: true, problems: [], versionId };
   }
   // policy_overlay
@@ -81,6 +95,10 @@ export async function activateVersion(
   if (row.kind === "graph_spec") {
     const res = await saveGraphSpec(sanitizeGraphSpec(row.spec as GraphSpec));
     if (!res.ok) return res;
+  } else if (row.kind === "ops_learning") {
+    await setConfig("ops_learning", JSON.stringify(row.spec ?? null)).catch(() => {});
+    const { bustOpsLearningCache } = await import("./ops/learning");
+    bustOpsLearningCache();
   } else {
     await setConfig("policy_overlay", JSON.stringify(clampOverlay(row.spec))).catch(() => {});
     bustOverlayCache();

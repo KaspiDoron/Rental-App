@@ -34,15 +34,19 @@ export async function POST(req: Request) {
   }
   // EVAL GATE: the edited graph must keep every golden case green before it
   // takes over live traffic (deterministic replay - fast, no LLM calls).
+  // FAIL CLOSED: an unreadable golden store (or a crashed gate) is an unknown
+  // verdict, not a green one - the old `total > 0` guard approved any edit the
+  // moment Supabase blinked, which is the one moment approvals must stop.
   let gateReport = null;
   try {
-    const { runGoldenSuite } = await import("@/lib/ops/golden");
+    const { runGoldenSuite, goldenGateBlocks } = await import("@/lib/ops/golden");
     const { sanitizeGraphSpec } = await import("@/lib/graph/default-graph");
     gateReport = await runGoldenSuite({ spec: sanitizeGraphSpec(body.spec) });
-    if (gateReport.total > 0 && gateReport.passed < gateReport.total) {
+    const blocked = goldenGateBlocks(gateReport);
+    if (blocked) {
       return NextResponse.json(
         {
-          error: `Golden suite failed (${gateReport.passed}/${gateReport.total}) - the edit was NOT applied.`,
+          error: `${blocked} The edit was NOT applied.`,
           problems: gateReport.cases
             .filter((c) => !c.pass)
             .map((c) => `${c.name}: ${c.turns.flatMap((t) => t.failures).join("; ")}`),
@@ -51,8 +55,13 @@ export async function POST(req: Request) {
         { status: 409 }
       );
     }
-  } catch {
-    /* no golden infra yet - save proceeds ungated */
+  } catch (e) {
+    return NextResponse.json(
+      {
+        error: `The golden gate could not run (${e instanceof Error ? e.message : "unknown error"}) - refusing to apply the edit blind.`,
+      },
+      { status: 503 }
+    );
   }
   const res = await saveVersionedSpec({
     kind: "graph_spec",

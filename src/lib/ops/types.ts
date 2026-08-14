@@ -58,7 +58,10 @@ export interface ReviewInput {
 
 // ---- Versioned behavior changes -------------------------------------------------
 
-export type PolicyKind = "graph_spec" | "policy_overlay";
+// "ops_learning" (Wave 3): the compiled learning blob is behavior-affecting
+// config, so it rides the same policy_versions machinery as the other two -
+// versioned, golden-gated, rollbackable - instead of a bare setConfig write.
+export type PolicyKind = "graph_spec" | "policy_overlay" | "ops_learning";
 
 export interface PolicyVersion {
   id: number;
@@ -84,6 +87,14 @@ export interface GoldenTurn {
   rivalOffers?: import("../search-session").RivalOffer[];
   imageKind?: string;
   voice?: boolean;
+  /**
+   * OUR message that went out BEFORE this shop turn (Wave 3). Live SPTE derives
+   * the ledger, the ask-once gate and the at-floor lock from the real outbound
+   * history; a frozen case that cannot carry our side of the conversation makes
+   * all of those structurally untestable in the gate. Optional and additive:
+   * existing cases (which lack it) replay byte-identically.
+   */
+  ourReplyBefore?: string;
 }
 
 /** Per-turn expectation - all fields optional, all must hold when present. */
@@ -144,6 +155,16 @@ export interface ReplayReport {
   total: number;
   passed: number;
   cases: ReplayCaseResult[];
+  /**
+   * Set when the golden store could not be read (Supabase outage). A report
+   * carrying this is NOT a verdict: total 0 here means "unknown", not "green",
+   * and every activation gate must FAIL CLOSED on it (goldenGateBlocks). This is
+   * what separates "no cases exist yet" (an honest, vacuous pass) from "cases
+   * exist but we could not see them" (approving blind).
+   */
+  storeError?: "unavailable";
+  /** Honest context on a trivially-green report (e.g. "no cases exist yet"). */
+  note?: string;
 }
 
 // ---- Compiled learning blob (app_config.ops_learning) ----------------------------

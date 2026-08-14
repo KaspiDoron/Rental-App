@@ -63,6 +63,18 @@ export function normalizeMove(raw: unknown): string {
   return LEGACY[s] ?? s;
 }
 
+/** The closed vocabulary as data - MEANING is keyed on MoveKind, so this list
+ *  can never drift from the type. */
+export const MOVE_KINDS = Object.keys(MEANING) as MoveKind[];
+
+/** Is this externally-sourced string a move the engine actually has? Used by
+ *  the golden-case builders: a stored expectation naming a move that does not
+ *  exist would fail every replay forever, so unknown strings are dropped at
+ *  the door rather than frozen. */
+export function isMoveKind(v: unknown): v is MoveKind {
+  return typeof v === "string" && (MOVE_KINDS as string[]).includes(v);
+}
+
 /** Does this move put a PRICE or an AGREEMENT on the table? */
 export function isPriceMove(move: MoveKind): boolean {
   return move === "bargain" || move === "present" || move === "momentum";

@@ -9,7 +9,7 @@
 // channel instantly.
 
 import "server-only";
-import { getConfig, setConfig, sbSelect } from "../runtime-config";
+import { getConfig, sbSelect } from "../runtime-config";
 import type { OpsLearning } from "./types";
 
 const KEY = "ops_learning";
@@ -104,7 +104,14 @@ export function compileOpsLearning(
       const parts = [`owner-correct ${a.correct}/${a.total}`];
       if (a.improved) parts.push(`outcome improved ${a.improved}x`);
       if (a.worsened) parts.push(`worsened ${a.worsened}x`);
-      return `edge ${edge}: ${parts.join(", ")}`;
+      // "spte:<move>" is the PRIMARY engine's stable decision identity (stamped
+      // by runSpteLiveTurn on every trace). Without accepting that form, every
+      // review of a production turn was dropped here - SPTE writes no graph
+      // edge_id, so edgePriorLines was structurally dead on live traffic.
+      const label = edge.startsWith("spte:")
+        ? `move ${edge.slice("spte:".length)} (primary engine)`
+        : `edge ${edge}`;
+      return `${label}: ${parts.join(", ")}`;
     });
 
   // Director exemplars: the freshest owner-curated snippets.
@@ -144,7 +151,24 @@ export async function recompileOpsLearning(): Promise<void> {
       ).catch(() => []),
     ]);
     const blob = compileOpsLearning(reviews, training, new Date().toISOString());
-    await setConfig(KEY, JSON.stringify(blob));
+    // BEHAVIOR-AFFECTING CONFIG GOES THROUGH THE CHOKEPOINT (Wave 3). This used
+    // to setConfig the blob directly - no policy_versions row, no golden gate,
+    // no rollback - while policy.ts documents itself as "the single chokepoint
+    // for every behavior-affecting write". Now: the deterministic suite must be
+    // readable and green (fail closed on an unreadable store, like every other
+    // activation), and the blob lands as a versioned, rollbackable ops_learning
+    // row. Dynamic imports because policy.ts imports this module.
+    const { runGoldenSuite, goldenGateBlocks } = await import("./golden");
+    const report = await runGoldenSuite();
+    if (goldenGateBlocks(report)) return; // keep the previous compiled blob
+    const { saveVersionedSpec } = await import("../policy");
+    await saveVersionedSpec({
+      kind: "ops_learning",
+      spec: blob,
+      note: "Learning recompile (owner review saved)",
+      author: "ops-learning-loop",
+      replayReport: report,
+    });
     bustOpsLearningCache();
   } catch {
     /* recompiling must never block a review save */
