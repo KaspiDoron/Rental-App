@@ -96,6 +96,7 @@ export async function GET(req: Request) {
     vendor_id: string;
     vendor_name: string;
     reply_text: string;
+    english_gloss?: string | null;
     found: boolean;
     price_per_day: number | null;
     matches_spec: boolean;
@@ -112,9 +113,11 @@ export async function GET(req: Request) {
     created_at: string;
   }
   const filter = `user_email=eq.${encodeURIComponent(session.email)}${sinceFilter}&order=created_at.desc&limit=40`;
+  // english_gloss (W1.5) rides in the FIRST tier only - the degrade tiers
+  // below keep the feed alive before the owner runs the newest schema.
   let rows = await sbSelect<ReplyRow>(
     "vendor_replies",
-    `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,deposit_type,deposit_amount,deposit_currency,delivers,insurance_included,delivery_fee,created_at&${filter}`
+    `select=id,vendor_id,vendor_name,reply_text,english_gloss,found,price_per_day,matches_spec,confidence,auto,currency,deposit,deposit_type,deposit_amount,deposit_currency,delivers,insurance_included,delivery_fee,created_at&${filter}`
   );
   if (rows.length === 0) {
     // A select naming a not-yet-migrated column fails SILENTLY as [] - the
@@ -391,6 +394,9 @@ export async function GET(req: Request) {
       vendorId: r.vendor_id,
       vendorName: r.vendor_name,
       replyText: r.reply_text,
+      // English gloss of a local-language reply (stamped by the agent loop) -
+      // the traveller can always read what the shop said, on every surface.
+      english: r.english_gloss ?? null,
       found: r.found,
       pricePerDay: r.price_per_day,
       // VERIFIED = high-confidence read AND the vehicle is established. The

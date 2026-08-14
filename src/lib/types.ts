@@ -83,6 +83,13 @@ export interface Offer {
   includesInsurance: boolean;
   includesDelivery: boolean;
   message: string;
+  /**
+   * English gloss of `message` when the shop wrote in a local language
+   * (vendor_replies.english_gloss). Every surface that quotes the shop's words
+   * renders this as a second quiet line - the traveller must always be able to
+   * read the bargain their agent is having. Absent for English replies.
+   */
+  messageEnglish?: string;
   round: number;
   // True only after the agent has confirmed the exact vehicle + price with the
   // vendor. Simulated (demo) offers are marked so the UI can label them.
@@ -222,7 +229,14 @@ export interface Vendor {
    * said "awaiting reply" is being told something that is plainly untrue.
    */
   lastInboundText?: string;
+  /** English gloss of lastInboundText (local-language shops) - same doctrine
+   *  as Offer.messageEnglish: the raw words stay primary, the translation is
+   *  the second quiet line. */
+  lastInboundEnglish?: string;
   lastInboundAt?: string;
+  /** When the newest agent message left (from /api/activity's lastByVendor) -
+   *  keeps sentText/sentGloss fresh past the first outreach response. */
+  lastOutboundAt?: string;
   lastEventAt?: number;
   queuedUntil?: string;
   // The anti-ban guard's RAW hold reason ("human pacing gap", "shop is closed

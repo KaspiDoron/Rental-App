@@ -616,6 +616,7 @@ function VendorCardInner({
                 <ThreadPeek
                   vendorId={vendor.id}
                   fallbackReceived={offer?.message}
+                  fallbackReceivedEnglish={offer?.messageEnglish}
                   since={searchEpoch}
                 />
                 {onOpenThread && (

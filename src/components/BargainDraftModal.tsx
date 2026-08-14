@@ -49,6 +49,10 @@ export function BargainDraftModal({
     sessionLocalLang && localEntitled ? "local" : "english"
   );
   const [text, setText] = useState("");
+  // English gloss of a LOCAL-LANGUAGE draft (composeBargain returns it as
+  // `english`). The traveller used to approve a Thai message with no idea what
+  // it said - the route sent the translation and the modal threw it away.
+  const [gloss, setGloss] = useState("");
   const [tacticLabel, setTacticLabel] = useState("");
   const [wasFallback, setWasFallback] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -80,6 +84,14 @@ export function BargainDraftModal({
       const data = await res.json();
       if (data.message) {
         setText(data.message);
+        // The draft's English gloss (local-language drafts only; a reused
+        // draft comes back without one). Never shown when it just repeats
+        // the message.
+        setGloss(
+          typeof data.english === "string" && data.english.trim() !== String(data.message).trim()
+            ? data.english
+            : ""
+        );
         setTacticLabel(data.tacticLabel ?? "");
         setWasFallback(Boolean(data.fallback));
         setEdited(false);
@@ -268,6 +280,14 @@ export function BargainDraftModal({
             <span>{edited ? t("Edited by you - screened before sending") : t("AI draft - edit it if you like")}</span>
             <span>{text.trim().length} {t("chars")}</span>
           </div>
+          {/* WHAT THE LOCAL-LANGUAGE DRAFT SAYS, in English - the traveller
+              approves a message they can actually read. Hidden once they edit
+              (the gloss no longer describes their text). */}
+          {gloss && !edited && (
+            <p className="mt-1.5 rounded-xl bg-brandblue-soft p-2 text-[11px] italic leading-relaxed text-brandblue">
+              🌐 {t("In English")}: {gloss}
+            </p>
+          )}
 
           <div className="mt-3 flex gap-2">
             <button

@@ -29,6 +29,10 @@ export interface FeedItem {
   vendorName?: string;
   title: string;
   detail?: string;
+  /** English gloss of `detail` (local-language sends/replies). One doctrine
+   *  everywhere: the real text is primary, the translation is a second quiet
+   *  line when it differs. */
+  english?: string;
   decisionId?: string;
   meta?: {
     pricePerDay?: number;
@@ -148,7 +152,14 @@ export function ActivityFeed({
                     ) : null}
                   </div>
                 ) : it.detail ? (
-                  <p className="mt-0.5 text-[11px] leading-relaxed text-soft">{it.detail}</p>
+                  <>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-soft">{it.detail}</p>
+                    {it.english && it.english.trim() !== it.detail.trim() && (
+                      <p className="mt-0.5 text-[10px] italic leading-relaxed text-faint">
+                        🌐 {it.english}
+                      </p>
+                    )}
+                  </>
                 ) : null}
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {it.decisionId && (

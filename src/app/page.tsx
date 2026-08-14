@@ -1161,7 +1161,18 @@ export default function Home() {
         d.vendorStates && typeof d.vendorStates === "object" ? d.vendorStates : {};
       const lastByVendor: Record<
         string,
-        { lastInboundText?: string; lastInboundAt?: string }
+        {
+          lastInboundText?: string;
+          lastInboundEnglish?: string;
+          lastInboundAt?: string;
+          // The agent's newest REAL sent text + its English gloss (W1.5).
+          // lastOutboundText was computed server-side from day one and the
+          // client type silently dropped it - the panel's "sent" line froze
+          // on the first outreach response forever.
+          lastOutboundText?: string;
+          lastOutboundEnglish?: string;
+          lastOutboundAt?: string;
+        }
       > = d.lastByVendor && typeof d.lastByVendor === "object" ? d.lastByVendor : {};
       // Forward-only stage ranking - the DB state can only ADVANCE a card, never
       // rewind it, and never overrides a terminal decline / no-contact.
@@ -1381,7 +1392,23 @@ export default function Home() {
             base = {
               ...base,
               lastInboundText: last.lastInboundText,
+              lastInboundEnglish: last.lastInboundEnglish,
               lastInboundAt: last.lastInboundAt,
+            };
+          }
+          // THE AGENT'S OWN LAST WORDS, kept fresh. sentText/sentGloss were
+          // stamped once from the outreach response and never again, so the
+          // "Awaiting reply" panel showed the opener forever while the agent
+          // kept talking. The activity rollup carries the newest real sent
+          // body + its gloss - consume it (W1.5).
+          if (last?.lastOutboundAt && last.lastOutboundAt !== base.lastOutboundAt) {
+            base = {
+              ...base,
+              sentText: last.lastOutboundText ?? base.sentText,
+              // The gloss travels WITH its text - a newer English send must
+              // clear the old gloss, never wear it (a mismatched pair lies).
+              sentGloss: last.lastOutboundText ? last.lastOutboundEnglish : base.sentGloss,
+              lastOutboundAt: last.lastOutboundAt,
             };
           }
           // Seed the offer from the activity feed so OFFERS IN advances fast
@@ -1868,6 +1895,9 @@ export default function Home() {
                       includesDelivery: r.delivers === true || v.offer?.includesDelivery === true,
                       deliveryFee: r.deliveryFee ?? v.offer?.deliveryFee,
                       message: r.replyText?.slice(0, 200) ?? "",
+                      // English gloss of a local-language reply (W1.5) - every
+                      // surface that quotes the shop can show the translation.
+                      messageEnglish: r.english?.slice(0, 200) ?? undefined,
                       // A sourced price is not a negotiation round - only a
                       // confirmed reply advances the counter.
                       round: v.offer ? (confirmedRow ? v.offer.round + 1 : v.offer.round) : 0,
@@ -3579,8 +3609,17 @@ export default function Home() {
                           {v.lastEventAt && <span>🕐 {formatClock(v.lastEventAt)}</span>}
                         </div>
                         {v.offer?.message && (
-                          <div className="mt-1 truncate rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
-                            💬 {v.offer.message}
+                          <div className="mt-1 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            <div className="truncate">💬 {v.offer.message}</div>
+                            {/* The English gloss of a local-language reply -
+                                the raw words stay primary, the translation is
+                                the quiet second line (W1.5, everywhere). */}
+                            {v.offer.messageEnglish &&
+                              v.offer.messageEnglish.trim() !== v.offer.message.trim() && (
+                                <div className="mt-0.5 truncate italic text-faint">
+                                  🌐 {v.offer.messageEnglish}
+                                </div>
+                              )}
                           </div>
                         )}
                       </div>
@@ -3613,8 +3652,16 @@ export default function Home() {
                           </span>
                         </div>
                         {v.lastInboundText && (
-                          <div className="mt-1 line-clamp-2 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
-                            💬 {v.lastInboundText}
+                          <div className="mt-1 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            <div className="line-clamp-2">💬 {v.lastInboundText}</div>
+                            {/* Same doctrine as the offers section: real words
+                                first, English gloss as the quiet second line. */}
+                            {v.lastInboundEnglish &&
+                              v.lastInboundEnglish.trim() !== v.lastInboundText.trim() && (
+                                <div className="mt-0.5 line-clamp-2 italic text-faint">
+                                  🌐 {v.lastInboundEnglish}
+                                </div>
+                              )}
                           </div>
                         )}
                         {/* WHAT IS ACTUALLY HAPPENING, not one sentence for
@@ -3691,9 +3738,16 @@ export default function Home() {
                             {v.lastEventAt ? `${t("sent")} ${formatClock(v.lastEventAt)}` : t("awaiting reply")}
                           </span>
                         </div>
-                        {v.sentGloss && (
+                        {(v.sentText || v.sentGloss) && (
                           <div className="mt-0.5 rounded-lg bg-card px-2 py-1 text-[10px] text-soft">
-                            🌐 {v.sentGloss}
+                            {/* What was ACTUALLY sent, then its translation -
+                                the gloss alone hid the real wire text (W1.5). */}
+                            {v.sentText && <div className="line-clamp-2">📤 {v.sentText}</div>}
+                            {v.sentGloss && v.sentGloss.trim() !== v.sentText?.trim() && (
+                              <div className="mt-0.5 line-clamp-2 italic text-faint">
+                                🌐 {v.sentGloss}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

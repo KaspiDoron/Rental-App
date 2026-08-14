@@ -115,3 +115,115 @@ describe("the draft popup's language belongs to the HUNT (owner report 5 #14)", 
     expect(route).toMatch(/languageUsed/);
   });
 });
+
+describe("the gloss is visible everywhere (owner report 5 #15)", () => {
+  // W1.5: a local-language bargain must be readable by the traveller on EVERY
+  // surface that quotes it - status panel, cards, feed, trips, map, draft
+  // modal - not only inside the full-conversation transcript. One doctrine:
+  // the REAL text on the wire stays primary, the English gloss is a second
+  // quiet line when it differs. Key facts these pins rest on: inbound rows
+  // carry raw.english (agent-loop stamps it), outbound rows carry
+  // raw.englishGloss (the outbox meta key every send path spreads).
+
+  it("vendor_replies carries english_gloss (the root data gap)", () => {
+    const schema = read("supabase/schema.sql");
+    expect(schema).toMatch(
+      /alter table public\.vendor_replies add column if not exists english_gloss text;/
+    );
+  });
+
+  it("the agent loop stamps the SAME inbound gloss onto the vendor_replies row", () => {
+    const loop = read("src/lib/agent-loop.ts");
+    // Best-effort follow-up on the row this turn just wrote (the gloss is
+    // computed after the insert), inside the inbound-gloss block.
+    const block = loop.slice(loop.indexOf('finishBeforeResponse("inbound-gloss"'));
+    expect(block).toMatch(/sbUpdate\("vendor_replies", `id=eq\.\$\{vr\[0\]\.id\}`, \{ english_gloss: english \}\)/);
+  });
+
+  it("/api/replies selects english_gloss (first tier only) and returns it as `english`", () => {
+    const route = read("src/app/api/replies/route.ts");
+    expect(route).toMatch(/select=id,vendor_id,vendor_name,reply_text,english_gloss,found/);
+    expect(route).toMatch(/english: r\.english_gloss \?\? null/);
+    // The degrade tiers survive WITHOUT the new column (pre-migration feed).
+    expect(route).toMatch(
+      /select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at/
+    );
+  });
+
+  it("the offer rows the client builds carry the gloss (Offer.messageEnglish)", () => {
+    const page = read("src/app/page.tsx");
+    expect(page).toMatch(/messageEnglish: r\.english\?\.slice\(0, 200\)/);
+    expect(read("src/lib/types.ts")).toMatch(/messageEnglish\?: string/);
+  });
+
+  it("the status panel renders the gloss under the offer excerpt and the replied excerpt", () => {
+    const page = read("src/app/page.tsx");
+    // Offers & negotiations: raw shop words + gloss line.
+    expect(page).toMatch(/v\.offer\.messageEnglish\.trim\(\) !== v\.offer\.message\.trim\(\)/);
+    // Replied - your agent is on it: same doctrine on lastInboundText.
+    expect(page).toMatch(/v\.lastInboundEnglish\.trim\(\) !== v\.lastInboundText\.trim\(\)/);
+  });
+
+  it("the activity client consumes lastOutboundText (it was silently dropped)", () => {
+    const page = read("src/app/page.tsx");
+    expect(page).toMatch(/lastOutboundText\?: string/);
+    expect(page).toMatch(/sentText: last\.lastOutboundText/);
+    // The gloss travels WITH its text - a newer English send clears the old gloss.
+    expect(page).toMatch(/sentGloss: last\.lastOutboundText \? last\.lastOutboundEnglish/);
+    // ...and the Awaiting-reply panel shows the REAL sent text, gloss second.
+    expect(page).toMatch(/\{v\.sentText && <div className="line-clamp-2">📤 \{v\.sentText\}<\/div>\}/);
+  });
+
+  it("the feed shows the REAL text with the gloss beside it - never gloss-instead", () => {
+    const route = read("src/app/api/activity/route.ts");
+    // The old outbound gloss-instead read (which keyed on the inbound key
+    // raw.english and so never fired) is gone in both places it lived.
+    expect(route).not.toMatch(/m\.raw\?\.english \|\| m\.body/);
+    // Outbound: detail = the real body, english = the outbound gloss key.
+    expect(route).toMatch(/detail: \(m\.body \|\| ""\)\.slice\(0, 220\)/);
+    expect(route).toMatch(/english: m\.raw\?\.englishGloss\?\.slice\(0, 220\)/);
+    // Inbound reply items carry the stored gloss.
+    expect(route).toMatch(/english: r\.english_gloss\?\.slice\(0, 220\)/);
+    // The raw-inbound fallback query SELECTS the stored gloss (raw->>english),
+    // so a reply whose agent turn has not run yet still shows its translation.
+    expect(route).toMatch(/english:raw->>english/);
+    expect(route).toMatch(/lastInboundEnglish = m\.english\?\.slice\(0, 240\)/);
+    // And the feed client renders the second quiet line.
+    const feed = read("src/components/activity/ActivityFeed.tsx");
+    expect(feed).toMatch(/it\.english && it\.english\.trim\(\) !== it\.detail\.trim\(\)/);
+  });
+
+  it("ThreadPeek's always-visible one-line preview is gloss-first", () => {
+    const peek = read("src/components/ThreadPeek.tsx");
+    expect(peek).toMatch(/const preview = gloss && gloss !== msg\.text\.trim\(\) \? gloss : msg\.text/);
+    expect(peek).toMatch(/summarize\(waPlain\(preview\)\)/);
+    // ...and the card's SEEDED first reply carries the gloss too.
+    expect(peek).toMatch(/fallbackReceivedEnglish/);
+    expect(read("src/components/VendorCard.tsx")).toMatch(
+      /fallbackReceivedEnglish=\{offer\?\.messageEnglish\}/
+    );
+  });
+
+  it("the trips timeline shows shop replies (and agent sends) with the gloss", () => {
+    const route = read("src/app/api/deals/route.ts");
+    expect(route).toMatch(/english_gloss/);
+    expect(route).toMatch(/english: r\.english_gloss\?\.slice\(0, 90\)/);
+    // Agent sends: real body as text, gloss beside it (undefined for the
+    // traveller's own human-manual rows, whose text is a label).
+    expect(route).toMatch(/english: human \? undefined : m\.raw\?\.englishGloss\?\.slice\(0, 90\)/);
+    expect(route).not.toMatch(/m\.raw\?\.english \|\| m\.body/);
+    const page = read("src/app/deals/page.tsx");
+    expect(page).toMatch(/e\.english && e\.english\.trim\(\) !== e\.text\.trim\(\)/);
+  });
+
+  it("BargainDraftModal shows the draft's English gloss before the traveller approves it", () => {
+    const modal = read("src/components/BargainDraftModal.tsx");
+    expect(modal).toMatch(/data\.english/);
+    expect(modal).toMatch(/\{gloss && !edited &&/);
+  });
+
+  it("the map cards carry the shop's last line + gloss", () => {
+    const map = read("src/components/MapView.tsx");
+    expect(map).toMatch(/lastLineEnglish\.trim\(\) !== lastLine\.trim\(\)/);
+  });
+});

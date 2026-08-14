@@ -47,6 +47,8 @@ interface TimelineEvent {
   kind: "sent" | "reply" | "offer" | "alert" | "booked" | "you";
   vendorName?: string;
   text: string;
+  /** English gloss of `text` (local-language sends/replies) - second quiet line. */
+  english?: string;
 }
 
 interface SessionSummary {
@@ -847,6 +849,14 @@ export default function DealsPage() {
                                     {e.vendorName ? `${e.vendorName}: ` : ""}
                                     {e.text}
                                   </div>
+                                  {/* English gloss of a local-language line -
+                                      real words first, translation second
+                                      (W1.5, the same rule everywhere). */}
+                                  {e.english && e.english.trim() !== e.text.trim() && (
+                                    <div className="truncate text-[10px] italic leading-tight text-faint">
+                                      🌐 {e.english}
+                                    </div>
+                                  )}
                                   <div className="text-[10px] text-faint">{timeAgo(e.at, t)}</div>
                                 </div>
                               </div>
