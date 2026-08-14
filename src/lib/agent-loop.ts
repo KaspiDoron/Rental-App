@@ -1898,9 +1898,15 @@ export async function processVendorReply(opts: {
   let followUp: string | null = null;
   let followKind: string = direction;
   let englishGloss: string | undefined;
-  // LANGUAGE ADAPTATION: a shop writing real English gets English back for
-  // this reply - matching the human beats the local-language setting.
-  const { looksEnglish } = await import("./agents");
+  // LANGUAGE ADAPTATION: a shop that DEMONSTRATES English gets English back -
+  // matching the human beats the local-language setting. THREAD level (owner
+  // report 4): the current message and the previous inbound must both look
+  // English, so one English line in a Thai thread cannot make the agent
+  // alternate languages turn by turn.
+  const { threadPrefersEnglish } = await import("./agents");
+  const priorInboundBodies = thread
+    .filter((m) => m.direction === "inbound")
+    .map((m) => m.body ?? "");
   // ONE PREDICATE (entitlements.localLanguageAllowed). This read
   // `ctx.plan === "ultra"` - a hardcoded tier on the one path that actually
   // composes the message to the shop, so a new tier would have been honoured by
@@ -1911,8 +1917,13 @@ export async function processVendorReply(opts: {
       requested: ctx.localLang,
       plan: ctx.plan,
       enabled: await localLanguageEnabled(),
-    }) && !looksEnglish(text);
+    }) && !threadPrefersEnglish(text, priorInboundBodies);
   const register = registerRules(cfg, cur, ctx.region || undefined);
+  // The shop's phone number resolves the country when the thread carries no
+  // region label - the 4-country ceiling fix (owner report 4). Feeds every
+  // localizeMessage/composeBargain call on this path.
+  const { countryForShop } = await import("./copy/region");
+  const localeRegion = ctx.region || countryForShop(from) || undefined;
 
   if (direction === "answer") {
     const { chat } = await import("./ai");
@@ -1974,7 +1985,7 @@ export async function processVendorReply(opts: {
       vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
       currentPricePerDay: usablePrice,
       rivalPricePerDay: rivalPrice,
-      region: ctx.region || undefined,
+      region: localeRegion,
       // The REAL round (0-based). A hardcoded 1 framed the first-ever counter as
       // a "SECOND PUSH" that falsely implies the shop already refused an ask -
       // so the opener's days-leverage play never fired on first contact.
@@ -2005,6 +2016,35 @@ export async function processVendorReply(opts: {
         .filter(Boolean)
         .join("\n"),
     });
+    if (draft.localizeFailed) {
+      // Template AND localizer failed on a local-language thread: fluent
+      // English here is a mid-negotiation language flip. Suppress and say so;
+      // the next inbound or tick recomposes with the AI back.
+      traces.push({
+        ...traceBase,
+        stage: "price-agent",
+        input: text.slice(0, 500),
+        reasoning:
+          "local-language bargain suppressed - localization unavailable; waiting beats an English flip mid-thread",
+        output: "(suppressed)",
+        verdict: "veto",
+      });
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: ctx.sender ?? "",
+          vendor_name: ctx.vendorName ?? from,
+          detail: JSON.stringify({
+            reason: "ai-unavailable",
+            region: localeRegion ?? null,
+            path: "legacy-bargain-fallback",
+            action: "suppressed",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
+      await writeTrace(traces);
+      return;
+    }
     followUp = draft.message;
     if (useLocalLang && draft.english) englishGloss = draft.english;
     await sbInsert("bargain_drafts", [
@@ -2151,15 +2191,26 @@ export async function processVendorReply(opts: {
   // English gloss for the traveller. Street register applies (orchestrator).
   if (followUp && useLocalLang && followKind !== "bargain") {
     const { localizeMessage } = await import("./agents");
-    const localized = await localizeMessage(
-      followUp,
-      ctx.region || undefined,
-      ctx.sender,
-      cfg.streetLocal
-    );
+    const localized = await localizeMessage(followUp, localeRegion, ctx.sender, cfg.streetLocal);
     if (localized.text && localized.text !== followUp) {
       englishGloss = localized.english ?? followUp;
       followUp = localized.text;
+    }
+    // This path used to fall back to English SILENTLY - only the mass-send
+    // route ever emitted localize-fallback. Honest reason, here too.
+    if (!localized.localized && localized.reason && localized.reason !== "english-region") {
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: ctx.sender ?? "",
+          vendor_name: ctx.vendorName ?? from,
+          detail: JSON.stringify({
+            reason: localized.reason,
+            region: localeRegion ?? null,
+            path: "legacy-reply",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
     }
   }
 

@@ -153,7 +153,7 @@ describe("work that does not depend on the turn no longer waits for it", () => {
     // `source` is `message` with the free/available ambiguity already rewritten -
     // that rail is about meaning, so it runs even when no translation happens.
     expect(readCode("src/lib/agents.ts")).toMatch(
-      /if \(isEnglishSpeaking\(region\)\) return \{ text: source, localized: false \}/
+      /if \(isEnglishSpeaking\(region\)\) return \{ text: source, localized: false, reason: "english-region" \}/
     );
   });
 

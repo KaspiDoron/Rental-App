@@ -563,14 +563,49 @@ export function money(amount: number, currency?: string): string {
  * English - matching the human on the other side always beats a setting.
  * Emoji/punctuation are ignored; a bare "ok" (under 3 words) never flips.
  */
+/** ONE Latin-dominance bar for both language decisions (owner report 4). It
+ * used to be 0.9 here and 0.7 in translateToEnglish, leaving a dead band where
+ * a romanized reply was simultaneously "not English" (no adaptation) and "not
+ * foreign" (no gloss) - the traveller saw raw text nobody explained. */
+export const LATIN_DOMINANT = 0.9;
+
+// Latin script is not English: "bisa antar ke hotel bos" is 100% ASCII and
+// used to pass this detector, flipping an Indonesian thread to English on the
+// shop's own Indonesian. Real English carries English FUNCTION words; require
+// one. (Deliberately no universal shop-speak like "ok"/"day"/"price" - those
+// appear verbatim inside SE-Asian chat and would re-open the false flip.)
+const ENGLISH_HINT =
+  /\b(the|is|are|you|your|we|our|do|does|can|could|will|would|have|has|this|that|what|when|where|how|please|thanks|thank|hello|speak|english|available|sorry|from|with|for|and)\b/i;
+
 export function looksEnglish(text: string): boolean {
   const t = (text || "").trim();
   const letters = t.replace(/[^\p{L}]/gu, "");
   if (!letters) return false;
   const ascii = letters.replace(/[^A-Za-z]/g, "");
-  if (ascii.length / letters.length < 0.9) return false; // another script dominates
+  if (ascii.length / letters.length < LATIN_DOMINANT) return false; // another script dominates
   const words = t.split(/\s+/).filter((w) => /[A-Za-z]{2,}/.test(w));
-  return words.length >= 3;
+  if (words.length < 3) return false;
+  return ENGLISH_HINT.test(t);
+}
+
+/**
+ * THREAD-LEVEL language adaptation (owner report 4, item 8).
+ *
+ * The per-turn `looksEnglish(message)` flip made the agent ALTERNATE on mixed
+ * threads: the shop's one English line got an English reply, their next Thai
+ * line got Thai, and from the shop's side one person kept switching languages
+ * mid-conversation - the exact bot tell thread-language stickiness exists to
+ * prevent. The flip is now a THREAD statement: the shop has demonstrated
+ * English when their current message looks English AND so did their previous
+ * one (or there is no previous - a thread opened in English adapts at once).
+ */
+export function threadPrefersEnglish(currentMessage: string, priorInbound: string[] = []): boolean {
+  if (!looksEnglish(currentMessage)) return false;
+  const prior = priorInbound.filter((m) => (m ?? "").trim().length > 0);
+  // The current turn's message is usually already stored - skip its tail copy.
+  while (prior.length && prior[prior.length - 1] === currentMessage) prior.pop();
+  const prev = [...prior].reverse().find((m) => (m ?? "").trim().length >= 3);
+  return prev === undefined || looksEnglish(prev);
 }
 
 /**
@@ -583,7 +618,10 @@ export async function translateToEnglish(text: string): Promise<string | null> {
   if (!t) return null;
   const letters = t.replace(/[^\p{L}]/gu, "");
   const ascii = letters.replace(/[^A-Za-z]/g, "");
-  if (!letters || ascii.length / letters.length > 0.7) return null;
+  // Same bar as looksEnglish (LATIN_DOMINANT): anything the adaptation logic
+  // does NOT read as Latin-dominant gets a gloss. The old 0.7 left a 0.7-0.9
+  // dead band - mixed/diacritic-heavy replies with no adaptation AND no gloss.
+  if (!letters || ascii.length / letters.length >= LATIN_DOMINANT) return null;
   const out = await chat(
     [
       {
@@ -601,12 +639,27 @@ export async function translateToEnglish(text: string): Promise<string | null> {
   return res || null;
 }
 
+/** WHY a localize call handed English back - so the event trail can tell
+ * "we never asked" from "the AI failed" from "the AI drifted the numbers".
+ * The old single false reason ("AI localization unavailable") blamed the AI
+ * for shops whose country simply was not resolved. */
+export type LocalizeFallbackReason =
+  | "no-region"
+  | "english-region"
+  | "ai-unavailable"
+  | "numbers-drifted";
+
 export async function localizeMessage(
   message: string,
   region?: string,
   voiceKey?: string,
   street = true
-): Promise<{ text: string; english?: string; localized: boolean }> {
+): Promise<{
+  text: string;
+  english?: string;
+  localized: boolean;
+  reason?: LocalizeFallbackReason;
+}> {
   void voiceKey; // persona intentionally not applied to local-language output
   // ...but the ONE persona rule that is about meaning rather than register has
   // to run here too. `personaHumanize` (which carries deAmbiguateFree) is
@@ -615,13 +668,13 @@ export async function localizeMessage(
   // the traveller cannot proofread. Fix the SOURCE before the model sees it;
   // the prompt rule below is the second layer, not the only one.
   const source = deAmbiguateFree(message);
-  if (!region) return { text: source, localized: false };
+  if (!region) return { text: source, localized: false, reason: "no-region" };
   // ENGLISH -> ENGLISH IS NOT A TRANSLATION. Where the everyday language
   // already is English, this call spent up to two LLM round trips (9s budget
   // each, with a retry) to hand back the text it was given - pure latency on
   // the critical path between composing a reply and sending it. Same output,
   // no call. Any country not on the list simply behaves as before.
-  if (isEnglishSpeaking(region)) return { text: source, localized: false };
+  if (isEnglishSpeaking(region)) return { text: source, localized: false, reason: "english-region" };
   // NB: we deliberately do NOT inject the English voice persona here - its
   // literal greeting ("Hey") was leaking into the local-language output. The
   // local register itself carries the human tone.
@@ -629,6 +682,7 @@ export async function localizeMessage(
   // DETERMINISM: one transient LLM hiccup must not flip a single shop in the
   // hunt to English while its neighbours get the local language - so a failed
   // attempt retries once before the (documented) English fallback applies.
+  let numbersDrifted = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     const out = await chat(
       [
@@ -678,6 +732,7 @@ export async function localizeMessage(
         if (!numbersPreserved(source, text)) {
           // Attempt 0 retries (the loop); attempt 1 falls through to English,
           // which the shop can still read and which quotes the right number.
+          numbersDrifted = true;
           continue;
         }
         return {
@@ -691,8 +746,13 @@ export async function localizeMessage(
     }
   }
   // Honest, DOCUMENTED fallback: English beats a failed send. Callers log a
-  // localize-fallback event so a language flip is never a silent mystery.
-  return { text: source, localized: false };
+  // localize-fallback event so a language flip is never a silent mystery -
+  // and the reason now says WHICH failure it was.
+  return {
+    text: source,
+    localized: false,
+    reason: numbersDrifted ? "numbers-drifted" : "ai-unavailable",
+  };
 }
 
 export async function composeBargain(opts: {
@@ -728,6 +788,12 @@ export async function composeBargain(opts: {
   english?: string;
   // True when the AI was unreachable and a varied template was used instead.
   fallback?: boolean;
+  // True when a LOCAL-LANGUAGE bargain could not be localized (template AND
+  // localizer both failed): the message field holds fluent English, which on
+  // a Thai/Spanish thread is a language flip mid-negotiation. AUTO callers
+  // suppress the send (the next event recomposes); interactive callers may
+  // still show the English draft to the traveller, who decides.
+  localizeFailed?: boolean;
 }> {
   const cur = opts.currency || currencyForRegion(opts.region) || "USD";
   // Owner-tuned thresholds (defaults = the historical literals below).
@@ -1024,6 +1090,30 @@ export async function composeBargain(opts: {
         `Appreciate it! Any wiggle room on the daily price for a ${days}-day rental? I can confirm right away.`,
       ];
   const filled = fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
+  // A LOCALIZED thread must not receive fluent English because the AI blinked
+  // (owner report 4): mid-Thai-negotiation English is the bot tell. Try the
+  // localizer once (its provider chain differs from the compose call that
+  // just failed, so this is not futile); if it also fails, flag the draft so
+  // AUTO callers suppress it instead of flipping the thread's language.
+  if (opts.localLanguage && opts.region && !isEnglishSpeaking(opts.region)) {
+    const localized = await localizeMessage(filled, opts.region, undefined, true);
+    if (localized.localized) {
+      return {
+        message: localized.text,
+        english: localized.english ?? sanitizeAiText(filled),
+        tacticId: tactic.id,
+        tacticLabel: tactic.label,
+        fallback: true,
+      };
+    }
+    return {
+      message: sanitizeAiText(filled),
+      tacticId: tactic.id,
+      tacticLabel: tactic.label,
+      fallback: true,
+      localizeFailed: true,
+    };
+  }
   return {
     message: sanitizeAiText(filled),
     tacticId: tactic.id,

@@ -971,13 +971,20 @@ async function runTailGates(args: {
   const { input, io, spec, cfg, nodeOn, push } = args;
   let text = args.draft;
   let englishGloss = args.englishGloss;
-  // LANGUAGE ADAPTATION: when the shop writes an actual English sentence
-  // ("Hi, do you speak English?") we answer in English for THIS reply -
-  // matching the human beats the local-language setting. A bare "ok" or a
-  // local-script reply keeps the thread local as configured.
-  const { looksEnglish } = await import("../agents");
+  // Set when a deterministic rail rewrote the text after localization - the
+  // re-gloss block at the bottom uses it to keep the traveller's translation
+  // alive (owner report 4, item 8).
+  let glossInvalidated = false;
+  // LANGUAGE ADAPTATION: when the shop DEMONSTRATES English we answer in
+  // English - matching the human beats the local-language setting. THREAD
+  // level (owner report 4): one English line in an otherwise local thread
+  // does not flip the reply (the per-turn test made the agent alternate
+  // languages on mixed threads - the exact bot tell stickiness prevents);
+  // the current message AND the previous inbound must both look English.
+  const { threadPrefersEnglish } = await import("../agents");
   const shopWroteEnglish =
-    input.event.kind !== "tick" && looksEnglish(input.event.shopMessage);
+    input.event.kind !== "tick" &&
+    threadPrefersEnglish(input.event.shopMessage, input.priorInbound ?? []);
   const useLocalLang =
     localLanguageAllowed({ requested: input.ctx.localLang, plan: input.ctx.plan }) &&
     !shopWroteEnglish;
@@ -1122,9 +1129,16 @@ async function runTailGates(args: {
 
   // ---- localize ----------------------------------------------------------------
   if (nodeOn("localize") && useLocalLang && args.nodeId !== "bargain") {
+    // The COUNTRY comes from the shop's own phone number when the thread has
+    // no region label (owner report 4): the label-only lookup was the
+    // 4-country ceiling that sent English to every +52/+51/+90 shop while
+    // blaming the AI for it.
+    const { countryForShop } = await import("../copy/region");
+    const localeRegion =
+      input.ctx.region || countryForShop(input.event.toDigits) || undefined;
     const localized = await localizeMessage(
       text,
-      input.ctx.region || undefined,
+      localeRegion,
       input.ctx.sender,
       spec.settings.streetLocal
     );
@@ -1138,6 +1152,23 @@ async function runTailGates(args: {
         output: localized.text,
       });
       text = localized.text;
+    }
+    // The reply paths used to fall back to English SILENTLY - the mass-send
+    // route was the only emitter of localize-fallback. Same event, honest
+    // reason, here too ("english-region" is a decision, not a failure).
+    if (!localized.localized && localized.reason && localized.reason !== "english-region") {
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: input.ctx.sender ?? "",
+          vendor_name: input.ctx.vendorName ?? input.event.toDigits,
+          detail: JSON.stringify({
+            reason: localized.reason,
+            region: localeRegion ?? null,
+            path: "engine-reply",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
     }
   }
 
@@ -1184,6 +1215,7 @@ async function runTailGates(args: {
         });
         text = fixed.text;
         englishGloss = undefined; // a corrected duration invalidates the gloss
+        glossInvalidated = true;
       }
     }
     // (0.9) THE COMMITMENT RAIL - the same one SPTE runs, from one definition.
@@ -1217,6 +1249,7 @@ async function runTailGates(args: {
         // of the turn is usually a legitimate question the shop is waiting on.
         text = stripCommitment(text);
         englishGloss = undefined;
+        glossInvalidated = true;
         if (!text.trim()) {
           return { delivered: "blocked", detail: "commitment guard: nothing left to send" };
         }
@@ -1253,6 +1286,7 @@ async function runTailGates(args: {
       });
       text = decline;
       englishGloss = undefined;
+      glossInvalidated = true;
     } else if (["bargain", "momentum", "close", "answer"].includes(args.nodeKind)) {
       // (2) NUMERIC SANITY: fabricated rival (any of these nodes) + the
       // sub-floor / inverted-ask bounds (the price-asking bargain node only).
@@ -1319,6 +1353,7 @@ async function runTailGates(args: {
           });
           text = safe;
           englishGloss = undefined;
+          glossInvalidated = true;
         } else {
           // No honest repair possible - block. The run-budget rollback in the
           // caller lets the next event recompose cleanly (never a lie sent).
@@ -1401,6 +1436,58 @@ async function runTailGates(args: {
         ? delivered.finalText ?? text
         : `(${delivered.delivered}${delivered.queuedUntil ? ` until ${delivered.queuedUntil}` : ""})`,
   });
+
+  // ---- re-gloss (owner report 4, item 8) --------------------------------------
+  // A deterministic repair (duration fix, commitment strip) on a LOCALIZED
+  // text dropped the English gloss, leaving the traveller blind to what was
+  // sent in their name - on exactly the turns where a rail rewrote the words.
+  // Fire-and-forget, same pattern as the inbound gloss: translate the FINAL
+  // text and stamp it onto the row the send produced. Only non-Latin text
+  // qualifies (a repair that produced English needs no gloss).
+  if (glossInvalidated && !englishGloss && delivered.delivered !== "blocked" && input.ctx.sender) {
+    const finalText = delivered.finalText ?? text;
+    const letters = finalText.replace(/[^\p{L}]/gu, "");
+    const ascii = letters.replace(/[^A-Za-z]/g, "");
+    if (letters.length > 0 && ascii.length / letters.length < 0.9) {
+      const senderKey = input.ctx.sender;
+      const toNumber = input.event.toDigits;
+      const wasQueued = delivered.delivered === "queued";
+      const { finishBeforeResponse } = await import("../after");
+      await finishBeforeResponse("outbound-regloss", async () => {
+        try {
+          const { translateToEnglish } = await import("../agents");
+          const english = await translateToEnglish(finalText);
+          if (!english) return;
+          const { sbSelect: sel, sbUpdate } = await import("../runtime-config");
+          const { numberFilter } = await import("../wa/phone-key");
+          const encSender = encodeURIComponent(senderKey);
+          if (wasQueued) {
+            const rows = await sel<{ id: number; meta: Record<string, unknown> | null }>(
+              "wa_outbox",
+              `select=id,meta&sender_key=eq.${encSender}&order=id.desc&limit=1${numberFilter("to_number", toNumber)}`
+            );
+            if (rows[0]) {
+              await sbUpdate("wa_outbox", `id=eq.${rows[0].id}`, {
+                meta: { ...(rows[0].meta ?? {}), englishGloss: english },
+              });
+            }
+          } else {
+            const rows = await sel<{ id: number; raw: Record<string, unknown> | null }>(
+              "whatsapp_messages",
+              `select=id,raw&direction=eq.outbound&raw->>sender=eq.${encSender}&order=id.desc&limit=1${numberFilter("to_number", toNumber)}`
+            );
+            if (rows[0]) {
+              await sbUpdate("whatsapp_messages", `id=eq.${rows[0].id}`, {
+                raw: { ...(rows[0].raw ?? {}), englishGloss: english },
+              });
+            }
+          }
+        } catch {
+          /* the gloss is a bonus - never the send */
+        }
+      });
+    }
+  }
 
   // ---- judge enqueue (never inline - a cheap later invocation grades it) ------
   if (
