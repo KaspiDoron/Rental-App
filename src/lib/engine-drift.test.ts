@@ -72,10 +72,10 @@ describe("a model id that drifted is visible instead of merely expensive", () =>
     const body = fn.slice(0, fn.indexOf("\n}\n"));
     expect(body).toMatch(/recordUsage\(cfg\.name, 0, true, cfg\.model, `primary model failed/);
     // Before the fallback runs, not after - a throw inside run() would skip it.
-    // (The fallback run is awaited in a try so a both-ids failure can name
-    // both attempts; the ordering invariant is unchanged.)
+    // (The fallback run is awaited in a try with its own remaining-budget
+    // argument; the ordering invariant - record BEFORE retry - is unchanged.)
     expect(body.indexOf("recordUsage(cfg.name, 0, true")).toBeLessThan(
-      body.indexOf("return await run(cfg.fallbackModel)")
+      body.indexOf("return await run(cfg.fallbackModel")
     );
   });
 

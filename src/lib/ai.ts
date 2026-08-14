@@ -43,9 +43,9 @@ const CALL_TIMEOUT_MS = 14000;
 export const PROVIDER_NAMES: ProviderName[] = [
   "groq",
   "cerebras",
-  "sambanova",
   "deepseek",
   "together",
+  "sambanova",
   "openrouter",
   "mistral",
   "huggingface",
@@ -110,17 +110,6 @@ async function allProviders(): Promise<ProviderConfig[]> {
       fallbackModel: "llama3.1-8b",
     },
     {
-      name: "sambanova",
-      token: sambanova,
-      endpoint: "https://api.sambanova.ai/v1/chat/completions",
-      // gpt-oss-120b leads: it is SambaCloud's newly promoted flagship with
-      // dedicated capacity, while the Llama-3.3-70B free pool 429s with
-      // "experiencing high demand" at peak (the owner hit it twice live).
-      // Llama stays as the fallback - still a current id, just crowded.
-      model: pick(sambaM, "gpt-oss-120b"),
-      fallbackModel: "Meta-Llama-3.3-70B-Instruct",
-    },
-    {
       name: "deepseek",
       token: deepseek,
       endpoint: "https://api.deepseek.com/chat/completions",
@@ -137,6 +126,19 @@ async function allProviders(): Promise<ProviderConfig[]> {
       // The old 3.1-8B-Turbo fallback is a PAID endpoint - useless as a
       // rescue for a free-tier key. R1-Distill-70B-free is the free sibling.
       fallbackModel: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+    },
+    {
+      name: "sambanova",
+      token: sambanova,
+      endpoint: "https://api.sambanova.ai/v1/chat/completions",
+      // DEMOTED below deepseek/together: the free tier queues requests past
+      // any reply-path budget at peak ("experiencing high demand" 429s, or a
+      // silent hold until the socket times out). Correct ids, slow tier - it
+      // still earns its keep on the long-budget callers (distill, admin).
+      // gpt-oss-120b leads (SambaCloud's flagship with dedicated capacity);
+      // the crowded Llama-3.3-70B free pool is the rescue.
+      model: pick(sambaM, "gpt-oss-120b"),
+      fallbackModel: "Meta-Llama-3.3-70B-Instruct",
     },
     {
       name: "openrouter",
@@ -489,6 +491,27 @@ async function errorDetail(res: Response, name: string): Promise<string> {
   return `${name} ${res.status}${msg ? ` - ${msg}` : ""}`;
 }
 
+// A platform abort surfaces as the bare "This operation was aborted" - no
+// provider name, no status, nothing a panel or a rescue gate can key on. Every
+// text-completion fetch goes through here so a timeout is always reported as
+// WHOSE timeout it was and how long the budget actually was.
+async function fetchNamed(
+  name: string,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  try {
+    return await fetchWithTimeout(url, init, timeoutMs);
+  } catch (e) {
+    const m = e instanceof Error ? `${e.name} ${e.message}` : String(e);
+    if (/abort/i.test(m)) {
+      throw new Error(`${name} timed out after ${timeoutMs}ms (no response)`);
+    }
+    throw e;
+  }
+}
+
 async function callOpenAICompatible(
   cfg: ProviderConfig,
   messages: ChatMessage[],
@@ -496,7 +519,7 @@ async function callOpenAICompatible(
   maxTokens: number,
   timeoutMs = CALL_TIMEOUT_MS
 ): Promise<{ text: string; tokens: number }> {
-  const res = await fetchWithTimeout(cfg.endpoint, {
+  const res = await fetchNamed(cfg.name, cfg.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -533,7 +556,7 @@ async function callGemini(
     }));
 
   const endpoint = cfg.endpoint.replace(/models\/[^:]+:/, `models/${model}:`);
-  const res = await fetchWithTimeout(`${endpoint}?key=${cfg.token}`, {
+  const res = await fetchNamed("gemini", `${endpoint}?key=${cfg.token}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -561,23 +584,38 @@ async function callProvider(
   // the configured id and the served id are two different facts, and the
   // telemetry is worthless if it records the one we hoped for.
 ): Promise<{ text: string; tokens: number; model: string }> {
-  const run = async (model: string) => ({
+  // `timeoutMs` is a DEADLINE for the whole provider attempt, primary and
+  // fallback together - not a per-call duration. Duplicating the full budget
+  // on the rescue used to let one provider spend 2x its share of the caller's
+  // chain budget (spte runs the reply path at 9s total), and it also meant a
+  // HUNG primary consumed everything, so a timeout-rescue could never fire.
+  // With a fallback available the primary may spend at most ~60%.
+  const deadline = Date.now() + timeoutMs;
+  const primaryMs = cfg.fallbackModel
+    ? Math.max(2_000, Math.round(timeoutMs * 0.6))
+    : timeoutMs;
+  const run = async (model: string, ms: number) => ({
     ...(cfg.name === "gemini"
-      ? await callGemini(cfg, messages, model, maxTokens, timeoutMs)
-      : await callOpenAICompatible(cfg, messages, model, maxTokens, timeoutMs)),
+      ? await callGemini(cfg, messages, model, maxTokens, ms)
+      : await callOpenAICompatible(cfg, messages, model, maxTokens, ms)),
     model,
   });
   try {
-    return await run(cfg.model);
+    return await run(cfg.model, primaryMs);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     // 400/404: the id is wrong or renamed. 429: THIS model's pool is
     // congested - SambaNova and OpenRouter throttle PER MODEL, so the
     // sibling fallback id on the same key routinely answers immediately
-    // while the popular primary is drowning. Either way the fallback id is
+    // while the popular primary is drowning. A TIMEOUT is the same
+    // congestion signal wearing a different mask (SambaNova queues free-tier
+    // requests until the socket budget expires), so it earns the same
+    // rescue - visionFailureFromThrown is the classifier the vision ladder
+    // already trusts for exactly this call. Either way the fallback id is
     // the right next move; a provider-wide quota 429 just fails a second
     // cheap call and the cross-provider failover chain moves on as before.
-    const modelIssue = /\b(400|404|429)\b/.test(reason);
+    const modelIssue =
+      /\b(400|404|429)\b/.test(reason) || visionFailureFromThrown(e) === "timeout";
     if (cfg.fallbackModel && modelIssue) {
       // A SUCCESSFUL RESCUE HID THE THING THAT NEEDED FIXING.
       //
@@ -600,7 +638,10 @@ async function callProvider(
       await recordUsage(cfg.name, 0, true, cfg.model, `primary model failed, fell back: ${reason}`)
         .catch(() => {});
       try {
-        return await run(cfg.fallbackModel);
+        // The rescue gets whatever the deadline has left (a fast-failing
+        // primary leaves nearly everything; a hung one leaves its reserved
+        // ~40%), never a duplicated budget.
+        return await run(cfg.fallbackModel, Math.max(2_000, deadline - Date.now()));
       } catch (e2) {
         // BOTH ids failed. Reporting only one of the two errors made the
         // live panel ambiguous: a red card naming the primary's error reads
