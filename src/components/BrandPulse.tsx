@@ -54,7 +54,11 @@ export function BrandPulse({
         className="aurora relative inline-flex items-center justify-center rounded-full"
         style={{ width: size * 1.28, height: size * 1.28 }}
       >
-        <BrandMark size={size} className="wd-heartbeat" />
+        {/* The OUTLINE mark (owner report 4, item 9): a monoline silhouette in
+            currentColor with a CSS draw-on shimmer - the filled emoji mark
+            stays the brand's speaking voice everywhere else; the loader wears
+            the luxury sketch. */}
+        <BrandMark size={size} variant="outline" className="wd-heartbeat text-brandblue" />
       </span>
       {label && <span className="text-[12px] font-extrabold text-soft">{label}</span>}
     </div>

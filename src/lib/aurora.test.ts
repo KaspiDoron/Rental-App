@@ -42,11 +42,11 @@ const pulse = stripComments(readRaw("src/components/BrandPulse.tsx"));
 //
 // This file used to pin the shape those defects had. It pins the fixes now.
 
-describe("REGRESSION: the geometry that made it look like a spinning square", () => {
+describe("REGRESSION: the geometry - no spin, no blur, ambient's own language", () => {
   const block = css.slice(css.indexOf(".aurora {"), css.indexOf(".no-scrollbar"));
-  // COMMENTS STRIPPED. The block explains the old `transform: rotate(1turn)` in
-  // prose, and the first draft of this assertion matched its own documentation
-  // - a test that fails on a correct fix because the fix is described.
+  // COMMENTS STRIPPED. The block explains the old defects in prose, and the
+  // first draft of this assertion matched its own documentation - a test that
+  // fails on a correct fix because the fix is described.
   const rules = stripComments(block);
 
   it("nothing in the glow is rotated by a transform any more", () => {
@@ -56,34 +56,42 @@ describe("REGRESSION: the geometry that made it look like a spinning square", ()
     expect(stripComments(css)).not.toMatch(/@keyframes aurora-drift/);
   });
 
-  it("the ANGLE is animated instead, via a registered custom property", () => {
-    expect(css).toMatch(/@property --wd-hue-angle \{/);
-    expect(css).toMatch(/syntax: "<angle>"/);
-    // Without the registration the property is an unanimatable string and the
-    // sweep silently does nothing - which is also the graceful degrade.
-    expect(css).toMatch(/@keyframes wd-hue-sweep \{\s*\n?\s*to \{ --wd-hue-angle: 360deg; \}/);
+  it("the rainbow sweep is gone - the glow speaks the ambient's radial language", () => {
+    // Owner report 4, item 9: the conic 360-degree rainbow read as amateur
+    // next to the page-level lobes. One geometry now: stacked radial lobes,
+    // box-scaled, breathing - never rotating, never a colour wheel.
+    expect(stripComments(css)).not.toMatch(/@keyframes wd-hue-sweep/);
+    expect(stripComments(css)).not.toMatch(/@property --wd-hue-angle/);
+    const before = rules.slice(rules.indexOf(".aurora::before"), rules.indexOf(".aurora::after"));
+    expect(before).not.toMatch(/conic-gradient/);
+    expect((before.match(/radial-gradient\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect(before).toMatch(/animation: aurora-breathe/);
   });
 
-  it("both gradients start FROM that angle, so the light travels and the box does not", () => {
+  it("no blur pass on the bloom - the same low-end-Android rule the ambient lives by", () => {
     const before = rules.slice(rules.indexOf(".aurora::before"), rules.indexOf(".aurora::after"));
+    expect(before, "soft gradient stops carry the haze for free").not.toMatch(/filter:/);
+  });
+
+  it("the rim is a still jewel setting - masked ring, no animation of its own", () => {
     const after = rules.slice(rules.indexOf(".aurora::after"));
-    for (const [name, part] of [["bloom", before], ["rim", after]] as const) {
-      expect(part, name).toMatch(/conic-gradient\(\s*\n?\s*from var\(--wd-hue-angle\)/);
-      expect(part, name).toMatch(/animation: wd-hue-sweep/);
-    }
+    expect(after).toMatch(/mask-composite: exclude/);
+    expect(after).toMatch(/linear-gradient\(\s*\n?\s*135deg/);
+    expect(after.slice(0, after.indexOf("\n}"))).not.toMatch(/animation:/);
   });
 });
 
 describe("REGRESSION: the palette is the brand's, and it does not go grey", () => {
   it("no gradient stop is a hardcoded colour any more", () => {
-    const block = css.slice(css.indexOf(".aurora::before"), css.indexOf("@keyframes wd-hue-sweep"));
+    const block = css.slice(css.indexOf(".aurora::before"), css.indexOf("@keyframes aurora-breathe"));
     expect(
-      block,
+      stripComments(block),
       "a stop that cannot follow the theme is a stop that does not belong to the brand"
     ).not.toMatch(/rgba?\(/);
-    // Every stop resolves from a variable.
-    const stops = block.match(/var\(--wd-hue-\d\)/g) ?? [];
-    expect(stops.length).toBeGreaterThanOrEqual(10); // 6 per gradient, two gradients
+    // Every stop resolves from a variable - all five hues in the bloom, four
+    // more on the rim.
+    const stops = stripComments(block).match(/var\(--wd-hue-\d\)/g) ?? [];
+    expect(stops.length).toBeGreaterThanOrEqual(9);
   });
 
   it("the hue set is seeded from real brand tokens", () => {
@@ -150,9 +158,17 @@ describe("the heartbeat is a heart, not a throb", () => {
     expect(dur).toBeLessThanOrEqual(1400);
   });
 
-  it("the loader is the REAL brand mark, and the backdrop is blurred", () => {
+  it("the loader is the REAL brand mark - OUTLINE variant - on a blurred backdrop", () => {
     expect(pulse).toMatch(/import \{ BrandMark \}/);
-    expect(pulse).toMatch(/className="wd-heartbeat"/);
+    // Owner report 4, item 9: the loader wears the monoline outline sketch
+    // (currentColor + CSS draw-on); the filled mark stays the default
+    // everywhere the brand speaks, so nav/marketing are untouched.
+    expect(pulse).toMatch(/variant="outline" className="wd-heartbeat/);
+    const mark = stripComments(readRaw("src/components/BrandMark.tsx"));
+    expect(mark).toMatch(/variant = "solid"/);
+    expect(mark).toMatch(/stroke="currentColor"/);
+    expect(mark).toMatch(/className="wd-draw"/);
+    expect(css).toMatch(/@keyframes wd-draw-on/);
     expect(css).toMatch(/\.wd-loader-veil \{/);
     expect(css).toMatch(/backdrop-filter: blur\(/);
     expect(pulse).toMatch(/wd-loader-veil/);

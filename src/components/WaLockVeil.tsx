@@ -14,6 +14,7 @@
 // the onboarding tour anchors and layout stay stable.
 
 import { Icon } from "./icons";
+import { AmbientRaiser } from "./AmbientRaiser";
 import { BrandPulse } from "./BrandPulse";
 import { startNav } from "./NavVeil";
 import { useI18n } from "@/lib/i18n";
@@ -30,6 +31,9 @@ export function WaLockVeil({ checking = false }: { checking?: boolean }) {
       <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-blob bg-card/80 p-5 text-center backdrop-blur-xl">
         {showChecking && (
           <>
+            {/* The WhatsApp gate is a BIG loading state - it earns the same
+                ambient wash as a route hop (owner report 4, item 9). */}
+            <AmbientRaiser />
             <BrandPulse size={40} label={t("Checking WhatsApp")} />
             <div className="text-[13px] font-extrabold text-soft">
               {t("Checking your WhatsApp link…")}
