@@ -93,15 +93,35 @@ export async function POST(req: Request) {
     "PAYMENT.SALE.COMPLETED",
   ].includes(event);
 
-  // WHO does this subscription belong to? The hint if PayPal carried one,
-  // otherwise our own verified activation record - which is the only path that
-  // exists for a subscription created by the in-app subscribe button. Without
-  // this a cancellation could not be attributed to anyone, so a traveller who
-  // cancelled kept their tier indefinitely.
+  // WHO does this subscription belong to?
+  //
+  // A PAYMENT.SALE.COMPLETED resource's `id` is the SALE id, not the
+  // subscription - the subscription is `billing_agreement_id`. Reading `id`
+  // first made every renewal unattributable. So a sale reads the agreement id
+  // first; every other event reads the subscription `id` first.
+  const isSale = event === "PAYMENT.SALE.COMPLETED";
   const subscriptionId = String(
-    resource.id ?? resource.billing_agreement_id ?? ""
+    (isSale
+      ? resource.billing_agreement_id ?? resource.id
+      : resource.id ?? resource.billing_agreement_id) ?? ""
   ).trim();
-  const email = hintEmail || (subscriptionId ? await subscriberFor(subscriptionId) : null) || "";
+
+  // The TRUSTED attribution is our own verified activation record
+  // (`subscriberFor`), which is written ONLY by the server-side confirm flow
+  // for a subscription an authenticated traveller actually claimed. `custom_id`
+  // is attacker-settable: a raw PayPal checkout can carry "victim@|pro", so a
+  // signature-verified CANCELLED on the attacker's own subscription would
+  // downgrade the victim if the hint were allowed to win.
+  //
+  //   - GRANTS may bootstrap from the hint for a subscription we have not linked
+  //     yet (a checkout created outside the in-app flow). Over-granting a victim
+  //     a plan they did not buy is harmless, and the webhook writes no durable
+  //     link from a hint, so it cannot be leveraged into a later downgrade.
+  //   - DOWNGRADES trust the verified link ONLY. Without one we do not act - the
+  //     reconcile sweep still catches a genuinely-lapsed subscriber.
+  const linked = subscriptionId ? await subscriberFor(subscriptionId) : null;
+  const grantEmail = linked || hintEmail || "";
+  const downgradeEmail = linked || "";
 
   // WHICH tier? PayPal's plan id is the authority, matched against the plan ids
   // the owner configured. The custom_id hint is only a fallback for a checkout
@@ -121,7 +141,8 @@ export async function POST(req: Request) {
   }
 
   // Only grant from a VERIFIED event (the sole trusted grant path).
-  if (verified && email && activates && tier) {
+  if (verified && grantEmail && activates && tier) {
+    const email = grantEmail;
     // A WEBHOOK IS THE LAST LINE - NOBODY IS WATCHING IT. There is no traveller
     // on the other end of this request to notice that the grant did not land,
     // so a failed write has to leave a trace the owner can actually find.
@@ -139,7 +160,8 @@ export async function POST(req: Request) {
     if (subscriptionId && clearsSuspension(event)) {
       await markSubscriptionState(RESUMED_KIND, { email, subscriptionId });
     }
-  } else if (verified && email) {
+  } else if (verified && downgradeEmail) {
+    const email = downgradeEmail;
     // A SUSPENSION IS NOT A CANCELLATION. PayPal suspends for a recoverable
     // payment failure and retries over about a week, sending RE-ACTIVATED when
     // the money lands - so treating it like a cancellation dropped a paying
@@ -162,11 +184,14 @@ export async function POST(req: Request) {
       // is not one already.
       await markSubscriptionState(SUSPENDED_KIND, { email, subscriptionId });
     }
-  } else if (verified && !email && (activates || subscriptionId)) {
-    // A VERIFIED event we could not pin to any account. Money may be moving
-    // with nobody attributed - the reconcile sweep and the owner both need to
-    // be able to find these, so the shrug leaves a durable, queryable trace
-    // instead of dissolving into the generic pp_* row above.
+  } else if (verified && (activates || subscriptionId)) {
+    // A VERIFIED event we could not pin to a TRUSTED account. This now also
+    // covers a downgrade whose only attribution was an unverified custom_id
+    // hint (deliberately refused above) - money or a cancellation may be moving
+    // with nobody safely attributed, so the reconcile sweep and the owner need
+    // to be able to find these. The shrug leaves a durable, queryable trace
+    // instead of dissolving into the generic pp_* row above, and instead of
+    // acting on a hint we do not trust.
     await sbInsert("billing_events", [
       {
         provider_event_id: String(body?.id ?? "") || null,

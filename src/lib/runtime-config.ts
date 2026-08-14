@@ -711,9 +711,26 @@ export function _resetKeyCache(): void {
   KEY_CACHE.clear();
 }
 
+const INSECURE_SECRET = "dev-insecure-secret-change-me";
+
 // The CURRENT secret - new writes (encrypt) always use this one.
+//
+// PRODUCTION STRENGTH GUARD (mirrors session.ts's cookie-signing guard). A
+// deploy with SESSION_SECRET missing or weak would ENCRYPT the whole Key Vault
+// AND the pending-signup blobs (which hold plaintext passwords) under a key
+// derived from a constant published in this repo - trivially decryptable by
+// anyone with the source. The cookie layer already refuses to sign in that
+// state (the app is locked until the secret is set), so refusing to encrypt is
+// consistent: we never write recoverable-by-anyone ciphertext. Decryption
+// (cryptoKeyFrom) stays lenient so existing rows can still be read.
 function cryptoKey(): Buffer {
-  return cryptoKeyFrom(process.env.SESSION_SECRET || "dev-insecure-secret-change-me");
+  const s = process.env.SESSION_SECRET;
+  if (process.env.NODE_ENV === "production" && !(s && s.length >= 16 && s !== INSECURE_SECRET)) {
+    throw new Error(
+      "SESSION_SECRET must be set to a strong value (>= 16 chars) in production before secrets can be encrypted."
+    );
+  }
+  return cryptoKeyFrom(s || INSECURE_SECRET);
 }
 
 // Secrets to TRY when DECRYPTING, newest first. This is the graceful-recovery
@@ -1173,6 +1190,13 @@ export async function setConfig(
       if (value) s.mem[name] = value;
       return { ok: false, persistent: false, error: `Could not save to Supabase (${res.status}). ${hint}` };
     }
+    // A DURABLE SAVE SUPERSEDES ANY EARLIER IN-MEMORY PIN. `s.mem` wins over the
+    // vault cache and the fresh per-key read, and a PRIOR failed save left the
+    // old value pinned here. Without this delete, a later successful save was
+    // invisible on this instance forever - including a KILL_SWITCH flip stuck at
+    // its old value after one transient write error. Clear it so the value we
+    // just persisted is the one that is read back.
+    delete s.mem[name];
     return { ok: true, persistent: true };
   } catch (e) {
     if (value) s.mem[name] = value;

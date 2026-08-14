@@ -9,6 +9,7 @@ import {
   supabaseConfigured,
 } from "@/lib/runtime-config";
 import { adminEmails, getSession } from "@/lib/session";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 interface ImagePayload {
   filename: string;
@@ -16,17 +17,33 @@ interface ImagePayload {
 }
 
 const MAX_IMAGES = 5;
+// Each screenshot is stored base64 in a text column and re-emitted to the admin
+// inbox, so an unbounded image is a storage-and-bandwidth amplifier. ~4MB of
+// base64 is ~3MB of image - plenty for a phone screenshot, and a hard ceiling.
+const MAX_IMAGE_B64 = 4 * 1024 * 1024;
 
 function parseImages(images: ImagePayload[] | undefined) {
   if (!Array.isArray(images)) return [];
   return images.slice(0, MAX_IMAGES).flatMap((img) => {
     const m = /^data:([^;]+);base64,(.+)$/.exec(img.dataUrl || "");
-    if (!m) return [];
+    if (!m || m[2].length > MAX_IMAGE_B64) return [];
     return [{ filename: img.filename || "screenshot.png", content: m[2] }];
   });
 }
 
 export async function POST(req: Request) {
+  // THROTTLE. This route makes an LLM triage call and an unbounded storage
+  // write per request with no session required - an open faucet. A modest
+  // per-ip window keeps genuine feedback flowing while closing the abuse path.
+  const ip = clientIp(req);
+  const gate = await rateLimit("feedback", ip, 8, 3600);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: "Thanks - you have sent a lot just now. Please try again a bit later." },
+      { status: 429, headers: { "Retry-After": String(gate.retryAfter) } }
+    );
+  }
+
   const body = await req.json().catch(() => null);
   if (!body?.text || !body?.category) {
     return NextResponse.json(
@@ -73,7 +90,14 @@ export async function POST(req: Request) {
   if (feedbackId !== null && Array.isArray(body.images) && body.images.length) {
     const rows = (body.images as { dataUrl?: string }[])
       .slice(0, MAX_IMAGES)
-      .filter((img) => typeof img.dataUrl === "string" && img.dataUrl.startsWith("data:"))
+      .filter(
+        (img) =>
+          typeof img.dataUrl === "string" &&
+          img.dataUrl.startsWith("data:") &&
+          // Same ceiling as the email attachments - the raw data URL is a bit
+          // larger than its base64 body, so bound the whole string.
+          img.dataUrl.length <= MAX_IMAGE_B64 + 256
+      )
       .map((img) => ({ feedback_id: feedbackId, data_url: img.dataUrl }));
     if (rows.length) await sbInsert("feedback_images", rows);
   }

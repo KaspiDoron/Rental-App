@@ -155,17 +155,27 @@ export async function getSession(): Promise<Session | null> {
   const role = await roleFor(raw.email);
   // Management holds the Ultra plan automatically, free of charge.
   const { getUser, normalizePlan } = await import("./access");
-  let plan =
-    role !== "user" ? "ultra" : normalizePlan((await getUser(raw.email))?.plan);
-  // TEST MODE: flagged testers ride Ultra for free while the switch is on -
-  // flipping it off instantly returns them to their real (paid) plan, since
-  // the plan is re-derived on every request.
-  if (plan !== "ultra" && role === "user") {
-    try {
-      const { isTestUser } = await import("./allowlist");
-      if (await isTestUser(raw.email)) plan = "ultra";
-    } catch {
-      /* never block a session on the test-mode lookup */
+  let plan: ReturnType<typeof normalizePlan> = "ultra";
+  if (role === "user") {
+    const rec = await getUser(raw.email);
+    // REVOCATION IS NOT ADVISORY. getSession re-derived role and plan on every
+    // request but never STATUS, so a blocked (or de-invited) account kept full
+    // API access for the whole 30-day cookie life simply by never calling /me.
+    // The record is already in hand here, so refusing a blocked account costs
+    // no extra read. Management cannot be blocked (the owner is protected and
+    // an admin block is an owner decision), so this gate is scoped to users.
+    if (rec?.status === "blocked") return null;
+    plan = normalizePlan(rec?.plan);
+    // TEST MODE: flagged testers ride Ultra for free while the switch is on -
+    // flipping it off instantly returns them to their real (paid) plan, since
+    // the plan is re-derived on every request.
+    if (plan !== "ultra") {
+      try {
+        const { isTestUser } = await import("./allowlist");
+        if (await isTestUser(raw.email)) plan = "ultra";
+      } catch {
+        /* never block a session on the test-mode lookup */
+      }
     }
   }
   return { email: raw.email, issuedAt: raw.issuedAt, role, plan };
