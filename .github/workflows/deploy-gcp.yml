@@ -109,8 +109,54 @@ jobs:
       # tested green could still fail to build, and the first anyone knew was
       # the deploy job minutes later, after the image had already been built
       # once. It runs here, before anything is pushed anywhere.
+      # THE BUILD REACHES OUT TO THE INTERNET, AND THE INTERNET SOMETIMES SAYS NO.
+      #
+      # `next/font/google` downloads every face at BUILD time (that is how it
+      # self-hosts them - there is no runtime Google dependency). layout.tsx
+      # declares 15 families whose subsets x weights come to ~89 woff2 files
+      # plus 15 CSS lookups: ~104 requests to fonts.googleapis.com /
+      # fonts.gstatic.com on every cold build. next/font retries each file 3
+      # times and then throws, and the throw is not a readable network error -
+      # it surfaces as `TypeError: Cannot read properties of null (reading '1')`
+      # inside the font loader, which reads like a code bug and is not one.
+      #
+      # Observed rate: 1 failure in the last 30 runs (~3%). Small, until you
+      # notice the SAME fetch happens again inside `docker build` on the deploy
+      # path - so a coin-flip against a Google edge node could fail a
+      # production deploy of code that is perfectly fine.
+      #
+      # Two mitigations, in order of how often they save us:
+      #   1. `.next/cache` is restored below, so an unchanged layout.tsx reuses
+      #      the cached font modules and makes ZERO network requests. (It also
+      #      silences the "No build cache found" warning and speeds the build.)
+      #   2. When the cache misses and a fetch does fail, retry the whole build
+      #      rather than failing the run. The build is idempotent; a transient
+      #      blip is not a reason to make a human re-run the job.
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.next/cache
+          # Source hash so a real code change gets a fresh compile; the
+          # restore-key still hands us the previous cache to reuse the
+          # unchanged modules (which is what saves the font fetches).
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**', 'next.config.mjs') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
       - name: Build
-        run: npm run build
+        run: |
+          set -uo pipefail
+          for ATTEMPT in 1 2 3; do
+            if npm run build; then
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              echo "::warning::Build attempt $ATTEMPT failed. next/font fetches ~104 files from fonts.gstatic.com at build time; a transient failure there fails the whole build. Retrying."
+              sleep $((ATTEMPT * 15))
+            fi
+          done
+          echo "::error::Build failed 3 times - this is not a transient font fetch, look at the compile errors above."
+          exit 1
       # THE BROWSER GATE (owner report 3, wave 4.1 - owner decision 6: hard
       # gate). The repo's own history: a fully green unit suite missed every
       # symptom the owner photographed, because they were BROWSER facts - a
@@ -187,18 +233,34 @@ jobs:
 
       - name: Build image
         run: |
+          set -uo pipefail
           IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE"
-          # NEXT_PUBLIC_* are inlined client-side at BUILD time - pass them all.
-          # NEXT_PUBLIC_SUPABASE_URL falls back to SUPABASE_URL (same project).
-          docker build \
-            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}" \
-            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
-            --build-arg NEXT_PUBLIC_SITE_URL="${{ secrets.NEXT_PUBLIC_SITE_URL }}" \
-            --build-arg WD_BUILD_SHA="${{ github.sha }}" \
-            --build-arg WD_BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t "$IMAGE:${{ github.sha }}" \
-            -t "$IMAGE:latest" \
-            .
+          # `Dockerfile:45` runs `npm run build` INSIDE the image, in a fresh
+          # container with no `.next/cache` - so this is the second, and the
+          # more expensive, place the ~104 build-time Google-Fonts requests
+          # happen. The verify job's cache cannot help here. A blip must not
+          # fail a production deploy of good code, so the same bounded retry
+          # applies. Docker does not cache a failed RUN layer, so a retry
+          # genuinely re-runs the build rather than replaying the failure.
+          for ATTEMPT in 1 2 3; do
+            if docker build \
+              --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}" \
+              --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+              --build-arg NEXT_PUBLIC_SITE_URL="${{ secrets.NEXT_PUBLIC_SITE_URL }}" \
+              --build-arg WD_BUILD_SHA="${{ github.sha }}" \
+              --build-arg WD_BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -t "$IMAGE:${{ github.sha }}" \
+              -t "$IMAGE:latest" \
+              . ; then
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              echo "::warning::Image build attempt $ATTEMPT failed - retrying (transient font/registry fetches are the usual cause)."
+              sleep $((ATTEMPT * 15))
+            fi
+          done
+          echo "::error::Image build failed 3 times - not transient, read the compile errors above."
+          exit 1
 
       - name: Push image
         run: |
@@ -228,6 +290,13 @@ jobs:
           EVOLUTION_API_KEY: ${{ secrets.EVOLUTION_API_KEY }}
           EVOLUTION_HOSTS: ${{ secrets.EVOLUTION_HOSTS }}
           APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+          # THE OPTIONAL LOOP BELOW READS SHELL VARIABLES, SO A SECRET THAT IS
+          # NOT EXPORTED HERE CAN NEVER BE PASSED. REDIS_URL was added to that
+          # loop and NOT to this block, so setting the repo secret would have
+          # silently done nothing while the owner believed the daily caps had
+          # become fleet-wide. The env-vs-loop drift test in
+          # src/lib/deploy-env.test.ts now fails if the two lists disagree.
+          REDIS_URL: ${{ secrets.REDIS_URL }}
           SESSION_SECRET_PREVIOUS: ${{ secrets.SESSION_SECRET_PREVIOUS }}
         run: |
           set -euo pipefail
