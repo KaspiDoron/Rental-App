@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireManagement, setAdmin, adminEmails, isOwner } from "@/lib/session";
 import { listUsers, setUserStatus, deleteUser } from "@/lib/access";
 import { disconnectInstance } from "@/lib/evolution";
-import { sbDelete } from "@/lib/runtime-config";
+import { sbDelete, sbSelect } from "@/lib/runtime-config";
 
 /**
  * THE MANAGEMENT LIST SHIPPED EVERY PASSWORD HASH TO A BROWSER.
@@ -76,10 +76,52 @@ export async function POST(req: Request) {
     const target = String(email).toLowerCase();
     await disconnectInstance(target); // logout + delete WhatsApp everywhere
     // Purge the rows we key by their email so nothing about them remains.
-    for (const table of ["bookings", "searches", "feedback", "wa_sessions"]) {
-      await sbDelete(table, `email=eq.${encodeURIComponent(target)}`);
+    //
+    // EACH TABLE NAMES THE USER DIFFERENTLY. bookings/searches use `user_email`,
+    // feedback uses `reporter_email`, only wa_sessions uses `email`. The old
+    // loop filtered `email=eq.` on all four, so three of the deletes hit a
+    // column that does not exist - PostgREST 400s, sbDelete swallows it to
+    // `false`, and the route returned 200 claiming an erasure that left the
+    // user's bookings, searches and feedback fully intact. An "erase" that
+    // silently keeps most of the data is worse than an honest failure.
+    const userColumn: Record<string, string> = {
+      bookings: "user_email",
+      searches: "user_email",
+      feedback: "reporter_email",
+      wa_sessions: "email",
+    };
+    // Feedback has children (replies + images) keyed by feedback_id, not email,
+    // so clear them first from the user's own feedback rows.
+    const ownFeedback = await sbSelect<{ id: number }>(
+      "feedback",
+      `select=id&reporter_email=eq.${encodeURIComponent(target)}&limit=1000`
+    ).catch(() => [] as { id: number }[]);
+    if (ownFeedback.length) {
+      const ids = ownFeedback.map((r) => r.id).join(",");
+      await sbDelete("feedback_replies", `feedback_id=in.(${ids})`).catch(() => false);
+      await sbDelete("feedback_images", `feedback_id=in.(${ids})`).catch(() => false);
     }
-    await deleteUser(target);
+    const purge: Record<string, boolean> = {};
+    for (const [table, col] of Object.entries(userColumn)) {
+      purge[table] = await sbDelete(table, `${col}=eq.${encodeURIComponent(target)}`);
+    }
+    const userDeleted = await deleteUser(target);
+    const failed = Object.entries(purge)
+      .filter(([, ok]) => !ok)
+      .map(([t]) => t);
+    if (failed.length || !userDeleted) {
+      // Report the truth: some rows could not be purged. The owner can retry.
+      return NextResponse.json(
+        {
+          error: `Partial erase - could not purge: ${[
+            ...failed,
+            ...(userDeleted ? [] : ["app_users"]),
+          ].join(", ")}. Retry, or check Supabase.`,
+          ...(await payload()),
+        },
+        { status: 500 }
+      );
+    }
     return NextResponse.json(await payload());
   }
 

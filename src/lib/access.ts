@@ -11,7 +11,7 @@
 // normalised on read, so old databases keep working without a migration.
 
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
-import { sbInsert, sbSelect, sbDelete, supabaseConfigured } from "./runtime-config";
+import { sbInsert, sbSelect, sbSelectStrict, sbDelete, supabaseConfigured } from "./runtime-config";
 import { boundedSet } from "./bounded-map";
 
 export type PlanId = "free" | "pro" | "ultra";
@@ -238,6 +238,29 @@ export async function getUser(
     return hit.rec;
   }
   if (supabaseConfigured()) {
+    // A FRESH READ MUST NOT SERVE STALE. Callers pass {fresh:true} to get ground
+    // truth (password reset checks whether an account still exists). sbSelect
+    // collapses a transient failure and a genuinely-empty result to the same
+    // []], so the old code fell back to the 10s cache on BOTH - reporting a
+    // deleted account as still present. sbSelectStrict separates them: an empty
+    // read means the row is gone (return undefined); only an UNAVAILABLE read
+    // (transient) falls back to cache, so a DB hiccup never wrongly reports a
+    // real account as missing.
+    if (opts?.fresh) {
+      const read = await sbSelectStrict<UserRow>(
+        "app_users",
+        `select=*&email=eq.${encodeURIComponent(key)}&limit=1`
+      );
+      if ("rows" in read) {
+        if (read.rows.length) {
+          const rec = fromRow(read.rows[0]);
+          remember(rec);
+          return rec;
+        }
+        return undefined;
+      }
+      return hit?.rec;
+    }
     const rows = await sbSelect<UserRow>(
       "app_users",
       `select=*&email=eq.${encodeURIComponent(key)}&limit=1`

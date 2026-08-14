@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUser, setPassword } from "@/lib/access";
 import { sendEmail } from "@/lib/email";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { randomBytes } from "crypto";
 
 // Forgot password: set a temporary password, email it with an easy-copy block,
@@ -11,14 +12,31 @@ import { randomBytes } from "crypto";
 export async function POST(req: Request) {
   const { email } = await req.json().catch(() => ({}));
   const key = String(email ?? "").trim().toLowerCase();
-  const user = await getUser(key, { fresh: true });
 
-  // Do not reveal whether an account exists.
+  // THROTTLE. This route overwrites a real password and emails it, so an
+  // unthrottled caller could hammer a known address to keep rewriting its
+  // password (locking the owner out) and flood their inbox. Two windows: a
+  // tight per-(ip,email) one that stops targeting a single victim, and a looser
+  // per-ip one that stops one host cycling through many addresses. Both refuse
+  // with the SAME generic body used below, so the throttle leaks no more than
+  // the happy path does.
+  const ip = clientIp(req);
   const generic = {
     ok: true,
     message:
       "If this email has an account, a temporary password is on its way. Check your inbox (and spam).",
   };
+  const perTarget = await rateLimit("forgot", `${ip}:${key}`, 3, 3600);
+  const perIp = await rateLimit("forgot-ip", ip, 10, 3600);
+  if (!perTarget.ok || !perIp.ok) {
+    return NextResponse.json(generic, {
+      headers: { "Retry-After": String(Math.max(perTarget.retryAfter, perIp.retryAfter)) },
+    });
+  }
+
+  const user = await getUser(key, { fresh: true });
+
+  // Do not reveal whether an account exists.
   if (!user) return NextResponse.json(generic);
 
   const temp = randomBytes(6).toString("hex").toUpperCase(); // 12 chars, ~48 bits

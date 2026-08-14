@@ -41,15 +41,19 @@ describe("a subscription can always be traced back to a traveller", () => {
     expect(s).toMatch(/String\(parsed\.subscriptionId \?\? ""\) === id/);
   });
 
-  it("no verified record means no email, and therefore no change", () => {
+  it("no verified record means no downgrade - a hint can never revoke a plan", () => {
     // A subscription we never activated must not be able to alter an account.
     const s = readCode("src/lib/billing/subscription-link.ts");
     expect(s).toMatch(/return null/);
-    expect(hook()).toMatch(/if \(verified && email && activates && tier\)/);
-    // The deactivation branch is still gated on a VERIFIED event with a
-    // resolved account; what changed is that the effect is now decided by the
-    // suspension policy rather than by one flat "deactivates" list.
-    expect(hook()).toMatch(/\} else if \(verified && email\) \{/);
+    const h = hook();
+    // The two attribution channels are now split by stakes: a GRANT may
+    // bootstrap from the attacker-settable custom_id hint (harmless), but a
+    // DOWNGRADE trusts ONLY the verified link. `downgradeEmail = linked || ""`,
+    // never the hint - so a signature-verified CANCELLED carrying "victim@|pro"
+    // on the attacker's own subscription cannot downgrade the victim.
+    expect(h).toMatch(/const downgradeEmail = linked \|\| ""/);
+    expect(h).toMatch(/if \(verified && grantEmail && activates && tier\)/);
+    expect(h).toMatch(/\} else if \(verified && downgradeEmail\) \{/);
   });
 });
 

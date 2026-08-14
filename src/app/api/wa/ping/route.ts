@@ -10,12 +10,22 @@ export const dynamic = "force-dynamic";
 // in Admin -> Keys guidance) stops anonymous callers from forcing outbox
 // drains and host pings.
 export async function GET(req: Request) {
+  // FAIL CLOSED. This route drains the outbox, pings hosts and sweeps inbound -
+  // heavy, fleet-wide work. When the token cannot be derived (no hosts
+  // configured, or SESSION_SECRET unset) the old code skipped the check
+  // entirely and ran fully OPEN to anonymous callers. Every sibling token route
+  // fails CLOSED; so does this one now. With no WhatsApp hosts there is nothing
+  // to keep awake anyway, so refusing is also the correct no-op.
   const expected = await webhookToken();
-  if (expected) {
-    const token = new URL(req.url).searchParams.get("token");
-    if (token !== expected) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+  if (!expected) {
+    return NextResponse.json(
+      { error: "WhatsApp is not configured (no hosts) - nothing to ping." },
+      { status: 403 }
+    );
+  }
+  const token = new URL(req.url).searchParams.get("token");
+  if (token !== expected) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const hosts = await pingAllHosts();
 
@@ -67,7 +77,8 @@ export async function GET(req: Request) {
   // keeps a staggered batch progressing for the following ~30 minutes even
   // between cron intervals. AWAITED to the point of leaving the instance - a
   // detached fetch here is exactly the call Cloud Run freezes (see wa/kick.ts).
-  if (expected) {
+  // `expected` is guaranteed present past the fail-closed guard above.
+  {
     const { kickDispatcher } = await import("@/lib/wa/kick");
     const { selfKickOrigin } = await import("@/lib/request-origin");
     const origin = await selfKickOrigin(req);
