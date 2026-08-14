@@ -489,14 +489,14 @@ export async function processVendorReply(opts: {
     const [outRows, inRows] = await Promise.all([
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
           "to_number",
           from
         )}`
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
           "from_number",
           from
         )}`
@@ -507,9 +507,11 @@ export async function processVendorReply(opts: {
     );
   }
   const thread = mine.slice(0, 12).reverse();
-  const history = thread
-    .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
-    .join("\n");
+  // The HISTORY window is wider than the working `thread` slice (counters and
+  // coalescing keep their 12-row behavior): char-budgeted, head-preserved,
+  // voice transcripts inlined - see wa/history-window.ts (owner report 4).
+  const { buildHistoryWindow } = await import("./wa/history-window");
+  const history = buildHistoryWindow(mine.slice(0, 40).reverse());
   // MULTI-MESSAGE COALESCING (critical data-loss fix): a shop often sends a
   // burst of separate messages - "Good day!" / "We have available Fazzio" /
   // "Regular rate is 550, we can give you 400 per day" - each arriving as its
@@ -1794,19 +1796,23 @@ export async function processVendorReply(opts: {
   const priceAtOrBelowFloor = Boolean(usablePrice && floorPrice && usablePrice <= floorPrice * 1.05);
   let rivalPrice: number | undefined;
   let target: number | undefined;
+  // CROSS-SHOP LEVERAGE on EVERY composing turn (owner report 4/W2.2): this
+  // fetch was gated inside "first bargain with a usable price", so a
+  // second-round push or an answer turn cited nothing - while SPTE fetches
+  // session leverage on all paths via buildSession. A lower real offer from
+  // another shop is honest negotiating power on any turn that has a quote to
+  // beat; the TARGET math below keeps its original first-push gate.
+  if (ctx.sender && usablePrice) {
+    const { vehicleKeyFor } = await import("./market");
+    const { cheapestRivalFor } = await import("./search-session");
+    rivalPrice = await cheapestRivalFor(ctx.sender, {
+      vendorId: ctx.vendorId ?? "",
+      currency: cur,
+      vehicleKey: vehicleKeyFor(rfq),
+      belowPrice: usablePrice,
+    }).catch(() => undefined);
+  }
   if (usablePrice && !priceAtOrBelowFloor && extraction.matchesSpec !== false && autoBargains === 0) {
-    // CROSS-SHOP LEVERAGE (same search session): a lower real offer from
-    // another shop is honest negotiating power.
-    if (ctx.sender) {
-      const { vehicleKeyFor } = await import("./market");
-      const { cheapestRivalFor } = await import("./search-session");
-      rivalPrice = await cheapestRivalFor(ctx.sender, {
-        vendorId: ctx.vendorId ?? "",
-        currency: cur,
-        vehicleKey: vehicleKeyFor(rfq),
-        belowPrice: usablePrice,
-      }).catch(() => undefined);
-    }
     const baseTarget = floorPrice
       ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
       : Math.round(usablePrice * 0.85);

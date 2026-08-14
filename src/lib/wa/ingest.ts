@@ -433,8 +433,18 @@ export async function processEvolutionWebhook(
       if (!data?.key) continue;
       const remoteJid = String(data.key.remoteJid ?? "");
       const jidKind = waIdKind(remoteJid);
-      // Groups, status broadcasts and anything unnameable are never a shop.
-      if (jidKind !== "phone" && jidKind !== "lid") continue;
+      // Groups, status broadcasts and anything unnameable are never a shop -
+      // but a silent `continue` here was the one drop the message-path view
+      // could not explain (owner report 4/W2.2). Traced, throttled by the
+      // helper, so "the shop replied and nothing happened" can be told apart
+      // from "that was a group post" in one query.
+      if (jidKind !== "phone" && jidKind !== "lid") {
+        void noteInboundDropped(undefined, waDigits(remoteJid) || remoteJid.slice(0, 24), "non-chat-jid", {
+          via: "webhook",
+          jidKind,
+        });
+        continue;
+      }
 
       // Resolve the RECEIVING user FIRST - every store/read below is scoped to
       // them, and a privacy-JID alias is only evidence inside ONE inbox. An

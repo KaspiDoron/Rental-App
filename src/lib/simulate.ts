@@ -684,11 +684,26 @@ export async function replaySpteTurns(args: {
   const { emptyDigest } = await import("./spte/digest");
   const { optionsFromThread } = await import("./offer-options");
   const rfq: StructuredRFQ = { ...DEFAULT_RFQ, ...(args.rfq ?? {}) };
+  // REPLAY PARITY (owner report 4/W2.2): `maxRounds: 6` was a literal while
+  // the live engine resolves the graph spec's owner-editable maxRoundsPerShop
+  // (default 4) - so the golden gate validated 50% more bargaining rounds
+  // than production would ever run, and a round-cap regression could pass
+  // replay yet fire live. Same resolution as spte/live.ts resolvePolicy.
+  const maxRounds = await getGraphSpec()
+    .then((spec) => spec.settings.maxRoundsPerShop)
+    .catch(() => 4);
 
   let digest = emptyDigest();
   const inboundSoFar: string[] = [];
   const outbound: string[] = [];
   const played: PlayedSpteTurn[] = [];
+  // LIVE PARITY: the live glue derives firmCount from the WHOLE history
+  // including the current inbound (live.ts deriveThreadFacts + the shopFirm
+  // OR-in), while runTurn's outcome digest never carries it - so replay ran
+  // every case at firmCount 0 and the two-firms-stop rule could not be
+  // exercised by the golden gate at all. Accumulate it here the way live
+  // counts it.
+  let firmSoFar = 0;
 
   for (const turn of args.turns.slice(0, 10)) {
     const stub = (turn.stubExtraction ?? {}) as Record<string, unknown>;
@@ -718,6 +733,8 @@ export async function replaySpteTurns(args: {
       sheetPricePerDay:
         typeof stub.sheetPricePerDay === "number" ? stub.sheetPricePerDay : undefined,
     };
+
+    if (verified.firm) firmSoFar++;
 
     const rivals = (turn.rivalOffers ?? [])
       .filter((r) => typeof r.pricePerDay === "number" && r.currency === currency)
@@ -751,7 +768,7 @@ export async function replaySpteTurns(args: {
         threadKey: "replay@wheeldeal:0000",
         vendorId: "replay-shop",
         shop: "Golden Shop",
-        digest: { ...digest, options },
+        digest: { ...digest, options, firmCount: firmSoFar },
       },
       tail: [
         ...outbound.map((text) => ({ dir: "out" as const, text, at: "" })),
@@ -759,7 +776,7 @@ export async function replaySpteTurns(args: {
       ],
       inbound: { text: turn.shopSays, verified },
       legalMoves: [],
-      guards: { floorPerDay: args.floor?.floor, maxRounds: 6 },
+      guards: { floorPerDay: args.floor?.floor, maxRounds },
       event: "shop-message",
       deterministic: true,
     };

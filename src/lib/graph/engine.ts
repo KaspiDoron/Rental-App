@@ -2152,7 +2152,7 @@ export async function buildTurnFromThread(
     "whatsapp_messages",
     `select=direction,body,raw,received_at&or=(to_number.eq.${encodeURIComponent(
       toDigits
-    )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=20`
+    )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=40`
   );
   // PRIVACY: both directions scoped to this user - inbound by receiver (the
   // WhatsApp that got it), outbound by sender. Another user's chat with the
@@ -2164,9 +2164,11 @@ export async function buildTurnFromThread(
       : raw?.sender === userEmail;
   });
   const thread = mine.slice(0, 12).reverse();
-  const history = thread
-    .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
-    .join("\n");
+  // Wider, budgeted HISTORY window than the working 12-row slice: head
+  // preserved, voice transcripts inlined (wa/history-window.ts, owner
+  // report 4). Counters/coalescing below keep their 12-row behavior.
+  const { buildHistoryWindow } = await import("../wa/history-window");
+  const history = buildHistoryWindow(mine.slice(0, 40).reverse());
   const outboundRows = thread.filter((m) => m.direction === "outbound" && (m.body ?? ""));
   const priorOutbound = outboundRows.map((m) => m.body ?? "");
   // Parallel to priorOutbound, same order and length. SPTE stamps the semantic

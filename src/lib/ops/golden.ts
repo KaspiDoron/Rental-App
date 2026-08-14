@@ -13,7 +13,10 @@ import type { GraphSpec } from "../graph/types";
 import type { PolicyOverlay } from "./overlay";
 import type { GoldenCase, GoldenExpect, ReplayCaseResult, ReplayReport } from "./types";
 
-const MAX_CASES = 24;
+// 48 (owner report 4/W2.2): 24 was already tight against the owner's frozen
+// conversations PLUS the authored coherence seeds below - a suite that stops
+// growing stops gating.
+const MAX_CASES = 48;
 
 /** Pure expectation checker - unit-tested. */
 export function evaluateTurn(
@@ -158,6 +161,15 @@ export async function runGoldenCase(
 export async function runGoldenSuite(
   opts: { spec?: GraphSpec; overlay?: PolicyOverlay } = {}
 ): Promise<ReplayReport> {
+  // The authored coherence seeds join the owner's frozen conversations in the
+  // durable suite (idempotent, name-keyed - see golden-coherence.ts). A seed
+  // failure never blocks the gate itself.
+  try {
+    const { ensureCoherenceGoldenCases } = await import("./golden-coherence");
+    await ensureCoherenceGoldenCases();
+  } catch {
+    /* seeding is an enrichment - the gate runs on whatever is stored */
+  }
   const cases = await listGoldenCases(true);
   const results: ReplayCaseResult[] = [];
   for (const gc of cases) results.push(await runGoldenCase(gc, opts));

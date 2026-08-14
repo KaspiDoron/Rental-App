@@ -109,7 +109,20 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   }
 
   const options = d.options ?? [];
-  const menuOpen = menuUnresolved(options) || (Boolean(v.variance) && !v.found);
+  // A MENU THE SHOP HAS ANSWERED IS NOT A MENU (owner report 4/W2.2 - the
+  // coherence golden seeds caught this). `menuUnresolved` reads the tiers
+  // accumulated across the WHOLE thread, so after the shop answered the probe
+  // ("the new one is 250, helmet included") - or simply moved the price
+  // ("cannot, 280 is my price", which optionsFromThread accumulates as a
+  // second tier) - the menu stayed "open" forever and option-probe outranked
+  // bargain on every later turn: the agent re-asked a question the shop had
+  // just answered. A confident single-price answer THIS turn resolves the
+  // menu for negotiation purposes; a turn that itself carries variance or an
+  // unclear vehicle keeps the probe legal.
+  const menuAnswered =
+    v.found && typeof v.pricePerDay === "number" && !v.variance && !v.vehicleUnclear;
+  const menuOpen =
+    (menuUnresolved(options) || (Boolean(v.variance) && !v.found)) && !menuAnswered;
   if (menuOpen && !dealComplete(ctx)) moves.push("option-probe");
 
   // FIRM LADDER (graph parity, the two-firms-stop rule). The shop said "last
