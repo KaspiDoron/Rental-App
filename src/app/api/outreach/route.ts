@@ -307,17 +307,24 @@ async function handlePost(req: Request) {
   const localizeThis = wantsLocal && ((isAuto && kind === "rfq") || kind === "custom");
   if (localizeThis) {
     const { localizeMessage } = await import("@/lib/agents");
-    const { regionForShop } = await import("@/lib/copy/region");
+    // countryForShop, NOT regionForShop (owner report 4): the latter knows
+    // only four SE-Asia markets, so a +52 Mexico opener went out in English
+    // with a false "AI localization unavailable" reason - the AI was never
+    // asked. The full phone-prefix map asks it for every country; the
+    // English-speaking ones short-circuit inside localizeMessage.
+    const { countryForShop } = await import("@/lib/copy/region");
     const localized = await localizeMessage(
       outboundText,
-      regionForShop(digits, String(body.region ?? "")),
+      countryForShop(digits, String(body.region ?? "")),
       session.email
     );
     if (localized.english && localized.text !== outboundText) englishGloss = localized.english;
-    // DOCUMENTED fallback: if localization failed (after its retry), the
-    // opener goes out in English and the reason is durably recorded - a
-    // language flip is never a silent mystery.
-    if (!localized.localized) {
+    // DOCUMENTED fallback: if localization declined or failed, the opener
+    // goes out in English and the TRUE reason is durably recorded - a
+    // language flip is never a silent mystery, and the AI is never blamed
+    // for a country we could not resolve. ("english-region" is a decision,
+    // not a failure - no event.)
+    if (!localized.localized && localized.reason !== "english-region") {
       await sbInsert("agent_events", [
         {
           kind: "localize-fallback",
@@ -326,7 +333,7 @@ async function handlePost(req: Request) {
           detail: JSON.stringify({
             email: session.email,
             region: String(body.region ?? ""),
-            reason: "AI localization unavailable after retry - sent in English",
+            reason: localized.reason ?? "ai-unavailable",
           }).slice(0, 800),
         },
       ]).catch(() => {});

@@ -367,12 +367,15 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
             "acknowledge their effort, and ask for a smaller step down. "
           : "This is our FINAL ask: tiny nudge only, make it effortless to say yes, " +
             "and make clear we are ready to decide. ";
+      // The shop's own phone number resolves the country when the thread has
+      // no region label - the 4-country ceiling fix (owner report 4).
+      const { countryForShop } = await import("../copy/region");
       const draft = await composeBargain({
         rfq: input.rfq,
         vendor: { name: input.ctx.vendorName ?? "the shop" } as Vendor,
         currentPricePerDay: f.pricePerDay,
         rivalPricePerDay: args.rivalPrice,
-        region: input.ctx.region || undefined,
+        region: input.ctx.region || countryForShop(input.event.toDigits) || undefined,
         // 0-based: round 0 IS the playbook opener (days leverage, ask the floor).
         round: rounds,
         currency: input.currency,
@@ -407,6 +410,19 @@ export async function composeForNode(args: ComposeArgs): Promise<NodeResult> {
           .filter(Boolean)
           .join("\n"),
       });
+      if (draft.localizeFailed) {
+        // The template AND the localizer both failed on a local-language
+        // thread: sending the fluent-English template would flip the thread's
+        // language mid-negotiation - the bot tell. Suppress; the next inbound
+        // or momentum tick recomposes with the AI back. The round counter is
+        // NOT advanced - no ask was made.
+        return {
+          reasoning:
+            "local-language bargain suppressed - localization unavailable, and an English " +
+            "flip mid-thread is worse than waiting for the next event to recompose",
+          terminal: true,
+        };
+      }
       return {
         message: draft.message,
         englishGloss: draft.english,

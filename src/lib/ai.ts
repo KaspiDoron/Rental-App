@@ -941,10 +941,15 @@ async function geminiVisionAttempt(
           // A REAL PRICE BOARD IS LONG. 600 tokens truncated a 17-row Thai
           // board mid-JSON, and a truncated generation returns no parseable
           // candidate - which this code then reported as "blocked", i.e. an
-          // outage. The ceiling has to fit the artefact, not the average.
+          // outage. The ceiling has to fit the artefact, not the average - and
+          // since bursts coalesce (owner report 4), the artefact is now up to
+          // 8 boards in one call: the ceiling scales with the frame count so a
+          // five-photo album cannot be truncated back into the failure the
+          // base value fixed. 2_048 covers one dense board; each extra frame
+          // buys 512 more, capped where Gemini's own output limit lives.
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: 2_048,
+            maxOutputTokens: Math.min(6_144, 2_048 + 512 * Math.max(0, images.length - 1)),
             // STRUCTURE, NOT FENCES. The caller that reads price boards parses
             // JSON out of this; asking the PROVIDER for JSON removes the whole
             // class of "the model wrapped it in prose / half a fence" failures

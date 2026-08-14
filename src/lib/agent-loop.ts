@@ -183,6 +183,19 @@ export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
   } as import("./agents").ExtractedOffer;
 }
 
+/** The same never-silent guarantee for a video nobody could watch (too large,
+ *  exotic codec, download failed): a reply exists, claims no price, and asks
+ *  for the one thing we need in a form we can read. */
+export function videoClarifyExtraction(): import("./agents").ExtractedOffer {
+  return {
+    found: false,
+    matchesSpec: true,
+    confidence: "low",
+    clarifyMessage:
+      "I could not watch the video - could you send a photo of the price list, or type the daily price? 🙂",
+  } as import("./agents").ExtractedOffer;
+}
+
 /**
  * Record how long THIS turn actually took, at the point the reply left our
  * hands. `composeMs` is the honest cost of the whole chain (extraction, engine
@@ -476,14 +489,14 @@ export async function processVendorReply(opts: {
     const [outRows, inRows] = await Promise.all([
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
           "to_number",
           from
         )}`
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=12${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
           "from_number",
           from
         )}`
@@ -494,9 +507,11 @@ export async function processVendorReply(opts: {
     );
   }
   const thread = mine.slice(0, 12).reverse();
-  const history = thread
-    .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
-    .join("\n");
+  // The HISTORY window is wider than the working `thread` slice (counters and
+  // coalescing keep their 12-row behavior): char-budgeted, head-preserved,
+  // voice transcripts inlined - see wa/history-window.ts (owner report 4).
+  const { buildHistoryWindow } = await import("./wa/history-window");
+  const history = buildHistoryWindow(mine.slice(0, 40).reverse());
   // MULTI-MESSAGE COALESCING (critical data-loss fix): a shop often sends a
   // burst of separate messages - "Good day!" / "We have available Fazzio" /
   // "Regular rate is 550, we can give you 400 per day" - each arriving as its
@@ -1781,19 +1796,23 @@ export async function processVendorReply(opts: {
   const priceAtOrBelowFloor = Boolean(usablePrice && floorPrice && usablePrice <= floorPrice * 1.05);
   let rivalPrice: number | undefined;
   let target: number | undefined;
+  // CROSS-SHOP LEVERAGE on EVERY composing turn (owner report 4/W2.2): this
+  // fetch was gated inside "first bargain with a usable price", so a
+  // second-round push or an answer turn cited nothing - while SPTE fetches
+  // session leverage on all paths via buildSession. A lower real offer from
+  // another shop is honest negotiating power on any turn that has a quote to
+  // beat; the TARGET math below keeps its original first-push gate.
+  if (ctx.sender && usablePrice) {
+    const { vehicleKeyFor } = await import("./market");
+    const { cheapestRivalFor } = await import("./search-session");
+    rivalPrice = await cheapestRivalFor(ctx.sender, {
+      vendorId: ctx.vendorId ?? "",
+      currency: cur,
+      vehicleKey: vehicleKeyFor(rfq),
+      belowPrice: usablePrice,
+    }).catch(() => undefined);
+  }
   if (usablePrice && !priceAtOrBelowFloor && extraction.matchesSpec !== false && autoBargains === 0) {
-    // CROSS-SHOP LEVERAGE (same search session): a lower real offer from
-    // another shop is honest negotiating power.
-    if (ctx.sender) {
-      const { vehicleKeyFor } = await import("./market");
-      const { cheapestRivalFor } = await import("./search-session");
-      rivalPrice = await cheapestRivalFor(ctx.sender, {
-        vendorId: ctx.vendorId ?? "",
-        currency: cur,
-        vehicleKey: vehicleKeyFor(rfq),
-        belowPrice: usablePrice,
-      }).catch(() => undefined);
-    }
     const baseTarget = floorPrice
       ? Math.max(floorPrice, Math.round(usablePrice * 0.6))
       : Math.round(usablePrice * 0.85);
@@ -1885,9 +1904,15 @@ export async function processVendorReply(opts: {
   let followUp: string | null = null;
   let followKind: string = direction;
   let englishGloss: string | undefined;
-  // LANGUAGE ADAPTATION: a shop writing real English gets English back for
-  // this reply - matching the human beats the local-language setting.
-  const { looksEnglish } = await import("./agents");
+  // LANGUAGE ADAPTATION: a shop that DEMONSTRATES English gets English back -
+  // matching the human beats the local-language setting. THREAD level (owner
+  // report 4): the current message and the previous inbound must both look
+  // English, so one English line in a Thai thread cannot make the agent
+  // alternate languages turn by turn.
+  const { threadPrefersEnglish } = await import("./agents");
+  const priorInboundBodies = thread
+    .filter((m) => m.direction === "inbound")
+    .map((m) => m.body ?? "");
   // ONE PREDICATE (entitlements.localLanguageAllowed). This read
   // `ctx.plan === "ultra"` - a hardcoded tier on the one path that actually
   // composes the message to the shop, so a new tier would have been honoured by
@@ -1898,8 +1923,13 @@ export async function processVendorReply(opts: {
       requested: ctx.localLang,
       plan: ctx.plan,
       enabled: await localLanguageEnabled(),
-    }) && !looksEnglish(text);
+    }) && !threadPrefersEnglish(text, priorInboundBodies);
   const register = registerRules(cfg, cur, ctx.region || undefined);
+  // The shop's phone number resolves the country when the thread carries no
+  // region label - the 4-country ceiling fix (owner report 4). Feeds every
+  // localizeMessage/composeBargain call on this path.
+  const { countryForShop } = await import("./copy/region");
+  const localeRegion = ctx.region || countryForShop(from) || undefined;
 
   if (direction === "answer") {
     const { chat } = await import("./ai");
@@ -1961,7 +1991,7 @@ export async function processVendorReply(opts: {
       vendor: { name: ctx.vendorName ?? "the shop" } as Vendor,
       currentPricePerDay: usablePrice,
       rivalPricePerDay: rivalPrice,
-      region: ctx.region || undefined,
+      region: localeRegion,
       // The REAL round (0-based). A hardcoded 1 framed the first-ever counter as
       // a "SECOND PUSH" that falsely implies the shop already refused an ask -
       // so the opener's days-leverage play never fired on first contact.
@@ -1992,6 +2022,35 @@ export async function processVendorReply(opts: {
         .filter(Boolean)
         .join("\n"),
     });
+    if (draft.localizeFailed) {
+      // Template AND localizer failed on a local-language thread: fluent
+      // English here is a mid-negotiation language flip. Suppress and say so;
+      // the next inbound or tick recomposes with the AI back.
+      traces.push({
+        ...traceBase,
+        stage: "price-agent",
+        input: text.slice(0, 500),
+        reasoning:
+          "local-language bargain suppressed - localization unavailable; waiting beats an English flip mid-thread",
+        output: "(suppressed)",
+        verdict: "veto",
+      });
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: ctx.sender ?? "",
+          vendor_name: ctx.vendorName ?? from,
+          detail: JSON.stringify({
+            reason: "ai-unavailable",
+            region: localeRegion ?? null,
+            path: "legacy-bargain-fallback",
+            action: "suppressed",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
+      await writeTrace(traces);
+      return;
+    }
     followUp = draft.message;
     if (useLocalLang && draft.english) englishGloss = draft.english;
     await sbInsert("bargain_drafts", [
@@ -2138,15 +2197,26 @@ export async function processVendorReply(opts: {
   // English gloss for the traveller. Street register applies (orchestrator).
   if (followUp && useLocalLang && followKind !== "bargain") {
     const { localizeMessage } = await import("./agents");
-    const localized = await localizeMessage(
-      followUp,
-      ctx.region || undefined,
-      ctx.sender,
-      cfg.streetLocal
-    );
+    const localized = await localizeMessage(followUp, localeRegion, ctx.sender, cfg.streetLocal);
     if (localized.text && localized.text !== followUp) {
       englishGloss = localized.english ?? followUp;
       followUp = localized.text;
+    }
+    // This path used to fall back to English SILENTLY - only the mass-send
+    // route ever emitted localize-fallback. Honest reason, here too.
+    if (!localized.localized && localized.reason && localized.reason !== "english-region") {
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: ctx.sender ?? "",
+          vendor_name: ctx.vendorName ?? from,
+          detail: JSON.stringify({
+            reason: localized.reason,
+            region: localeRegion ?? null,
+            path: "legacy-reply",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
     }
   }
 

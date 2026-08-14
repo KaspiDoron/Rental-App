@@ -60,23 +60,24 @@ import { REPLY_KIND_FILTER, humanizeForOutbound } from "../wa-guard";
  * The worker runtime sets this to a delayed drain job scheduled at exactly the
  * moment the row comes due.
  *
- * Unset (the Next runtime) it is a no-op - and that is the ONLY runtime live
- * today: `services/workers` is in no Dockerfile CMD and no deploy manifest, so
- * this hook is dark in production. It stayed dark and unnoticed because the
- * comment here used to say the Next path "already kicks the self-chaining
- * /api/wa/tick, which waits the row out in-process" - true of the code, false
- * of the outcome. That kick was refused every time a cold batch was draining
- * (one global runner, one chain claim), which is exactly when a reply matters.
+ * Unset, the NEXT runtime's own armer (wa/drain-armer.ts) runs - and that is
+ * the ONLY runtime live today: `services/workers` is in no Dockerfile CMD and
+ * no deploy manifest, so the worker hook is dark in production. It stayed dark
+ * and unnoticed because the comment here used to say the Next path "already
+ * kicks the self-chaining /api/wa/tick, which waits the row out in-process" -
+ * true of the code, false of the outcome. That kick was refused every time a
+ * cold batch was draining (one global runner, one chain claim), which is
+ * exactly when a reply matters.
  *
- * The Next runtime is now self-sufficient by design rather than by assumption:
- * ingest kicks `/api/wa/reply-tick` PER SENDER, and that dispatcher carries
- * reply rows only, holds a per-sender claim no cold batch can take, and waits
- * a due row out in-process. Provisioning the worker would make replies land
- * marginally sooner; nothing depends on it.
+ * The Next default arms a bounded in-process timer whose only action is an
+ * HTTP self-kick of the per-sender reply dispatcher (never a dangling drain -
+ * Cloud Run freezes CPU after the response, so the work must run in its own
+ * invocation). The 1-minute cron stays the backstop; the armer is the fast
+ * path. Provisioning the worker replaces it with an exact-moment drain job.
  */
-let armDrainAt: ((atMs: number) => void) | null = null;
+let armDrainAt: ((atMs: number, senderKey?: string) => void) | null = null;
 
-export function setDrainArmer(fn: ((atMs: number) => void) | null): void {
+export function setDrainArmer(fn: ((atMs: number, senderKey?: string) => void) | null): void {
   armDrainAt = fn;
 }
 
@@ -163,7 +164,12 @@ export async function parkOutboxOnce(row: {
   // compose we lost to), so arming the drain is correct in both branches - and
   // the arm must never be able to break the park.
   try {
-    armDrainAt?.(row.notBeforeMs);
+    if (armDrainAt) {
+      armDrainAt(row.notBeforeMs, row.senderKey);
+    } else {
+      const { armReplyDrain } = await import("./drain-armer");
+      armReplyDrain(row.notBeforeMs, row.senderKey);
+    }
   } catch {
     /* a missed arm only costs the next heartbeat, never the message */
   }

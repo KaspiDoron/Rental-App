@@ -971,13 +971,20 @@ async function runTailGates(args: {
   const { input, io, spec, cfg, nodeOn, push } = args;
   let text = args.draft;
   let englishGloss = args.englishGloss;
-  // LANGUAGE ADAPTATION: when the shop writes an actual English sentence
-  // ("Hi, do you speak English?") we answer in English for THIS reply -
-  // matching the human beats the local-language setting. A bare "ok" or a
-  // local-script reply keeps the thread local as configured.
-  const { looksEnglish } = await import("../agents");
+  // Set when a deterministic rail rewrote the text after localization - the
+  // re-gloss block at the bottom uses it to keep the traveller's translation
+  // alive (owner report 4, item 8).
+  let glossInvalidated = false;
+  // LANGUAGE ADAPTATION: when the shop DEMONSTRATES English we answer in
+  // English - matching the human beats the local-language setting. THREAD
+  // level (owner report 4): one English line in an otherwise local thread
+  // does not flip the reply (the per-turn test made the agent alternate
+  // languages on mixed threads - the exact bot tell stickiness prevents);
+  // the current message AND the previous inbound must both look English.
+  const { threadPrefersEnglish } = await import("../agents");
   const shopWroteEnglish =
-    input.event.kind !== "tick" && looksEnglish(input.event.shopMessage);
+    input.event.kind !== "tick" &&
+    threadPrefersEnglish(input.event.shopMessage, input.priorInbound ?? []);
   const useLocalLang =
     localLanguageAllowed({ requested: input.ctx.localLang, plan: input.ctx.plan }) &&
     !shopWroteEnglish;
@@ -1122,9 +1129,16 @@ async function runTailGates(args: {
 
   // ---- localize ----------------------------------------------------------------
   if (nodeOn("localize") && useLocalLang && args.nodeId !== "bargain") {
+    // The COUNTRY comes from the shop's own phone number when the thread has
+    // no region label (owner report 4): the label-only lookup was the
+    // 4-country ceiling that sent English to every +52/+51/+90 shop while
+    // blaming the AI for it.
+    const { countryForShop } = await import("../copy/region");
+    const localeRegion =
+      input.ctx.region || countryForShop(input.event.toDigits) || undefined;
     const localized = await localizeMessage(
       text,
-      input.ctx.region || undefined,
+      localeRegion,
       input.ctx.sender,
       spec.settings.streetLocal
     );
@@ -1138,6 +1152,23 @@ async function runTailGates(args: {
         output: localized.text,
       });
       text = localized.text;
+    }
+    // The reply paths used to fall back to English SILENTLY - the mass-send
+    // route was the only emitter of localize-fallback. Same event, honest
+    // reason, here too ("english-region" is a decision, not a failure).
+    if (!localized.localized && localized.reason && localized.reason !== "english-region") {
+      void sbInsert("agent_events", [
+        {
+          kind: "localize-fallback",
+          user_email: input.ctx.sender ?? "",
+          vendor_name: input.ctx.vendorName ?? input.event.toDigits,
+          detail: JSON.stringify({
+            reason: localized.reason,
+            region: localeRegion ?? null,
+            path: "engine-reply",
+          }).slice(0, 500),
+        },
+      ]).catch(() => {});
     }
   }
 
@@ -1184,6 +1215,7 @@ async function runTailGates(args: {
         });
         text = fixed.text;
         englishGloss = undefined; // a corrected duration invalidates the gloss
+        glossInvalidated = true;
       }
     }
     // (0.9) THE COMMITMENT RAIL - the same one SPTE runs, from one definition.
@@ -1217,6 +1249,7 @@ async function runTailGates(args: {
         // of the turn is usually a legitimate question the shop is waiting on.
         text = stripCommitment(text);
         englishGloss = undefined;
+        glossInvalidated = true;
         if (!text.trim()) {
           return { delivered: "blocked", detail: "commitment guard: nothing left to send" };
         }
@@ -1253,6 +1286,7 @@ async function runTailGates(args: {
       });
       text = decline;
       englishGloss = undefined;
+      glossInvalidated = true;
     } else if (["bargain", "momentum", "close", "answer"].includes(args.nodeKind)) {
       // (2) NUMERIC SANITY: fabricated rival (any of these nodes) + the
       // sub-floor / inverted-ask bounds (the price-asking bargain node only).
@@ -1319,6 +1353,7 @@ async function runTailGates(args: {
           });
           text = safe;
           englishGloss = undefined;
+          glossInvalidated = true;
         } else {
           // No honest repair possible - block. The run-budget rollback in the
           // caller lets the next event recompose cleanly (never a lie sent).
@@ -1401,6 +1436,58 @@ async function runTailGates(args: {
         ? delivered.finalText ?? text
         : `(${delivered.delivered}${delivered.queuedUntil ? ` until ${delivered.queuedUntil}` : ""})`,
   });
+
+  // ---- re-gloss (owner report 4, item 8) --------------------------------------
+  // A deterministic repair (duration fix, commitment strip) on a LOCALIZED
+  // text dropped the English gloss, leaving the traveller blind to what was
+  // sent in their name - on exactly the turns where a rail rewrote the words.
+  // Fire-and-forget, same pattern as the inbound gloss: translate the FINAL
+  // text and stamp it onto the row the send produced. Only non-Latin text
+  // qualifies (a repair that produced English needs no gloss).
+  if (glossInvalidated && !englishGloss && delivered.delivered !== "blocked" && input.ctx.sender) {
+    const finalText = delivered.finalText ?? text;
+    const letters = finalText.replace(/[^\p{L}]/gu, "");
+    const ascii = letters.replace(/[^A-Za-z]/g, "");
+    if (letters.length > 0 && ascii.length / letters.length < 0.9) {
+      const senderKey = input.ctx.sender;
+      const toNumber = input.event.toDigits;
+      const wasQueued = delivered.delivered === "queued";
+      const { finishBeforeResponse } = await import("../after");
+      await finishBeforeResponse("outbound-regloss", async () => {
+        try {
+          const { translateToEnglish } = await import("../agents");
+          const english = await translateToEnglish(finalText);
+          if (!english) return;
+          const { sbSelect: sel, sbUpdate } = await import("../runtime-config");
+          const { numberFilter } = await import("../wa/phone-key");
+          const encSender = encodeURIComponent(senderKey);
+          if (wasQueued) {
+            const rows = await sel<{ id: number; meta: Record<string, unknown> | null }>(
+              "wa_outbox",
+              `select=id,meta&sender_key=eq.${encSender}&order=id.desc&limit=1${numberFilter("to_number", toNumber)}`
+            );
+            if (rows[0]) {
+              await sbUpdate("wa_outbox", `id=eq.${rows[0].id}`, {
+                meta: { ...(rows[0].meta ?? {}), englishGloss: english },
+              });
+            }
+          } else {
+            const rows = await sel<{ id: number; raw: Record<string, unknown> | null }>(
+              "whatsapp_messages",
+              `select=id,raw&direction=eq.outbound&raw->>sender=eq.${encSender}&order=id.desc&limit=1${numberFilter("to_number", toNumber)}`
+            );
+            if (rows[0]) {
+              await sbUpdate("whatsapp_messages", `id=eq.${rows[0].id}`, {
+                raw: { ...(rows[0].raw ?? {}), englishGloss: english },
+              });
+            }
+          }
+        } catch {
+          /* the gloss is a bonus - never the send */
+        }
+      });
+    }
+  }
 
   // ---- judge enqueue (never inline - a cheap later invocation grades it) ------
   if (
@@ -1485,17 +1572,20 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       const threads = await sbSelect<{
         vendor_id: string | null;
         vendor_name: string | null;
+        to_number: string | null;
         phase: string;
         fields: Record<string, unknown> | null;
       }>(
         "negotiation_threads",
-        `select=vendor_id,vendor_name,phase,fields&user_email=eq.${encodeURIComponent(
+        `select=vendor_id,vendor_name,to_number,phase,fields&user_email=eq.${encodeURIComponent(
           userEmail
         )}&updated_at=gte.${encodeURIComponent(since)}&limit=16`
       ).catch(() => []);
       const rows = new Map<string, SessionShopRow>();
+      const numberByVendor = new Map<string, string>();
       for (const t of threads) {
         if (!t.vendor_id) continue;
+        if (t.to_number) numberByVendor.set(t.vendor_id, t.to_number);
         const fx = (t.fields ?? {}) as {
           pricePerDay?: number;
           currency?: string;
@@ -1531,6 +1621,54 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           complete: existing?.complete,
           isThisShop: o.vendor_id === thisVendorId,
         });
+      }
+
+      // A BOARD PHOTOGRAPHED IN THREAD A IS LEVERAGE IN THREAD B (owner
+      // report 4). The vision pass stamps its MediaReading (prices included)
+      // on the inbound message row - and that store was joined by nothing, so
+      // a shop whose photographed prices never became a formal offer (a
+      // multi-option board, a read that missed the traveller's exact spec)
+      // was invisible to every sibling negotiation. Fold the cheapest read
+      // price into rows that still lack one, at the SAME trust level thread
+      // fields already get (the currency/phase validity filters in
+      // validRivals apply downstream either way). Rows that have a price keep
+      // it - a quote the shop typed beats a board we read.
+      {
+        const priceless = [...rows.values()].filter(
+          (r) => typeof r.pricePerDay !== "number" && numberByVendor.has(r.vendorId)
+        );
+        if (priceless.length > 0) {
+          // ONE query serves every priceless shop; number matching happens in
+          // code (tolerant, like every other cross-spelling comparison).
+          const { sameNumber } = await import("../wa/phone-key");
+          const readRows = await sbSelect<{
+            from_number: string | null;
+            raw: { reading?: { prices?: Array<{ pricePerDay?: number; currency?: string }> } } | null;
+          }>(
+            "whatsapp_messages",
+            `select=from_number,raw&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+              userEmail
+            )}&received_at=gte.${encodeURIComponent(since)}&raw->reading=not.is.null` +
+              `&order=received_at.desc&limit=24`
+          ).catch(() => []);
+          for (const r of priceless) {
+            const digits = numberByVendor.get(r.vendorId)!;
+            const read = readRows.find(
+              (m) =>
+                m.from_number &&
+                sameNumber(m.from_number, digits) &&
+                (m.raw?.reading?.prices?.length ?? 0) > 0
+            );
+            const cheapest = read?.raw?.reading?.prices?.[0];
+            if (cheapest && typeof cheapest.pricePerDay === "number" && cheapest.pricePerDay > 0) {
+              rows.set(r.vendorId, {
+                ...r,
+                pricePerDay: cheapest.pricePerDay,
+                currency: cheapest.currency ?? r.currency,
+              });
+            }
+          }
+        }
       }
       return [...rows.values()].slice(0, 10);
     },
@@ -1608,14 +1746,18 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           kind: (meta as { kind?: string } | undefined)?.kind,
         });
         if (stale.stale) {
-          await sbInsert("agent_events", [
-            {
-              kind: "wa-send-stale",
-              user_email: senderKey,
-              vendor_name: String((meta as { vendorName?: string } | undefined)?.vendorName ?? toNumber),
-              detail: `inline ${stale.reason}: ${stale.detail ?? ""}`.slice(0, 300),
-            },
-          ]).catch(() => {});
+          // to_number is the message-path join key; retried without it so an
+          // un-migrated database loses the join, never the event.
+          const staleEv = {
+            kind: "wa-send-stale",
+            user_email: senderKey,
+            vendor_name: String((meta as { vendorName?: string } | undefined)?.vendorName ?? toNumber),
+            detail: `inline ${stale.reason}: ${stale.detail ?? ""}`.slice(0, 300),
+          };
+          const staleOk = await sbInsert("agent_events", [{ ...staleEv, to_number: toNumber }]).catch(
+            () => false
+          );
+          if (!staleOk) await sbInsert("agent_events", [staleEv]).catch(() => {});
           await scheduleRecompose(senderKey, toNumber, "stale-draft-recompose");
           return {
             delivered: "blocked",
@@ -1648,13 +1790,8 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       // A reply/follow-up to an engaged shop paces per-recipient (distinct
       // shops never serialize on each other); a cold intro keeps per-sender.
       const sendKind = (meta as { kind?: string } | undefined)?.kind;
-      const claim = await claimForSend(
-        senderKey,
-        toNumber,
-        verdict.text,
-        true,
-        sendKind !== "rfq" && sendKind !== "custom"
-      );
+      const isReplySend = sendKind !== "rfq" && sendKind !== "custom";
+      const claim = await claimForSend(senderKey, toNumber, verdict.text, true, isReplySend);
       if (!claim.ok) {
         if (claim.kind === "duplicate") {
           return {
@@ -1664,7 +1801,13 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           };
         }
         const { jitteredHold } = await import("../wa/pacing");
-        const notBefore = jitteredHold(Date.now(), 1, 2);
+        // Lane-proportional: the lane a REPLY lost is measured in seconds (5s
+        // per-shop gap, fleet slot), so it re-parks 20-40s out; a cold intro
+        // keeps the minute-scale hold - velocity to new numbers is the ban
+        // vector, and its lane is 12s+ anyway.
+        const notBefore = isReplySend
+          ? new Date(Date.now() + 20_000 + Math.round(Math.random() * 20_000)).toISOString()
+          : jitteredHold(Date.now(), 1, 2);
         await sbInsert("wa_outbox", [
           {
             sender_key: senderKey,
@@ -2009,7 +2152,7 @@ export async function buildTurnFromThread(
     "whatsapp_messages",
     `select=direction,body,raw,received_at&or=(to_number.eq.${encodeURIComponent(
       toDigits
-    )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=20`
+    )},from_number.eq.${encodeURIComponent(toDigits)})&order=received_at.desc&limit=40`
   );
   // PRIVACY: both directions scoped to this user - inbound by receiver (the
   // WhatsApp that got it), outbound by sender. Another user's chat with the
@@ -2021,9 +2164,11 @@ export async function buildTurnFromThread(
       : raw?.sender === userEmail;
   });
   const thread = mine.slice(0, 12).reverse();
-  const history = thread
-    .map((m) => `${m.direction === "outbound" ? "Us" : "Shop"}: ${(m.body ?? "").slice(0, 300)}`)
-    .join("\n");
+  // Wider, budgeted HISTORY window than the working 12-row slice: head
+  // preserved, voice transcripts inlined (wa/history-window.ts, owner
+  // report 4). Counters/coalescing below keep their 12-row behavior.
+  const { buildHistoryWindow } = await import("../wa/history-window");
+  const history = buildHistoryWindow(mine.slice(0, 40).reverse());
   const outboundRows = thread.filter((m) => m.direction === "outbound" && (m.body ?? ""));
   const priorOutbound = outboundRows.map((m) => m.body ?? "");
   // Parallel to priorOutbound, same order and length. SPTE stamps the semantic

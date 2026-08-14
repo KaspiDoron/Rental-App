@@ -141,8 +141,9 @@ export async function POST(req: Request) {
     const localized = await localizeMessage(message, String(body.region ?? "") || undefined);
     batchMessage = localized.text;
     if (localized.english && localized.text !== message) englishGloss = localized.english;
-    if (!localized.localized) {
-      // Documented English fallback (after retry) - never a silent flip.
+    if (!localized.localized && localized.reason !== "english-region") {
+      // Documented English fallback - never a silent flip, and never the AI
+      // blamed for a region we could not resolve (owner report 4).
       await sbInsert("agent_events", [
         {
           kind: "localize-fallback",
@@ -151,7 +152,7 @@ export async function POST(req: Request) {
           detail: JSON.stringify({
             email: session.email,
             region: String(body.region ?? ""),
-            reason: "AI localization unavailable after retry - batch sent in English",
+            reason: localized.reason ?? "ai-unavailable",
           }).slice(0, 800),
         },
       ]).catch(() => {});
@@ -296,7 +297,13 @@ export async function POST(req: Request) {
     compiledRecent.push(unique.text);
     if (!wantLocalLang) return { text: unique.text };
     const { localizeMessage } = await import("@/lib/agents");
-    const localized = await localizeMessage(unique.text, shopRegion);
+    // The LANGUAGE comes from the full phone-prefix country map; the narrow
+    // 4-market shopRegion above stays what it always was - greeting flavor.
+    const { countryForShop } = await import("@/lib/copy/region");
+    const localized = await localizeMessage(
+      unique.text,
+      countryForShop(shopDigits, String(body.region ?? ""))
+    );
     return localized.localized
       ? { text: localized.text, gloss: localized.english ?? unique.text }
       : { text: unique.text };

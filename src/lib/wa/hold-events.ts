@@ -18,10 +18,24 @@ import { sbInsert } from "../runtime-config";
 // event.
 
 const THROTTLE_MS = 10 * 60_000;
+// LANE-AWARE (owner report 4): a REPLY's holds are measured in seconds-to-a-
+// couple-of-minutes, so a 10-minute throttle collapsed its whole re-park story
+// into one event - the exact churn the trail exists to show. Replies throttle
+// at 2 minutes; cold intros keep 10 (their holds ARE minutes long, and the
+// reason changing is still recorded immediately either way).
+const REPLY_THROTTLE_MS = 2 * 60_000;
 const lastWrite = new Map<string, number>();
 
 /** Exposed for tests. */
 export const HOLD_EVENT_THROTTLE_MS = THROTTLE_MS;
+export const REPLY_HOLD_EVENT_THROTTLE_MS = REPLY_THROTTLE_MS;
+
+/** The same "no kind means auto reply" reading as REPLY_KIND_FILTER. */
+export function holdThrottleMsFor(msgKind?: string): number {
+  return msgKind === "rfq" || msgKind === "custom" || msgKind === "human-manual"
+    ? THROTTLE_MS
+    : REPLY_THROTTLE_MS;
+}
 
 /** Test hook - resets the in-process throttle. */
 export function resetHoldThrottle(): void {
@@ -40,7 +54,7 @@ export async function recordHoldEvent(e: {
   const key = `${e.senderKey}|${e.toNumber}|${e.reason}`;
   const now = Date.now();
   const prev = lastWrite.get(key);
-  if (prev && now - prev < THROTTLE_MS) return;
+  if (prev && now - prev < holdThrottleMsFor(e.msgKind)) return;
   lastWrite.set(key, now);
   // Bound the throttle map - it lives for the process, not the request.
   if (lastWrite.size > 2000) {

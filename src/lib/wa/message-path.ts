@@ -28,6 +28,10 @@ export interface PathStep {
     | "send-attempt"
     | "send-dropped"
     | "send-unconfirmed"
+    | "send-expired"
+    | "send-stale"
+    | "claim-lost"
+    | "claim-error"
     | "park-failed"
     | "wakeup";
   detail: string;
@@ -49,6 +53,14 @@ const EVENT_STAGE: Record<string, PathStep["stage"]> = {
   "wa-send-dropped": "send-dropped",
   "wa-send-unconfirmed": "send-unconfirmed",
   "wa-park-failed": "park-failed",
+  // The four terminal-or-contended fates that used to be invisible here: a row
+  // binned as too old, a draft dropped as stale, and the two claim outcomes
+  // (busy vs broken). Without them the trail showed a message queued and then
+  // NOTHING - exactly the "where did it go" hole this view exists to close.
+  "wa-send-expired": "send-expired",
+  "wa-send-stale": "send-stale",
+  "claim-lost": "claim-lost",
+  "claim-error": "claim-error",
 };
 
 export async function messagePath(opts: {
@@ -99,7 +111,7 @@ export async function messagePath(opts: {
     sbSelect<{ kind: string; detail: string | null; created_at: string; to_number?: string | null }>(
       "agent_events",
       `select=kind,detail,created_at,to_number&user_email=eq.${enc(opts.senderKey)}` +
-        `&kind=in.(wa-hold,wa-send-dropped,wa-send-unconfirmed,wa-park-failed)` +
+        `&kind=in.(wa-hold,wa-send-dropped,wa-send-unconfirmed,wa-park-failed,wa-send-expired,wa-send-stale,claim-lost,claim-error)` +
         `&or=(to_number.eq.${enc(digits)},vendor_name.eq.${enc("+" + digits)})` +
         `&order=created_at.desc&limit=${limit}`
     )
