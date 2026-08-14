@@ -1,63 +1,21 @@
 // The WheelDeal mark (emoji-style half scooter / half car) as inline SVG.
 // Transparent background so it sits on any surface.
 //
-// TWO VARIANTS (owner report 4, item 9):
-//  - "solid" (default): the full-colour emoji mark. Used everywhere the brand
-//    speaks - topbar, welcome, pricing. Changing the default would rebrand
-//    the whole app, so the loader opts IN to the outline instead.
-//  - "outline": the same silhouette as strokes only, in currentColor - the
-//    luxury monoline treatment for the loading heartbeat. It inherits the
-//    text colour, so both themes get it right for free, and a pure-CSS
-//    draw-on shimmer (`.wd-draw` in globals.css) can animate the strokes
-//    without a single JS timer.
-
-const OUTLINE_PATHS = [
-  // Car body (right half) + scooter body (left half), cabin, windshield.
-  "M256 214 L336 214 C346 190 368 174 396 174 C424 174 446 190 456 214 L462 214 C482 214 496 230 496 250 L496 342 C496 360 482 372 464 372 L256 372 Z",
-  "M352 224 C360 204 376 192 396 192 C416 192 432 204 440 224 L444 252 L348 252 Z",
-  "M256 214 L214 214 C186 214 166 232 156 258 L136 316 L136 344 C136 360 148 372 164 372 L256 372 Z",
-  // Handlebar + lightning bolt keep their line character.
-  "M196 236 L156 156 L136 156",
-  "M262 196 L234 268 L258 268 L246 330 L286 250 L262 250 L278 196 Z",
-];
+// ONE VARIANT: the full-colour solid mark - the brand's actual speaking voice,
+// used everywhere including the loader. Loading v2 added a currentColor OUTLINE
+// variant with a `.wd-draw` sketch-on for the loading heartbeat; the owner
+// named that monoline treatment "the worst thing that I ever seen", so Loading
+// v3 removed it (along with its dead `.wd-draw` CSS). The loader now renders
+// this solid mark held perfectly still, with the motion in a separate horizon
+// bar - see BrandPulse.
 
 export function BrandMark({
   size = 40,
   className = "",
-  variant = "solid",
 }: {
   size?: number;
   className?: string;
-  variant?: "solid" | "outline";
 }) {
-  if (variant === "outline") {
-    // ~20/512 viewBox units reads as a crisp ~1.6px line at 40px render size.
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 512 512"
-        className={className}
-        aria-label="WheelDeal"
-        role="img"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="20"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <g transform="translate(-26,0)">
-          {OUTLINE_PATHS.map((d, i) => (
-            <path key={i} d={d} className="wd-draw" style={{ animationDelay: `${i * 120}ms` }} />
-          ))}
-          <circle cx="150" cy="384" r="58" className="wd-draw" style={{ animationDelay: "600ms" }} />
-          <circle cx="150" cy="384" r="12" className="wd-draw" style={{ animationDelay: "720ms" }} />
-          <circle cx="392" cy="384" r="58" className="wd-draw" style={{ animationDelay: "840ms" }} />
-          <circle cx="392" cy="384" r="12" className="wd-draw" style={{ animationDelay: "960ms" }} />
-        </g>
-      </svg>
-    );
-  }
   return (
     <svg
       width={size}

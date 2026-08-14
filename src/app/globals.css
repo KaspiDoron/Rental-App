@@ -686,6 +686,17 @@ input, textarea, select, button {
     transparent 100%
   );
 }
+/* THE SHIMMER SWEEP, DEFINED WHERE IT IS USED.
+ *
+ * `.skeleton::after` starts at translateX(-100%) and rides `animation: shimmer`,
+ * but the only `@keyframes shimmer` lived in tailwind.config.ts - and Tailwind
+ * tree-shakes a keyframe whose `animate-shimmer` utility is never emitted, so
+ * the rule referenced a keyframe that never shipped. The sweep was dead: every
+ * skeleton was a flat opacity breath. Declaring it here, next to its consumer,
+ * makes the highlight actually travel and cannot be shaken away. */
+@keyframes shimmer {
+  to { transform: translateX(100%); }
+}
 @keyframes skeleton-breathe {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.72; }
@@ -719,33 +730,32 @@ input, textarea, select, button {
   isolation: isolate;
 }
 
-/* ONE GEOMETRY FOR EVERY GLOW (owner report 4, item 9).
+/* ONE GEOMETRY FOR EVERY GLOW - now SINGLE-HUE (Loading v3).
  *
- * The component glow used to be a CONIC rainbow sweeping 360 degrees behind a
- * blur pass, while the page-level `.wd-ambient` painted soft layered radial
- * lobes - two visual languages for the same sentence, and the owner named the
- * spinning rainbow as the amateur one. The aurora now speaks ambient: the
- * same stacked radial lobes at box scale, no rotation, no blur filter (soft
- * gradient stops carry the haze for free - the identical low-end-Android
- * budget rule the ambient already lives by). Motion is the breath alone,
- * which the heartbeat shares its rhythm with.
+ * The component glow was a CONIC rainbow sweeping 360 degrees; Loading v2 made
+ * it stacked radial lobes but kept all FIVE brand hues, and at box scale five
+ * hues still read as the amateur colour wheel the owner named. The aurora now
+ * paints ONE brand hue walked across oklch lightness - no rotation, no blur
+ * filter (soft gradient stops carry the haze for free, the same low-end-Android
+ * budget rule the ambient lives by). Motion is the breath alone. The five-hue
+ * ramp did not disappear: it moved wholesale to the page-level `.wd-ambient`,
+ * where a full-viewport wash is the one place a multi-hue spread reads as light
+ * rather than as a status wheel.
  */
 
-/* THE PALETTE, RE-SEEDED FROM THE BRAND.
+/* THE HUE SET, SEEDED FROM THE BRAND.
  *
- * The stops used to be five hardcoded rgba() literals with no relationship to
- * any token, which is why the glow read as a generic "AI shimmer" rather than
- * as WheelDeal. Each stop is now a real brand colour mixed toward a saturated
- * carrier, so the sweep is recognisably ours while still reading as an aurora.
+ * These five tokens are the AMBIENT's palette now (the single-hue aurora and
+ * the LoadingDots ramp both draw from `--wd-hue-1` alone). Each is a real brand
+ * colour mixed toward a saturated carrier, so the wash is recognisably ours.
  *
  * `in oklch` is load-bearing, not decoration. sRGB interpolation between a blue
- * and a green drives the midpoint through grey - which is exactly the muddy
- * band the current glow shows halfway round. oklch keeps chroma up across the
- * whole arc.
+ * and a green drives the midpoint through grey - the muddy band the old glow
+ * showed halfway round. oklch keeps chroma up across the whole arc.
  *
  * One held violet stays. Without it, blue -> green -> yellow -> red is a
- * traffic light; the violet is what makes the set read as light rather than as
- * a status.
+ * traffic light; the violet is what makes the ambient read as light rather than
+ * as a status.
  */
 :root {
   --wd-hue-1: color-mix(in oklch, var(--blue) 78%, #4f8bff);
@@ -756,37 +766,34 @@ input, textarea, select, button {
 }
 
 .aurora::before {
-  /* THE BLOOM. Behind the content, escaping the box, never interactive.
-   * Ambient-style layered lobes, box-scaled: cool crown up top, warm floor
-   * lobes below, the held violet in the middle so the set reads as light
-   * rather than as a traffic signal. NO blur filter - soft stops only. */
+  /* THE BLOOM, NOW SINGLE-HUE (Loading v3).
+   *
+   * The owner ditched the colour wheel: five brand hues stacked in a small box
+   * read as an amateur rainbow. The bloom is now ONE brand hue (`--wd-hue-1`)
+   * walked across three oklch lightness steps - a light crown, the pure hue,
+   * and a deep floor - which gives the same sense of depth with none of the
+   * traffic-signal tell. NO blur filter - soft, far-reaching stops only. */
   content: "";
   position: absolute;
   inset: -16%;
   z-index: -1;
   pointer-events: none;
   border-radius: inherit;
-  /* OPACITY BELONGS TO THE THEME, AND ONLY TO THE THEME.
-   *
-   * `aurora-breathe` animated `opacity`, which outranks both the static value
-   * here AND the dark-mode override below - so the breath silently cancelled
-   * the one adjustment that made this readable in daylight. The breath now
-   * rides on `scale`, which nothing else claims, and opacity is a plain
-   * declaration the theme can win. */
+  /* OPACITY BELONGS TO THE THEME, AND ONLY TO THE THEME. The breath rides on
+   * `scale` (nothing else claims it), so opacity is a plain declaration the
+   * dark-mode override below can actually win. */
   opacity: 0.5;
   background:
-    radial-gradient(60% 60% at 24% 16%, var(--wd-hue-1) 0%, transparent 70%),
-    radial-gradient(55% 55% at 78% 22%, var(--wd-hue-2) 0%, transparent 70%),
-    radial-gradient(58% 55% at 72% 84%, var(--wd-hue-3) 0%, transparent 72%),
-    radial-gradient(50% 50% at 20% 80%, var(--wd-hue-4) 0%, transparent 70%),
-    radial-gradient(46% 46% at 50% 50%, var(--wd-hue-5) 0%, transparent 76%);
+    radial-gradient(60% 60% at 30% 20%, color-mix(in oklch, var(--wd-hue-1) 90%, #fff) 0%, transparent 88%),
+    radial-gradient(58% 58% at 72% 80%, var(--wd-hue-1) 0%, transparent 88%),
+    radial-gradient(66% 60% at 50% 52%, color-mix(in oklch, var(--wd-hue-1) 72%, #000) 0%, transparent 90%);
   animation: aurora-breathe 3.6s ease-in-out infinite;
 }
 .aurora::after {
-  /* THE EDGE. A gradient ring, masked to the border only - no extra wrapper
-     element and no double-border artefact on a rounded card. Static by
-     design now: the breath on the bloom is the motion, and a still rim under
-     a breathing glow reads as a jewel setting, not a spinner. */
+  /* THE EDGE. A SINGLE-HUE gradient ring, masked to the border only - no extra
+     wrapper element and no double-border artefact on a rounded card. One brand
+     hue on an oklch lightness ramp reads as a jewel setting; static by design,
+     because the breath on the bloom is the whole motion. */
   content: "";
   position: absolute;
   inset: 0;
@@ -795,10 +802,9 @@ input, textarea, select, button {
   padding: 1.5px;
   background: linear-gradient(
     135deg,
-    var(--wd-hue-1),
-    var(--wd-hue-2) 35%,
-    var(--wd-hue-3) 68%,
-    var(--wd-hue-4)
+    color-mix(in oklch, var(--wd-hue-1) 55%, #fff),
+    var(--wd-hue-1) 50%,
+    color-mix(in oklch, var(--wd-hue-1) 72%, #000)
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -821,71 +827,81 @@ input, textarea, select, button {
   50% { scale: 1.045; }
 }
 
-/* THE DRAW-ON (outline BrandMark). Each stroke sketches itself in and then
- * softly re-shimmers - the classic monoline luxury treatment, pure CSS. The
- * dash length over-covers the longest path so every shape closes. */
-@keyframes wd-draw-on {
-  0% { stroke-dashoffset: 1200; opacity: 0.35; }
-  55% { stroke-dashoffset: 0; opacity: 1; }
-  100% { stroke-dashoffset: 0; opacity: 1; }
-}
-.wd-draw {
-  stroke-dasharray: 1200;
-  animation: wd-draw-on 2.6s ease-out infinite;
-}
-
-/* THE HEARTBEAT.
+/* THE HORIZON LINE - the whole loader's motion (Loading v3).
  *
- * A real cardiac cycle, not a symmetric pulse: a short strong systole (lub), a
- * shorter softer second contraction (dub), then a long diastole where nothing
- * happens at all. That pause is what makes it read as alive rather than as a
- * throbbing element - a sine wave reads as a machine, and a machine is what the
- * traveller is already worried about.
- *
- * ~52 bpm (1150ms) is a resting rate. Faster reads as anxious on a screen
- * someone is watching because they are waiting.
- */
-@keyframes wd-heartbeat {
-  0%   { transform: scale(1); }
-  8%   { transform: scale(1.11); }  /* lub */
-  16%  { transform: scale(1); }
-  24%  { transform: scale(1.055); } /* dub - deliberately weaker */
-  32%  { transform: scale(1); }
-  100% { transform: scale(1); }     /* diastole - the long rest */
+ * The old loader SCALED the brand logo on a heartbeat keyframe. A pulsing logo
+ * is the single most dated 2025-26 loading element and exactly what
+ * prefers-reduced-motion exists to remove; the owner named it, plus the outline
+ * mark it rode on, as "the worst thing that I ever seen". So the mark now holds
+ * PERFECTLY STILL and the motion signal moves down here: a thin (~2px) rounded
+ * bar on a faint single-hue track, with ONE bright specular segment travelling
+ * left -> right on an ease-in-out loop. One hue walked in oklch lightness -
+ * never a colour wheel, never a spinner. Pure CSS, no JS timer. */
+.wd-horizon {
+  display: block;
+  position: relative;
+  height: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+  /* The faint rail - ~12% of the brand hue, so the track still reads when the
+     specular segment is parked at the far end. */
+  background: color-mix(in oklch, var(--wd-hue-1) 12%, transparent);
 }
-.wd-heartbeat {
-  animation: wd-heartbeat 1150ms ease-in-out infinite;
-  transform-origin: center;
-  will-change: transform;
+.wd-horizon::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 42%;
+  border-radius: inherit;
+  /* THE SPECULAR SEGMENT. The one brand hue brightened at its centre (an oklch
+     lightness walk toward white) and fading to nothing at both ends, so it
+     reads as a travelling glint of light rather than a coloured block. */
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--wd-hue-1) 45%, transparent) 28%,
+    color-mix(in oklch, var(--wd-hue-1) 92%, #fff) 50%,
+    color-mix(in oklch, var(--wd-hue-1) 45%, transparent) 72%,
+    transparent 100%
+  );
+  transform: translateX(-110%);
+  animation: wd-horizon-travel 1.6s ease-in-out infinite;
+}
+@keyframes wd-horizon-travel {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(238%); }
 }
 
 /* THE VEIL. A blurred backdrop so the loader reads as suspended ABOVE the app
- * rather than as a panel replacing it - the app is still there, it is just out
- * of focus while the work happens.
- *
- * backdrop-filter degrades to no blur where unsupported; the translucent
- * background keeps the contrast either way, so the loader is never illegible.
- */
+   rather than as a panel replacing it. LIGHTENED for Loading v3: the old 55%
+   fill under a 14px blur washed the intensified ambient right out. At 30% fill
+   and an 8px blur the loved wash still reads THROUGH the veil, and the app
+   underneath stays legibly out of focus. backdrop-filter degrades to no blur
+   where unsupported; the translucent fill keeps the contrast either way. */
 .wd-loader-veil {
-  background: color-mix(in oklch, var(--bg) 55%, transparent);
-  backdrop-filter: blur(14px) saturate(1.15);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  background: color-mix(in oklch, var(--bg) 30%, transparent);
+  backdrop-filter: blur(8px) saturate(1.15);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
 }
 
-/* A glow is decoration; motion is not mandatory to understand it. Someone who
-   asked for less motion keeps the colour and loses the travel - the same
-   contract .skeleton already honours. The heartbeat stops too: a pulsing logo
-   is precisely the kind of motion that setting exists to remove. */
+/* Motion is not mandatory to understand a loader. Someone who asked for less
+   motion keeps the colour and loses the travel - the same contract .skeleton
+   already honours. The mark already holds still; here the aurora breath and the
+   horizon's travelling glint both stop, leaving a calm, coloured, static bar. */
 @media (prefers-reduced-motion: reduce) {
   .aurora::before,
   .aurora::after { animation: none; }
   .aurora::before { opacity: 0.4; }
-  .wd-heartbeat { animation: none; }
-  /* The draw-on settles to the finished outline - never a half-sketched mark. */
-  .wd-draw {
+  /* The horizon settles to a full, still, single-hue bar - never a frozen
+     glint parked mid-track. Keep the colour, drop the travel. */
+  .wd-horizon::after {
     animation: none;
-    stroke-dashoffset: 0;
-    stroke-dasharray: none;
+    left: 0;
+    width: 100%;
+    transform: none;
+    background: color-mix(in oklch, var(--wd-hue-1) 30%, transparent);
   }
 }
 
@@ -1329,7 +1345,10 @@ input, textarea, select, button {
  * dead-layer failure mode where this shipped as CSS no component rendered).
  *
  * TOP-HEAVY BY CONSTRUCTION: the two main lobes hang ABOVE the viewport
- * (-6% / 4%) and the mask fades everything to transparent by ~85% down.
+ * (-6% / 4%). Loading v3 intensifies the loved wash - the radial stops reach
+ * to 88% (fuller lobes) and the mask holds real weight (0.45) all the way to
+ * 88% down before fading out - but it is still top-heavy and the bottom edge
+ * ends transparent, so the wash never shouts at the foot of the screen.
  * NO blur filter - a 48px blur over a full viewport is a compositor tax the
  * low-end-Android budget cannot pay, and soft gradient stops produce the
  * same haze for free. The breath animates transform only; visibility is the
@@ -1347,13 +1366,13 @@ input, textarea, select, button {
    * screen instead of only crowning it. Still top-heavy: the mask (below)
    * carries real weight further down but never lets the bottom shout. */
   background:
-    radial-gradient(70% 55% at 22% -6%, var(--wd-hue-1) 0%, transparent 70%),
-    radial-gradient(60% 48% at 78% 4%, var(--wd-hue-2) 0%, transparent 70%),
-    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 72%),
-    radial-gradient(55% 38% at 12% 64%, var(--wd-hue-4) 0%, transparent 70%),
-    radial-gradient(58% 40% at 90% 78%, var(--wd-hue-5) 0%, transparent 70%);
-  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.28) 78%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.28) 78%, transparent 100%);
+    radial-gradient(70% 55% at 22% -6%, var(--wd-hue-1) 0%, transparent 88%),
+    radial-gradient(60% 48% at 78% 4%, var(--wd-hue-2) 0%, transparent 88%),
+    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 88%),
+    radial-gradient(55% 38% at 12% 64%, var(--wd-hue-4) 0%, transparent 88%),
+    radial-gradient(58% 40% at 90% 78%, var(--wd-hue-5) 0%, transparent 88%);
+  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.45) 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.45) 88%, transparent 100%);
   opacity: 0;
   transform-origin: 50% 0%;
   transition: opacity 420ms ease;
@@ -1361,19 +1380,22 @@ input, textarea, select, button {
   animation-play-state: paused;
 }
 .wd-ambient-on {
-  opacity: 0.45;
+  /* INTENSIFIED (Loading v3). The owner loves this wash and wanted it "much
+   * more intense": 0.45 -> 0.6 over the near-white canvas, with the fuller
+   * radial stops and the deeper/lower mask above doing the rest. */
+  opacity: 0.6;
   transition: none;
   animation-play-state: running;
 }
-/* Brightness is theme work: 0.45 over a near-white canvas is a wash, the same
- * over #17191d is a glare. A RULE (not a token) so the prefers-color-scheme
- * mirror test is untouched. */
+/* Brightness is theme work: 0.6 over a near-white canvas is a rich wash, the
+ * same over #17191d is a glare - dark rides lower (0.36 -> 0.5, still lifted).
+ * A RULE (not a token) so the prefers-color-scheme mirror test is untouched. */
 [data-theme="dark"] .wd-ambient-on {
-  opacity: 0.36;
+  opacity: 0.5;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .wd-ambient-on {
-    opacity: 0.36;
+    opacity: 0.5;
   }
 }
 
