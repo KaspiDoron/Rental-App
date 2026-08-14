@@ -1174,7 +1174,12 @@ export async function processEvolutionWebhook(
         }
       }
 
-      await processVendorReply({
+      // BOUNDED CONCURRENCY (scale #7): cap heavy AI turns in flight per
+      // instance so a burst of simultaneous webhooks under --concurrency 32
+      // cannot spike RAM/CPU and slow everyone's reply together. Never drops a
+      // turn - a waiter proceeds ungated past its patience window.
+      const { withInboundSlot } = await import("@/lib/wa/inbound-gate");
+      await withInboundSlot(async () => processVendorReply({
         fromDigits: from,
         // The RESOLVED origin chat - asserted against `from` before attributing.
         // For a privacy @lid chat this is the line the alias resolved to, which
@@ -1218,7 +1223,7 @@ export async function processEvolutionWebhook(
           if (!email) return { ok: false, error: "unknown instance" };
           return sendFromUser(email, to, message, true, { lane: "reply" });
         },
-      });
+      }));
       } catch (e) {
         // One bad message in the batch must not drop its siblings (DEFECT 5) -
         // the webhook already 200s so Evolution never redelivers. Skip this

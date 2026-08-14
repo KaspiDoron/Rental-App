@@ -46,10 +46,17 @@ export async function GET(req: Request) {
   let synced = 0;
   try {
     const { recentActiveSenders, syncInboundReplies } = await import("@/lib/wa-sync");
-    const { pickSweepEmails } = await import("@/lib/wa/sweep");
+    const { rotateWindow, sweepCapForFleet } = await import("@/lib/wa/sweep");
     const senders = await recentActiveSenders();
     const minute = Math.floor(Date.now() / 60_000);
-    for (const email of pickSweepEmails(senders, minute, 3)) {
+    // Proportional to the fleet (scale #9), and a FULL-WINDOW rotation so
+    // coverage time is ceil(fleet/cap), not `fleet` minutes: a fixed 3 that
+    // advanced one sender per tick left a 300-user fleet with a ~100-minute
+    // (worst case ~300) recovery gap. cap = ceil(fleet/20) floored 3 capped 10,
+    // advancing a whole window per tick -> every sender swept within ~20-30 min
+    // at any size. Dedup+sort for a stable rotation order.
+    const roster = [...new Set(senders.filter(Boolean))].sort();
+    for (const email of rotateWindow(roster, minute, sweepCapForFleet(roster.length))) {
       synced += await syncInboundReplies(email).catch(() => 0);
     }
   } catch {

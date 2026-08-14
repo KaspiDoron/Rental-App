@@ -53,7 +53,10 @@ describe("an app-closed recovery runner that exists in production", () => {
   it("the ping cron (the ONE live scheduler) runs a bounded inbound sweep", () => {
     const ping = readCode("src/app/api/wa/ping/route.ts");
     expect(ping).toMatch(/recentActiveSenders/);
-    expect(ping).toMatch(/pickSweepEmails\(senders, minute, 3\)/);
+    // The sweep cap is now PROPORTIONAL to the fleet with a full-window
+    // rotation (owner report 4, scale #9) - a fixed 3 that advanced one sender
+    // per tick left a 300-user fleet ~100 min between recovery sweeps.
+    expect(ping).toMatch(/rotateWindow\(roster, minute, sweepCapForFleet\(roster\.length\)\)/);
     expect(ping).toMatch(/syncInboundReplies\(email\)/);
     // The response reports it, so the cron logs show recovery working.
     expect(ping).toMatch(/synced/);

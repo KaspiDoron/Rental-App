@@ -791,10 +791,21 @@ export async function chatDetailed(
   // fall back to their deterministic heuristic instead of making people wait.
   const deadline = Date.now() + (opts?.budgetMs ?? 38_000);
 
-  for (const cfg of list) {
+  const { tryConsume } = await import("./ai-rpm");
+  for (let idx = 0; idx < list.length; idx++) {
+    const cfg = list[idx];
     if (Date.now() > deadline) {
       errors.push("time budget exhausted before trying remaining providers");
       break;
+    }
+    // RPM SPILLOVER, BEFORE THE 429 (owner report 4, scale #5). A provider whose
+    // minute is spent is skipped so the fleet spreads across rungs instead of
+    // all hammering the first one and paying a wasted round trip on its refusal.
+    // The LAST rung is never skipped - better a possible 429 than no attempt at
+    // all when every bucket is dry.
+    if (idx < list.length - 1 && !tryConsume(cfg.name)) {
+      errors.push(`${cfg.name}: skipped (rpm budget spent this minute)`);
+      continue;
     }
     try {
       // Never let one call overshoot the caller's total budget.
