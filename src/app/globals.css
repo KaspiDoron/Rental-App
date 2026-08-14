@@ -17,10 +17,22 @@
      per-CHARACTER, so Latin stays pixel-identical on Nunito/Baloo while
      Hebrew glyphs (which neither carries) resolve to Rubik / Secular One
      instead of an arbitrary system face (owner report 3, item 10). */
-  --font-body: var(--wd-font-body), "Nunito", var(--wd-font-body-he), "Rubik", ui-rounded,
-    "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: var(--wd-font-body), "Nunito", var(--wd-font-body-he), "Rubik",
+    var(--wd-font-body-ar), "IBM Plex Sans Arabic", var(--wd-font-body-hi), "Mukta",
+    var(--wd-font-body-th), "Sarabun", "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC",
+    "Malgun Gothic", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
   --font-display: var(--wd-font-display), "Baloo 2", var(--wd-font-display-he), "Secular One",
-    var(--font-body);
+    var(--wd-font-display-ar), "Baloo Bhaijaan 2", var(--wd-font-display-cy), "Comfortaa",
+    var(--wd-font-display-th), "Mitr", "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC",
+    "Malgun Gothic", var(--font-body);
+  /* The third premium role (owner report 4, item 2): prices, savings numbers,
+     counters, plan cards. Same per-character ladder discipline - the Latin
+     accent face leads, each script's accent face catches its own glyphs, and
+     anything else falls through to the body ladder. */
+  --font-accent: var(--wd-font-accent), "Space Grotesk", var(--wd-font-accent-he), "Heebo",
+    var(--wd-font-accent-ar), "Cairo", var(--wd-font-accent-hi), "Hind",
+    var(--wd-font-accent-th), "IBM Plex Sans Thai", var(--font-body);
 
   --bg: #f4f6f9;
   --card: #ffffff;
@@ -920,6 +932,16 @@ input, textarea, select, button {
 [data-theme="dark"] .leaflet-control-attribution a { color: #aab2bf !important; }
 
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* The accent face for the numbers that sell the product: offer prices, savings
+   tickers, plan cards, live counters. Tabular by construction - an animated
+   price must not wobble as digits change - and slightly tightened, because
+   Space Grotesk runs wide at display sizes. */
+.font-accent {
+  font-family: var(--font-accent);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
 
 /* ---- Flashy feature badges (Ultra, authentic bargain, translate intro) --- */
 @keyframes shine {

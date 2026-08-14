@@ -242,11 +242,50 @@ describe("RTL structural fixes hold (3.2)", () => {
     const layout = read("src/app/layout.tsx");
     expect(layout).toMatch(/Rubik\(\{/);
     expect(layout).toMatch(/Secular_One\(\{/);
-    expect(layout).toMatch(/subsets: \["hebrew", "latin"\]/);
+    expect(layout).toMatch(/subsets: \["hebrew", "latin"/);
     const css = read("src/app/globals.css");
     expect(css).toMatch(/var\(--wd-font-body\), "Nunito", var\(--wd-font-body-he\)/);
     expect(css).toMatch(/var\(--wd-font-display\), "Baloo 2", var\(--wd-font-display-he\)/);
     expect(css).toMatch(/font-synthesis-weight: none/);
+  });
+
+  it("every translated script has its 3-face trio, Latin-first (owner report 4)", () => {
+    const layout = read("src/app/layout.tsx");
+    const css = read("src/app/globals.css");
+    // The accent role exists app-wide and is tabular by construction - an
+    // animated price must not wobble as its digits change.
+    expect(layout).toMatch(/Space_Grotesk\(\{/);
+    expect(css).toMatch(/--font-accent: var\(--wd-font-accent\), "Space Grotesk"/);
+    expect(css).toMatch(/\.font-accent \{\n  font-family: var\(--font-accent\);\n  font-variant-numeric: tabular-nums;/);
+    // Per-script faces, each AFTER the Latin families in its ladder so Latin
+    // stays pixel-identical (per-character fallback is the whole mechanism).
+    for (const [face, ladder] of [
+      ['"IBM Plex Sans Arabic"', "--font-body"],
+      ['"Mukta"', "--font-body"],
+      ['"Sarabun"', "--font-body"],
+      ['"Baloo Bhaijaan 2"', "--font-display"],
+      ['"Comfortaa"', "--font-display"],
+      ['"Mitr"', "--font-display"],
+      ['"Heebo"', "--font-accent"],
+      ['"Cairo"', "--font-accent"],
+      ['"Hind"', "--font-accent"],
+      ['"IBM Plex Sans Thai"', "--font-accent"],
+    ] as const) {
+      const start = css.indexOf(`${ladder}:`);
+      const slice = css.slice(start, css.indexOf(";", start));
+      expect(slice, `${face} must ride the ${ladder} ladder`).toContain(face);
+      expect(
+        slice.indexOf(face),
+        `${face} must come AFTER the Latin lead of ${ladder}`
+      ).toBeGreaterThan(slice.indexOf(","));
+    }
+    // Subsets that were silently falling to system faces: Polish/Turkish
+    // (latin-ext), Vietnamese, Cyrillic prose, Hindi display.
+    expect(layout).toMatch(/"latin", "latin-ext", "cyrillic", "cyrillic-ext", "vietnamese"/);
+    expect(layout).toMatch(/"latin", "latin-ext", "vietnamese", "devanagari"/);
+    // CJK deliberately ships ZERO webfont bytes - native system stacks only.
+    expect(css.match(/"PingFang SC", "Hiragino Sans", "Noto Sans CJK SC"/g)?.length).toBe(2);
+    expect(layout).not.toMatch(/Noto_Sans_SC|Noto_Sans_JP|Noto_Sans_KR/);
   });
 });
 

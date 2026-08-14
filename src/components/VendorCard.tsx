@@ -669,7 +669,7 @@ function VendorCardInner({
                     drift={badge.next ? t(badge.next) : undefined}
                   />
                 </div>
-                <div className="text-2xl font-extrabold text-strong">
+                <div className="font-accent text-2xl font-extrabold text-strong">
                   {curSymbol}
                   <AnimatedNumber value={offer.pricePerDay} />
                   <span className="text-sm font-bold text-faint">/{t("day")}</span>

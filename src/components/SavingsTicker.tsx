@@ -48,7 +48,7 @@ export function AnimatedNumber({
   }, [value, duration]);
 
   return (
-    <span className={`tabular ${pop ? "animate-count-pop inline-block" : ""} ${className}`}>
+    <span className={`font-accent ${pop ? "animate-count-pop inline-block" : ""} ${className}`}>
       {prefix}
       {Math.round(display).toLocaleString()}
       {suffix}

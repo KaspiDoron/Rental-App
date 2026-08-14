@@ -99,16 +99,24 @@ describe("the brand faces are ours, not a third party's", () => {
   });
 
   it("the fallback face is metric-matched, so the swap shifts nothing", () => {
-    // Four faces now: Nunito/Baloo (Latin) + Rubik/Secular One (Hebrew, 3.2).
-    expect(layout.match(/adjustFontFallback: true/g)?.length).toBe(4);
-    expect(layout.match(/display: "swap"/g)?.length).toBe(4);
+    // Fifteen faces now (owner report 4, item 2): the Latin pair + accent,
+    // and per-script trios for Hebrew, Arabic, Devanagari, Thai + the
+    // Cyrillic display. EVERY one must be metric-matched and swap-safe -
+    // counting them keeps a new face from shipping without either flag.
+    const faces = layout.match(/= (?:Baloo_2|Baloo_Bhaijaan_2|Cairo|Comfortaa|Heebo|Hind|IBM_Plex_Sans_Arabic|IBM_Plex_Sans_Thai|Mitr|Mukta|Nunito|Rubik|Sarabun|Secular_One|Space_Grotesk)\(\{/g);
+    expect(faces?.length).toBe(15);
+    expect(layout.match(/adjustFontFallback: true/g)?.length).toBe(15);
+    expect(layout.match(/display: "swap"/g)?.length).toBe(15);
   });
 
   it("the variables reach the stylesheet that actually uses them", () => {
-    expect(layout).toMatch(
-      /className=\{`\$\{nunito\.variable\} \$\{baloo\.variable\} \$\{rubik\.variable\} \$\{secular\.variable\}`\}/
-    );
+    // The 15 variables ride one FONT_VARS join onto <html>; the ladders read
+    // them in globals.css.
+    expect(layout).toMatch(/const FONT_VARS = \[/);
+    expect(layout).toMatch(/className=\{FONT_VARS\}/);
+    expect(layout.match(/\.variable,/g)?.length).toBe(15);
     expect(css).toMatch(/--font-body: var\(--wd-font-body\)/);
     expect(css).toMatch(/--font-display: var\(--wd-font-display\)/);
+    expect(css).toMatch(/--font-accent: var\(--wd-font-accent\)/);
   });
 });
