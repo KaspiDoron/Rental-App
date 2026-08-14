@@ -56,15 +56,21 @@ describe("REGRESSION: the geometry - no spin, no blur, ambient's own language", 
     expect(stripComments(css)).not.toMatch(/@keyframes aurora-drift/);
   });
 
-  it("the rainbow sweep is gone - the glow speaks the ambient's radial language", () => {
-    // Owner report 4, item 9: the conic 360-degree rainbow read as amateur
-    // next to the page-level lobes. One geometry now: stacked radial lobes,
-    // box-scaled, breathing - never rotating, never a colour wheel.
+  it("the rainbow sweep is gone - the glow is a SINGLE hue in oklch lightness", () => {
+    // Loading v3: v2 replaced the conic rainbow with FIVE radial hues, but at
+    // box scale five hues still read as the colour wheel the owner named "the
+    // worst thing that I ever seen". The bloom is now ONE brand hue walked
+    // across oklch lightness - never rotating, never a colour wheel.
     expect(stripComments(css)).not.toMatch(/@keyframes wd-hue-sweep/);
     expect(stripComments(css)).not.toMatch(/@property --wd-hue-angle/);
     const before = rules.slice(rules.indexOf(".aurora::before"), rules.indexOf(".aurora::after"));
     expect(before).not.toMatch(/conic-gradient/);
-    expect((before.match(/radial-gradient\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    // Radial lobes, yes - but the ONLY brand hue in them is --wd-hue-1. A
+    // second hue (2/3/4/5) appearing would be the wheel coming back.
+    expect(before).toMatch(/radial-gradient\(/);
+    expect(before).toMatch(/var\(--wd-hue-1\)/);
+    expect(before, "the loader bloom must not stack a second hue").not.toMatch(/--wd-hue-[2345]/);
+    expect(before).toMatch(/color-mix\(in oklch/);
     expect(before).toMatch(/animation: aurora-breathe/);
   });
 
@@ -82,16 +88,19 @@ describe("REGRESSION: the geometry - no spin, no blur, ambient's own language", 
 });
 
 describe("REGRESSION: the palette is the brand's, and it does not go grey", () => {
-  it("no gradient stop is a hardcoded colour any more", () => {
+  it("no gradient stop is a hardcoded rgb colour - every stop resolves from the one hue", () => {
     const block = css.slice(css.indexOf(".aurora::before"), css.indexOf("@keyframes aurora-breathe"));
+    const clean = stripComments(block);
     expect(
-      stripComments(block),
+      clean,
       "a stop that cannot follow the theme is a stop that does not belong to the brand"
     ).not.toMatch(/rgba?\(/);
-    // Every stop resolves from a variable - all five hues in the bloom, four
-    // more on the rim.
-    const stops = stripComments(block).match(/var\(--wd-hue-\d\)/g) ?? [];
-    expect(stops.length).toBeGreaterThanOrEqual(9);
+    // Single hue now: every brand-colour stop in the bloom AND the rim is
+    // --wd-hue-1 (mixed toward #fff/#000 for the lightness ramp). No other hue
+    // appears - that is the whole point of ditching the wheel.
+    const stops = clean.match(/var\(--wd-hue-\d\)/g) ?? [];
+    expect(stops.length).toBeGreaterThanOrEqual(4);
+    expect(stops.every((s) => s === "var(--wd-hue-1)"), "the loader glow is one hue").toBe(true);
   });
 
   it("the hue set is seeded from real brand tokens", () => {
@@ -133,49 +142,59 @@ describe("REGRESSION: opacity belongs to the theme again", () => {
   });
 });
 
-describe("the heartbeat is a heart, not a throb", () => {
-  it("two UNEQUAL contractions and a long rest", () => {
-    const kf = css.slice(css.indexOf("@keyframes wd-heartbeat"));
-    // Bound on the CLOSING brace of the at-rule (column 0), not on the first
-    // `}` - every keyframe step ends with one, so the naive slice captured
-    // only "0% { ... }" and every later step read as absent.
-    const body = kf.slice(0, kf.indexOf("\n}") + 2);
-    const lub = Number(/8%\s*\{ transform: scale\(([\d.]+)\)/.exec(body)?.[1]);
-    const dub = Number(/24%\s*\{ transform: scale\(([\d.]+)\)/.exec(body)?.[1]);
-    expect(lub).toBeGreaterThan(1);
-    expect(dub).toBeGreaterThan(1);
-    // A symmetric pulse reads as a machine, and a machine is what the traveller
-    // is already worried about.
-    expect(dub, "the second contraction must be weaker - that is what makes it a lub-dub").toBeLessThan(lub);
-    // Diastole: nothing at all happens for most of the cycle.
-    expect(body).toMatch(/32%\s*\{ transform: scale\(1\); \}/);
-    expect(body).toMatch(/100% \{ transform: scale\(1\); \}/);
+describe("the loader mark holds still - no scale-pulse, no draw-on", () => {
+  it("the heartbeat and the draw-on are GONE from the stylesheet", () => {
+    // Loading v3 inverts the v2 pins. A scaling logo is the single most dated
+    // loading element and precisely what prefers-reduced-motion exists to
+    // remove; the owner named it, and the outline sketch it rode on, as "the
+    // worst thing that I ever seen". Neither may come back.
+    const clean = stripComments(css);
+    expect(clean).not.toMatch(/@keyframes wd-heartbeat/);
+    expect(clean).not.toMatch(/\.wd-heartbeat/);
+    expect(clean).not.toMatch(/@keyframes wd-draw-on/);
+    expect(clean).not.toMatch(/\.wd-draw/);
   });
 
-  it("~52 bpm - a resting rate, not an anxious one", () => {
-    const dur = Number(/animation: wd-heartbeat (\d+)ms/.exec(css)?.[1]);
-    expect(dur).toBeGreaterThanOrEqual(1000);
-    expect(dur).toBeLessThanOrEqual(1400);
-  });
-
-  it("the loader is the REAL brand mark - OUTLINE variant - on a blurred backdrop", () => {
+  it("the mark the loader renders does not animate its own transform", () => {
+    // BrandPulse renders the REAL solid BrandMark, motionless - no wd-heartbeat,
+    // no outline variant, no wrapper glow. The old pins asserted the PRESENCE of
+    // a scale-pulse; these assert its ABSENCE.
     expect(pulse).toMatch(/import \{ BrandMark \}/);
-    // Owner report 4, item 9: the loader wears the monoline outline sketch
-    // (currentColor + CSS draw-on); the filled mark stays the default
-    // everywhere the brand speaks, so nav/marketing are untouched.
-    expect(pulse).toMatch(/variant="outline" className="wd-heartbeat/);
+    expect(pulse).toMatch(/<BrandMark size=\{size\}/);
+    expect(pulse).not.toMatch(/wd-heartbeat/);
+    expect(pulse).not.toMatch(/variant="outline"/);
+    expect(pulse).not.toMatch(/\baurora\b/);
+    // The solid mark is the ONLY variant now - the hated outline was deleted
+    // outright, taking its currentColor strokes and wd-draw class with it.
     const mark = stripComments(readRaw("src/components/BrandMark.tsx"));
-    expect(mark).toMatch(/variant = "solid"/);
-    expect(mark).toMatch(/stroke="currentColor"/);
-    expect(mark).toMatch(/className="wd-draw"/);
-    expect(css).toMatch(/@keyframes wd-draw-on/);
+    expect(mark).not.toMatch(/variant/);
+    expect(mark).not.toMatch(/wd-draw/);
+    expect(mark).not.toMatch(/stroke="currentColor"/);
+  });
+
+  it("the loader's WHOLE motion is the single-hue horizon line", () => {
+    // A thin bar under the still mark, one bright specular segment gliding
+    // across - one hue in oklch lightness, no colour wheel, no rotation.
+    expect(pulse).toMatch(/wd-horizon/);
+    expect(css).toMatch(/@keyframes wd-horizon-travel/);
+    const horizon = css.slice(css.indexOf(".wd-horizon {"), css.indexOf(".wd-loader-veil"));
+    expect(horizon).toMatch(/var\(--wd-hue-1\)/);
+    expect(horizon, "the horizon is one hue, not a wheel").not.toMatch(/--wd-hue-[2345]/);
+    expect(horizon).toMatch(/color-mix\(in oklch/);
+    expect(horizon).toMatch(/animation: wd-horizon-travel/);
+    expect(horizon, "the glint translates - nothing rotates").not.toMatch(/rotate/);
+  });
+
+  it("~1.6s ease-in-out - a calm glide, not an anxious sweep", () => {
+    const dur = /animation: wd-horizon-travel ([\d.]+)s ease-in-out/.exec(css)?.[1];
+    expect(Number(dur)).toBeGreaterThanOrEqual(1.2);
+    expect(Number(dur)).toBeLessThanOrEqual(2);
+  });
+
+  it("the loader still rides the (now lightened) veil", () => {
     expect(css).toMatch(/\.wd-loader-veil \{/);
     expect(css).toMatch(/backdrop-filter: blur\(/);
     expect(pulse).toMatch(/wd-loader-veil/);
-  });
-
-  it("the bloom is on a ROUND wrapper, not traced around a scooter", () => {
-    expect(pulse).toMatch(/aurora relative inline-flex[^"]*rounded-full/);
   });
 
   it("no animation library was added for it", () => {
@@ -194,7 +213,7 @@ describe("the heartbeat is a heart, not a throb", () => {
 });
 
 describe("COVERAGE: the complaint was that it is not everywhere", () => {
-  it("the search screen shows the heartbeat - it used to show nothing", () => {
+  it("the search screen shows the still loader - it used to show nothing", () => {
     const page = stripComments(readRaw("src/app/page.tsx"));
     expect(page).toMatch(/<BrandPulse size=\{62\}/);
     expect(page).toMatch(/phase === "profiling"/);
@@ -229,11 +248,15 @@ describe("COVERAGE: the complaint was that it is not everywhere", () => {
     ).toEqual([]);
   });
 
-  it("inline dots join by COLOUR, not by carrying a full glow", () => {
+  it("inline dots join by ONE hue in a lightness ramp, not three distinct hues", () => {
     // ~60 sites. Sixty conic gradients under an 18px blur is a repaint budget,
-    // not a design.
+    // not a design - they join by colour. But v2 gave each dot a DIFFERENT brand
+    // hue (--wd-hue-1/2/3), the same rainbow tell as the old wheel. Loading v3:
+    // one hue (--wd-hue-1) walked across three oklch lightness steps.
     const dots = stripComments(readRaw("src/components/LoadingDots.tsx"));
-    expect(dots).toMatch(/var\(--wd-hue-\$\{i \+ 1\}\)/);
+    expect(dots).toMatch(/--wd-hue-1/);
+    expect(dots, "one hue, not a wheel").not.toMatch(/--wd-hue-[2345]/);
+    expect(dots).toMatch(/color-mix\(in oklch/);
     expect(dots).not.toMatch(/aurora/);
   });
 });
@@ -301,7 +324,7 @@ describe("the glow still has exactly one name and one definition", () => {
 });
 
 describe("reduced motion keeps the colour and drops every movement", () => {
-  it("including the heartbeat - a pulsing logo is exactly what that setting is for", () => {
+  it("including the horizon glint - a moving light is exactly what that setting is for", () => {
     // There is more than one prefers-reduced-motion block in this stylesheet
     // (the topbar has its own). Search from the aurora definition forward, or
     // this asserts against a block that was never about the glow.
@@ -311,6 +334,21 @@ describe("reduced motion keeps the colour and drops every movement", () => {
     const body = reduced.slice(0, reduced.indexOf("\n}") + 2);
     expect(body).toMatch(/\.aurora::before,\s*\n\s*\.aurora::after \{ animation: none; \}/);
     expect(body).toMatch(/opacity: 0\.4/);
-    expect(body).toMatch(/\.wd-heartbeat \{ animation: none; \}/);
+    // The horizon holds a still, single-hue bar instead of a parked glint -
+    // keeps the colour, drops the travel (the mark was already motionless).
+    expect(body).toMatch(/\.wd-horizon::after \{/);
+    expect(body).toMatch(/animation: none/);
+  });
+});
+
+describe("the skeleton shimmer sweep is alive again", () => {
+  it("@keyframes shimmer is declared in the stylesheet, not only in the tailwind config", () => {
+    // The keyframe lived ONLY in tailwind.config.ts, where Tailwind tree-shook
+    // it away (no `animate-shimmer` utility was ever emitted), so
+    // `.skeleton::after`'s `animation: shimmer` pointed at a keyframe that never
+    // shipped - every skeleton was a flat opacity breath. It is declared in the
+    // CSS now, next to its consumer, sweeping the -100% start to +100%.
+    expect(css).toMatch(/@keyframes shimmer \{\s*\n?\s*to \{ transform: translateX\(100%\); \}/);
+    expect(css).toMatch(/\.skeleton::after \{[\s\S]*?animation: shimmer/);
   });
 });

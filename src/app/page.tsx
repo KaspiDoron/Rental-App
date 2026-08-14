@@ -117,6 +117,7 @@ import { LanguageButton } from "@/components/LanguageButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useI18n } from "@/lib/i18n";
 import { moneyLocal, currencySymbol } from "@/lib/currency";
+import { depositSummary } from "@/lib/deposit";
 import { cheapestPresentable, offerConfidence } from "@/lib/offer-presentation";
 import { digitsOnly } from "@/lib/phone";
 import { addDays, deviceTimeZone } from "@/lib/rental-window";
@@ -1160,7 +1161,18 @@ export default function Home() {
         d.vendorStates && typeof d.vendorStates === "object" ? d.vendorStates : {};
       const lastByVendor: Record<
         string,
-        { lastInboundText?: string; lastInboundAt?: string }
+        {
+          lastInboundText?: string;
+          lastInboundEnglish?: string;
+          lastInboundAt?: string;
+          // The agent's newest REAL sent text + its English gloss (W1.5).
+          // lastOutboundText was computed server-side from day one and the
+          // client type silently dropped it - the panel's "sent" line froze
+          // on the first outreach response forever.
+          lastOutboundText?: string;
+          lastOutboundEnglish?: string;
+          lastOutboundAt?: string;
+        }
       > = d.lastByVendor && typeof d.lastByVendor === "object" ? d.lastByVendor : {};
       // Forward-only stage ranking - the DB state can only ADVANCE a card, never
       // rewind it, and never overrides a terminal decline / no-contact.
@@ -1380,7 +1392,23 @@ export default function Home() {
             base = {
               ...base,
               lastInboundText: last.lastInboundText,
+              lastInboundEnglish: last.lastInboundEnglish,
               lastInboundAt: last.lastInboundAt,
+            };
+          }
+          // THE AGENT'S OWN LAST WORDS, kept fresh. sentText/sentGloss were
+          // stamped once from the outreach response and never again, so the
+          // "Awaiting reply" panel showed the opener forever while the agent
+          // kept talking. The activity rollup carries the newest real sent
+          // body + its gloss - consume it (W1.5).
+          if (last?.lastOutboundAt && last.lastOutboundAt !== base.lastOutboundAt) {
+            base = {
+              ...base,
+              sentText: last.lastOutboundText ?? base.sentText,
+              // The gloss travels WITH its text - a newer English send must
+              // clear the old gloss, never wear it (a mismatched pair lies).
+              sentGloss: last.lastOutboundText ? last.lastOutboundEnglish : base.sentGloss,
+              lastOutboundAt: last.lastOutboundAt,
             };
           }
           // Seed the offer from the activity feed so OFFERS IN advances fast
@@ -1803,34 +1831,63 @@ export default function Home() {
         // every row would make the OLDEST functional update win (React applies
         // them in order), silently reverting a fresher negotiated price to an
         // older, higher one and inflating the round counter.
+        //
+        // AND A SOURCED PRICE IS A PRICE. `!r.found` used to skip the row
+        // entirely, which dropped everything ON it - the shop's option menu,
+        // the price read off its photographed board, the thread's standing
+        // price - and the card sat on "No price yet" while its own excerpt
+        // showed one. A row whose server-side effectivePrice carries a number
+        // is admitted; a CONFIRMED row always outranks a sourced one for the
+        // same shop, whatever their timestamps.
         const newestByVendor = new Map<string, (typeof d.replies)[number]>();
         for (const r of d.replies ?? []) {
-          if (!r.found || !r.pricePerDay) continue;
+          const confirmed = Boolean(r.found && r.pricePerDay);
+          if (!confirmed && !r.effectivePrice?.pricePerDay) continue;
           if (searchEpoch && r.createdAt && Date.parse(r.createdAt) < epochOnServerClock())
             continue;
           const cur = newestByVendor.get(r.vendorId);
-          if (!cur || Date.parse(r.createdAt) > Date.parse(cur.createdAt)) {
+          const curConfirmed = Boolean(cur && cur.found && cur.pricePerDay);
+          if (
+            !cur ||
+            (confirmed && !curConfirmed) ||
+            (confirmed === curConfirmed && Date.parse(r.createdAt) > Date.parse(cur.createdAt))
+          ) {
             newestByVendor.set(r.vendorId, r);
           }
         }
         for (const r of newestByVendor.values()) {
           if (appliedReplies.current.has(r.id)) continue;
           appliedReplies.current.add(r.id);
+          // Confirmed rows carry the price on themselves; sourced rows carry it
+          // in effectivePrice with a provenance tag the card will show.
+          const confirmedRow = Boolean(r.found && r.pricePerDay);
+          const price: number = confirmedRow ? r.pricePerDay : r.effectivePrice.pricePerDay;
+          const priceSource = confirmedRow ? undefined : r.effectivePrice.source;
           setVendors((vs) =>
-            vs.map((v) =>
-              v.id === r.vendorId
-                ? {
+            vs.map((v) => {
+              if (v.id !== r.vendorId) return v;
+              // A sourced price must never REPLACE a confirmed offer - it only
+              // fills the silence before one exists (or refreshes an earlier
+              // sourced one).
+              if (!confirmedRow && v.offer && !v.offer.priceSource) return v;
+              return {
                     ...v,
                     stage: declinedIds.has(r.vendorId)
                       ? ("declined" as TrackerStage)
                       : ("offer-received" as TrackerStage),
                     offer: {
-                      pricePerDay: r.pricePerDay,
-                      listPricePerDay: v.offer?.listPricePerDay ?? r.pricePerDay,
+                      priceSource,
+                      priceSourceVehicle: confirmedRow
+                        ? undefined
+                        : r.effectivePrice.vehicle ?? undefined,
+                      pricePerDay: price,
+                      listPricePerDay: v.offer?.listPricePerDay ?? price,
                       // The shop's OWN currency from the reply (server-derived);
                       // never a silent USD default.
-                      currency: r.currency ?? v.offer?.currency ?? "USD",
-                      totalPrice: Math.round(r.pricePerDay * rfq.durationDays),
+                      currency: confirmedRow
+                        ? r.currency ?? v.offer?.currency ?? "USD"
+                        : r.effectivePrice.currency ?? r.currency ?? v.offer?.currency ?? "USD",
+                      totalPrice: Math.round(price * rfq.durationDays),
                       // Now wired from the shop's confirmed reply (was always
                       // false, so an "insurance included" quote never showed).
                       includesInsurance:
@@ -1838,12 +1895,20 @@ export default function Home() {
                       includesDelivery: r.delivers === true || v.offer?.includesDelivery === true,
                       deliveryFee: r.deliveryFee ?? v.offer?.deliveryFee,
                       message: r.replyText?.slice(0, 200) ?? "",
-                      round: v.offer ? v.offer.round + 1 : 0,
-                      verified: Boolean(r.verified),
+                      // English gloss of a local-language reply (W1.5) - every
+                      // surface that quotes the shop can show the translation.
+                      messageEnglish: r.english?.slice(0, 200) ?? undefined,
+                      // A sourced price is not a negotiation round - only a
+                      // confirmed reply advances the counter.
+                      round: v.offer ? (confirmedRow ? v.offer.round + 1 : v.offer.round) : 0,
+                      verified: confirmedRow && Boolean(r.verified),
                       // false = the shop quoted a DIFFERENT vehicle; the card
                       // flags it and it is excluded from the best-price picker.
-                      // undefined (legacy) is treated as matching.
-                      matchesSpec: r.matchesSpec ?? true,
+                      // undefined (legacy) is treated as matching. A SOURCED
+                      // price must not inherit the found:false row's verdict -
+                      // its vehicle is whatever tier the source named, which is
+                      // exactly what the provenance chip discloses.
+                      matchesSpec: confirmedRow ? r.matchesSpec ?? true : true,
                       // The vehicle-identity gate. Only "confirmed" may ever be
                       // presented as a deal (see offer-presentation).
                       vehicleStatus: r.vehicleStatus ?? undefined,
@@ -1872,9 +1937,8 @@ export default function Home() {
                           ? undefined
                           : r.askedLocationQuote ?? v.offer?.askedLocationQuote,
                     },
-                  }
-                : v
-            )
+              };
+            })
           );
         }
       } catch {
@@ -3509,9 +3573,35 @@ export default function Home() {
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-bold text-faint">
                           {typeof v.rating === "number" && v.rating > 0 && <span>⭐ {v.rating.toFixed(1)}</span>}
+                          {/* EVERY deposit alternative, never only the first.
+                              This chip rendered the legacy enum alone -
+                              "passport or money4000" showed as "Passport
+                              deposit" while the 4000 sat parsed in
+                              depositAmount. One shared summary now
+                              (lib/deposit.depositSummary), same as the card. */}
                           {(v.offer?.deposit || v.offer?.depositType) && (
                             <span>
-                              🔐 {v.offer.depositType === "passport" ? t("Passport deposit") : v.offer.deposit || t("Deposit asked")}
+                              🔐 {depositSummary(
+                                {
+                                  deposit: v.offer.deposit,
+                                  depositType: v.offer.depositType,
+                                  depositAmount: v.offer.depositAmount,
+                                  depositCurrency: v.offer.depositCurrency,
+                                  currency: v.offer.currency,
+                                },
+                                moneyLocal
+                              ) ?? t("Deposit asked")}
+                            </span>
+                          )}
+                          {/* WHERE a sourced price came from - menu photo,
+                              option menu, or the thread - until confirmed. */}
+                          {v.offer?.priceSource && (
+                            <span className="text-brandblue">
+                              {v.offer.priceSource === "menu-photo"
+                                ? `📷 ${t("from menu photo")}`
+                                : v.offer.priceSource === "menu"
+                                  ? `📋 ${t("from price menu")}`
+                                  : `💬 ${t("from the chat")}`}
                             </span>
                           )}
                           {v.offer?.includesDelivery && <span>🛵 {t("Delivers")}</span>}
@@ -3519,8 +3609,17 @@ export default function Home() {
                           {v.lastEventAt && <span>🕐 {formatClock(v.lastEventAt)}</span>}
                         </div>
                         {v.offer?.message && (
-                          <div className="mt-1 truncate rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
-                            💬 {v.offer.message}
+                          <div className="mt-1 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            <div className="truncate">💬 {v.offer.message}</div>
+                            {/* The English gloss of a local-language reply -
+                                the raw words stay primary, the translation is
+                                the quiet second line (W1.5, everywhere). */}
+                            {v.offer.messageEnglish &&
+                              v.offer.messageEnglish.trim() !== v.offer.message.trim() && (
+                                <div className="mt-0.5 truncate italic text-faint">
+                                  🌐 {v.offer.messageEnglish}
+                                </div>
+                              )}
                           </div>
                         )}
                       </div>
@@ -3553,8 +3652,16 @@ export default function Home() {
                           </span>
                         </div>
                         {v.lastInboundText && (
-                          <div className="mt-1 line-clamp-2 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
-                            💬 {v.lastInboundText}
+                          <div className="mt-1 rounded-lg bg-card2 px-2 py-1 text-[10px] text-soft">
+                            <div className="line-clamp-2">💬 {v.lastInboundText}</div>
+                            {/* Same doctrine as the offers section: real words
+                                first, English gloss as the quiet second line. */}
+                            {v.lastInboundEnglish &&
+                              v.lastInboundEnglish.trim() !== v.lastInboundText.trim() && (
+                                <div className="mt-0.5 line-clamp-2 italic text-faint">
+                                  🌐 {v.lastInboundEnglish}
+                                </div>
+                              )}
                           </div>
                         )}
                         {/* WHAT IS ACTUALLY HAPPENING, not one sentence for
@@ -3631,9 +3738,16 @@ export default function Home() {
                             {v.lastEventAt ? `${t("sent")} ${formatClock(v.lastEventAt)}` : t("awaiting reply")}
                           </span>
                         </div>
-                        {v.sentGloss && (
+                        {(v.sentText || v.sentGloss) && (
                           <div className="mt-0.5 rounded-lg bg-card px-2 py-1 text-[10px] text-soft">
-                            🌐 {v.sentGloss}
+                            {/* What was ACTUALLY sent, then its translation -
+                                the gloss alone hid the real wire text (W1.5). */}
+                            {v.sentText && <div className="line-clamp-2">📤 {v.sentText}</div>}
+                            {v.sentGloss && v.sentGloss.trim() !== v.sentText?.trim() && (
+                              <div className="mt-0.5 line-clamp-2 italic text-faint">
+                                🌐 {v.sentGloss}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -4142,6 +4256,7 @@ export default function Home() {
           region={origin?.label ?? ""}
           round={bargainVendor.offer ? bargainVendor.offer.round + 1 : 0}
           plan={session?.plan}
+          sessionLocalLang={localLangActive}
           currentPricePerDay={bargainVendor.offer?.pricePerDay}
           rivalPricePerDay={
             cheapest && cheapest.id !== bargainVendor.id

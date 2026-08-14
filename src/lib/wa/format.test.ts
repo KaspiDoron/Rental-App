@@ -67,6 +67,10 @@ describe("every surface that shows a shop's words uses it", () => {
   it("the card's thread peek does too, and its one-line preview is plain", () => {
     const p = readCode("src/components/ThreadPeek.tsx");
     expect(p).toMatch(/<WaText text=\{msg\.text\}/);
-    expect(p).toMatch(/summarize\(waPlain\(msg\.text\)\)/);
+    // The preview is gloss-first since W1.5 (English when a gloss exists, the
+    // raw local text otherwise) - either way it goes through waPlain, which is
+    // this test's invariant: the collapsed one-liner never shows raw asterisks.
+    expect(p).toMatch(/summarize\(waPlain\(preview\)\)/);
+    expect(p).toMatch(/\? gloss : msg\.text/);
   });
 });

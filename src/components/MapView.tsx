@@ -157,6 +157,10 @@ function ShopCard({
   onOpen?: () => void;
 }) {
   const { t } = useI18n();
+  // The shop's last line + its English gloss (W1.5: the gloss is visible
+  // everywhere). Data the card already holds - one small line, no new fetch.
+  const lastLine = v.lastInboundText || v.offer?.message || "";
+  const lastLineEnglish = v.lastInboundText ? v.lastInboundEnglish : v.offer?.messageEnglish;
   return (
     <div
       onClick={onSelect}
@@ -210,6 +214,14 @@ function ShopCard({
           <div className="mt-0.5 truncate text-[10px] font-bold text-faint">🕒 {v.todayHours}</div>
         )}
         {v.address && <div className="truncate text-[10px] text-faint">{v.address}</div>}
+        {lastLine && (
+          <div className="mt-1 rounded-lg bg-card2 px-1.5 py-1 text-[10px] text-soft">
+            <div className="truncate">💬 {lastLine}</div>
+            {lastLineEnglish && lastLineEnglish.trim() !== lastLine.trim() && (
+              <div className="truncate italic text-faint">🌐 {lastLineEnglish}</div>
+            )}
+          </div>
+        )}
         <div className="mt-1">
           {(v.orders ?? 0) > 0 ? (
             <span className="rounded-md bg-savings-soft px-1.5 py-0.5 text-[9px] font-extrabold text-savings">

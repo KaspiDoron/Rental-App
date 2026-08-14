@@ -143,27 +143,32 @@ describe("there is an ambient layer at the page level", () => {
     expect(glow).toMatch(/wd-ambient-on/);
   });
 
-  it("top-heavy and fading down, like the owner asked - now reaching further", () => {
+  it("top-heavy and fading down, like the owner asked - INTENSIFIED in v3", () => {
     const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
     // The main lobes still hang ABOVE the viewport...
     expect(amb).toMatch(/at 22% -6%/);
     expect(amb).toMatch(/at 78% 4%/);
-    // ...the new side lobes sit LOW so the wash wraps the whole screen...
+    // ...the side lobes still sit LOW so the wash wraps the whole screen...
     expect(amb).toMatch(/at 12% 64%/);
     expect(amb).toMatch(/at 90% 78%/);
-    // ...and the mask carries real weight to ~78% before fading out entirely
-    // (owner report 4: "take more of the screen space vertically") - but the
-    // gradient still ENDS transparent, so the bottom never shouts.
-    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*rgba\(0, 0, 0, 0\.28\) 78%, transparent 100%\)/);
+    // ...Loading v3 makes it "much more intense": the radial stops now reach to
+    // 88% (fuller lobes, no early fade to transparent)...
+    expect(amb, "the lobes must reach further before fading").not.toMatch(/transparent 7[02]%/);
+    expect((amb.match(/transparent 88%/g) ?? []).length).toBe(5);
+    // ...and the mask holds real weight (0.45) all the way to 88% down before
+    // fading out - deeper and lower than v2's 0.28/78% - but it still ENDS
+    // transparent at 100%, so the bottom edge never shouts.
+    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*rgba\(0, 0, 0, 0\.45\) 88%, transparent 100%\)/);
   });
 
-  it("brightness is theme work: one raise level per canvas", () => {
-    // 0.45 over near-white is a wash; the same over #17191d is a glare. The
-    // dark values are RULES, not tokens, so the theme-mirror test stays out
-    // of it - but both dark selectors must agree with each other.
-    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/opacity: 0\.45/);
-    expect(css).toMatch(/\[data-theme="dark"\] \.wd-ambient-on \{\s*\n\s*opacity: 0\.36;/);
-    expect(css).toMatch(/:root:not\(\[data-theme\]\) \.wd-ambient-on \{\s*\n\s*opacity: 0\.36;/);
+  it("brightness is theme work, INTENSIFIED: one raise level per canvas", () => {
+    // Owner v3: "much more intense". 0.45 -> 0.6 over near-white; the same over
+    // #17191d would glare, so dark rides 0.36 -> 0.5 (still lifted). The dark
+    // values are RULES, not tokens, so the theme-mirror test stays out of it -
+    // but both dark selectors must agree with each other.
+    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/opacity: 0\.6/);
+    expect(css).toMatch(/\[data-theme="dark"\] \.wd-ambient-on \{\s*\n\s*opacity: 0\.5;/);
+    expect(css).toMatch(/:root:not\(\[data-theme\]\) \.wd-ambient-on \{\s*\n\s*opacity: 0\.5;/);
   });
 
   it("no blur pass - the low-end-Android budget rule", () => {

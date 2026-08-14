@@ -42,13 +42,19 @@ function Row({
   accent: string;
   inEnglishLabel: string;
 }) {
+  // GLOSS-FIRST PREVIEW (W1.5): the always-visible one line is the ENGLISH
+  // gloss when one exists - a collapsed Thai preview told the traveller
+  // nothing. The raw local text stays primary in the expanded view below,
+  // with the gloss under it, exactly as before.
+  const gloss = msg.english?.trim();
+  const preview = gloss && gloss !== msg.text.trim() ? gloss : msg.text;
   return (
     <details className="rounded-xl border-2 border-line p-2 text-[11px]">
       <summary className={`cursor-pointer font-extrabold ${accent}`}>
         {/* The one-line preview is plain text - formatting marks would be
             noise inside a quoted summary, but the asterisks must not show
             either. */}
-        {emoji} {label}: &ldquo;{summarize(waPlain(msg.text))}&rdquo;
+        {emoji} {label}: &ldquo;{summarize(waPlain(preview))}&rdquo;
       </summary>
       <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-soft">
         <WaText text={msg.text} />
@@ -65,12 +71,16 @@ function Row({
 export function ThreadPeek({
   vendorId,
   fallbackReceived,
+  fallbackReceivedEnglish,
   since,
 }: {
   vendorId: string;
   // The shop's offer message already on the card (replies are shown verbatim,
   // so the fallback is safe for the received side only).
   fallbackReceived?: string;
+  // Its English gloss (offer.messageEnglish) - the seeded first reply used to
+  // carry no `english`, so the peek opened raw-local until the first poll.
+  fallbackReceivedEnglish?: string;
   // Session epoch - only show messages from the current search, never a
   // previous session's thread with the same shop.
   since?: number;
@@ -78,7 +88,7 @@ export function ThreadPeek({
   const { t } = useI18n();
   const [sent, setSent] = useState<Msg | null>(null);
   const [received, setReceived] = useState<Msg | null>(
-    fallbackReceived ? { text: fallbackReceived } : null
+    fallbackReceived ? { text: fallbackReceived, english: fallbackReceivedEnglish } : null
   );
 
   useEffect(() => {

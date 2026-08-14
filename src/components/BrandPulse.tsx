@@ -1,29 +1,29 @@
 "use client";
 
-// THE LOADER: A WHEELDEAL HEARTBEAT INSIDE THE HUE BLOOM, ON A BLURRED BACKDROP.
+// THE LOADER (Loading v3): A STILL WHEELDEAL MARK OVER A TRAVELLING HORIZON LINE.
 //
-// The owner asked for exactly this - "an animation heartbeat of the WheelDeal
-// logo, and the background is blurry" - and for the hue to keep its colours
-// while picking up the brand. Three parts, each doing one job:
+// The owner's verdict on v2 was blunt - the outline mark, its heartbeat pulse
+// and the five-hue "aurora" wheel behind it were "the worst thing that I ever
+// seen". Every one of those is gone here. What premium/luxury loaders actually
+// do in 2025-26 (Vercel, Linear, Stripe, skeleton-first product UIs) is the
+// opposite of a throbbing logo: the brand mark holds PERFECTLY STILL and a
+// single thin, single-hue bar carries all the motion. Two parts, each one job:
 //
-//   the veil     `.wd-loader-veil` - a blurred, translucent backdrop, so the
-//                app reads as still there and out of focus rather than replaced
-//                by a loading screen. Suspension, not substitution.
-//   the bloom    `.aurora` - the same primitive every skeleton wears, so there
-//                is ONE visual answer to "something is happening" in this app
-//                instead of a different one per surface. It breathes on the
-//                same period the heart beats on, so they read as one organism.
-//   the heart    the real BrandMark SVG on `.wd-heartbeat` - a lub-dub with two
-//                unequal contractions and a long diastole, not a symmetric
-//                pulse. See the keyframes for why the pause is the point.
+//   the mark      the REAL solid BrandMark - the brand's actual speaking voice,
+//                 not a monoline sketch - rendered motionless. A scaling logo is
+//                 the single most dated loading element and exactly what
+//                 prefers-reduced-motion exists to suppress, so it never scales,
+//                 pulses, or draws itself on. Stillness reads as confidence.
+//   the horizon   `.wd-horizon` - a ~2px rounded bar under the mark on a faint
+//                 track, with ONE bright specular segment gliding left -> right
+//                 on a ~1.6s ease. One brand hue walked in oklch lightness -
+//                 never a colour wheel. This is the loader's whole animation.
 //
-// NO ANIMATION LIBRARY. Motion is ~12 KB gzipped and Framer Motion ~31 KB, and
-// every effect here is a keyframe over an SVG that is already in the bundle.
-// For travellers on roaming data, on free-tier Cloud Run, paying that for a
-// loading screen would be the wrong trade twice over - and a JS-driven glow on
-// a loading screen competes for the main thread with the very work being waited
-// on. The whole thing is CSS; aurora.test.ts forbids JS timers in this module
-// and that rule now covers this file too.
+// NO ANIMATION LIBRARY. Motion is ~12 KB gz and Framer Motion ~31 KB; every
+// effect here is a single CSS keyframe over an SVG already in the bundle. On
+// roaming data, on free-tier Cloud Run, a JS-driven loading screen would also
+// compete for the main thread with the very work being waited on. The whole
+// thing is CSS; aurora.test.ts forbids JS timers in this module.
 
 import { BrandMark } from "./BrandMark";
 
@@ -44,29 +44,22 @@ export function BrandPulse({
       aria-live="polite"
       aria-busy="true"
       aria-label={label || "Loading"}
-      className={`flex flex-col items-center gap-2.5 ${className}`}
+      className={`flex flex-col items-center gap-3 ${className}`}
     >
-      {/* The bloom is on a wrapper rather than on the SVG: `.aurora` composes a
-          rim onto its own box, and a rim traced around a scooter silhouette is
-          not what anyone wants. A round wrapper gives the light something to
-          travel along. */}
-      <span
-        className="aurora relative inline-flex items-center justify-center rounded-full"
-        style={{ width: size * 1.28, height: size * 1.28 }}
-      >
-        {/* The OUTLINE mark (owner report 4, item 9): a monoline silhouette in
-            currentColor with a CSS draw-on shimmer - the filled emoji mark
-            stays the brand's speaking voice everywhere else; the loader wears
-            the luxury sketch. */}
-        <BrandMark size={size} variant="outline" className="wd-heartbeat text-brandblue" />
-      </span>
+      {/* The solid mark, held still. No wd-heartbeat, no outline, no wrapper
+          glow - the motion lives entirely in the horizon line below. */}
+      <BrandMark size={size} />
+      {/* THE HORIZON LINE. Width tracks the mark (~2x) so it reads as a base the
+          mark rests on. The single travelling glint is the status signal. */}
+      <span className="wd-horizon" aria-hidden="true" style={{ width: Math.round(size * 2) }} />
       {label && <span className="text-[12px] font-extrabold text-soft">{label}</span>}
     </div>
   );
 }
 
 /**
- * The full-screen version: the same heartbeat, centred on the blurred veil.
+ * The full-screen version: the same still mark + horizon, centred on a light
+ * veil that lets the intensified ambient wash read through it.
  *
  * `fixed` + the veil rather than a solid panel, because a loading state that
  * paints over the app makes every wait feel like a navigation. Sitting at the

@@ -195,24 +195,19 @@ describe("the collapse is transform-only", () => {
     expect(perFrame).not.toMatch(/getBoundingClientRect|offsetHeight|offsetTop|getComputedStyle/);
   });
 
-  it("the sub-nav travels with the bar, so no gap opens above it", () => {
-    // Collapsing only the brand row left the pinned List/Map/Activity row
-    // where it was, with ~55px of scrolling page visible above it. That window
-    // of moving content under a stationary toggle is the "springy" report.
+  it("the views bar scrolls off in flow - it is not pinned and does not collapse", () => {
+    // The owner's report: the List/Map/Activity + Feed/Swipe bar pinned below
+    // the top bar and blocked the screen. It is now a normal in-flow element,
+    // so it must be OUT of the collapse machinery entirely: not in the transform
+    // selector, and not managed by the collapse hook (which now moves only the
+    // top brand row). The pinned-vs-in-flow rect read goes with it.
     const c = css();
-    const rule = c.slice(c.indexOf('.topbar[data-collapsed="true"]'));
-    const head = rule.slice(0, rule.indexOf("{"));
-    expect(head).toMatch(/\.substick\[data-collapsed="true"\]/);
+    expect(c).not.toMatch(/\.substick\[data-collapsed="true"\]/);
     const h = readCode("src/components/useHeaderCollapse.ts");
-    expect(h).toMatch(/querySelectorAll<HTMLElement>\("\.topbar, \.substick"\)/);
-  });
-
-  it("...but never while it is still scrolling in flow", () => {
-    // Translating an unpinned sub-nav would move it its whole offset in one
-    // frame - the very jump this is meant to remove. The flip checks first.
-    const h = readCode("src/components/useHeaderCollapse.ts");
-    expect(h).toMatch(/const pinned =/);
-    expect(h).toMatch(/if \(next && !pinned\)/);
+    expect(h).toMatch(/querySelectorAll<HTMLElement>\("\.topbar"\)/);
+    expect(h).not.toMatch(/\.substick/);
+    expect(h).not.toMatch(/const pinned =/);
+    expect(h).not.toMatch(/getBoundingClientRect/);
   });
 
   it("promotes only while moving, never permanently", () => {
@@ -226,7 +221,7 @@ describe("the collapse is transform-only", () => {
       /prefers-reduced-motion: reduce/
     );
     expect(css()).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}\.substick \{ transition: none/
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}\.topbar \{ transition: none/
     );
   });
 

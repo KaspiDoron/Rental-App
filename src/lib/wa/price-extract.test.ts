@@ -268,3 +268,34 @@ describe("reconcileCurrency - the shop's own money wins unless they typed otherw
     expect(reconcileCurrency("THB", undefined, "300")).toBe("THB");
   });
 });
+
+describe("the bare-number rescue survives burst coalescing (owner report 5)", () => {
+  // The field failure: the shop answered "200 baht" as one frame of a burst.
+  // The coalescer joins every unread frame with newlines, so the WHOLE text is
+  // far over the 40-char bare-message ceiling and the rescue never fired - the
+  // card said "No price yet" while the excerpt showed the price. The rescue now
+  // also runs PER LINE, with the identical strict shape + sanity band.
+  it("finds a bare price on ONE LINE of a long coalesced message", () => {
+    const burst = [
+      "Hello! Sorry for late reply, we were busy at the shop today",
+      "200 baht",
+      "You can come pick it up any time before 8pm, we are near the pier",
+    ].join("\n");
+    const hit = extractRentalDailyPrice(burst, { vehicleClass: "scooter", durationDays: 3 });
+    expect(hit).not.toBeNull();
+    expect(hit!.pricePerDay).toBe(200);
+    expect(hit!.currency).toBe("THB");
+  });
+
+  it("the whole-message rescue still works exactly as before", () => {
+    const hit = extractRentalDailyPrice("400 baht", { durationDays: 2 });
+    expect(hit!.pricePerDay).toBe(400);
+  });
+
+  it("a line that is not a bare amount never passes (times, years, day counts)", () => {
+    // "3" == durationDays is excluded; "open 8:30 am" has no bare-amount shape;
+    // a long chatty line is skipped by the 40-char line ceiling.
+    const burst = ["we open 8:30 am, close 8:00 pm", "3", "see you soon!"].join("\n");
+    expect(extractRentalDailyPrice(burst, { durationDays: 3 })).toBeNull();
+  });
+});

@@ -137,6 +137,12 @@ create table if not exists public.vendor_replies (
 );
 -- If you already ran an older schema, run these once:
 alter table public.vendor_replies add column if not exists auto boolean default false;
+-- The traveller-readable ENGLISH GLOSS of a local-language shop reply (W1.5:
+-- the gloss is visible everywhere). Stamped best-effort by the agent loop from
+-- the SAME translation it writes onto whatsapp_messages.raw.english, so every
+-- reply-fed surface (status panel excerpt, activity feed, trips timeline) can
+-- show the translation without a JSON join. Null = English reply / pre-gloss row.
+alter table public.vendor_replies add column if not exists english_gloss text;
 create index if not exists vendor_replies_user_idx
   on public.vendor_replies (user_email, created_at desc);
 

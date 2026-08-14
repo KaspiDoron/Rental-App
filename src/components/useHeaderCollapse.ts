@@ -25,22 +25,20 @@ import { useEffect } from "react";
 //   - `will-change` ONLY WHILE MOVING. Left on permanently it pins a compositor
 //     layer for the life of the page, which is the cost it was meant to avoid.
 //
-// BOTH BARS, OR NEITHER. Collapsing only the brand row left the sub-nav pinned
-// ~55px down with a window of scrolling page above it - the "springy" half of
-// the report. They now carry the same attribute and the same transition, so
-// they travel as one plate. The sub-nav is only ever marked collapsed once it
-// is genuinely pinned: while it is still scrolling in flow, translating it
-// would itself be the jump.
+// ONLY THE BRAND ROW COLLAPSES NOW. The views bar (List/Map/Activity +
+// Feed/Swipe) used to pin below the top bar and get collapsed alongside it;
+// the owner reported it "blocks the whole screen". It is now a normal in-flow
+// element (globals.css .substick carries no position:sticky), so it simply
+// scrolls off with the page and this hook no longer touches it - which also
+// deletes the pinned-vs-in-flow rect read that used to run on every flip.
 //
-// The bars keep their own heights, so nothing below them shifts: CLS stays zero
-// because the elements still occupy their boxes, they are merely drawn higher.
+// The bar keeps its own height, so nothing below it shifts: CLS stays zero
+// because the element still occupies its box, it is merely drawn higher.
 
 /** Scrolled past this before anything hides - a short flick must not collapse. */
 const ARM_PX = 64;
 /** Direction changes smaller than this are noise (rubber-band, momentum). */
 const HYSTERESIS_PX = 6;
-/** Tolerance for "is it pinned" - sub-pixel layout and a 1px border. */
-const PIN_SLACK_PX = 2;
 
 /**
  * Collapse the chrome on scroll-down, restore on scroll-up.
@@ -62,27 +60,17 @@ export function useHeaderCollapse(enabled = true): void {
     let ticking = false;
     let clearTimer: ReturnType<typeof setTimeout> | undefined;
 
+    // Only the brand row now. The views bar scrolls off in flow and is not
+    // touched here - so there is no rect read on a flip at all.
     const bars = (): HTMLElement[] =>
-      Array.from(document.querySelectorAll<HTMLElement>(".topbar, .substick"));
+      Array.from(document.querySelectorAll<HTMLElement>(".topbar"));
 
     const apply = (next: boolean) => {
       if (next === collapsed) return;
       const all = bars();
-      const bar = all.find((el) => el.classList.contains("topbar"));
-      if (!bar) return;
+      if (all.length === 0) return;
       collapsed = next;
-      // ONE layout read, and only on a flip. The sub-nav must not be moved
-      // while it is still in the flow of the page - it would travel its whole
-      // offset in a single frame, which is the exact artefact this removes.
-      const barBottom = bar.getBoundingClientRect().bottom;
       for (const el of all) {
-        const isSub = el.classList.contains("substick");
-        const pinned = !isSub || el.getBoundingClientRect().top <= barBottom + PIN_SLACK_PX;
-        if (next && !pinned) {
-          // Not stuck yet - leave it in flow. The brand row still collapses.
-          el.dataset.collapsed = "false";
-          continue;
-        }
         // Promote for the duration of the move only.
         el.style.willChange = "transform";
         el.dataset.collapsed = next ? "true" : "false";

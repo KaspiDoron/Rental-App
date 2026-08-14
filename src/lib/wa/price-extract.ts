@@ -618,6 +618,36 @@ export function extractQuotedPrices(
         }
       }
     }
+    // ...AND PER LINE, because burst coalescing broke the whole-text path.
+    // The coalescer joins every unread frame with newlines, so a burst whose
+    // one real answer is the line "200 baht" arrives as a text far over 40
+    // chars and the rescue above never fires - the field failure where the
+    // card said "No price yet" while the excerpt showed the price. Each LINE
+    // gets the identical strict shape + band, so the rescue is exactly as
+    // safe as before, applied at the granularity the message actually has.
+    // Deliberately OUTSIDE the whole-text SERVICE_LINE guard above: one
+    // "near the pier" pleasantry elsewhere in the burst must not suppress the
+    // price line - service lines are skipped INDIVIDUALLY, exactly as the
+    // main per-line loop does.
+    if (hits.length === 0) {
+      for (const rawLine of lines) {
+        if (SERVICE_LINE.test(rawLine)) continue;
+        const l = expandK(rawLine);
+        if (l.length > 40) continue;
+        const m = l.match(BARE_PRICE);
+        if (!m) continue;
+        const amt = parseAmount(m[1]);
+        if (amt >= 20 && amt <= 5_000_000 && amt !== days) {
+          hits.push({
+            pricePerDay: amt,
+            currency: currencyIn(l) ?? opts.localCurrency,
+            line: rawLine.slice(0, 120),
+            classMatch: undefined,
+          });
+          break;
+        }
+      }
+    }
     if (!hits.length) return none;
   }
 

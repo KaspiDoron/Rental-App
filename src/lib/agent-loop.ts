@@ -1407,6 +1407,30 @@ export async function processVendorReply(opts: {
             raw: { ...(row.raw ?? {}), english },
           });
         }
+        // THE SAME GLOSS LANDS ON THE vendor_replies ROW THIS TURN JUST WROTE
+        // (W1.5: the gloss is visible everywhere). The raw-JSON stamp above
+        // only serves the transcript; the status panel excerpt, the activity
+        // feed's reply items and the trips timeline are all fed from
+        // vendor_replies, which stored only the raw local text - so those
+        // surfaces structurally COULD NOT show the translation. The gloss is
+        // computed after the insert (it needs the LLM), so it arrives as a
+        // best-effort follow-up update on the newest row for this shop - the
+        // row written moments ago in this very turn. Before the english_gloss
+        // migration the update silently no-ops and every surface keeps
+        // working on the raw text (the established degrade pattern).
+        if (ctx.vendorId && ctx.sender) {
+          const vr = await sbSelect<{ id: number }>(
+            "vendor_replies",
+            `select=id&user_email=eq.${encodeURIComponent(
+              ctx.sender
+            )}&vendor_id=eq.${encodeURIComponent(
+              ctx.vendorId
+            )}&order=created_at.desc&limit=1`
+          );
+          if (vr[0]?.id) {
+            await sbUpdate("vendor_replies", `id=eq.${vr[0].id}`, { english_gloss: english });
+          }
+        }
       } catch {
         /* gloss is an enhancement - never blocks the loop */
       }

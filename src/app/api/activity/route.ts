@@ -37,6 +37,14 @@ export interface ActivityItem {
   vendorName?: string;
   title: string;
   detail?: string;
+  /**
+   * English gloss of `detail` when the quoted message is in a local language
+   * (outbound: whatsapp_messages.raw.englishGloss; inbound:
+   * vendor_replies.english_gloss). FEED DOCTRINE (W1.5): `detail` is always
+   * the REAL text on the wire; the translation is a second quiet line when it
+   * differs - never the gloss INSTEAD of what was actually sent or received.
+   */
+  english?: string;
   decisionId?: string;
   meta?: Record<string, unknown>;
 }
@@ -190,7 +198,9 @@ export async function GET(req: Request) {
       id: number;
       to_number: string;
       body: string;
-      raw: { vendorId?: string; vendorName?: string; english?: string; kind?: string } | null;
+      // Outbound rows carry the gloss as raw.englishGloss (stamped by every
+      // send path from the outbox meta); raw.english is the INBOUND key.
+      raw: { vendorId?: string; vendorName?: string; englishGloss?: string; kind?: string } | null;
       received_at: string;
     }>(
       "whatsapp_messages",
@@ -200,17 +210,43 @@ export async function GET(req: Request) {
       // the newest 40 (the feed itself is still sliced to `limit`).
       `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=150`
     ).catch(() => []),
-    sbSelect<{
-      id: number;
-      vendor_id: string | null;
-      vendor_name: string | null;
-      reply_text: string | null;
-      image_count: number | null;
-      created_at: string;
-    }>(
-      "vendor_replies",
-      `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=80`
-    ).catch(() => []),
+    (async () => {
+      type ReplyFeedRow = {
+        id: number;
+        vendor_id: string | null;
+        vendor_name: string | null;
+        reply_text: string | null;
+        english_gloss?: string | null;
+        image_count: number | null;
+        created_at: string;
+      };
+      const filter = `user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=80`;
+      // english_gloss in the FIRST tier only: a select naming a not-yet-
+      // migrated column fails SILENTLY as [] (same degrade /api/replies uses),
+      // and this feed must never blank over a pending migration.
+      let rows = await sbSelect<ReplyFeedRow>(
+        "vendor_replies",
+        `select=id,vendor_id,vendor_name,reply_text,english_gloss,image_count,created_at&${filter}`
+      );
+      if (rows.length === 0) {
+        rows = await sbSelect<ReplyFeedRow>(
+          "vendor_replies",
+          `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&${filter}`
+        );
+      }
+      return rows;
+    })().catch(
+      () =>
+        [] as {
+          id: number;
+          vendor_id: string | null;
+          vendor_name: string | null;
+          reply_text: string | null;
+          english_gloss?: string | null;
+          image_count: number | null;
+          created_at: string;
+        }[]
+    ),
     sbSelect<{
       id: number;
       vendor_id: string | null;
@@ -277,14 +313,20 @@ export async function GET(req: Request) {
         email
       )}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=20`
     ).catch(() => []),
-    sbSelect<{ from_number: string; body: string | null; received_at: string }>(
+    sbSelect<{ from_number: string; body: string | null; english?: string | null; received_at: string }>(
       "whatsapp_messages",
       // STORED inbound, straight from the wire. vendor_replies only exists once
       // the agent turn DERIVED the message - so a stored reply whose turn
       // failed (or is still queued for the recovery sweep) left the card on
       // "Awaiting reply" while the reply sat in the DB. The card state must
       // follow the wire, not the derivation.
-      `select=from_number,body,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=60`
+      //
+      // english:raw->>english is the INBOUND gloss the agent loop stamps on the
+      // stored row - a JSON-path projection on a column every deploy has, so it
+      // degrades to null rather than blanking the read. This is exactly the
+      // path that needs it: a reply whose agent turn has not run yet has no
+      // vendor_replies row (and so no english_gloss) to read from.
+      `select=from_number,body,english:raw->>english,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=60`
     ).catch(() => []),
   ]);
 
@@ -351,8 +393,10 @@ export async function GET(req: Request) {
   // Rows are newest-first, so the FIRST per vendor is the latest.
   type LastMsg = {
     lastOutboundText?: string;
+    lastOutboundEnglish?: string;
     lastOutboundAt?: string;
     lastInboundText?: string;
+    lastInboundEnglish?: string;
     lastInboundAt?: string;
   };
   const lastByVendor: Record<string, LastMsg> = {};
@@ -362,8 +406,12 @@ export async function GET(req: Request) {
     if (!id) continue;
     const slot = ensureLast(id);
     if (slot.lastOutboundAt) continue; // already have the newest for this vendor
-    // Prefer the English gloss for the panel; fall back to the raw sent body.
-    slot.lastOutboundText = (m.raw?.english || m.body || "").slice(0, 240);
+    // The REAL sent body, with the English gloss beside it (W1.5 doctrine:
+    // show what was actually sent, translation as a second quiet line). The
+    // old "prefer the gloss" read keyed on raw.english - the INBOUND key -
+    // so it silently never fired; outbound rows carry raw.englishGloss.
+    slot.lastOutboundText = (m.body || "").slice(0, 240);
+    slot.lastOutboundEnglish = m.raw?.englishGloss?.slice(0, 240);
     slot.lastOutboundAt = m.received_at;
   }
   for (const r of replies) {
@@ -372,6 +420,7 @@ export async function GET(req: Request) {
     const slot = ensureLast(id);
     if (slot.lastInboundAt) continue;
     slot.lastInboundText = (r.reply_text || (r.image_count ? "[photo]" : "") || "").slice(0, 240);
+    slot.lastInboundEnglish = r.english_gloss?.slice(0, 240) ?? undefined;
     slot.lastInboundAt = r.created_at;
   }
   // Underived-but-stored inbound fills the gap (newest-first here too), so the
@@ -382,6 +431,7 @@ export async function GET(req: Request) {
     const slot = ensureLast(id);
     if (slot.lastInboundAt && Date.parse(slot.lastInboundAt) >= Date.parse(m.received_at)) continue;
     slot.lastInboundText = (m.body || "").slice(0, 240) || slot.lastInboundText;
+    slot.lastInboundEnglish = m.english?.slice(0, 240) ?? undefined;
     slot.lastInboundAt = m.received_at;
   }
 
@@ -410,7 +460,11 @@ export async function GET(req: Request) {
       vendorId: m.raw?.vendorId,
       vendorName: m.raw?.vendorName,
       title: human ? "You messaged the shop yourself" : "Message sent to the shop",
-      detail: (m.raw?.english || m.body || "").slice(0, 220) || undefined,
+      // FEED DOCTRINE (W1.5): the REAL text on the wire, gloss beside it -
+      // the gloss-INSTEAD render meant the traveller never saw what their
+      // agent actually sent (and it read the inbound key anyway, see above).
+      detail: (m.body || "").slice(0, 220) || undefined,
+      english: m.raw?.englishGloss?.slice(0, 220),
     });
   }
   for (const r of replies) {
@@ -422,6 +476,7 @@ export async function GET(req: Request) {
       vendorName: r.vendor_name ?? undefined,
       title: r.image_count ? "The shop replied (with a photo)" : "The shop replied",
       detail: (r.reply_text ?? "").slice(0, 220) || undefined,
+      english: r.english_gloss?.slice(0, 220) ?? undefined,
     });
   }
   for (const o of offers) {

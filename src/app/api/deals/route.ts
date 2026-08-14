@@ -69,6 +69,9 @@ export interface TimelineEvent {
   kind: "sent" | "reply" | "offer" | "alert" | "booked" | "you";
   vendorName?: string;
   text: string;
+  /** English gloss of `text` for local-language sends/replies (W1.5): the real
+   *  wire text stays primary, the translation is the second quiet line. */
+  english?: string;
 }
 
 export interface SessionSummary {
@@ -175,23 +178,51 @@ export async function GET() {
         id: number;
         to_number: string;
         body: string | null;
-        raw: { vendorId?: string; vendorName?: string; english?: string; kind?: string } | null;
+        // Outbound rows carry the gloss as raw.englishGloss (the outbox meta
+        // key every send path stamps); raw.english is the INBOUND key.
+        raw: { vendorId?: string; vendorName?: string; englishGloss?: string; kind?: string } | null;
         received_at: string;
       }>(
         "whatsapp_messages",
         `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(oldestStart)}&order=received_at.desc&limit=250`
       ).catch(() => []),
-      sbSelect<{
-        id: number;
-        vendor_id: string | null;
-        vendor_name: string | null;
-        reply_text: string | null;
-        image_count: number | null;
-        created_at: string;
-      }>(
-        "vendor_replies",
-        `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`
-      ).catch(() => []),
+      (async () => {
+        type DealsReplyRow = {
+          id: number;
+          vendor_id: string | null;
+          vendor_name: string | null;
+          reply_text: string | null;
+          english_gloss?: string | null;
+          image_count: number | null;
+          created_at: string;
+        };
+        const filter = `user_email=eq.${enc}&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`;
+        // english_gloss in the first tier only - an unknown column silently
+        // blanks the select, and the trips timeline must survive a pending
+        // migration (same degrade /api/replies uses).
+        let rows = await sbSelect<DealsReplyRow>(
+          "vendor_replies",
+          `select=id,vendor_id,vendor_name,reply_text,english_gloss,image_count,created_at&${filter}`
+        );
+        if (rows.length === 0) {
+          rows = await sbSelect<DealsReplyRow>(
+            "vendor_replies",
+            `select=id,vendor_id,vendor_name,reply_text,image_count,created_at&${filter}`
+          );
+        }
+        return rows;
+      })().catch(
+        () =>
+          [] as {
+            id: number;
+            vendor_id: string | null;
+            vendor_name: string | null;
+            reply_text: string | null;
+            english_gloss?: string | null;
+            image_count: number | null;
+            created_at: string;
+          }[]
+      ),
       (async () => {
         let rows = await sbSelect<OfferRow>(
           "offers",
@@ -402,14 +433,16 @@ export async function GET() {
     // Compact timeline: the last few moments that actually matter.
     const timeline: TimelineEvent[] = [];
     for (const m of sent.slice(0, 12)) {
+      const human = m.raw?.kind === "human-manual";
       timeline.push({
         at: m.received_at,
-        kind: m.raw?.kind === "human-manual" ? "you" : "sent",
+        kind: human ? "you" : "sent",
         vendorName: m.raw?.vendorName,
-        text:
-          m.raw?.kind === "human-manual"
-            ? "You messaged the shop yourself"
-            : (m.raw?.english || m.body || "Message sent").slice(0, 90),
+        // The REAL sent text, gloss beside it (W1.5 doctrine). The old
+        // gloss-instead read keyed on raw.english - the inbound key - so it
+        // never fired anyway; outbound rows carry raw.englishGloss.
+        text: human ? "You messaged the shop yourself" : (m.body || "Message sent").slice(0, 90),
+        english: human ? undefined : m.raw?.englishGloss?.slice(0, 90),
       });
     }
     for (const r of rep.slice(0, 12)) {
@@ -418,6 +451,7 @@ export async function GET() {
         kind: "reply",
         vendorName: r.vendor_name ?? undefined,
         text: (r.reply_text ?? (r.image_count ? "Sent a photo" : "Replied")).slice(0, 90),
+        english: r.english_gloss?.slice(0, 90) ?? undefined,
       });
     }
     for (const o of off.slice(0, 12)) {

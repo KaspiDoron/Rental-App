@@ -42,6 +42,29 @@ export async function POST(req: Request) {
   const quoted: number | undefined = body.currentPricePerDay;
   const cur = currencyForRegion(region) || "USD";
 
+  // SERVER-AUTHORITATIVE LANGUAGE (owner report 5 #14). This route used to
+  // trust body.language verbatim while the modal invented its own default
+  // (`isUltra ? "local" : "english"`) - so an English-only hunt composed its
+  // FIRST draft in Thai. The send path (/api/outreach) already resolves the
+  // thread's established mode and lets it win; the draft path now runs the
+  // identical resolution, so what the traveller reviews is what would send.
+  let composeLocal = wantsLocal && localAllowed;
+  try {
+    const digits = digitsOnly(String(vendor.whatsapp ?? ""));
+    if (digits) {
+      const { threadLanguageMode, resolveThreadLanguage } = await import(
+        "@/lib/wa/thread-language"
+      );
+      const established = await threadLanguageMode(session.email, digits);
+      composeLocal = resolveThreadLanguage({
+        requested: localLanguageAllowed({ requested: wantsLocal, plan: session.plan }),
+        established,
+      }).localLang;
+    }
+  } catch {
+    /* resolution is a guard - the entitlement gate above has already run */
+  }
+
   // ONE MOVE PER HUMAN BEAT: inside the user-move window a second tap gets the
   // SAME draft back, not a freshly-worded one. Every dedupe downstream keys on
   // exact text - a re-composed draft is a new string by construction, which is
@@ -174,7 +197,7 @@ export async function POST(req: Request) {
     region,
     round: Math.max(0, Number(body.round ?? 0)),
     currency: cur,
-    localLanguage: wantsLocal && localAllowed,
+    localLanguage: composeLocal,
     targetPricePerDay: target,
     floorPricePerDay: floorPrice,
     history,
@@ -199,7 +222,10 @@ export async function POST(req: Request) {
     },
   ]);
 
-  return NextResponse.json(draft);
+  // The language the draft was ACTUALLY composed in, so the modal can reflect
+  // reality when the server overrode the request (thread already in English,
+  // hunt not local, plan not entitled).
+  return NextResponse.json({ ...draft, languageUsed: composeLocal ? "local" : "english" });
 }
 
 // maxDuration: lift the request-timeout ceiling for slow AI upstreams.

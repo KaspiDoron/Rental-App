@@ -616,6 +616,7 @@ function VendorCardInner({
                 <ThreadPeek
                   vendorId={vendor.id}
                   fallbackReceived={offer?.message}
+                  fallbackReceivedEnglish={offer?.messageEnglish}
                   since={searchEpoch}
                 />
                 {onOpenThread && (
@@ -682,6 +683,21 @@ function VendorCardInner({
                     </span>
                   )}
                 </div>
+                {/* PROVENANCE. A sourced price is real information the app was
+                    hiding behind "No price yet" - the shop's photographed menu,
+                    its option list, the thread's standing number. Shown WITH
+                    where it came from, so the traveller can weigh it while the
+                    agent confirms it; a confirmed reply clears the tag. */}
+                {offer.priceSource && (
+                  <div className="mt-0.5 text-[10px] font-bold text-brandblue">
+                    {offer.priceSource === "menu-photo"
+                      ? t("Read from their price-menu photo - being confirmed.")
+                      : offer.priceSource === "menu"
+                        ? t("From their price menu - being confirmed.")
+                        : t("From the conversation - being confirmed.")}
+                    {offer.priceSourceVehicle ? ` (${offer.priceSourceVehicle})` : ""}
+                  </div>
+                )}
                 {/* Shop-CONFIRMED conditions only - never guessed */}
                 {(offer.deposit || offer.depositType || offer.includesDelivery || offer.includesInsurance || offer.deliveryFee != null) && (
                   <div className="mt-1 flex flex-wrap gap-1">

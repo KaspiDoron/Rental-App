@@ -221,7 +221,14 @@ const SUBJECTS: SubjectSpec[] = [
     // original-vs-copy axis - the distinction between surrendering your only
     // travel document and leaving a photocopy on a counter.
     details: [
-      { detail: "cash", rx: /\b(cash|\d[\d,.]{2,}|money)\b/i },
+      // NO word boundary around the amount, and "money" may be GLUED to it.
+      // The field message "deposit passport or money4000" matched nothing here:
+      // `\bmoney\b` fails on "money4000" (y->4 is not a boundary) and `\b\d`
+      // fails for the same reason - so the ledger filed a passport-ONLY deposit
+      // and armed the cash counter for a cash option the shop had already
+      // offered. Shops write amounts glued to words constantly; inside a clause
+      // the deposit cue has already claimed, a bare 3+ digit run IS the cash.
+      { detail: "cash", rx: /\b(cash|money)\b|money\d|\d[\d,.]{2,}/i },
       { detail: "passport", rx: /\bpassports?\b/i, document: true },
       { detail: "id", rx: /\b(id cards?|identity cards?|ktp)\b/i, document: true },
       { detail: "licence", rx: /\b(driver'?s? )?licen[cs]e\b/i, document: true },
