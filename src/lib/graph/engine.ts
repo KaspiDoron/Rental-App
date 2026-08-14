@@ -1485,17 +1485,20 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       const threads = await sbSelect<{
         vendor_id: string | null;
         vendor_name: string | null;
+        to_number: string | null;
         phase: string;
         fields: Record<string, unknown> | null;
       }>(
         "negotiation_threads",
-        `select=vendor_id,vendor_name,phase,fields&user_email=eq.${encodeURIComponent(
+        `select=vendor_id,vendor_name,to_number,phase,fields&user_email=eq.${encodeURIComponent(
           userEmail
         )}&updated_at=gte.${encodeURIComponent(since)}&limit=16`
       ).catch(() => []);
       const rows = new Map<string, SessionShopRow>();
+      const numberByVendor = new Map<string, string>();
       for (const t of threads) {
         if (!t.vendor_id) continue;
+        if (t.to_number) numberByVendor.set(t.vendor_id, t.to_number);
         const fx = (t.fields ?? {}) as {
           pricePerDay?: number;
           currency?: string;
@@ -1531,6 +1534,54 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           complete: existing?.complete,
           isThisShop: o.vendor_id === thisVendorId,
         });
+      }
+
+      // A BOARD PHOTOGRAPHED IN THREAD A IS LEVERAGE IN THREAD B (owner
+      // report 4). The vision pass stamps its MediaReading (prices included)
+      // on the inbound message row - and that store was joined by nothing, so
+      // a shop whose photographed prices never became a formal offer (a
+      // multi-option board, a read that missed the traveller's exact spec)
+      // was invisible to every sibling negotiation. Fold the cheapest read
+      // price into rows that still lack one, at the SAME trust level thread
+      // fields already get (the currency/phase validity filters in
+      // validRivals apply downstream either way). Rows that have a price keep
+      // it - a quote the shop typed beats a board we read.
+      {
+        const priceless = [...rows.values()].filter(
+          (r) => typeof r.pricePerDay !== "number" && numberByVendor.has(r.vendorId)
+        );
+        if (priceless.length > 0) {
+          // ONE query serves every priceless shop; number matching happens in
+          // code (tolerant, like every other cross-spelling comparison).
+          const { sameNumber } = await import("../wa/phone-key");
+          const readRows = await sbSelect<{
+            from_number: string | null;
+            raw: { reading?: { prices?: Array<{ pricePerDay?: number; currency?: string }> } } | null;
+          }>(
+            "whatsapp_messages",
+            `select=from_number,raw&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
+              userEmail
+            )}&received_at=gte.${encodeURIComponent(since)}&raw->reading=not.is.null` +
+              `&order=received_at.desc&limit=24`
+          ).catch(() => []);
+          for (const r of priceless) {
+            const digits = numberByVendor.get(r.vendorId)!;
+            const read = readRows.find(
+              (m) =>
+                m.from_number &&
+                sameNumber(m.from_number, digits) &&
+                (m.raw?.reading?.prices?.length ?? 0) > 0
+            );
+            const cheapest = read?.raw?.reading?.prices?.[0];
+            if (cheapest && typeof cheapest.pricePerDay === "number" && cheapest.pricePerDay > 0) {
+              rows.set(r.vendorId, {
+                ...r,
+                pricePerDay: cheapest.pricePerDay,
+                currency: cheapest.currency ?? r.currency,
+              });
+            }
+          }
+        }
       }
       return [...rows.values()].slice(0, 10);
     },

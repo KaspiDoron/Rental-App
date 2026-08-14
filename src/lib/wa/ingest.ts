@@ -117,6 +117,11 @@ function hasImageMessage(data: any): boolean {
 function hasVideoMessage(data: any): boolean {
   return Boolean(unwrap(data)?.videoMessage);
 }
+/** The video's own mimetype, for the media stamp + the native-read gate. */
+function videoMessage(data: any): { mimetype?: string } | null {
+  const v = unwrap(data)?.videoMessage;
+  return v ? { mimetype: v.mimetype } : null;
+}
 // Beyond image/audio: documents (PDF rate cards), location pins and contact
 // cards used to be silently dropped - now every one becomes either engine
 // input or an honest user-facing note.
@@ -730,12 +735,16 @@ export async function processEvolutionWebhook(
             // What the shop actually SENT, so "Full conversation" can show it
             // instead of the string "[photo]". Bytes are never stored here -
             // only the provider KEY, which /api/wa/media redeems on demand.
-            ...(hasImage || hasAudio || doc
+            // VIDEO INCLUDED (owner report 4): without the key a video's bytes
+            // were never redeemable, so it could never be watched natively nor
+            // replayed from the audit copy - the stamp is what makes the frames
+            // below more than a "[video]" placeholder.
+            ...(hasImage || hasAudio || doc || hasVideo
               ? {
                   media: {
                     key: data.key ?? null,
-                    kind: hasImage ? "image" : hasAudio ? "audio" : "document",
-                    mime: doc?.mimetype ?? null,
+                    kind: hasImage ? "image" : hasAudio ? "audio" : hasVideo ? "video" : "document",
+                    mime: doc?.mimetype ?? videoMessage(data)?.mimetype ?? null,
                     fileName: doc?.fileName ?? null,
                   },
                 }
@@ -765,6 +774,27 @@ export async function processEvolutionWebhook(
       // Response-time analytics: record how fast this shop replied to our RFQ.
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
+
+      // A SHARED CONTACT IS A LEAD, NOT JUST PROSE (owner report 4). The card's
+      // digits are already stored on the row (raw.contact); this durable event
+      // is what a UI chip can render as a one-tap "ask this shop too". A
+      // SUGGESTION only - no thread is opened, no message sent: contacting a
+      // number the traveller never chose is exactly what the outreach consent
+      // flow exists to prevent.
+      if (email && contact?.digits) {
+        void sbInsert("agent_events", [
+          {
+            kind: "contact-suggested",
+            user_email: email,
+            vendor_name: from,
+            detail: JSON.stringify({
+              name: contact.name ?? null,
+              digits: contact.digits,
+              sharedBy: from,
+            }),
+          },
+        ]).catch(() => {});
+      }
 
       // NOTIFY AT INGEST, BUT ONLY WHEN IT IS WORTH IT.
       //
@@ -878,9 +908,15 @@ export async function processEvolutionWebhook(
         markOpen(email).catch(() => {});
       }
 
-      // A PDF (or any non-image document) can't go through the vision agent -
-      // tell the user honestly instead of dropping it on the floor.
-      const docIsImage = Boolean(doc?.mimetype && /^image\//i.test(doc.mimetype));
+      // A machine-readable document rides the vision rung. PDFs INCLUDED
+      // (owner report 4): Gemini inline_data accepts application/pdf, so a
+      // shop's PDF rate card is read exactly like a price-board photo (the
+      // Groq rung filters itself to image parts and degrades gracefully).
+      // Only genuinely unreadable formats (docx, xlsx, zip) keep the honest
+      // "stored, not machine-readable" note below.
+      const docIsImage = Boolean(
+        doc?.mimetype && (/^image\//i.test(doc.mimetype) || /^application\/pdf\b/i.test(doc.mimetype))
+      );
       // NOT A PUSH. A document we cannot read is real and worth showing, and it
       // is not worth a buzz: the traveller has nothing to decide and the app
       // says so the moment they look. See lib/notify/significance - the whole
@@ -951,13 +987,67 @@ export async function processEvolutionWebhook(
 
       // INLINE PATH: download WITH RETRY so the vision agent can read
       // the prices - a transient media failure must not lose the offer.
+      //
+      // COALESCED (owner report 4): a five-photo album used to run five turns,
+      // each seeing one fifth of the board. assembleImageBurst makes the LAST
+      // frame of a burst run ONE turn holding every frame; earlier frames
+      // stand down here (their rows are stored - only the duplicate turn is
+      // skipped). Frames are then fitted to the vision request budget, and
+      // every frame that does not fit leaves a trace - never a silent drop.
       const images: { mime: string; base64: string }[] = [];
       let mediaFetchFailed = false;
+      let videoUnreadable = false;
       if ((hasImage || docIsImage) && email) {
-        const media = await fetchMediaWithRetry(email, data);
-        if (media) images.push(media);
-        else {
-          mediaFetchFailed = true;
+        const { assembleImageBurst } = await import("@/lib/wa/image-burst");
+        const verdict = await assembleImageBurst({
+          email,
+          fromDigits: from,
+          ownMsgId: msgId,
+          fetchOwn: () => fetchMediaWithRetry(email, data),
+          fetchByKey: async (key) => {
+            const { fetchMediaBase64 } = await import("@/lib/evolution");
+            return fetchMediaBase64(email, { key }).catch(() => null);
+          },
+        });
+        if (verdict.standDown) {
+          // A newer sibling's invocation owns the whole burst - this frame's
+          // row is already stored and will be in its call. Traced so a
+          // coalesced frame is never mistaken for a dropped one.
+          void noteInboundDropped(email, from, "image-coalesced", {
+            via: "webhook",
+            msgId,
+            leader: verdict.leaderId,
+          });
+          continue;
+        }
+        // Audit copies BEFORE budgeting: WhatsApp expires media, and the copy
+        // must exist for every frame we hold bytes for - including ones the
+        // vision budget is about to exclude. Fire-and-forget by contract.
+        {
+          const { storeMediaAudit } = await import("@/lib/media/audit");
+          for (const f of verdict.frames) void storeMediaAudit(f.waMessageId, f);
+        }
+        const { budgetFrames } = await import("@/lib/media/frame-budget");
+        const budget = budgetFrames(verdict.frames);
+        images.push(...budget.kept.map((f) => ({ mime: f.mime, base64: f.base64 })));
+        for (const d of budget.dropped) {
+          await sbInsert("agent_events", [
+            d.reason === "frame-too-large"
+              ? {
+                  kind: "media-unreadable",
+                  vendor_id: "",
+                  vendor_name: from,
+                  detail: `Photo from +${from} is too large to read (${Math.round(d.chars / 1_400_000) / 1}MB) - the agent asks for a smaller one (email ${email}).`,
+                }
+              : {
+                  kind: "image-batch-truncated",
+                  vendor_id: "",
+                  vendor_name: from,
+                  detail: `Burst from +${from}: frame ${d.index + 1} of ${verdict.burstSize} not sent to the reader (${d.reason}) - read the first ${budget.kept.length} (email ${email}).`,
+                },
+          ]).catch(() => {});
+        }
+        if (verdict.fetchFailures > 0 || verdict.ownFetchFailed) {
           // Honest, and in the app rather than on the lock screen - a photo we
           // could not download is not something the traveller can act on.
           // (lib/notify/significance.)
@@ -966,28 +1056,71 @@ export async function processEvolutionWebhook(
               kind: "media-fetch-failed",
               vendor_id: "",
               vendor_name: from,
-              detail: `Photo from +${from} failed to download after 3 attempts (email ${email}).`,
+              detail: `${verdict.ownFetchFailed ? "Photo" : "Burst photo"} from +${from} failed to download after 3 attempts (email ${email}).`,
             },
           ]).catch(() => {});
-          // ...and NEVER-SILENT with the SHOP: the old `continue` here left the
-          // vendor on read forever. Fall through to processVendorReply with the
-          // photo-clarify so the agent warmly asks for the price in text.
+        }
+        // NEVER-SILENT with the SHOP: when NOTHING readable survived (every
+        // download failed or every frame was oversized), fall through to
+        // processVendorReply with the photo-clarify so the agent warmly asks
+        // for the price in text. The old `continue` left the vendor on read.
+        mediaFetchFailed = images.length === 0;
+      }
+
+      // NATIVE VIDEO (owner report 4, owner decision): a shop filming the bike
+      // or panning over the price wall is read by Gemini directly - video/mp4
+      // and video/3gpp ride the same inline_data rung as photos (the Groq rung
+      // filters itself to images). One video per request and only when no
+      // photo frames are attached (photos carry the prices; the provider reads
+      // one video at a time). Oversized or exotic formats degrade to the
+      // honest "could not watch it" ask below - never silence.
+      if (hasVideo && email && images.length === 0) {
+        const media = await fetchMediaWithRetry(email, data);
+        const mime = media?.mime || videoMessage(data)?.mimetype || "";
+        const { MAX_REQUEST_B64_CHARS } = await import("@/lib/media/frame-budget");
+        if (media && /^video\/(mp4|3gpp)\b/i.test(mime) && media.base64.length <= MAX_REQUEST_B64_CHARS) {
+          images.push({ mime: mime.split(";")[0], base64: media.base64 });
+          const { storeMediaAudit } = await import("@/lib/media/audit");
+          if (msgId) void storeMediaAudit(msgId, { mime: mime.split(";")[0], base64: media.base64 });
+        } else {
+          videoUnreadable = true;
+          await sbInsert("agent_events", [
+            {
+              kind: "media-unreadable",
+              vendor_id: "",
+              vendor_name: from,
+              detail: media
+                ? `Video from +${from} (${mime || "unknown format"}, ~${Math.round(media.base64.length / 1_400_000)}MB) is too large or not mp4/3gpp - agent asks for a photo instead (email ${email}).`
+                : `Video from +${from} failed to download - agent asks for a photo instead (email ${email}).`,
+            },
+          ]).catch(() => {});
         }
       }
 
       // Voice note? Download + transcribe (heavy-accent primed) so the whole
       // pipeline treats it exactly like an inbound text.
+      //
+      // CAPTIONED VOICE NOTES TRANSCRIBE TOO (owner report 4). This was gated
+      // on `!syntheticText`, so a voice note sent WITH a caption kept only the
+      // caption - the spoken half (usually the actual price) never reached the
+      // engine. Caption and transcript both feed the turn now.
       let transcript: { text: string; language?: string; source: string } | null = null;
-      if (hasAudio && email && !syntheticText) {
+      if (hasAudio && email) {
         try {
           const media = await fetchMediaWithRetry(email, data);
           if (media) {
             const { transcribeAudio } = await import("@/lib/graph/transcribe");
+            const { threadLanguageMode } = await import("@/lib/wa/thread-language");
             const rfqRegion = await regionForThread(from, email);
+            // The Whisper language hint fires only on threads the traveller
+            // opened in the shop's language - transcribeAudio has carried the
+            // flag since it shipped, and no caller ever passed it.
+            const localLang = (await threadLanguageMode(email, from).catch(() => null)) === true;
             transcript = await transcribeAudio({
               mime: media.mime || "audio/ogg",
               base64: media.base64,
               region: rfqRegion,
+              localLang,
             });
           }
         } catch {
@@ -1030,11 +1163,16 @@ export async function processEvolutionWebhook(
         humanDelay: Boolean(email),
         // A photo we could not download (and no caption to extract from):
         // inject the never-silent clarify so the shop still gets a warm ask
-        // for the price in text instead of silence.
+        // for the price in text instead of silence. A video we could not
+        // watch gets its own honest ask - "[video]" is the placeholder body a
+        // captionless video carries, so the guard reads as "video and nothing
+        // else to go on".
         preExtracted:
           mediaFetchFailed && !syntheticText
             ? (await import("@/lib/agent-loop")).photoClarifyExtraction()
-            : undefined,
+            : videoUnreadable && syntheticText === "[video]"
+              ? (await import("@/lib/agent-loop")).videoClarifyExtraction()
+              : undefined,
         // THE AGENT'S REPLY IS A REPLY. It was billed as a cold introduction.
         //
         // This is the send SPTE's inline `guardAndSend` uses for the actual

@@ -22,7 +22,9 @@ export const dynamic = "force-dynamic";
 // single upstream call - the /api/photo discipline: never interpolate an
 // unvalidated value into a URL.
 const ID_RX = /^[A-Za-z0-9_-]{4,80}$/;
-const AUDIT_EXTS = ["jpg", "png", "webp"] as const;
+// Keep in step with lib/media/audit.ts (inline path) AND the vision worker -
+// pdf/mp4/ogg joined when the inline path started auditing every media kind.
+const AUDIT_EXTS = ["jpg", "png", "webp", "pdf", "mp4", "ogg"] as const;
 
 type MediaRow = {
   wa_message_id: string | null;

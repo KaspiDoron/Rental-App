@@ -183,6 +183,19 @@ export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
   } as import("./agents").ExtractedOffer;
 }
 
+/** The same never-silent guarantee for a video nobody could watch (too large,
+ *  exotic codec, download failed): a reply exists, claims no price, and asks
+ *  for the one thing we need in a form we can read. */
+export function videoClarifyExtraction(): import("./agents").ExtractedOffer {
+  return {
+    found: false,
+    matchesSpec: true,
+    confidence: "low",
+    clarifyMessage:
+      "I could not watch the video - could you send a photo of the price list, or type the daily price? 🙂",
+  } as import("./agents").ExtractedOffer;
+}
+
 /**
  * Record how long THIS turn actually took, at the point the reply left our
  * hands. `composeMs` is the honest cost of the whole chain (extraction, engine

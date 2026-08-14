@@ -80,42 +80,63 @@ export async function transcribeAudio(opts: {
 }): Promise<Transcription | null> {
   const token = await getConfig("GROQ_TOKEN");
   if (token) {
-    try {
-      const bytes = Buffer.from(opts.base64, "base64");
-      const fd = new FormData();
-      const ext = opts.mime.includes("ogg")
-        ? "ogg"
-        : opts.mime.includes("mp4") || opts.mime.includes("m4a")
-        ? "m4a"
-        : opts.mime.includes("mpeg") || opts.mime.includes("mp3")
-        ? "mp3"
-        : opts.mime.includes("wav")
-        ? "wav"
-        : "ogg";
-      fd.append(
-        "file",
-        new Blob([bytes], { type: opts.mime || "audio/ogg" }),
-        `note.${ext}`
-      );
-      fd.append("model", "whisper-large-v3"); // NOT -turbo: strongest on accents
-      fd.append("temperature", "0");
-      fd.append("response_format", "verbose_json");
-      const lang = opts.localLang ? langFor(opts.region) : null;
-      if (lang) fd.append("language", lang.iso); // hint only when confident
-      fd.append("prompt", accentPrimerFor(opts.region));
-      const res = await fetchWithTimeout(
-        "https://api.groq.com/openai/v1/audio/transcriptions",
-        { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd },
-        20_000
-      );
-      await recordApi("groq_whisper").catch(() => {});
-      if (res.ok) {
-        const data = (await res.json()) as { text?: string; language?: string };
-        const text = (data.text ?? "").trim();
-        if (text) return { text, language: data.language, source: "groq" };
+    // ONE CLASSIFIED RETRY BEFORE FALLING TO GEMINI (owner report 4). Whisper
+    // large-v3 is the strongest model on heavy accents - the whole reason it
+    // is first - and any failure used to fall straight through to Gemini
+    // audio, which is measurably weaker on exactly the notes this pipeline is
+    // primed for. A 429 or a timeout is a statement about this minute, not
+    // about the audio (RETRYABLE_VISION is the same policy the image ladder
+    // uses); a rejected key or a bad request cannot succeed twice and goes to
+    // Gemini immediately.
+    const attemptGroq = async (): Promise<Transcription | "retryable" | null> => {
+      try {
+        const bytes = Buffer.from(opts.base64, "base64");
+        const fd = new FormData();
+        const ext = opts.mime.includes("ogg")
+          ? "ogg"
+          : opts.mime.includes("mp4") || opts.mime.includes("m4a")
+          ? "m4a"
+          : opts.mime.includes("mpeg") || opts.mime.includes("mp3")
+          ? "mp3"
+          : opts.mime.includes("wav")
+          ? "wav"
+          : "ogg";
+        fd.append(
+          "file",
+          new Blob([bytes], { type: opts.mime || "audio/ogg" }),
+          `note.${ext}`
+        );
+        fd.append("model", "whisper-large-v3"); // NOT -turbo: strongest on accents
+        fd.append("temperature", "0");
+        fd.append("response_format", "verbose_json");
+        const lang = opts.localLang ? langFor(opts.region) : null;
+        if (lang) fd.append("language", lang.iso); // hint only when confident
+        fd.append("prompt", accentPrimerFor(opts.region));
+        const res = await fetchWithTimeout(
+          "https://api.groq.com/openai/v1/audio/transcriptions",
+          { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd },
+          20_000
+        );
+        await recordApi("groq_whisper").catch(() => {});
+        if (res.ok) {
+          const data = (await res.json()) as { text?: string; language?: string };
+          const text = (data.text ?? "").trim();
+          if (text) return { text, language: data.language, source: "groq" };
+          return null; // a clean empty transcription is an answer, not an outage
+        }
+        const { visionFailureFromStatus, RETRYABLE_VISION } = await import("../vision-read");
+        return RETRYABLE_VISION.has(visionFailureFromStatus(res.status)) ? "retryable" : null;
+      } catch (e) {
+        const { visionFailureFromThrown, RETRYABLE_VISION } = await import("../vision-read");
+        return RETRYABLE_VISION.has(visionFailureFromThrown(e)) ? "retryable" : null;
       }
-    } catch {
-      /* fall through to Gemini */
+    };
+    const first = await attemptGroq();
+    if (first && first !== "retryable") return first;
+    if (first === "retryable") {
+      await new Promise((r) => setTimeout(r, 1_500));
+      const second = await attemptGroq();
+      if (second && second !== "retryable") return second;
     }
   }
 

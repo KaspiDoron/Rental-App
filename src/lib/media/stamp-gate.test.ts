@@ -100,7 +100,12 @@ describe("the vision ladder is current and hot-fixable", () => {
   });
 
   it("a long board fits, and the extractor asks the provider for JSON", () => {
-    expect(ai).toMatch(/maxOutputTokens: 2_048/);
+    // 2_048 covers ONE dense board; a coalesced burst scales the ceiling with
+    // the frame count (owner report 4) so 8 boards cannot be truncated back
+    // into the mid-JSON failure the base value fixed. Capped at 6_144.
+    expect(ai).toMatch(
+      /maxOutputTokens: Math\.min\(6_144, 2_048 \+ 512 \* Math\.max\(0, images\.length - 1\)\)/
+    );
     expect(ai).toMatch(/responseMimeType: "application\/json"/);
     expect(ai).toMatch(/response_format: \{ type: "json_object" \}/);
     expect(readCode("src/lib/agents.ts")).toMatch(/\{ json: true \}/);
