@@ -7,12 +7,23 @@ import { getConfig } from "@/lib/runtime-config";
 
 type TestResult = { ok: boolean; detail: string };
 
-async function testOpenAICompatible(endpoint: string, token: string, model: string): Promise<TestResult> {
+async function testOpenAICompatible(
+  endpoint: string,
+  token: string,
+  model: string,
+  opts?: { reasoningSampler?: boolean }
+): Promise<TestResult> {
   try {
     const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 2 }),
+      // OpenAI's newer models reject max_tokens (want max_completion_tokens) -
+      // testing with the classic param would fail a perfectly good key.
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "ping" }],
+        ...(opts?.reasoningSampler ? { max_completion_tokens: 2 } : { max_tokens: 2 }),
+      }),
     });
     if (res.ok) return { ok: true, detail: `OK - ${model} responded.` };
     // Surface the real error body (some providers return non-JSON on 404).
@@ -66,7 +77,39 @@ export async function GET(req: Request) {
           return NextResponse.json({ ok: false, detail: e instanceof Error ? e.message : "network error" });
         }
       }
-      return NextResponse.json(await testOpenAICompatible(target.endpoint, value!, target.model));
+      if (target.dialect === "anthropic") {
+        // Anthropic's native grammar: x-api-key (not Bearer) + a required
+        // version header + top-level max_tokens. Without this branch the test
+        // button silently fell through to "No test available for this key."
+        try {
+          const res = await fetch(target.endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": value!,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: target.model,
+              max_tokens: 2,
+              messages: [{ role: "user", content: "ping" }],
+            }),
+          });
+          const d = await res.json().catch(() => ({}));
+          return NextResponse.json(
+            res.ok
+              ? { ok: true, detail: `OK - Anthropic responded (${target.model}).` }
+              : { ok: false, detail: d?.error?.message ?? `HTTP ${res.status} (model: ${target.model})` }
+          );
+        } catch (e) {
+          return NextResponse.json({ ok: false, detail: e instanceof Error ? e.message : "network error" });
+        }
+      }
+      return NextResponse.json(
+        await testOpenAICompatible(target.endpoint, value!, target.model, {
+          reasoningSampler: target.sampler === "reasoning",
+        })
+      );
     }
   }
 

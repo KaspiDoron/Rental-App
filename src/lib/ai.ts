@@ -19,7 +19,20 @@ export type ProviderName =
   | "huggingface"
   | "deepseek"
   | "together"
-  | "sambanova";
+  | "sambanova"
+  // PAID providers (owner report 5 #13): keys the owner buys tokens for. They
+  // sit LAST in the default failover order (a free rung answering means no
+  // bill) and FIRST when a caller asks for the premium tier (chatDetailed
+  // opts.tier) - high-stakes turns get the strongest brains.
+  | "openai"
+  | "anthropic"
+  | "kimi";
+
+/** How a provider speaks on the wire. Everything OpenAI-shaped shares one code
+ *  path; Gemini and Anthropic have their own request/response grammar. This
+ *  field is what lets a new provider join WITHOUT a name-equality special case
+ *  buried in the call path (the old `name === "gemini"` pattern). */
+type ProviderDialect = "openai" | "gemini" | "anthropic";
 
 interface ProviderConfig {
   name: ProviderName;
@@ -31,6 +44,16 @@ interface ProviderConfig {
   // before failing over to the next provider. Keeps the app resilient to model
   // renames without a redeploy.
   fallbackModel?: string;
+  /** Wire grammar. Absent = "openai" (the overwhelming default). */
+  dialect?: ProviderDialect;
+  /** The owner pays per token here - drives ordering and honest panel copy. */
+  paid?: boolean;
+  /** "reasoning" = OpenAI's newer models: they reject `max_tokens` (want
+   *  `max_completion_tokens`) and refuse a non-default temperature. Sending
+   *  the classic sampler params 400s EVERY call and burns the fallback rescue
+   *  on each turn - the exact silent-tax failure the rescue telemetry exists
+   *  to expose. */
+  sampler?: "reasoning";
 }
 
 // Per provider call budget. A hung free-tier endpoint must fail over fast, not
@@ -39,7 +62,9 @@ interface ProviderConfig {
 // a 2-3 provider failover chain still fits inside the route's 60s maxDuration.
 const CALL_TIMEOUT_MS = 14000;
 
-/** Every AI provider token key, in default failover order. */
+/** Every AI provider token key, in default failover order. The paid trio sits
+ *  LAST by default - a free rung that answers means no bill - and is hoisted
+ *  to the FRONT for premium-tier callers (see chatDetailed opts.tier). */
 export const PROVIDER_NAMES: ProviderName[] = [
   "groq",
   "cerebras",
@@ -50,10 +75,13 @@ export const PROVIDER_NAMES: ProviderName[] = [
   "mistral",
   "huggingface",
   "gemini",
+  "anthropic",
+  "openai",
+  "kimi",
 ];
 
 async function allProviders(): Promise<ProviderConfig[]> {
-  const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova] =
+  const [groq, openrouter, cerebras, gemini, mistral, huggingface, deepseek, together, sambanova, openai, anthropic, kimi] =
     await Promise.all([
       getConfig("GROQ_TOKEN"),
       getConfig("OPENROUTER_TOKEN"),
@@ -64,13 +92,16 @@ async function allProviders(): Promise<ProviderConfig[]> {
       getConfig("DEEPSEEK_TOKEN"),
       getConfig("TOGETHER_TOKEN"),
       getConfig("SAMBANOVA_TOKEN"),
+      getConfig("OPENAI_TOKEN"),
+      getConfig("ANTHROPIC_TOKEN"),
+      getConfig("KIMI_TOKEN"),
     ]);
   // Optional per-provider MODEL override (vault/env `<PROVIDER>_MODEL`). Free-tier
   // model ids drift constantly - a rename 404s the whole provider. This lets the
   // owner pin or upgrade any provider's model LIVE from Admin -> Keys with no
   // redeploy (paste e.g. `CEREBRAS_MODEL = qwen-3-235b-a22b-instruct-2507`).
   // Blank -> the strong default below. The fallbackModel still covers a bad id.
-  const [groqM, orM, cerM, gemM, misM, hfM, dsM, togM, sambaM] = await Promise.all([
+  const [groqM, orM, cerM, gemM, misM, hfM, dsM, togM, sambaM, oaiM, antM, kimiM] = await Promise.all([
     getConfig("GROQ_MODEL"),
     getConfig("OPENROUTER_MODEL"),
     getConfig("CEREBRAS_MODEL"),
@@ -80,6 +111,9 @@ async function allProviders(): Promise<ProviderConfig[]> {
     getConfig("DEEPSEEK_MODEL"),
     getConfig("TOGETHER_MODEL"),
     getConfig("SAMBANOVA_MODEL"),
+    getConfig("OPENAI_MODEL"),
+    getConfig("ANTHROPIC_MODEL"),
+    getConfig("KIMI_MODEL"),
   ]);
   const pick = (override: string | undefined, def: string) =>
     (override && override.trim()) || def;
@@ -175,6 +209,50 @@ async function allProviders(): Promise<ProviderConfig[]> {
       // with a free tier. gemini-flash-latest is the rolling-alias rescue.
       model: pick(gemM, GEMINI_MODEL),
       fallbackModel: "gemini-flash-latest",
+      dialect: "gemini",
+    },
+    // ---- PAID providers (owner report 5 #13) --------------------------------
+    // The owner buys tokens here for the turns that decide money: the premium
+    // tier (chatDetailed opts.tier) runs these FIRST; the default chain runs
+    // them LAST so routine turns never bill when a free rung answers.
+    {
+      name: "anthropic",
+      token: anthropic,
+      // Anthropic is NOT OpenAI-compatible: native /v1/messages, x-api-key
+      // auth, top-level system, usage.input_tokens/output_tokens.
+      endpoint: "https://api.anthropic.com/v1/messages",
+      // claude-sonnet-5: the balanced tier ($2/$10 per Mtok intro until
+      // 2026-08-31, then $3/$15). Haiku 4.5 is the cheap rescue.
+      model: pick(antM, "claude-sonnet-5"),
+      fallbackModel: "claude-haiku-4-5-20251001",
+      dialect: "anthropic",
+      paid: true,
+    },
+    {
+      name: "openai",
+      token: openai,
+      endpoint: "https://api.openai.com/v1/chat/completions",
+      // gpt-5.6-terra is the mid tier ($2/$12 per Mtok); luna the cheap rescue.
+      // The flagship (gpt-5.6-sol) needs /v1/responses for tool calls - we use
+      // none on this path, so chat/completions with terra is the right default.
+      model: pick(oaiM, "gpt-5.6-terra"),
+      fallbackModel: "gpt-5.6-luna",
+      dialect: "openai",
+      paid: true,
+      // Newer OpenAI models reject max_tokens + non-default temperature.
+      sampler: "reasoning",
+    },
+    {
+      name: "kimi",
+      token: kimi,
+      // Moonshot is genuinely OpenAI-compatible on the wire (temperature 0.6
+      // sits inside its [0,1] range, so no sampler quirk needed).
+      endpoint: "https://api.moonshot.ai/v1/chat/completions",
+      // kimi-k3: flagship, 1M context, native vision ($3 in/$15 out per Mtok).
+      model: pick(kimiM, "kimi-k3"),
+      fallbackModel: "kimi-k2.6",
+      dialect: "openai",
+      paid: true,
     },
   ];
 }
@@ -195,6 +273,13 @@ const PROVIDER_META: Record<ProviderName, { cadence: Cadence; note: string }> = 
   huggingface: { cadence: "month", note: "Router credits reset MONTHLY." },
   together: { cadence: "none", note: "One-time free credit; free models are per-minute rate-limited." },
   deepseek: { cadence: "none", note: "Pay-as-you-go balance (shown live); no free reset." },
+  // PAID tiers: no free reset to describe - the honest label is the bill.
+  openai: { cadence: "none", note: "PAID per token (no free reset) - runs first on premium-tier turns." },
+  anthropic: {
+    cadence: "none",
+    note: "PAID per token (no free reset) - Sonnet intro pricing ends 2026-08-31.",
+  },
+  kimi: { cadence: "none", note: "PAID per token (no free reset) - runs first on premium-tier turns." },
 };
 
 /** Start of the current cadence window as an ISO instant (UTC). */
@@ -446,7 +531,13 @@ export async function aiStatus() {
  */
 export async function aiProviderTestTarget(
   tokenKey: string
-): Promise<{ endpoint: string; model: string; gemini: boolean } | null> {
+): Promise<{
+  endpoint: string;
+  model: string;
+  gemini: boolean;
+  dialect: ProviderDialect;
+  sampler?: "reasoning";
+} | null> {
   const byKey: Record<string, ProviderName> = {
     GROQ_TOKEN: "groq",
     OPENROUTER_TOKEN: "openrouter",
@@ -457,11 +548,24 @@ export async function aiProviderTestTarget(
     DEEPSEEK_TOKEN: "deepseek",
     TOGETHER_TOKEN: "together",
     SAMBANOVA_TOKEN: "sambanova",
+    OPENAI_TOKEN: "openai",
+    ANTHROPIC_TOKEN: "anthropic",
+    KIMI_TOKEN: "kimi",
   };
   const name = byKey[tokenKey];
   if (!name) return null;
   const p = (await allProviders()).find((x) => x.name === name);
-  return p ? { endpoint: p.endpoint, model: p.model, gemini: p.name === "gemini" } : null;
+  return p
+    ? {
+        endpoint: p.endpoint,
+        model: p.model,
+        gemini: p.name === "gemini",
+        // The test button must speak the provider's real grammar - a missing
+        // dialect branch silently fell through to "No test available".
+        dialect: p.dialect ?? "openai",
+        sampler: p.sampler,
+      }
+    : null;
 }
 
 /** fetch with a hard timeout so one slow provider cannot stall the request. */
@@ -519,6 +623,15 @@ async function callOpenAICompatible(
   maxTokens: number,
   timeoutMs = CALL_TIMEOUT_MS
 ): Promise<{ text: string; tokens: number }> {
+  // OpenAI's newer (reasoning) models reject the classic sampler params:
+  // `max_tokens` must be `max_completion_tokens` and temperature must stay at
+  // its default. Sending the old shape 400s EVERY call, which silently burns
+  // the fallback rescue on every single turn - the exact permanent-double-call
+  // tax the rescue telemetry exists to expose.
+  const sampler =
+    cfg.sampler === "reasoning"
+      ? { max_completion_tokens: maxTokens }
+      : { temperature: 0.6, max_tokens: maxTokens };
   const res = await fetchNamed(cfg.name, cfg.endpoint, {
     method: "POST",
     headers: {
@@ -528,8 +641,7 @@ async function callOpenAICompatible(
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.6,
-      max_tokens: maxTokens,
+      ...sampler,
     }),
   }, timeoutMs);
   if (!res.ok) throw new Error(await errorDetail(res, cfg.name));
@@ -537,6 +649,53 @@ async function callOpenAICompatible(
   return {
     text: data.choices?.[0]?.message?.content?.trim() ?? "",
     tokens: data.usage?.total_tokens ?? 0,
+  };
+}
+
+/**
+ * Anthropic's native /v1/messages - NOT OpenAI-compatible. Verified shape:
+ * `x-api-key` auth (not Bearer), a required `anthropic-version` header, the
+ * system prompt as a TOP-LEVEL field (a "system" role in messages is a 400),
+ * and usage split into input_tokens/output_tokens.
+ */
+async function callAnthropic(
+  cfg: ProviderConfig,
+  messages: ChatMessage[],
+  model: string,
+  maxTokens: number,
+  timeoutMs = CALL_TIMEOUT_MS
+): Promise<{ text: string; tokens: number }> {
+  const system = messages.find((m) => m.role === "system")?.content ?? "";
+  const turns = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+  const res = await fetchNamed(cfg.name, cfg.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": cfg.token ?? "",
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      temperature: 0.6,
+      ...(system ? { system } : {}),
+      // /v1/messages requires at least one user turn.
+      messages: turns.length ? turns : [{ role: "user", content: "" }],
+    }),
+  }, timeoutMs);
+  if (!res.ok) throw new Error(await errorDetail(res, cfg.name));
+  const data = await res.json();
+  const text = Array.isArray(data.content)
+    ? data.content
+        .map((b: { type?: string; text?: string }) => (b?.type === "text" ? b.text ?? "" : ""))
+        .join("")
+        .trim()
+    : "";
+  return {
+    text,
+    tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
   };
 }
 
@@ -594,10 +753,14 @@ async function callProvider(
   const primaryMs = cfg.fallbackModel
     ? Math.max(2_000, Math.round(timeoutMs * 0.6))
     : timeoutMs;
+  // Dispatch on the DIALECT, not on a name equality - a new provider joins by
+  // declaring how it speaks, never by another special case buried here.
   const run = async (model: string, ms: number) => ({
-    ...(cfg.name === "gemini"
+    ...(cfg.dialect === "gemini"
       ? await callGemini(cfg, messages, model, maxTokens, ms)
-      : await callOpenAICompatible(cfg, messages, model, maxTokens, ms)),
+      : cfg.dialect === "anthropic"
+        ? await callAnthropic(cfg, messages, model, maxTokens, ms)
+        : await callOpenAICompatible(cfg, messages, model, maxTokens, ms)),
     model,
   });
   try {
@@ -615,7 +778,12 @@ async function callProvider(
     // the right next move; a provider-wide quota 429 just fails a second
     // cheap call and the cross-provider failover chain moves on as before.
     const modelIssue =
-      /\b(400|404|429)\b/.test(reason) || visionFailureFromThrown(e) === "timeout";
+      /\b(400|404|429)\b/.test(reason) ||
+      // Anthropic reports overload as 529, per model pool - the cheaper
+      // sibling (Haiku) routinely answers while the primary is drowning,
+      // exactly the SambaNova per-model-429 pattern with a different number.
+      /\b529\b/.test(reason) ||
+      visionFailureFromThrown(e) === "timeout";
     if (cfg.fallbackModel && modelIssue) {
       // A SUCCESSFUL RESCUE HID THE THING THAT NEEDED FIXING.
       //
@@ -746,7 +914,20 @@ export async function chat(
  */
 export async function chatDetailed(
   messages: ChatMessage[],
-  opts?: { maxTokens?: number; budgetMs?: number; preferProvider?: ProviderName }
+  opts?: {
+    maxTokens?: number;
+    budgetMs?: number;
+    preferProvider?: ProviderName;
+    /**
+     * "premium" hoists the PAID providers (OpenAI/Anthropic/Kimi, when keyed)
+     * to the front of the chain for this call - the high-stakes turns (first
+     * push, farewell, comprehension) get the strongest brains, while the
+     * default order keeps paid rungs LAST so routine turns never bill when a
+     * free rung answers. This is what makes SPTE's pickRoute tier REAL: it
+     * used to compute "Tier M" and route nothing.
+     */
+    tier?: "premium";
+  }
 ): Promise<{ text: string | null; provider?: ProviderName; error?: string }> {
   // THE PER-USER AI CAP, AT THE ONE PLACE EVERY LLM CALL PASSES THROUGH.
   //
@@ -773,6 +954,12 @@ export async function chatDetailed(
     };
   }
   let list = await providers();
+  // PREMIUM TIER: paid providers first (stable within each half), free chain
+  // as the fallback. Only reorders what is CONFIGURED - with no paid key this
+  // is a no-op and the call behaves exactly like the default chain.
+  if (opts?.tier === "premium") {
+    list = [...list.filter((p) => p.paid), ...list.filter((p) => !p.paid)];
+  }
   // preferProvider hoists one provider to the front WHEN it is configured
   // (used by the distillation "teacher" to prefer DeepSeek, while still falling
   // back to the free chain when no DeepSeek key exists). Not a hard pin.
@@ -891,10 +1078,11 @@ const GEMINI_VISION_FALLBACKS = [
  * multimodal id - was also the only one they could not fix without a
  * redeploy. GEMINI_VISION_MODEL / GROQ_VISION_MODEL close that gap.
  */
-async function visionLadders(): Promise<{ gemini: string[]; groq: string[] }> {
-  const [gemOverride, groqOverride] = await Promise.all([
+async function visionLadders(): Promise<{ gemini: string[]; groq: string[]; anthropic: string[] }> {
+  const [gemOverride, groqOverride, antOverride] = await Promise.all([
     getConfig("GEMINI_VISION_MODEL"),
     getConfig("GROQ_VISION_MODEL"),
+    getConfig("ANTHROPIC_VISION_MODEL"),
   ]);
   const withOverride = (override: string | undefined, defaults: string[]) => {
     const o = (override ?? "").trim();
@@ -903,6 +1091,10 @@ async function visionLadders(): Promise<{ gemini: string[]; groq: string[] }> {
   return {
     gemini: withOverride(gemOverride, GEMINI_VISION_FALLBACKS),
     groq: withOverride(groqOverride, GROQ_VISION_FALLBACKS),
+    // A PAID rescue rung (owner report 5 #13): every current Claude model
+    // accepts image input, and a menu photo the free rungs failed on decides
+    // real money. Haiku is the cheap default; the vault override can raise it.
+    anthropic: withOverride(antOverride, ["claude-haiku-4-5-20251001"]),
   };
 }
 
@@ -1043,6 +1235,79 @@ async function groqVisionAttempt(
   }
 }
 
+async function anthropicVisionAttempt(
+  key: string,
+  model: string,
+  system: string,
+  userText: string,
+  images: { mime: string; base64: string }[],
+  timeoutMs: number,
+  json: boolean
+): Promise<VisionAttemptOutcome> {
+  try {
+    const res = await fetchWithTimeout(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          // Same frame-scaled ceiling reasoning as the Gemini rung: a
+          // coalesced multi-board burst must fit.
+          max_tokens: Math.min(6_144, 2_048 + 512 * Math.max(0, images.length - 1)),
+          temperature: 0.2,
+          system: json
+            ? `${system}\n\nAnswer with ONLY the JSON object - no prose, no code fences.`
+            : system,
+          messages: [
+            {
+              role: "user",
+              content: [
+                ...images.map((img) => ({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: img.mime || "image/jpeg",
+                    data: img.base64,
+                  },
+                })),
+                { type: "text", text: userText },
+              ],
+            },
+          ],
+        }),
+      },
+      timeoutMs
+    );
+    if (!res.ok) {
+      return { failure: visionFailureFromStatus(res.status), error: await errorDetail(res, "anthropic") };
+    }
+    const data = await res.json();
+    const out = Array.isArray(data.content)
+      ? data.content
+          .map((b: { type?: string; text?: string }) => (b?.type === "text" ? b.text ?? "" : ""))
+          .join("")
+          .trim()
+      : "";
+    if (out) {
+      return {
+        text: out,
+        tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
+      };
+    }
+    return { failure: "blocked", error: "empty reply" };
+  } catch (e) {
+    return {
+      failure: visionFailureFromThrown(e),
+      error: e instanceof Error ? e.message : "network error",
+    };
+  }
+}
+
 /**
  * READ IMAGES, AND SAY WHETHER WE ACTUALLY SAW THEM.
  *
@@ -1063,9 +1328,10 @@ export async function readImages(
   globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
   const deadline = Date.now() + VISION_TOTAL_BUDGET_MS;
 
-  const [gemini, groq, models] = await Promise.all([
+  const [gemini, groq, anthropic, models] = await Promise.all([
     getConfig("GEMINI_TOKEN"),
     getConfig("GROQ_TOKEN"),
+    getConfig("ANTHROPIC_TOKEN"),
     visionLadders(),
   ]);
   if (!gemini)
@@ -1091,7 +1357,7 @@ export async function readImages(
   const groqImages = images.filter((i) => (i.mime || "").startsWith("image/"));
 
   const ladder: Array<{
-    provider: "gemini" | "groq";
+    provider: "gemini" | "groq" | "anthropic";
     model: string;
     run: (timeoutMs: number) => Promise<VisionAttemptOutcome>;
   }> = [];
@@ -1120,6 +1386,18 @@ export async function readImages(
       failure: "unconfigured",
       error: "no image parts (audio-only input)",
     });
+  }
+  // PAID rescue rung (only when the owner keyed it): a menu photo the free
+  // rungs failed on decides real money, so it earns a premium read. Runs LAST -
+  // it is a rescue, not the default spend. Image parts only (like Groq).
+  if (anthropic && groqImages.length > 0) {
+    for (const model of models.anthropic) {
+      ladder.push({
+        provider: "anthropic",
+        model,
+        run: (ms) => anthropicVisionAttempt(anthropic, model, system, userText, groqImages, ms, json),
+      });
+    }
   }
 
   const perCall = () => Math.max(2_000, Math.min(VISION_CALL_TIMEOUT_MS, deadline - Date.now()));

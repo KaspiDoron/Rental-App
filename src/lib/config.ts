@@ -40,6 +40,9 @@ const DOC_URLS: Record<string, string> = {
   DEEPSEEK_TOKEN: "https://platform.deepseek.com/api_keys",
   TOGETHER_TOKEN: "https://api.together.ai/settings/api-keys",
   SAMBANOVA_TOKEN: "https://cloud.sambanova.ai/apis",
+  ANTHROPIC_TOKEN: "https://platform.claude.com/settings/keys",
+  OPENAI_TOKEN: "https://platform.openai.com/api-keys",
+  KIMI_TOKEN: "https://platform.moonshot.ai/console/api-keys",
   EVOLUTION_HOSTS: "https://doc.evolution-api.com/",
   EVOLUTION_API_URL: "https://doc.evolution-api.com/",
   EVOLUTION_API_KEY: "https://doc.evolution-api.com/",
@@ -94,6 +97,12 @@ const KEYS: {
   { name: "DEEPSEEK_TOKEN", label: "DeepSeek (deepseek-v4-pro - top tier)", scope: "ai", editable: true },
   { name: "TOGETHER_TOKEN", label: "Together AI (Llama 3.3 70B - free)", scope: "ai", editable: true },
   { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
+  // ---- PAID providers (owner report 5 #13) - premium brains for the turns
+  // that decide money. Last in the default failover chain (a free rung
+  // answering means no bill), first on premium-tier calls.
+  { name: "ANTHROPIC_TOKEN", label: "Anthropic Claude (PAID - premium tier)", scope: "ai", editable: true },
+  { name: "OPENAI_TOKEN", label: "OpenAI (PAID - premium tier)", scope: "ai", editable: true },
+  { name: "KIMI_TOKEN", label: "Kimi / Moonshot AI (PAID - premium tier)", scope: "ai", editable: true },
   // Not a secret, and I-7 makes it the FIRST thing to read: the default order
   // returns Groq first, so a "Cerebras primary, fails over to Groq" report is
   // only possible under a non-default value here. Masked, it could not be
@@ -121,8 +130,12 @@ const KEYS: {
   { name: "DEEPSEEK_MODEL", label: "DeepSeek model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "TOGETHER_MODEL", label: "Together model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "SAMBANOVA_MODEL", label: "SambaNova model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "ANTHROPIC_MODEL", label: "Anthropic model id (blank = claude-sonnet-5)", scope: "ai", editable: true, secret: false },
+  { name: "OPENAI_MODEL", label: "OpenAI model id (blank = gpt-5.6-terra)", scope: "ai", editable: true, secret: false },
+  { name: "KIMI_MODEL", label: "Kimi model id (blank = kimi-k3)", scope: "ai", editable: true, secret: false },
   { name: "GEMINI_VISION_MODEL", label: "Gemini vision model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "GROQ_VISION_MODEL", label: "Groq vision model id (blank = default)", scope: "ai", editable: true, secret: false },
+  { name: "ANTHROPIC_VISION_MODEL", label: "Anthropic vision model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "GRAPH_ENGINE", label: "Negotiation engine ('off' = legacy pipeline)", scope: "ai", editable: true },
   // ---- Monetization: the warm-up gate and its measurement holdout ----------
   //
