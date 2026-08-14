@@ -205,6 +205,38 @@ export async function recordProxyVerification(email: string, applied: boolean): 
   }
 }
 
+/** How many unproxied numbers on one datacenter host is a cluster-ban risk.
+ *  WhatsApp's classic cluster-ban trigger is many companion devices egressing
+ *  from ONE IP; below this the shared-IP signal is weak, at/above it loud. */
+export const PROXYLESS_CLUSTER_THRESHOLD = 5;
+
+/**
+ * The datacenter-IP concentration warning, pure so it is testable.
+ *
+ * Given each session's host and whether a proxy template is configured, returns
+ * the loudest per-host over-concentration (owner report 4, anti-ban A4). Null
+ * when a proxy IS configured (every number gets its own residential exit) or no
+ * host crosses the threshold.
+ */
+export function clusterWarning(
+  hosts: Array<string | null>,
+  proxied: boolean
+): { host: string; count: number } | null {
+  if (proxied) return null;
+  const byHost = new Map<string, number>();
+  for (const h of hosts) {
+    const key = (h ?? "").trim() || "(unknown host)";
+    byHost.set(key, (byHost.get(key) ?? 0) + 1);
+  }
+  let worst: { host: string; count: number } | null = null;
+  for (const [host, count] of byHost) {
+    if (count >= PROXYLESS_CLUSTER_THRESHOLD && (!worst || count > worst.count)) {
+      worst = { host, count };
+    }
+  }
+  return worst;
+}
+
 export interface TransportSummary {
   /** Is a residential exit configured at all? */
   configured: boolean;
@@ -220,6 +252,13 @@ export interface TransportSummary {
    * and painting it as a failure would cry wolf on every dashboard load.
    */
   note: string;
+  /**
+   * THE LOUD BANNER (anti-ban A4). Present ONLY when too many unproxied numbers
+   * share one datacenter host - the classic cluster-ban trigger. This is the
+   * one transport state that IS a red dot, because it is the one that gets a
+   * whole host's fleet banned at once. Absent at the safe baseline.
+   */
+  clusterWarning?: { host: string; count: number };
 }
 
 /**
@@ -232,19 +271,37 @@ export async function transportSummary(): Promise<TransportSummary> {
   const template = (await getConfig("EVOLUTION_PROXY_TEMPLATE"))?.trim();
   const legacy = (await getConfig("EVOLUTION_PROXY"))?.trim();
   const configured = Boolean(template || legacy);
+  // The concentration read is worth doing EVEN when no proxy is configured -
+  // that is precisely when the cluster-ban risk is real.
+  let hostRows: Array<{ host_url: string | null; proxy_verified_at: string | null }> = [];
+  let readOk = true;
+  try {
+    hostRows = await sbSelect<{ host_url: string | null; proxy_verified_at: string | null }>(
+      "wa_sessions",
+      "select=host_url,proxy_verified_at&limit=1000"
+    );
+  } catch {
+    readOk = false;
+  }
+  const warn = readOk
+    ? clusterWarning(hostRows.map((r) => r.host_url), configured) ?? undefined
+    : undefined;
   if (!configured) {
     return {
       configured: false,
+      // Neutral baseline: the session COUNT is not the point when no exit is
+      // configured (the tile must not cry wolf), so it stays null exactly as
+      // before - the cluster warning below is the only signal that escalates.
       sessions: null,
       verified: null,
-      note: "No residential exit configured - sessions egress from the datacenter IP. Expected baseline; the paid proxy was cut by owner decision.",
+      note: warn
+        ? `${warn.count} unproxied numbers share ${warn.host} - a datacenter-IP cluster-ban risk. Configure EVOLUTION_PROXY_TEMPLATE or spread the numbers across hosts.`
+        : "No residential exit configured - sessions egress from the datacenter IP. Expected baseline; the paid proxy was cut by owner decision.",
+      ...(warn ? { clusterWarning: warn } : {}),
     };
   }
-  try {
-    const rows = await sbSelect<{ proxy_verified_at: string | null }>(
-      "wa_sessions",
-      "select=proxy_verified_at&limit=1000"
-    );
+  if (readOk) {
+    const rows = hostRows;
     const sessions = rows.length;
     const verified = rows.filter((r) => r.proxy_verified_at).length;
     return {
@@ -256,7 +313,8 @@ export async function transportSummary(): Promise<TransportSummary> {
           ? "Every linked session has a confirmed residential exit."
           : `${verified} of ${sessions} sessions have a confirmed exit; the rest are asserted but unverified.`,
     };
-  } catch {
+  }
+  {
     return {
       configured: true,
       sessions: null,

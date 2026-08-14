@@ -42,7 +42,14 @@ import type { InboundImage } from "./media/orientation";
 // per-instance field AND the server env is belt-and-suspenders - the field is a
 // harmless no-op on builds that read only the env, and authoritative on forks
 // that pass `browser` straight to makeWASocket.
-const CLIENT_BROWSER: readonly [string, string, string] = ["Mac OS", "Chrome", "122.0.0"];
+// The VERSION is refreshed to a current stable build (owner report 4, anti-ban
+// A3): a linked-device fingerprint pinned to a long-retired Chrome is itself a
+// mild tell as the real fleet moves on. The platform + browser stay fleet-
+// UNIFORM on purpose - the unofficial-client axis is a full ban keyed on client
+// IDENTITY that resolves 100%/0% for everyone at once (see
+// wa/device-fingerprint.test.ts), so varying "Mac OS"/"Chrome" per account buys
+// nothing; only the version tracks reality. Keep it current on each refresh.
+const CLIENT_BROWSER: readonly [string, string, string] = ["Mac OS", "Chrome", "131.0.0"];
 
 // Connection-safety defaults shared by every instance/create path. mobile:false
 // pins the WhatsApp WEB protocol (not the flagged/deprecated mobile API); the
@@ -428,7 +435,14 @@ export async function canonicalWebhookOrigin(requestOrigin?: string): Promise<st
   return norm(configured) ?? routableOrigin(norm(requestOrigin)) ?? null;
 }
 
-// Per-instance re-arm throttle (in-memory, survives warm invocations).
+// Per-instance re-arm throttle. SHARED ACROSS RUNTIME INSTANCES (owner report
+// 4, anti-ban A8): it used to live in a per-process Map, so N Cloud Run
+// instances each kept their own clock and the "once per hour" re-arm actually
+// fired up to N times an hour - unnecessary /webhook/set churn that scales with
+// the fleet. A config row is the shared clock every instance reads. The 30s
+// runtime-config cache is negligible against a 1h window. In-memory is kept as
+// a same-process fast-path so a warm instance does not read the vault every
+// send-adjacent re-arm.
 declare global {
   // eslint-disable-next-line no-var
   var __wd_wh_rearm__: Map<string, number> | undefined;
@@ -438,6 +452,31 @@ function rearmStore(): Map<string, number> {
   return globalThis.__wd_wh_rearm__;
 }
 const REARM_THROTTLE_MS = 60 * 60 * 1000; // ~1h per instance unless forced
+const rearmConfigKey = (instance: string) => `WH_REARM_${instance}`;
+
+/** The last re-arm time for an instance, from the shared config row (falling
+ *  back to this process's own memory). Returns 0 when never re-armed / unread. */
+async function lastRearmAt(instance: string): Promise<number> {
+  const local = rearmStore().get(instance) ?? 0;
+  try {
+    const raw = await getConfig(rearmConfigKey(instance));
+    const shared = raw ? Date.parse(raw) : NaN;
+    return Number.isFinite(shared) ? Math.max(local, shared) : local;
+  } catch {
+    return local; // vault unreadable - the local clock still throttles this process
+  }
+}
+
+/** Stamp the re-arm time in BOTH the shared row and this process's memory. */
+async function stampRearm(instance: string, atMs: number): Promise<void> {
+  rearmStore().set(instance, atMs);
+  try {
+    const { setConfig } = await import("./runtime-config");
+    await setConfig(rearmConfigKey(instance), new Date(atMs).toISOString());
+  } catch {
+    /* the local stamp above still throttles this process */
+  }
+}
 
 /**
  * Re-assert the user's webhook URL on Evolution with the CURRENT token, WITHOUT
@@ -464,12 +503,11 @@ export async function reassertWebhook(
   const origin = await canonicalWebhookOrigin(opts.requestOrigin);
   if (!origin) return { ok: false, changed: false, registeredUrl: null, skipped: "no-origin" };
 
-  const store = rearmStore();
   const now = Date.now();
-  if (!opts.force && now - (store.get(instance) ?? 0) < REARM_THROTTLE_MS) {
+  if (!opts.force && now - (await lastRearmAt(instance)) < REARM_THROTTLE_MS) {
     return { ok: true, changed: false, registeredUrl: null, skipped: "throttled" };
   }
-  store.set(instance, now);
+  await stampRearm(instance, now);
 
   const token = await webhookToken();
   if (!token) return { ok: false, changed: false, registeredUrl: null, skipped: "no-host" };
@@ -817,6 +855,62 @@ async function evo(
   const host = await resolveHost(email);
   if (!host) return { ok: false, status: 0, data: { error: "not configured" } };
   return evoFetch(host, path, init);
+}
+
+/**
+ * BLUE TICKS, ON A HUMAN'S CLOCK (owner report 4, anti-ban A1).
+ *
+ * A real linked device sends read receipts: you open the chat, WhatsApp marks
+ * the message read, and only THEN do you reply. Our sessions did neither -
+ * `readMessages:false` at link time and no markMessageAsRead anywhere - so
+ * every one of our numbers presented the same never-reads-then-replies pattern,
+ * which is one of the strongest behavioural bot tells on the platform (research
+ * corroborated: read-receipt absence clusters accounts).
+ *
+ * Fired post-store from ingest with a humanized delay (see the caller), so the
+ * receipt lands 2-7s after arrival - the "just glanced at my phone" beat, not
+ * an instant machine ack. Best-effort by contract: a failed receipt must never
+ * affect the reply, but it is COUNTED (agent_events) rather than swallowed, so
+ * the @lid-recipient silent-failure class that bit sendPresence cannot hide
+ * here. Product note: shops now see blue ticks - the pre-link consent copy
+ * says so.
+ */
+export async function markMessageAsRead(
+  email: string,
+  key: { remoteJid?: string; fromMe?: boolean; id?: string } | null | undefined
+): Promise<boolean> {
+  if (!email || !key?.remoteJid || !key?.id) return false;
+  const instance = instanceNameFor(email);
+  const r = await evo(email, `/chat/markMessageAsRead/${instance}`, {
+    method: "POST",
+    body: JSON.stringify({
+      readMessages: [{ remoteJid: key.remoteJid, fromMe: Boolean(key.fromMe), id: key.id }],
+    }),
+  }).catch(() => ({ ok: false, status: 0, data: {} }));
+  if (!r.ok) {
+    // COUNTED, not swallowed - the @lid presence bug class was invisible for
+    // exactly this reason. Throttled by the caller's own cadence (one inbound
+    // per shop message), so no extra throttle is needed here.
+    await sbInsert("agent_events", [
+      {
+        kind: "wa-read-failed",
+        user_email: email,
+        vendor_name: digitsOnly(key.remoteJid) || key.remoteJid,
+        detail: `markMessageAsRead ${r.status} for ${instance}`.slice(0, 200),
+      },
+    ]).catch(() => {});
+  }
+  return r.ok;
+}
+
+/** The humanized "I just glanced at my phone" delay before a blue tick, in ms.
+ *  Floor 2s + exponential tail (mean ~4s), capped so it stays inside the
+ *  webhook's after-work budget - a receipt that never leaves the instance is
+ *  worse than a slightly-quicker one. Pure + injectable for the test. */
+export function readReceiptDelayMs(rand: () => number = Math.random): number {
+  const u = Math.min(Math.max(rand(), 0), 0.999_999);
+  const tail = -Math.log(1 - u) * 4_000;
+  return Math.round(Math.min(7_000, 2_000 + tail));
 }
 
 /** Keep-awake: ping every configured host so none of them sleeps. */
@@ -2251,11 +2345,30 @@ export async function sendFromUser(
     const { getPolicies } = await import("./wa-guard");
     const p = await getPolicies();
     const span = Math.max(0, p.presence_max_ms - p.presence_min_ms);
-    const presence = (state: string, delay: number) =>
-      evo(email, `/chat/sendPresence/${instance}`, {
+    // COUNT presence failures instead of swallowing them (owner report 4,
+    // anti-ban A6). The @lid sendPresence bug class made lid recipients
+    // silently presence-less - a real behavioural gap that left no trace
+    // because every presence call was fire-and-forget. One throttled event per
+    // (sender, shop) on the FIRST failure of the sequence is enough to see it.
+    let presenceFailed = false;
+    const presence = async (state: string, delay: number) => {
+      const r = await evo(email, `/chat/sendPresence/${instance}`, {
         method: "POST",
         body: JSON.stringify({ number, presence: state, delay }),
       });
+      if (!r.ok && !presenceFailed) {
+        presenceFailed = true;
+        void sbInsert("agent_events", [
+          {
+            kind: "wa-presence-failed",
+            user_email: email,
+            vendor_name: number,
+            detail: `sendPresence(${state}) ${r.status} for ${instance}`.slice(0, 200),
+          },
+        ]).catch(() => {});
+      }
+      return r;
+    };
     if (fast) {
       // One short typing burst, no blocking wait beyond ~1.2s.
       await presence("composing", 1500);

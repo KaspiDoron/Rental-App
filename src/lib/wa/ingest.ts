@@ -213,6 +213,11 @@ export async function processEvolutionWebhook(
   // dispatcher is kicked at the end - per sender, so one traveller's cold
   // batch can never gate another's answer.
   const touchedSenders = new Set<string>();
+  // Read receipts (anti-ban A1) collected across the batch and fired once,
+  // concurrently, AFTER the try below - so N messages pay the "just glanced"
+  // delay in parallel, never serially in front of the reply. Declared out here
+  // so the post-loop firing block can see it.
+  const readReceipts: Array<{ email: string; key: { remoteJid: string; fromMe: boolean; id: string } }> = [];
   if (!body) return { retryable };
 
   try {
@@ -785,6 +790,16 @@ export async function processEvolutionWebhook(
       const { recordResponseTime } = await import("@/lib/stats");
       recordResponseTime(from).catch(() => {});
 
+      // BLUE TICK ON A HUMAN'S CLOCK (owner report 4, anti-ban A1). A real
+      // linked device reads the message before it answers; ours never did,
+      // presenting a never-reads-then-replies pattern to every shop. Collected
+      // here and fired ONCE, concurrently, after the batch loop (below) with a
+      // 2-7s "just glanced" delay each - so a multi-message batch pays that
+      // delay in parallel, never serially in front of the reply.
+      if (email && msgId && data.key) {
+        readReceipts.push({ email, key: { remoteJid: originJid || remoteJid, fromMe: false, id: msgId } });
+      }
+
       // A SHARED CONTACT IS A LEAD, NOT JUST PROSE (owner report 4). The card's
       // digits are already stored on the row (raw.contact); this durable event
       // is what a UI chip can render as a one-tap "ask this shop too". A
@@ -1220,6 +1235,26 @@ export async function processEvolutionWebhook(
     }
   } catch {
     // Never fail the webhook.
+  }
+
+  // BLUE TICKS (anti-ban A1), the whole batch at once. Each fires after its own
+  // 2-7s "just glanced" delay, all in parallel, bounded so the receipts leave
+  // the instance before Cloud Run freezes CPU - and never blocking the reply
+  // path above, which has already parked its answers by now.
+  if (readReceipts.length) {
+    await finishBeforeResponse(
+      "read-receipts",
+      async () => {
+        const { markMessageAsRead, readReceiptDelayMs } = await import("@/lib/evolution");
+        await Promise.all(
+          readReceipts.map(async (r) => {
+            await new Promise((res) => setTimeout(res, readReceiptDelayMs()));
+            await markMessageAsRead(r.email, r.key);
+          })
+        );
+      },
+      9_000
+    );
   }
 
   // Opportunistic queue drain: any webhook activity flushes due outbox
