@@ -6,10 +6,12 @@ import {
   sbInsertReturning,
   sbSelect,
   sbDelete,
-  supabaseConfigured,
+  sbUpdate,
 } from "@/lib/runtime-config";
 import { adminEmails, getSession } from "@/lib/session";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { moderateFeedback } from "@/lib/feedback/moderation";
+import { normalizeVerdict } from "@/lib/feedback/verdict";
 
 interface ImagePayload {
   filename: string;
@@ -59,10 +61,36 @@ export async function POST(req: Request) {
   // team-reply email to an attacker-chosen address.
   const session = await getSession();
   const email = session?.email ?? "";
+
+  // SAFE WORDS (owner report 5 #18). BEFORE anything is stored, emailed or
+  // shown: model-first moderation with a deterministic blocklist floor. A
+  // rejected report is never written to the table, so abuse cannot reach the
+  // owner's inbox at all - and the refusal is polite, specific, and never
+  // quotes the abuse back at the person who wrote it.
+  //
+  // Deliberately NOT a complaint filter: fury about the product is exactly the
+  // feedback we want, and the moderator is told so in as many words.
+  const moderation = await moderateFeedback(text);
+  if (!moderation.allowed) {
+    return NextResponse.json(
+      {
+        error: moderation.message ?? "Please rephrase this without the language and send it again.",
+        rejected: "language",
+        stored: false,
+      },
+      { status: 400 }
+    );
+  }
+
   const attachments = parseImages(body.images);
 
   // Feedback Triage Agent: keep genuine issues, filter spam before emailing.
-  const verdict = await triageFeedback(category, text);
+  //
+  // VALIDATED. This used to accept the model's JSON on one `typeof` check, so a
+  // reply missing `severity` threw a TypeError in the email subject below -
+  // AFTER the row was inserted. The user saw "Something went wrong", nothing
+  // was escalated, and re-submitting duplicated the row. See feedback/verdict.
+  const verdict = normalizeVerdict(await triageFeedback(category, text), text);
 
   const inserted = await sbInsertReturning<{ id: number }>("feedback", [
     {
@@ -85,7 +113,15 @@ export async function POST(req: Request) {
   // said `accepted: true` with a null id. The escalation email is a separate
   // path and still goes out, so this is not a hard failure; it is a different
   // promise, and the copy has to match which one we actually kept.
-  const storedRow = feedbackId !== null || !supabaseConfigured();
+  //
+  // W6.2 - AND DEMO MODE IS NOT A STORED ROW EITHER. The `|| !supabaseConfigured()`
+  // that used to sit here reported `stored: true` with no database at all, so
+  // the app promised a thread under "Your reports" that the GET can only ever
+  // answer with an empty list. No row, no thread, and we say so.
+  const storedRow = feedbackId !== null;
+  /** No session, so this report has no owner and no reply channel. Told to the
+   *  reporter plainly rather than discovered by them later (W6.2). */
+  const anonymous = !email;
 
   if (feedbackId !== null && Array.isArray(body.images) && body.images.length) {
     const rows = (body.images as { dataUrl?: string }[])
@@ -109,6 +145,7 @@ export async function POST(req: Request) {
       accepted: false,
       id: feedbackId,
       stored: storedRow,
+      anonymous,
       reason: storedRow
         ? "Thanks! Our assistant reviewed this and didn't flag a concrete bug, so it wasn't escalated. Add more detail (what happened, steps) to send it through - you can also reply on it under Your reports."
         : "Thanks - we read this, and our assistant didn't flag a concrete bug. We could not save a copy just now, so it will not appear under Your reports. If you want us to look again, please send it once more in a few minutes.",
@@ -136,6 +173,7 @@ export async function POST(req: Request) {
     accepted: true,
     id: feedbackId,
     stored: storedRow,
+    anonymous,
     // The team got it either way (that is `emailed`); `stored` is specifically
     // whether a thread exists for the reporter to follow up in.
     storedNote: storedRow
@@ -151,22 +189,38 @@ export async function POST(req: Request) {
 // GET: the signed-in user's OWN submissions, each with its reply thread and
 // status, newest first - so feedback is a visible, two-way conversation rather
 // than a fire-and-forget box.
+type OwnReportRow = {
+  id: number;
+  category: string;
+  body: string;
+  status: string | null;
+  severity: string | null;
+  summary: string | null;
+  user_seen_at?: string | null;
+  created_at: string;
+};
+
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   const me = encodeURIComponent(session.email);
-  const rows = await sbSelect<{
-    id: number;
-    category: string;
-    body: string;
-    status: string | null;
-    severity: string | null;
-    summary: string | null;
-    created_at: string;
-  }>(
+  const filter = `reporter_email=eq.${me}&order=created_at.desc&limit=50`;
+  // `user_seen_at` in the first tier only - the column exists in the schema and
+  // has been DEAD CODE since it was added (the unread dot was computed from a
+  // localStorage stamp, so a reply read on a phone was unread again on a
+  // laptop, and the badge only ever appeared INSIDE the already-open modal).
+  // An unknown column silently blanks a select, so the pre-migration tier keeps
+  // the reports list alive without it.
+  let rows = await sbSelect<OwnReportRow>(
     "feedback",
-    `select=id,category,body,status,severity,summary,created_at&reporter_email=eq.${me}&order=created_at.desc&limit=50`
-  ).catch(() => []);
+    `select=id,category,body,status,severity,summary,user_seen_at,created_at&${filter}`
+  ).catch(() => [] as OwnReportRow[]);
+  if (rows.length === 0) {
+    rows = await sbSelect<OwnReportRow>(
+      "feedback",
+      `select=id,category,body,status,severity,summary,created_at&${filter}`
+    ).catch(() => [] as OwnReportRow[]);
+  }
 
   let replies: {
     id: number;
@@ -191,9 +245,45 @@ export async function GET() {
   const byId: Record<number, typeof replies> = {};
   for (const r of replies) (byId[r.feedback_id] ??= []).push(r);
 
-  return NextResponse.json({
-    reports: rows.map((r) => ({ ...r, replies: byId[r.id] ?? [] })),
+  // THE UNREAD SIGNAL, FROM THE SERVER (W6.2). A team reply newer than the
+  // stamp this device-independent column carries is unread, full stop.
+  const reports = rows.map((r) => {
+    const thread = byId[r.id] ?? [];
+    const seen = r.user_seen_at ? Date.parse(r.user_seen_at) : 0;
+    const unread = thread.filter(
+      (rp) => rp.author_role !== "user" && (Date.parse(rp.created_at) || 0) > seen
+    ).length;
+    return { ...r, replies: thread, unread };
   });
+
+  // Categories that DO something: the counts the tab needs to offer a filter.
+  const byCategory: Record<string, number> = {};
+  for (const r of reports) byCategory[r.category || "other"] = (byCategory[r.category || "other"] ?? 0) + 1;
+
+  return NextResponse.json({
+    reports,
+    unread: reports.reduce((n, r) => n + r.unread, 0),
+    byCategory,
+  });
+}
+
+// PATCH: "I have read the team's replies." Stamps `user_seen_at` on the
+// caller's OWN reports, which is what makes the unread badge survive a device
+// change - the column has existed since the feedback-threads migration and
+// nothing has ever written to it.
+export async function PATCH(req: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  const body = await req.json().catch(() => ({}));
+  const id = Number(body?.id);
+  const me = encodeURIComponent(session.email);
+  const scope = Number.isFinite(id) && id > 0 ? `id=eq.${id}&reporter_email=eq.${me}` : `reporter_email=eq.${me}`;
+  // Ownership is in the FILTER, never in the id alone: one user can never stamp
+  // another user's row, whatever they send.
+  const ok = await sbUpdate("feedback", scope, { user_seen_at: new Date().toISOString() }).catch(
+    () => false
+  );
+  return NextResponse.json({ ok: ok !== false });
 }
 
 // DELETE: a user removes their OWN submission (and its thread + screenshots).

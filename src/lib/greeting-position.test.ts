@@ -174,10 +174,20 @@ describe("the send-time choke point knows where in the thread it is", () => {
 
 describe("the hard-coded greeting sources are closed", () => {
   it("the re-check message no longer opens with one", () => {
-    const m = recheckMessage({ pricePerDay: 400, currency: "PHP", days: 5 });
-    expect(hasLeadingGreeting(m)).toBe(false);
+    // W6.1: the composer now REFUSES an incomplete deal (no price, deposit or
+    // fulfillment = no message at all), so the second assertion is that there
+    // is no sentence to greet with rather than a greetingless one.
+    const m = recheckMessage({
+      pricePerDay: 400,
+      currency: "PHP",
+      days: 5,
+      depositType: "cash",
+      depositAmount: 2000,
+      fulfillment: "pickup",
+    });
+    expect(hasLeadingGreeting(m!)).toBe(false);
     expect(m).not.toMatch(/again/i);
-    expect(hasLeadingGreeting(recheckMessage({ pricePerDay: null, currency: "PHP" }))).toBe(false);
+    expect(recheckMessage({ pricePerDay: null, currency: "PHP" })).toBeNull();
   });
 
   it("SPTE's own momentum template no longer opens with one", () => {

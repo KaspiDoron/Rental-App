@@ -171,18 +171,19 @@ export function toTrip(input: TripInput, nowMs: number): Trip {
   };
 }
 
-/**
- * WHAT A FREE TRAVELLER SEES. The owner's choice: a LOCKED PREVIEW, not a
- * hidden tab - the trip is real and visible, its headline and its shape are
- * there, and the numbers a paid plan unlocks are held back.
- *
- * Deliberately not "hide the row": an empty tab teaches a traveller the feature
- * does not exist. A visible trip they cannot fully open teaches them what they
- * would get, which is the honest version of the same gate.
- */
-export function previewTrip(trip: Trip): Trip {
-  return { ...trip, perDay: null, total: null, savedPerDay: null, saved: null, savedPct: null };
-}
+// WHAT A FREE TRAVELLER SEES - AND WHERE THAT DECISION NOW LIVES (W6.1).
+//
+// `previewTrip` / `visibleTrips` used to redact a past trip's numbers so the
+// row could stay on screen as a "locked preview". Two things were wrong with
+// it. The owner asked for the opposite product (report 5 #17: "the trips
+// section should be open only for pro and ultra users, for free we are putting
+// upgrade cards tiers"), and the redaction ran in the BROWSER, so the prices,
+// the shop names and the whole history shipped to a free plan regardless - a
+// curtain, not a gate.
+//
+// The gate is now in /api/deals: a free plan is answered with `locked: true`
+// and a hunt COUNT, and the tab renders real Pro/Ultra tier cards. There is
+// nothing left here to redact, so there is no redactor.
 
 // ---------------------------------------------------------------------------
 // ACTIVE vs ARCHIVE (W-2b)
@@ -266,12 +267,4 @@ export function partitionHunts<T extends HuntStamp>(
   const archive: T[] = [];
   for (const h of hunts) (huntIsActive(h, nowMs, ttlMs) ? active : archive).push(h);
   return { active, archive };
-}
-
-/** Which trips a plan may see in full: always the current hunt, history on Pro+. */
-export function visibleTrips(trips: Trip[], canHistory: boolean): Array<Trip & { locked: boolean }> {
-  return trips.map((t) => {
-    const locked = !canHistory && !t.isLatest;
-    return { ...(locked ? previewTrip(t) : t), locked };
-  });
 }

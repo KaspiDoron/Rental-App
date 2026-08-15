@@ -38,16 +38,19 @@ describe("the trips read can fail", () => {
 
 describe("the two states are mutually exclusive", () => {
   it("the empty state is gated on the load having succeeded", () => {
+    // `canHistory &&` joined the chain in W6.1 (Trips is a Pro/Ultra section,
+    // so a free plan never reaches the empty state at all) - the ordering rule
+    // this file exists for is unchanged.
     expect(deals).toMatch(
-      /!loading && !loadFailed && sessions\.length === 0 && bookings\.length === 0/
+      /!loading && canHistory && !loadFailed && sessions\.length === 0 && bookings\.length === 0/
     );
   });
 
   it("the failure card renders before the empty card", () => {
     // Two cards - "you have no trips" and "we could not check" - is worse than
     // either alone, so the failure branch has to come first and exclude it.
-    const fail = deals.indexOf("!loading && loadFailed &&");
-    const empty = deals.indexOf("!loading && !loadFailed && sessions.length === 0");
+    const fail = deals.indexOf("!loading && canHistory && loadFailed &&");
+    const empty = deals.indexOf("!loading && canHistory && !loadFailed && sessions.length === 0");
     expect(fail).toBeGreaterThan(-1);
     expect(fail).toBeLessThan(empty);
   });

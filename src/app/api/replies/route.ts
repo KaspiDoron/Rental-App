@@ -5,6 +5,7 @@ import { identityKey } from "@/lib/wa/phone-key";
 import { clampSince } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 import { languageSwitchNotice } from "@/lib/wa/thread-language";
+import { termsComplete } from "@/lib/deal-terms";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -184,12 +185,18 @@ export async function GET(req: Request) {
   for (const th of threads) {
     if (th.vendor_id && !stateByVendor.has(th.vendor_id)) stateByVendor.set(th.vendor_id, th.fields);
   }
+  // ONE PREDICATE, SHARED (W6.1). This was a local closure - unexported and
+  // therefore unreachable - while the Trips re-check, which the owner scoped to
+  // exactly "price, deposit and how we get the vehicle", had no way to ask the
+  // question and messaged every shop it had ever contacted. See lib/deal-terms.
   const isComplete = (f: ThreadRow["fields"], depositLabel?: string | null) =>
-    Boolean(
-      f?.pricePerDay &&
-        (f?.depositType || f?.depositNote || depositLabel) &&
-        (f?.fulfillment === "pickup" || f?.fulfillment === "delivery" || f?.fulfillment === "on-shop")
-    );
+    termsComplete({
+      pricePerDay: f?.pricePerDay ?? null,
+      depositType: f?.depositType ?? null,
+      depositNote: f?.depositNote ?? null,
+      depositLabel: depositLabel ?? null,
+      fulfillment: f?.fulfillment ?? null,
+    });
 
   // THE SHOP'S MENU, for the card. A reply naming more than one price is a
   // CHOICE ("some models 200 and some new 250/day"), and showing only the one

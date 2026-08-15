@@ -1,12 +1,18 @@
 import { test, expect } from "@playwright/test";
-import { signIn } from "./fixtures/session";
+import { signIn, asPlan } from "./fixtures/session";
 import { seedLiveHunt } from "./fixtures/seeds";
 import { dismissTour } from "./fixtures/init";
 
-// Two Trips journeys: (a) the free-plan lock on re-opening an EARLIER hunt
-// surfaces the upgrade sheet instead of a dead button; (b) a live hunt
+// Three Trips journeys: (a) a FREE traveller meets the Pro/Ultra gate as real
+// upgrade tier cards that say so, and the CTA opens the existing upgrade sheet;
+// (b) a paid traveller can actually re-open an earlier hunt; (c) a live hunt
 // SURVIVES tab navigation - wd_search rides sessionStorage across the
 // client-routed hop (Wave 2.3) instead of dying with a full document load.
+//
+// W6.1 replaced the old "locked preview" - every hunt visible with its numbers
+// redacted in the BROWSER, plus a per-row "Re-open this hunt (Pro)" button -
+// because the owner asked for tier cards and because redacting in the browser
+// shipped the whole history to a free plan anyway.
 
 function session(over: Record<string, unknown>) {
   return {
@@ -44,9 +50,30 @@ test.describe("trips re-open", () => {
     await signIn(context);
   });
 
-  test("free plan: an earlier hunt offers the LOCKED re-open and it opens the upgrade sheet", async ({
+  test("free plan: Trips is the tier cards, and they open the upgrade sheet", async ({
     page,
   }) => {
+    await asPlan(page, "free");
+    // What the SERVER answers a free plan: no hunts, just how many are saved.
+    await page.route((url) => url.pathname === "/api/deals", (route) =>
+      route.fulfill({
+        json: { locked: true, feature: "trips-history", huntCount: 3, sessions: [], bookings: [] },
+      })
+    );
+    await page.goto("/deals");
+    // The gate is WRITTEN DOWN, as the owner asked - not implied by a blur.
+    await expect(page.getByText("Trips is a Pro & Ultra feature")).toBeVisible();
+    await expect(page.getByText(/3 saved hunts are waiting/)).toBeVisible();
+    // Real tier cards from the shared plan catalogue.
+    await expect(page.getByText("Pro Traveller")).toBeVisible();
+    await expect(page.getByText("Ultra", { exact: true })).toBeVisible();
+    // ...and the CTA is the EXISTING sheet, not a second checkout surface.
+    await page.getByRole("button", { name: "See plans & upgrade" }).first().click();
+    await expect(page.getByText("Go Pro or Ultra")).toBeVisible();
+  });
+
+  test("paid plan: an earlier hunt can actually be re-opened", async ({ page }) => {
+    await asPlan(page, "pro");
     const now = Date.now();
     await page.route((url) => url.pathname === "/api/deals", (route) =>
       route.fulfill({
@@ -68,10 +95,9 @@ test.describe("trips re-open", () => {
     await page.goto("/deals");
     await expect(page.getByText("yesterday's hunt")).toBeVisible();
     await page.getByRole("button", { name: /yesterday's hunt/ }).click();
-    const locked = page.getByRole("button", { name: "Re-open this hunt (Pro)" });
-    await expect(locked).toBeVisible();
-    await locked.click();
-    await expect(page.getByText("Go Pro or Ultra")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Re-open this hunt" })).toBeVisible();
+    // No per-row Pro lock survives - the gate is met once, up front.
+    await expect(page.getByText("Re-open this hunt (Pro)")).toHaveCount(0);
   });
 
   test("a live hunt survives Trips-and-back (client nav keeps wd_search)", async ({ page }) => {

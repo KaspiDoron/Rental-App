@@ -30,3 +30,23 @@ export async function signIn(
     },
   ]);
 }
+
+/**
+ * Make /api/auth/me report a PAID plan for this page.
+ *
+ * W6.1 gated Trips to Pro/Ultra on both sides - the route ships a free plan no
+ * history at all, and the tab renders upgrade tier cards - so a spec about the
+ * hunt LIST has to say which plan it is describing. Signing in mints a session
+ * cookie; the plan comes from the app_users row, which an e2e run has no way to
+ * write, so it is stubbed at the one endpoint the page reads it from.
+ */
+export async function asPlan(
+  page: import("@playwright/test").Page,
+  plan: "free" | "pro" | "ultra",
+  email = "traveller@e2e.test"
+): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/api/auth/me",
+    (route) => route.fulfill({ json: { session: { email, plan, role: "user" } } })
+  );
+}

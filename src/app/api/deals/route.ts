@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect, pgTimestamp } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict, pgTimestamp } from "@/lib/runtime-config";
 import { toTrip } from "@/lib/trips";
 import { groupSearchSessions } from "@/lib/session-life";
+import {
+  termsComplete,
+  depositPhrase,
+  fulfillmentLabel,
+  type DealTerms,
+} from "@/lib/deal-terms";
+import { moneyLocal } from "@/lib/currency";
+import { can } from "@/lib/entitlements";
+import type { PlanId } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +34,9 @@ interface SearchRow {
   vehicle_class: string | null;
   source: string | null;
   results: number | null;
+  /** WHERE the hunt happened. Never selected before, so no card could say. */
+  lat?: number | null;
+  lng?: number | null;
   created_at: string;
 }
 
@@ -37,6 +49,22 @@ interface OfferRow {
   currency: string | null;
   round: number | null;
   verified: boolean | null;
+  created_at: string;
+}
+
+/** A vendor reply, as this route reads it (see the three column tiers). */
+interface DealsReplyRow {
+  id: number;
+  vendor_id: string | null;
+  vendor_name: string | null;
+  reply_text: string | null;
+  english_gloss?: string | null;
+  image_count: number | null;
+  deposit?: string | null;
+  deposit_type?: string | null;
+  deposit_amount?: number | null;
+  deposit_currency?: string | null;
+  delivers?: boolean | null;
   created_at: string;
 }
 
@@ -72,6 +100,14 @@ export interface TimelineEvent {
   /** English gloss of `text` for local-language sends/replies (W1.5): the real
    *  wire text stays primary, the translation is the second quiet line. */
   english?: string;
+}
+
+/** The hunt's terms, as the COLLAPSED card needs them (owner report 5 #17). */
+export interface HuntPlace {
+  lat: number;
+  lng: number;
+  /** A human place label, reverse-geocoded (cached) - null when unresolved. */
+  label: string | null;
 }
 
 export interface SessionSummary {
@@ -113,10 +149,33 @@ export interface SessionSummary {
   timeline: TimelineEvent[];
   progress: number; // 0..100
   progressLabel: string;
+  /** WHERE this hunt ran - so a collapsed card can say so. */
+  place: HuntPlace | null;
+  /** The deposit the shops asked for, in plain words (dominant answer). */
+  depositLabel: string | null;
+  /** How the traveller would get the vehicle ("Pick-up at the shop"). */
+  fulfillmentLabel: string | null;
+  /** Shops that answered, by name, and shops that never did - collapsed too. */
+  answeredNames: string[];
+  silentNames: string[];
+  /** Shops with a FULL deal (price + deposit + pick-up) - the only ones the
+   *  re-check may message. `0` is why the button is not offered. */
+  recheckable: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const GROUP_GAP_MS = 30 * 60 * 1000;
+/**
+ * How many past hunts the tab lists.
+ *
+ * WAS 5, INSIDE A 14-DAY WINDOW - which is how the owner's three-day Thailand
+ * hunt vanished from Trips entirely after a fortnight. Re-open still worked;
+ * there was simply no row left to tap, and the restore route (limit=40, no date
+ * bound) would happily have served it. The list now reads the SAME window the
+ * restore and re-check routes read, so the three routes agree about which hunts
+ * exist as well as about where their boundaries are.
+ */
+const MAX_HUNTS = 20;
+const SEARCH_ROW_LIMIT = 40;
 
 function progressFor(s: {
   booked: boolean;
@@ -140,13 +199,31 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   const email = session.email;
   const enc = encodeURIComponent(email);
+  const plan = (session.plan ?? "free") as PlanId;
 
-  // 1. Recent search rows -> session groups (newest 14 days keeps it fast).
-  const sinceIso = new Date(Date.now() - 14 * DAY_MS).toISOString();
-  const searchRows = await sbSelect<SearchRow>(
+  // 1. Recent search rows -> session groups.
+  //
+  // NO DATE BOUND. The old read was `gte(now - 14 days) limit 30`, so a hunt
+  // dropped out of Trips two weeks after it ran and the traveller lost the only
+  // handle on it - the restore route has no date bound at all and would have
+  // served it happily, but there was nothing left to tap. Same window as
+  // /api/deals/restore and /api/deals/recheck now (40 rows, newest first), so
+  // all three routes agree about which hunts exist.
+  //
+  // Two column tiers: `lat`/`lng` have shipped since the first schema, but an
+  // unknown column silently blanks a select and blanking THIS one empties the
+  // whole tab - the one failure this route has already been bitten by.
+  const wideSearch = await sbSelectStrict<SearchRow>(
     "searches",
-    `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=30`
-  ).catch(() => [] as SearchRow[]);
+    `select=id,query_text,radius_km,vehicle_class,source,results,lat,lng,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
+  );
+  const searchRows =
+    "rows" in wideSearch
+      ? wideSearch.rows
+      : await sbSelect<SearchRow>(
+          "searches",
+          `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
+        ).catch(() => [] as SearchRow[]);
 
   // Same discriminator the restore route uses: /api/profile records a `searches`
   // row for every RFQ BUILD (source `panel` / `profiler`, `results: 0`, no
@@ -161,7 +238,26 @@ export async function GET() {
   // unlock) to the oldest one, and disagreed with restore/recheck - which do
   // NOT reverse - about which hunt `gi === 0` means.
   const groups = groupSearchSessions(searchRows);
-  const kept = groups.slice(0, 5);
+
+  // THE GATE, ON THE SERVER (owner report 5 #17).
+  //
+  // Trips is a Pro/Ultra section now. It used to ship every hunt to every plan
+  // and redact the numbers in the BROWSER (`previewTrip`, applied in the page),
+  // which is a curtain, not a gate: the prices, the shop names and the whole
+  // history were in the JSON either way. A free plan gets the count - enough
+  // for the upgrade card to say "3 saved hunts are waiting" honestly - and
+  // nothing else, which also makes the free path one cheap query instead of ten.
+  if (!can(plan, "trips-history")) {
+    return NextResponse.json({
+      locked: true,
+      feature: "trips-history",
+      huntCount: groups.length,
+      sessions: [],
+      bookings: [],
+    });
+  }
+
+  const kept = groups.slice(0, MAX_HUNTS);
 
   // pgTimestamp, NOT raw interpolation. `kept[...].created_at` comes back from
   // PostgREST as `...+00:00`, and a raw `+` in a query string decodes to a
@@ -187,23 +283,21 @@ export async function GET() {
         `select=id,to_number,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&received_at=gte.${pgTimestamp(oldestStart)}&order=received_at.desc&limit=250`
       ).catch(() => []),
       (async () => {
-        type DealsReplyRow = {
-          id: number;
-          vendor_id: string | null;
-          vendor_name: string | null;
-          reply_text: string | null;
-          english_gloss?: string | null;
-          image_count: number | null;
-          created_at: string;
-        };
         const filter = `user_email=eq.${enc}&created_at=gte.${pgTimestamp(oldestStart)}&order=created_at.desc&limit=250`;
-        // english_gloss in the first tier only - an unknown column silently
-        // blanks the select, and the trips timeline must survive a pending
-        // migration (same degrade /api/replies uses).
+        // english_gloss + the deposit columns in the first tier only - an
+        // unknown column silently blanks the select, and the trips timeline
+        // must survive a pending migration (same degrade /api/replies uses).
+        // The deposit half is what lets a COLLAPSED card state the terms.
         let rows = await sbSelect<DealsReplyRow>(
           "vendor_replies",
-          `select=id,vendor_id,vendor_name,reply_text,english_gloss,image_count,created_at&${filter}`
+          `select=id,vendor_id,vendor_name,reply_text,english_gloss,image_count,deposit,deposit_type,deposit_amount,deposit_currency,delivers,created_at&${filter}`
         );
+        if (rows.length === 0) {
+          rows = await sbSelect<DealsReplyRow>(
+            "vendor_replies",
+            `select=id,vendor_id,vendor_name,reply_text,english_gloss,image_count,created_at&${filter}`
+          );
+        }
         if (rows.length === 0) {
           rows = await sbSelect<DealsReplyRow>(
             "vendor_replies",
@@ -211,18 +305,7 @@ export async function GET() {
           );
         }
         return rows;
-      })().catch(
-        () =>
-          [] as {
-            id: number;
-            vendor_id: string | null;
-            vendor_name: string | null;
-            reply_text: string | null;
-            english_gloss?: string | null;
-            image_count: number | null;
-            created_at: string;
-          }[]
-      ),
+      })().catch(() => [] as DealsReplyRow[]),
       (async () => {
         let rows = await sbSelect<OfferRow>(
           "offers",
@@ -293,6 +376,25 @@ export async function GET() {
       ).catch(() => [] as { received_at: string }[]),
     ]);
 
+  // The engine's own extracted per-shop state: the AUTHORITY on how a traveller
+  // would get the vehicle, and the second source for the deposit. Never joined
+  // before, which is why no card - collapsed or open - could state either.
+  // Keyed by shop, not by hunt, so it is only ever read for shops the hunt's
+  // own windowed rows already name.
+  const threadRows = await sbSelect<{
+    vendor_id: string | null;
+    fields: { fulfillment?: string; depositType?: string; depositNote?: string } | null;
+  }>(
+    "negotiation_threads",
+    `select=vendor_id,fields&user_email=eq.${enc}&order=updated_at.desc&limit=100`
+  ).catch(() => [] as { vendor_id: string | null; fields: null }[]);
+  const threadByVendor = new Map<string, { fulfillment?: string; depositType?: string; depositNote?: string }>();
+  for (const th of threadRows) {
+    if (th.vendor_id && th.fields && !threadByVendor.has(th.vendor_id)) {
+      threadByVendor.set(th.vendor_id, th.fields);
+    }
+  }
+
   const now = Date.now();
   const paused = pauseMarkers[0]?.raw?.kind === "session-paused";
   const closedStamps = closedMarkers
@@ -315,6 +417,12 @@ export async function GET() {
     // (one 30-min group with the clear in the middle) as closed.
     const groupEnd = Date.parse(group[group.length - 1].created_at);
     const closed = closedStamps.some((t) => t > groupEnd && t < end);
+
+    // The newest row of the group that carried a real origin - the same rule
+    // the restore route uses to rebuild the map's centre.
+    const originRow = [...group]
+      .reverse()
+      .find((r) => r.lat != null && r.lng != null && Number.isFinite(Number(r.lat)));
 
     const query = group.find((r) => r.query_text)?.query_text ?? null;
     const vehicleClass = [...group].reverse().find((r) => r.vehicle_class)?.vehicle_class ?? null;
@@ -342,12 +450,33 @@ export async function GET() {
         ? Math.max(1, Math.round(Number(booking.total_price) / Number(booking.price_per_day)))
         : null;
 
+    // WHO WE REACHED, WHO ANSWERED, AND WHO NEVER DID - BY NAME.
+    //
+    // The counts were already computed here and shipped on every summary, but
+    // they only ever rendered inside the `open &&` branch, so a collapsed card
+    // - which is every card the traveller has not tapped - could not say how
+    // many shops answered, let alone which ones (owner report 5 #17).
     const contactedIds = new Set<string>();
-    for (const m of sent) contactedIds.add(m.raw?.vendorId || m.to_number);
+    const nameById = new Map<string, string>();
+    for (const m of sent) {
+      const id = m.raw?.vendorId || m.to_number;
+      contactedIds.add(id);
+      if (m.raw?.vendorName && !nameById.has(id)) nameById.set(id, m.raw.vendorName);
+    }
     const repliedIds = new Set<string>();
-    for (const r of rep) repliedIds.add(r.vendor_id || r.vendor_name || String(r.id));
+    for (const r of rep) {
+      const id = r.vendor_id || r.vendor_name || String(r.id);
+      repliedIds.add(id);
+      if (r.vendor_name && !nameById.has(id)) nameById.set(id, r.vendor_name);
+    }
     const contacted = contactedIds.size;
     const replied = Math.min(repliedIds.size, contacted || repliedIds.size);
+    const shopLabel = (id: string) => nameById.get(id) ?? "Rental shop";
+    const answeredNames = [...repliedIds].map(shopLabel).slice(0, 12);
+    const silentNames = [...contactedIds]
+      .filter((id) => !repliedIds.has(id))
+      .map(shopLabel)
+      .slice(0, 12);
 
     // Per-vendor: newest price + the honest "before" number (list price when
     // the shop stated one, otherwise the earliest quote in this session).
@@ -400,6 +529,39 @@ export async function GET() {
               : null,
         }
       : null;
+
+    // THE TERMS, PER SHOP - price + deposit + how you get the vehicle.
+    //
+    // One shape (`DealTerms`), one predicate (`termsComplete`), shared with the
+    // re-check route so what a card CLAIMS and what the re-ask is ALLOWED to do
+    // can never drift. The deposit reaches the screen for the first time here:
+    // /api/deals never joined negotiation_threads and never read the reply
+    // rows' deposit columns, so no card could show a deposit at all.
+    const termsById = new Map<string, DealTerms>();
+    for (const id of contactedIds) {
+      const offer = byVendor.get(id)?.newest;
+      const reply = rep.find((r) => (r.vendor_id || r.vendor_name) === id);
+      const th = threadByVendor.get(id);
+      termsById.set(id, {
+        pricePerDay: offer?.price_per_day ?? null,
+        currency: offer?.currency ?? null,
+        depositType: th?.depositType ?? reply?.deposit_type ?? null,
+        depositNote: th?.depositNote ?? null,
+        depositLabel: reply?.deposit ?? null,
+        depositAmount: reply?.deposit_amount ?? null,
+        depositCurrency: reply?.deposit_currency ?? null,
+        fulfillment: th?.fulfillment ?? null,
+        delivers: reply?.delivers ?? null,
+      });
+    }
+    const allTerms = [...termsById.values()];
+    const recheckable = allTerms.filter(termsComplete).length;
+    // The hunt-level answer is the FIRST shop that stated one - a card says
+    // "the shops asked for X", never averages incompatible conditions.
+    const depositLabel =
+      allTerms.map((t) => depositPhrase(t, moneyLocal)).find((p): p is string => Boolean(p)) ?? null;
+    const fulfilLabel =
+      allTerms.map(fulfillmentLabel).find((p): p is string => Boolean(p)) ?? null;
 
     // What needs the traveller (not the agent) right now.
     const attention: string[] = [];
@@ -536,6 +698,15 @@ export async function GET() {
       timeline: timeline.slice(0, 6),
       progress,
       progressLabel: label,
+      // WHERE, WHAT THE DEPOSIT WAS, HOW YOU GET IT, AND WHO ANSWERED - the
+      // facts a COLLAPSED card has to carry (owner report 5 #17). The label is
+      // filled in below, once, per distinct point.
+      place: originRow ? { lat: Number(originRow.lat), lng: Number(originRow.lng), label: null } : null,
+      depositLabel,
+      fulfillmentLabel: fulfilLabel,
+      answeredNames,
+      silentNames,
+      recheckable,
       // THE TRIP: what became of this hunt, what it cost, what it saved.
       // A session could only ever describe what is happening right now, so a
       // finished hunt looked exactly like an abandoned one and a traveller who
@@ -569,7 +740,50 @@ export async function GET() {
     };
   });
 
+  // 4. NAME THE PLACE. "8km hunt" is not a location a traveller recognises
+  //    their own trip by; "Ao Nang, Krabi" is. `reverseGeocode` is cached for a
+  //    day per rounded point and hunts cluster around the same hotel, so this
+  //    is usually zero network calls - but Trips is on the critical path, so it
+  //    is deduped, capped, run in parallel and hard-bounded in wall clock. A
+  //    slow geocoder costs the label, never the tab.
+  await labelPlaces(sessions);
+
   return NextResponse.json({ sessions, bookings });
+}
+
+/** Distinct rounded points only, at most PLACE_LOOKUPS, under PLACE_BUDGET_MS. */
+const PLACE_LOOKUPS = 6;
+const PLACE_BUDGET_MS = 2_500;
+
+async function labelPlaces(sessions: SessionSummary[]): Promise<void> {
+  const points = new Map<string, { lat: number; lng: number }>();
+  for (const s of sessions) {
+    if (!s.place) continue;
+    const key = `${Math.round(s.place.lat * 1000) / 1000},${Math.round(s.place.lng * 1000) / 1000}`;
+    if (!points.has(key)) points.set(key, { lat: s.place.lat, lng: s.place.lng });
+  }
+  if (!points.size) return;
+  const wanted = [...points.entries()].slice(0, PLACE_LOOKUPS);
+  const labels = new Map<string, string>();
+  try {
+    const { reverseGeocode } = await import("@/lib/google");
+    await Promise.race([
+      Promise.all(
+        wanted.map(async ([key, p]) => {
+          const hit = await reverseGeocode(p.lat, p.lng).catch(() => null);
+          if (hit?.label) labels.set(key, hit.label);
+        })
+      ),
+      new Promise((resolve) => setTimeout(resolve, PLACE_BUDGET_MS)),
+    ]);
+  } catch {
+    /* a label is an enhancement to a card, never a condition of it */
+  }
+  for (const s of sessions) {
+    if (!s.place) continue;
+    const key = `${Math.round(s.place.lat * 1000) / 1000},${Math.round(s.place.lng * 1000) / 1000}`;
+    s.place.label = labels.get(key) ?? null;
+  }
 }
 
 // maxDuration: lift the request-timeout ceiling for slow upstreams.
