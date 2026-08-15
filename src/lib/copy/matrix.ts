@@ -109,8 +109,15 @@ export const VEHICLE_PHRASINGS = [
 
 // "for 1 days" shipped to every one-day rental. A shop reading that knows it
 // came from a template, which is the one impression a cold first contact cannot
-// afford. `day(d)` is the only place the plural is decided.
-const day = (d: number) => (d === 1 ? "day" : "days");
+// afford. `dayWord(n)` is the ONE place the plural is decided - exported because
+// the first fix stopped at this matrix while six follow-up composers (bargain /
+// clarify / answer / momentum templates, the bargain fallback pool, the re-check
+// message) kept hard-coding "days" after their interpolation, so mid-thread
+// messages still said "for the 1 days" (owner report 5 #7).
+export const dayWord = (n: number) => (n === 1 ? "day" : "days");
+/** "3 days" / "1 day" - the counted form every composer should interpolate. */
+export const nDays = (n: number) => `${n} ${dayWord(n)}`;
+const day = dayWord;
 
 export const DURATION_PHRASINGS = [
   (d: number) => `for ${d} ${day(d)}`,

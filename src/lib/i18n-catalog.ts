@@ -730,6 +730,7 @@ export const I18N_CATALOG: string[] = [
   "We moved your pickup date:",
   "We never read your personal chats",
   "We only ever send the place name - never your live GPS position, and never to any shop you haven't messaged.",
+  "We searched for {n} days, not {asked} - tap the dates to change it.",
   "We sent a 6-digit code to",
   "We want you to get the most out of Premium, so unlock it by using the app a little more first.",
   "Welcome aboard!",

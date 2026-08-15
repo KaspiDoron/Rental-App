@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { compileOpener, formatRentalDate } from "./promptCompiler";
 import type { StructuredRFQ } from "../types";
+import { citedDurationDays } from "../wa/rental-params";
 
 // THE WIRE TEXT, NOT THE POOLS.
 //
@@ -84,12 +85,38 @@ describe("every compiled opener is ANSWERABLE", () => {
     }
   });
 
-  it("a range replaces the duration instead of repeating it", () => {
-    // "12 Aug to 15 Aug 3 days total" said the same fact twice, in the register
-    // of a form letter rather than a person texting.
+  it("a range CARRIES its day count, in one clause - never as a second sentence", () => {
+    // DOCTRINE REVERSED, DELIBERATELY (W4.1, owner report 5 #2). This asserted
+    // that a range must never repeat the duration, because "12 Aug to 15 Aug
+    // 3 days total" said the same fact twice in the register of a form letter.
+    // The register objection survives; the suppression does not:
+    //
+    //   - a WRONG duration became invisible on the wire (the traveller picked
+    //     3 days, the profiler invented 1, and "16 Aug until 17 Aug"
+    //     contradicted nothing);
+    //   - `citedDurationDays` - the promise fallback for a thread whose
+    //     structured rfq was lost - can only read a COUNTED day number, so a
+    //     range-only opener left the thread with no text provenance and any
+    //     later send could rewrite its anchor (the mid-thread flip).
+    //
+    // So the count rides with the range the way a person texts it - one
+    // parenthetical, not a second sentence.
     for (const text of corpus()) {
       const hasRange = /12 Aug\b[^.]*15 Aug/.test(text);
-      if (hasRange) expect(text, text).not.toMatch(/\b3 days\b/);
+      if (!hasRange) continue;
+      expect(text, text).toMatch(/15 Aug \(3 days\)/);
+      // The old clumsy shape stays banned: no free-standing "3 days total".
+      expect(text, text).not.toMatch(/\b3 days total\b/);
+    }
+  });
+
+  it("the day count a range states is machine-readable as the thread's promise", () => {
+    // The provenance half of the doctrine above: whatever wording the matrix
+    // draws, promiseOf's text fallback must be able to recover the duration
+    // from the opener alone.
+    for (const text of corpus()) {
+      if (!/12 Aug\b[^.]*15 Aug/.test(text)) continue;
+      expect(citedDurationDays(text), text).toBe(3);
     }
   });
 

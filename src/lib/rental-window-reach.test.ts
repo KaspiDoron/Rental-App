@@ -144,13 +144,29 @@ describe("the server says what it did to the date", () => {
     expect(route.match(/windowAdjusted: decided\.adjusted/g) ?? []).toHaveLength(2);
   });
 
-  it("an explicit pickup date overrides the parse, and drags the return with it", () => {
+  it("an explicit pickup date AND an explicit duration both override the parse", () => {
+    // THE GAP THIS TEST USED TO CODIFY (owner report 5 #2). It asserted the
+    // date override and said nothing about the duration - which is exactly
+    // what the route did: `returnDate: addDays(start, profiled.durationDays)`
+    // dragged the return date off the LLM's number while the traveller's own
+    // picker value was never applied at all. A traveller who chose 3 days had
+    // twenty shops asked about 1. Explicit input beats inference on BOTH axes,
+    // and the return date is then derived from the reconciled pair by the one
+    // writer in lib/rental-window - never from the profiler's guess.
     expect(route).toMatch(/requestedStart\(body\?\.startDate\)/);
-    expect(route).toMatch(/returnDate: addDays\(start, profiled\.durationDays\)/);
+    expect(route).toMatch(/requestedDays\(body\?\.durationDays\)/);
+    expect(route).toMatch(/\.\.\.\(days \? \{ durationDays: days \} : \{\}\)/);
+    expect(route).toMatch(/deriveReturnDate\(\{/);
+    expect(route).not.toMatch(/returnDate: addDays\(start, profiled\.durationDays\)/);
   });
 
-  it("and the traveller is told, at the control that now disagrees with them", () => {
-    expect(page).toMatch(/setWindowNote\(pData\.windowAdjusted \? pData\.windowReason \?\? null : null\)/);
+  it("and the traveller is told - about a clamped DATE or a changed DURATION", () => {
+    // Same channel, one more thing it must carry: the picker is overwritten
+    // from the server's answer, so a duration the app changed has to be said
+    // out loud or it is simply a number that quietly moved on screen.
+    expect(page).toMatch(/const durationChanged =/);
+    expect(page).toMatch(/pData\.windowAdjusted\s*[\r\n]?\s*\? pData\.windowReason \?\? null/);
+    expect(page).toMatch(/durationChanged/);
     expect(field).toMatch(/adjustedReason/);
     // The reason is composed on the server and one of its forms interpolates a
     // day count, so it can never be a catalogue literal - it has to go through

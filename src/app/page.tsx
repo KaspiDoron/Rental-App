@@ -2166,8 +2166,28 @@ export default function Home() {
       setStartDate(pData.rfq.startDate);
       setWindowTouched(true);
     }
+    // W4.1: A DURATION OVERWRITE IS NOT ALLOWED TO BE SILENT.
+    //
+    // The picker is overwritten from the server's answer (right below) with no
+    // word to the traveller, and the only explanation channel was wired
+    // exclusively to the PLAN clamp. So when the search collapsed 3 days into 1
+    // - the profiler inventing a length the traveller never stated - the
+    // control simply read "1" afterwards and twenty shops were asked about a
+    // one-day rental. The fix upstream stops the collapse; this makes any
+    // remaining disagreement visible, on the channel the clamp already uses.
+    const askedDays = windowTouched ? days : null;
+    const gotDays = Number(pData.rfq?.durationDays);
+    const durationChanged = askedDays !== null && Number.isFinite(gotDays) && gotDays !== askedDays;
     if (Number.isFinite(pData.rfq?.durationDays)) setDays(pData.rfq.durationDays);
-    setWindowNote(pData.windowAdjusted ? pData.windowReason ?? null : null);
+    setWindowNote(
+      pData.windowAdjusted
+        ? pData.windowReason ?? null
+        : durationChanged
+          ? t("We searched for {n} days, not {asked} - tap the dates to change it.")
+              .replace("{n}", String(gotDays))
+              .replace("{asked}", String(askedDays))
+          : null
+    );
     // The active filter always follows the requested vehicle class.
     setFilters({ ...DEFAULT_FILTERS, vehicleClass: pData.rfq.vehicleClass });
     setPhase("discovering");

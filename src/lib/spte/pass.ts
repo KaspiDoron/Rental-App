@@ -18,6 +18,9 @@ import { nextGap } from "../offer-options";
 import { planLeverage, leadCard } from "../negotiation/leverage";
 import { disclosureBlock } from "../negotiation/traveller-disclosure";
 import { describeActs } from "../wa/dialogue-acts";
+// The ONE place the day plural is decided (owner report 5 #7: shops were told
+// "for the 1 days" - a template tell on a cold first contact).
+import { nDays } from "../copy/matrix";
 
 /** Pick the model tier. Multimodal/high-stakes -> Tier M (Gemini Flash);
  *  everything else -> Tier F (the standard failover chain). Reflex (Tier R) is
@@ -296,7 +299,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // Kept as its own line only when there is nothing stronger to lead with.
   const durationLeverage =
     !lead && !atLow && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
-      ? `Duration is your lever this first push: ${days} days is a long rental.\n`
+      ? `Duration is your lever this first push: ${nDays(days)} is a long rental.\n`
       : "";
 
   const user =
@@ -372,8 +375,8 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
   switch (move) {
     case "bargain":
       return v.pricePerDay
-        ? `Thanks! Any chance you can do a bit better for ${days} days?`
-        : `Could you share your best price for ${days} days?`;
+        ? `Thanks! Any chance you can do a bit better for ${nDays(days)}?`
+        : `Could you share your best price for ${nDays(days)}?`;
     case "confirm-vehicle":
       // The gate already phrased the question from the traveller's own declared
       // spec; the fallback simply sends it. Never invents a price.
@@ -413,14 +416,14 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       // read that did not happen, and the shop cannot act on it. This is the one
       // case where asking for text IS the honest move.
       if (v.hadImage && v.imageUnread) {
-        return `Thanks for sending that! It didn't open properly on my phone - could you type the price per day for ${days} days? 🙂`;
+        return `Thanks for sending that! It didn't open properly on my phone - could you type the price per day for ${nDays(days)}? 🙂`;
       }
       if (v.hadImage) {
         return v.pricePerDay
-          ? `Thanks for the price list! I read ${v.pricePerDay}${v.currency ? " " + v.currency : ""}/day for the ${days} days - is that right for me? 🙂`
-          : `Thanks for the price list! Which line is the one for me, for ${days} days? 🙂`;
+          ? `Thanks for the price list! I read ${v.pricePerDay}${v.currency ? " " + v.currency : ""}/day for the ${nDays(days)} - is that right for me? 🙂`
+          : `Thanks for the price list! Which line is the one for me, for ${nDays(days)}? 🙂`;
       }
-      return `Could you share your best price per day for the ${days} days? 🙂`;
+      return `Could you share your best price per day for the ${nDays(days)}? 🙂`;
     case "pickup-location": {
       // The address comes from the disclosure gate, never from the shop's
       // message or the model. No verified stay = not a legal move at all
@@ -459,9 +462,9 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
       // Never re-ask for a price we can already see.
       const known = v.pricePerDay ?? v.sheetPricePerDay;
       if (known) {
-        return `${thanks} Just to confirm - is ${known}${v.currency ? " " + v.currency : ""}/day the best you can do for ${days} days? 🙂`.trim();
+        return `${thanks} Just to confirm - is ${known}${v.currency ? " " + v.currency : ""}/day the best you can do for ${nDays(days)}? 🙂`.trim();
       }
-      return `${thanks} What would your best price per day be for ${days} days?`.trim();
+      return `${thanks} What would your best price per day be for ${nDays(days)}?`.trim();
     case "deposit-probe":
       // THE ONE-SHOT PASSPORT COUNTER: when the shop's stated terms demand the
       // original passport with no cash route, this probe IS the polite
@@ -499,7 +502,7 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
         ? `Great, thanks! Is there a charge for delivery to the hotel - and would it be cheaper if I collect it from the shop instead?`
         : `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
     case "momentum":
-      return `Hi again! Just checking in - any chance on that better rate for ${days} days?`;
+      return `Hi again! Just checking in - any chance on that better rate for ${nDays(days)}?`;
     default:
       return undefined; // present / closing-message / silent
   }
