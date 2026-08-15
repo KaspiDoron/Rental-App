@@ -136,9 +136,12 @@ describe("the vision ladder gained a verified paid rescue rung", () => {
   it("Anthropic vision joins LAST (a rescue, not the default spend), override-able", () => {
     expect(ai).toMatch(/async function anthropicVisionAttempt/);
     expect(ai).toMatch(/getConfig\("ANTHROPIC_VISION_MODEL"\)/);
-    // The rung uses the same frame-scaled output ceiling as Gemini's.
+    // The rung uses the same frame-scaled output ceiling as Gemini's - one
+    // shared helper now, because the Groq rung's "same reason as the Gemini
+    // ceiling above" comment sat on a flat 2_048 for years and nothing caught
+    // it (owner report 5).
     const fn = ai.slice(ai.indexOf("async function anthropicVisionAttempt"), ai.indexOf("READ IMAGES, AND SAY"));
-    expect(fn).toMatch(/Math\.min\(6_144, 2_048 \+ 512 \* Math\.max\(0, images\.length - 1\)\)/);
+    expect(fn).toMatch(/max_tokens: visionCeiling\(images\.length, raiseCeiling\)/);
     // Ladder appends anthropic AFTER the groq rungs.
     const ladderRegion = ai.slice(ai.indexOf("const ladder: Array<"), ai.indexOf("const perCall"));
     expect(ladderRegion.indexOf('provider: "anthropic"')).toBeGreaterThan(

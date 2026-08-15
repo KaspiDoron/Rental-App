@@ -1113,6 +1113,19 @@ const VISION_RETRY_DELAY_MS = 1_200;
 /** One (provider, model) attempt: either the text, or a classified failure. */
 type VisionAttemptOutcome = { text: string; tokens: number } | { failure: VisionFailure; error: string };
 
+/**
+ * THE OUTPUT CEILING FOR THIS CALL, and the raised one a cut-off earns.
+ *
+ * 2_048 covers ONE dense board; each extra coalesced frame buys 512 more,
+ * capped where the provider's own output limit lives. The RETRY ceiling is what
+ * a `truncated` classification is worth: retrying a MAX_TOKENS cut-off at the
+ * same ceiling can only produce the same cut-off.
+ */
+function visionCeiling(frames: number, raised: boolean): number {
+  const base = Math.min(6_144, 2_048 + 512 * Math.max(0, frames - 1));
+  return raised ? Math.min(8_192, Math.round(base * 1.75)) : base;
+}
+
 async function geminiVisionAttempt(
   key: string,
   model: string,
@@ -1120,7 +1133,8 @@ async function geminiVisionAttempt(
   userText: string,
   images: { mime: string; base64: string }[],
   timeoutMs: number,
-  json: boolean
+  json: boolean,
+  raiseCeiling = false
 ): Promise<VisionAttemptOutcome> {
   try {
     const res = await fetchWithTimeout(
@@ -1146,13 +1160,11 @@ async function geminiVisionAttempt(
           // candidate - which this code then reported as "blocked", i.e. an
           // outage. The ceiling has to fit the artefact, not the average - and
           // since bursts coalesce (owner report 4), the artefact is now up to
-          // 8 boards in one call: the ceiling scales with the frame count so a
-          // five-photo album cannot be truncated back into the failure the
-          // base value fixed. 2_048 covers one dense board; each extra frame
-          // buys 512 more, capped where Gemini's own output limit lives.
+          // 8 boards in one call, so it scales with the frame count
+          // (visionCeiling, shared by every rung).
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: Math.min(6_144, 2_048 + 512 * Math.max(0, images.length - 1)),
+            maxOutputTokens: visionCeiling(images.length, raiseCeiling),
             // STRUCTURE, NOT FENCES. The caller that reads price boards parses
             // JSON out of this; asking the PROVIDER for JSON removes the whole
             // class of "the model wrapped it in prose / half a fence" failures
@@ -1168,10 +1180,30 @@ async function geminiVisionAttempt(
     }
     const data = await res.json();
     const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    // A CUT-OFF GENERATION IS NOT A READ (owner report 5, #2).
+    //
+    // Nothing here ever looked at finishReason, so a MAX_TOKENS cut-off came
+    // back as non-empty PARTIAL JSON, was recorded ok:true, sailed past the
+    // ladder, failed extractJson in agents.ts and landed in the "nothing
+    // usable in this image" fallback - a model failure reported to the
+    // traveller as a fact about their photo. The provider tells us plainly;
+    // we now listen, and the classification earns the raised-ceiling retry.
+    const finish = String(data.candidates?.[0]?.finishReason ?? "");
+    if (/^(MAX_TOKENS|LENGTH)$/i.test(finish)) {
+      return {
+        failure: "truncated",
+        error: `generation cut off at the output ceiling (finishReason=${finish}, ${
+          data.usageMetadata?.candidatesTokenCount ?? "?"
+        } output tokens)`,
+      };
+    }
     if (out) return { text: out, tokens: data.usageMetadata?.totalTokenCount ?? 0 };
     // A 200 carrying no candidate text is the provider REFUSING - a safety
-    // filter, or a truncated generation. It is not a reading of the picture.
-    return { failure: "blocked", error: "empty reply (possibly safety-blocked)" };
+    // filter. It is not a reading of the picture.
+    return {
+      failure: "blocked",
+      error: `empty reply (possibly safety-blocked, finishReason=${finish || "none"})`,
+    };
   } catch (e) {
     return {
       failure: visionFailureFromThrown(e),
@@ -1187,7 +1219,8 @@ async function groqVisionAttempt(
   userText: string,
   images: { mime: string; base64: string }[],
   timeoutMs: number,
-  json: boolean
+  json: boolean,
+  raiseCeiling = false
 ): Promise<VisionAttemptOutcome> {
   try {
     const res = await fetchWithTimeout(
@@ -1201,8 +1234,12 @@ async function groqVisionAttempt(
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          // Same reason as the Gemini ceiling above: a long board must fit.
-          max_tokens: 2_048,
+          // Same reason as the Gemini ceiling above: a long board must fit -
+          // and the comment used to say exactly that while the value stayed a
+          // flat 2_048 no matter how many frames the burst carried, so this
+          // rung could still truncate a coalesced album back into the failure
+          // the Gemini formula had fixed. Same helper now, same behaviour.
+          max_tokens: visionCeiling(images.length, raiseCeiling),
           ...(json ? { response_format: { type: "json_object" } } : {}),
           messages: [
             {
@@ -1225,6 +1262,10 @@ async function groqVisionAttempt(
     }
     const data = await res.json();
     const out = data.choices?.[0]?.message?.content?.trim();
+    // Same cut-off contract as the Gemini rung, in OpenAI's spelling.
+    if (String(data.choices?.[0]?.finish_reason ?? "").toLowerCase() === "length") {
+      return { failure: "truncated", error: "generation cut off at the output ceiling (finish_reason=length)" };
+    }
     if (out) return { text: out, tokens: data.usage?.total_tokens ?? 0 };
     return { failure: "blocked", error: "empty reply" };
   } catch (e) {
@@ -1242,7 +1283,8 @@ async function anthropicVisionAttempt(
   userText: string,
   images: { mime: string; base64: string }[],
   timeoutMs: number,
-  json: boolean
+  json: boolean,
+  raiseCeiling = false
 ): Promise<VisionAttemptOutcome> {
   try {
     const res = await fetchWithTimeout(
@@ -1258,7 +1300,7 @@ async function anthropicVisionAttempt(
           model,
           // Same frame-scaled ceiling reasoning as the Gemini rung: a
           // coalesced multi-board burst must fit.
-          max_tokens: Math.min(6_144, 2_048 + 512 * Math.max(0, images.length - 1)),
+          max_tokens: visionCeiling(images.length, raiseCeiling),
           temperature: 0.2,
           system: json
             ? `${system}\n\nAnswer with ONLY the JSON object - no prose, no code fences.`
@@ -1287,6 +1329,9 @@ async function anthropicVisionAttempt(
       return { failure: visionFailureFromStatus(res.status), error: await errorDetail(res, "anthropic") };
     }
     const data = await res.json();
+    if (String(data.stop_reason ?? "") === "max_tokens") {
+      return { failure: "truncated", error: "generation cut off at the output ceiling (stop_reason=max_tokens)" };
+    }
     const out = Array.isArray(data.content)
       ? data.content
           .map((b: { type?: string; text?: string }) => (b?.type === "text" ? b.text ?? "" : ""))
@@ -1321,12 +1366,18 @@ export async function readImages(
   system: string,
   userText: string,
   images: { mime: string; base64: string }[],
-  opts?: { json?: boolean }
+  opts?: { json?: boolean; budgetMs?: number }
 ): Promise<VisionRead> {
   const json = opts?.json === true;
   const attempts: VisionAttempt[] = [];
   globalThis.__wd_vision_diag__ = { at: Date.now(), attempts };
-  const deadline = Date.now() + VISION_TOTAL_BUDGET_MS;
+  // A SECOND LADDER MUST NOT COST A SECOND BUDGET. The failure-class re-read in
+  // agents.ts calls this again inside the same webhook turn, and the route is
+  // capped at 60s - two calls each helping themselves to the full 45s would
+  // blow it. Callers that run after a first read pass their own smaller budget;
+  // it can only ever shrink the default.
+  const deadline =
+    Date.now() + Math.max(4_000, Math.min(VISION_TOTAL_BUDGET_MS, opts?.budgetMs ?? VISION_TOTAL_BUDGET_MS));
 
   const [gemini, groq, anthropic, models] = await Promise.all([
     getConfig("GEMINI_TOKEN"),
@@ -1359,14 +1410,15 @@ export async function readImages(
   const ladder: Array<{
     provider: "gemini" | "groq" | "anthropic";
     model: string;
-    run: (timeoutMs: number) => Promise<VisionAttemptOutcome>;
+    run: (timeoutMs: number, raiseCeiling?: boolean) => Promise<VisionAttemptOutcome>;
   }> = [];
   if (gemini) {
     for (const model of models.gemini) {
       ladder.push({
         provider: "gemini",
         model,
-        run: (ms) => geminiVisionAttempt(gemini, model, system, userText, images, ms, json),
+        run: (ms, raise) =>
+          geminiVisionAttempt(gemini, model, system, userText, images, ms, json, raise),
       });
     }
   }
@@ -1375,7 +1427,8 @@ export async function readImages(
       ladder.push({
         provider: "groq",
         model,
-        run: (ms) => groqVisionAttempt(groq, model, system, userText, groqImages, ms, json),
+        run: (ms, raise) =>
+          groqVisionAttempt(groq, model, system, userText, groqImages, ms, json, raise),
       });
     }
   } else if (groq && images.length > 0 && groqImages.length === 0) {
@@ -1395,7 +1448,8 @@ export async function readImages(
       ladder.push({
         provider: "anthropic",
         model,
-        run: (ms) => anthropicVisionAttempt(anthropic, model, system, userText, groqImages, ms, json),
+        run: (ms, raise) =>
+          anthropicVisionAttempt(anthropic, model, system, userText, groqImages, ms, json, raise),
       });
     }
   }
@@ -1403,9 +1457,10 @@ export async function readImages(
   const perCall = () => Math.max(2_000, Math.min(VISION_CALL_TIMEOUT_MS, deadline - Date.now()));
   const attempt = async (
     step: (typeof ladder)[number],
-    label: string
+    label: string,
+    raiseCeiling = false
   ): Promise<string | null> => {
-    const r = await step.run(perCall());
+    const r = await step.run(perCall(), raiseCeiling);
     if ("text" in r) {
       attempts.push({ provider: step.provider, model: label, ok: true });
       await recordUsage(step.provider, r.tokens);
@@ -1440,10 +1495,18 @@ export async function readImages(
   // about this minute, not about the photo; retrying the preferred model once
   // recovers the read that would otherwise be reported as an unreadable image.
   // A rejected key or a safety block is never retried - it cannot succeed.
+  //
+  // A CUT-OFF ANSWER RETRIES DIFFERENTLY. `truncated` is retryable for the
+  // opposite reason to a 429: nothing about the minute was wrong, OUR ceiling
+  // was too low - so the one retry it earns is at a RAISED ceiling. Repeating
+  // the same call would only reproduce the same cut-off.
   const first = ladder[0];
   const firstFailure = attempts.find(
     (a) => !a.ok && first && a.provider === first.provider && a.model === first.model
   )?.failure;
+  // Truncation anywhere on the ladder means the ceiling is the problem, even
+  // when the preferred rung failed for another reason.
+  const anyTruncated = attempts.some((a) => !a.ok && a.failure === "truncated");
   if (
     first &&
     firstFailure &&
@@ -1451,7 +1514,8 @@ export async function readImages(
     deadline - Date.now() > VISION_RETRY_DELAY_MS + 4_000
   ) {
     await new Promise((r) => setTimeout(r, VISION_RETRY_DELAY_MS));
-    const text = await attempt(first, `${first.model} (retry)`);
+    const raise = firstFailure === "truncated" || anyTruncated;
+    const text = await attempt(first, `${first.model} (retry${raise ? ", raised ceiling" : ""})`, raise);
     if (text) return { ok: true, text, provider: first.provider, model: first.model, attempts };
   }
 

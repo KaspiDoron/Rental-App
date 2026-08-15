@@ -1314,6 +1314,17 @@ export interface ExtractedOffer {
     failure?: import("./ai").VisionFailure;
     detail?: string;
     retryable?: boolean;
+    /**
+     * THE READER RAN AND WE STILL HAVE NOTHING - and it is OUR fault, not the
+     * photo's. `parse-failed` (the model answered, the JSON did not parse),
+     * `truncated` (the answer was cut off at our token ceiling),
+     * `sanity-nulled` (we read a price and rejected it as implausible). Without
+     * this, all three arrived at the traveller as "the photo was blank".
+     */
+    modelFailure?: import("./media/reading").ModelReadFailure;
+    /** The implausible number the sanity net rejected (`sanity-nulled`). */
+    rejectedPricePerDay?: number;
+    rejectedCurrency?: string;
   };
 }
 
@@ -1423,6 +1434,15 @@ export async function arbitratePriceBasis(input: {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * The slice the failure-class re-read may spend (owner report 5, #5).
+ *
+ * readImages owns a 45s total budget and the webhook route is capped at 60s, so
+ * a second FULL ladder after a failed first read would blow the turn. One
+ * targeted pass, explicitly bounded, is the whole mechanism.
+ */
+const VISION_REREAD_BUDGET_MS = 14_000;
+
 export async function extractOffer(
   rfq: StructuredRFQ,
   text: string,
@@ -1508,7 +1528,14 @@ export async function extractOffer(
     "Reply ONLY as JSON: { \"found\": boolean, \"pricePerDay\": number, " +
     '"currency": string, "vehicleDescription": string, ' +
     '"vehicleVerdict": "match"|"mismatch"|"unclear", ' +
-    '"options": [{"label": string, "pricePerDay": number, "condition": "new"|"older"|"unknown", "mileageKm": number|null, "model": string|null}], ' +
+    // currency + tierLabel ARE RENDERED, so they have to be ASKED FOR. The
+    // reading panel reads `options[].currency` and `options[].tierLabel` and
+    // draws a duration-tier chip from them - and the contract had never
+    // mentioned either field, so on the live path the chip could not exist
+    // (owner report 5, #7). `available` is the crossed-out row (see below).
+    '"options": [{"label": string, "pricePerDay": number, "currency": string|null, ' +
+    '"tierLabel": string|null, "available": boolean|null, ' +
+    '"condition": "new"|"older"|"unknown", "mileageKm": number|null, "model": string|null}], ' +
     '"confidence": "high"|"medium"|"low", "clarifyMessage": string, ' +
     '"deposit": string, "delivers": boolean|null, "deliveryFee": number|null, ' +
     '"insuranceIncluded": boolean|null, "kmLimitPerDay": number|"unlimited"|null, ' +
@@ -1534,6 +1561,28 @@ export async function extractOffer(
     "is offering the traveller right now. If THIS reply only restates the regular " +
     "price to defend a discount it already gave, set found=false and quote no " +
     "price - the discounted price we already have still stands. " +
+    // THE LIMIT OF THAT RULE, AND IT IS THE ONE THAT COST A LIVE READ.
+    //
+    // Owner report 5: a shop sent ONE clear photo of a typed price menu with
+    // some old prices struck out, which reads exactly like a 'was X now Y'
+    // pair - so the rule above fired and the model returned found=false on a
+    // board where every cell was machine-readable, including the traveller's
+    // exact bike. That rule is about a SENTENCE the shop wrote in THIS reply.
+    "THAT RULE IS ABOUT A SENTENCE, NEVER ABOUT A PHOTO OF A BOARD. A price " +
+    "sheet / menu / board is a LIST OF CURRENT PRICES: never set found=false on " +
+    "a board because it also shows old, replaced or crossed-out numbers. Read " +
+    "the board and quote the current row. " +
+    "CROSSED-OUT / STRUCK-THROUGH / OVERWRITTEN entries, including a red X over " +
+    "a row: (a) a whole ROW crossed out means that MODEL IS UNAVAILABLE - keep " +
+    "it in options[] with \"available\": false and its label, and NEVER quote " +
+    "its price as pricePerDay; (b) a crossed-out PRICE with a new number beside " +
+    "or above it means the NEW number is the current price for that row - quote " +
+    "the new one, set \"available\": true, and mention the old one in " +
+    "imageSummary only. Every other row is \"available\": true. Crossing-out " +
+    "NEVER makes a board unreadable, and it never justifies found=false. " +
+    "If the row the traveller asked for is crossed out but other rows are not, " +
+    "still return the board: found=true on the cheapest AVAILABLE matching row, " +
+    "and say in imageSummary that their exact model is marked unavailable. " +
     "pickupOffered: true ONLY if the shop offered to come pick the TRAVELLER up " +
     "(by car or motorbike) and bring them to the shop - this is different from " +
     "delivering the vehicle; null when not mentioned. " +
@@ -1582,6 +1631,10 @@ export async function extractOffer(
     "traveller's rental length, never the cheapest row: for a 5-day rental on " +
     "that board the answer is 600, NOT 500 and NOT 450. The 'cheapest matching " +
     "row' rule above is about different MODELS, never about duration tiers. " +
+    "EVERY options[] ROW CARRIES ITS OWN currency, and a duration-ladder row " +
+    "carries the shop's own words for its range as tierLabel ('1-2 days', " +
+    "'3-7 days', 'Monthly') - the traveller is shown that label beside the " +
+    "price, so a row without it reads as if it applied to any stay. " +
     "A BOARD'S HEADING BINDS ITS ROWS: if the board is titled '155 CC' or 'Honda " +
     "Click - V2 125 CC', every row underneath is that vehicle. When the heading " +
     "names a vehicle the traveller did NOT ask for, that whole board is the " +
@@ -1717,60 +1770,112 @@ export async function extractOffer(
     // only signal was a `null` that a good read of a blank board also returns.
     const imageRead: ExtractedOffer["imageRead"] = read.ok
       ? { seen: true }
-      : { seen: false, failure: read.failure, detail: read.detail.slice(0, 300), retryable: read.retryable };
+      : {
+          seen: false,
+          failure: read.failure,
+          detail: read.detail.slice(0, 300),
+          retryable: read.retryable,
+          // A ladder that ended on OUR token ceiling is not an outage. Carried
+          // through so the panel says "too long to read in one go", never "the
+          // image reader was unavailable" (owner report 5, #1/#2).
+          ...(read.failure === "truncated" ? { modelFailure: "truncated" as const } : {}),
+        };
+
+    // REGION-DIRECTED RE-READ (the "multi-crop" retry, without pixels).
+    //
+    // A dense, low-contrast or badly-lit board is the case where one pass
+    // reliably under-reads: the model answers from the rows it attended to and
+    // the rest are simply absent - which is how a real Thai board came back
+    // with no usable row at all. We cannot CROP: there is no image library in
+    // this runtime, and adding one is the tens-of-MB weight the vision plan
+    // deliberately rejected for a 1GB worker. What we can do is direct
+    // ATTENTION, which costs one call and no dependencies: ask the model to
+    // transcribe the board region by region, verbatim, then extract from its
+    // own transcription.
+    //
+    // GATED ON THE FAILURE CLASS, NOT ON THE MODEL'S SELF-REPORT (owner report
+    // 5, #5). It used to require `imageKind === "price_sheet"`, so the cases
+    // that most needed it - unparseable JSON, a cut-off answer, an omitted or
+    // "other"/"document" imageKind - all skipped it: the mechanism built for
+    // dense boards never fired for the boards that actually failed.
+    //
+    // BUDGETED: readImages helps itself to 45s and the webhook route is capped
+    // at 60s, so this second pass is given an explicit slice instead of a
+    // second full ladder.
+    const regionReRead = async (): Promise<ExtractedOffer | null> => {
+      try {
+        const focused = await readImages(
+          system +
+            " SECOND PASS - THE FIRST READ CAME BACK UNUSABLE. Work the board in " +
+            "regions: TOP third, then MIDDLE, then BOTTOM. For each region " +
+            "transcribe EVERY line you can see verbatim (model name, engine " +
+            "size, every number, the unit beside it), including faint, " +
+            "angled, glare-covered, crossed-out or handwritten lines. THEN " +
+            "extract from your own transcription. Put the full transcription in " +
+            "imageSummary so a human can check it against the photo. Keep the " +
+            "answer COMPACT so it fits: no repetition, no commentary.",
+          text || "Read this price board region by region.",
+          images,
+          { json: true, budgetMs: VISION_REREAD_BUDGET_MS }
+        );
+        if (!focused.ok) return null;
+        const retried = extractJson<ExtractedOffer>(focused.text);
+        if (!retried || typeof retried.found !== "boolean") return null;
+        const second = normalizeExtraction(retried, spec);
+        // Only ADOPT a second read that actually recovered something.
+        if (second.found || (second.options?.length ?? 0) > 0) {
+          return { ...second, imageRead: { seen: true } };
+        }
+        return null;
+      } catch {
+        /* the re-read is an upgrade - its failure keeps the first result */
+        return null;
+      }
+    };
+
     if (read.ok) {
       const parsed = extractJson<ExtractedOffer>(read.text);
       if (parsed && typeof parsed.found === "boolean") {
         const first = normalizeExtraction(parsed, spec);
-        // REGION-DIRECTED RE-READ (the "multi-crop" retry, without pixels).
-        //
-        // A dense, low-contrast or badly-lit board is the case where one pass
-        // reliably under-reads: the model answers from the rows it attended to
-        // and the rest are simply absent - which is how a real Thai board came
-        // back with no usable row at all. We cannot CROP: there is no image
-        // library in this runtime, and adding one is the tens-of-MB weight the
-        // vision plan deliberately rejected for a 1GB worker. What we can do
-        // is direct ATTENTION, which costs one call and no dependencies: ask
-        // the model to transcribe the board top-to-bottom, region by region,
-        // verbatim, then extract from its own transcription.
-        //
-        // Fires ONLY on the case it is for: a price board that yielded nothing
-        // usable. A good first read is never spent on a second call.
-        const boardMissed =
-          first.imageKind === "price_sheet" &&
-          !first.found &&
-          first.vehicleVerdict !== "mismatch";
-        if (!boardMissed) return { ...first, imageRead };
-        try {
-          const focused = await readImages(
-            system +
-              " SECOND PASS - THE FIRST READ FOUND NOTHING. Work the board in " +
-              "regions: TOP third, then MIDDLE, then BOTTOM. For each region " +
-              "transcribe EVERY line you can see verbatim (model name, engine " +
-              "size, every number, the unit beside it), including faint, " +
-              "angled, glare-covered or handwritten lines. THEN extract from " +
-              "your own transcription. Put the full transcription in " +
-              "imageSummary so a human can check it against the photo.",
-            text || "Read this price board region by region.",
-            images,
-            { json: true }
-          );
-          if (focused.ok) {
-            const retried = extractJson<ExtractedOffer>(focused.text);
-            if (retried && typeof retried.found === "boolean") {
-              const second = normalizeExtraction(retried, spec);
-              // Only ADOPT a second read that actually recovered something.
-              if (second.found || (second.options?.length ?? 0) > 0) {
-                return { ...second, imageRead: { seen: true } };
-              }
-            }
-          }
-        } catch {
-          /* the re-read is an upgrade - its failure keeps the first result */
-        }
+        // The failure class "we looked and got nothing usable out of it" - no
+        // longer conditioned on the model having classified the photo for us.
+        const gotNothing = !first.found && (first.options?.length ?? 0) === 0;
+        // A "mismatch" that read NOTHING AT ALL is a self-report, not a
+        // finding: no row, no price, no description of what it saw. Those are
+        // re-read like any other empty result. A mismatch that DID read the
+        // board (a 155cc heading, a car) is a real observation and is never
+        // re-read into an offer for a vehicle the traveller cannot ride.
+        const unsupportedMismatch =
+          first.vehicleVerdict === "mismatch" && !first.imageSummary && !first.vehicleDescription;
+        const worthReReading =
+          gotNothing &&
+          (first.vehicleVerdict !== "mismatch" || unsupportedMismatch) &&
+          first.imageKind !== "vehicle";
+        if (!worthReReading) return { ...first, imageRead };
+        const second = await regionReRead();
+        if (second) return second;
         return { ...first, imageRead };
       }
+      // THE MODEL ANSWERED AND WE COULD NOT PARSE IT (owner report 5, #1).
+      //
+      // This is the branch that produced the field failure. It fell straight
+      // through to the blank-photo fallback below with `imageRead.seen = true`
+      // and no marker, so readingFrom classified it "empty" and the traveller
+      // was told, about a crisp typed menu, "We could not read anything usable
+      // from this one. CONFIDENCE: LOW." The re-read gets a chance first, and
+      // whatever happens the failure is named as OURS.
+      const second = await regionReRead();
+      if (second) return second;
+      imageRead.modelFailure = "parse-failed";
+      imageRead.detail = `model answered ${read.text.length} chars of unparseable JSON`;
+    } else if (read.failure === "truncated") {
+      // The whole ladder ended cut off (the raised-ceiling retry inside
+      // readImages did not rescue it). One compact, budgeted re-read is the
+      // last cheap thing worth trying before we admit it.
+      const second = await regionReRead();
+      if (second) return second;
     }
+
     // A photo with NO usable model output: still try the caption text with the
     // deterministic extractor before giving up (many captions carry the price).
     const capHit = deterministicPriceHit();
@@ -1784,7 +1889,8 @@ export async function extractOffer(
       // The negotiation still has to move, so we still ask - a shop cannot fix
       // our outage and a stalled thread helps nobody. What changes is that we
       // no longer TELL THE TRAVELLER we read their photo and found it wanting:
-      // `imageRead.seen` carries the truth to every surface that reports.
+      // `imageRead` carries the truth (which failed: the reader, our parser,
+      // our ceiling) to every surface that reports.
       clarifyMessage: `Thanks for the photo! Could you confirm in text the daily price for the ${spec}? Just want to be sure we quote the right vehicle.`,
       imageRead,
       ...heuristicDepositFields(text, localCur),

@@ -153,6 +153,24 @@ export const I18N_EXTRAS: string[] = [
   "medium",
   "low",
 
+  // src/lib/media/reading.ts - readingHeadline() and readingEmptyLine() reach
+  // the panel as t(readingHeadline(r)) / t(readingEmptyLine(r)), so no literal
+  // exists for the grep. Owner report 5: THREE different failures of OURS (an
+  // unparseable answer, a generation cut off at our token ceiling, a price our
+  // own sanity net rejected) all rendered as the ONE sentence reserved for "the
+  // photo was blank". Each says what actually happened now, so each needs a
+  // translation - a traveller reading in Thai got the honest English or
+  // nothing.
+  "Your agent is re-reading this one",
+  "Too long to read in one go - re-reading",
+  "One price here looks wrong - checking",
+  "Could not read this one yet",
+  "Nothing readable in this one",
+  "Your agent could not read this one yet - our reader answered with something we could not use. That is our side failing, not your photo, and it is being retried.",
+  "This board is longer than our reader was allowed to answer, so its reading was cut off part-way. That is our limit, not your photo - your agent is reading it again with more room.",
+  "We read a price off this one that cannot be right for this area - so your agent is asking the shop to confirm it instead of quoting a number we do not trust.",
+  "We could not read anything usable from this one.",
+
   // src/components/SiteFooter.tsx - the public guides hub link (wave 4.4)
   "Guides",
 
