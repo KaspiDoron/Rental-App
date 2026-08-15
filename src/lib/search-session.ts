@@ -1,5 +1,5 @@
 import "server-only";
-import { sbSelect } from "./runtime-config";
+import { sbSelect, sbSelectStrict } from "./runtime-config";
 
 // The SEARCH-SESSION boundary + the ONE rival-selection predicate.
 //
@@ -56,8 +56,23 @@ export async function currentSession(
  */
 export async function cheapestRivalFor(
   userEmail: string,
-  args: { vendorId: string; currency: string; vehicleKey: string; belowPrice: number }
+  args: { vendorId: string; currency: string; vehicleKey: string; belowPrice: number; durationDays?: number }
 ): Promise<number | undefined> {
+  return (await cheapestRivalQuoteFor(userEmail, args))?.pricePerDay;
+}
+
+/**
+ * The same lookup, WITH provenance - what a message composer needs.
+ *
+ * `cheapestRivalFor` returns a bare number, which is exactly how a per-day we
+ * derived from someone's 3-day package became a sentence claiming a shop quoted
+ * it. This returns the span too, so the composer can say "their 3-day price
+ * works out to about 167/day" or drop the card entirely.
+ */
+export async function cheapestRivalQuoteFor(
+  userEmail: string,
+  args: { vendorId: string; currency: string; vehicleKey: string; belowPrice: number; durationDays?: number }
+): Promise<RivalPick | null> {
   const session = await currentSession(userEmail);
 
   // HOT PATH (Module 2): O(log n) Redis ZSET read, scoped to this exact
@@ -73,10 +88,20 @@ export async function cheapestRivalFor(
       excludeVendorId: args.vendorId,
       belowPrice: args.belowPrice,
     });
-    if (cached != null) return cached;
+    // The hot cache stores quoted daily rates only, so a hit is by construction
+    // not package arithmetic.
+    if (cached != null) return { pricePerDay: cached };
   }
 
-  const rows = await sbSelect<{
+  const select =
+    "vendor_id,price_per_day,currency,vehicle_key,effective_daily_rate,created_at,search_id,quote_basis_days";
+  const where =
+    `&user_email=eq.${encodeURIComponent(userEmail)}&simulated=eq.false&currency=eq.${encodeURIComponent(
+      args.currency
+    )}&vehicle_key=eq.${encodeURIComponent(args.vehicleKey)}&created_at=gte.${encodeURIComponent(
+      session.sinceIso
+    )}&order=price_per_day.asc&limit=24`;
+  type OfferRow = {
     vendor_id: string;
     price_per_day: number;
     currency: string;
@@ -84,17 +109,23 @@ export async function cheapestRivalFor(
     effective_daily_rate: number | null;
     created_at: string;
     search_id: number | null;
-  }>(
-    "offers",
-    `select=vendor_id,price_per_day,currency,vehicle_key,effective_daily_rate,created_at,search_id&user_email=eq.${encodeURIComponent(
-      userEmail
-    )}&simulated=eq.false&currency=eq.${encodeURIComponent(
-      args.currency
-    )}&vehicle_key=eq.${encodeURIComponent(args.vehicleKey)}&created_at=gte.${encodeURIComponent(
-      session.sinceIso
-    )}&order=price_per_day.asc&limit=24`
-  ).catch(() => []);
-  return pickCheapestRival(
+    quote_basis_days?: number | null;
+  };
+  // Schema-graceful, like every other read of a freshly-added column: a host
+  // that has not re-run schema.sql gets the same selection minus provenance
+  // rather than an empty rival set. `sbSelectStrict`, not `sbSelect`, precisely
+  // because sbSelect collapses "the column does not exist" into [] - and an
+  // empty rival set is indistinguishable from a hunt with no rivals yet, which
+  // is how a missing migration would silently disable cross-shop leverage.
+  const strict = await sbSelectStrict<OfferRow>("offers", `select=${select}${where}`);
+  const rows =
+    "rows" in strict
+      ? strict.rows
+      : await sbSelect<OfferRow>(
+          "offers",
+          `select=${select.replace(",quote_basis_days", "")}${where}`
+        ).catch(() => []);
+  return pickRival(
     rows.map((r) => ({
       vendorId: r.vendor_id,
       pricePerDay: r.price_per_day,
@@ -103,6 +134,7 @@ export async function cheapestRivalFor(
       effectiveDailyRate: r.effective_daily_rate,
       createdAt: r.created_at,
       searchId: r.search_id,
+      quoteBasisDays: r.quote_basis_days ?? null,
     })),
     { ...args, sinceIso: session.sinceIso, searchId: session.id }
   );
@@ -118,6 +150,24 @@ export interface RivalOffer {
   createdAt: string; // ISO
   /** The search this offer belongs to - the exact, leak-proof session key. */
   searchId?: number | null;
+  /**
+   * PROVENANCE: the span this per-day figure was DIVIDED out of, when it was
+   * derived rather than quoted ("500 for 3 days" -> 167/day, basis 3). Null or
+   * absent = the shop stated a daily rate. See offers.quote_basis_days.
+   */
+  quoteBasisDays?: number | null;
+}
+
+/** A chosen rival, with enough provenance to say it honestly. */
+export interface RivalPick {
+  /** The per-day figure to cite. */
+  pricePerDay: number;
+  /**
+   * Set when `pricePerDay` is package arithmetic rather than a quoted daily
+   * rate. Every surface that repeats it must say so ("their 3-day price works
+   * out to about 167/day") - never "they quoted me 167 a day".
+   */
+  derivedFromDays?: number;
 }
 
 /**
@@ -132,20 +182,40 @@ export interface RivalOffer {
  *    per-day price, so a weekly-deal rival is compared honestly
  *  - strictly cheaper than the quote being negotiated
  */
-export function pickCheapestRival(
-  offers: RivalOffer[],
-  args: {
-    vendorId: string;
-    currency: string;
-    vehicleKey: string;
-    belowPrice: number;
-    sinceIso: string;
-    /** The current search's id. When known, a rival MUST belong to it -
-     * exact-match scoping that a time window alone cannot guarantee. */
-    searchId?: number | null;
-  }
-): number | undefined {
-  let best: number | undefined;
+export interface RivalArgs {
+  vendorId: string;
+  currency: string;
+  vehicleKey: string;
+  belowPrice: number;
+  sinceIso: string;
+  /** The current search's id. When known, a rival MUST belong to it -
+   * exact-match scoping that a time window alone cannot guarantee. */
+  searchId?: number | null;
+  /**
+   * How many days the traveller is actually renting. A rival per-day DERIVED
+   * from a longer package is only like-for-like once the traveller stays long
+   * enough to earn that package; below that it is arithmetic, not an offer.
+   * Absent = unknown, and the conservative reading applies (see below).
+   */
+  durationDays?: number;
+}
+
+/**
+ * The cheapest REAL rival for a negotiation, with its provenance - pure and
+ * deterministic. Rules (each one deliberate):
+ *  - same session only (createdAt >= sinceIso, or exact searchId)
+ *  - same currency EXACTLY (comparing across currencies without FX invents
+ *    leverage - a mismatch is surfaced by the caller, never guessed through)
+ *  - same vehicle class exactly
+ *  - a DIFFERENT shop
+ *  - duration-aware: the effective daily rate (when known) beats the sticker
+ *    per-day price, so a weekly-deal rival is compared honestly
+ *  - DERIVED prices carry their span out with them, so the caller can phrase
+ *    them as arithmetic instead of as a quote
+ *  - strictly cheaper than the quote being negotiated
+ */
+export function pickRival(offers: RivalOffer[], args: RivalArgs): RivalPick | null {
+  let best: RivalPick | null = null;
   for (const o of offers) {
     if (o.vendorId === args.vendorId) continue;
     if (o.currency !== args.currency) continue;
@@ -162,12 +232,41 @@ export function pickCheapestRival(
     } else if (o.createdAt < args.sinceIso) {
       continue;
     }
+    // DURATION AWARENESS, THE HALF THAT WAS MISSING (owner report 5 #2).
+    //
+    // `offers.duration_days` was written and never read here, and the per-day
+    // figure carried no marker for having been divided out of a package - so a
+    // 167 that only exists because a shop quoted 500 for THREE days was handed
+    // to the composer as a rival for a ONE-day rental, which then welded the
+    // current duration onto it: "167/day for 1 day", a price no shop ever said,
+    // and the prompt forbade the model from softening it.
+    //
+    // A package basis longer than the traveller's rental is not leverage. It is
+    // dropped rather than discounted, because we do not know what that shop
+    // would charge for one day - guessing a markup would invent a second number
+    // on top of the first.
+    const basis = typeof o.quoteBasisDays === "number" && o.quoteBasisDays > 0 ? o.quoteBasisDays : undefined;
+    if (basis && basis > 1) {
+      // Unknown duration is treated as the shortest possible rental: the whole
+      // point of this guard is that we must not assert a package rate applies.
+      const renting = typeof args.durationDays === "number" && args.durationDays > 0 ? args.durationDays : 1;
+      if (basis > renting) continue;
+    }
     const rate =
       typeof o.effectiveDailyRate === "number" && o.effectiveDailyRate > 0
         ? Math.min(o.effectiveDailyRate, o.pricePerDay)
         : o.pricePerDay;
     if (!(rate > 0) || rate >= args.belowPrice) continue;
-    if (best === undefined || rate < best) best = rate;
+    if (best === null || rate < best.pricePerDay) {
+      best = { pricePerDay: rate, derivedFromDays: basis };
+    }
   }
   return best;
+}
+
+/** The cheapest rival's NUMBER. Thin wrapper over `pickRival` for the callers
+ *  that only need the figure; anything that repeats it in a message should use
+ *  `pickRival` so it can phrase a derived price honestly. */
+export function pickCheapestRival(offers: RivalOffer[], args: RivalArgs): number | undefined {
+  return pickRival(offers, args)?.pricePerDay;
 }

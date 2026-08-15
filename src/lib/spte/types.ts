@@ -117,7 +117,20 @@ export interface SessionSnapshot {
     grounded: true;
   } | null;
   lowest: { vendorId: string; shop: string; pricePerDay: number } | null;
-  rivals: Array<{ vendorId: string; shop: string; pricePerDay: number; currency: string }>;
+  rivals: Array<{
+    vendorId: string;
+    shop: string;
+    pricePerDay: number;
+    currency: string;
+    /**
+     * PROVENANCE (owner report 5 #2). The per-day figure was DIVIDED out of a
+     * package covering this many days ("500 for 3 days" -> 167) rather than
+     * quoted per day. It is real arithmetic on a real number, but it is not a
+     * price any shop stated for THIS rental length, so every surface that
+     * repeats it has to say "works out to about" instead of "they quoted".
+     */
+    derivedFromDays?: number;
+  }>;
   /** Priors banked from past successful deals (self-improvement loop). */
   priors?: { medianAchieved?: number; typicalDiscountPct?: number; sampleSize: number } | null;
   /** Few-shot TONE/tactic coaching (owner teaching + Ops learning + distilled
@@ -175,6 +188,22 @@ export interface ThreadDigest {
    * a question can see WHY instead of watching an idle card.
    */
   awaitingConfirmation?: { subject: ConfirmSubject; question: string } | null;
+  /**
+   * THE PRICE WATCH HAS ALREADY BEEN ARMED FOR THIS THREAD (owner report 5 #9).
+   *
+   * A priced thread schedules no return of its own: a wakeup is written only
+   * when the model asked to wait (clamped to 3 minutes - a pause-before-replying
+   * tactic, not a re-entry) or when the turn went silent with no price. So a
+   * shop that quoted 300 and fell quiet could never hear about the 200 that
+   * landed twenty minutes later, because no turn ever happened in which it
+   * could be said.
+   *
+   * One long re-entry per thread, ever, recorded here. Durable because the
+   * digest is (W4.5). The bound is the whole design: without it, every
+   * re-entered turn that lands silent-and-priced would arm another watch, and a
+   * negotiation assistant would become a slow broadcast loop.
+   */
+  priceWatchArmed?: boolean;
 }
 
 export interface VerifiedExtraction {

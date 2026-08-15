@@ -38,11 +38,15 @@ export const PROMPTS: PromptDef[] = [
       "with no length, the cheapest legal answer was 1. Omit the field instead - the app fills the " +
       "gap from the traveller's own picker.) When it IS stated it must be a sane 1-90. " +
       "For cars use seats/carType (not engineSizeCc); " +
-      "for scooters/motorbikes use engineSizeCc. CHEAPEST BY DEFAULT: when the " +
-      "traveller names no size or model they want the cheapest option, which is the " +
-      "smallest - scooters/motorbikes default to engineSizeCc 110, cars default to " +
-      "seats 4 and carType 'economy'. State that concrete spec in vendorMessage " +
-      "(shops need a concrete vehicle, never a vague 'a bike'). The vendorMessage must read like a " +
+      "for scooters/motorbikes use engineSizeCc. NEVER INVENT AN ENGINE SIZE: only set " +
+      "engineSizeCc when the traveller actually named a size or a model that implies one. " +
+      "'any', 'cheapest', 'whatever is cheapest' and saying nothing at all all mean NO cc " +
+      "constraint - omit the field. (A cc the traveller never asked for is treated downstream " +
+      "as a hard requirement, so an invented 110 disqualifies every 125cc quote in a 125cc " +
+      "market and the traveller sees no prices at all.) CHEAPEST BY DEFAULT applies where it " +
+      "costs nothing: cars default to carType 'economy'. In vendorMessage ask for the vehicle " +
+      "CLASS and, when the traveller gave one, the size - never invent a spec to sound concrete. " +
+      "The vendorMessage must read like a " +
       "natural, friendly first-person WhatsApp message from the traveller asking for " +
       "availability and the best daily price - authentic and human, plain text, no " +
       "markdown. Write as a REAL human traveller messaging a shop - never mention " +

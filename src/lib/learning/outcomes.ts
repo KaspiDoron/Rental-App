@@ -63,6 +63,17 @@ export async function learnFromReply(input: {
   tacticId: string | null | undefined;
   previousQuote: number | null | undefined;
   newQuote: number | null | undefined;
+  /**
+   * The PHRASING arm the scored move was written in (negotiation/ask-variant).
+   *
+   * THE VARIANT LABEL IS THE WHOLE POINT OF THE OWNER'S A/B. This function is
+   * already the precise answer to "did the shop concede, and by how much" - the
+   * one thing it could not answer was WHICH phrasing earned it, because the
+   * identifier it credits is the MOVE NAME ("bargain"), identical in both arms.
+   * A second `bargain#<arm>` row makes the two populations separable without
+   * disturbing the move-level statistic anything else reads.
+   */
+  askVariant?: string | null;
 }): Promise<MoveResult | null> {
   const tacticId = String(input.tacticId ?? "").trim();
   if (!tacticId) return null;
@@ -70,6 +81,11 @@ export async function learnFromReply(input: {
   if (!result) return null;
   try {
     recordOutcome(tacticId, result.won, result.discountPct);
+    // The arm gets its own row, in ADDITION to the move's. Replacing the move
+    // row would silently change what every existing panel is measuring; this
+    // adds a population without moving one.
+    const arm = String(input.askVariant ?? "").trim();
+    if (arm) recordOutcome(`${tacticId}#${arm}`, result.won, result.discountPct);
   } catch {
     /* best-effort - the panel is an observation, not a rail */
   }

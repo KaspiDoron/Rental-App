@@ -274,6 +274,24 @@ export interface SessionShopRow {
   phase?: ThreadPhase;
   complete?: boolean;
   isThisShop?: boolean;
+  /**
+   * PROVENANCE (owner report 5 #2): `pricePerDay` was DIVIDED out of a package
+   * covering this many days rather than quoted per day. A rival carrying this
+   * must be phrased as arithmetic ("their 3-day price works out to about
+   * 167/day"), and is not like-for-like for a shorter rental at all.
+   */
+  quoteBasisDays?: number;
+  /** How many days the traveller's RFQ asked this shop about, when the row came
+   *  from an `offers` row that recorded it. Lets a package basis be judged
+   *  against the rental it was quoted for. */
+  durationDays?: number;
+  /** The shop's WhatsApp number, when this row came from a live thread. It is
+   *  what a thread key is built from, so it is what a sibling re-bargain needs
+   *  to reach back into an EXPENSIVE thread when a cheaper quote lands. */
+  toNumber?: string;
+  /** How many times this shop has said "last price" - a shop that has refused
+   *  twice is not re-opened by the swarm. */
+  firmCount?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -49,6 +49,23 @@ export interface RentalPriceHit {
   maxDays?: number;
   /** The shop's own words for the range ("3-7 days", "Monthly"). */
   tierLabel?: string;
+  /**
+   * PROVENANCE: THIS NUMBER WAS DERIVED, NOT QUOTED (owner report 5 #2).
+   *
+   * A shop that types "500 for 3 days" has stated a TOTAL. Dividing it gives
+   * 167/day - arithmetic on a real number, and useful - but no shop ever said
+   * "167 a day", and nothing downstream could tell the difference. The field
+   * failure is exactly that: a Thai draft citing "167 บาท/วัน สำหรับ 1 วัน"
+   * (167/day for 1 day) against a shop that had quoted a 3-day package, with
+   * the CURRENT rental's 1 day welded on by the composer.
+   *
+   * `derivedFromDays` is the span the original amount covered (3 here, 7 for a
+   * weekly, 30 for a monthly). Absent = the shop stated a per-day rate. Every
+   * surface that repeats a derived figure has to phrase it as arithmetic
+   * ("their 3-day price works out to about 167/day"), and a rival whose span
+   * exceeds the traveller's rental is not like-for-like at all.
+   */
+  derivedFromDays?: number;
 }
 
 // Currency CODES/symbols AND the spoken WORDS shops actually type ("400 baht
@@ -496,6 +513,10 @@ export function extractQuotedPrices(
           classMatch: cls ? cls === wantClass : undefined,
           listPrice: isListPriceAt(line, a.index),
           index: a.index,
+          // A trip total divided over the rental we asked for. Derived, and it
+          // says so - but the span IS the traveller's own rental, so nothing
+          // downstream has to discount it as a mismatched package.
+          derivedFromDays: days > 1 ? days : undefined,
         });
         took = true;
       }
@@ -534,6 +555,11 @@ export function extractQuotedPrices(
           line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
           listPrice: isListPriceAt(line, amtAt),
+          // THE "167" (owner report 5 #2). "500 for 3 days" -> 167, and the
+          // span is the SHOP's 3 days, not the traveller's. When those differ
+          // this is not a like-for-like daily rate and must never be repeated
+          // to another shop as one.
+          derivedFromDays: nDays,
         });
         continue;
       }
@@ -564,6 +590,10 @@ export function extractQuotedPrices(
           line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
           listPrice: isListPriceAt(line, amountIndex(line, month, month[1] ? 1 : 2)),
+          // A monthly rate spread over a month is the deepest package discount
+          // a shop offers. Quoting it at a rival as a daily rate for a 2-day
+          // rental is the same lie the 3-day package told, only larger.
+          derivedFromDays: div,
         });
         continue;
       }
@@ -579,6 +609,9 @@ export function extractQuotedPrices(
           line: rawLine,
           classMatch: cls ? cls === wantClass : undefined,
           listPrice: isListPriceAt(line, amountIndex(line, week, week[1] ? 1 : 2)),
+          // A weekly package spread over 7 days - only a like-for-like rate for
+          // a traveller actually renting a week.
+          derivedFromDays: 7,
         });
       }
     }

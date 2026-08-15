@@ -693,6 +693,10 @@ export async function processVendorReply(opts: {
     extraction.found && extraction.pricePerDay
       ? extraction.pricePerDay
       : undefined;
+  /** The span `usablePrice` was DERIVED over, when it was derived at all (a
+   *  package total divided out). Undefined = the shop stated a per-day rate.
+   *  Filled by the menu block below and written onto the offers row. */
+  let priceBasisDays: number | undefined;
 
   // DETERMINISTIC BACKSTOP (the "3 of 4 offers vanished" fix): the LLM
   // extractor can miss/fail (quota, odd phrasing) - but a price a human can
@@ -1046,6 +1050,17 @@ export async function processVendorReply(opts: {
     const fromModel = Array.isArray(extraction.options) ? extraction.options : [];
     const options = mergeOptions(fromModel, derived);
     if (options.length >= 2) extraction.options = options;
+
+    // WAS THIS PER-DAY QUOTED, OR DID WE DIVIDE IT OUT? (owner report 5 #2)
+    //
+    // "500 for 3 days" gives 167/day, and until now nothing recorded that no
+    // shop ever said 167. That figure then reached another shop as a rival's
+    // daily price for a ONE-day rental, with our duration welded on - the
+    // "167 บาท/วัน สำหรับ 1 วัน" screenshot. The reader knows the span it
+    // divided by; this is where that fact is carried out of the reader and
+    // into the offers row, so the rival predicate can refuse a package price
+    // as like-for-like and every prompt can phrase it honestly.
+    priceBasisDays = quoted.allOffers.find((h) => h.pricePerDay === usablePrice)?.derivedFromDays;
   }
 
   // TOTAL vs PER-DAY sanity net. Shops constantly quote the WHOLE rental
@@ -1288,11 +1303,43 @@ export async function processVendorReply(opts: {
       ).catch(() => []);
       searchId = s[0]?.id ?? null;
     }
+    // THE GUARD THAT WAS DECLARED, READ, AND NEVER WRITTEN (owner report 5 #2).
+    //
+    // `offers.effective_daily_rate` is in the schema and `pickCheapestRival`
+    // reads it - `Math.min(effectiveDailyRate, pricePerDay)` is the whole
+    // duration-aware half of the rival predicate. Nothing in the repo ever
+    // wrote the column, so that min() fell through to the sticker price on
+    // every row ever inserted and the guard was inert by construction.
+    //
+    // What it means here: the honest daily rate FOR THE RENTAL WE ASKED ABOUT.
+    // A price the shop stated per day is that rate. A price we divided out of a
+    // package is that rate only when the traveller is actually renting long
+    // enough to earn the package - a 3-day deal does not apply to a 1-day hire,
+    // and 500/3 = 167 is not a number that shop would honour for one day. In
+    // that case there is no known effective rate, and null is the honest value:
+    // the predicate then falls back to the sticker price, and `quote_basis_days`
+    // below tells every reader the figure is package arithmetic.
+    const packageApplies =
+      priceBasisDays === undefined || priceBasisDays <= (rfq.durationDays ?? 1);
+    const provenance = {
+      effective_daily_rate: packageApplies ? usablePrice : null,
+      quote_basis_days: priceBasisDays ?? null,
+    };
+    // A SESSION STAMP THAT SURVIVES THE GRACEFUL RETRY.
+    //
+    // `search_id` lived only on the richest insert attempt, and
+    // `pickCheapestRival` REQUIRES `o.searchId === args.searchId` whenever the
+    // session id is known. So any row that fell back - one un-migrated column
+    // anywhere in the wide insert - was silently excluded from every rival
+    // lookup for the rest of the hunt, even minutes old. It belongs in the base
+    // row: `search_id` has shipped since the intel migration, and it is the key
+    // the whole cross-shop leverage mechanism is scoped by.
+    const base = { ...offerBase, search_id: searchId };
     // Retry without the newest columns if the migration has not run yet.
     const offerOk = await sbInsert("offers", [
       {
-        ...offerBase,
-        search_id: searchId,
+        ...base,
+        ...provenance,
         deposit_note: extraction.deposit ?? null,
         deposit_type: extraction.depositType ?? null,
         deposit_amount: extraction.depositAmount ?? null,
@@ -1304,8 +1351,15 @@ export async function processVendorReply(opts: {
       },
     ]);
     if (!offerOk) {
-      const okDep = await sbInsert("offers", [{ ...offerBase, deposit_note: extraction.deposit ?? null }]);
-      if (!okDep) await sbInsert("offers", [offerBase]);
+      // Step down one column set at a time, keeping the session stamp and the
+      // provenance for as long as the schema allows.
+      const okDep = await sbInsert("offers", [
+        { ...base, ...provenance, deposit_note: extraction.deposit ?? null },
+      ]);
+      if (!okDep) {
+        const okBase = await sbInsert("offers", [base]);
+        if (!okBase) await sbInsert("offers", [offerBase]);
+      }
     }
     // HOT-STATE WRITE-THROUGH (Module 2): mirror the offer into the Redis
     // session aggregates (lowest-rival ZSET + OFFERS IN / BARGAINED HSET) and

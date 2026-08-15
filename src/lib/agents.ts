@@ -20,6 +20,7 @@ import { catalogueFactsFor } from "./vehicle/catalogue";
 import { isEnglishSpeaking } from "./locale";
 import { deAmbiguateFree } from "./wa/persona";
 import { numbersPreserved } from "./integrity/translation";
+import { beatRivalTarget } from "./negotiation/beat-rival";
 
 // ---------------------------------------------------------------------------
 // Profiler Agent - free text → structured, vendor-ready RFQ
@@ -127,11 +128,22 @@ function normalizeRFQ(
     vehicleClass: (["car", "motorbike", "scooter"].includes(rfq.vehicleClass)
       ? rfq.vehicleClass
       : "car") as VehicleClass,
-    // CHEAPEST BY DEFAULT (item #14): when the traveller names no size/model,
-    // they want the cheapest option - which is the smallest. Scooters and
-    // motorbikes default to 110cc; cars to a regular 4-seat economy car. The
-    // agents then ask shops for a CONCRETE vehicle, never a vague "a bike".
-    engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc ?? 110,
+    // NO INVENTED ENGINE SIZE (owner report 5 #11 - the 110cc trap).
+    //
+    // "Cheapest by default" used to DECLARE 110cc for a traveller who had named
+    // no size, and for one who explicitly tapped "Any / cheapest". Displacement
+    // is a DISQUALIFYING attribute in the vehicle-identity gate (vehicle/spec),
+    // and only attributes the traveller actually declared may block a quote -
+    // the seats default above was removed for exactly this reason and left this
+    // one standing. In a 125cc market like Thailand the consequence is total:
+    // real quotes for the bikes the shops actually rent were stamped "wrong
+    // vehicle" and barred from BEST PRICE, on a constraint the traveller never
+    // asked for and could not see.
+    //
+    // "Any / cheapest" means NO cc constraint. Cheapest is then what it should
+    // always have been - the lowest price the shops come back with - rather than
+    // a displacement we picked on their behalf and then enforced against them.
+    engineSizeCc: rfq.vehicleClass === "car" ? undefined : rfq.engineSizeCc,
     // NO SEAT DEFAULT. `seats` is a DISQUALIFYING attribute in the vehicle
     // identity gate (src/lib/vehicle/spec) - only attributes the traveller
     // actually declared may block a quote. Defaulting it to 4 meant every car
@@ -809,6 +821,13 @@ export async function composeBargain(opts: {
   vendor: Vendor;
   currentPricePerDay?: number;
   rivalPricePerDay?: number;
+  /**
+   * The rival per-day was DERIVED by dividing their multi-day package over this
+   * many days, not quoted per day (owner report 5 #2 - the "167" screenshot).
+   * When set, the message must say "their N-day price works out to about X/day"
+   * and must never present X as a price that shop quoted for THIS rental.
+   */
+  rivalDerivedFromDays?: number;
   region?: string;
   round: number;
   // The LOCAL rental currency where the shop is (e.g. THB) - the agent must
@@ -867,6 +886,18 @@ export async function composeBargain(opts: {
     // ladder tracks.
     if (!opts.targetPricePerDay) target = roundNice(target);
     if (target >= quoted) target = undefined; // quote already at/below target
+  }
+  // BEAT, NEVER MATCH (owner report 5 #2). Whenever we hold a cheaper rival,
+  // the number we ask for is strictly BELOW it - a target equal to the rival is
+  // a match dressed as an ask, and the best outcome of a successful match is
+  // the price the traveller already had. `roundNice` above can also land the
+  // target exactly ON the rival, so this runs last and binds unconditionally.
+  if (opts.rivalPricePerDay && opts.rivalPricePerDay > 0) {
+    target = beatRivalTarget({
+      rivalPricePerDay: opts.rivalPricePerDay,
+      quotePerDay: quoted,
+      floorPerDay: opts.floorPricePerDay,
+    });
   }
   // Refresh the durable tactic table first (30s-cached, one query at most) so
   // win-rate learning from other instances/deploys reaches this compose.
@@ -1006,19 +1037,56 @@ export async function composeBargain(opts: {
   // is the strongest card the traveller holds - the model must NOT drop it under
   // the "vary your arguments" directive. Force the number + the rental days into
   // the message, in very simple broken English (many shops read basic English).
+  //
+  // BEAT, NEVER MATCH (owner report 5 #2). This block used to end "ask this shop
+  // to match or beat it" and then MODEL the match in its own few-shot ("you can
+  // do same or better?"). A match hands over the traveller's strongest card and
+  // wins them nothing - the price they already had. The ask is now a concrete
+  // number strictly below the rival, and spte/rails refuses any draft that asks
+  // to match anyway, so this stopped being advice.
   if (opts.rivalPricePerDay) {
+    const beat =
+      target && target < opts.rivalPricePerDay
+        ? target
+        : beatRivalTarget({
+            rivalPricePerDay: opts.rivalPricePerDay,
+            quotePerDay: quoted,
+            floorPerDay: opts.floorPricePerDay,
+          });
+    // HONEST PROVENANCE: a per-day we divided out of their package is stated as
+    // the arithmetic it is, never as a price that shop quoted for these days.
+    const derived = opts.rivalDerivedFromDays;
+    const leverageFact =
+      typeof derived === "number" && derived > 0
+        ? `a real nearby shop in this same search quoted a ${derived}-day package that WORKS OUT TO about ${money(
+            opts.rivalPricePerDay,
+            cur
+          )}/day. That is our arithmetic on their package, NOT a per-day price they gave for ${nDays(
+            opts.rfq.durationDays
+          )} - say "their ${derived}-day price works out to about ${money(
+            opts.rivalPricePerDay,
+            cur
+          )} a day", never "they gave me ${money(opts.rivalPricePerDay, cur)} a day"`
+        : `a real nearby shop in this same search gave ${money(
+            opts.rivalPricePerDay,
+            cur
+          )}/day for the SAME ${vehicleTerm(opts.rfq.vehicleClass)} for these ${nDays(
+            opts.rfq.durationDays
+          )}`;
     systemWithDirectives +=
-      `\nHARD LEVERAGE RULE: a real nearby shop in this same search gave ${money(
+      `\nHARD LEVERAGE RULE: ${leverageFact}. You MUST name the ${money(
         opts.rivalPricePerDay,
         cur
-      )}/day for the SAME ${vehicleTerm(opts.rfq.vehicleClass)} for these ${nDays(
+      )} figure AND the ${nDays(
         opts.rfq.durationDays
-      )}. You MUST name this ${money(
-        opts.rivalPricePerDay,
+      )} - never omit or soften them away. Then ask THIS shop for ${money(
+        beat,
         cur
-      )}/day price AND the ${nDays(
+      )}/day, which is strictly LOWER than the other offer. ` +
+      `NEVER ask them to "match" it, to do "the same", or to "get close to" it: a matching price leaves the traveller exactly where they already are, so the only outcome worth asking for is a LOWER one. ` +
+      `Very simple broken English, e.g. "another shop give me ${opts.rivalPricePerDay} per day for ${nDays(
         opts.rfq.durationDays
-      )} and ask this shop to match or beat it - never omit or soften it away. Very simple broken English, e.g. "another shop give me ${opts.rivalPricePerDay} per day for ${nDays(opts.rfq.durationDays)}, you can do same or better? then i rent from you".`;
+      )}, you can do ${beat}? then i rent from you".`;
   }
 
   // ZERO-PATTERN AUTHENTICITY: (a) a stable per-user voice persona so every
@@ -1056,18 +1124,31 @@ export async function composeBargain(opts: {
   const user =
     `Vehicle: ${spec}. Currency: ${cur}. ` +
     (quoted ? `They quoted ${money(quoted, cur)}/day. ` : "No quote yet. ") +
+    // BEAT, NEVER MATCH - the second of the two composeBargain sites that
+    // carried "match or beat it" verbatim. See the HARD LEVERAGE RULE above.
     (opts.rivalPricePerDay
-      ? `LEVERAGE (you MUST use this): another shop in the traveller's search ALREADY offered ${money(
+      ? `LEVERAGE (you MUST use this): ${
+          typeof opts.rivalDerivedFromDays === "number" && opts.rivalDerivedFromDays > 0
+            ? `another shop in the traveller's search quoted a ${
+                opts.rivalDerivedFromDays
+              }-day package that works out to about ${money(
+                opts.rivalPricePerDay,
+                cur
+              )}/day for the same ${vehicleTerm(
+                opts.rfq.vehicleClass
+              )}. Say it as "works out to about" - they never quoted that as a daily price`
+            : `another shop in the traveller's search ALREADY offered ${money(
+                opts.rivalPricePerDay,
+                cur
+              )}/day for the same ${vehicleTerm(opts.rfq.vehicleClass)} for this ${
+                opts.rfq.durationDays
+              }-day rental`
+        }. Your message MUST state that ${money(
           opts.rivalPricePerDay,
           cur
-        )}/day for the same ${vehicleTerm(opts.rfq.vehicleClass)} for this ${
+        )} figure and the ${nDays(
           opts.rfq.durationDays
-        }-day rental. Your message MUST state that a nearby shop gave ${money(
-          opts.rivalPricePerDay,
-          cur
-        )}/day for the ${nDays(
-          opts.rfq.durationDays
-        )} and ask THIS shop to match or beat it to close now - make clear you'll rent from whoever is cheaper. Friendly, never threatening. Do NOT omit the ${money(
+        )}, and then ask THIS shop for a price BELOW it to close now - make clear you'll rent from whoever is cheaper. Never ask them to match it, to do the same, or to get close to it; matching wins the traveller nothing. Friendly, never threatening. Do NOT omit the ${money(
           opts.rivalPricePerDay,
           cur
         )} number or the ${nDays(opts.rfq.durationDays)}. `
@@ -1112,23 +1193,45 @@ export async function composeBargain(opts: {
   // Deterministic fallback (AI unreachable). Varied templates so even the
   // fallback never sends the same message twice, and it is flagged so the UI
   // can tell the user this was a template, not the real agent brain.
-  const t = target ? money(target, cur) : undefined;
-  const rival = opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : undefined;
   const days = opts.rfq.durationDays;
   const vt = vehicleTerm(opts.rfq.vehicleClass);
   const q = quoted ? money(quoted, cur) : undefined;
+  // BEAT, NEVER MATCH - in the LLM-down path too.
+  //
+  // Every rival template below used `t ?? rival`, so with no computed target the
+  // deterministic agent asked the shop for the rival's EXACT number, and the
+  // later-round pool asked it to "get close to" it. Both are matches. The ask
+  // here is always a real number strictly below the rival: `beatAsk` never
+  // falls back to the rival itself, and the phrasing never softens to
+  // "close to".
+  const beatAsk =
+    opts.rivalPricePerDay && opts.rivalPricePerDay > 0
+      ? beatRivalTarget({
+          rivalPricePerDay: opts.rivalPricePerDay,
+          quotePerDay: quoted,
+          floorPerDay: opts.floorPricePerDay,
+        })
+      : undefined;
+  const t = target ? money(target, cur) : beatAsk ? money(beatAsk, cur) : undefined;
+  const rival = opts.rivalPricePerDay ? money(opts.rivalPricePerDay, cur) : undefined;
+  // Honest provenance for a per-day we divided out of their package.
+  const rivalPhrase =
+    typeof opts.rivalDerivedFromDays === "number" && opts.rivalDerivedFromDays > 0
+      ? `another shop's ${opts.rivalDerivedFromDays}-day price works out to about ${rival}/day`
+      : `another shop offered me ${rival}/day for the same ${vt}`;
+  const ask = t ?? (beatAsk ? money(beatAsk, cur) : rival);
   const fallbackPool = rival
     ? opts.round <= 0
       ? [
-          `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${nDays(days)}? 🙂`,
-          `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${nDays(days)}? 🙏`,
+          `Thanks! Just being upfront - ${rivalPhrase}. If you can go under that, I'll happily rent from you. Could you do ${ask}/day for the ${nDays(days)}? 🙂`,
+          `Appreciate it! ${rivalPhrase[0].toUpperCase()}${rivalPhrase.slice(1)}. I'd honestly prefer your place - any chance you could do ${ask}/day for ${nDays(days)}? 🙏`,
         ]
       : [
-          // Later rounds: don't re-wave the rival card the same way - soften to
-          // a meet-in-the-middle nudge that still holds the leverage.
-          `Ok! Honestly I really want to rent from you - if you can get close to ${t ?? rival}/day for the ${nDays(days)}, I book right now. 🤝`,
-          `I hear you! Just a little closer to ${t ?? rival}/day and it's done - I'd rather give you the ${nDays(days)} than the other shop. 🙂`,
-          `No pressure - even ${t ?? rival}/day for ${nDays(days)} and I confirm today. I'd love it to be your place. 🙏`,
+          // Later rounds: don't re-wave the rival card the same way - soften the
+          // TONE, never the number. "Get close to X" was a match in disguise.
+          `Ok! Honestly I really want to rent from you - at ${ask}/day for the ${nDays(days)} I book right now. 🤝`,
+          `I hear you! Just ${ask}/day and it's done - I'd rather give you the ${nDays(days)} than the other shop. 🙂`,
+          `No pressure - ${ask}/day for ${nDays(days)} and I confirm today. I'd love it to be your place. 🙏`,
         ]
     : t && opts.round <= 0
     ? [

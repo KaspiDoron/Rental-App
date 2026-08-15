@@ -15,7 +15,9 @@ import { composePassportCounter } from "../negotiation/deposit-counter";
 import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
-import { planLeverage, leadCard } from "../negotiation/leverage";
+import { planLeverage, leadCard, cheapestCheaperRival } from "../negotiation/leverage";
+import { beatRivalTarget } from "../negotiation/beat-rival";
+import { askVariantDirective, askVariantFor } from "../negotiation/ask-variant";
 import { disclosureBlock } from "../negotiation/traveller-disclosure";
 import { describeActs } from "../wa/dialogue-acts";
 // The ONE place the day plural is decided (owner report 5 #7: shops were told
@@ -285,6 +287,11 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // number. The price and the vehicle are the leverage; the name is not ours to
   // give away. spte/rails enforces it on the finished draft as well.
   const quoteNow = quoteOnTable(ctx);
+  // Which arm of the owner's phrasing A/B this thread is in. Read here, before
+  // the leverage plan, because the rival card must not name a counter-price in
+  // the open-ended arm - two halves of one prompt contradicting each other is
+  // not an experiment, it is noise in both arms.
+  const askVariant = askVariantFor(ctx.thread.threadKey);
   const plan = ctx.legalMoves.includes("bargain")
     ? planLeverage({
         rivals: s.rivals,
@@ -293,6 +300,17 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         durationDays: days,
         round,
         vehicleLabel: vehicleLine(ctx),
+        // BEAT, NEVER MATCH needs a number, and a number needs a floor: the
+        // rival card names a concrete target strictly below the rival, and the
+        // floor is what stops that target becoming an insulting lowball.
+        floorPerDay: ctx.guards.floorPerDay,
+        // A rival per-day we DIVIDED out of their multi-day package is not a
+        // quote for these days. The card says so rather than welding our
+        // duration onto their arithmetic.
+        rivalDerivedFromDays: s.rivals[0]?.derivedFromDays,
+        // BEAT-NEVER-MATCH holds in both arms; only whether we NAME the number
+        // differs (negotiation/ask-variant).
+        nameATarget: askVariant !== "open-ended-below",
         // The same fact the policy uses to retire `bargain`, read from the
         // same place. Two modules disagreeing about who the cheapest shop is
         // would be worse than either answer.
@@ -339,6 +357,44 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         : `BARGAIN ANGLE (final gentle nudge): one last soft ask, then you will accept. Use a DIFFERENT phrasing and lever from your earlier messages.\n`
     : "";
 
+  // THE PHRASING A/B (owner report 5 #2, second half).
+  //
+  // "Measure the times of successful bargain that we suggested a lower price
+  // (we gave them a specific number) Vs the times we didn't give a specific
+  // price and just asked for a lower price than X - in both ways we write them
+  // the high price we already have 'X'."
+  //
+  // Both arms state the shop's own quote; only our counter differs. Assigned
+  // PER THREAD (negotiation/ask-variant), so one traveller runs both arms in
+  // parallel against comparable shops instead of a whole hunt landing in one.
+  // Recorded on the turn telemetry and attributed by learnFromReply one turn
+  // later, which is where the concession is actually visible.
+  // The number the specific-number arm names. Strictly below a cheaper rival
+  // when we hold one (BEAT, NEVER MATCH - the same helper the rival card uses,
+  // so the two can never name different figures), otherwise the ordinary
+  // floor-clamped cut.
+  const askTarget = (() => {
+    const rival = cheapestCheaperRival(s.rivals, quoteNow)?.pricePerDay;
+    if (rival) {
+      return beatRivalTarget({
+        rivalPricePerDay: rival,
+        quotePerDay: quoteNow,
+        floorPerDay: ctx.guards.floorPerDay,
+      });
+    }
+    if (typeof quoteNow === "number" && quoteNow > 0) {
+      return Math.max(ctx.guards.floorPerDay ?? 0, Math.round(quoteNow * 0.85)) || undefined;
+    }
+    return undefined;
+  })();
+  const askShape = ctx.legalMoves.includes("bargain")
+    ? `${askVariantDirective(askVariant, {
+        quotePerDay: quoteNow,
+        currency: s.currency,
+        target: askTarget,
+      })}\n`
+    : "";
+
   // Kept as its own line only when there is nothing stronger to lead with.
   const durationLeverage =
     !lead && !atLow && round <= 0 && days >= 3 && ctx.legalMoves.includes("bargain")
@@ -351,6 +407,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     `RIVAL OFFERS (other shops, this search):\n${rivalLines}\n\n` +
     menuBlock +
     roundPlay +
+    askShape +
     firmNote +
     depositCounterNote +
     questionNote +

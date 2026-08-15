@@ -31,6 +31,9 @@ export function persistableDigest(d: ThreadDigest): Partial<ThreadDigest> {
     ...(d.tone ? { tone: d.tone } : {}),
     ...(d.confirmAsked?.length ? { confirmAsked: d.confirmAsked } : {}),
     ...(d.awaitingConfirmation ? { awaitingConfirmation: d.awaitingConfirmation } : {}),
+    // The once-ever price-watch bound (owner report 5 #9). Durable or it is not
+    // a bound at all - an in-memory flag would re-arm on every cold start.
+    ...(d.priceWatchArmed ? { priceWatchArmed: true } : {}),
   };
 }
 
@@ -56,6 +59,9 @@ export function digestFromStored(stored: unknown): ThreadDigest {
       s.awaitingConfirmation && typeof s.awaitingConfirmation === "object"
         ? s.awaitingConfirmation
         : null,
+    // ABSENT means not armed, so a row written before this field existed reads
+    // as "no watch yet" rather than as a watch that already happened.
+    priceWatchArmed: s.priceWatchArmed === true ? true : undefined,
   };
 }
 

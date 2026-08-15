@@ -30,12 +30,23 @@ import { getGraphSpec } from "../graph/engine";
 /** The historical literal, kept as the config-outage fallback. It is the graph
  *  spec's own default (default-graph.ts:44), not the 6 that used to be here. */
 const DEFAULT_MAX_ROUNDS = 4;
+/**
+ * How long a priced thread waits before looking again (owner report 5 #9).
+ *
+ * Long enough to span the gap the owner described - an expensive quote at 10:00
+ * and a cheaper one at 10:20 - and short enough that a shop still remembers the
+ * conversation. Deliberately NOT routed through clampWaitMinutes: that band
+ * (1-3 minutes) bounds a MODEL-proposed pause, and this is the engine's own
+ * re-entry, armed at most once per thread.
+ */
+const PRICE_WATCH_MINUTES = 22;
 import { buildLedger } from "../thread/ledger";
 import type { MoveKind, SessionSnapshot, ThreadDigest, TurnContext, VerifiedExtraction } from "./types";
 import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../wa/detectors";
 import { shopAskedQuestion } from "../graph/nodes";
 import { classifyActs } from "../wa/dialogue-acts";
 import { vehicleKeyFor, groundedBenchmarkFor } from "../market";
+import { askVariantFor, variantHonoured } from "../negotiation/ask-variant";
 import {
   nextThreadLanguage,
   threadLanguageFromStored,
@@ -296,7 +307,14 @@ async function buildSession(
     // used to be the inline path only, which before the routing fix meant every
     // scheduled follow-up negotiated with no cross-chat leverage at all.
     const { validRivals, sessionFloor } = await import("../negotiation/session-rivals");
-    rivals = validRivals(rows, { excludeVendorId: thisVendor, currency: compareCur, limit: 4 });
+    rivals = validRivals(rows, {
+      excludeVendorId: thisVendor,
+      currency: compareCur,
+      limit: 4,
+      // A rival per-day divided out of a longer package is not a like-for-like
+      // price for a shorter rental (owner report 5 #2, the "167").
+      durationDays: input.rfq.durationDays,
+    });
     lowest = sessionFloor(rows, compareCur);
   }
   // Grounded market benchmark (F5): the ONLY market rate allowed into the
@@ -831,11 +849,17 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // can never fail the turn (see lib/learning/outcomes).
   {
     const { learnFromReply } = await import("../learning/outcomes");
-    const { lastTacticId } = await import("../learning/last-move");
+    const { lastMove } = await import("../learning/last-move");
+    const played = await lastMove(input.ctx.sender ?? "", input.event.toDigits);
     await learnFromReply({
-      tacticId: await lastTacticId(input.ctx.sender ?? "", input.event.toDigits),
+      tacticId: played?.tacticId,
       previousQuote: tc.thread.digest.quotedPricePerDay,
       newQuote: tc.inbound.verified.pricePerDay,
+      // WHICH PHRASING EARNED THE CONCESSION (owner report 5 #2, second half).
+      // The arm was stamped on the outbound row this reply is answering, so the
+      // credit lands on the phrasing that was actually used, not on the move
+      // name both arms share.
+      askVariant: played?.askVariant,
     }).catch(() => null);
   }
 
@@ -857,6 +881,14 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // agent's thinking all the way to WhatsApp" - was not a missing feature so
   // much as a missing KEY: the surfaces existed and had nothing to join on.
   const decisionId = newDecisionId();
+  // WHICH PHRASING ARM THIS THREAD IS IN (owner report 5 #2, second half).
+  //
+  // Stamped on the OUTBOUND row, not only on the telemetry: `lastTacticId`
+  // reads the newest outbound row to decide which move the shop's next reply is
+  // answering, and that is the exact join the attribution needs. Without the
+  // arm on that row the concession detector can say "the bargain worked" and
+  // never which bargain it was.
+  const askVariant = askVariantFor(input.event.threadKey);
   const meta: Record<string, unknown> = {
     kind: metaKindFor(outcome.move),
     vendorId: input.ctx.vendorId,
@@ -864,6 +896,18 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     engine: "v3",
     move: outcome.move,
     tacticId: outcome.move,
+    // Only a bargain is in the experiment; labelling a deposit probe with an
+    // arm would credit that arm for a concession it never asked for.
+    ...(outcome.move === "bargain"
+      ? {
+          askVariant,
+          // THE DISCRIMINATOR ITSELF. "Did we name a number" is exactly what
+          // separates the two arms, and `counterPricePerDay` is the pass's own
+          // structured answer to it - so the label needs no text parsing and
+          // cannot disagree with what was sent.
+          counterPricePerDay: outcome.artifact.counterPricePerDay ?? null,
+        }
+      : {}),
     decisionId,
     // The freshness fingerprint - see wa/freshness.ts. A parked reply carries
     // what it was an answer to, so the drain can tell whether it still is one.
@@ -1009,6 +1053,42 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // claim that we ASKED the shop something - a card that says "double-checking
   // with the shop" about a message the guard blocked would be a lie.
   //
+  // A PRICED THREAD MUST ALSO BE ABLE TO COME BACK (owner report 5 #9).
+  //
+  // The block further down schedules a return for a thread with NO price. A
+  // thread that HAS one schedules nothing at all - the only other wakeup is the
+  // model's own strategic pause, clamped to three minutes because it is a
+  // pause-before-replying tactic, not a re-entry. Three minutes cannot span the
+  // gap between an expensive quote at 10:00 and a cheaper one landing at 10:20,
+  // and that gap is exactly where the owner's "we are not bargaining enough"
+  // lives: the shop at 300 never heard about the 200 because no turn ever
+  // happened in which it could be said.
+  //
+  // So a thread that is priced, still open and NOT the session's best price
+  // arms ONE long watch. When it fires, the ordinary policy decides - if a
+  // cheaper rival has landed by then the rival card is live and the bargain is
+  // legal; if nothing changed the turn goes silent and costs nothing.
+  //
+  // ONCE, EVER, and the bound is durable (digest.priceWatchArmed). Without it
+  // every re-entered silent-and-priced turn would arm another watch and the
+  // negotiator would become a slow broadcast loop - which is the failure mode
+  // this whole feature has to be designed against, not the one it creates.
+  const pricedNow = tc.inbound.verified.pricePerDay ?? tc.thread.digest.quotedPricePerDay;
+  const sessionLow = tc.session.lowest?.pricePerDay;
+  const armPriceWatch =
+    !outcome.digest.priceWatchArmed &&
+    typeof pricedNow === "number" &&
+    pricedNow > 0 &&
+    // Being the cheapest shop in the hunt is not a position to re-open: there
+    // is no rival that could arrive to argue with (spte/policy's lockedAtFloor
+    // and negotiation/leverage's isSessionLow make the same ruling).
+    (typeof sessionLow !== "number" || pricedNow > sessionLow) &&
+    (tc.thread.digest.firmCount ?? 0) < 2 &&
+    !tc.inbound.verified.declined &&
+    !tc.inbound.verified.deflected &&
+    !tc.inbound.verified.shopUnavailable;
+  if (armPriceWatch) outcome.digest.priceWatchArmed = true;
+
   // Awaited, not detached: Cloud Run freezes the CPU the moment the response
   // flushes, so a detached write is a write that may never happen. Internally
   // total - it can never fail a turn that has already been sent.
@@ -1120,6 +1200,89 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
       .catch(() => {});
   }
 
+  // ...AND THE LONG ONE. Deliberately separate from the clamped block above:
+  // that clamp guards a MODEL-proposed pause (the "until 08:28 AM" incident),
+  // and loosening it would give a hallucinated wait the run of the thread
+  // again. This wait is the engine's own, its horizon is a fixed constant, and
+  // it is armed at most once per thread.
+  if (armPriceWatch && !waitMinutes) {
+    await io
+      .insertWakeup({
+        kind: "tick",
+        threadKey: input.event.threadKey,
+        notBefore: new Date(io.now() + PRICE_WATCH_MINUTES * 60_000).toISOString(),
+        payload: {
+          userEmail: input.ctx.sender,
+          vendorId: input.ctx.vendorId,
+          engine: "v3",
+          reason: `watching for a better price elsewhere - back in ~${PRICE_WATCH_MINUTES} min`,
+          vendorName: input.ctx.vendorName,
+        },
+      })
+      .catch(() => {});
+  }
+
+  // THE SIBLING RE-BARGAIN - the swarm behaviour `materialDrop` has promised in
+  // its own docstring since the engine shipped ("the caller enqueues bounded
+  // re-bargain wakeups for sibling threads") while its only consumers were a
+  // telemetry field, an admin chip and the distiller.
+  //
+  // The bounds live in negotiation/rebargain, deliberately pure: dearest shops
+  // first, at most four, never the shop that just quoted, never a thread that
+  // has refused twice, never a dead one, and staggered so wa-guard is not
+  // handed a burst. This is the difference between a negotiation swarm and a
+  // broadcast engine, and it is why none of it is decided here.
+  if (outcome.materialDrop && input.ctx.sender) {
+    try {
+      const newLow = tc.inbound.verified.pricePerDay;
+      if (typeof newLow === "number" && newLow > 0) {
+        const rows = await io
+          .sessionTable(input.ctx.sender, input.ctx.vendorId ?? "", vehicleKeyFor(input.rfq))
+          .catch(() => []);
+        const { planSiblingRebargain } = await import("../negotiation/rebargain");
+        const { threadKeyFor } = await import("../graph/state");
+        const targets = planSiblingRebargain({
+          rows,
+          excludeVendorId: input.ctx.vendorId ?? "",
+          newLowPerDay: newLow,
+          currency: input.currency,
+        });
+        for (const t of targets) {
+          await io
+            .insertWakeup({
+              kind: "tick",
+              threadKey: threadKeyFor(input.ctx.sender, t.toNumber),
+              notBefore: new Date(io.now() + t.delayMinutes * 60_000).toISOString(),
+              payload: {
+                userEmail: input.ctx.sender,
+                vendorId: t.vendorId,
+                vendorName: t.vendorName,
+                engine: "v3",
+                reason: `another shop just came in cheaper - going back to ${t.vendorName} with it`,
+              },
+            })
+            .catch(() => {});
+        }
+        if (targets.length) {
+          await io
+            .recordEvent?.({
+              kind: "swarm-rebargain",
+              vendorId: input.ctx.vendorId,
+              vendorName: input.ctx.vendorName,
+              detail: JSON.stringify({
+                newLow,
+                currency: input.currency,
+                targets: targets.map((t) => ({ shop: t.vendorName, at: t.pricePerDay, inMin: t.delayMinutes })),
+              }).slice(0, 500),
+            })
+            .catch(() => {});
+        }
+      }
+    } catch {
+      /* the swarm is an enhancement to a turn that has already been decided */
+    }
+  }
+
   // TRANSPARENCY telemetry (feeds the Session Blackboard Inspector): the exact
   // move, model tier/provider, the private scratchpad, and the wire text.
   await io
@@ -1158,6 +1321,20 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         citedRival: Boolean(outcome.artifact.leverageUsed?.includes("rival")),
         // The shop's menu + what it sent, so the option and vision KPIs have a
         // source that is not a guess.
+        // THE ROW THE A/B IS COMPUTED FROM (owner report 5 #2, second half).
+        //
+        // This blob already carried the move, rival availability, citedRival,
+        // the quote and the wire text - everything except the one field that
+        // separates "we named 210" from "we asked them to beat 250". Without
+        // it the two phrasings were one indistinguishable statistic.
+        // `variantOk` records whether the draft actually honoured its arm, so a
+        // contaminated sample is visible rather than silently averaged in.
+        askVariant: outcome.move === "bargain" ? askVariant : null,
+        counterPricePerDay: outcome.artifact.counterPricePerDay ?? null,
+        variantOk:
+          outcome.move === "bargain"
+            ? variantHonoured(askVariant, outcome.artifact.counterPricePerDay)
+            : null,
         options: tc.thread.digest.options?.length ?? 0,
         hadImage: Boolean(tc.inbound.verified.hadImage),
         imageKind: tc.inbound.verified.imageKind ?? null,

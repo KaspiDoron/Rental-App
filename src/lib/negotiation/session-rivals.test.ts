@@ -126,9 +126,12 @@ describe("and it is wired where EVERY entry point passes through", () => {
     expect(live).toMatch(
       /const \{ validRivals, sessionFloor \} = await import\("\.\.\/negotiation\/session-rivals"\);/
     );
-    expect(live).toMatch(
-      /rivals = validRivals\(rows, \{ excludeVendorId: thisVendor, currency: compareCur, limit: 4 \}\);/
-    );
+    expect(live).toMatch(/rivals = validRivals\(rows, \{/);
+    expect(live).toMatch(/excludeVendorId: thisVendor,\s*\n\s*currency: compareCur,\s*\n\s*limit: 4,/);
+    // W5: the rental length reaches the predicate, or a per-day divided out of
+    // someone's 3-day package is offered as a like-for-like rival for a 1-day
+    // hire - the owner's "167" screenshot.
+    expect(live).toMatch(/durationDays: input\.rfq\.durationDays,/);
     expect(live).toMatch(/lowest = sessionFloor\(rows, compareCur\);/);
     // The hand-rolled loop is gone, so there is one definition of "rival".
     expect(live).not.toMatch(/rivals\.push\(\{ vendorId: r\.vendorId/);

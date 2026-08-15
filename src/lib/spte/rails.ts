@@ -8,6 +8,7 @@
 
 import { checkOutboundNumbers, correctDuration, verbatimNumerals } from "../graph/guardrails";
 import { rivalIdentityTokens, namesRival } from "../negotiation/leverage";
+import { citesAMatch } from "../negotiation/beat-rival";
 import { inventsADate } from "../negotiation/traveller-disclosure";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
 
@@ -257,6 +258,39 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   // are how the traveller learns enough to decide.
   const commit = checkCommitment(text, artifact.move);
   if (commit) return { ok: false, rejected: commit };
+
+  // 0.95) BEAT, NEVER MATCH (owner report 5 #2).
+  //
+  // "Could you match the 200 THB/day offer" went out on the wire. Matching is
+  // not bargaining: it spends the traveller's single strongest card - that a
+  // real competitor already quoted less - and the BEST outcome it can produce
+  // is the price they already had. Every "never match" control in this repo was
+  // a sentence in a prompt, and this file's own comments say what that is worth:
+  // "a prompt is advice and a rail is a guarantee". Three independent prompt
+  // builders carried "match or beat it" verbatim, and one of them modelled the
+  // match in its own few-shot. Fixing the words was necessary; this is what
+  // makes them binding.
+  //
+  // Scoped to the two moves that ask for a number. A `confirm` or an `answer`
+  // that happens to contain "the same bike" is ordinary English, and the
+  // patterns in negotiation/beat-rival are price-scoped for the same reason.
+  //
+  // Rejection rather than repair: the ask IS the message here, so there is no
+  // sentence to strip that leaves a message behind. The orchestrator re-composes
+  // through the deterministic fallback, whose bargain template names no rival
+  // number at all and therefore cannot match one.
+  if (artifact.move === "bargain" || artifact.move === "momentum") {
+    const matched = citesAMatch(text);
+    if (matched) {
+      return {
+        ok: false,
+        rejected: {
+          rule: "beat-not-match",
+          detail: `the draft asked the shop to match rather than beat ("${matched.phrase}") - a matched price wins the traveller nothing`,
+        },
+      };
+    }
+  }
 
   // 1) Duration integrity: rewrite any wrong day-count to the RFQ's real value.
   text = correctDuration(text, ctx.session.rfq.durationDays).text;
