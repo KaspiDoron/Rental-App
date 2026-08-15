@@ -242,6 +242,19 @@ export interface Vendor {
    * traveller their agent was chasing a price it had already been given.
    */
   confirming?: string;
+  /**
+   * WE CHANGED THE LANGUAGE OF THIS CONVERSATION, AND THE SHOP ASKED US TO
+   * (W4.6). Set ONLY for an explicit request - "sorry, I don't speak Thai",
+   * "English please". A thread that is English because the whole hunt is
+   * English is not a switch and leaves this undefined.
+   *
+   * The owner's ask, verbatim: "present the user in the status panel and the
+   * card map/vendor card that we switched to English because they are not
+   * speaking the local language."
+   */
+  languageSwitch?: "english" | "local";
+  /** Their own words for it, so the card quotes rather than claims. */
+  languageSwitchQuote?: string;
   /** When the newest agent message left (from /api/activity's lastByVendor) -
    *  keeps sentText/sentGloss fresh past the first outreach response. */
   lastOutboundAt?: string;

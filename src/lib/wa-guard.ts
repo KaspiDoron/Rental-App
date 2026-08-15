@@ -56,6 +56,8 @@ import {
   type OutboxRow,
 } from "./wa/outbox-lifecycle";
 import { personaHumanize } from "./wa/persona";
+// W4.7 - the greeting definition, shared with the orchestrator's validator.
+import { stripLeadingGreeting } from "./copy/greeting";
 import { stealthFactor } from "./wa/stealth";
 import { stripWaFormatting } from "./text";
 import { tableReady } from "./schema-probe";
@@ -1390,10 +1392,29 @@ async function insertPathEvent(
 // Content variance - unique payload signature every time
 // ---------------------------------------------------------------------------
 
-const GREET_SWAPS: [RegExp, string[]][] = [
-  // B2 fix: the old `^hi!?\s` only consumed "Hi " so it swapped INSIDE
-  // "Hi there!" -> "Hey there! there!". Match the whole leading greeting phrase.
-  [/^(?:hi|hey|hello)(?:\s+there)?!?[,\s]+/i, ["Hi! ", "Hey! ", "Hello! ", "Hi there! ", "Hey there! "]],
+/**
+ * THE GREETING SWAP - FIRST OUTBOUND ONLY (W4.7).
+ *
+ * This used to fire on every send, and it is the direct cause of owner report
+ * 5 item 3: it matched a leading greeting and substituted a DIFFERENT random
+ * one, so one thread showed "Hi", "Hi there!" and "Hey there!" in three
+ * consecutive messages. It never REMOVED a greeting, and it had no idea where
+ * in a thread it was. It also mangled "Hi again!" - the leading "Hi " matched
+ * and a whole greeting was substituted for it, producing "Hey there! again!" on
+ * EVERY momentum/recheck send.
+ *
+ * It is still worth having on the message that opens a thread (forty cold
+ * openers must not share one greeting), so it now runs there and nowhere else.
+ */
+// B2 fix: the old `^hi!?\s` only consumed "Hi " so it swapped INSIDE
+// "Hi there!" -> "Hey there! there!". Match the whole leading greeting phrase.
+// W4.7: "(?!again)" so an "X again!" opener is never re-rolled into a doubled
+// artifact - a first outbound has no "again" to keep anyway.
+const GREETING_SWAP_RX = /^(?:hi|hey|hello)(?:\s+there)?!?[,\s]+(?!again\b)/i;
+const GREETING_SWAP_POOL = ["Hi! ", "Hey! ", "Hello! ", "Hi there! ", "Hey there! "];
+
+/** Sign-off variance - safe at ANY thread position, so it always runs. */
+const SIGNOFF_SWAPS: [RegExp, string[]][] = [
   [/\bthanks!?$/i, ["Thanks!", "Thank you!", "Thanks a lot!", "Thanks 🙏", "Ta!"]],
 ];
 
@@ -1408,9 +1429,23 @@ const GREET_SWAPS: [RegExp, string[]][] = [
  * humanization is never re-rolled, which is what kept two concurrent drainers'
  * idempotency hashes stable.
  */
-export function humanizeVariant(text: string, rand: () => number = Math.random): string {
+export function humanizeVariant(
+  text: string,
+  rand: () => number = Math.random,
+  /**
+   * W4.7 - THREAD POSITION. The greeting pool is only drawn from on the message
+   * that OPENS a thread. Default false: a caller that does not know where it is
+   * never re-greets, which is the safe direction (a missing greeting reads as a
+   * person mid-chat; a fourth one reads as a bot).
+   */
+  opts?: { firstOutbound?: boolean }
+): string {
   let out = text;
-  for (const [rx, pool] of GREET_SWAPS) {
+  if (opts?.firstOutbound === true && GREETING_SWAP_RX.test(out)) {
+    const pick = GREETING_SWAP_POOL[Math.floor(rand() * GREETING_SWAP_POOL.length)];
+    out = out.replace(GREETING_SWAP_RX, pick);
+  }
+  for (const [rx, pool] of SIGNOFF_SWAPS) {
     if (rx.test(out)) {
       const pick = pool[Math.floor(rand() * pool.length)];
       out = out.replace(rx, pick);
@@ -1450,11 +1485,35 @@ export function humanizeVariant(text: string, rand: () => number = Math.random):
  * idempotency slot hash stays stable. The number spelling is normalised
  * before seeding so every call site agrees on the seed for one shop.
  */
-export function humanizeForOutbound(senderKey: string, toDigits: string, text: string): string {
+export function humanizeForOutbound(
+  senderKey: string,
+  toDigits: string,
+  text: string,
+  /**
+   * W4.7 - IS THIS THE FIRST THING WE HAVE EVER SAID TO THIS SHOP?
+   *
+   * Derived server-side by `guardOutbound` (see `hasMessagedShopBefore`), so no
+   * caller can forget it. When false - the overwhelmingly common case, since
+   * every reply, nudge and follow-up is mid-thread - a leading greeting is
+   * REMOVED and none is rolled in. When true the opener keeps its greeting and
+   * the greeting pool varies it, which is what stops forty cold openers sharing
+   * one first word.
+   *
+   * Defaults to false on purpose: the failure this closes is a repeated
+   * greeting, so an unknown position must never manufacture one.
+   */
+  opts?: { firstOutbound?: boolean }
+): string {
   const digits = waDigits(toDigits) || toDigits;
+  const firstOutbound = opts?.firstOutbound === true;
+  // POSITION FIRST, THEN VARIANCE. Stripping before the seed is computed keeps
+  // the humanize pass deterministic for a given (sender, shop, text, position)
+  // - a re-park of the same composed turn still produces a byte-identical body,
+  // so the idempotency slot hash stays stable.
+  const positioned = firstOutbound ? text : stripLeadingGreeting(text);
   const rand = (() => {
     let h = 2166136261 >>> 0;
-    const seed = `${senderKey}|${digits}|${text}`;
+    const seed = `${senderKey}|${digits}|${positioned}`;
     for (let i = 0; i < seed.length; i++) {
       h ^= seed.charCodeAt(i);
       h = Math.imul(h, 16777619) >>> 0;
@@ -1468,7 +1527,45 @@ export function humanizeForOutbound(senderKey: string, toDigits: string, text: s
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   })();
-  return stripWaFormatting(humanizeVariant(personaHumanize(text, rand), rand));
+  return stripWaFormatting(
+    humanizeVariant(personaHumanize(positioned, rand), rand, { firstOutbound })
+  );
+}
+
+/**
+ * HAVE WE EVER SENT THIS SHOP A MESSAGE? (W4.7)
+ *
+ * The information the greeting rule needs already existed and nothing read it:
+ * `wa_recipient_state.last_sent_at` is stamped by `recordOutboundSend` after
+ * every delivery, on the ONE row per (sender, shop) the whole guard keys on.
+ * Read tail-tolerantly (`numberFilter`), like every other read of this table,
+ * because our send carries discovery's spelling of the number and the shop's
+ * reply carries WhatsApp's.
+ *
+ * Deliberately derived here rather than passed in: eight call sites reach
+ * `guardOutbound` and a rule that depends on all of them remembering a flag is
+ * a rule that is off somewhere. `null` means the answer could not be read - the
+ * caller decides, and both callers choose "not the first", because the failure
+ * being closed is a REPEATED greeting.
+ */
+export async function hasMessagedShopBefore(
+  senderKey: string,
+  toNumber: string
+): Promise<boolean | null> {
+  const digits = waDigits(toNumber) || toNumber;
+  if (!senderKey || !digits) return null;
+  // `last_sent_at` only - it is in the base schema.sql table, so this read
+  // cannot 400 on a database that has not taken the later migrations (which is
+  // how a column probe would turn every thread into "unknown" at once).
+  const res = await sbSelectStrict<{ last_sent_at: string | null }>(
+    "wa_recipient_state",
+    `select=last_sent_at&sender_key=eq.${encodeURIComponent(senderKey)}` +
+      `&limit=1${numberFilter("to_number", digits)}`
+  );
+  if (!("rows" in res)) return null;
+  const row = res.rows[0];
+  if (!row) return false; // no row at all - we have never touched this shop
+  return Boolean(row.last_sent_at);
 }
 
 /**
@@ -1647,6 +1744,13 @@ export async function guardOutbound(rawOpts: {
   // stripWaFormatting runs; the stored text is delivered verbatim.
   alreadyHumanized?: boolean;
   /**
+   * W4.7 - a caller's OPINION on whether this is the first outbound to this
+   * shop. Only consulted when the database cannot answer: the position is
+   * derived server-side (`hasMessagedShopBefore`) precisely so no caller has to
+   * be trusted with it.
+   */
+  firstOutbound?: boolean;
+  /**
    * The wa_outbox row this send IS. Set by the drain, which now claims a row by
    * LEASE rather than deleting it, so the row still exists: a re-queue must
    * re-time THAT row, not insert a second pending message for the same shop.
@@ -1680,10 +1784,16 @@ export async function guardOutbound(rawOpts: {
   // (parkOutboxOnce, the mass route's stagger slots) run the IDENTICAL chain
   // at enqueue - which is what makes the drain's `alreadyHumanized: true`
   // premise actually true.
+  // W4.7: WHERE IN THE THREAD THIS MESSAGE IS, decided here and nowhere else.
+  // A `null` (unreadable) falls back to the caller's hint and then to "not the
+  // first", because the defect being closed is a repeated greeting: an extra
+  // greeting is the bug, a missing one on a genuine opener is a wording nit.
+  const priorSend = await hasMessagedShopBefore(opts.senderKey, opts.toDigits).catch(() => null);
+  const firstOutbound = priorSend === null ? opts.firstOutbound === true : priorSend === false;
   const text = opts.auto
     ? opts.alreadyHumanized
       ? stripWaFormatting(opts.text)
-      : humanizeForOutbound(opts.senderKey, opts.toDigits, opts.text)
+      : humanizeForOutbound(opts.senderKey, opts.toDigits, opts.text, { firstOutbound })
     : opts.text;
   const now = Date.now();
   // STRICT read: a null means the DB is unreachable RIGHT NOW. The guard must

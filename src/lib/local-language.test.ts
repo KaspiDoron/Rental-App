@@ -36,13 +36,8 @@ vi.mock("./runtime-config", () => ({
   setConfig: vi.fn(async () => ({ ok: true, persistent: true })),
 }));
 
-import {
-  localizeMessage,
-  composeBargain,
-  looksEnglish,
-  threadPrefersEnglish,
-  translateToEnglish,
-} from "./agents";
+import { localizeMessage, composeBargain, looksEnglish, translateToEnglish } from "./agents";
+import { nextThreadLanguage, threadWritesEnglish } from "./wa/thread-language";
 
 beforeEach(() => {
   chatMock.fn.mockReset();
@@ -126,7 +121,21 @@ describe("localizeMessage - honest reasons, executed (Mexico + Thailand)", () =>
   });
 });
 
-describe("the language-adaptation flip is a THREAD statement", () => {
+describe("the language doctrine: stay local unless the shop ASKS", () => {
+  // W4.6 REWRITE OF FOUR DOCTRINE PINS. The four cases that used to live here
+  // asserted the OLD doctrine - that a shop DEMONSTRATING English flips the
+  // thread ("two consecutive English inbounds DO flip", "a thread OPENED in
+  // English adapts at once"). The owner inverted it in report 5 item 15: "if
+  // they answer in English we need to write them in local language - we are not
+  // speaking English only the local. If the shop writes us in English that they
+  // are not speaking the local language ... we should move to English also."
+  //
+  // The INTENT of the originals is preserved exactly, and it was never "English
+  // wins": it was (a) the agent must never ALTERNATE languages inside one
+  // thread, and (b) both engines must consume ONE shared decision rather than
+  // each computing its own. Both are asserted below, against the decision that
+  // now exists instead of the per-turn re-derivation that did not.
+
   it("looksEnglish requires English, not merely Latin script", () => {
     expect(looksEnglish("Hi Doron, do you speak English?")).toBe(true);
     expect(looksEnglish("We have Honda Click, best price today")).toBe(true);
@@ -136,27 +145,114 @@ describe("the language-adaptation flip is a THREAD statement", () => {
     expect(looksEnglish("สวัสดีครับ มีรถว่างครับ")).toBe(false);
   });
 
-  it("one English line in a local thread does not flip the reply", () => {
-    const thaiThread = ["สวัสดีครับ", "มีรถ Fazzio ครับ 300 บาท"];
-    expect(threadPrefersEnglish("Do you speak English my friend?", thaiThread)).toBe(false);
+  // WAS: "one English line in a local thread does not flip the reply".
+  // Same guarantee, stronger: no amount of English REPLYING flips anything,
+  // because replying is not a statement about language.
+  it("a shop that merely REPLIES in English does not flip the thread", () => {
+    const out = nextThreadLanguage({
+      persisted: null,
+      statement: null, // the comprehension pass found no language STATEMENT
+      localRequested: true,
+      now: 1_000,
+    });
+    expect(out.changed).toBe(false);
+    expect(out.language.mode).toBe("local");
+    expect(threadWritesEnglish(out.language)).toBe(false);
   });
 
-  it("two consecutive English inbounds DO flip - the shop demonstrated it", () => {
-    const mixed = ["สวัสดีครับ", "Yes we have the bike for you my friend"];
-    expect(threadPrefersEnglish("What is your best price for the week?", mixed)).toBe(true);
+  // WAS: "two consecutive English inbounds DO flip - the shop demonstrated it".
+  // That is precisely the behaviour the owner asked us to remove; the flip it
+  // was protecting now needs the shop to SAY it.
+  it("an explicit statement DOES flip it, and says why", () => {
+    const out = nextThreadLanguage({
+      persisted: null,
+      statement: { prefers: "english", quote: "sorry i am not thai, english please", confidence: 0.9 },
+      localRequested: true,
+      now: 2_000,
+    });
+    expect(out.changed).toBe(true);
+    expect(out.language.mode).toBe("english");
+    expect(out.language.reason).toBe("shop-asked");
+    expect(out.language.quote).toContain("english please");
   });
 
-  it("a thread OPENED in English adapts at once", () => {
-    expect(threadPrefersEnglish("Hello, do you have a scooter for tomorrow?", [])).toBe(true);
+  // WAS: "a thread OPENED in English adapts at once" - the worst case of the
+  // old predicate, which treated "no previous message" as agreement, so the
+  // FIRST reply from any shop that types a line of English ended the feature.
+  it("a thread opened in English stays LOCAL until the shop asks", () => {
+    const out = nextThreadLanguage({
+      persisted: null,
+      statement: null,
+      localRequested: true,
+      now: 3_000,
+    });
+    expect(out.language.mode).toBe("local");
   });
 
-  it("the engines consume the thread-level test, not the per-turn one", () => {
-    expect(readCode("src/lib/graph/engine.ts")).toMatch(
-      /threadPrefersEnglish\(input\.event\.shopMessage, input\.priorInbound \?\? \[\]\)/
-    );
-    expect(readCode("src/lib/agent-loop.ts")).toMatch(
-      /!threadPrefersEnglish\(text, priorInboundBodies\)/
-    );
+  it("a low-confidence read is not a statement, and a tick is not a message", () => {
+    const unsure = nextThreadLanguage({
+      persisted: null,
+      statement: { prefers: "english", confidence: 0.5 },
+      localRequested: true,
+      now: 4_000,
+    });
+    expect(unsure.changed).toBe(false);
+    // The tick guard, which the graph engine had and the legacy loop did not.
+    const tick = nextThreadLanguage({
+      persisted: null,
+      statement: { prefers: "english", confidence: 0.99 },
+      isTick: true,
+      localRequested: true,
+      now: 5_000,
+    });
+    expect(tick.changed).toBe(false);
+    expect(tick.language.mode).toBe("local");
+  });
+
+  it("an AI outage NEVER flips a thread - it keeps the decision it had", () => {
+    const persisted = { mode: "english" as const, reason: "shop-asked" as const, at: "2026-01-01T00:00:00.000Z" };
+    // Degraded comprehension reports no statement at all.
+    const out = nextThreadLanguage({ persisted, statement: null, localRequested: true, now: 6_000 });
+    expect(out.changed).toBe(false);
+    expect(out.language).toEqual(persisted); // not re-derived back to local
+  });
+
+  it("the shop can ask for the local language back", () => {
+    const persisted = { mode: "english" as const, reason: "shop-asked" as const, at: "2026-01-01T00:00:00.000Z" };
+    const out = nextThreadLanguage({
+      persisted,
+      statement: { prefers: "local", quote: "เขียนไทยได้นะ", confidence: 0.85 },
+      localRequested: true,
+      now: 7_000,
+    });
+    expect(out.changed).toBe(true);
+    expect(out.language.mode).toBe("local");
+    expect(out.language.reason).toBe("shop-asked-local");
+  });
+
+  // WAS: "the engines consume the thread-level test, not the per-turn one",
+  // pinned as two source assertions on the exact `threadPrefersEnglish(...)`
+  // call expressions. SAME INTENT - one decision, consumed by both engines -
+  // against the module that now holds it. The per-turn predicate is gone, and
+  // its absence is asserted so it cannot creep back.
+  it("both engines READ one stored decision instead of re-deriving one", () => {
+    const engine = readCode("src/lib/graph/engine.ts");
+    const loop = readCode("src/lib/agent-loop.ts");
+    const agents = readCode("src/lib/agents.ts");
+    expect(engine).toMatch(/threadWritesEnglish\(args\.threadLanguage\)/);
+    expect(engine).toMatch(/threadLanguage: threadLanguageFromStored\(state\.fields\.language\)/);
+    expect(loop).toMatch(/!threadWritesEnglish\(storedLanguage\)/);
+    // The demonstration predicate no longer exists anywhere.
+    expect(agents).not.toMatch(/export function threadPrefersEnglish/);
+    expect(engine).not.toMatch(/threadPrefersEnglish\(/);
+    expect(loop).not.toMatch(/threadPrefersEnglish\(/);
+  });
+
+  it("the SWITCH is stored on the thread, not recomputed per turn", () => {
+    // Written by the engine that actually runs...
+    expect(readCode("src/lib/spte/live.ts")).toMatch(/fields\.language = language/);
+    // ...and read by the surface the traveller sees.
+    expect(readCode("src/app/api/replies/route.ts")).toMatch(/languageSwitchNotice\(st\?\.language\)/);
   });
 });
 

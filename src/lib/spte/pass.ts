@@ -568,7 +568,12 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
         ? `Great, thanks! Is there a charge for delivery to the hotel - and would it be cheaper if I collect it from the shop instead?`
         : `One more thing while we compare options - do you deliver to the hotel, or is it pickup at your shop?`;
     case "momentum":
-      return `Hi again! Just checking in - any chance on that better rate for ${nDays(days)}?`;
+      // W4.7: NO GREETING. `momentum` is by definition a re-opening of a thread
+      // we are already in, so "Hi again!" was a second greeting by construction
+      // - and wa-guard's variance pass then matched the leading "Hi " and
+      // substituted a whole greeting for it, shipping "Hey there! again!" on
+      // every single nudge. The nudge is warmer without either.
+      return `Just checking in - any chance on that better rate for ${nDays(days)}?`;
     default:
       return undefined; // present / closing-message / silent
   }

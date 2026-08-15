@@ -130,6 +130,10 @@ describe("the wiring is in place (source pins)", () => {
     const park = readCode("src/lib/wa/park.ts");
     expect(park).toMatch(/import \{ REPLY_KIND_FILTER, humanizeForOutbound \} from "\.\.\/wa-guard"/);
     expect(park).toMatch(/\$\{REPLY_KIND_FILTER\}/);
+    // W4.7: a parked row is a mid-thread REPLY by construction (the dedup scope
+    // IS the auto-kind filter), so it declares its thread position statically -
+    // the drain re-guards with `alreadyHumanized` and never looks again.
+    expect(park).toMatch(/firstOutbound: false/);
     // The NULL-blind local predicate is gone.
     expect(park).not.toMatch(/meta->>kind=not\.in\./);
   });

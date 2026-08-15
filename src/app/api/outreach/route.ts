@@ -330,10 +330,18 @@ async function handlePost(req: Request) {
     // asked. The full phone-prefix map asks it for every country; the
     // English-speaking ones short-circuit inside localizeMessage.
     const { countryForShop } = await import("@/lib/copy/region");
+    // W4.7 - THREAD POSITION FOR THE LOCALIZER. `established !== null` means
+    // this shop already has an open thread with us (the language lock read the
+    // thread's first outbound to compute it), so a "custom" line, or a second
+    // search reaching the same shop, must NOT be given a fresh local greeting -
+    // rule 1 of the localize prompt orders one unless it is told otherwise, and
+    // the deterministic strip at the send-time choke point reads English only.
     const localized = await localizeMessage(
       outboundText,
       countryForShop(digits, String(body.region ?? "")),
-      session.email
+      session.email,
+      true,
+      { greet: kind === "rfq" && established === null }
     );
     if (localized.english && localized.text !== outboundText) englishGloss = localized.english;
     // DOCUMENTED fallback: if localization declined or failed, the opener

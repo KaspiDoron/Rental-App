@@ -79,6 +79,29 @@ export const ThreadComprehension = z.object({
       })
     )
     .max(3),
+  /**
+   * W4.6 - DID THE SHOP STATE SOMETHING ABOUT LANGUAGE?
+   *
+   * Not "did they reply in English" - that is a demonstration, and demonstration
+   * is exactly what the old doctrine flipped on, ending the local-language
+   * feature for every shop in Thailand that types "ok 300 per day". This is a
+   * STATEMENT: they told us they do not speak the local language, or asked us to
+   * write English (or asked us back into the local language). The judgement
+   * belongs to a model reading the sentence, never to a phrase list - the
+   * owner's standing rule for anything to do with understanding.
+   *
+   * `.nullish()` on purpose: an older provider that omits the key entirely must
+   * not fail schema validation and take the stance read down with it.
+   */
+  languageRequest: z
+    .object({
+      /** "english" = write to us in English; "local" = write in the local one. */
+      prefers: z.enum(["english", "local"]),
+      /** Their own words, verbatim - the card quotes rather than claims. */
+      quote: z.string().max(200).nullable(),
+      confidence: z.number().min(0).max(1),
+    })
+    .nullish(),
   confidence: z.number().min(0).max(1),
 });
 export type ThreadComprehension = z.infer<typeof ThreadComprehension>;
@@ -94,6 +117,7 @@ export function readComprehension(
       '{"stance": "engaged"|"deflecting"|"declining"|"unclear", "stanceQuote": string|null, ' +
       '"stanceReason": string|null, "uncertain": [{"subject": "deposit"|"price"|"availability"' +
       '|"conditions"|"vehicle", "reading": string, "question": string, "confidence": 0..1}], ' +
+      '"languageRequest": null | {"prefers": "english"|"local", "quote": string|null, "confidence": 0..1}, ' +
       '"confidence": 0..1}',
     instructions:
       "You are the traveller's agent reading a rental shop's WhatsApp reply. Answer TWO " +
@@ -114,7 +138,16 @@ export function readComprehension(
       "otherwise assume, and a SHORT, warm question the traveller could send to settle it " +
       "('wait - do you mean I can leave a passport OR 4,000 cash?'). Write the question in " +
       "simple everyday English, first person, one sentence. If the message is plain, return " +
-      "an empty list - a needless question wastes the shop's patience.",
+      "an empty list - a needless question wastes the shop's patience.\n" +
+      "THIRD, did this shop SAY something about which LANGUAGE to use? We write to shops in " +
+      "their own local language on purpose, and we only change that if they ASK. Set " +
+      "languageRequest ONLY for an explicit statement or request about language - 'sorry I " +
+      "don't speak Thai', 'I am not Thai, please write English', 'can you write in English', " +
+      "'English please' - or, the other way, 'please write Thai/Spanish/Indonesian'. " +
+      "SIMPLY REPLYING IN ENGLISH IS NOT SUCH A STATEMENT and must return null: shop owners " +
+      "everywhere type a few words of English at tourists and it says nothing about what they " +
+      "read comfortably. A message that merely happens to be in English, or mixes languages, " +
+      "is null. Quote their exact words when you do set it.",
     text,
     context,
     options: {

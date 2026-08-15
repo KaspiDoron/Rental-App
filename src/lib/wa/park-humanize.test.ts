@@ -107,7 +107,14 @@ const readCode = (p: string) =>
 describe("every park site runs the SAME pass (source pins)", () => {
   it("the mass route's budget-hold and stagger slots humanize the opener at park", () => {
     const mass = readCode("src/app/api/outreach/mass/route.ts");
-    const parked = (mass.match(/body: humanizeForOutbound\(session\.email, digits, opener\.text\)/g) ?? []).length;
+    // W4.7: the call now carries the thread position, derived from the same
+    // `knownNumbers` set the introductions budget uses - a shop this traveller
+    // has messaged before must not be greeted a second time.
+    const parked = (
+      mass.match(
+        /body: humanizeForOutbound\(session\.email, digits, opener\.text, \{\s*firstOutbound: isNewIntro,\s*\}\)/g
+      ) ?? []
+    ).length;
     expect(parked).toBe(2);
     // The raw opener must never be parked directly anymore.
     expect(mass).not.toMatch(/body: opener\.text/);
@@ -115,7 +122,12 @@ describe("every park site runs the SAME pass (source pins)", () => {
 
   it("guardOutbound's inline path uses the SAME exported helper (one chain, no drift)", () => {
     const guard = readCode("src/lib/wa-guard.ts");
-    expect(guard).toMatch(/humanizeForOutbound\(opts\.senderKey, opts\.toDigits, opts\.text\)/);
+    // W4.7: ...and the position it passes is DERIVED here, not taken on trust
+    // from any of the eight call sites that reach guardOutbound.
+    expect(guard).toMatch(
+      /humanizeForOutbound\(opts\.senderKey, opts\.toDigits, opts\.text, \{ firstOutbound \}\)/
+    );
+    expect(guard).toMatch(/hasMessagedShopBefore\(opts\.senderKey, opts\.toDigits\)/);
     expect(guard).toMatch(/export function humanizeForOutbound/);
   });
 

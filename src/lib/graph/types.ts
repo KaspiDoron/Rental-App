@@ -230,6 +230,18 @@ export interface ThreadFields {
    */
   digest?: Record<string, unknown>;
   /**
+   * WHICH LANGUAGE THIS THREAD IS WRITTEN IN, AND WHY (W4.6).
+   *
+   * The language used to be re-derived from scratch every turn by
+   * `agents.threadPrefersEnglish`, from nothing but what the last two inbound
+   * messages happened to look like - so the same thread could flip back and
+   * forth, and a shop merely REPLYING in English ended the local-language
+   * feature for it. It is a decision now: taken once, on an explicit statement
+   * the comprehension pass read, stored here with its reason and its timestamp,
+   * and surfaced to the traveller (`/api/replies` -> the card + status panel).
+   */
+  language?: import("../wa/thread-language").ThreadLanguage;
+  /**
    * A CONFIRMING QUESTION THE AGENT IS WAITING ON (W4.4). Set when the engine
    * put a fact back to the shop because it was not sure it had understood;
    * cleared once the fact reads cleanly. The card renders it as "double-
@@ -371,8 +383,9 @@ export interface GraphTurnInput {
    * reached the engine. Absent -> the classifiers read the raw text, exactly as
    * before.
    *
-   * NOT a language decision about what we SEND: that is W4.6, and
-   * threadPrefersEnglish is deliberately untouched here.
+   * NOT a language decision about what we SEND: that is `fields.language`
+   * (W4.6), decided from an explicit statement the comprehension pass reads off
+   * this very gloss and stored on the thread.
    */
   inboundEnglish?: string;
   priorOutbound: string[];

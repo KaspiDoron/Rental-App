@@ -618,25 +618,24 @@ export function looksEnglish(text: string): boolean {
   return ENGLISH_HINT.test(t);
 }
 
-/**
- * THREAD-LEVEL language adaptation (owner report 4, item 8).
- *
- * The per-turn `looksEnglish(message)` flip made the agent ALTERNATE on mixed
- * threads: the shop's one English line got an English reply, their next Thai
- * line got Thai, and from the shop's side one person kept switching languages
- * mid-conversation - the exact bot tell thread-language stickiness exists to
- * prevent. The flip is now a THREAD statement: the shop has demonstrated
- * English when their current message looks English AND so did their previous
- * one (or there is no previous - a thread opened in English adapts at once).
- */
-export function threadPrefersEnglish(currentMessage: string, priorInbound: string[] = []): boolean {
-  if (!looksEnglish(currentMessage)) return false;
-  const prior = priorInbound.filter((m) => (m ?? "").trim().length > 0);
-  // The current turn's message is usually already stored - skip its tail copy.
-  while (prior.length && prior[prior.length - 1] === currentMessage) prior.pop();
-  const prev = [...prior].reverse().find((m) => (m ?? "").trim().length >= 3);
-  return prev === undefined || looksEnglish(prev);
-}
+// W4.6 - `threadPrefersEnglish` IS GONE, DELIBERATELY.
+//
+// It flipped a whole thread to English on DEMONSTRATION: the shop's current
+// inbound and its previous one both "looked English" - and, with no prior at
+// all, the very first inbound flipped it too, because "no previous message" was
+// read as agreement. Half the shops in the markets this app runs in type "ok
+// 300 per day" at tourists, so the local-language feature quietly ended for
+// them on their first reply.
+//
+// The owner's doctrine is the opposite (report 5, item 15): stay local; switch
+// only when the shop SAYS they do not speak the local language. That is an
+// explicit statement, read by the W4.3 comprehension pass (a typed model
+// judgement, never a phrase list), decided by `wa/thread-language`
+// .nextThreadLanguage and STORED on the thread - so it is a decision, not a
+// re-derivation from whatever the last two messages happened to look like.
+//
+// `looksEnglish` survives: it is still the Latin-dominance bar that decides
+// whether an inbound needs an English gloss (translateToEnglish below).
 
 /**
  * English gloss for an INBOUND local-language shop reply, so the traveller
@@ -683,7 +682,18 @@ export async function localizeMessage(
   message: string,
   region?: string,
   voiceKey?: string,
-  street = true
+  street = true,
+  /**
+   * W4.7 - WHERE IN THE THREAD THIS MESSAGE SITS.
+   *
+   * Prompt rule 1 below explicitly ORDERS the model to write a local greeting.
+   * That is right for the message that opens a thread and wrong for every other
+   * one - and it silently defeated every greeting repair in the app, because a
+   * deterministic strip runs in English and the greeting it re-introduced was
+   * in Thai. `greet: false` forbids one instead. Defaults to true so an
+   * un-updated caller behaves exactly as it did.
+   */
+  opts?: { greet?: boolean }
 ): Promise<{
   text: string;
   english?: string;
@@ -726,8 +736,17 @@ export async function localizeMessage(
                 "people actually type in chats. NEVER formal or written-speech register. "
               : "") +
             "CRITICAL RULES:\n" +
-            "1. Translate the WHOLE message including the greeting and sign-off. Do NOT leave ANY English " +
-            "words (no 'Hey', 'Hi', 'Thanks', etc.) - use a natural LOCAL greeting instead.\n" +
+            (opts?.greet === false
+              ? // W4.7: MID-CONVERSATION. The English text handed in has already had
+                // its greeting removed at the send-time choke point; if the model is
+                // told to "use a natural LOCAL greeting" it simply puts one back, in
+                // a script no downstream deterministic rail can read.
+                "1. Translate the WHOLE message. Do NOT leave ANY English words (no 'Hey', 'Hi', " +
+                "'Thanks', etc.). This message is MID-CONVERSATION with a shop we are already " +
+                "chatting to: it must NOT begin with a greeting of any kind - no 'สวัสดี', no " +
+                "'Hola', no local equivalent. Start straight at the point.\n"
+              : "1. Translate the WHOLE message including the greeting and sign-off. Do NOT leave ANY English " +
+                "words (no 'Hey', 'Hi', 'Thanks', etc.) - use a natural LOCAL greeting instead.\n") +
             "2. Keep every fact exactly (vehicle, cc, days, accessories, prices); numbers stay as given.\n" +
             // THE AMBIGUITY TRAVELS. The English rail (persona.deAmbiguateFree)
             // is deliberately not applied to local-language output, so if the
@@ -1008,7 +1027,12 @@ export async function composeBargain(opts: {
   // is ever recycled across shops.
   if (opts.voiceKey) {
     const { voiceProfileFor, voiceDirectives } = await import("./voice");
-    systemWithDirectives += `\n${voiceDirectives(voiceProfileFor(opts.voiceKey))}`;
+    // W4.7: the persona's greeting habit belongs to the OPENER. A bargain with
+    // history is mid-conversation, and naming a greeting here contradicted the
+    // "do NOT start with a greeting" rule added twenty lines above.
+    systemWithDirectives += `\n${voiceDirectives(voiceProfileFor(opts.voiceKey), {
+      greeting: !opts.history,
+    })}`;
     try {
       const recent = await sbSelect<{ body: string | null }>(
         "whatsapp_messages",
