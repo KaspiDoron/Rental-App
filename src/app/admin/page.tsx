@@ -751,10 +751,31 @@ export default function AdminPage() {
     return list;
   }, [users, userSearch, userSort]);
 
-  async function runDiag(kind: "supabase" | "maps" | "email") {
+  async function runDiag(kind: "supabase" | "maps" | "email" | "rpc") {
     setDiagBusy(kind);
     setDiag(null);
     try {
+      if (kind === "rpc") {
+        // Asks the DATABASE whether the dangerous SECURITY DEFINER prune
+        // function is still reachable with the public anon key - the probe
+        // calls it exactly as an attacker would, with a 100-year window so a
+        // still-exposed function deletes nothing. "unknown" is reported as
+        // unknown: a green light that only means "we did not check" is worse
+        // than no light at all.
+        const res = await fetch("/api/admin/rpc-exposure");
+        const d = await res.json();
+        setDiag({
+          kind,
+          ok: d.state === "locked",
+          text:
+            d.state === "locked"
+              ? `✅ Locked. ${d.detail}`
+              : d.state === "exposed"
+                ? `🚨 EXPOSED. ${d.detail}`
+                : `❔ Unknown. ${d.detail}`,
+        });
+        return;
+      }
       if (kind === "email") {
         // Sends a REAL email through the production chain to the admin's own
         // address, so "I entered the env values" becomes a verified fact.
@@ -910,8 +931,11 @@ export default function AdminPage() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    // A refused or half-applied action still ships the CURRENT list (the erase
+    // and block paths both do), so render it rather than leaving the panel on a
+    // stale row that no longer matches the database.
+    if (Array.isArray(data.users)) setUsers(data.users);
     if (data.error) setUserMsg(data.error);
-    else setUsers(data.users ?? []);
   }
 
   if (authorized === null) {
@@ -1851,6 +1875,20 @@ export default function AdminPage() {
                 {diagBusy === "email" ? <LoadingDots label="Sending" /> : "Send live test email"}
               </button>
             </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => runDiag("rpc")}
+                disabled={diagBusy !== null}
+                className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+                title="Checks whether the public anon key can still call prune_old_rows"
+              >
+                {diagBusy === "rpc" ? (
+                  <LoadingDots label="Probing" />
+                ) : (
+                  "Check anon RPC lockdown"
+                )}
+              </button>
+            </div>
             {diag && (
               <pre
                 className={`mt-2 whitespace-pre-wrap rounded-xl p-2.5 font-sans text-[11px] font-bold ${
@@ -2435,6 +2473,12 @@ export default function AdminPage() {
                     {u.role === "admin" ? "Remove admin" : "Make admin"}
                   </button>
                   )}
+                  {/* Blocking an ADMIN is an owner action (the route enforces
+                      it), and it is a real one now: a blocked admin's session
+                      is refused on their next request. Hiding the button from a
+                      peer admin keeps the panel from offering something that
+                      will come back 403. */}
+                  {(u.role !== "admin" || isOwner) && (
                   <button
                     onClick={() =>
                       userAction({
@@ -2447,9 +2491,15 @@ export default function AdminPage() {
                         ? "bg-brandred-soft text-brandred"
                         : "bg-savings-soft text-savings"
                     }`}
+                    title={
+                      u.role === "admin"
+                        ? "Blocks this admin immediately - their next request is refused, including the Key Vault"
+                        : undefined
+                    }
                   >
                     {u.status === "active" ? "Block" : "Unblock"}
                   </button>
+                  )}
                   <button
                     onClick={() => {
                       if (

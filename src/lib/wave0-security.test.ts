@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { rateLimit, clientIp, _resetRateLimit } from "./rate-limit";
+import { rateLimit, clientIp, SHARED_BUCKET, _resetRateLimit } from "./rate-limit";
+import { readdirSync } from "node:fs";
 
 // WAVE 0 - security hotfixes. Each fix lands with a test that fails on revert.
 // The behavioral tests exercise the new limiter directly; the source pins guard
@@ -30,31 +31,114 @@ describe("rateLimit - the sessionless route limiter", () => {
     expect((await rateLimit("other", "a", 5, 3600)).ok).toBe(true); // other bucket
   });
 
-  it("clientIp reads the proxy headers Cloud Run sets, newest-hop first", () => {
+  // REWRITTEN, INTENT PRESERVED. This asserted that clientIp returns hop 0
+  // ("newest-hop first"), which was wrong about the platform and is the whole
+  // reason the limiter was bypassable: Cloud Run's front end APPENDS the address
+  // it observed, so the newest hop is the LAST one and hop 0 is written by the
+  // caller. Same intent - clientIp identifies the caller and answers a
+  // non-empty key when it cannot - with the direction corrected. The attack
+  // itself is exercised in client-ip.test.ts.
+  it("clientIp reads the hop Cloud Run appends, which is the LAST one", () => {
     const req = new Request("https://x/y", {
       headers: { "x-forwarded-for": "9.9.9.9, 10.0.0.1" },
     });
-    expect(clientIp(req)).toBe("9.9.9.9");
-    expect(clientIp(new Request("https://x/y"))).toBe("unknown");
+    expect(clientIp(req)).toBe("10.0.0.1");
+    expect(clientIp(new Request("https://x/y"))).toBe(SHARED_BUCKET);
   });
 });
 
 describe("prune_old_rows is no longer callable by the anon key", () => {
-  it("security-fix.sql revokes the default grant and hands EXECUTE to service_role only", () => {
+  // REWRITTEN, INTENT PRESERVED. The original asserted that the REVOKE exists in
+  // supabase/security-fix.sql - a file referenced in no guide, no deploy note
+  // and no admin screen, while the file that CREATES the vulnerable function was
+  // the one owners are told to run. The test was green and every fresh
+  // deployment still got the hole. The invariant worth pinning is not "the
+  // revoke exists somewhere" but "the revoke cannot be skipped": any file that
+  // creates the function must lock it down in the same file, after the create.
+  //
+  // There is no Postgres in the unit suite, so this is structural rather than
+  // executed. The live check is the admin panel's "Check anon RPC lockdown"
+  // probe (/api/admin/rpc-exposure), which asks the real database.
+  const revokes = [
+    /revoke all on function public\.prune_old_rows\(int\) from anon;/i,
+    /revoke all on function public\.prune_old_rows\(int\) from authenticated/i,
+    /grant execute on function public\.prune_old_rows\(int\) to service_role/i,
+  ];
+
+  it("every SQL file that creates the function also revokes the anon grant, AFTER the create", () => {
+    const files = readdirSync(join(process.cwd(), "supabase")).filter((f) => f.endsWith(".sql"));
+    const creators = files.filter((f) =>
+      /create\s+(or\s+replace\s+)?function\s+public\.prune_old_rows/i.test(read(`supabase/${f}`))
+    );
+    // If nobody creates it any more the vulnerability is gone by construction;
+    // as long as somebody does, that same file has to close it.
+    expect(creators.length).toBeGreaterThan(0);
+    for (const f of creators) {
+      const sql = read(`supabase/${f}`);
+      const createAt = sql.search(/create\s+(or\s+replace\s+)?function\s+public\.prune_old_rows/i);
+      for (const re of revokes) {
+        const m = re.exec(sql);
+        expect(m, `${f} is missing ${re}`).not.toBeNull();
+        expect(m!.index, `${f} revokes before it creates`).toBeGreaterThan(createAt);
+      }
+    }
+  });
+
+  it("retention.sql - the file the guides tell owners to run - is the one that carries it", () => {
+    const sql = read("supabase/retention.sql");
+    for (const re of revokes) expect(sql).toMatch(re);
+    // And it refuses to finish quietly if the revoke did not take.
+    expect(sql).toMatch(/has_function_privilege\('anon'/i);
+    expect(sql).toMatch(/raise exception/i);
+  });
+
+  it("schema.sql - the file every owner runs, and re-runs - repairs it too", () => {
+    // Belt and braces against ordering: an owner who ran the OLD retention.sql
+    // and later re-runs schema.sql (which the guide tells them to do on every
+    // update) is repaired without knowing any of this happened. Guarded on
+    // existence so it is a clean no-op before the function is created.
+    const sql = read("supabase/schema.sql");
+    const idx = sql.indexOf("prune_old_rows");
+    expect(idx).toBeGreaterThan(0);
+    for (const re of revokes) expect(sql).toMatch(re);
+    expect(sql).toMatch(/where n\.nspname = 'public' and p\.proname = 'prune_old_rows'/);
+  });
+
+  it("the standalone repair file still works for databases built before the move", () => {
     const sql = read("supabase/security-fix.sql");
-    expect(sql).toMatch(/revoke all on function public\.prune_old_rows\(int\) from anon/i);
-    expect(sql).toMatch(/revoke all on function public\.prune_old_rows\(int\) from authenticated/i);
-    expect(sql).toMatch(/grant execute on function public\.prune_old_rows\(int\) to service_role/i);
+    for (const re of revokes) expect(sql).toMatch(re);
+  });
+
+  it("the owner is TOLD to run it, in the guides they actually read", () => {
+    // The defect was never the SQL - it was that nothing pointed at it.
+    for (const doc of ["GUIDE.md", "SCALING.md", "PRODUCTION-READINESS.md"]) {
+      expect(read(doc), `${doc} never mentions retention.sql`).toMatch(/retention\.sql/);
+    }
+    expect(read("GUIDE.md")).toMatch(/prune_old_rows/);
   });
 });
 
 describe("PayPal webhook - a hint can never drive a downgrade", () => {
   const src = read("src/app/api/webhooks/paypal/route.ts");
+  // REWRITTEN, INTENT PRESERVED. The middle assertion pinned the exact string
+  // `grantEmail = linked || hintEmail || ""` - the very line through which the
+  // downgrade this describe-block is named after was still reachable, because
+  // setPlan overwrites and a "grant" of Pro to an Ultra account IS a downgrade.
+  // Same intent (the link is the trusted attribution, the hint is not), now
+  // asserting the shape that actually holds: a hint bootstraps only an unlinked
+  // subscription, and the grant is raise-only. The executed proof lives in
+  // src/app/api/webhooks/paypal/attribution.test.ts.
   it("the verified activation link wins; the downgrade path trusts ONLY the link", () => {
-    // grantEmail may bootstrap from the hint; downgradeEmail is link-only.
     expect(src).toMatch(/const linked = subscriptionId \? await subscriberFor\(subscriptionId\) : null/);
-    expect(src).toMatch(/const grantEmail = linked \|\| hintEmail \|\| ""/);
+    expect(src).toMatch(/const grantEmail = linked \|\| \(hintUsable \? hintEmail : ""\)/);
     expect(src).toMatch(/const downgradeEmail = linked \|\| ""/);
+  });
+  it("a grant can only ever RAISE a plan, so it cannot be used as a downgrade", () => {
+    // The ladder comparison has to come BEFORE the write, not merely exist.
+    const guard = src.indexOf("PLAN_RANK[tier] <= PLAN_RANK[before]");
+    const write = src.indexOf("setPlan(email, tier)");
+    expect(guard).toBeGreaterThan(0);
+    expect(write).toBeGreaterThan(guard);
   });
   it("the suspension/downgrade branch consumes downgradeEmail, not the raw hint", () => {
     expect(src).toMatch(/else if \(verified && downgradeEmail\)/);

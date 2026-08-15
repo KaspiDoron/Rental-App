@@ -38,14 +38,25 @@ describe("W8 B14: membership of management is the owner's decision", () => {
     expect(route).toMatch(/The owner cannot be demoted\./);
   });
 
-  it("blocking and deleting stay open to any admin - only PRIVILEGE narrowed", () => {
-    // Narrowing more than the defect would make the app harder to run without
-    // making it safer: those actions are reversible by the owner.
+  it("blocking an ORDINARY USER stays open to any admin - only PRIVILEGE narrowed", () => {
+    // REWRITTEN, INTENT PRESERVED. This asserted that the block branch carries
+    // no owner check AT ALL, guarding against over-narrowing: blocking or
+    // erasing a traveller is reversible and every admin needs to be able to do
+    // it without waking the owner. That still holds and is still asserted.
+    //
+    // What changed is that blocking an ADMIN stopped being the same act. It was
+    // a silent no-op (getSession ignored `status` for management), so nothing
+    // was being narrowed by leaving it open; now that a blocked admin is
+    // actually refused, it is a revocation of management - the same class as
+    // demote, and an admin who could block their peers could clear the room.
     const block = route.slice(
       route.indexOf('} else if (status === "active"'),
       route.length
     );
-    expect(block).not.toMatch(/session\.role !== "owner"/);
+    // Narrowed on the TARGET, not on the action.
+    expect(block).toMatch(/targetIsManagement && session\.role !== "owner"/);
+    // And no blanket owner-only gate on the branch itself.
+    expect(block).not.toMatch(/if \(session\.role !== "owner"\) \{/);
   });
 
   it("the admin panel stops offering an action the API will refuse", () => {
@@ -162,10 +173,16 @@ describe("W8 verification: already fixed by wave 0", () => {
     expect(route).toMatch(/wa_sessions: "email"/);
   });
 
-  it("B11 - a custom_id hint may grant, never downgrade", () => {
+  it("B11 - a custom_id hint may bootstrap, never downgrade, never lower", () => {
+    // REWRITTEN, INTENT PRESERVED. `grantEmail = linked || hintEmail || ""` was
+    // pinned as the fix, and it was half of one: setPlan OVERWRITES, so a hint
+    // that "granted" Pro to an Ultra account performed the downgrade this test
+    // is named after. The hint may now only bootstrap an UNLINKED subscription,
+    // and every grant is raise-only (see attribution.test.ts, which runs it).
     const hook = readCode("src/app/api/webhooks/paypal/route.ts");
-    expect(hook).toMatch(/const grantEmail = linked \|\| hintEmail \|\| "";/);
+    expect(hook).toMatch(/const grantEmail = linked \|\| \(hintUsable \? hintEmail : ""\);/);
     expect(hook).toMatch(/const downgradeEmail = linked \|\| "";/);
+    expect(hook).toMatch(/PLAN_RANK\[tier\] <= PLAN_RANK\[before\]/);
   });
 
   it("B12 - forgot-password is throttled per target AND per ip", () => {

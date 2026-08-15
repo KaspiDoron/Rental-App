@@ -594,9 +594,24 @@ deploy; each one names the surface that answers it.
    receipt call is failing (check the Evolution build).
 8. **Cluster risk** - the same launch card turns red when ≥5 unproxied numbers
    share one Evolution host. At the beta's size it should be silent.
-9. **Retention** - run `supabase/retention.sql` once, then confirm
-   `select public.prune_old_rows(90);` returns a JSON summary and that
-   `api_usage_daily` has rows.
+9. **Retention + the RPC lockdown** - run `supabase/retention.sql` once, then
+   confirm `select public.prune_old_rows(90);` returns a JSON summary and that
+   `api_usage_daily` has rows. The same file revokes that function from
+   `anon`/`authenticated` (PostgreSQL grants EXECUTE to PUBLIC by default, and
+   Supabase publishes it over the Data API, so without the revoke the
+   browser-side anon key could call it with `retain_days: 0`). It raises an
+   exception instead of finishing quietly if the revoke did not take, and
+   **Admin -> Keys -> Connection tests -> "Check anon RPC lockdown"** asks the
+   live database whether the anon key is still able to call it. That probe is
+   the only honest answer - the SQL sitting in the repo proves nothing about
+   what your project actually has.
+10. **Rate limiting identifies the caller from the RIGHT end of
+    `X-Forwarded-For`.** Google's front end appends the address it saw rather
+    than replacing the header, so hop 0 is attacker-written and the last hop is
+    not. If a load balancer or CDN is ever placed in front of Cloud Run, set
+    `TRUSTED_PROXY_HOPS` to the number of addresses it appends after the
+    client's; until then it is 0. Fails closed: an unresolvable caller shares a
+    single bucket with every other unresolvable caller.
 
 ## Deliberate scope notes (so they are not re-litigated as bugs)
 

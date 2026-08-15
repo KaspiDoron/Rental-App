@@ -1,5 +1,15 @@
--- WheelDeal - security hardening (owner report 5, Wave 0). Run ONCE in the
--- Supabase SQL editor. Idempotent and safe to re-run.
+-- WheelDeal - security hardening (owner report 5, Wave 0). Idempotent and safe
+-- to re-run.
+--
+-- YOU PROBABLY DO NOT NEED TO RUN THIS FILE ANY MORE. Its contents now live at
+-- the bottom of `supabase/retention.sql`, right after the CREATE that makes the
+-- function - because a patch in a file nobody is told to run is not a patch,
+-- and that is exactly what this file was: referenced in no guide, no deploy
+-- note and no admin screen, while the file that creates the vulnerable function
+-- was the one owners were told to run. Re-running retention.sql applies this.
+--
+-- It is kept because it is the smallest possible repair for a database that was
+-- set up before that change: paste it, get the revoke, nothing else moves.
 --
 -- WHY THIS EXISTS. `prune_old_rows` (supabase/retention.sql) is a
 -- SECURITY DEFINER function: it runs with the privileges of its OWNER (the

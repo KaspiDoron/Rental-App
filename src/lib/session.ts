@@ -194,16 +194,26 @@ export async function getSession(): Promise<Session | null> {
   // Management holds the Ultra plan automatically, free of charge.
   const { getUser, normalizePlan } = await import("./access");
   let plan: ReturnType<typeof normalizePlan> = "ultra";
-  if (role === "user") {
+
+  // REVOCATION IS NOT ADVISORY, AND IT WAS NOT ADVISORY ONLY FOR USERS.
+  //
+  // getSession re-derived role and plan on every request but never STATUS, so a
+  // blocked account kept full API access for the whole 30-day cookie life
+  // simply by never calling /me. That was fixed for `user` sessions - and the
+  // gate was scoped to them on the assumption that management is never blocked.
+  // The admin panel offered the Block button on every admin row, the route
+  // performed the write, and the blocked admin kept the Key Vault: the one
+  // account whose revocation is urgent was the one revocation did not reach.
+  //
+  // The owner is deliberately exempt: the owner is derived from OWNER_EMAIL, is
+  // refused by the block route, and must not be lockable out of their own
+  // product by a row in a table an admin can reach.
+  if (role !== "owner") {
     const rec = await getUser(raw.email);
-    // REVOCATION IS NOT ADVISORY. getSession re-derived role and plan on every
-    // request but never STATUS, so a blocked (or de-invited) account kept full
-    // API access for the whole 30-day cookie life simply by never calling /me.
-    // The record is already in hand here, so refusing a blocked account costs
-    // no extra read. Management cannot be blocked (the owner is protected and
-    // an admin block is an owner decision), so this gate is scoped to users.
     if (rec?.status === "blocked") return null;
-    plan = normalizePlan(rec?.plan);
+    if (role === "user") plan = normalizePlan(rec?.plan);
+  }
+  if (role === "user") {
     // TEST MODE: flagged testers ride Ultra for free while the switch is on -
     // flipping it off instantly returns them to their real (paid) plan, since
     // the plan is re-derived on every request.

@@ -1582,3 +1582,34 @@ alter table public.ai_usage add column if not exists detail text;
 create index if not exists ai_usage_failed_idx
   on public.ai_usage (provider, created_at desc)
   where failed;
+
+-- ---- The anon Data API must never reach a SECURITY DEFINER prune ------------
+--
+-- `prune_old_rows` is created by supabase/retention.sql, and PostgreSQL grants
+-- EXECUTE on a new function to PUBLIC by default - which Supabase publishes
+-- over PostgREST to `anon`, the key that ships inside every browser. That is a
+-- one-request wipe of agent_events / agent_traces / whatsapp_messages by anyone
+-- who views the site. retention.sql now revokes it as part of creating it; this
+-- block is here because THIS is the file every owner is told to run, and told
+-- to re-run after every update. A database repaired here cannot un-repair
+-- itself by running the files in the wrong order.
+--
+-- Guarded on existence so it is a clean no-op before retention.sql has ever run,
+-- and safe to re-run for ever.
+do $$
+begin
+  if exists (
+    select 1 from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'prune_old_rows'
+  ) then
+    revoke all on function public.prune_old_rows(int) from public;
+    revoke all on function public.prune_old_rows(int) from anon;
+    revoke all on function public.prune_old_rows(int) from authenticated;
+    grant execute on function public.prune_old_rows(int) to service_role;
+    raise notice 'prune_old_rows locked down: service_role only.';
+  else
+    raise notice 'prune_old_rows does not exist yet - run supabase/retention.sql (it creates AND locks it).';
+  end if;
+end;
+$$;

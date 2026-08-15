@@ -86,7 +86,47 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 3. Schedule it nightly via pg_cron when available; a clean NOTICE otherwise.
+-- 3. LOCK THE FUNCTION DOWN. This is part of creating it - not a separate file.
+-- ---------------------------------------------------------------------------
+--
+-- `prune_old_rows` is SECURITY DEFINER: it runs with the privileges of its
+-- OWNER, not of the caller. PostgreSQL grants EXECUTE on a new function to
+-- PUBLIC by default, and Supabase exposes every function in the `public` schema
+-- over PostgREST RPC to the `anon` and `authenticated` roles. The anon key
+-- ships to every browser. So without the four lines below, ANYONE could call
+--   POST /rest/v1/rpc/prune_old_rows  { "retain_days": 0 }
+-- and wipe agent_events, agent_traces and the un-priced whatsapp_messages as
+-- the definer, straight past every RLS policy this schema relies on.
+--
+-- THEY LIVE HERE, IMMEDIATELY AFTER THE CREATE, ON PURPOSE. They shipped first
+-- as a separate supabase/security-fix.sql, which meant the file that creates
+-- the hole was the one owners were told to run and the file that closes it was
+-- referenced nowhere - so every fresh deployment got the vulnerable function and
+-- never the patch. A fix in a file nobody runs is not a fix. `create or replace`
+-- above preserves whatever grants already exist, so re-running this file on an
+-- older database repairs it; running it on a new one never opens the hole at
+-- all. pg_cron is unaffected (it runs as a superuser, not through PostgREST),
+-- and the app calls it - if it ever does - with the service_role key.
+revoke all on function public.prune_old_rows(int) from public;
+revoke all on function public.prune_old_rows(int) from anon;
+revoke all on function public.prune_old_rows(int) from authenticated;
+grant execute on function public.prune_old_rows(int) to service_role;
+
+-- Prove it, in the same transcript the owner is already reading. `has_function_privilege`
+-- is the database's own answer, not a comment claiming the lines above worked.
+do $$
+begin
+  if has_function_privilege('anon', 'public.prune_old_rows(int)', 'execute')
+     or has_function_privilege('authenticated', 'public.prune_old_rows(int)', 'execute') then
+    raise exception
+      'prune_old_rows is STILL callable by anon/authenticated - the revoke did not take. Do not leave the database in this state.';
+  end if;
+  raise notice 'prune_old_rows is service_role-only: the anon/authenticated Data API cannot call it.';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4. Schedule it nightly via pg_cron when available; a clean NOTICE otherwise.
 -- ---------------------------------------------------------------------------
 do $$
 begin
