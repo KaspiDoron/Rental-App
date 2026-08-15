@@ -178,4 +178,40 @@ export const I18N_EXTRAS: string[] = [
   // t(placeholder), so the literal lives in the parameter list, not in a
   // t("...") call the grep can see.
   "Search hotel, address or area...",
+
+  // src/components/FeedbackModal.tsx - the category chips and the status pills
+  // reach t() as t(c.label) / t(meta.label), so no literal exists for the grep
+  // (W6.2: categories now drive a filter on both sides, which made them
+  // suddenly much more visible).
+  "Bug",
+  "UI / layout",
+  "Slow / performance",
+  "Crash / blank",
+  "Suggestion",
+  "Question",
+  "Other",
+  "All",
+  "Open",
+  "In progress",
+  "Resolved",
+  "Closed",
+
+  // src/app/deals/page.tsx - TripsUpgradeGate renders the shared plan
+  // catalogue (lib/plans) through t(p.name) / t(p.blurb) / t(f), so no literal
+  // exists for the grep. W6.1: Trips is a Pro/Ultra section and a free
+  // traveller meets these tier cards, so they are user-facing copy now.
+  "Pro Traveller",
+  "Best for frequent travellers",
+  "100% ad-free experience",
+  "Priority negotiation agents",
+  "Mass bargain: ask many shops at once",
+  "Schedule pickups for future days",
+  "Saved trips & full order history",
+  "Ultra",
+  "The ultimate bargaining machine",
+  "Everything in Pro",
+  "Agents bargain in the shop's LOCAL language - real street talk",
+  "Locals-only pricing: agents anchor to the real local market floor",
+  "See the English translation of every local-language message",
+  "Fast-responder insights: which shops reply quickest",
 ];

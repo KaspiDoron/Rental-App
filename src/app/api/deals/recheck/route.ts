@@ -5,6 +5,10 @@ import { digitsOnly } from "@/lib/phone";
 import { killSwitchOn } from "@/lib/usage";
 import { groupSearchSessions, sessionIdOf } from "@/lib/session-life";
 import { recheckMessage } from "@/lib/wa/recheck-message";
+import { can, localLanguageAllowed } from "@/lib/entitlements";
+import type { PlanId } from "@/lib/access";
+import { termsComplete, type DealTerms } from "@/lib/deal-terms";
+import { threadWritesEnglish, type ThreadLanguage } from "@/lib/wa/thread-language";
 
 export const dynamic = "force-dynamic";
 
@@ -29,8 +33,26 @@ export const dynamic = "force-dynamic";
 //   * It quotes the shop's OWN number back to them. No invented figure ever
 //     reaches a shop - the price comes from the offers row we stored when they
 //     said it.
+//
+// W6.1 - THE COMPLETENESS FILTER, WHICH WAS THE WHOLE POINT AND WAS MISSING.
+//
+// The target list was built from every distinct outbound number in the hunt
+// window - i.e. every shop CONTACTED, whether or not it ever answered. The
+// price map was used only to pick the wording, never to filter, and the deposit
+// and the fulfillment were never read at all. So the "is that price still
+// good?" tap messaged shops that had never said a price, and the message it
+// sent them could not name any condition to hold constant.
+//
+// The owner's rule, verbatim: re-ask "ONLY if we have price, deposit and how we
+// get the vehicle details". `termsComplete` (src/lib/deal-terms.ts) is that
+// rule, shared with /api/replies so the two can never drift.
+//
+// This also removes the terminal wall those shops hit: `kind: "recheck"` is not
+// exempt from the engagement halt (only "rfq" is) and `isNewContact` is false
+// for anyone already in `wa_recipient_state`, so every never-replied shop was
+// dropped by the guard anyway - after we had already decided to message it. A
+// correct filter removes them by construction.
 
-const GROUP_GAP_MS = 30 * 60_000;
 /** One re-check per shop per day - asking twice reads as a bot, and is rude. */
 const RECHECK_WINDOW_MS = 20 * 3600_000;
 
@@ -42,9 +64,46 @@ interface OfferRow {
   created_at: string;
 }
 
+/** The deposit + fulfillment half of the terms, per shop, from replies. */
+interface ReplyTermsRow {
+  vendor_id: string | null;
+  vendor_name: string | null;
+  deposit: string | null;
+  deposit_type?: string | null;
+  deposit_amount?: number | null;
+  deposit_currency?: string | null;
+  delivers?: boolean | null;
+  created_at: string;
+}
+
+interface ThreadRow {
+  vendor_id: string | null;
+  fields: {
+    fulfillment?: string;
+    depositType?: string;
+    depositNote?: string;
+    language?: ThreadLanguage;
+  } | null;
+}
+
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  // THE ENTITLEMENT, ON THE SERVER SIDE TOO.
+  //
+  // The re-ask had NO plan gate on either side: the button rendered for any
+  // plan whenever `contacted > 0`, and this route checked only the session and
+  // the kill switch. FEATURE_META documents `trips-history` as covering exactly
+  // this ("re-open and re-engage any earlier search"), and re-engaging is the
+  // half that spends the traveller's WhatsApp reputation - so it is the half
+  // that most needed the gate.
+  const plan = (session.plan ?? "free") as PlanId;
+  if (!can(plan, "trips-history")) {
+    return NextResponse.json(
+      { error: "upgrade-required", feature: "trips-history" },
+      { status: 402 }
+    );
+  }
   if (await killSwitchOn()) {
     return NextResponse.json({ error: "Temporarily paused by the owner." }, { status: 503 });
   }
@@ -105,8 +164,11 @@ export async function POST(req: Request) {
     [...groups[gi]].reverse().find((r) => typeof r.rfq?.durationDays === "number")?.rfq
       ?.durationDays ?? null;
 
-  // Shops we MESSAGED in that window, with the last price each of them gave.
-  const [outbound, offers] = await Promise.all([
+  // Shops we MESSAGED in that window, the last price each of them gave, and
+  // the deposit + fulfillment they stated. All three are needed: the deposit
+  // and the fulfillment are what make the question "on the same conditions"
+  // rather than "how much again?".
+  const [outbound, offers, replyTerms, threads] = await Promise.all([
     sbSelect<{
       to_number: string;
       received_at: string;
@@ -119,6 +181,31 @@ export async function POST(req: Request) {
       "offers",
       `select=vendor_id,vendor_name,price_per_day,currency,created_at&user_email=eq.${enc}&simulated=eq.false&order=created_at.desc&limit=200`
     ).catch(() => []),
+    // Two column tiers, exactly like /api/replies: an unknown column silently
+    // blanks the whole select, and a pre-migration database must degrade to
+    // "we do not know the deposit" (which refuses the send) rather than to a
+    // crash or, worse, to messaging everyone again.
+    (async () => {
+      const filter = `user_email=eq.${enc}&order=created_at.desc&limit=200`;
+      let rows = await sbSelect<ReplyTermsRow>(
+        "vendor_replies",
+        `select=vendor_id,vendor_name,deposit,deposit_type,deposit_amount,deposit_currency,delivers,created_at&${filter}`
+      );
+      if (rows.length === 0) {
+        rows = await sbSelect<ReplyTermsRow>(
+          "vendor_replies",
+          `select=vendor_id,vendor_name,deposit,delivers,created_at&${filter}`
+        );
+      }
+      return rows;
+    })().catch(() => [] as ReplyTermsRow[]),
+    // The engine's own extracted state. Authoritative for fulfillment, and it
+    // carries the thread's PERSISTED language decision (W4.6) - which is why
+    // the re-check can finally be localized like every other send path.
+    sbSelect<ThreadRow>(
+      "negotiation_threads",
+      `select=vendor_id,fields&user_email=eq.${enc}&order=updated_at.desc&limit=100`
+    ).catch(() => [] as ThreadRow[]),
   ]);
 
   const inWindow = (iso: string) => {
@@ -132,16 +219,65 @@ export async function POST(req: Request) {
     if (!id || !inWindow(o.created_at) || priceByVendor.has(id)) continue;
     if (o.price_per_day && o.price_per_day > 0) priceByVendor.set(id, o);
   }
+  // Deposit/fulfillment from the replies IN THIS HUNT'S WINDOW - a shop that
+  // told us its deposit during some other hunt has not told us about this one.
+  const termsByVendor = new Map<string, ReplyTermsRow>();
+  for (const r of replyTerms) {
+    const id = r.vendor_id || r.vendor_name;
+    if (!id || !inWindow(r.created_at)) continue;
+    const cur = termsByVendor.get(id);
+    // Newest-first: keep the first row that actually says something, so a later
+    // bare "ok" does not erase the reply that named the deposit.
+    if (!cur || (!cur.deposit && !cur.deposit_type && cur.delivers == null)) {
+      termsByVendor.set(id, { ...(cur ?? {}), ...r });
+    }
+  }
+  const threadByVendor = new Map<string, ThreadRow["fields"]>();
+  for (const th of threads) {
+    if (th.vendor_id && !threadByVendor.has(th.vendor_id)) threadByVendor.set(th.vendor_id, th.fields);
+  }
+
+  /** Everything we know about one shop's deal, in the shared shape. */
+  const termsFor = (vendorId?: string): DealTerms => {
+    if (!vendorId) return {};
+    const offer = priceByVendor.get(vendorId);
+    const reply = termsByVendor.get(vendorId);
+    const th = threadByVendor.get(vendorId);
+    return {
+      pricePerDay: offer?.price_per_day ?? null,
+      currency: offer?.currency ?? null,
+      depositType: th?.depositType ?? reply?.deposit_type ?? null,
+      depositNote: th?.depositNote ?? null,
+      depositLabel: reply?.deposit ?? null,
+      depositAmount: reply?.deposit_amount ?? null,
+      depositCurrency: reply?.deposit_currency ?? null,
+      fulfillment: th?.fulfillment ?? null,
+      delivers: reply?.delivers ?? null,
+    };
+  };
 
   const targets = new Map<string, { name: string; vendorId?: string }>();
+  let contactedInHunt = 0;
   for (const m of outbound) {
     if (!inWindow(m.received_at)) continue;
     const digits = digitsOnly(m.to_number);
     if (digits.length < 6 || targets.has(digits)) continue;
+    contactedInHunt += 1;
+    // THE FILTER. Price + deposit + how we get the vehicle, or we do not ask.
+    if (!termsComplete(termsFor(m.raw?.vendorId))) continue;
     targets.set(digits, { name: m.raw?.vendorName || digits, vendorId: m.raw?.vendorId });
   }
   if (targets.size === 0) {
-    return NextResponse.json({ error: "No shops were messaged in that hunt.", asked: 0 });
+    return NextResponse.json({
+      // Two different silences, said differently - "nobody was messaged" and
+      // "nobody gave us full terms" send the traveller to different places.
+      error: contactedInHunt
+        ? "None of these shops gave a full deal (price, deposit and pick-up), so there is nothing to re-confirm."
+        : "No shops were messaged in that hunt.",
+      asked: 0,
+      contacted: contactedInHunt,
+      eligible: 0,
+    });
   }
 
   // Already re-checked today? Do not ask the same shop twice.
@@ -167,16 +303,51 @@ export async function POST(req: Request) {
       detail.push({ name: info.name, state: "skipped", reason: "already asked today" });
       continue;
     }
-    const known = info.vendorId ? priceByVendor.get(info.vendorId) : undefined;
-    const text = recheckMessage({
-      pricePerDay: known?.price_per_day ?? null,
-      currency: known?.currency ?? null,
-      days,
-    });
+    const english = recheckMessage({ ...termsFor(info.vendorId), days });
+    // Belt and braces: the composer refuses incomplete terms on its own, so a
+    // null here means the filter above and the composer disagreed. Skip, never
+    // send a half-stated condition to a shop.
+    if (!english) {
+      skipped += 1;
+      detail.push({ name: info.name, state: "skipped", reason: "terms incomplete" });
+      continue;
+    }
+    // THE THREAD'S LANGUAGE, HONOURED HERE TOO (W4.6/W4.7).
+    //
+    // This route composed English and handed it straight to guardOutbound -
+    // it never imported localizeMessage - so a hunt that had been conducted
+    // entirely in Thai got one English message weeks later, from the same
+    // number, in the same thread. That is precisely the mid-conversation
+    // language flip the whole thread-language lock exists to prevent.
+    let text = english;
+    let englishGloss: string | undefined;
+    const lang = info.vendorId ? threadByVendor.get(info.vendorId)?.language : undefined;
+    if (!threadWritesEnglish(lang)) {
+      const { threadLanguageMode } = await import("@/lib/wa/thread-language");
+      const established = await threadLanguageMode(session.email, digits);
+      if (localLanguageAllowed({ requested: established === true, plan })) {
+        const { countryForShop } = await import("@/lib/copy/region");
+        const { localizeMessage } = await import("@/lib/agents");
+        const localized = await localizeMessage(
+          english,
+          countryForShop(digits),
+          session.email,
+          true,
+          // A re-check is ALWAYS mid-thread - the shop already answered us once
+          // with a full deal - so a local greeting here is a repeat greeting.
+          { greet: false }
+        );
+        if (localized.localized && localized.text) {
+          text = localized.text;
+          englishGloss = localized.english ?? english;
+        }
+      }
+    }
     const meta = {
       kind: "recheck",
       vendorId: info.vendorId ?? null,
       vendorName: info.name,
+      ...(englishGloss ? { englishGloss } : {}),
     };
     // auto:true - this is the agent acting on the traveller's behalf, so it
     // must obey every automated-send veto (pause, takeover, cancellation) and
@@ -246,6 +417,10 @@ export async function POST(req: Request) {
     sent,
     queued,
     skipped,
+    /** How many shops were messaged in the hunt at all, and how many of those
+     *  had a full deal to re-confirm - so the UI can say WHY it asked few. */
+    contacted: contactedInHunt,
+    eligible: targets.size,
     detail: detail.slice(0, 40),
   });
 }

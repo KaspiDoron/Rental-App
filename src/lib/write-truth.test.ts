@@ -161,9 +161,13 @@ describe("the savings baseline is not the client's to decide", () => {
 describe("a lost report does not read as a received one", () => {
   it("the response says whether the thread the copy promises exists", () => {
     const route = readCode("src/app/api/feedback/route.ts");
-    expect(route).toMatch(
-      /const storedRow = feedbackId !== null \|\| !supabaseConfigured\(\);/
-    );
+    // W6.2 TIGHTENED THIS. The old expression was
+    // `feedbackId !== null || !supabaseConfigured()`, which reported a stored
+    // row in DEMO MODE - where the GET can only ever answer with an empty list,
+    // so the app promised a thread under "Your reports" that cannot exist. No
+    // row, no thread, no claim.
+    expect(route).toMatch(/const storedRow = feedbackId !== null;/);
+    expect(route).not.toMatch(/supabaseConfigured\(\)/);
     // Both replies - the triaged-out one and the escalated one - carry it.
     expect(route.match(/stored: storedRow/g)?.length).toBe(2);
   });

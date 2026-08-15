@@ -157,7 +157,10 @@ describe("a cleared hunt is recognisable everywhere, not just at the restore gat
   it("the client offers no live button on a cleared hunt", () => {
     const page = readCode("src/app/deals/page.tsx");
     expect(page).toMatch(/s\.closed \?/);
-    expect(page).toMatch(/s\.contacted > 0 && !s\.closed &&/);
+    // W6.1 replaced `contacted > 0` with `recheckable > 0` (the owner's
+    // price + deposit + pick-up rule); the `!s.closed` half is the fact this
+    // test is about and it still guards the button.
+    expect(page).toMatch(/\(s\.recheckable \?\? 0\) > 0 && !s\.closed \?/);
     // And the restore 404 is no longer collapsed into a retryable error.
     expect(page).toMatch(/d\?\.error === "session-closed"/);
   });

@@ -26,7 +26,8 @@ import { startNav } from "@/components/NavVeil";
 import { LoadingDots } from "@/components/LoadingDots";
 import { moneyLocal } from "@/lib/currency";
 import { can } from "@/lib/entitlements";
-import { previewTrip, partitionHunts } from "@/lib/trips";
+import { partitionHunts } from "@/lib/trips";
+import { PLANS } from "@/lib/plans";
 import { SEARCH_SESSION_TTL_MS } from "@/lib/session-life";
 import { useI18n } from "@/lib/i18n";
 
@@ -88,6 +89,17 @@ interface SessionSummary {
   timeline: TimelineEvent[];
   progress: number;
   progressLabel: string;
+  /** WHERE the hunt ran - so a COLLAPSED card can say so (owner report 5 #17). */
+  place?: { lat: number; lng: number; label: string | null } | null;
+  /** The deposit the shops asked for, in plain words. */
+  depositLabel?: string | null;
+  /** How the traveller would get the vehicle. */
+  fulfillmentLabel?: string | null;
+  answeredNames?: string[];
+  silentNames?: string[];
+  /** Shops with a FULL deal (price + deposit + pick-up) - the only ones the
+   *  re-check may message. Zero is why the button is not offered. */
+  recheckable?: number;
   /** What became of this hunt - outcome, cost, saving (lib/trips). */
   trip?: import("@/lib/trips").Trip;
 }
@@ -162,6 +174,9 @@ export default function DealsPage() {
   const [restoreErr, setRestoreErr] = useState<string | null>(null);
   /** The trips read did not answer. Distinct from "answered with nothing". */
   const [loadFailed, setLoadFailed] = useState(false);
+  /** How many hunts are SAVED, when the server refuses to ship them (free plan).
+   *  The upgrade card names a real number instead of a vague promise. */
+  const [huntCount, setHuntCount] = useState(0);
   // "Is that price still good?" - one tap re-asks every shop from a past hunt.
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [recheckNote, setRecheckNote] = useState<Record<string, string>>({});
@@ -177,6 +192,13 @@ export default function DealsPage() {
         body: JSON.stringify({ ts: startedAt, sid }),
       });
       const d = await r.json().catch(() => ({}));
+      // THE ENTITLEMENT ANSWER IS NOT AN ERROR MESSAGE. Re-engaging a past
+      // hunt is `trips-history`, and the route now says so with a 402 - which
+      // belongs in the upgrade sheet, not in red text under a button.
+      if (r.status === 402 || d?.error === "upgrade-required") {
+        setUpgradeOpen(true);
+        return;
+      }
       if (!r.ok) {
         setRecheckNote((n) => ({
           ...n,
@@ -186,6 +208,7 @@ export default function DealsPage() {
       }
       const asked = Number(d?.asked ?? 0);
       const skipped = Number(d?.skipped ?? 0);
+      const eligible = Number(d?.eligible ?? 0);
       setRecheckNote((n) => ({
         ...n,
         [startedAt]:
@@ -193,7 +216,11 @@ export default function DealsPage() {
             ? `${t("Asking")} ${asked} ${asked === 1 ? t("shop") : t("shops")} - ${t("their answers land in this hunt.")}`
             : skipped > 0
               ? t("Already asked these shops today - give them a chance to answer.")
-              : t("No shops from this hunt can be messaged right now."),
+              : eligible === 0
+                ? // The owner's rule, said out loud: no price + deposit +
+                  // pick-up means there are no "same conditions" to re-confirm.
+                  t("None of these shops gave a full deal (price, deposit and pick-up), so there is nothing to re-confirm.")
+                : t("No shops from this hunt can be messaged right now."),
       }));
     } catch {
       setRecheckNote((n) => ({
@@ -285,6 +312,7 @@ export default function DealsPage() {
         const s: SessionSummary[] = d.sessions ?? [];
         setSessions(s);
         setBookings(d.bookings ?? []);
+        setHuntCount(Number(d.huntCount ?? s.length) || 0);
         setLoadFailed(false);
         // The freshest hunt opens expanded - it's what you came to check.
         if (s[0]) setExpanded({ [s[0].id]: true });
@@ -433,7 +461,14 @@ export default function DealsPage() {
             is computed from the trips the traveller can actually see, so a free
             plan's figure is honest about being partial rather than quietly
             counting trips it is hiding behind a lock. */}
-        {!loading && (sessions.length > 0 || bookings.length > 0) && (
+        {/* TRIPS IS A PRO/ULTRA SECTION (owner report 5 #17), and a free
+            traveller is told so in the UI rather than being handed a redacted
+            list. The upgrade path is the EXISTING sheet - no second sheet. */}
+        {!loading && !canHistory && (
+          <TripsUpgradeGate hunts={huntCount} onUpgrade={() => setUpgradeOpen(true)} />
+        )}
+
+        {!loading && canHistory && (sessions.length > 0 || bookings.length > 0) && (
           <section className="glass-solid glass-rim fluid-in relative overflow-hidden rounded-blob p-5">
             <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-brandblue-soft opacity-60 blur-2xl" />
             <div className="pointer-events-none absolute -bottom-16 -left-8 h-36 w-36 rounded-full bg-savings-soft opacity-50 blur-2xl" />
@@ -462,14 +497,6 @@ export default function DealsPage() {
                 </div>
               ))}
             </div>
-            {!canHistory && sessions.length > 1 && (
-              <button
-                onClick={() => setUpgradeOpen(true)}
-                className="btn btn-primary cta-sheen fluid-press relative mt-3.5 w-full rounded-2xl px-4 py-3 text-[13px]"
-              >
-                ✨ {t("Unlock every past trip")}
-              </button>
-            )}
           </section>
         )}
 
@@ -484,7 +511,7 @@ export default function DealsPage() {
             This has to render INSTEAD of the empty state, not beside it: two
             cards, one saying "you have no trips" and one saying "we could not
             check", is worse than either alone. */}
-        {!loading && loadFailed && (
+        {!loading && canHistory && loadFailed && (
           <div className="glass-solid glass-rim fluid-in rounded-blob p-6 text-center">
             <div className="text-[15px] font-extrabold text-strong">
               {t("Couldn't load your trips")}
@@ -501,7 +528,7 @@ export default function DealsPage() {
           </div>
         )}
 
-        {!loading && !loadFailed && sessions.length === 0 && bookings.length === 0 && (
+        {!loading && canHistory && !loadFailed && sessions.length === 0 && bookings.length === 0 && (
           <div className="glass-solid glass-rim rounded-blob p-6 text-center fluid-in">
             <div className="mx-auto mb-3 w-fit float-soft">
               <WillAvatar size={64} />
@@ -535,16 +562,19 @@ export default function DealsPage() {
             because an archived hunt that renders differently is a second
             component to keep true. */}
         {!loading &&
+          canHistory &&
           (() => {
             const renderSession = (s: HuntRow) => {
               const open = Boolean(expanded[s.id]);
-              // LOCKED PREVIEW, not a hidden row. A past trip stays visible with
-              // its real headline and shape; the numbers a paid plan unlocks are
-              // held back. An empty tab teaches a traveller the feature does not
-              // exist - a visible trip they cannot fully open teaches them what
-              // they would get, which is the honest version of the same gate.
-              const locked = !canHistory && !s.isLatest;
-              const trip = s.trip && locked ? previewTrip(s.trip) : s.trip;
+              // W6.1 - THE GATE MOVED OUT OF THE CARD.
+              //
+              // This used to render a locked PREVIEW for every non-latest hunt
+              // on a free plan (previewTrip redacted the numbers, a frosted
+              // pane sat over them). The owner asked for the opposite: Trips is
+              // a Pro/Ultra section, and free travellers get real upgrade tier
+              // cards that say so. So a card that renders here is a card the
+              // traveller is entitled to see in full - see TripsUpgradeGate.
+              const trip = s.trip;
               return (
                 <section key={s.id} className="glass-solid glass-rim overflow-hidden rounded-blob fluid-in">
                   {/* Header - always visible, tap to expand */}
@@ -573,12 +603,18 @@ export default function DealsPage() {
                                 ? ` · ${moneyLocal(trip.perDay, trip.currency)}/${t("day")}`
                                 : ""}
                               {trip.savedPct != null ? ` · ${t("saved")} ${trip.savedPct}%` : ""}
-                              {locked && (
-                                <span className="ml-1 inline-flex items-center gap-1 align-middle text-[10px] font-extrabold text-brandblue">
-                                  <Icon name="lock" className="h-3 w-3" />
-                                  {t("Pro")}
-                                </span>
-                              )}
+                            </div>
+                          )}
+                          {/* WHERE IT HAPPENED. /api/deals never selected lat,
+                              lng or any place label, so no card - collapsed or
+                              open - could say where a hunt ran. It is the first
+                              thing a traveller recognises a trip by. */}
+                          {s.place?.label && (
+                            <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] font-bold text-soft">
+                              <Icon name="pin" className="h-3 w-3 shrink-0 text-faint" />
+                              <span className="truncate">
+                                <bdi dir="auto">{s.place.label}</bdi>
+                              </span>
                             </div>
                           )}
                           <div className="mt-0.5 truncate text-[11px] text-faint">
@@ -596,39 +632,59 @@ export default function DealsPage() {
                       </div>
                     </div>
 
-                    {/* THE LOCK, AS A PANE OF FROSTED GLASS.
-                        A chip saying "Pro" tells a traveller they are missing
-                        something. A frosted panel with the real shape of their
-                        own trip behind it shows them WHAT - which is the only
-                        version of a paywall that is honest and the only one that
-                        converts. The numbers underneath are already redacted
-                        server-side by previewTrip; this is not a CSS blur over
-                        real data. */}
-                    {locked && (
-                      <div className="relative mx-3 mb-3 overflow-hidden rounded-2xl">
-                        <div className="grid grid-cols-3 gap-2 p-3 opacity-45 blur-[3px]" aria-hidden>
-                          {[t("Best price"), t("You saved"), t("Shops")].map((k) => (
-                            <div key={k} className="rounded-xl bg-card2 px-2 py-2 text-center">
-                              <div className="text-[15px] font-extrabold text-strong">&#8226;&#8226;&#8226;</div>
-                              <div className="text-[9px] font-extrabold uppercase text-faint">{k}</div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="glass-strong absolute inset-0 flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 text-center">
-                          <Icon name="lock" className="h-4 w-4 text-brandblue" />
-                          <p className="text-[11.5px] font-extrabold text-strong">
-                            {t("Your full trip history is a Pro feature")}
-                          </p>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUpgradeOpen(true);
-                            }}
-                            className="btn btn-sm btn-primary fluid-press rounded-xl px-3.5 py-1.5 text-[11px]"
-                          >
-                            {t("See Pro & Ultra")}
-                          </button>
-                        </div>
+                    {/* THE COLLAPSED CARD CARRIES THE HUNT (owner report 5 #17).
+                        "Even when a history hunt card is collapsed we still show
+                        the location, best price from the hunt, details about the
+                        search session, how many answered, who didn't answer,
+                        deposit and every other detail we have." All of this was
+                        computed and shipped already, and rendered ONLY inside
+                        the `open &&` branch - i.e. on the one card the traveller
+                        had tapped, and on no other. */}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      {s.best && (
+                        <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10.5px] font-extrabold text-savings">
+                          {t("Best")}: {moneyLocal(s.best.current, s.best.currency)}/{t("day")}
+                          {s.best.savedPct != null && s.best.savedPct > 0
+                            ? ` (−${s.best.savedPct}%)`
+                            : ""}
+                        </span>
+                      )}
+                      <span className="rounded-full bg-card2 px-2 py-0.5 text-[10.5px] font-bold text-soft">
+                        {s.replied}/{s.contacted} {t("answered")}
+                      </span>
+                      {s.waiting > 0 && (
+                        <span className="rounded-full bg-card2 px-2 py-0.5 text-[10.5px] font-bold text-faint">
+                          {s.waiting} {t("never answered")}
+                        </span>
+                      )}
+                      {s.depositLabel && (
+                        <span className="rounded-full bg-card2 px-2 py-0.5 text-[10.5px] font-bold text-soft">
+                          {t("Deposit")}: {s.depositLabel}
+                        </span>
+                      )}
+                      {s.fulfillmentLabel && (
+                        <span className="rounded-full bg-card2 px-2 py-0.5 text-[10.5px] font-bold text-soft">
+                          {s.fulfillmentLabel}
+                        </span>
+                      )}
+                      {s.booking && (
+                        <span className="rounded-full bg-savings-soft px-2 py-0.5 text-[10.5px] font-extrabold text-savings">
+                          {t("Booked")}: {s.booking.vendorName}
+                        </span>
+                      )}
+                    </div>
+                    {(s.answeredNames?.length || s.silentNames?.length) && (
+                      <div className="mt-1.5 space-y-0.5">
+                        {s.answeredNames && s.answeredNames.length > 0 && (
+                          <div className="truncate text-[10.5px] font-bold text-soft">
+                            {t("Answered")}: {s.answeredNames.join(", ")}
+                          </div>
+                        )}
+                        {s.silentNames && s.silentNames.length > 0 && (
+                          <div className="truncate text-[10.5px] text-faint">
+                            {t("No reply")}: {s.silentNames.join(", ")}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -886,7 +942,11 @@ export default function DealsPage() {
                           >
                             {t("Open live workspace")}
                           </a>
-                        ) : canHistory ? (
+                        ) : (
+                          // No `canHistory` branch here any more: the whole list
+                          // renders only for Pro/Ultra, so a card on screen is a
+                          // card the traveller may re-open. A free plan meets the
+                          // gate once, up front, instead of on every row.
                           <button
                             onClick={() => restoreSession(s.startedAt, false, s.sid)}
                             disabled={restoring === s.startedAt}
@@ -901,14 +961,6 @@ export default function DealsPage() {
                               t("Re-open this hunt")
                             )}
                           </button>
-                        ) : (
-                          <button
-                            onClick={() => setUpgradeOpen(true)}
-                            className="btn btn-ghost flex flex-1 items-center justify-center gap-1.5 rounded-2xl py-2.5 text-center text-[13px]"
-                          >
-                            <Icon name="lock" className="h-3.5 w-3.5" />
-                            {t("Re-open this hunt (Pro)")}
-                          </button>
                         )}
                         {restoreErr && restoring === null && (
                           <p className="text-center text-[10px] font-bold text-brandred">{restoreErr}</p>
@@ -919,8 +971,16 @@ export default function DealsPage() {
                             whatever the shop said last time - useful only if you
                             then message ten shops by hand to find out whether any
                             of it still stands. One tap asks all of them, with
-                            each shop's own quote read back to them. */}
-                        {s.contacted > 0 && !s.closed && (
+                            each shop's own deal read back to them.
+
+                            OFFERED ONLY WHERE THERE IS A DEAL TO RE-CONFIRM.
+                            The condition used to be `contacted > 0`, so the
+                            button appeared for a hunt where nobody had ever
+                            answered - and the route then messaged every one of
+                            those silent shops. The owner's rule is price +
+                            deposit + how you get the vehicle, and `recheckable`
+                            is that count (server-side, same predicate). */}
+                        {(s.recheckable ?? 0) > 0 && !s.closed ? (
                           <button
                             onClick={() => recheckPrices(s.startedAt, s.sid)}
                             disabled={rechecking === s.startedAt}
@@ -934,10 +994,17 @@ export default function DealsPage() {
                             ) : (
                               <>
                                 <Icon name="whatsapp" className="h-3.5 w-3.5" />
-                                {t("Ask if these prices still stand")}
+                                {t("Ask if these deals still stand")} ({s.recheckable})
                               </>
                             )}
                           </button>
+                        ) : (
+                          s.contacted > 0 &&
+                          !s.closed && (
+                            <p className="rounded-2xl bg-card2 px-3 py-2 text-center text-[11px] font-bold text-faint">
+                              {t("No shop here gave a full deal (price, deposit and pick-up), so there is nothing to re-confirm.")}
+                            </p>
+                          )
                         )}
                         {recheckNote[s.startedAt] && (
                           <p className="text-center text-[10.5px] font-bold text-soft">
@@ -986,6 +1053,7 @@ export default function DealsPage() {
 
         {/* Older bookings that predate the recent sessions */}
         {!loading &&
+          canHistory &&
           (() => {
             const shown = new Set(
               sessions.filter((s) => s.booking).map((s) => s.booking!.at)
@@ -1047,5 +1115,84 @@ export default function DealsPage() {
         showUpgrade={!upgradeOpen && plan === "free"}
       />
     </main>
+  );
+}
+
+/**
+ * TRIPS, FOR A FREE TRAVELLER (owner report 5 #17).
+ *
+ * The tab used to show every hunt to everyone and redact the numbers on the
+ * older cards - a "locked preview". The owner asked for the opposite and said
+ * why: Trips is a Pro/Ultra section, and a free traveller should meet real
+ * upgrade TIER CARDS that say the gate out loud, once, instead of a list of
+ * blurred rows that reads like a broken feature.
+ *
+ * The tiers are read from the shared catalogue (lib/plans), and the CTA opens
+ * the EXISTING UpgradeSheet - the same sheet the three other upgrade CTAs
+ * open. There is no second checkout surface here and there must never be one.
+ */
+function TripsUpgradeGate({ hunts, onUpgrade }: { hunts: number; onUpgrade: () => void }) {
+  const { t } = useI18n();
+  const tiers = PLANS.filter((p) => p.id !== "free");
+  return (
+    <div className="space-y-3">
+      <section className="glass-solid glass-rim fluid-in relative overflow-hidden rounded-blob p-5 text-center">
+        <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-brandblue-soft opacity-60 blur-2xl" />
+        <div className="relative mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-brandblue-soft">
+          <Icon name="lock" className="h-6 w-6 text-brandblue" />
+        </div>
+        <h2 className="relative text-[16px] font-extrabold text-strong">
+          {t("Trips is a Pro & Ultra feature")}
+        </h2>
+        <p className="relative mx-auto mt-1 max-w-[320px] text-[12.5px] text-soft">
+          {t("Your past hunts - every shop, every price, every deposit - stay saved. Pro and Ultra let you open them again and ask those same shops whether the deal still stands.")}
+        </p>
+        {hunts > 0 && (
+          <p className="relative mt-2 text-[11.5px] font-extrabold text-brandblue">
+            {hunts} {hunts === 1 ? t("saved hunt is waiting") : t("saved hunts are waiting")}
+          </p>
+        )}
+        <a
+          href="/"
+          onClick={() => startNav()}
+          className="btn btn-ghost relative mt-3 inline-block rounded-2xl px-5 py-2.5 text-[12.5px]"
+        >
+          {t("Open live workspace")}
+        </a>
+      </section>
+
+      {tiers.map((p) => (
+        <section
+          key={p.id}
+          className={`glass-solid fluid-in rounded-blob p-4 ${
+            p.highlight ? "glass-rim border-2 border-brandblue/40" : "glass-rim"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[15px] font-extrabold text-strong">{t(p.name)}</div>
+            {p.highlight && (
+              <span className="rounded-full bg-brandblue px-2 py-0.5 text-[10px] font-extrabold text-white">
+                {t("Most popular")}
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-[12px] text-soft">{t(p.blurb)}</p>
+          <ul className="mt-2 space-y-1">
+            {p.features.slice(0, 5).map((f) => (
+              <li key={f} className="flex items-start gap-1.5 text-[11.5px] font-bold text-soft">
+                <Icon name="check" className="mt-0.5 h-3 w-3 shrink-0 text-savings" />
+                <span>{t(f)}</span>
+              </li>
+            ))}
+          </ul>
+          <button
+            onClick={onUpgrade}
+            className="btn btn-primary cta-sheen fluid-press mt-3 w-full rounded-2xl px-4 py-2.5 text-[13px]"
+          >
+            {t("See plans & upgrade")}
+          </button>
+        </section>
+      ))}
+    </div>
   );
 }

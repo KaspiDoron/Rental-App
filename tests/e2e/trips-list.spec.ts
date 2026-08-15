@@ -1,10 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { signIn } from "./fixtures/session";
+import { signIn, asPlan } from "./fixtures/session";
 import { dismissTour, assertNoOverflow } from "./fixtures/init";
 
 // Trips (owner report 3, items 1.1/1.2): the list once rendered the OLDEST
 // five hunts as the newest (a double reverse), and a cleared hunt still
 // offered a live Re-open that could only 404.
+//
+// W6.1: Trips is a Pro/Ultra section, so every spec here declares the plan it
+// is describing (`asPlan`). The free-plan journey is its own spec in
+// trips-reopen.spec.ts - a free traveller sees upgrade tier cards, not a list.
 
 // Mirrors /api/deals's SessionSummary (route.ts) - a wrong shape here does
 // not fail the fetch, it crashes the renderer into the error boundary.
@@ -47,6 +51,7 @@ test.describe("trips list", () => {
   test("newest hunt renders FIRST and carries the live badge, not the oldest", async ({
     page,
   }) => {
+    await asPlan(page, "pro");
     const now = Date.now();
     // The page fetches exactly "/api/deals" (no query string) - a "?**" glob
     // never matches and the page falls through to the real (empty) API.
@@ -89,6 +94,7 @@ test.describe("trips list", () => {
   });
 
   test("a CLOSED hunt says so honestly and offers no live Re-open", async ({ page }) => {
+    await asPlan(page, "pro");
     await page.route((url) => url.pathname === "/api/deals", (route) =>
       route.fulfill({
         json: {
@@ -114,6 +120,7 @@ test.describe("trips list", () => {
   });
 
   test("a 500 renders an honest failure, never an empty 'no trips yet'", async ({ page }) => {
+    await asPlan(page, "pro");
     await page.route("**/api/deals**", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
     await page.goto("/deals");
     await expect(page.getByText("Couldn't load your trips")).toBeVisible();

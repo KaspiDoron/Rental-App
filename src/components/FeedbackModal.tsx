@@ -18,7 +18,6 @@ const CATEGORIES = [
 ];
 
 const MAX_IMAGES = 5;
-const SEEN_KEY = "wd_fb_seen";
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   open: { label: "Open", cls: "bg-brandblue-soft text-brandblue" },
@@ -43,6 +42,9 @@ interface Report {
   summary: string | null;
   created_at: string;
   replies: Reply[];
+  /** Team replies the reporter has not seen - computed SERVER-side from
+   *  `feedback.user_seen_at`, so it survives a change of device (W6.2). */
+  unread?: number;
 }
 
 // A bug report's screenshot is usually a photo of the phone's own screen, taken
@@ -74,24 +76,22 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
       const res = await fetch("/api/feedback", { method: "GET" });
       if (res.status === 401) {
         setReports([]);
-        setReportsError("Sign in to see and manage your reports.");
+        setReportsError(t("Sign in to see and manage your reports."));
         return;
       }
       const data = await res.json();
       const list: Report[] = Array.isArray(data.reports) ? data.reports : [];
       setReports(list);
-      // Unread = a team reply newer than the last time this device looked.
-      const seen = Number(localStorage.getItem(SEEN_KEY) ?? 0);
-      const newestTeam = list
-        .flatMap((r) => r.replies)
-        .filter((rp) => rp.author_role !== "user")
-        .reduce((mx, rp) => Math.max(mx, Date.parse(rp.created_at) || 0), 0);
-      setHasUnread(newestTeam > seen);
+      // UNREAD COMES FROM THE SERVER NOW (W6.2). It used to be a device-local
+      // timestamp, so a reply read on a phone was unread again on a laptop -
+      // and the `feedback.user_seen_at` column built for exactly this was dead
+      // code that nothing ever wrote to.
+      setHasUnread(Number(data.unread ?? 0) > 0);
     } catch {
       setReports([]);
-      setReportsError("Could not load your reports - check your connection.");
+      setReportsError(t("Could not load your reports - check your connection."));
     }
-  }, []);
+  }, [t]);
 
   // Peek once on open so the tab can show an unread dot without switching.
   useEffect(() => {
@@ -100,11 +100,16 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
 
   const openYours = () => {
     setTab("yours");
-    try {
-      localStorage.setItem(SEEN_KEY, String(Date.now()));
-    } catch {}
     setHasUnread(false);
-    loadReports();
+    // Stamp `user_seen_at` server-side, then re-read. Best-effort: a failed
+    // stamp shows the dot again next time, which is the safe direction.
+    fetch("/api/feedback", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .catch(() => {})
+      .finally(() => loadReports());
   };
 
   return (
@@ -129,7 +134,7 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
             tab === "new" ? "bg-card text-strong shadow-sm" : "text-soft"
           }`}
         >
-          Send new
+          {t("Send new")}
         </button>
         <button
           onClick={openYours}
@@ -137,7 +142,7 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
             tab === "yours" ? "bg-card text-strong shadow-sm" : "text-soft"
           }`}
         >
-          Your reports
+          {t("Your reports")}
           {hasUnread && tab !== "yours" && (
             <span className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-brandred" aria-label={t("new reply")} />
           )}
@@ -174,8 +179,11 @@ function ComposeTab({
   const [status, setStatus] = useState<
     | { s: "idle" }
     | { s: "sending" }
-    | { s: "accepted"; emailed: boolean; summary: string }
-    | { s: "filtered"; reason: string }
+    | { s: "accepted"; emailed: boolean; summary: string; stored: boolean; anonymous: boolean }
+    | { s: "filtered"; reason: string; stored: boolean }
+    // THE SAFE-WORDS REFUSAL IS NOT AN ERROR (W6.2). It is a specific, polite
+    // answer the reporter can act on, and it must not look like a crash.
+    | { s: "blocked"; msg: string }
     | { s: "error"; msg: string }
   >({ s: "idle" });
 
@@ -218,22 +226,55 @@ function ComposeTab({
         body: JSON.stringify({ category, text, email, images }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        setStatus({ s: "error", msg: data.error ?? "Something went wrong." });
+      if (data?.rejected === "language") {
+        setStatus({ s: "blocked", msg: data.error ?? t("Please rephrase this and send it again.") });
+      } else if (!res.ok) {
+        setStatus({ s: "error", msg: data.error ?? t("Something went wrong.") });
       } else if (data.accepted) {
-        setStatus({ s: "accepted", emailed: data.emailed, summary: data.summary });
+        // `stored` IS THE HONEST FLAG AND IT WAS BEING THROWN AWAY. The server
+        // says whether a row landed; both success copies promise a thread under
+        // "Your reports" that only exists if it did, so a lost report used to
+        // read exactly like a received one.
+        setStatus({
+          s: "accepted",
+          emailed: data.emailed,
+          summary: data.summary,
+          stored: data.stored !== false,
+          anonymous: Boolean(data.anonymous),
+        });
         onSubmitted();
       } else {
-        setStatus({ s: "filtered", reason: data.reason });
+        setStatus({ s: "filtered", reason: data.reason, stored: data.stored !== false });
         onSubmitted();
       }
     } catch {
-      setStatus({ s: "error", msg: "Network error. Please try again." });
+      setStatus({ s: "error", msg: t("Network error. Please try again.") });
     }
+  }
+
+  // A REFUSED MESSAGE IS NOT A FINISHED ONE. The text stays in the box so the
+  // reporter can edit the one word that tripped it, not retype the paragraph.
+  if (status.s === "blocked") {
+    return (
+      <div className="py-6 text-center">
+        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brandyellow-soft">
+          <Icon name="shield" className="h-8 w-8 text-brandyellow" />
+        </div>
+        <p className="text-sm font-extrabold text-strong">{t("Let's keep it clean")}</p>
+        <p className="mx-auto mt-1 max-w-[300px] text-[13px] text-soft">{status.msg}</p>
+        <button
+          onClick={() => setStatus({ s: "idle" })}
+          className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
+        >
+          {t("Edit my report")}
+        </button>
+      </div>
+    );
   }
 
   const done = status.s === "accepted" || status.s === "filtered";
   if (done) {
+    const stored = status.stored;
     return (
       <div className="py-6 text-center">
         <div
@@ -250,19 +291,30 @@ function ComposeTab({
           <>
             <p className="text-sm font-extrabold text-strong">{t("Thanks - this one is on us.")}</p>
             <p className="mt-1 text-[13px] text-soft">
-              Verified as a real issue
-              {status.emailed ? " and emailed to the team." : " and logged for the team."} You can
-              follow it under Your reports.
+              {status.emailed
+                ? t("Verified as a real issue and emailed to the team.")
+                : t("Verified as a real issue and logged for the team.")}
             </p>
           </>
         ) : (
           <p className="text-[13px] text-soft">{status.reason}</p>
         )}
+        {/* THE HONEST FOLLOW-UP PROMISE. The server tells us whether a row
+            landed and whether the report has an owner; the copy has to match
+            which promise we actually kept, or a lost report reads exactly like
+            a received one. */}
+        <p className="mx-auto mt-2 max-w-[300px] text-[12px] font-bold text-soft">
+          {!stored
+            ? t("We could not save your copy just now, so it will not appear under Your reports.")
+            : status.s === "accepted" && status.anonymous
+              ? t("You sent this while signed out, so we have no way to reply to you. Sign in and send it again if you want to follow it.")
+              : t("You can follow it under Your reports.")}
+        </p>
         <button
           onClick={onSeeYours}
           className="btn btn-primary mt-4 w-full rounded-2xl py-2.5 text-sm"
         >
-          See your reports
+          {t("See your reports")}
         </button>
       </div>
     );
@@ -271,8 +323,22 @@ function ComposeTab({
   return (
     <>
       <p className="mb-3 text-[12px] text-soft">
-        Bug, idea, question or complaint - tell us anything. You will see it under Your reports and
-        the team can reply right there.
+        {t("Bug, idea, question or complaint - tell us anything. You will see it under Your reports and the team can reply right there.")}
+      </p>
+
+      {/* AN ANONYMOUS REPORT IS A DEAD END, AND WE SAY SO BEFORE IT IS SENT.
+          Ownership comes from the session only (never the body), so a signed-out
+          submission is stored unowned: invisible to its author forever, with no
+          reply channel. That was discovered afterwards, if ever. */}
+      {!email && (
+        <p className="mb-3 rounded-2xl bg-brandyellow-soft px-3 py-2 text-[11.5px] font-bold text-warn">
+          {t("You are signed out. We will still read this, but we will not be able to reply to you or show it under Your reports.")}
+        </p>
+      )}
+
+      {/* The rule, said once, before anyone types. */}
+      <p className="mb-2 text-[11px] text-faint">
+        {t("Please keep it civil - reports with abusive language are not accepted.")}
       </p>
 
       <div className="no-scrollbar mb-3 flex gap-2 overflow-x-auto">
@@ -286,7 +352,7 @@ function ComposeTab({
                 : "border-line bg-card text-soft"
             }`}
           >
-            {c.label}
+            {t(c.label)}
           </button>
         ))}
       </div>
@@ -308,14 +374,14 @@ function ComposeTab({
           className="btn btn-sm chip inline-flex items-center gap-1.5 rounded-xl border-2 border-brandred/30 bg-brandred-soft px-2.5 py-1.5 text-[12px] font-bold text-brandred disabled:opacity-50"
         >
           <Icon name="spark" className="h-3.5 w-3.5" />
-          {assisting ? <LoadingDots label="Writing" /> : "Write it for me"}
+          {assisting ? <LoadingDots label={t("Writing")} /> : t("Write it for me")}
         </button>
         <span className="text-[11px] text-faint">{text.length}/4000</span>
       </div>
 
       <div className="mt-3">
         <div className="mb-1.5 text-[12px] font-bold text-soft">
-          Screenshots ({images.length}/{MAX_IMAGES})
+          {t("Screenshots")} ({images.length}/{MAX_IMAGES})
         </div>
         <div className="flex flex-wrap gap-2">
           {images.map((img, i) => (
@@ -363,9 +429,9 @@ function ComposeTab({
         className="btn btn-primary mt-4 w-full rounded-2xl py-3 text-sm disabled:opacity-60"
       >
         {status.s === "sending" ? (
-          <LoadingDots light label="Sending your feedback" />
+          <LoadingDots light label={t("Sending your feedback")} />
         ) : (
-          "Submit feedback"
+          t("Submit feedback")
         )}
       </button>
     </>
@@ -382,10 +448,13 @@ function ReportsTab({
   onChanged: () => void;
 }) {
   const { t } = useI18n();
+  // CATEGORIES THAT DO SOMETHING (W6.2). They were collected, stored and
+  // displayed, and drove nothing at all - here or in the owner's inbox.
+  const [pick, setPick] = useState<string>("all");
   if (reports === null) {
     return (
       <div className="py-8 text-center">
-        <LoadingDots label="Loading your reports" />
+        <LoadingDots label={t("Loading your reports")} />
       </div>
     );
   }
@@ -397,17 +466,47 @@ function ReportsTab({
       <div className="py-8 text-center">
         <p className="text-[13px] font-extrabold text-strong">{t("No reports yet")}</p>
         <p className="mx-auto mt-1 max-w-[260px] text-[12px] text-soft">
-          Anything you send appears here as a conversation you can follow and reply to.
+          {t("Anything you send appears here as a conversation you can follow and reply to.")}
         </p>
       </div>
     );
   }
+  const counts: Record<string, number> = {};
+  for (const r of reports) counts[r.category || "other"] = (counts[r.category || "other"] ?? 0) + 1;
+  const chips = [
+    { id: "all", label: "All", n: reports.length },
+    ...CATEGORIES.filter((c) => counts[c.id]).map((c) => ({
+      id: c.id,
+      label: c.label,
+      n: counts[c.id],
+    })),
+  ];
+  const shown = pick === "all" ? reports : reports.filter((r) => (r.category || "other") === pick);
   return (
-    <div className="no-scrollbar max-h-[55vh] space-y-2.5 overflow-y-auto">
-      {reports.map((r) => (
-        <ReportRow key={r.id} report={r} onChanged={onChanged} />
-      ))}
-    </div>
+    <>
+      {chips.length > 2 && (
+        <div className="no-scrollbar mb-2 flex gap-1.5 overflow-x-auto">
+          {chips.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setPick(c.id)}
+              className={`chip whitespace-nowrap rounded-full border-2 px-2.5 py-1 text-[11px] font-bold ${
+                pick === c.id
+                  ? "border-brandblue bg-brandblue text-white"
+                  : "border-line bg-card text-soft"
+              }`}
+            >
+              {t(c.label)} ({c.n})
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="no-scrollbar max-h-[55vh] space-y-2.5 overflow-y-auto">
+        {shown.map((r) => (
+          <ReportRow key={r.id} report={r} onChanged={onChanged} />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -461,7 +560,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${meta.cls}`}>
-              {meta.label}
+              {t(meta.label)}
             </span>
             <span className="text-[10px] font-bold uppercase tracking-wide text-faint">
               {report.category}
@@ -469,6 +568,15 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
             {teamReplies > 0 && (
               <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-brandblue">
                 <Icon name="chat" className="h-3 w-3" /> {teamReplies}
+              </span>
+            )}
+            {/* THE UNREAD DOT, ON THE ROW ITSELF. It only ever existed on the
+                tab header - i.e. visible once the modal was already open, and
+                only until you switched tabs - so a team reply was easy to miss
+                entirely. The count is server-side (feedback.user_seen_at). */}
+            {(report.unread ?? 0) > 0 && (
+              <span className="rounded-full bg-brandred px-1.5 py-0.5 text-[9px] font-extrabold text-white">
+                {t("new reply")}
               </span>
             )}
           </div>
@@ -498,7 +606,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
                     >
                       {!mine && (
                         <div className="text-[9px] font-extrabold uppercase tracking-wide text-brandblue">
-                          {rp.author_role === "owner" ? "WheelDeal team" : "Support"}
+                          {rp.author_role === "owner" ? t("WheelDeal team") : t("Support")}
                         </div>
                       )}
                       <p className="whitespace-pre-wrap">{rp.body}</p>
@@ -538,10 +646,10 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
               <div className="flex items-center gap-2 text-[11px]">
                 <span className="text-soft">{t("Delete this report?")}</span>
                 <button onClick={remove} disabled={busy} className="font-extrabold text-brandred">
-                  Delete
+                  {t("Delete")}
                 </button>
                 <button onClick={() => setConfirmDel(false)} className="font-bold text-faint">
-                  Cancel
+                  {t("Cancel")}
                 </button>
               </div>
             ) : (
@@ -549,7 +657,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
                 onClick={() => setConfirmDel(true)}
                 className="text-[11px] font-bold text-faint hover:text-brandred"
               >
-                Delete report
+                {t("Delete report")}
               </button>
             )}
           </div>

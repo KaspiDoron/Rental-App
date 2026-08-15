@@ -191,6 +191,40 @@ describe("no scanned user surface ships bare English JSX text", () => {
   });
 });
 
+// W6.2 - THE SCAN'S OWN BLIND SPOT, ON THE ONE SURFACE THE OWNER NAMED.
+//
+// The SCAN list above has always included FeedbackModal, and its regex is
+// `/>([^<>{}\n]*[A-Za-z]{3}[^<>{}\n]*)</g` - the `\n` exclusions mean it only
+// ever sees text nodes written on ONE line. Prettier puts almost every JSX text
+// node on its own line between the tag lines, so nearly all of the modal's
+// English chrome ("Send new", "Your reports", "Submit feedback", "Delete
+// report") was invisible to the guardrail that lists it.
+//
+// This is the same scan with the newline exclusion removed, applied to the
+// feedback surfaces only - deliberately not to the whole SCAN list, which is a
+// separate (and much larger) piece of work.
+describe("the feedback surfaces ship no multi-line bare English either", () => {
+  const MULTILINE_SCAN = ["src/components/FeedbackModal.tsx"];
+  it.each(MULTILINE_SCAN)("%s wraps every JSX text node in t()", (p) => {
+    const src = read(p)
+      // NB: `accept="image/*"` reads as a block-comment opener to a naive
+      // stripper and swallows half the file, so comments go line-first and the
+      // block form is anchored to a real `/**`-style opener.
+      .replace(/^\s*\/\/[^\n]*$/gm, "")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/^\s*\/\*\*?[\s\S]*?\*\//gm, "");
+    const bare: string[] = [];
+    for (const m of src.matchAll(/>([^<>{}]*[A-Za-z]{3}[^<>{}]*)</g)) {
+      const text = m[1].trim();
+      // Only real prose: a match spanning code (`=`, `;`, `=>`) is the regex
+      // running past a JSX boundary, not a text node.
+      if (!text || /[=;()[\]]|=>/.test(text)) continue;
+      bare.push(text.replace(/\s+/g, " "));
+    }
+    expect(bare, `bare multi-line literals in ${p}: ${bare.join(" | ")}`).toEqual([]);
+  });
+});
+
 describe("the stage vocabulary reaches every surface translated (3.2)", () => {
   it("StageBadge renders through t() and its texts are catalogued", () => {
     const tracker = read("src/components/Tracker.tsx");

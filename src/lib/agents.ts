@@ -459,12 +459,10 @@ export interface SafetyVerdict {
   suggestion?: string;
 }
 
-const BLOCKLIST = [
-  /\b(f[uck]{2,}|sh[i1]t|bitch|asshole)\b/i,
-  /\b(scam|fraud|idiot|stupid|useless)\b/i,
-  /\b(threat|kill|hurt you|report you to)\b/i,
-  /(phone|whatsapp|email|address).{0,20}(personal|home|private)/i,
-];
+// THE LIST MOVED, IT DID NOT CHANGE (W6.2). It used to be a private const here
+// and was therefore unreachable from the feedback pipeline, which had no
+// profanity screen of any kind - so the owner's "safe words feedback page" ask
+// would have meant a second, drifting copy. See lib/safety/blocklist.ts.
 
 export async function runSafety(message: string): Promise<SafetyVerdict> {
   const trimmed = message.trim();
@@ -473,14 +471,13 @@ export async function runSafety(message: string): Promise<SafetyVerdict> {
     return { allowed: false, reason: "Message is too long (max 600 chars)." };
 
   // Fast local screen first.
-  for (const rx of BLOCKLIST) {
-    if (rx.test(trimmed)) {
-      return {
-        allowed: false,
-        reason:
-          "This message contains language that could be unprofessional or harmful. Please rephrase.",
-      };
-    }
+  const { matchesAny, OUTBOUND_BLOCKLIST } = await import("./safety/blocklist");
+  if (matchesAny(trimmed, OUTBOUND_BLOCKLIST)) {
+    return {
+      allowed: false,
+      reason:
+        "This message contains language that could be unprofessional or harmful. Please rephrase.",
+    };
   }
 
   const { getPrompt } = await import("./prompts");

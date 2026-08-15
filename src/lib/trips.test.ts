@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toTrip, outcomeOf, savingOf, previewTrip, visibleTrips, type TripInput } from "./trips";
+import { toTrip, outcomeOf, savingOf, type TripInput } from "./trips";
 
 const NOW = Date.parse("2026-07-27T09:00:00.000Z");
 
@@ -103,35 +103,17 @@ describe("the saving is honest or it is absent", () => {
   });
 });
 
-describe("free users get a LOCKED PREVIEW, not an empty tab", () => {
-  const trips = [
-    toTrip({ ...base, id: "now", isLatest: true, best: { pricePerDay: 400, ask: 500, currency: "PHP" } }, NOW),
-    toTrip({ ...base, id: "past", best: { pricePerDay: 300, ask: 450, currency: "PHP" } }, NOW),
-  ];
-
-  it("keeps the trip visible and holds back the numbers", () => {
-    // An empty tab teaches a traveller the feature does not exist; a visible
-    // trip they cannot fully open teaches them what they would get.
-    const p = previewTrip(trips[1]);
-    expect(p.headline).toBe(trips[1].headline);
-    expect(p.outcome).toBe(trips[1].outcome);
-    expect(p.perDay).toBeNull();
-    expect(p.savedPct).toBeNull();
-  });
-
-  it("free keeps the CURRENT hunt in full and locks the history", () => {
-    const shown = visibleTrips(trips, false);
-    expect(shown).toHaveLength(2); // nothing is hidden
-    expect(shown[0].locked).toBe(false);
-    expect(shown[0].perDay).toBe(400);
-    expect(shown[1].locked).toBe(true);
-    expect(shown[1].perDay).toBeNull();
-  });
-
-  it("Pro sees every trip in full", () => {
-    const shown = visibleTrips(trips, true);
-    expect(shown.every((t) => !t.locked)).toBe(true);
-    expect(shown[1].perDay).toBe(300);
+describe("free users get UPGRADE TIER CARDS, not a redacted list (W6.1)", () => {
+  // The old shape here was a "locked preview": every trip stayed on screen and
+  // `previewTrip` blanked the numbers. The owner asked for the opposite - Trips
+  // is a Pro/Ultra section and free travellers get real tier cards that say so
+  // - and the redaction ran client-side anyway, so the full history shipped to
+  // a free plan regardless. Both the redactor and its client-side application
+  // are gone; the assertions below pin the replacement.
+  it("the redactor is gone - a curtain is not a gate", async () => {
+    const mod = (await import("./trips")) as Record<string, unknown>;
+    expect(mod.previewTrip, "previewTrip came back - the gate belongs on the server").toBeUndefined();
+    expect(mod.visibleTrips).toBeUndefined();
   });
 });
 
@@ -154,10 +136,21 @@ describe("the trip reaches the tab", () => {
     expect(api).toMatch(/trip:/);
   });
 
-  it("the tab shows the outcome and locks past trips for free users", () => {
+  it("the tab shows the outcome and gates the whole section for free users", () => {
     const page = readCode("src/app/deals/page.tsx");
-    expect(page).toMatch(/previewTrip/);
     expect(page).toMatch(/trip\.headline/);
-    expect(page).toMatch(/!canHistory && !s\.isLatest/);
+    // The gate is met ONCE, up front, as tier cards - not per row as a blur.
+    expect(page).toMatch(/!loading && !canHistory && \(/);
+    expect(page).toMatch(/<TripsUpgradeGate/);
+    expect(page).not.toMatch(/previewTrip/);
+  });
+
+  it("the SERVER refuses to ship a free plan's history at all", () => {
+    // The redaction used to run in the browser, so every price and shop name
+    // reached a free plan in the JSON. The gate is a route decision now.
+    const api = readCode("src/app/api/deals/route.ts");
+    expect(api).toMatch(/can\(plan, "trips-history"\)/);
+    expect(api).toMatch(/locked: true/);
+    expect(api).toMatch(/huntCount/);
   });
 });

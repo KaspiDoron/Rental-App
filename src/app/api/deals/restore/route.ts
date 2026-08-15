@@ -23,7 +23,9 @@ export const dynamic = "force-dynamic";
 //
 // PRIVACY: everything is strictly scoped to the signed-in user's own rows.
 
-const GROUP_GAP_MS = 30 * 60_000;
+// (The 30-minute grouping constant that used to sit here was dead in all three
+//  deals routes - `groupSearchSessions` owns the gap now, which is the whole
+//  point of there being one grouping.)
 
 interface SnapshotVendor {
   id: string;

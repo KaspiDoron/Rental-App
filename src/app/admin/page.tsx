@@ -579,6 +579,13 @@ export default function AdminPage() {
   const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
   const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | "high" | "issues" | "noise">("all");
+  // W6.2: the owner asked for feedback that is "categorized properly". The
+  // category was collected, stored and displayed but drove NOTHING - severity
+  // was the only axis to slice on. The counts come from the WHOLE table (the
+  // route counts over 1000 rows and filters in the query), so a chip's number
+  // stays honest even when the 100-row page is full of one category.
+  const [feedbackCategory, setFeedbackCategory] = useState<string>("");
+  const [feedbackByCategory, setFeedbackByCategory] = useState<Record<string, number>>({});
   const [diag, setDiag] = useState<{ kind: string; text: string; ok: boolean } | null>(null);
   const [diagBusy, setDiagBusy] = useState<string | null>(null);
   const [costs, setCosts] = useState<any>(null);
@@ -697,6 +704,7 @@ export default function AdminPage() {
       setTrainingCount((tr.examples ?? []).length);
       setMemory(tr.examples ?? []);
       setFeedbackRows(fb.feedback ?? []);
+      setFeedbackByCategory(fb.byCategory ?? {});
       // Costs are non-blocking - never make first paint wait on them.
       refreshCosts().catch(() => {});
     })().catch(() => setAuthorized(false));
@@ -2523,6 +2531,39 @@ export default function AdminPage() {
               </button>
             ))}
           </div>
+          {/* CATEGORY chips (W6.2). The category was stored and displayed but
+              filtered nothing. Counts come from the whole table, so they stay
+              true while the list itself is one page deep; picking one refetches
+              server-side rather than filtering the page, or a busy category
+              would be silently truncated by the 100-row window. */}
+          {Object.keys(feedbackByCategory).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {[["", "all"] as const, ...Object.entries(feedbackByCategory)
+                .sort((a, b) => b[1] - a[1])
+                .map(([c, n]) => [c, `${c} ${n}`] as const)].map(([value, label]) => (
+                <button
+                  key={value || "all"}
+                  onClick={() => {
+                    setFeedbackCategory(value);
+                    fetch(`/api/admin/feedback${value ? `?category=${encodeURIComponent(value)}` : ""}`)
+                      .then((r) => r.json())
+                      .then((d) => {
+                        setFeedbackRows(d.feedback ?? []);
+                        setFeedbackByCategory(d.byCategory ?? {});
+                      })
+                      .catch(() => {});
+                  }}
+                  className={`chip rounded-xl border-2 px-2.5 py-1 text-[10px] font-extrabold capitalize ${
+                    feedbackCategory === value
+                      ? "border-brandblue bg-brandblue-soft text-brandblue"
+                      : "border-line text-soft"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {feedbackRows.length === 0 && (
             <div className="surface rounded-blob p-4 text-center text-[12px] text-faint">
               No feedback yet (or Supabase is not connected - run Test Supabase
@@ -2574,6 +2615,17 @@ export default function AdminPage() {
                       />
                     </a>
                   ))}
+                  {/* CAPPED, NOT HIDDEN (W6.2). The inbox used to inline up to
+                      200 base64 screenshots in one JSON response. The route
+                      caps what it SENDS and reports the real count, so a
+                      withheld screenshot says so instead of vanishing. */}
+                  {f.image_count > (f.images?.length ?? 0) && (
+                    <span className="flex h-24 shrink-0 items-center rounded-xl border-2 border-dashed border-line px-3 text-[10px] font-extrabold text-faint">
+                      +{f.image_count - (f.images?.length ?? 0)} more
+                      <br />
+                      (not loaded)
+                    </span>
+                  )}
                 </div>
               )}
               <div className="mt-1 text-[10px] text-faint">
