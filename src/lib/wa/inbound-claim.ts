@@ -23,11 +23,6 @@ import "server-only";
 import { sbInsertReturning, sbSelect } from "../runtime-config";
 
 /**
- * True when THIS caller owns the message and should store it. False when
- * another delivery already stored it (skip). Fails open (true) if the claim
- * store is unavailable.
- */
-/**
  * Hand a reply claim BACK.
  *
  * The claim is a LEASE on "someone is answering this message", not a tombstone
@@ -67,6 +62,15 @@ export async function releaseInboundStore(waMessageId: string): Promise<void> {
   }
 }
 
+/**
+ * True when THIS caller owns the message and should store it. False when
+ * another delivery already stored it (skip). Fails open (true) if the claim
+ * store is unavailable.
+ *
+ * (This doc block used to sit sixty lines up, immediately above
+ * `releaseReplyClaim`, so every IDE hover on that function showed the contract
+ * of a different one - "fails open (true)" for a function that returns void.)
+ */
 export async function claimInboundStore(waMessageId: string): Promise<boolean> {
   const id = (waMessageId || "").trim();
   if (!id) return true; // no id to dedupe on - store it

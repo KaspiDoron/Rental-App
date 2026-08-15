@@ -416,7 +416,22 @@ export async function tierForPaypalPlan(planId: string | null): Promise<"pro" | 
     getConfig(PAYPAL_PLANS.ultra.configKey),
   ]);
   const norm = (v: string | undefined | null) => (v ?? "").trim();
-  if (planId === norm(pro) || planId === PAYPAL_PLANS.pro.fallbackPlanId) return "pro";
-  if (planId === norm(ultra) || planId === PAYPAL_PLANS.ultra.fallbackPlanId) return "ultra";
+  // A FALLBACK IS WHAT YOU USE WHEN THERE IS NO CONFIGURATION - NOT A SECOND
+  // PERMANENTLY-VALID PLAN ID.
+  //
+  // This accepted the configured id OR the hardcoded one, unconditionally. So
+  // an owner who retires a plan (fraud, a pricing change, a swapped PayPal
+  // account) and pastes the new id in Admin -> Keys does not retire anything: a
+  // subscription to the old plan keeps entitling its tier forever, and there is
+  // no way to stop it from the admin panel at all - only a redeploy. That is
+  // the whole point of the runtime config being the source of truth, stated at
+  // the top of paypal-plans.ts and then contradicted here.
+  //
+  // Resolve exactly the way the checkout button does: configured value if there
+  // is one, the built-in id only when there is not.
+  const resolved = (cfg: string | undefined | null, spec: { fallbackPlanId: string }) =>
+    norm(cfg) || spec.fallbackPlanId;
+  if (planId === resolved(pro, PAYPAL_PLANS.pro)) return "pro";
+  if (planId === resolved(ultra, PAYPAL_PLANS.ultra)) return "ultra";
   return null;
 }

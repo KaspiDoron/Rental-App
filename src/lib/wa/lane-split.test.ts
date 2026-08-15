@@ -114,7 +114,20 @@ describe("the lane reaches the rate limiter", () => {
     // intro = raw.kind is rfq; reply = everything that is not an intro or a
     // user-typed message. A row cannot be counted in both.
     expect(evo).toMatch(/intro: "&raw->>kind=eq\.rfq"/);
-    expect(evo).toMatch(/reply: "&raw->>kind=not\.in\.\(rfq,custom,human-manual\)"/);
+    expect(evo).toMatch(/reply:\s*"&or=\(raw->>kind\.is\.null,raw->>kind\.not\.in\.\(rfq,custom,human-manual\)\)"/);
+  });
+
+  it("W8 REGRESSION: a kind-less sent row is counted in ONE lane, not neither", () => {
+    // The reply lane used the exact `not.in.(...)` spelling wa-guard's
+    // REPLY_KIND_FILTER was rewritten to abandon: `raw->>kind` is SQL NULL for
+    // a row that stamped no kind, `NOT (NULL IN (...))` is NULL, and PostgREST
+    // keeps only TRUE. The intro lane's `eq.rfq` drops NULL as well, so the row
+    // was in NEITHER anti-ban budget - a free send on a personal number.
+    expect(evo).not.toMatch(/reply: "&raw->>kind=not\.in\./);
+    expect(evo).toMatch(/raw->>kind\.is\.null/);
+    // The guard settled this question once; the limiter must answer it the
+    // same way - no kind means reply.
+    expect(guard).toMatch(/meta->>kind\.is\.null/);
   });
 
   it("an unspecified lane defaults to INTRO - the tighter budget", () => {

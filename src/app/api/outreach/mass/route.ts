@@ -13,7 +13,8 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
-import { lidKey, outboxKey } from "@/lib/wa/phone-key";
+import { lidKey } from "@/lib/wa/phone-key";
+import { outboxToKeyPatch } from "@/lib/wa/outbox-columns";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
@@ -467,7 +468,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          to_key: outboxKey(digits),
+          ...(await outboxToKeyPatch(digits)),
           body: humanizeForOutbound(session.email, digits, opener.text, {
             firstOutbound: isNewIntro,
           }),
@@ -511,7 +512,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          to_key: outboxKey(digits),
+          ...(await outboxToKeyPatch(digits)),
           // Same humanize-at-park rule as the budget hold above: parked slots
           // are delivered verbatim by the drain, so the pass runs at enqueue.
           body: humanizeForOutbound(session.email, digits, opener.text, {
@@ -565,7 +566,7 @@ export async function POST(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          to_key: outboxKey(digits),
+          ...(await outboxToKeyPatch(digits)),
           body: guard.text,
           not_before: notBefore,
           meta: { ...rowMeta, reason: claim.kind === "duplicate" ? "batch-spacing" : "human pacing gap" },

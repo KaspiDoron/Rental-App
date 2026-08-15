@@ -8,7 +8,11 @@ import type { Vendor, VehicleClass, Fulfillment } from "@/lib/types";
 import { can } from "@/lib/entitlements";
 
 interface Body {
-  origin: { lat: number; lng: number };
+  /** `label` is the place the traveller NAMED, and it is the app's `region` -
+   *  the input that decides the negotiation currency and whether the market
+   *  floor applies. Storing only the coordinates is what made a restored hunt
+   *  bargain in USD (see the origin_label note in supabase/schema.sql). */
+  origin: { lat: number; lng: number; label?: string };
   radiusKm: number;
   vehicleClass?: VehicleClass | "any";
   fulfillment?: Fulfillment;
@@ -46,6 +50,20 @@ export async function POST(req: Request) {
       { status: 429 }
     );
   }
+  // THE DEBIT THIS GATE READS, WHICH NOTHING WAS WRITING.
+  //
+  // `checkDailyLimit("search", ...)` counts `api_usage` rows of kind `search`
+  // scoped to this user. The only searches ever recorded were
+  // `recordApi("places_search")` inside lib/google - a DIFFERENT kind, and with
+  // no user_email at all (it is the COST tracker: whose spend, not whose
+  // quota). So the durable, cross-instance half of this cap summed to zero
+  // forever, and all that remained was a per-instance in-memory counter that a
+  // cold start resets - i.e. on Cloud Run, effectively no cap.
+  //
+  // Same shape as /api/translate's debit, which is the one that got it right.
+  // Fire-and-forget: a search must never fail because its meter did.
+  const { recordApi } = await import("@/lib/usage");
+  void recordApi("search", 1, session.email).catch(() => {});
 
   const body = (await req.json().catch(() => null)) as Body | null;
   // Validate BOTH coordinates and their ranges - a valid lat with a string/NaN
@@ -162,10 +180,18 @@ export async function POST(req: Request) {
     basePricePerDay: v.basePricePerDay,
     photoUrl: v.photoUrl ?? null,
   }));
+  // SEATBELT: `origin_label` arrives by `alter table ... add column if not
+  // exists`, so a database that has not re-run schema.sql does not have it, and
+  // PostgREST rejects a whole record for one unknown column. A missing column
+  // must cost the label, never the search row.
+  const { tableReady } = await import("@/lib/schema-probe");
+  const label = String(body.origin.label ?? "").trim().slice(0, 200);
+  const hasLabel = label ? (await tableReady("searches", "origin_label")) === "ready" : false;
   const searchRow = {
     user_email: session?.email ?? null,
     lat: body.origin.lat,
     lng: body.origin.lng,
+    ...(hasLabel ? { origin_label: label } : {}),
     radius_km: radius,
     vehicle_class: vClass,
     source,

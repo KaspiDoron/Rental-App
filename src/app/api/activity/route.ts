@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect, pgTimestamp } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict, pgTimestamp } from "@/lib/runtime-config";
 import { senderSafety, type SenderSafety } from "@/lib/wa-guard";
 import { deriveCountered } from "@/lib/counter-offer";
 import { clampSince } from "@/lib/session-life";
@@ -189,7 +189,8 @@ export async function GET(req: Request) {
   const sinceIso = new Date(sinceMs).toISOString();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 40, 10), 80);
 
-  const [traces, outbound, replies, offers, outbox, wakeups, events, inboundRows] = await Promise.all([
+  const [traces, outbound, replies, offers, outboxRead, wakeups, events, inboundRows] =
+    await Promise.all([
     sbSelect<TraceRow>(
       "agent_traces",
       `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=120`
@@ -260,7 +261,13 @@ export async function GET(req: Request) {
       "offers",
       `select=id,vendor_id,vendor_name,price_per_day,currency,round,verified,created_at&user_email=eq.${enc}&simulated=eq.false&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=80`
     ).catch(() => []),
-    sbSelect<{
+    // STRICT, AND THE ONLY READ HERE THAT IS. "Nothing is queued" is a claim
+    // this poll makes on the screen a traveller opens to ask whether their
+    // messages are stuck, and `.catch(() => [])` made a Supabase outage
+    // indistinguishable from an empty queue - a confident, reassuring, wrong
+    // answer. The other reads above degrade to an under-full FEED, which is
+    // visibly incomplete; an empty QUEUE reads as a positive statement of fact.
+    sbSelectStrict<{
       id: number;
       to_number: string;
       not_before: string;
@@ -268,7 +275,7 @@ export async function GET(req: Request) {
     }>(
       "wa_outbox",
       `select=id,to_number,not_before,meta&sender_key=eq.${enc}&order=not_before.asc&limit=50`
-    ).catch(() => []),
+    ).catch(() => ({ error: "unavailable" }) as const),
     sbSelect<{
       id: number;
       kind: string;
@@ -328,7 +335,19 @@ export async function GET(req: Request) {
       // vendor_replies row (and so no english_gloss) to read from.
       `select=from_number,body,english:raw->>english,received_at&direction=eq.inbound&raw->>receiver=eq.${enc}&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=60`
     ).catch(() => []),
-  ]);
+    ]);
+
+  // AN EMPTY QUEUE IS A CLAIM. A FAILED READ IS NOT.
+  //
+  // `queueState` travels with every poll so the client never has to guess which
+  // of the two an empty `queue` array means:
+  //   "ok"          - we read the queue; this is what is in it.
+  //   "unavailable" - we could not read it. Show nothing CONFIDENT.
+  // ("missing" - the table does not exist on this database - is a vacuously
+  // empty read and is honestly "ok".)
+  const queueState: "ok" | "unavailable" =
+    "error" in outboxRead && outboxRead.error === "unavailable" ? "unavailable" : "ok";
+  const outbox = "rows" in outboxRead ? outboxRead.rows : [];
 
   // decisionId per vendor (newest first) so cards can open "Why this move?".
   const ladderByDecision = new Set(
@@ -533,11 +552,15 @@ export async function GET(req: Request) {
         id: `contact:${e.id}`,
         at: e.created_at,
         kind: "contact",
-        title: shared.name
-          ? `A shop shared a contact: ${shared.name}`
-          : "A shop shared a contact",
+        // TRANSLATABLE TITLE, INTERPOLATED NAME. The title used to embed the
+        // shared contact's name, which makes every occurrence a unique string
+        // that can never be in the catalogue - and `t()` refuses anything
+        // outside it, so this line rendered English in all nineteen other
+        // languages. The name is a proper noun and is not translated anyway,
+        // so the client appends it to the translated title.
+        title: "A shop shared a contact",
         detail: `+${shared.digits} - shared by the shop you are talking to. Tap to copy if you want to ask them too; nothing was sent to them.`,
-        meta: { digits: shared.digits },
+        meta: { digits: shared.digits, sharedName: shared.name ?? undefined },
       });
       continue;
     }
@@ -826,6 +849,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     items: items.slice(0, limit),
     queue,
+    queueState,
     agentPending, // F9: {vendorId: {count, sending}} - what the agent is mid-sentence with
     waHealth,
     introBudget,

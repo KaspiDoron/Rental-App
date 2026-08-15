@@ -54,7 +54,17 @@ export async function GET(req: Request) {
   // oldest first - powers the TranscriptSheet chat view. The default 2-message
   // shape below stays untouched (ThreadPeek relies on it).
   if (url.searchParams.get("full") === "1") {
-    if (!sent?.to_number) return NextResponse.json({ messages: [], delivery: null });
+    // NO OUTBOUND ROW IS NOT AN EMPTY CONVERSATION - it is "we have not written
+    // to this shop yet", and the transcript sheet has to be able to tell the
+    // difference between that, a thread with nothing in it, and a read that
+    // failed. All three used to be the same `{messages: [], delivery: null}`.
+    if (!sent?.to_number)
+      return NextResponse.json({
+        messages: [],
+        delivery: null,
+        state: "not-started",
+        note: "Your agent has not messaged this shop yet.",
+      });
     const digits = sent.to_number;
     const [outs, ins, recip] = await Promise.all([
       sbSelect<{ id: number; body: string; received_at: string; raw: { englishGloss?: string; kind?: string } | null }>(
@@ -164,7 +174,7 @@ export async function GET(req: Request) {
           lastReadAt: null,
           lastReplyAt: null,
         };
-    return NextResponse.json({ messages, delivery });
+    return NextResponse.json({ messages, delivery, state: "ok" });
   }
 
   let received: { body: string; received_at: string; raw?: { english?: string } | null } | null =

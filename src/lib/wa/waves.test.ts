@@ -296,7 +296,7 @@ describe("BOTH HALVES ARE WIRED - building it in one place is the failure mode",
 
   it("the drain reads it back and clamps its own re-stamps", () => {
     expect(guard).toMatch(/clampRestampToWave/);
-    expect(guard).toMatch(/waveEndsAt\?: unknown/);
+    expect(guard).toMatch(/Number\(candMeta\.waveEndsAt\) \|\| null/);
   });
 
   it("the drain clamps EVERY release, not one branch of the ladder", () => {
@@ -305,7 +305,23 @@ describe("BOTH HALVES ARE WIRED - building it in one place is the failure mode",
     // leaks the burst through the others - so they all go through one closure.
     const releases = guard.match(/await release\(/g) ?? [];
     expect(releases.length).toBeGreaterThanOrEqual(5);
-    expect(guard).toMatch(/const release = \(delayMs: number/);
+    expect(guard).toMatch(/const release = async \(delayMs: number/);
+  });
+
+  it("W8: the OVER-BUDGET re-park is clamped too - it is the path most of a wave takes", () => {
+    // The clamp was wired only into the post-claim `release()` helper, which
+    // handles the exceptional re-parks. The drain sends 2 cold rows per sender
+    // per invocation and re-parks THE REST through the over-budget branch, so
+    // the one path a wave actually flows through skipped the clamp entirely
+    // and the burst bled across its own silence, wave after wave.
+    const branch = guard.slice(
+      guard.indexOf("if (overCap) {"),
+      guard.indexOf("const claimedAt = Date.now();")
+    );
+    expect(branch.length).toBeGreaterThan(100);
+    expect(branch).toMatch(/clampRestampToWave\(/);
+    // ...and it must clamp the COMPUTED delay, not re-park unclamped and hope.
+    expect(branch).toMatch(/not_before: new Date\(\s*clampRestampToWave\(/);
   });
 
   it("the clamp does NOT reach the guard's own re-park, and that is deliberate", () => {

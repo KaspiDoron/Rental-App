@@ -22,7 +22,11 @@ export async function GET(req: Request) {
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
   const region = (new URL(req.url).searchParams.get("region") ?? "").trim();
-  if (!region) return NextResponse.json({ scooter: null, car: null });
+  // "We don't know where you are" and "we know, and there is no floor for it"
+  // are different answers and the hint card renders them differently. Both
+  // used to be a bare `{scooter:null,car:null}`.
+  if (!region)
+    return NextResponse.json({ scooter: null, car: null, state: "no-region" }, { status: 400 });
 
   // Anchor the hint on the CHEAPEST real vehicles the market floor tracks: a
   // 110cc automatic scooter and a small 4-seat economy car.
@@ -31,7 +35,11 @@ export async function GET(req: Request) {
     floorPriceFor(region, { ...baseRfq, vehicleClass: "car", carType: "economy" }).catch(() => null),
   ]);
 
-  return NextResponse.json({ scooter, car });
+  return NextResponse.json({
+    scooter,
+    car,
+    state: scooter || car ? "ok" : "no-floor",
+  });
 }
 
 // maxDuration: lift the request-timeout ceiling for slow upstreams.

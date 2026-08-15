@@ -130,12 +130,30 @@ export interface RateVerdict {
  */
 export type SendLane = "intro" | "reply";
 
-/** PostgREST filter selecting one lane's rows out of whatsapp_messages. */
+/**
+ * PostgREST filter selecting one lane's rows out of whatsapp_messages.
+ *
+ * THE NULL-KIND TRAP THE GUARD ALREADY FIXED, STILL LIVE IN THE ANTI-BAN
+ * BUDGET.
+ *
+ * The reply lane was spelled `raw->>kind=not.in.(rfq,custom,human-manual)` -
+ * the EXACT predicate wa-guard's REPLY_KIND_FILTER was rewritten to stop using,
+ * for the exact reason documented there: when `raw` carries no `kind`,
+ * `raw->>kind` is SQL NULL, `NOT (NULL IN (...))` is NULL rather than true, and
+ * PostgREST keeps only TRUE. The intro lane's `eq.rfq` drops NULL too. So a
+ * sent row with no stamped kind - anything parked by a path that forgot
+ * `meta.kind`, plus every row written before kinds existed - was counted in
+ * NEITHER budget. Those are free sends as far as the anti-ban ceiling is
+ * concerned, on a traveller's personal number, and the caps are the last thing
+ * in this system that should quietly under-count.
+ *
+ * Spelled as an explicit `or`, matching the guard: no kind means reply.
+ */
 const LANE_FILTER: Record<SendLane, string> = {
   // `raw` is spread from the outbox row's `meta`, so meta.kind lands as
   // raw.kind on every drain-sent row.
   intro: "&raw->>kind=eq.rfq",
-  reply: "&raw->>kind=not.in.(rfq,custom,human-manual)",
+  reply: "&or=(raw->>kind.is.null,raw->>kind.not.in.(rfq,custom,human-manual))",
 };
 
 export async function checkRateLimit(
@@ -2323,6 +2341,12 @@ export async function sendFromUser(
   ok: boolean;
   error?: string;
   rateLimited?: boolean;
+  /**
+   * The budget could not be READ (Supabase blip), so we held rather than
+   * risking the number. Not a cap, not a host fault - a third thing, and the
+   * drain must say so instead of inventing one of the other two.
+   */
+  budgetUnreadable?: boolean;
   /** How long the CAP says to wait. Absent for every non-cap failure. */
   retryAfterSeconds?: number;
   messageId?: string;
@@ -2338,9 +2362,19 @@ export async function sendFromUser(
     // Carry the limiter's OWN wait forward. Without it the drain had no way to
     // tell a cap refusal from a dead host, so it re-parked by the transient
     // backoff and told the owner Evolution was unreachable.
+    //
+    // AND CARRY WHICH REFUSAL IT WAS. `checkRateLimit` has two distinct
+    // `allowed:false` outcomes and only ONE of them is a cap: a genuine
+    // refusal stamps `rateLimited`, while an unreadable send-history read
+    // deliberately does not (it carries an honest reason string instead).
+    // Hardcoding `rateLimited: true` here collapsed them, so a Supabase outage
+    // was reported to the owner, word for word, as "DAILY MESSAGE ALLOWANCE
+    // REACHED" - sending them to look at a budget that was nowhere near spent
+    // while the actual fault sat in the database.
     return {
       ok: false,
-      rateLimited: true,
+      rateLimited: rate.rateLimited === true,
+      budgetUnreadable: rate.rateLimited !== true,
       retryAfterSeconds: rate.waitSeconds,
       error: rate.reason,
     };

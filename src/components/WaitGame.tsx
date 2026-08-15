@@ -274,7 +274,7 @@ export function WaitGame({ onClose }: { onClose: () => void }) {
 
   if (typeof document === "undefined") return null;
   return createPortal(
-    <div className="fixed inset-0 z-[1300] flex flex-col items-center justify-center bg-black/70 p-4 pb-safe pt-safe">
+    <div className="layer-lightbox fixed inset-0 flex flex-col items-center justify-center bg-black/70 p-4 pb-safe pt-safe">
       <div className="surface-strong w-full max-w-[480px] rounded-blob p-4">
         <div className="mb-2 flex items-center justify-between">
           <div className="text-[15px] font-extrabold text-strong">🛵 Scooter Dash</div>

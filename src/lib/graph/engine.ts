@@ -1,4 +1,4 @@
-import { outboxKey } from "../wa/phone-key";
+import { outboxToKeyPatch } from "../wa/outbox-columns";
 import { finishBeforeResponse } from "../after";
 // The digraph execution engine - one serverless invocation per event.
 //
@@ -1876,7 +1876,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           {
             sender_key: senderKey,
             to_number: toNumber,
-            to_key: outboxKey(toNumber),
+            ...(await outboxToKeyPatch(toNumber)),
             body: verdict.text,
             not_before: notBefore,
             meta: { ...meta, reason: claim.kind === "pacing" ? "human pacing gap" : "sync-retry" },

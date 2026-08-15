@@ -54,8 +54,46 @@ function isImageRow(r: SiblingRow): boolean {
   return Boolean(m.mime && /^image\//i.test(m.mime));
 }
 
-async function siblingFrames(email: string, fromDigits: string): Promise<SiblingRow[]> {
-  const since = new Date(Date.now() - BURST_WINDOW_MS).toISOString();
+/**
+ * THE WINDOW IS ANCHORED ON THE LEADER, NOT ON THE CLOCK.
+ *
+ * This used to compute `now - 6s` on every one of the three probes, which is a
+ * SLIDING window - and between probe 1 and probe 3 the code does a media
+ * download (with retries) and then sleeps 4s. By probe 3 the frame's OWN row
+ * had usually fallen out of its own window: `newerSibling` then found no `own`
+ * row and refused to stand down (correct - never stand down blind), and the
+ * assembly loop below iterated a `rows` array that no longer contained the
+ * frame itself OR any of its siblings. A five-photo album assembled zero
+ * frames and the reader was handed nothing.
+ *
+ * The burst is defined relative to the LEADER's arrival: every frame that
+ * landed within BURST_WINDOW_MS BEFORE it, plus anything that lands after. That
+ * set does not move while we wait, so however long the fetch and the defer take
+ * the same rows keep answering. Falls back to the sliding window only when our
+ * own row is not visible at all (a brand-new store, an un-ingested frame),
+ * which is exactly the case where there is no anchor to use.
+ */
+export function burstWindowSince(anchorReceivedAt: string | null, nowMs: number): string {
+  const at = anchorReceivedAt ? Date.parse(anchorReceivedAt) : NaN;
+  const base = Number.isFinite(at) ? at : nowMs;
+  return new Date(base - BURST_WINDOW_MS).toISOString();
+}
+
+/** The leader's own `received_at`, when its row is visible. */
+export function burstAnchor(
+  rows: Array<{ wa_message_id: string | null; received_at?: string }>,
+  ownMsgId: string
+): string | null {
+  const own = rows.find((r) => r.wa_message_id === ownMsgId);
+  return own?.received_at ?? null;
+}
+
+async function siblingFrames(
+  email: string,
+  fromDigits: string,
+  sinceIso?: string
+): Promise<SiblingRow[]> {
+  const since = sinceIso ?? burstWindowSince(null, Date.now());
   const rows = await sbSelect<SiblingRow>(
     "whatsapp_messages",
     `select=id,wa_message_id,received_at,type,raw&direction=eq.inbound` +
@@ -108,8 +146,13 @@ export async function assembleImageBurst(opts: {
 }): Promise<BurstVerdict> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  // 1) Who else is in this burst right now?
+  // 1) Who else is in this burst right now? This first probe is the only one
+  //    that may use the sliding window - it is what discovers the anchor.
   let rows = await siblingFrames(opts.email, opts.fromDigits);
+  // FREEZE THE WINDOW on our own arrival. Every later probe asks the same
+  // question of the same set, so the seconds spent fetching and deferring can
+  // never shrink the burst out from under us (including our own row).
+  const since = burstWindowSince(burstAnchor(rows, opts.ownMsgId), Date.now());
   const newer0 = newerSibling(rows, opts.ownMsgId);
   if (newer0) return { standDown: true, leaderId: newer0.wa_message_id ?? String(newer0.id) };
 
@@ -119,7 +162,7 @@ export async function assembleImageBurst(opts: {
   // 3) Re-ask. A lone photo pays exactly this one extra read and moves on.
   //    (Anything that arrived during the fetch is NEWER than us - store ids
   //    are monotonic - so growth always resolves to a stand-down here.)
-  rows = await siblingFrames(opts.email, opts.fromDigits);
+  rows = await siblingFrames(opts.email, opts.fromDigits, since);
   const newer1 = newerSibling(rows, opts.ownMsgId);
   if (newer1) return { standDown: true, leaderId: newer1.wa_message_id ?? String(newer1.id) };
 
@@ -128,17 +171,26 @@ export async function assembleImageBurst(opts: {
   //    to any frame that landed meanwhile - otherwise this is the whole burst.
   if (rows.length >= 2) {
     await sleep(DEFER_MS);
-    rows = await siblingFrames(opts.email, opts.fromDigits);
+    rows = await siblingFrames(opts.email, opts.fromDigits, since);
     const newer2 = newerSibling(rows, opts.ownMsgId);
     if (newer2) return { standDown: true, leaderId: newer2.wa_message_id ?? String(newer2.id) };
   }
 
-  // 4) We are the newest frame: assemble every sibling's bytes, arrival order.
+  // 5) We are the newest frame: assemble every sibling's bytes, arrival order.
+  //
+  // BELT AND BRACES ON OUR OWN FRAME. The anchored window above means our row
+  // can no longer age out of the probe, but the probe can also return [] for a
+  // reason that has nothing to do with time (a read error - `siblingFrames`
+  // swallows those). Bytes we already hold must never be thrown away because a
+  // LISTING failed, so `own` is pushed unconditionally when the loop did not
+  // find our row.
   const frames: Array<{ mime: string; base64: string; waMessageId: string }> = [];
   let fetchFailures = 0;
+  let sawOwn = false;
   for (const r of rows) {
     const msgId = r.wa_message_id ?? String(r.id);
     if (msgId === opts.ownMsgId) {
+      sawOwn = true;
       if (own) frames.push({ ...own, waMessageId: msgId });
       continue;
     }
@@ -151,11 +203,12 @@ export async function assembleImageBurst(opts: {
     if (media) frames.push({ ...media, waMessageId: msgId });
     else fetchFailures++;
   }
+  if (!sawOwn && own) frames.unshift({ ...own, waMessageId: opts.ownMsgId });
   return {
     standDown: false,
     frames,
     fetchFailures,
-    burstSize: rows.length || 1,
+    burstSize: Math.max(rows.length, frames.length, 1),
     ownFetchFailed: !own,
   };
 }

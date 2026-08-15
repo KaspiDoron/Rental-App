@@ -42,6 +42,10 @@ export interface FeedItem {
     risk?: string;
     /** kind:"contact" - the shared number, digits only, for the copy chip. */
     digits?: string;
+    /** kind:"contact" - the shared contact's NAME, appended to the translated
+     *  title rather than baked into it (a name inside the title makes every
+     *  occurrence a unique string, which `t()` refuses by design). */
+    sharedName?: string;
   };
 }
 
@@ -126,7 +130,10 @@ export function ActivityFeed({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-[12px] font-extrabold text-strong">{t(it.title)}</span>
+                  <span className="text-[12px] font-extrabold text-strong">
+                    {t(it.title)}
+                    {it.meta?.sharedName ? `: ${it.meta.sharedName}` : ""}
+                  </span>
                   <span className="shrink-0 text-[10px] font-bold text-faint">{relTime(it.at)}</span>
                 </div>
                 {it.vendorName && (
@@ -153,7 +160,14 @@ export function ActivityFeed({
                   </div>
                 ) : it.detail ? (
                   <>
-                    <p className="mt-0.5 text-[11px] leading-relaxed text-soft">{it.detail}</p>
+                    {/* A DROP LINE IS OUR COPY, NOT THE SHOP'S. Every other
+                        kind's `detail` is either a real message body or an
+                        agent's own reasoning, and translating those would
+                        rewrite evidence - so only the closed set authored in
+                        wa/safety-signals is passed through t(). */}
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-soft">
+                      {it.kind === "drop" ? t(it.detail) : it.detail}
+                    </p>
                     {it.english && it.english.trim() !== it.detail.trim() && (
                       <p className="mt-0.5 text-[10px] italic leading-relaxed text-faint">
                         🌐 {it.english}

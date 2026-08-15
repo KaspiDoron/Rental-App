@@ -126,6 +126,7 @@ import { MassBargainPreview } from "@/components/MassBargainPreview";
 import { VirtualVendorList } from "@/components/VirtualVendorList";
 import { QuotesRail } from "@/components/QuotesRail";
 import { HorizontalVendorRail } from "@/components/HorizontalVendorRail";
+import { loadPublicConfig } from "@/lib/client/public-config";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -414,12 +415,13 @@ export default function Home() {
   // immediate refresh on top of this.
   const [pollCfg, setPollCfg] = useState({ activityMs: 6000, repliesMs: 6000, tagsMs: 120000 });
   useEffect(() => {
-    fetch("/api/config/public")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.poll?.activityMs) setPollCfg(d.poll);
-      })
-      .catch(() => {});
+    let alive = true;
+    void loadPublicConfig().then((d) => {
+      if (alive && d.poll?.activityMs) setPollCfg(d.poll);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Fold the search card away when the agents take over the screen; a phase
@@ -1732,6 +1734,14 @@ export default function Home() {
     };
   }, [session, vendorIdsKey, pollCfg.tagsMs]);
 
+  // THE REPLY POLL'S CONCURRENCY GUARD LIVES ABOVE THE EFFECT, ON PURPOSE.
+  //
+  // Refs, not `let`s inside the effect: the effect is re-created on wake, and a
+  // per-effect flag is a guard that resets exactly when it is needed most (see
+  // the long note at the effect itself).
+  const repliesInFlight = useRef(false);
+  const repliesAbort = useRef<AbortController | null>(null);
+
   // Live loop: while agents are in ANY active conversation, poll the reply
   // feed so shop answers pop into the cards automatically. This must include
   // offer-received/negotiating - after a bargain is sent the shop's counter
@@ -1761,7 +1771,7 @@ export default function Home() {
     // Stale-run guard: an unmounted/reconfigured effect must never apply its
     // in-flight response to fresh state (the epoch may have changed).
     let cancelled = false;
-    // ONE POLL AT A TIME.
+    // ONE POLL AT A TIME - AND THE GUARD HAS TO OUTLIVE THE EFFECT.
     //
     // /api/replies does real work on the server - it flushes this traveller's
     // due WhatsApp sends and runs their due agent turns - so it can take longer
@@ -1769,13 +1779,24 @@ export default function Home() {
     // the next one launched on top of it, and on a bad host that stacks
     // indefinitely: N concurrent drains of the same queue, all contending for
     // the same claims, on a phone that has stopped showing anything new.
-    let inFlight = false;
+    //
+    // W8 #17: the flag was a `let` DECLARED INSIDE THE EFFECT, and the effect
+    // is re-created on wake (`syncNonce` is in its deps, and waking is exactly
+    // when a slow drain is likeliest to still be running). The new closure got
+    // a brand-new `inFlight = false` and launched a second concurrent drain on
+    // top of the first, which nothing aborted - so returning to the tab did the
+    // one thing the comment above promises it does not. A ref survives the
+    // re-creation, and the AbortController makes cleanup actually cancel the
+    // request instead of only ignoring its answer.
+    const inFlight = repliesInFlight;
     const tick = async () => {
       // Pause in a hidden tab (parity with the activity poll) - no wasted
       // /api/replies requests while backgrounded; resumes on focus.
       if (typeof document !== "undefined" && document.hidden) return;
-      if (inFlight) return;
-      inFlight = true;
+      if (inFlight.current) return;
+      inFlight.current = true;
+      const ctl = new AbortController();
+      repliesAbort.current = ctl;
       try {
         // Scope to THIS session both server-side (since=) and client-side, so a
         // previous search's replies can never render on the new results.
@@ -1790,6 +1811,7 @@ export default function Home() {
         if (rfq?.transmission && rfq.transmission !== "any") spec.set("tx", rfq.transmission);
         const res = await fetch(`/api/replies?${spec.toString()}`, {
           cache: "no-store",
+          signal: ctl.signal,
         });
         const d = await res.json();
         if (cancelled) return;
@@ -1982,7 +2004,8 @@ export default function Home() {
         }
       } catch {
       } finally {
-        inFlight = false;
+        if (repliesAbort.current === ctl) repliesAbort.current = null;
+        inFlight.current = false;
       }
     };
     tick();
@@ -1990,6 +2013,11 @@ export default function Home() {
     return () => {
       cancelled = true;
       clearInterval(id);
+      // ABORT, don't just ignore. The old cleanup left a slow drain running and
+      // the re-created effect started a second one beside it.
+      repliesAbort.current?.abort();
+      repliesAbort.current = null;
+      inFlight.current = false;
     };
   }, [session, waiting, rfq, searchEpoch, pollCfg.repliesMs, syncNonce]);
 
@@ -2163,7 +2191,9 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          origin: { lat: origin.lat, lng: origin.lng },
+          // The LABEL travels with the coordinates: it is the app's `region`,
+          // and the search row is what a restored hunt reads it back from.
+          origin: { lat: origin.lat, lng: origin.lng, label: origin.label ?? "" },
           radiusKm,
           vehicleClass,
           lang,
@@ -2945,6 +2975,24 @@ export default function Home() {
     offers: statusGroups.deals.length,
   };
 
+  // HAS ANYTHING ACTUALLY BEEN SENT?
+  //
+  // Two spinners claimed "contacting shops" purely because `phase === "running"`
+  // - and `running` is the FUNNEL ANIMATION: runFunnel walks the local cards
+  // from "queued" to "found" over a couple of seconds and touches no shop at
+  // all. Outreach in this app is an explicit tap (the consent flow exists
+  // precisely so nobody is messaged without one), so for the whole of that
+  // phase the app was animating a claim about work it had not done, on the
+  // paid tier, next to a request the traveller had just submitted.
+  //
+  // Evidence, not phase: a shop counts as contacted once it has been messaged,
+  // has replied, or has a queued row waiting to go out.
+  const contactingShops =
+    stageCounts.messaged +
+      stageCounts.replied +
+      Math.max(stageCounts.queued, queueItems.length) >
+    0;
+
   // Honest pacing progress ("3 of 8 sent - next at ~14:32 - done by ~14:41")
   // derived from LIVE queue rows so mid-batch removals shrink the plan.
   const queueProgress = useMemo(
@@ -3379,7 +3427,12 @@ export default function Home() {
                 }
               />
             ) : phase === "running" ? (
-              <LoadingDots light label={t("Agents contacting shops")} />
+              <LoadingDots
+                light
+                label={
+                  contactingShops ? t("Agents contacting shops") : t("Getting your shops ready")
+                }
+              />
             ) : (
               <>
                 <Icon name="bolt" className="h-5 w-5" /> {t("Find my deal")}
@@ -3446,9 +3499,15 @@ export default function Home() {
           <div className="surface mt-3 rounded-blob p-3 text-[12px] animate-slide-up">
             <div className="mb-1 flex items-center gap-1.5 font-extrabold text-brandblue">
               <Icon name="spark" className="h-3.5 w-3.5" /> {t("Structured request")}
-              {session && session.plan !== "free" && phase === "running" && (
+              {session && session.plan !== "free" && (contactingShops || phase === "running") && (
                 <span className="ml-auto font-bold text-faint">
-                  <LoadingDots label={t("Order status: contacting shops")} />
+                  <LoadingDots
+                    label={
+                      contactingShops
+                        ? t("Order status: contacting shops")
+                        : t("Order status: getting your shops ready")
+                    }
+                  />
                 </span>
               )}
             </div>
@@ -4884,6 +4943,15 @@ function ToggleBtn({
   return (
     <button
       onClick={onClick}
+      // WHICH VIEW AM I IN? COLOUR WAS THE ONLY ANSWER.
+      //
+      // The view switcher and the list-axis switcher are the app's two primary
+      // mode controls, and "selected" was conveyed purely by a blue fill. A
+      // screen reader announced three identical buttons with no state at all,
+      // and so did every high-contrast / forced-colours mode that flattens the
+      // fill. `aria-pressed` is the standard answer for a toggle button and
+      // costs nothing.
+      aria-pressed={active}
       className={`btn flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-extrabold ${
         active ? "bg-brandblue text-white" : "text-soft hover:bg-card2"
       }`}

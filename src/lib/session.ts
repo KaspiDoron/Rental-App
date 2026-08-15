@@ -8,11 +8,30 @@
 //
 // The cookie is an HMAC-signed token holding only the email; the role is
 // re-derived on every request so promotions/demotions apply instantly.
+//
+// "INSTANTLY" WAS A CLAIM ABOUT THE DERIVATION, NOT ABOUT THE DATA.
+//
+// The role IS recomputed per request - but the runtime admin list lives in
+// `ADMIN_EMAILS_EXTRA`, and that was read through the 30-second WHOLE-VAULT
+// cache. Only the instance that performed the demotion dropped its copy, so on
+// Cloud Run - where a demotion is served by one container out of N - every other
+// warm instance kept honouring the removed admin for up to half a minute, with
+// full Key-Vault access. Half a minute is a long time to hold the keys to an
+// account somebody has just decided to take them from.
+//
+// It reads through `getConfigFresh` now: a single-row, 3-second read, the same
+// mechanism the safety gates use for `KILL_SWITCH` and for the same reason. It
+// fails CLOSED - an unreadable vault yields owner + env admins only - because a
+// privilege list we cannot read is not a privilege list we should honour, and
+// the owner (env-derived) can never be locked out by it.
+//
+// The residual window is documented in PRODUCTION-READINESS.md: the user record
+// behind `status` / tester flags still carries a 10-second cache.
 
 import "server-only";
 import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
-import { getConfig, setConfig } from "./runtime-config";
+import { getConfig, getConfigFresh, setConfig } from "./runtime-config";
 import type { Session, Role } from "./types";
 
 const COOKIE = "wd_session";
@@ -54,9 +73,19 @@ function envAdmins(): string[] {
     .filter(Boolean);
 }
 
-/** Full management list: owner + env admins + runtime-added admins. */
+/**
+ * Full management list: owner + env admins + runtime-added admins.
+ *
+ * The runtime half is read FRESH (3s, single row) rather than through the 30s
+ * vault cache - see the note at the top of this file. An unreadable vault
+ * yields owner + env admins only.
+ */
 export async function adminEmails(): Promise<string[]> {
-  const extra = ((await getConfig("ADMIN_EMAILS_EXTRA")) || "")
+  const read = await getConfigFresh("ADMIN_EMAILS_EXTRA").catch(() => ({
+    error: "unavailable" as const,
+  }));
+  const raw = "error" in read ? "" : (read.value ?? "");
+  const extra = raw
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
@@ -70,12 +99,21 @@ export async function roleFor(email: string): Promise<Role> {
   return "user";
 }
 
-/** Add or remove a runtime admin (management action). Owner is immutable. */
+/**
+ * Add or remove a runtime admin (management action). Owner is immutable.
+ *
+ * FRESH on the read-modify-write too: through the 30s vault cache, a demotion
+ * issued moments after a promotion could rebuild the list from a stale snapshot
+ * and hand the admin right back.
+ */
 export async function setAdmin(email: string, admin: boolean): Promise<void> {
   const e = email.trim().toLowerCase();
   if (isOwner(e)) return;
+  const current = await getConfigFresh("ADMIN_EMAILS_EXTRA").catch(() => ({
+    error: "unavailable" as const,
+  }));
   const extra = new Set(
-    ((await getConfig("ADMIN_EMAILS_EXTRA")) || "")
+    ("error" in current ? "" : (current.value ?? ""))
       .split(",")
       .map((x) => x.trim().toLowerCase())
       .filter(Boolean)

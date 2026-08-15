@@ -27,7 +27,11 @@ describe("REPRODUCTION: the banner had a publisher but no ad unit", () => {
 
   it("the slot comes from configuration, not from a prop nobody passes", () => {
     expect(ad).toMatch(/const adSlot = slot \?\? unit;/);
-    expect(ad).toMatch(/setUnit\(d\.adsenseSlot \?\? null\)/);
+    // W8 #19: the value now arrives through the shared single-flight loader
+    // (lib/client/public-config) instead of a third independent fetch of the
+    // same force-dynamic endpoint - but it is still the CONFIGURED slot.
+    expect(ad).toMatch(/setUnit\(d\.adsenseSlot\)/);
+    expect(ad).toMatch(/loadPublicConfig\(\)/);
   });
 
   it("data-ad-slot is always rendered when there is a unit", () => {

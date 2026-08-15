@@ -37,7 +37,12 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   if (/circuit breaker|-rate breaker|cold outreach frozen/.test(r)) return "breaker";
   if (/director hold|thinking time|human reply pacing/.test(r)) return "hold";
   if (/pacing|burst|gap/.test(r)) return "pacing";
-  if (/cap|limit|paused|recovery|warm/.test(r)) return "limit";
+  // "allowance" is how the drain words the daily/hourly send cap ("held - daily
+  // message allowance reached, resumes 14:32"). It matched none of the words
+  // above, so THE cap hold - the one the anti-ban budget exists to produce -
+  // fell through to "unknown" and rendered as a blank "Queued - sends
+  // automatically", the same silence the circuit breakers were rescued from.
+  if (/cap|limit|allowance|paused|recovery|warm/.test(r)) return "limit";
   return "unknown";
 }
 

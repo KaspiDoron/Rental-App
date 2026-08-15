@@ -82,7 +82,7 @@ export function Modal({
   return createPortal(
     <div
       onClick={() => closeRef.current()}
-      className={`fixed inset-0 z-[1200] flex justify-center bg-black/45 backdrop-blur-sm ${
+      className={`layer-overlay fixed inset-0 flex justify-center bg-black/45 backdrop-blur-sm ${
         center ? "items-center px-4" : "items-end sm:items-center sm:px-4"
       }`}
     >

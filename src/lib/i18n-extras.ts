@@ -214,4 +214,88 @@ export const I18N_EXTRAS: string[] = [
   "Locals-only pricing: agents anchor to the real local market floor",
   "See the English translation of every local-language message",
   "Fast-responder insights: which shops reply quickest",
+  // ---- W8 #15: THREE WHOLE TRAVELLER-FACING SURFACES SHIPPED IN ENGLISH ----
+  //
+  // `t()` refuses any string that is not in the catalogue (an uncatalogued
+  // string would be POSTed to /api/translate and cached into a GLOBALLY SHARED
+  // row, so unbounded input is a cross-user leak). Everything below IS wrapped
+  // in `t()` at the render site and was never in the catalogue, so all of it
+  // rendered English in all nineteen non-English languages - silently, with no
+  // error anywhere, on three surfaces a traveller reads constantly.
+
+  // src/app/api/activity/route.ts - STAGE_TITLES. Every line of the Activity
+  // tab's feed is authored server-side and rendered as t(it.title).
+  "Listened to the shop's voice note",
+  "Read the shop's reply",
+  "Double-checked the photo against the conversation",
+  "Checked what the deal is still missing",
+  "Chose the next move",
+  "Bargained for a better price",
+  "Asked the shop to clarify",
+  "Answered the shop's question",
+  "Asked about the deposit",
+  "Asked how you get the vehicle",
+  "Shared your pickup location (with your consent)",
+  "Wrapped up the conversation",
+  "Marked this offer ready for you",
+  "Sent the closing message",
+  "Message on its way to the shop",
+  // ...and the feed's non-trace titles, from the same route.
+  "You messaged the shop yourself",
+  "Message sent to the shop",
+  "The shop replied (with a photo)",
+  "The shop replied",
+  "Confirmed offer in",
+  "Offer in (unconfirmed)",
+  "Will is waiting on purpose",
+  "A shop shared a contact",
+  "Will flagged this reply - please review",
+
+  // src/lib/wa/safety-signals.ts - dropFeedItem(). A closed set of app-authored
+  // sentences (never shop text), so the DETAIL is translated too.
+  "A shop reply needs attention",
+  "A message was not sent",
+  "A message arrived from a number your agent never contacted, so it was not linked to any shop.",
+  "A reply arrived from a hidden WhatsApp identity and couldn't be matched to a shop yet.",
+  "The shop sent a photo or voice note that couldn't be downloaded.",
+  "A reply was saved but couldn't be linked to a shop card.",
+  "A reply couldn't be checked on the first try - it is retried automatically.",
+  "A reply couldn't be saved on the first try - it is retried automatically.",
+  "A recovered reply couldn't be answered on the first try - it is retried automatically.",
+  "Checking this shop's thread failed once - it is retried automatically.",
+  "A reply couldn't be processed automatically.",
+  "A duplicate of a message this shop already received was skipped.",
+  "This shop already got your request in the last day, so a repeat was skipped.",
+  "This shop hasn't answered earlier messages, so a repeat wasn't sent - this protects your WhatsApp number.",
+  "A message was skipped by the safety guard.",
+
+  // src/lib/wa-guard.ts senderSafety() + src/lib/wa/safety-signals.ts
+  // classifySafety() - the WhatsApp-safety explainer, rendered as
+  // t(safety.publicReason). The panel that explains why a traveller's PERSONAL
+  // number is being paced, in English, to someone reading the app in Thai.
+  "Sending is taking a short break and resumes automatically - your queued messages are safe.",
+  "We can't check your messaging status right now. Nothing is lost - this refreshes on its own in a moment.",
+  "Your agent is sending messages at a natural, human pace - each one goes out automatically.",
+  "WhatsApp is disconnected, so shop replies cannot reach the app - reconnect in Profile to keep your conversations moving.",
+  "Some messages needed attention in the last day - check the activity feed to see what happened to each one.",
+
+  // src/lib/queue-reason.ts - queueReasonLabel(). queueReasonWhy() was
+  // catalogued above and its sibling was missed, so the SHORT label on every
+  // queued row - the line a traveller actually reads on the card and in the
+  // Live Status queue - stayed English while the long explanation under it
+  // was translated. Rendered as t(queueReasonLabel(...)).
+  "Waiting for the shop to open - sends automatically",
+  "Paused by you - resumes when you say so",
+  "Your agent is timing this reply like a human",
+  "In line - your agent messages shops one at a time, like a person",
+  "Queued - sending resumes automatically in a few minutes",
+  "You've reached your plan's batch of new shops - more open up shortly, automatically",
+  "Today's introductions are done - this goes out tomorrow morning automatically",
+  "Protecting your WhatsApp number - new-shop messages resume automatically in a few hours",
+  "Queued briefly - sends are paced like a human",
+  "Done for now - sending resumes automatically later today",
+  "Queued - sends automatically",
+  // ...and the two states the queue viewer composes itself.
+  "Sending now",
+  "Sending shortly",
 ];

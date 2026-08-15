@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { queueReasonLabel } from "@/lib/queue-reason";
 import { digitsOnly } from "@/lib/phone";
 
@@ -16,16 +16,46 @@ import { digitsOnly } from "@/lib/phone";
 
 import { outboxState, type OutboxRow } from "@/lib/wa/outbox-lifecycle";
 
+// "NOTHING IS QUEUED" AND "WE COULD NOT LOOK" ARE NOT THE SAME ANSWER.
+//
+// Both paths returned a bare `{items: []}` with a 200 (or a 401 whose BODY said
+// the same thing), so the queue panel rendered a confident, reassuring "nothing
+// waiting" over a Supabase outage and over a signed-out session alike. This is
+// the screen a traveller opens specifically to ask "is my message stuck?" - an
+// empty list is the one answer it must never invent.
+//
+// The shape says which: `state` is always present, and `items` is only
+// authoritative when it is "ok".
+type QueueState = "ok" | "signed-out" | "unavailable";
+
 export async function GET() {
   const session = await getSession();
-  if (!session) return NextResponse.json({ items: [] }, { status: 401 });
+  if (!session)
+    return NextResponse.json(
+      { state: "signed-out" satisfies QueueState, items: [], total: 0, error: "Sign in first." },
+      { status: 401 }
+    );
 
-  const rows = await sbSelect<OutboxRow>(
+  const read = await sbSelectStrict<OutboxRow>(
     "wa_outbox",
     `select=id,sender_key,to_number,body,not_before,meta&sender_key=eq.${encodeURIComponent(
       session.email
     )}&order=not_before.asc&limit=50`
-  ).catch(() => []);
+  );
+  if ("error" in read && read.error === "unavailable") {
+    return NextResponse.json(
+      {
+        state: "unavailable" satisfies QueueState,
+        items: [],
+        total: 0,
+        error: "We can't read your queue right now - this is our side, and it retries on its own.",
+      },
+      { status: 503 }
+    );
+  }
+  // "missing" is a genuinely empty read: the table does not exist on this
+  // database, so nothing can be queued.
+  const rows = "rows" in read ? read.rows : [];
 
   const now = Date.now();
   const items = rows.map((r) => {
@@ -54,7 +84,7 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ items, total: items.length });
+  return NextResponse.json({ state: "ok" satisfies QueueState, items, total: items.length });
 }
 
 export async function POST(req: Request) {

@@ -2316,7 +2316,9 @@ export default function AdminPage() {
           {/* Private-beta invite list (owner only) */}
           {isOwner && <BetaManager />}
 
-          {/* Add management */}
+          {/* Add management - OWNER ONLY (the API enforces it; this only
+              stops the button offering an action that will be refused). */}
+          {isOwner && (
           <div className="surface rounded-blob p-4">
             <div className="mb-2 text-[13px] font-extrabold text-strong">
               Add management user
@@ -2342,9 +2344,10 @@ export default function AdminPage() {
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-faint">
-              Only management can add management. The owner can never be demoted.
+              Only the owner can add or remove admins. The owner can never be demoted.
             </p>
           </div>
+          )}
 
           {userMsg && (
             <div className="rounded-2xl bg-brandred-soft p-2.5 text-[12px] font-bold text-brandred">
@@ -2419,6 +2422,7 @@ export default function AdminPage() {
               </div>
               {u.role !== "owner" && (
                 <div className="mt-2 flex gap-2">
+                  {isOwner && (
                   <button
                     onClick={() =>
                       userAction({
@@ -2430,6 +2434,7 @@ export default function AdminPage() {
                   >
                     {u.role === "admin" ? "Remove admin" : "Make admin"}
                   </button>
+                  )}
                   <button
                     onClick={() =>
                       userAction({

@@ -11,7 +11,8 @@ import { getSession } from "@/lib/session";
 import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import { normalizePlan } from "@/lib/access";
 import { digitsOnly } from "@/lib/phone";
-import { lidKey, outboxKey } from "@/lib/wa/phone-key";
+import { lidKey } from "@/lib/wa/phone-key";
+import { outboxToKeyPatch } from "@/lib/wa/outbox-columns";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
 import { jsonRoute } from "@/lib/http/json-route";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
@@ -540,7 +541,7 @@ async function handlePost(req: Request) {
         {
           sender_key: session.email,
           to_number: digits,
-          to_key: outboxKey(digits),
+          ...(await outboxToKeyPatch(digits)),
           body: guardedMessage,
           not_before: notBefore,
           meta: {

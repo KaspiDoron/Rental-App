@@ -271,13 +271,8 @@ export async function checkDailyLimit(
   // that has never existed is vacuously empty and must not brick a fresh
   // install, while a table that could not be read means the count is UNKNOWN
   // and spending someone's paid quota on a guess is not ours to do.
-  const read = await sbSelectStrict<{ count: number }>(
-    "api_usage",
-    `select=count&kind=eq.${encodeURIComponent(kind)}&user_email=eq.${encodeURIComponent(
-      who
-    )}&created_at=gte.${encodeURIComponent(today)}&limit=1000`
-  );
-  if ("error" in read && read.error === "unavailable") {
+  const tally = await dailyUsed(kind, who, today, limit);
+  if (tally.unreadable) {
     return {
       allowed: false,
       used: 0,
@@ -285,8 +280,7 @@ export async function checkDailyLimit(
       reason: "unreadable",
     };
   }
-  const rows = "rows" in read ? read.rows : [];
-  const used = rows.reduce((s, r) => s + (r.count ?? 1), 0);
+  const used = tally.used;
   // Bounded (like the sibling apiCache) so the map can't grow one entry per
   // distinct user*kind forever on a long-lived process.
   boundedSet(counters(), key, { day: today, n: Math.max(used, mem?.day === today ? mem.n : 0) }, 5000);
@@ -304,9 +298,68 @@ export async function checkDailyLimit(
     }
   }
 
-  const cur = counters().get(key)!;
-  cur.n += 1;
-  return { allowed: true, used: used + 1, limit };
+  // A PEEK MUST NOT SPEND.
+  //
+  // This incremented unconditionally, so `reserve: false` - documented on the
+  // parameter itself as "PEEKS instead of consuming a unit", and used by the AI
+  // budget precisely so it can reserve per model call instead - consumed one
+  // unit of the user's daily allowance on every peek. A turn that then made
+  // ZERO model calls still burned allowance, and the in-memory counter only
+  // ever goes up within a day, so nothing gave it back: a user could be refused
+  // by a counter that had never once corresponded to a real call.
+  if (opts?.reserve !== false) {
+    const cur = counters().get(key)!;
+    cur.n += 1;
+    return { allowed: true, used: used + 1, limit };
+  }
+  return { allowed: true, used, limit };
+}
+
+/**
+ * Today's durable total for one (kind, user), summed EXACTLY.
+ *
+ * THE DURABLE HALF OF EVERY PER-USER CAP WAS READ WITH `limit=1000` ROWS.
+ *
+ * PostgREST truncates at the limit, silently - so any owner-set cap above a
+ * thousand (or SCALE_MODE tripling a high override past it: LIMIT_GEOCODE at
+ * 400 becomes 1200) simply stopped being enforceable on the Postgres side. The
+ * read could never report more than 1000, so `used >= limit` could never be
+ * true, and the cross-instance half of the cap - the only half that survives a
+ * cold start - was dead exactly for the owners who had raised a limit on
+ * purpose.
+ *
+ * It cannot be an HTTP count either: `count` is a COLUMN (recordApi takes a
+ * count), so the answer is a SUM over rows, not a number of rows. So it pages,
+ * and stops the moment the running sum reaches the limit - which is all the
+ * caller ever asks. In practice that is one page: a user at their cap is
+ * decided by the first thousand rows.
+ */
+const USAGE_PAGE = 1000;
+const USAGE_MAX_PAGES = 20;
+
+async function dailyUsed(
+  kind: string,
+  who: string,
+  today: string,
+  limit: number
+): Promise<{ used: number; unreadable?: true }> {
+  let used = 0;
+  for (let page = 0; page < USAGE_MAX_PAGES; page++) {
+    const read = await sbSelectStrict<{ count: number }>(
+      "api_usage",
+      `select=count&kind=eq.${encodeURIComponent(kind)}&user_email=eq.${encodeURIComponent(
+        who
+      )}&created_at=gte.${encodeURIComponent(today)}&order=id.asc&offset=${
+        page * USAGE_PAGE
+      }&limit=${USAGE_PAGE}`
+    );
+    if ("error" in read && read.error === "unavailable") return { used: 0, unreadable: true };
+    const rows = "rows" in read ? read.rows : [];
+    for (const r of rows) used += r.count ?? 1;
+    // Enough to answer the question, or the table ran out. Either way, stop.
+    if (used >= limit || rows.length < USAGE_PAGE) break;
+  }
+  return { used };
 }
 
 // ---- request caching (saves real money) --------------------------------------------

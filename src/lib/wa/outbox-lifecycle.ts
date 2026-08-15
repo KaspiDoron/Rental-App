@@ -52,6 +52,14 @@ export interface OutboxMeta {
   /** Consecutive drains blocked by a live idempotency claim. */
   dupHolds?: number;
   /**
+   * Epoch ms of the FIRST drain pass that found this row due and did not send
+   * it. Stamped once and never rewritten, because it is the only thing that
+   * separates "deliberately scheduled for tomorrow morning" from "has been
+   * bouncing around the queue all day" - `not_before` is rewritten by every
+   * re-park and therefore cannot tell them apart (wa/outbox-policy).
+   */
+  firstDueAt?: number;
+  /**
    * Epoch ms at which this row's WAVE closes (plan Part 11 F1).
    *
    * Stamped at enqueue by the mass route so the drain can clamp its re-stamps
@@ -69,6 +77,13 @@ export interface OutboxRow {
   body: string;
   not_before: string;
   meta: OutboxMeta | null;
+  /**
+   * When the message was COMPOSED. Optional because the column is newer than
+   * some databases this code can reach, so the drain asks for it only when the
+   * schema probe says it is there (see wa/outbox-policy for why age must be
+   * measured from it and never from `not_before`).
+   */
+  created_at?: string | null;
 }
 
 export type OutboxState = "due" | "waiting" | "sending";

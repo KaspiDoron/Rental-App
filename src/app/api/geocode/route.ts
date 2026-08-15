@@ -21,6 +21,12 @@ export async function GET(req: Request) {
     if (await killSwitchOn()) return NextResponse.json({ results: [], error: "paused" });
     const gate = await checkDailyLimit("geocode", session.email, "LIMIT_GEOCODE_PER_DAY");
     if (!gate.allowed) return NextResponse.json({ results: [], error: "daily-limit" });
+    // The debit the gate above reads. `recordApi("geocoding")` in lib/google is
+    // the COST tracker - a different kind, and no user_email - so this cap's
+    // durable half summed to zero on every instance and only the in-memory
+    // counter (reset by every cold start) was doing anything at all.
+    const { recordApi } = await import("@/lib/usage");
+    void recordApi("geocode", 1, session.email).catch(() => {});
   }
 
   const url = new URL(req.url);

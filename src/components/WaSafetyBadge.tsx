@@ -101,7 +101,11 @@ export function WaSafetyBadge({ safety }: { safety: WaSafety | null }) {
           {safety.queued > 0 && (
             <p className="mt-1">
               {safety.queued} {t("message(s) held")}
-              {(safety.publicQueueReasons ?? []).length > 0 ? ` - ${(safety.publicQueueReasons ?? []).join(" · ")}` : ""}
+              {/* queueReasonLabel() output - app copy, and the ONE line here
+                  that was not going through t(). */}
+              {(safety.publicQueueReasons ?? []).length > 0
+                ? ` - ${(safety.publicQueueReasons ?? []).map((r) => t(r)).join(" · ")}`
+                : ""}
             </p>
           )}
           <p className="mt-1.5 text-[10px] text-faint">
