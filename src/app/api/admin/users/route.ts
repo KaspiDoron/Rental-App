@@ -126,7 +126,27 @@ export async function POST(req: Request) {
   }
 
   if (action === "promote" || action === "demote") {
-    // Only management may manage management; the owner can never be demoted.
+    // MEMBERSHIP OF MANAGEMENT IS THE OWNER'S DECISION, NOT A PEER ADMIN'S.
+    //
+    // This gate was `requireManagement`, so ANY admin could promote an
+    // arbitrary email to admin and demote every other admin. The owner was
+    // protected by the check below; nobody else was. And admin is not a
+    // read-only role in this app - it opens the Key Vault, where an admin can
+    // paste their own integration keys and read every masked setting, so one
+    // compromised or disgruntled admin account converts into durable,
+    // self-renewing privilege plus the removal of everyone who could revoke it.
+    //
+    // A promotion is also PERSISTENT (`ADMIN_EMAILS_EXTRA` in the vault), which
+    // is exactly what makes it worth restricting: everything else on this route
+    // is reversible by the owner, and this is the one action that can be used
+    // to make the owner's next login the only way back.
+    if (session.role !== "owner") {
+      return NextResponse.json(
+        { error: "Only the owner can add or remove admins." },
+        { status: 403 }
+      );
+    }
+    // The owner can never be demoted (setAdmin also refuses, belt and braces).
     if (isOwner(String(email)) && action === "demote") {
       return NextResponse.json({ error: "The owner cannot be demoted." }, { status: 400 });
     }

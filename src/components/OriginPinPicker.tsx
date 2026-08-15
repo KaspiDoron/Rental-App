@@ -90,7 +90,7 @@ export default function OriginPinPicker({
 
   if (typeof document === "undefined") return null;
   return createPortal(
-    <div className="fixed inset-0 z-[1300] flex flex-col bg-black/70 pt-safe pb-safe">
+    <div className="layer-lightbox fixed inset-0 flex flex-col bg-black/70 pt-safe pb-safe">
       <div className="mx-auto flex h-full w-full max-w-lg flex-col p-3">
         <div className="surface-strong flex-1 overflow-hidden rounded-blob">
           <div className="flex items-center justify-between p-3 pb-2">

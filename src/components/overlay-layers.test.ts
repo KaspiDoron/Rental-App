@@ -30,12 +30,34 @@ describe("an overlay escapes the canvas", () => {
   it("no overlay carries a hand-picked z-index any more", () => {
     expect(read("src/components/Onboarding.tsx")).not.toMatch(/z-\[1300\]/);
   });
+
+  // W8 #21: THE LADDER WAS ONLY HALF-ADOPTED, AND THE HALF LEFT BEHIND WAS THE
+  // EXACT NUMBER THIS FILE EXISTS TO ELIMINATE.
+  //
+  // Onboarding's z-[1300] was removed and the assertion above pinned it there -
+  // while the shared Modal (every dialog in the app) kept a raw z-[1200] and
+  // three full-screen viewers kept the same raw z-[1300]. A convention adopted
+  // by one file is a convention nothing enforces, so a new surface still picks
+  // a bigger number than whatever it lost to last time.
+  it("the shared Modal and every full-screen viewer state a LAYER, not a number", () => {
+    const files = [
+      "src/components/Modal.tsx",
+      "src/components/PhotoGallery.tsx",
+      "src/components/OriginPinPicker.tsx",
+      "src/components/WaitGame.tsx",
+    ];
+    for (const f of files) {
+      const src = read(f);
+      expect(src, `${f} still hardcodes a dialog z-index`).not.toMatch(/z-\[1[23]\d\d\]/);
+      expect(src, `${f} states no layer`).toMatch(/layer-(overlay|lightbox)/);
+    }
+  });
 });
 
 describe("the layer ladder is named, not guessed", () => {
   it("every rung is a token", () => {
     const src = css();
-    for (const t of ["--z-chrome", "--topbar-z", "--z-coach", "--z-overlay", "--z-veil", "--z-alert"]) {
+    for (const t of ["--z-chrome", "--topbar-z", "--z-coach", "--z-overlay", "--z-lightbox", "--z-veil", "--z-alert"]) {
       expect(src, `${t} missing`).toMatch(new RegExp(`${t}:\\s*\\d+`));
     }
   });
@@ -53,13 +75,16 @@ describe("the layer ladder is named, not guessed", () => {
     expect(topbar).toBeLessThan(coach);
     // THE REGRESSION: a modal must beat the navigation bar, whatever else moves.
     expect(coach).toBeLessThan(overlay);
-    expect(overlay).toBeLessThan(veil);
+    // A viewer opened FROM a dialog sits above it and below the route veil.
+    const lightbox = val("--z-lightbox");
+    expect(overlay).toBeLessThan(lightbox);
+    expect(lightbox).toBeLessThan(veil);
     expect(veil).toBeLessThan(alert);
   });
 
   it("there is a class per rung, so components state a layer not a number", () => {
     const src = css();
-    for (const c of [".layer-chrome", ".layer-coach", ".layer-overlay", ".layer-veil", ".layer-alert"]) {
+    for (const c of [".layer-chrome", ".layer-coach", ".layer-overlay", ".layer-lightbox", ".layer-veil", ".layer-alert"]) {
       expect(src).toContain(c);
     }
   });

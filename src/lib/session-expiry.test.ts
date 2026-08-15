@@ -8,6 +8,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("./runtime-config", () => ({
   getConfig: async () => undefined,
+  // W8 #27: the runtime admin list is read FRESH (single row, 3s) instead of
+  // through the 30s whole-vault cache, so a demotion propagates to warm
+  // instances in seconds rather than half a minute.
+  getConfigFresh: async () => ({ value: undefined }),
   setConfig: async () => {},
 }));
 vi.mock("./access", () => ({

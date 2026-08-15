@@ -346,6 +346,9 @@ function ComposeTab({
           <button
             key={c.id}
             onClick={() => setCategory(c.id)}
+            // Selected-by-colour-alone: the category chips carried no state
+            // for a screen reader or for forced-colours mode.
+            aria-pressed={category === c.id}
             className={`chip whitespace-nowrap rounded-full border-2 px-3 py-1.5 text-[12px] font-bold ${
               category === c.id
                 ? "border-brandblue bg-brandblue text-white"
@@ -490,6 +493,7 @@ function ReportsTab({
             <button
               key={c.id}
               onClick={() => setPick(c.id)}
+              aria-pressed={pick === c.id}
               className={`chip whitespace-nowrap rounded-full border-2 px-2.5 py-1 text-[11px] font-bold ${
                 pick === c.id
                   ? "border-brandblue bg-brandblue text-white"

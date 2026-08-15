@@ -55,10 +55,21 @@ describe("the 8-second poll is scoped to the person who fired it", () => {
 
   it("the client cannot stack polls on top of each other", () => {
     const page = readCode("src/app/page.tsx");
-    expect(page).toMatch(/let inFlight = false;/);
-    expect(page).toMatch(/if \(inFlight\) return;/);
+    // W8 #17: the guard is a REF, not a `let` inside the effect. The effect is
+    // re-created on wake (syncNonce is in its deps), so a per-effect flag reset
+    // to false at exactly the moment a slow drain was still running - and the
+    // new closure launched a second one on top of it. A ref survives that.
+    expect(page).toMatch(/const repliesInFlight = useRef\(false\);/);
+    expect(page).toMatch(/const inFlight = repliesInFlight;/);
+    expect(page).toMatch(/if \(inFlight\.current\) return;/);
+    expect(page).not.toMatch(/let inFlight = false;/);
     // Released in `finally`, or one thrown error wedges the poll forever.
-    expect(page).toMatch(/\} finally \{\s*inFlight = false;/);
+    expect(page).toMatch(/\} finally \{[\s\S]{0,140}inFlight\.current = false;/);
+    // ...and the old request is ABORTED on cleanup, not merely ignored: an
+    // ignored request is still a second concurrent drain on the server.
+    expect(page).toMatch(/const repliesAbort = useRef<AbortController \| null>\(null\);/);
+    expect(page).toMatch(/signal: ctl\.signal,/);
+    expect(page).toMatch(/repliesAbort\.current\?\.abort\(\);/);
   });
 });
 

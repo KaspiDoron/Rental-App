@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { loadPublicConfig } from "@/lib/client/public-config";
 
 declare global {
   interface Window {
@@ -32,13 +33,17 @@ export function AdBanner({
 
   useEffect(() => {
     if (!free) return;
-    fetch("/api/config/public")
-      .then((r) => r.json())
-      .then((d) => {
-        setClient(d.adsenseClient ?? null);
-        setUnit(d.adsenseSlot ?? null);
-      })
-      .catch(() => {});
+    let alive = true;
+    // Shared single-flight: three components used to fetch this force-dynamic
+    // endpoint independently on every cold load (see lib/client/public-config).
+    void loadPublicConfig().then((d) => {
+      if (!alive) return;
+      setClient(d.adsenseClient);
+      setUnit(d.adsenseSlot);
+    });
+    return () => {
+      alive = false;
+    };
   }, [free]);
 
   // AN AD UNIT WITH NO UNIT ID CANNOT BE FILLED.

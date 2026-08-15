@@ -1,11 +1,21 @@
 // Pure drain policy for an already-CLAIMED outbox row.
 //
-// drainOutbox claims a due row by DELETING it (atomic delete-with-return), then
-// re-runs the guard. If the guard rejects, the row is gone from the table - so
-// the drain MUST decide, purely from the verdict, whether to re-insert it. The
-// data-loss bug this pins: a non-terminal reject (daily cap, circuit breaker)
-// that returned a bare {allow:false} WITHOUT re-queuing left the claimed row
-// deleted forever - "sent a few then the rest vanished".
+// HOW A ROW IS CLAIMED (read this before reasoning about re-park safety - the
+// comment that used to sit here described the OLD mechanism and anyone starting
+// from it starts from a false model of what a lost re-park costs):
+//
+//   drainOutbox claims a due row by LEASE - an atomic conditional update that
+//   pushes `not_before` past now and stamps `meta.claimedAt` (wa/outbox-
+//   lifecycle). The row NEVER leaves the table. Two drainers serialize on the
+//   row lock and the loser matches nothing; a drainer that dies simply lets the
+//   lease lapse and the row is due again.
+//
+// It was a delete-with-return once, and that is where this module's rule comes
+// from: with the row gone, a non-terminal reject (daily cap, circuit breaker)
+// that returned a bare {allow:false} without re-queuing deleted the message
+// forever - "sent a few then the rest vanished". Under the lease the same
+// mistake is survivable (the lease lapses and the row comes back minutes
+// later), but it is still a stall nobody asked for, so the rule stands:
 //
 // A claimed row must be re-parked EXACTLY when the reject is neither an explicit
 // re-queue (queuedUntil set) nor a deliberate terminal drop (terminal set -
@@ -91,12 +101,57 @@ export function compareOutboxRows(
  * Six hours: long enough that no legitimate pacing hold (the batch deadline
  * clamps to the same evening) is ever caught by it, short enough that nothing
  * sent is answering a question the traveller has forgotten asking.
+ *
+ * AGE IS MEASURED FROM `created_at`, AND MEASURING IT FROM `not_before` MADE
+ * THE CEILING TOOTHLESS AGAINST EXACTLY THE BACKLOG IT DESCRIBES.
+ *
+ * `not_before` is not the message's age - it is its NEXT attempt. Every re-park
+ * path rewrites it to `now + delay`: the over-budget smoothing, the lost-claim
+ * penalty, the transient bounce, the duplicate hold. So a row that keeps losing
+ * a claim was re-stamped young on every single pass and could never age out,
+ * while a row parked once and left alone aged normally. The ceiling caught the
+ * healthy rows and spared the stuck ones - the precise inverse of its purpose.
+ *
+ * `created_at` never moves, so "this answer is six hours out of date" is
+ * finally the question being asked.
+ *
+ * ...MINUS THE WAIT THE ROW WAS DELIBERATELY GIVEN. A cold introduction parked
+ * at 22:00 for the shop's 09:00 opening is ELEVEN HOURS old the first second it
+ * becomes eligible, and the app has already promised the traveller in writing
+ * that it "goes out tomorrow morning automatically". Binning it on arrival
+ * would be a new lie, not a fix. So the planned wait is subtracted:
+ *
+ *     age = now - created_at - (firstDueAt - created_at) = now - firstDueAt
+ *
+ * where `firstDueAt` is stamped by the drain the first time the row is DUE and
+ * still does not go out. A row serving its original schedule has no stamp and
+ * keeps the old not_before reading exactly; a row bouncing around the queue has
+ * one, and from then on every re-park is charged against it.
  */
 export const OUTBOX_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-export function outboxExpired(notBefore: string, nowMs: number): boolean {
-  const due = Date.parse(notBefore);
-  // An unparseable timestamp is not evidence of age. Leave it to the send path.
-  if (!Number.isFinite(due)) return false;
-  return nowMs - due > OUTBOX_MAX_AGE_MS;
+export interface OutboxAge {
+  /** wa_outbox.created_at, when the database has the column. */
+  createdAt?: string | null;
+  /** meta.firstDueAt - epoch ms of the first drain pass that did not send. */
+  firstDueAt?: number | null;
+  notBefore: string;
+}
+
+export function outboxExpired(row: OutboxAge, nowMs: number): boolean {
+  const firstDue = Number(row.firstDueAt);
+  if (!Number.isFinite(firstDue)) {
+    // NEVER RE-PARKED. Either it is about to send, or it is serving the long
+    // hold the guard deliberately gave it. Keep the pre-existing reading, which
+    // for both of those is ~0 - and which is also the only reading available on
+    // a database whose wa_outbox predates `created_at`.
+    const due = Date.parse(row.notBefore);
+    if (!Number.isFinite(due)) return false;
+    return nowMs - due > OUTBOX_MAX_AGE_MS;
+  }
+  const born = row.createdAt ? Date.parse(row.createdAt) : NaN;
+  // Whichever is LATER: a row cannot be older than it is, and it cannot be
+  // charged for a wait it was told to serve.
+  const from = Number.isFinite(born) ? Math.max(born, firstDue) : firstDue;
+  return nowMs - from > OUTBOX_MAX_AGE_MS;
 }

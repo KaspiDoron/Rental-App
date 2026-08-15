@@ -90,8 +90,17 @@ describe("every write stamps it, and the scope reads it", () => {
       const inserts = code.split(`sbInsert("wa_outbox", [`).slice(1);
       expect(inserts.length).toBeGreaterThan(0);
       for (const chunk of inserts) {
-        // The record literal ends well within 400 chars of the insert call.
-        expect(chunk.slice(0, 400)).toMatch(/to_key: outboxKey\(/);
+        // The record literal ends well within 600 chars of the insert call.
+        //
+        // W8: it must be the SEATBELTED spelling. `to_key` arrives by
+        // `alter table ... add column if not exists`, so a database that has
+        // not re-run schema.sql does not have it - and PostgREST 400s a record
+        // naming an unknown column, killing the whole insert. park.ts probed;
+        // these four named it unconditionally, so on an un-migrated database
+        // every non-drain guard caller got {allow:false} with no row and no
+        // queuedUntil: told "queued" with nothing queued anywhere.
+        expect(chunk.slice(0, 600)).toMatch(/\.\.\.\(await outboxToKeyPatch\(/);
+        expect(chunk.slice(0, 600)).not.toMatch(/\bto_key: outboxKey\(/);
       }
     }
   });

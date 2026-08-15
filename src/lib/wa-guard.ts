@@ -46,7 +46,8 @@ import { clampRestampToWave } from "./wa/waves";
 // `noteRisk` cannot throw, so telemetry can never be the reason a send fails.
 import { noteRisk } from "./wa/risk-events";
 import { digitsOnly } from "./phone";
-import { numberFilter, waDigits, lidKey, outboxKey, nationalTail } from "./wa/phone-key";
+import { numberFilter, waDigits, lidKey, nationalTail } from "./wa/phone-key";
+import { outboxToKeyPatch } from "./wa/outbox-columns";
 import {
   claimOutboxRow,
   releaseOutboxRow,
@@ -1868,7 +1869,12 @@ export async function guardOutbound(rawOpts: {
         {
           sender_key: opts.senderKey,
           to_number: opts.toDigits,
-          to_key: outboxKey(opts.toDigits),
+          // SEATBELT: `to_key` is newer than some databases this code can
+          // reach. Naming it unconditionally 400s the whole insert there, and
+          // this park is what every NON-drain caller of the guard depends on -
+          // they would be handed {allow:false} with no row and no queuedUntil,
+          // i.e. told "queued" with nothing queued. See wa/outbox-columns.
+          ...(await outboxToKeyPatch(opts.toDigits)),
           body: text,
           not_before: notBefore,
           // Keep the human reason with the row so the queue viewer explains why.
@@ -2867,6 +2873,8 @@ export async function drainOutbox(
     ok: boolean;
     error?: string;
     rateLimited?: boolean;
+    /** The budget could not be READ - neither a cap nor a host fault. */
+    budgetUnreadable?: boolean;
     /** The limiter's own wait. Present only on a cap refusal. */
     retryAfterSeconds?: number;
     unconfirmed?: boolean;
@@ -2875,7 +2883,15 @@ export async function drainOutbox(
   opts?: DrainOptions
 ): Promise<number> {
   const due = new Date().toISOString();
-  const cols = "select=id,sender_key,to_number,body,not_before,meta";
+  // `created_at` is the only honest measure of a message's age (see
+  // wa/outbox-policy) - and it is newer than some databases this code can
+  // reach, so it is asked for only when the cached schema probe says it is
+  // there. Naming a missing column would 400 BOTH selects and take the whole
+  // drain down, which is a far worse failure than a weaker staleness ceiling.
+  const hasCreatedAt = (await tableReady("wa_outbox", "created_at")) === "ready";
+  const cols = `select=id,sender_key,to_number,body,not_before,meta${
+    hasCreatedAt ? ",created_at" : ""
+  }`;
   const senderFilter = opts?.senderKey
     ? `&sender_key=eq.${encodeURIComponent(opts.senderKey)}`
     : "";
@@ -2949,7 +2965,18 @@ export async function drainOutbox(
     // scheduler calling this every minute it is not - and the freshness gate
     // cannot save us, because NEVER_STALE exempts cold introductions, so an
     // ancient "do you have one for tomorrow?" is judged fresh and goes out.
-    if (outboxExpired(cand.not_before, Date.now())) {
+    const candMeta = (cand.meta ?? {}) as OutboxMeta;
+    // The wave this row belongs to (stamped at enqueue), needed by EVERY
+    // re-stamp on this row - including the over-budget one below, which runs
+    // before the claim and therefore before `release()` exists.
+    const waveEndsAt = Number(candMeta.waveEndsAt) || null;
+    const firstDueAt = Number(candMeta.firstDueAt) || null;
+    if (
+      outboxExpired(
+        { createdAt: cand.created_at, firstDueAt, notBefore: cand.not_before },
+        Date.now()
+      )
+    ) {
       await completeOutboxRow(cand.id);
       await insertPathEvent({
         kind: "wa-send-expired",
@@ -2959,10 +2986,16 @@ export async function drainOutbox(
         vendor_name: String(
           (cand.meta as { vendorName?: string } | null)?.vendorName ?? cand.to_number
         ),
-        detail: `Binned a message to +${cand.to_number} (sender ${cand.sender_key}) that had been due since ${cand.not_before} - older than the ${Math.round(OUTBOX_MAX_AGE_MS / 3600_000)}h ceiling. Sending it now would answer a question the traveller has moved on from.`,
+        detail: `Binned a message to +${cand.to_number} (sender ${cand.sender_key}) composed ${cand.created_at ?? cand.not_before} and stuck in the queue since ${
+          firstDueAt ? new Date(firstDueAt).toISOString() : cand.not_before
+        } - older than the ${Math.round(OUTBOX_MAX_AGE_MS / 3600_000)}h ceiling. Sending it now would answer a question the traveller has moved on from.`,
       });
       continue;
     }
+    // STAMPED ONCE, HERE, BEFORE ANY BRANCH CAN RE-PARK THE ROW. Every path
+    // below rewrites `not_before`, so this is the last moment at which "when
+    // did this row first get a real chance to go?" is still knowable.
+    const dueSince = firstDueAt ?? Date.now();
     const cold = isCold(cand);
     const rcptKey = `${cand.sender_key}|${digitsOnly(cand.to_number)}`;
     const overCap = cold
@@ -2977,11 +3010,47 @@ export async function drainOutbox(
       // gap are the real pacers. It used to wait 30-90s here for a queueing
       // artefact, on top of everything else, which is how a "reply in seconds"
       // target quietly became minutes.
+      //
+      // THE WAVE CLAMP BELONGS HERE MOST OF ALL. This branch handles "the
+      // rest" of every cold wave - the drain sends two intros per sender per
+      // invocation and re-parks everything else through exactly this line - and
+      // it was the one re-stamp that skipped `clampRestampToWave`, which was
+      // wired only into the post-claim `release()`. So the burst that waves
+      // exist to contain bled straight across its own silence, wave after
+      // wave, while the clamp guarded a path that handles a handful of rows.
+      const overCapReason = cold
+        ? "batch-spacing - your agent opens shops a few at a time"
+        : "human pacing gap";
       await sbUpdate("wa_outbox", `id=eq.${cand.id}`, {
-        not_before: cold
-          ? jitteredHold(Date.now(), 2, 2)
-          : new Date(Date.now() + (RECIPIENT_LOCK_SEC + 2 + Math.random() * 6) * 1000).toISOString(),
+        not_before: new Date(
+          clampRestampToWave(
+            cold
+              ? Date.parse(jitteredHold(Date.now(), 2, 2))
+              : Date.now() + (RECIPIENT_LOCK_SEC + 2 + Math.random() * 6) * 1000,
+            waveEndsAt
+          )
+        ).toISOString(),
+        meta: { ...candMeta, firstDueAt: dueSince, reason: overCapReason },
       }).catch(() => {});
+      // THE DOMINANT HOLD IN THE WHOLE SYSTEM, AND IT LEFT NO TRAIL. hold-events
+      // promises "every queue() verdict appends a wa-hold event" and
+      // message-path.ts is built to read that history back - but this re-park
+      // and the duplicate-claim one below are the drain's own, made with a
+      // direct write, so neither wrote anything at all. The message-path view
+      // showed a row that had been re-parked forty times as a row nothing had
+      // ever happened to.
+      {
+        const { recordHoldEvent } = await import("./wa/hold-events");
+        void recordHoldEvent({
+          senderKey: cand.sender_key,
+          toNumber: cand.to_number,
+          reason: overCapReason,
+          outboxRowId: cand.id,
+          decisionId:
+            typeof candMeta.decisionId === "string" ? (candMeta.decisionId as string) : undefined,
+          msgKind: typeof candMeta.kind === "string" ? candMeta.kind : undefined,
+        });
+      }
       continue;
     }
     // ATOMIC CLAIM BY LEASE. This used to be a delete-with-return, which won
@@ -2996,8 +3065,9 @@ export async function drainOutbox(
     // gives a crashed drainer's message a way back: the lease lapses and the row
     // is simply due again, which the delete made impossible.
     const claimedAt = Date.now();
-    if (!(await claimOutboxRow(cand.id, cand.meta as OutboxMeta | null, claimedAt))) continue;
-    const row: OutboxRow = { ...cand, meta: { ...(cand.meta ?? {}), claimedAt } };
+    if (!(await claimOutboxRow(cand.id, { ...candMeta, firstDueAt: dueSince }, claimedAt)))
+      continue;
+    const row: OutboxRow = { ...cand, meta: { ...candMeta, firstDueAt: dueSince, claimedAt } };
     /** Hand this row back to the queue at a new time, with an honest reason. */
     // WAVE-AWARE RE-STAMP - the drain-side half of Part 11 F1.
     //
@@ -3020,15 +3090,34 @@ export async function drainOutbox(
     // EARLIER. Clamping a safety hold to a wave boundary would release a paused
     // account sooner, which is the opposite of what the hold is for. Pacing
     // re-times on that path are already bounded by `boundToBatch`.
-    const waveEndsAt = Number((cand.meta as { waveEndsAt?: unknown } | null)?.waveEndsAt) || null;
-    const release = (delayMs: number, patch: Record<string, unknown>) =>
-      releaseOutboxRow(
-        row.id,
-        new Date(
-          clampRestampToWave(Date.now() + Math.max(0, delayMs), waveEndsAt)
-        ).toISOString(),
-        { ...(cand.meta ?? {}), ...patch } as OutboxMeta
-      );
+    const release = async (delayMs: number, patch: Record<string, unknown>) => {
+      const notBefore = new Date(
+        clampRestampToWave(Date.now() + Math.max(0, delayMs), waveEndsAt)
+      ).toISOString();
+      const held = await releaseOutboxRow(row.id, notBefore, {
+        ...candMeta,
+        firstDueAt: dueSince,
+        ...patch,
+      } as OutboxMeta);
+      // EVERY re-park appends to the durable hold trail, including the drain's
+      // own. `guardOutbound`'s queue() has always done this; the drain's
+      // re-parks went through a direct write and wrote nothing, so the two
+      // holds that dominate a real queue - over budget, and a live duplicate
+      // claim - were the two the message-path view could never show.
+      const reason = typeof patch.reason === "string" ? patch.reason : "re-parked";
+      const { recordHoldEvent } = await import("./wa/hold-events");
+      void recordHoldEvent({
+        senderKey: row.sender_key,
+        toNumber: row.to_number,
+        reason,
+        until: notBefore,
+        outboxRowId: row.id,
+        decisionId:
+          typeof candMeta.decisionId === "string" ? (candMeta.decisionId as string) : undefined,
+        msgKind: typeof candMeta.kind === "string" ? candMeta.kind : undefined,
+      });
+      return held;
+    };
     // Re-check the gate (caps/hours may have changed while queued). Preserve the
     // row's ORIGINAL auto-ness: a user-typed `custom` message that the caps
     // parked is NOT an agent send, so it must not be re-evaluated as auto and
@@ -3104,7 +3193,14 @@ export async function drainOutbox(
     // N concurrent drainers all pass them together. The claim row is the
     // lock: exactly ONE invocation per min-gap window per sender sends, and
     // exactly one delivery per unique message ever happens.
-    const isReplyRow = rowKind !== "rfq" && rowKind !== "custom";
+    // THE LANE TEST AND THE FILTER IT CLAIMS TO MATCH MUST AGREE ABOUT
+    // `human-manual`. REPLY_KIND_FILTER excludes it (rfq, custom, human-manual)
+    // and so does `replyKind` inside guardOutbound - this test omitted it, so a
+    // message the USER typed by hand was paced on the reply lane (5s per-shop
+    // gap, per-recipient claim, reply fleet gap) instead of the strict
+    // per-sender velocity lane the other two put it on. One row, three
+    // different opinions about which budget it draws from.
+    const isReplyRow = rowKind !== "rfq" && rowKind !== "custom" && rowKind !== "human-manual";
     const claim = await claimSendSlots({
       senderKey: row.sender_key,
       toDigits: row.to_number,
@@ -3194,6 +3290,7 @@ export async function drainOutbox(
       ok: boolean;
       error?: string;
       rateLimited?: boolean;
+      budgetUnreadable?: boolean;
       /** The limiter's own wait. Present only on a cap refusal. */
       retryAfterSeconds?: number;
       unconfirmed?: boolean;
@@ -3316,7 +3413,13 @@ export async function drainOutbox(
             typeof (row.meta as { decisionId?: string } | null)?.decisionId === "string"
               ? ((row.meta as { decisionId?: string }).decisionId as string)
               : undefined,
-          msgKind: r.rateLimited ? "rate-limited" : transient ? "transient" : "recipient",
+          msgKind: r.rateLimited
+            ? "rate-limited"
+            : r.budgetUnreadable
+              ? "budget-unreadable"
+              : transient
+                ? "transient"
+                : "recipient",
         });
       }
       const dropEvent = (detail: string) =>
@@ -3350,6 +3453,24 @@ export async function drainOutbox(
           reason: `held - daily message allowance reached, resumes ${resumesAt
             .toISOString()
             .slice(11, 16)}`,
+        });
+        continue;
+      }
+
+      // A BUDGET WE COULD NOT READ IS NOT A BUDGET WE SPENT.
+      //
+      // `checkRateLimit` fails CLOSED when the send-history read is
+      // unavailable: nothing is wrong with the number and nothing is at cap -
+      // the count simply cannot be trusted right now, so the send waits. That
+      // refusal used to arrive here stamped `rateLimited` (the send path
+      // hardcoded it), so a Supabase outage was reported to the owner as
+      // "daily message allowance reached" - a number they could check and
+      // disprove, pointing them away from the actual fault. It is a sync
+      // retry, and it says so.
+      if (r.budgetUnreadable) {
+        const waitSec = Math.max(30, Math.min(600, r.retryAfterSeconds ?? 120));
+        await release(waitSec * 1000, {
+          reason: "sync-retry - send budget unreadable, holding rather than risking your number",
         });
         continue;
       }

@@ -46,6 +46,20 @@ export async function POST(req: Request) {
       { status: 429 }
     );
   }
+  // THE DEBIT THIS GATE READS, WHICH NOTHING WAS WRITING.
+  //
+  // `checkDailyLimit("search", ...)` counts `api_usage` rows of kind `search`
+  // scoped to this user. The only searches ever recorded were
+  // `recordApi("places_search")` inside lib/google - a DIFFERENT kind, and with
+  // no user_email at all (it is the COST tracker: whose spend, not whose
+  // quota). So the durable, cross-instance half of this cap summed to zero
+  // forever, and all that remained was a per-instance in-memory counter that a
+  // cold start resets - i.e. on Cloud Run, effectively no cap.
+  //
+  // Same shape as /api/translate's debit, which is the one that got it right.
+  // Fire-and-forget: a search must never fail because its meter did.
+  const { recordApi } = await import("@/lib/usage");
+  void recordApi("search", 1, session.email).catch(() => {});
 
   const body = (await req.json().catch(() => null)) as Body | null;
   // Validate BOTH coordinates and their ranges - a valid lat with a string/NaN

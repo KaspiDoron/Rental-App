@@ -21,27 +21,31 @@ const ago = (ms: number) => new Date(NOW - ms).toISOString();
 // drain every minute changes what "due" means: every row whose not_before has
 // passed becomes eligible at once, however long ago it passed.
 
+// A row that has never been re-parked has no `firstDueAt` stamp, which is the
+// legacy (not_before) reading - the behaviour these cases were written for.
+const unparked = (notBefore: string) => ({ notBefore });
+
 describe("REPRODUCTION: 'due' was a floor with no ceiling", () => {
   it("a row overdue by minutes is still perfectly sendable", () => {
-    expect(outboxExpired(ago(5 * 60_000), NOW)).toBe(false);
+    expect(outboxExpired(unparked(ago(5 * 60_000)), NOW)).toBe(false);
   });
 
   it("a row overdue by three days is not", () => {
-    expect(outboxExpired(ago(3 * 24 * 3600_000), NOW)).toBe(true);
+    expect(outboxExpired(unparked(ago(3 * 24 * 3600_000)), NOW)).toBe(true);
   });
 
   it("the boundary is the ceiling itself, not near it", () => {
-    expect(outboxExpired(ago(OUTBOX_MAX_AGE_MS - 1000), NOW)).toBe(false);
-    expect(outboxExpired(ago(OUTBOX_MAX_AGE_MS + 1000), NOW)).toBe(true);
+    expect(outboxExpired(unparked(ago(OUTBOX_MAX_AGE_MS - 1000)), NOW)).toBe(false);
+    expect(outboxExpired(unparked(ago(OUTBOX_MAX_AGE_MS + 1000)), NOW)).toBe(true);
   });
 
   it("a row due in the FUTURE is never expired", () => {
-    expect(outboxExpired(new Date(NOW + 3600_000).toISOString(), NOW)).toBe(false);
+    expect(outboxExpired(unparked(new Date(NOW + 3600_000).toISOString()), NOW)).toBe(false);
   });
 
   it("an unparseable timestamp is not evidence of age", () => {
     // Guessing "expired" here would silently bin a message over a bad string.
-    expect(outboxExpired("not a date", NOW)).toBe(false);
+    expect(outboxExpired(unparked("not a date"), NOW)).toBe(false);
   });
 
   it("the ceiling clears the longest legitimate pacing hold", () => {
@@ -60,19 +64,86 @@ describe("REPRODUCTION: the freshness gate cannot catch these, by design", () =>
     const fresh = readCode("src/lib/wa/freshness-live.ts");
     expect(fresh).toMatch(/const NEVER_STALE = new Set\(\["rfq", "custom", "human-manual"\]\);/);
     expect(fresh).toMatch(/if \(args\.kind && NEVER_STALE\.has\(args\.kind\)\) return FRESH;/);
-    expect(outboxExpired(ago(3 * 24 * 3600_000), NOW)).toBe(true);
+    expect(outboxExpired(unparked(ago(3 * 24 * 3600_000)), NOW)).toBe(true);
   });
 
   it("the drain bins the row instead of sending it, and says so", () => {
     const guard = readCode("src/lib/wa-guard.ts");
-    expect(guard).toMatch(/if \(outboxExpired\(cand\.not_before, Date\.now\(\)\)\) \{/);
+    expect(guard).toMatch(/outboxExpired\(\s*\{ createdAt: cand\.created_at, firstDueAt, notBefore: cand\.not_before \},/);
     expect(guard).toMatch(/kind: "wa-send-expired"/);
     // Completed, not re-parked: a re-park would leave it to expire again forever.
     const block = guard.slice(
-      guard.indexOf("if (outboxExpired("),
+      guard.indexOf("if (\n      outboxExpired("),
       guard.indexOf("const cold = isCold(cand);")
     );
     expect(block).toMatch(/completeOutboxRow\(cand\.id\)/);
+  });
+});
+
+// W8: THE CEILING WAS TOOTHLESS AGAINST EXACTLY THE BACKLOG IT DESCRIBES.
+//
+// `not_before` is not a message's age - it is its NEXT attempt, and every
+// re-park path in the drain rewrites it to `now + delay`. So the row that keeps
+// losing a claim was re-stamped young on every pass and could never age out,
+// while a row parked once and left alone aged normally.
+describe("REPRODUCTION: a re-parked row was re-stamped young forever", () => {
+  const composed = ago(3 * 24 * 3600_000); // three days old
+  const firstDue = NOW - 3 * 24 * 3600_000 + 60_000;
+
+  it("the OLD reading calls a perpetually re-parked three-day-old row fresh", () => {
+    // This is the shape the drain sees on every pass: not_before was just
+    // rewritten to ~now by the previous invocation's re-park.
+    expect(outboxExpired(unparked(ago(30_000)), NOW)).toBe(false);
+  });
+
+  it("measured from created_at, the same row is expired", () => {
+    expect(
+      outboxExpired({ createdAt: composed, firstDueAt: firstDue, notBefore: ago(30_000) }, NOW)
+    ).toBe(true);
+  });
+
+  it("a DELIBERATE overnight hold is not punished for the wait it was given", () => {
+    // A cold intro composed at 22:00 and parked for the shop's 09:00 opening is
+    // eleven hours old the first second it is eligible - and the app has told
+    // the traveller in writing it "goes out tomorrow morning automatically".
+    // Binning it on arrival would be a new lie, not a fix.
+    const composedLastNight = new Date(NOW - 11 * 3600_000).toISOString();
+    // First pass: no stamp yet, so the legacy reading applies and it survives.
+    expect(outboxExpired({ createdAt: composedLastNight, notBefore: ago(1000) }, NOW)).toBe(false);
+    // Stamped on that pass; it gets the full ceiling from THEN, not from 22:00.
+    expect(
+      outboxExpired(
+        { createdAt: composedLastNight, firstDueAt: NOW - 60_000, notBefore: ago(1000) },
+        NOW
+      )
+    ).toBe(false);
+    // ...and still ages out if it goes on bouncing.
+    expect(
+      outboxExpired(
+        {
+          createdAt: composedLastNight,
+          firstDueAt: NOW - OUTBOX_MAX_AGE_MS - 1000,
+          notBefore: ago(1000),
+        },
+        NOW
+      )
+    ).toBe(true);
+  });
+
+  it("the drain stamps firstDueAt ONCE, before any branch can re-park the row", () => {
+    const guard = readCode("src/lib/wa-guard.ts");
+    expect(guard).toMatch(/const dueSince = firstDueAt \?\? Date\.now\(\);/);
+    // Both re-park paths carry it forward rather than re-stamping it.
+    expect(guard).toMatch(/meta: \{ \.\.\.candMeta, firstDueAt: dueSince, reason: overCapReason \}/);
+    expect(guard).toMatch(/firstDueAt: dueSince,/);
+  });
+
+  it("created_at is only asked for when the database actually has it", () => {
+    const guard = readCode("src/lib/wa-guard.ts");
+    // Naming a missing column 400s BOTH selects and takes the drain down
+    // entirely - much worse than a weaker ceiling.
+    expect(guard).toMatch(/tableReady\("wa_outbox", "created_at"\)/);
+    expect(guard).toMatch(/hasCreatedAt \? ",created_at" : ""/);
   });
 });
 

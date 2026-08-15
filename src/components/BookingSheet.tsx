@@ -47,7 +47,6 @@ export function BookingSheet({
 }) {
   const { t } = useI18n();
   const [step, setStep] = useState<Step>("verify");
-  const [verification, setVerification] = useState<string>("");
   // Fulfillment defaults from the request: a hotel-delivery RFQ pre-selects
   // delivery so the booking (and the shop message) match what was negotiated.
   //
@@ -83,20 +82,37 @@ export function BookingSheet({
   // Commitment-lock refusal from the server (double-booking guard).
   const [lockError, setLockError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/negotiate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vendor, rfq, round: 0, verify: true }),
-    })
-      .then((r) => r.json())
-      .then((d) => alive && setVerification(d.verification ?? ""))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [vendor, rfq]);
+  // W8 #28: THE "AGENT SPEC VERIFICATION" BLOCK WAS THE TRAVELLER'S OWN
+  // REQUEST, READ BACK TO THEM UNDER A GREEN TICK.
+  //
+  // It fetched `/api/negotiate` with `verify:true`, whose entire answer is
+  // `verificationMessage(rfq)` - the text we would SEND a shop ("can you verify
+  // the vehicle matches: 125cc scooter, automatic, 3 days from..."). Nothing in
+  // it came from the shop. It was rendered on the last screen before a deposit,
+  // headed "Agent spec verification", beside a savings-coloured check.
+  //
+  // And when the fetch failed it left the placeholder in place, so the block sat
+  // on "Requesting confirmation from the vendor..." for the life of the sheet -
+  // a permanent claim that something was in progress when nothing was.
+  //
+  // What replaces it is only what the SHOP actually said, derived from the
+  // offer the thread stored: the vehicle-identity verdict, the per-extra
+  // verdicts, and the deposit. When the shop has confirmed nothing, it says
+  // that - which is a fact the traveller can act on, unlike a spinner.
+  const confirmedLines: { text: string; tone: "yes" | "no" }[] = [];
+  const off = vendor.offer;
+  if (off?.deposit) confirmedLines.push({ text: `${t("Deposit")}: ${off.deposit}`, tone: "yes" });
+  for (const a of off?.accessories ?? []) {
+    if (a.state === "confirmed") {
+      confirmedLines.push({
+        text: typeof a.extraCost === "number" && a.extraCost > 0 ? `${a.item} (+${a.extraCost})` : a.item,
+        tone: "yes",
+      });
+    } else if (a.state === "refused") {
+      confirmedLines.push({ text: a.item, tone: "no" });
+    }
+  }
+  const vehicleConfirmed = off?.vehicleStatus === "confirmed" || off?.verified === true;
 
   // Free plan schedules SAME-DAY pickups only; Pro/Business unlock future days.
   //
@@ -177,7 +193,7 @@ export function BookingSheet({
         const bd = await bRes.json().catch(() => ({}));
         setLockError(
           bd.error ??
-            "You just locked a deal with another shop - remove that booking first if you changed your mind."
+            t("You just locked a deal with another shop - remove that booking first if you changed your mind.")
         );
         setSubmitting(false);
         return;
@@ -189,7 +205,7 @@ export function BookingSheet({
       // was then sent a closing message about it.
       if (!bRes.ok) {
         const bd = await bRes.json().catch(() => ({}));
-        setLockError(bd.error ?? "That booking could not be saved - please try again.");
+        setLockError(bd.error ?? t("That booking could not be saved - please try again."));
         setSubmitting(false);
         return;
       }
@@ -252,9 +268,9 @@ export function BookingSheet({
     <Modal onClose={onClose}>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-extrabold text-strong">
-          {step === "confirmed" ? "Booking confirmed 🎉" : "Lock your deal"}
+          {step === "confirmed" ? `${t("Booking confirmed")} 🎉` : t("Lock your deal")}
         </h2>
-        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label="Close">
+        <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl px-3" aria-label={t("Close")}>
           ✕
         </button>
       </div>
@@ -263,19 +279,51 @@ export function BookingSheet({
         <div className="font-extrabold text-strong">{vendor.name}</div>
         {vendor.offer && (
           <div className="text-soft">
-            {moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day ·{" "}
-            {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} total
+            {moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/{t("day")} ·{" "}
+            {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} {t("total")}
           </div>
         )}
       </div>
 
       {step === "verify" && (
         <div>
-          <div className="mb-2 flex items-center gap-1.5 text-[12px] font-extrabold text-savings">
-            <Icon name="check" className="h-4 w-4" /> Agent spec verification
+          <div
+            className={`mb-2 flex items-center gap-1.5 text-[12px] font-extrabold ${
+              vehicleConfirmed || confirmedLines.length ? "text-savings" : "text-faint"
+            }`}
+          >
+            <Icon name={vehicleConfirmed || confirmedLines.length ? "check" : "clock"} className="h-4 w-4" />{" "}
+            {t("What the shop confirmed")}
           </div>
           <div className="rounded-2xl border-2 border-line bg-card p-3 text-[13px] text-soft">
-            {verification || "Requesting confirmation from the vendor..."}
+            {vehicleConfirmed ? (
+              <div className="flex items-start gap-1.5">
+                <span aria-hidden className="text-savings">✓</span>
+                <span>{t("The shop confirmed this is the exact vehicle you asked for.")}</span>
+              </div>
+            ) : off?.vehicleNote ? (
+              <div className="flex items-start gap-1.5">
+                <span aria-hidden className="text-faint">·</span>
+                <span>{off.vehicleNote}</span>
+              </div>
+            ) : (
+              <div className="flex items-start gap-1.5">
+                <span aria-hidden className="text-faint">·</span>
+                <span>
+                  {t(
+                    "The shop has not confirmed the exact vehicle in writing yet. Check it with them before you pay anything."
+                  )}
+                </span>
+              </div>
+            )}
+            {confirmedLines.map((l) => (
+              <div key={`${l.tone}:${l.text}`} className="mt-1 flex items-start gap-1.5">
+                <span aria-hidden className={l.tone === "yes" ? "text-savings" : "text-brandred"}>
+                  {l.tone === "yes" ? "✓" : "✕"}
+                </span>
+                <span className={l.tone === "no" ? "line-through opacity-70" : ""}>{l.text}</span>
+              </div>
+            ))}
           </div>
           {/* A GREEN TICK IS A CLAIM ABOUT THE SHOP, AND THIS LIST IS THE
               TRAVELLER'S OWN REQUEST.
@@ -297,7 +345,7 @@ export function BookingSheet({
             {rfq?.maxMileageKm && (
               <div className="flex items-center gap-1.5">
                 <span aria-hidden className="text-faint">·</span>
-                under {rfq.maxMileageKm.toLocaleString()} km
+                {t("under")} {rfq.maxMileageKm.toLocaleString()} km
               </div>
             )}
             {rfq?.accessories.map((a) => {
@@ -342,20 +390,21 @@ export function BookingSheet({
       {step === "schedule" && (
         <div>
           <div className="mb-2 flex items-center gap-1.5 text-[12px] font-extrabold text-soft">
-            <Icon name="calendar" className="h-4 w-4 text-brandblue" /> When would you like it?
+            <Icon name="calendar" className="h-4 w-4 text-brandblue" /> {t("When would you like it?")}
           </div>
           <p className="mb-2 text-[11px] text-faint">
-            Confirm the exact pickup or delivery arrangement directly with the
-            shop over WhatsApp - the agents will have asked already.
+            {t(
+              "Confirm the exact pickup or delivery arrangement directly with the shop over WhatsApp - the agents will have asked already."
+            )}
           </p>
 
           {/* Fulfillment: pickup at the shop vs delivery to your stay */}
           <div className="mt-3 grid grid-cols-3 gap-1.5">
             {(
               [
-                { id: "in-store", label: "🏪 I'll walk in" },
-                { id: "shuttle", label: "🚐 Collect me" },
-                { id: "hotel-delivery", label: "🛵 Deliver to me" },
+                { id: "in-store", label: `🏪 ${t("I'll walk in")}` },
+                { id: "shuttle", label: `🚐 ${t("Collect me")}` },
+                { id: "hotel-delivery", label: `🛵 ${t("Deliver to me")}` },
               ] as { id: Handover; label: string }[]
             ).map((o) => (
               <button
@@ -377,12 +426,12 @@ export function BookingSheet({
           {fulfillment !== "in-store" && (
             <div className="mt-2">
               <PlaceAutocomplete
-                label={fulfillment === "shuttle" ? "Pick-up point" : "Delivery address"}
-                placeholder={
+                label={t(fulfillment === "shuttle" ? "Pick-up point" : "Delivery address")}
+                placeholder={t(
                   fulfillment === "shuttle"
                     ? "Where should they collect you?"
                     : "Hotel name / address for delivery"
-                }
+                )}
                 value={address}
                 onText={setAddress}
               />
@@ -391,21 +440,20 @@ export function BookingSheet({
 
           {/* Rental period the shop is being asked to hold */}
           <div className="mt-3 rounded-2xl bg-card2 p-2.5 text-[12px] text-soft">
-            📅 {durationDays} day{durationDays === 1 ? "" : "s"} · pick up{" "}
-            <span className="font-bold text-strong">{pickupDate}</span> · return{" "}
+            📅 {durationDays} {durationDays === 1 ? t("day") : t("days")} · {t("pick up")}{" "}
+            <span className="font-bold text-strong">{pickupDate}</span> · {t("return")}{" "}
             <span className="font-bold text-strong">{returnDateStr}</span>
-            <div className="mt-0.5 text-[10px] text-faint">Times are the shop&apos;s local time.</div>
+            <div className="mt-0.5 text-[10px] text-faint">{t("Times are the shop's local time.")}</div>
           </div>
 
           {freePlan && (
             <div className="mt-3 rounded-2xl bg-brandyellow-soft p-2.5 text-[12px] font-bold text-warn">
-              Free plan: pickup can be scheduled for TODAY only. Upgrade to Pro
-              to book future days.
+              {t("Free plan: pickup can be scheduled for TODAY only. Upgrade to Pro to book future days.")}
             </div>
           )}
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="text-[12px] font-bold text-soft">
-              Date
+              {t("Date")}
               <input
                 type="date"
                 min={minDate}
@@ -417,7 +465,7 @@ export function BookingSheet({
               />
             </label>
             <label className="text-[12px] font-bold text-soft">
-              Time
+              {t("Time")}
               <input
                 type="time"
                 value={time}
@@ -429,31 +477,31 @@ export function BookingSheet({
 
           {/* The full deal you are about to close, so there are no surprises. */}
           <div className="mt-3 rounded-2xl border-2 border-brandblue/30 bg-brandblue-soft p-3 text-[12px]">
-            <div className="font-extrabold text-strong">Do you really want to close this deal?</div>
+            <div className="font-extrabold text-strong">{t("Do you really want to close this deal?")}</div>
             <div className="mt-1.5 space-y-0.5 text-soft">
               {vendor.offer && (
                 <div>
-                  💰 <span className="font-bold text-strong">{moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/day</span>
+                  💰 <span className="font-bold text-strong">{moneyLocal(vendor.offer.pricePerDay, vendor.offer.currency)}/{t("day")}</span>
                   {" · "}
-                  {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} total ({durationDays}d)
+                  {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} {t("total")} ({durationDays}d)
                 </div>
               )}
-              {vendor.offer?.deposit && <div>🔒 Deposit: {vendor.offer.deposit}</div>}
+              {vendor.offer?.deposit && <div>🔒 {t("Deposit")}: {vendor.offer.deposit}</div>}
               {/* The traveller's OWN choice, in all three modes - not the
                   shop's offer overriding it. */}
               <div>
                 {fulfillment === "hotel-delivery"
-                  ? `🛵 Delivery to ${address.trim() || "your stay"}`
+                  ? `🛵 ${t("Delivery to")} ${address.trim() || t("your stay")}`
                   : fulfillment === "shuttle"
-                  ? `🚐 They collect you at ${address.trim() || "your stay"}`
-                  : "🏪 You walk in to the shop"}
+                  ? `🚐 ${t("They collect you at")} ${address.trim() || t("your stay")}`
+                  : `🏪 ${t("You walk in to the shop")}`}
               </div>
-              <div>📅 {pickupDate} around {time}</div>
+              <div>📅 {pickupDate} {t("around")} {time}</div>
             </div>
             <div className="mt-2 rounded-xl bg-card p-2 text-[11px] font-bold text-brandblue">
-              After you confirm, we send the shop a final message and disconnect
-              WheelDeal from your WhatsApp - you continue the chat in your own
-              WhatsApp. You can reconnect anytime from Profile.
+              {t(
+                "After you confirm, we send the shop a final message and disconnect WheelDeal from your WhatsApp - you continue the chat in your own WhatsApp. You can reconnect anytime from Profile."
+              )}
             </div>
           </div>
 
@@ -466,13 +514,9 @@ export function BookingSheet({
               className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--blue)]"
             />
             <span>
-              I understand that WheelDeal only connects me with independent
-              rental shops and takes NO responsibility whatsoever for the
-              vehicle, its condition, pricing, insurance, deposits, accidents,
-              damages, disputes or the rental transaction itself. AI-negotiated
-              summaries may contain errors - I will verify all terms with the
-              shop. The agreement is strictly between me and the shop, at my own
-              risk.
+              {t(
+                "I understand that WheelDeal only connects me with independent rental shops and takes NO responsibility whatsoever for the vehicle, its condition, pricing, insurance, deposits, accidents, damages, disputes or the rental transaction itself. AI-negotiated summaries may contain errors - I will verify all terms with the shop. The agreement is strictly between me and the shop, at my own risk."
+              )}
             </span>
           </label>
           {lockError && (
@@ -486,11 +530,11 @@ export function BookingSheet({
             className="btn btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-2xl py-2.5 text-sm disabled:opacity-50"
           >
             {submitting ? (
-              <LoadingDots light label="Closing the deal & messaging the shop" />
+              <LoadingDots light label={t("Closing the deal & messaging the shop")} />
             ) : !deliveryReady ? (
-              fulfillment === "shuttle" ? "Add a pick-up point" : "Add a delivery address"
+              t(fulfillment === "shuttle" ? "Add a pick-up point" : "Add a delivery address")
             ) : (
-              "Yes, close this deal"
+              t("Yes, close this deal")
             )}
           </button>
         </div>
@@ -502,7 +546,7 @@ export function BookingSheet({
             <Icon name="check" className="h-8 w-8 text-savings" />
           </div>
           <p className="text-sm text-soft">
-            {vendor.name} is confirmed for{" "}
+            {vendor.name} {t("is confirmed for")}{" "}
             <span className="font-extrabold text-strong">
               {date || defaultDate} at {time}
             </span>
@@ -511,37 +555,38 @@ export function BookingSheet({
           {/* HONEST notify status - we never claim the shop was told unless it was */}
           {notify === "sending" && (
             <p className="mt-2 text-[12px] text-faint">
-              Saving your booking and messaging the shop your pickup time...
+              {t("Saving your booking and messaging the shop your pickup time...")}
             </p>
           )}
           {notify === "sent" && (
             <p className="mt-2 text-[12px] font-bold text-savings">
-              ✓ The shop was messaged that you want the deal. Booking saved to your profile.
+              ✓ {t("The shop was messaged that you want the deal. Booking saved to your profile.")}
             </p>
           )}
           {notify === "queued" && (
             <p className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[12px] font-bold text-brandblue">
-              🕒 The shop looks closed - your message is queued and sends when
-              they open. Booking saved to your profile.
+              🕒 {t("The shop looks closed - your message is queued and sends when they open. Booking saved to your profile.")}
             </p>
           )}
           {notify === "failed" && (
             <p className="mt-2 rounded-xl bg-brandyellow-soft p-2 text-[12px] font-bold text-warn">
               {notifyReason
-                ? `Booking saved, but the confirmation couldn't be sent (${notifyReason}) - open the chat below and tell the shop yourself.`
-                : "Booking saved, but the message could not be sent - open the chat below and tell the shop yourself."}
+                ? `${t("Booking saved, but the confirmation couldn't be sent - open the chat below and tell the shop yourself.")} (${notifyReason})`
+                : t("Booking saved, but the message could not be sent - open the chat below and tell the shop yourself.")}
             </p>
           )}
 
           {/* Handoff: continue in your OWN WhatsApp. WheelDeal has stepped out. */}
           <div className="mt-3 rounded-2xl bg-card2 p-3 text-left text-[12px] text-soft">
-            <div className="font-extrabold text-strong">Finish in your WhatsApp 💬</div>
+            <div className="font-extrabold text-strong">{t("Finish in your WhatsApp")} 💬</div>
             <p className="mt-1">
-              {disconnected
-                ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. You can reconnect the agents anytime from "
-                : "Your WhatsApp stays linked and the agents have stepped back from this chat - the rest of the conversation is just you and the shop. Manage the connection anytime from "}
+              {t(
+                disconnected
+                  ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. You can reconnect the agents anytime from"
+                  : "Your WhatsApp stays linked and the agents have stepped back from this chat - the rest of the conversation is just you and the shop. Manage the connection anytime from"
+              )}{" "}
               <a href="/profile" className="font-bold text-brandblue underline">
-                Profile
+                {t("Profile")}
               </a>
               .
             </p>
@@ -552,7 +597,7 @@ export function BookingSheet({
                 rel="noopener noreferrer"
                 className="btn mt-2 block w-full rounded-xl bg-wagreen-deep py-2.5 text-center text-[13px] font-extrabold text-white shadow-md hover:opacity-90"
               >
-                Open WhatsApp chat with {vendor.name}
+                {t("Open WhatsApp chat with")} {vendor.name}
               </a>
             )}
           </div>
@@ -561,7 +606,7 @@ export function BookingSheet({
             onClick={onClose}
             className="btn mt-3 w-full rounded-2xl border-2 border-line py-2.5 text-sm font-bold text-soft"
           >
-            Done
+            {t("Done")}
           </button>
         </div>
       )}

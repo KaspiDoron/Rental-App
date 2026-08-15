@@ -303,6 +303,13 @@ input, textarea, select, button {
      number decided, and the number was picked to win. */
   --z-panel: 1100; /* full-screen panels - above chrome, BELOW the dialogs they open */
   --z-overlay: 1200; /* modals, sheets, onboarding: they own the screen */
+  /* A VIEWER OPENED FROM A DIALOG. The photo lightbox, the map pin picker and
+     the wait game are all launched from INSIDE a modal and must cover it -
+     which is why all three carried the raw z-[1300] the ladder was built to
+     retire, the exact number `overlay-layers.test.ts` was written to eliminate
+     from Onboarding. Deleting the number from one component and leaving it in
+     three others is not adoption; naming the rung is. */
+  --z-lightbox: 1300; /* full-screen viewers opened FROM an overlay */
   --z-veil: 1400; /* route-change veil - covers a dialog mid-navigation */
   --z-alert: 2000; /* offline / test-mode banners - always legible */
   /* THE BOTTOM-RIGHT STACK, AS NAMED SLOTS - the vertical twin of the z
@@ -362,6 +369,7 @@ input, textarea, select, button {
 .layer-coach { z-index: var(--z-coach); }
 .layer-panel { z-index: var(--z-panel); }
 .layer-overlay { z-index: var(--z-overlay); }
+.layer-lightbox { z-index: var(--z-lightbox); }
 .layer-veil { z-index: var(--z-veil); }
 .layer-alert { z-index: var(--z-alert); }
 

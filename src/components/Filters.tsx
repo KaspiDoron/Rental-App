@@ -61,6 +61,10 @@ function Chip({
       disabled={disabled}
       title={title}
       aria-disabled={disabled}
+      // Every chip in this rail is a two-state filter whose ON state was
+      // signalled by a blue fill and nothing else - so the whole sort/filter
+      // rail was unreadable to a screen reader and to forced-colours mode.
+      aria-pressed={active}
       className={`chip whitespace-nowrap rounded-full border-2 px-3 py-1.5 text-[12px] font-bold transition ${
         disabled
           ? "cursor-not-allowed border-line/60 bg-card text-faint opacity-55"

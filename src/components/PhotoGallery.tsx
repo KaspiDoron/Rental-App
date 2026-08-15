@@ -52,7 +52,7 @@ export function PhotoGallery({
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[1300] flex flex-col bg-black/90 backdrop-blur-sm pop-in">
+    <div className="layer-lightbox fixed inset-0 flex flex-col bg-black/90 backdrop-blur-sm pop-in">
       <div className="flex items-center justify-between px-4 pt-safe">
         <span className="truncate py-3 text-[13px] font-extrabold text-white">
           <bdi>{name}</bdi> · {t("{n} photos").replace("{n}", String(visible.length))}

@@ -24,13 +24,38 @@ import type { ThreadMsg } from "./MessageBubble";
 //      is not a reason to take it away from them - that is how every chat
 //      client behaves.
 
-/** Cheap identity for a transcript: nothing else in a message body changes
- *  after it lands, so the count plus first/last ids settle it. */
+/**
+ * Cheap identity for a transcript.
+ *
+ * "NOTHING ELSE IN A MESSAGE BODY CHANGES AFTER IT LANDS" WAS TRUE ONCE, AND
+ * THE MEDIA READER MADE IT FALSE.
+ *
+ * A photo's row is stored the instant it arrives; the agents' READING of it
+ * (lib/media/reading - the Agentic-summary panel: what was on the price board,
+ * the confidence, the honest failure line) is patched onto that SAME row
+ * seconds later, asynchronously. Count, first id, last id and the last text's
+ * length are all identical before and after, so the signature never moved -
+ * and an open transcript kept its old array for the life of the sheet. The
+ * summary panel simply never appeared, however long the traveller waited, and
+ * closing and reopening the sheet was the only way to see it.
+ *
+ * So the signature has to include the two things that DO get patched in later:
+ * whether a message has a reading yet, and the English gloss stamped by the
+ * translation pass. Both are per-message and cheap - one pass over a list
+ * bounded at 80 - and both are exactly the "the row changed under us" case the
+ * count-based signature was blind to.
+ */
 function signature(list: ThreadMsg[]): string {
   if (!list.length) return "0";
+  let patched = "";
+  for (const m of list) {
+    // A single character per message: reading present, gloss present, or
+    // neither. Enough to move the signature, small enough to build every poll.
+    patched += m.reading ? (m.english ? "b" : "r") : m.english ? "e" : ".";
+  }
   return `${list.length}|${list[0].id}|${list[list.length - 1].id}|${
     list[list.length - 1].text.length
-  }`;
+  }|${patched}`;
 }
 
 /**

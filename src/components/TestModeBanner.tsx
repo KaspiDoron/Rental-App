@@ -5,15 +5,19 @@
 // is not in live-production mode. Disappears the moment the switch goes off.
 
 import { useEffect, useState } from "react";
+import { loadPublicConfig } from "@/lib/client/public-config";
 
 export function TestModeBanner() {
   const [on, setOn] = useState(false);
 
   useEffect(() => {
-    fetch("/api/config/public")
-      .then((r) => r.json())
-      .then((d) => setOn(Boolean(d.testMode)))
-      .catch(() => {});
+    let alive = true;
+    void loadPublicConfig().then((d) => {
+      if (alive) setOn(d.testMode);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (!on) return null;

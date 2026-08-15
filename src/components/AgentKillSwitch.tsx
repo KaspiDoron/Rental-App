@@ -14,6 +14,18 @@
 // copy, and an optimistic-but-server-confirmed toggle that shows a spinner and
 // disables itself mid-switch. On a failed toggle it reverts and says so - it
 // must never claim "stopped" when the server did not confirm the hold.
+//
+// W8 #20: EVERY COLOUR HERE IS A TOKEN, LIKE EVERYWHERE ELSE IN THE APP.
+//
+// This was the last traveller-facing component painting itself out of the raw
+// Tailwind palette - emerald-400/500, amber-400/500, orange-400, red-600 - which
+// is exactly the set of colours that does NOT follow the dark-mode flip. Every
+// other surface derives from CSS custom properties (globals.css) that are
+// redefined per theme, so this card kept its light-mode greens and ambers on a
+// dark screen while the panel it sits in changed underneath it. The tokens are
+// `savings` (green), `warn` (amber) and `brandred`, and the one-off `dark:`
+// override on the error line disappears with them: a token IS the dark-mode
+// answer, so nothing needs to say what to do in dark mode twice.
 
 import { useCallback, useMemo } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -89,8 +101,8 @@ export function AgentKillSwitch({
       <div
         className={`relative overflow-hidden rounded-2xl p-[1.5px] transition-colors ${
           isPaused
-            ? "bg-gradient-to-r from-amber-400/70 via-orange-400/60 to-amber-400/70"
-            : "bg-gradient-to-r from-emerald-400/70 via-brandblue/60 to-emerald-400/70"
+            ? "bg-gradient-to-r from-warn/70 via-warn/50 to-warn/70"
+            : "bg-gradient-to-r from-savings/70 via-brandblue/60 to-savings/70"
         }`}
       >
         <button
@@ -103,11 +115,11 @@ export function AgentKillSwitch({
           {/* Breathing state dot */}
           <span className="relative flex h-3 w-3 shrink-0 items-center justify-center">
             {!isPaused && !loading && (
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-savings opacity-70" />
             )}
             <span
               className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
-                loading ? "bg-faint" : isPaused ? "bg-amber-500" : "bg-emerald-500"
+                loading ? "bg-faint" : isPaused ? "bg-warn" : "bg-savings"
               }`}
             />
           </span>
@@ -133,7 +145,7 @@ export function AgentKillSwitch({
           <span
             className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
               isPaused
-                ? "bg-emerald-500 text-white"
+                ? "bg-savings text-white"
                 : "bg-card2 text-strong ring-1 ring-line"
             }`}
           >
@@ -153,7 +165,7 @@ export function AgentKillSwitch({
         </button>
       </div>
       {error && (
-        <p className="mt-1 px-1 text-[10px] font-bold text-red-600 dark:text-red-400">{error}</p>
+        <p className="mt-1 px-1 text-[10px] font-bold text-brandred">{error}</p>
       )}
     </div>
   );

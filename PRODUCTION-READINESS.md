@@ -613,6 +613,51 @@ deploy; each one names the surface that answers it.
 - **The workers VM is still unprovisioned** and nothing depends on it; it is a
   throughput upgrade, not a correctness one.
 
+### Revocation latency across warm instances (W8 #27)
+
+Every privilege decision is re-derived per request - the session cookie carries
+only an email - but the DATA those decisions read is cached per instance, and
+Cloud Run serves a revocation from ONE container out of N. Only that container
+drops its copy. So "applies instantly" was true of the derivation and not of the
+propagation.
+
+Two windows existed. One is closed; one is accepted, and this is the honest
+statement of it.
+
+**Closed - the admin list (`ADMIN_EMAILS_EXTRA`).** It was read through the 30s
+whole-vault cache, so a demoted admin kept full Key-Vault access on every warm
+instance for up to half a minute. `adminEmails()` now reads it through
+`getConfigFresh` - a single-row read on a 3-second TTL, the same mechanism
+`KILL_SWITCH` uses and for the same reason - and fails CLOSED: an unreadable
+vault yields owner + env admins only. Worst case is now ~3s, and it is 3s of a
+list we could read rather than 30s of one we did not re-ask for.
+
+Paired with this: only the OWNER can promote or demote (`/api/admin/users`).
+Peer admins previously could, and a promotion is durable (it is a vault row), so
+one compromised admin session could mint itself permanence and remove everyone
+able to revoke it. That is the reason the propagation window mattered at all.
+
+**Accepted - the user record (10s, `src/lib/access.ts`).** `status: "blocked"`,
+the `test` tester flag and `plan` ride a 10-second per-instance cache. A blocked
+account can therefore keep a session alive for up to ~10 seconds on a warm
+instance, and a revoked tester keeps free Ultra for the same window.
+
+Accepted deliberately, on these grounds:
+
+- 10s is not 30s, and the blast radius is a normal user's own session - not
+  administrative access to everyone else's data.
+- Every WRITE path already uses `getUser(email, { fresh: true })`, so nothing
+  makes a durable decision on a stale record; only the read-side session
+  derivation can lag.
+- Making it fresh would add a single-row Supabase read to EVERY authenticated
+  request on the app's hottest path (the activity and replies polls run every
+  6-8 seconds per open tab). That is a real, permanent cost to close a 10-second
+  window on a non-privilege field.
+
+If it ever needs closing, the mechanism is the same one used above: give
+`getUser` a `getConfigFresh`-style short-TTL single-row read for the three
+security-relevant columns only, not for the whole record.
+
 ## What is already right (do not re-solve)
 
 - Atomic queue claims (`sbDeleteReturning`) - genuinely exactly-once.
