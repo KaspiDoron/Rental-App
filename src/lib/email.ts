@@ -49,6 +49,137 @@ export async function emailProviderStatus(): Promise<{
   };
 }
 
+export interface EmailProbe {
+  provider: "gmail" | "brevo" | "resend";
+  configured: boolean;
+  /**
+   * TRUE means a credential was actually exercised against the provider.
+   * The health roll-call used to call `emailVerificationAvailable()` - which
+   * only asks whether a STRING is present - and print HEALTHY. A revoked
+   * Gmail app password, a deleted Brevo key and a perfect setup all rendered
+   * identically, on the path that delivers signup codes.
+   */
+  live: boolean;
+  detail: string;
+}
+
+/**
+ * ONE LIVE CREDENTIAL CHECK PER CONFIGURED EMAIL PROVIDER (Wave 7).
+ *
+ * Gmail: nodemailer's `verify()` opens the real SMTP session and AUTHs,
+ * without sending anything - so a revoked App Password fails here, which is
+ * the whole point. Brevo/Resend: an authenticated GET on an account-scoped
+ * endpoint. Nothing is sent to anybody, so this is safe to press repeatedly.
+ */
+export async function emailLiveProbe(): Promise<EmailProbe[]> {
+  const [gmailUser, gmailPass, brevo, resend] = await Promise.all([
+    getConfig("GMAIL_USER"),
+    getConfig("GMAIL_APP_PASSWORD"),
+    getConfig("BREVO_API_KEY"),
+    getConfig("RESEND_API_KEY"),
+  ]);
+
+  const gmailProbe = async (): Promise<EmailProbe> => {
+    if (!gmailUser || !gmailPass) {
+      return { provider: "gmail", configured: false, live: false, detail: "Not configured." };
+    }
+    try {
+      const nodemailer = (await import("nodemailer")).default;
+      const transporter = nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 465,
+        secure: true,
+        auth: { user: gmailUser.trim(), pass: gmailPass.replace(/\s+/g, "") },
+      });
+      await transporter.verify();
+      return {
+        provider: "gmail",
+        configured: true,
+        live: true,
+        detail: `SMTP AUTH accepted for ${gmailUser.trim()} (live check, nothing sent).`,
+      };
+    } catch (e) {
+      return {
+        provider: "gmail",
+        configured: true,
+        live: false,
+        detail: `SMTP rejected the App Password: ${e instanceof Error ? e.message : "connect failed"}`,
+      };
+    }
+  };
+
+  const brevoProbe = async (): Promise<EmailProbe> => {
+    if (!brevo) return { provider: "brevo", configured: false, live: false, detail: "Not configured." };
+    try {
+      const res = await fetch("https://api.brevo.com/v3/account", {
+        headers: { "api-key": brevo.trim(), Accept: "application/json" },
+        cache: "no-store",
+      });
+      const d = (await res.json().catch(() => ({}))) as { email?: string; message?: string };
+      return res.ok
+        ? { provider: "brevo", configured: true, live: true, detail: `Key accepted (${d.email ?? "account reachable"}).` }
+        : { provider: "brevo", configured: true, live: false, detail: d.message ?? `Brevo responded ${res.status}.` };
+    } catch (e) {
+      return { provider: "brevo", configured: true, live: false, detail: e instanceof Error ? e.message : "network error" };
+    }
+  };
+
+  const resendProbe = async (): Promise<EmailProbe> => {
+    if (!resend) return { provider: "resend", configured: false, live: false, detail: "Not configured." };
+    try {
+      const res = await fetch("https://api.resend.com/domains", {
+        headers: { Authorization: `Bearer ${resend.trim()}` },
+        cache: "no-store",
+      });
+      return res.ok
+        ? { provider: "resend", configured: true, live: true, detail: "Key accepted." }
+        : { provider: "resend", configured: true, live: false, detail: `Resend responded ${res.status}.` };
+    } catch (e) {
+      return { provider: "resend", configured: true, live: false, detail: e instanceof Error ? e.message : "network error" };
+    }
+  };
+
+  return Promise.all([gmailProbe(), brevoProbe(), resendProbe()]);
+}
+
+/**
+ * The one sentence the health roll-call prints, and whether it was EARNED by a
+ * live call. `kind` is the honesty flag: "live" when at least one credential
+ * was exercised, "config" when all we know is that a string is present.
+ */
+export function summariseEmailProbes(probes: EmailProbe[]): {
+  status: "ok" | "degraded" | "down" | "off";
+  kind: "live" | "config";
+  detail: string;
+} {
+  const configured = probes.filter((p) => p.configured);
+  if (configured.length === 0) {
+    return {
+      status: "off",
+      kind: "config",
+      detail: "No email key - invited testers sign up WITHOUT a code.",
+    };
+  }
+  const live = configured.filter((p) => p.live);
+  const dead = configured.filter((p) => !p.live);
+  if (live.length === 0) {
+    return {
+      status: "down",
+      kind: "live",
+      detail: `LIVE CHECK FAILED on every configured provider - signup codes will NOT send. ${dead
+        .map((p) => `${p.provider}: ${p.detail}`)
+        .join(" | ")}`,
+    };
+  }
+  return {
+    status: dead.length ? "degraded" : "ok",
+    kind: "live",
+    detail:
+      `LIVE CHECK: ${live.map((p) => p.provider).join(", ")} accepted the credential.` +
+      (dead.length ? ` Failing: ${dead.map((p) => `${p.provider} (${p.detail})`).join(" | ")}` : ""),
+  };
+}
+
 // Brevo (formerly Sendinblue): REST API, 300 free emails/day, single verified
 // sender (no domain needed). Sender = BREVO_SENDER (must be a verified email),
 // falling back to FEEDBACK_FROM_EMAIL's address.

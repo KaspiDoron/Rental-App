@@ -717,6 +717,51 @@ export interface MapsDiagnostics {
    *  every card photo broken while this whole panel reported green, because
    *  nothing here had ever actually fetched an image. */
   placePhotos: { ok: boolean; detail: string };
+  /**
+   * THE KEYLESS FALLBACK, WHICH IS ALSO A PRODUCTION PATH (Wave 7).
+   *
+   * OpenStreetMap Nominatim carries place search AND reverse geocoding
+   * whenever Google is unset, over quota or restricted - including the
+   * no-key path a fresh deployment runs on. Its own comment in this file
+   * says it "often throttles/blocks datacenter IPs", and a scaled
+   * deployment is by definition a datacenter IP, so the single most
+   * likely time for it to be blocked is the moment it is most needed.
+   * Nothing probed it. It is probed here, WITH or WITHOUT a Google key,
+   * because "no key configured" never meant "no geocoder configured".
+   */
+  nominatim: { ok: boolean; detail: string };
+}
+
+/**
+ * One real Nominatim search, with the same User-Agent the app sends.
+ *
+ * A 403 or 429 here is the honest signal that the free fallback is refusing
+ * this deployment's IP - the failure that renders as an empty suggestion list
+ * with no explanation anywhere.
+ */
+export async function probeNominatim(): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const res = await timedFetch(
+      "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=Canggu%20Bali",
+      { headers: { "User-Agent": await nominatimUA() }, cache: "no-store" }
+    );
+    if (!res.ok) {
+      return {
+        ok: false,
+        detail:
+          res.status === 403 || res.status === 429
+            ? `HTTP ${res.status} - OpenStreetMap is blocking or throttling this server's IP. With no Google key, address search and reverse geocoding return nothing.`
+            : `HTTP ${res.status} from Nominatim.`,
+      };
+    }
+    const data = (await res.json()) as unknown;
+    const n = Array.isArray(data) ? data.length : 0;
+    return n > 0
+      ? { ok: true, detail: `OK - ${n} result(s). The keyless geocoder fallback is reachable.` }
+      : { ok: false, detail: "Answered 200 with no results - unexpected for a known place; treat as degraded." };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : "unreachable" };
+  }
 }
 
 /**
@@ -771,6 +816,8 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
   const key = await mapsKey();
   if (!key) {
     const off = { ok: false, detail: "No key configured." };
+    // NOT "no geocoder": with no Google key, Nominatim IS the geocoder, so it
+    // is the one thing that must still be probed on this branch.
     return {
       keyConfigured: false,
       placesNew: off,
@@ -778,12 +825,13 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
       placesLegacy: off,
       geocoding: off,
       placePhotos: off,
+      nominatim: await probeNominatim(),
     };
   }
 
   const probe = { lat: -8.6478, lng: 115.1385 }; // Canggu, Bali
 
-  const [n, a, l, g, ph] = await Promise.all([
+  const [n, a, l, g, ph, osm] = await Promise.all([
     (async () => {
       const { places, error } = await newTextSearch(
         key,
@@ -835,6 +883,7 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
       }
     })(),
     probePlacePhoto(key, probe.lat, probe.lng),
+    probeNominatim(),
   ]);
 
   return {
@@ -844,5 +893,6 @@ export async function runMapsDiagnostics(): Promise<MapsDiagnostics> {
     placesLegacy: l,
     geocoding: g,
     placePhotos: ph,
+    nominatim: osm,
   };
 }

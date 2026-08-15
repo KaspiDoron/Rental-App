@@ -39,13 +39,75 @@ async function testOpenAICompatible(
   }
 }
 
+// A 1x1 PNG. The smallest artefact that is a legitimate image to every vision
+// API, so "is this model id still alive on this key" costs a handful of tokens
+// and no meaningful money. Content does not matter - the STATUS CODE does.
+const PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/**
+ * A ~0.25s silent 16kHz mono WAV, built here rather than checked in.
+ *
+ * Whisper accepts it, charges essentially nothing for it, and answers with an
+ * empty transcription and HTTP 200 - which is exactly the signal wanted: the
+ * key is valid FOR THE AUDIO SKU and the model id still exists. A chat-only
+ * test could never say that.
+ */
+function silentWav(): Uint8Array<ArrayBuffer> {
+  const sampleRate = 16_000;
+  const samples = Math.round(sampleRate * 0.25);
+  const dataBytes = samples * 2; // 16-bit mono
+  const raw = new ArrayBuffer(44 + dataBytes);
+  const bytes = new Uint8Array(raw);
+  const view = new DataView(raw);
+  const ascii = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i += 1) bytes[offset + i] = s.charCodeAt(i);
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + dataBytes, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  ascii(36, "data");
+  view.setUint32(40, dataBytes, true);
+  return bytes; // the samples stay zeroed - silence
+}
+
+/** Read an error body once and squeeze the most useful sentence out of it. */
+async function briefError(res: Response): Promise<string> {
+  const raw = await res.text().catch(() => "");
+  try {
+    const j = JSON.parse(raw);
+    return String(j?.error?.message ?? j?.message ?? j?.error ?? raw).slice(0, 200);
+  } catch {
+    return raw.slice(0, 200) || "no body";
+  }
+}
+
 export async function GET(req: Request) {
   const session = await requireManagement();
   if (!session) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const name = new URL(req.url).searchParams.get("name") ?? "";
   const value = (await getConfig(name))?.trim();
-  if (!value && !name.startsWith("WHATSAPP")) {
+  // KEYS WHOSE TEST DOES NOT NEED THE KEY'S OWN VALUE. A blank vision/whisper
+  // model id means "use the built-in default", which is the case most worth
+  // testing; the WABA block and the Cloud API block are tested as a set; and
+  // REDIS_URL is env-only, so refusing to probe it for being "unsaved" would
+  // reproduce the exact invisibility this button exists to end.
+  const testsWithoutOwnValue =
+    name.startsWith("WHATSAPP") ||
+    name.startsWith("WABA_") ||
+    name === "REDIS_URL" ||
+    name === "GROQ_WHISPER_MODEL" ||
+    name.endsWith("_VISION_MODEL");
+  if (!value && !testsWithoutOwnValue) {
     return NextResponse.json({ ok: false, detail: "No value saved for this key yet." });
   }
 
@@ -116,12 +178,155 @@ export async function GET(req: Request) {
   let result: TestResult = { ok: false, detail: "No test available for this key." };
 
   switch (name) {
+    // ---- REDIS: the dependency that had no button at all --------------------
+    case "REDIS_URL": {
+      const { redisDiagnostics } = await import("@/lib/rival-cache");
+      const d = await redisDiagnostics();
+      result = { ok: d.ok, detail: d.detail };
+      break;
+    }
+
+    // ---- The SECOND Groq SKU, tested as itself ------------------------------
+    case "GROQ_WHISPER_MODEL": {
+      const token = (await getConfig("GROQ_TOKEN"))?.trim();
+      if (!token) {
+        result = { ok: false, detail: "Set GROQ_TOKEN first - the voice-note path uses the same key as Groq chat." };
+        break;
+      }
+      const { whisperModel } = await import("@/lib/graph/transcribe");
+      const model = await whisperModel();
+      try {
+        const fd = new FormData();
+        fd.append("file", new Blob([silentWav()], { type: "audio/wav" }), "probe.wav");
+        fd.append("model", model);
+        fd.append("temperature", "0");
+        const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: fd,
+        });
+        result = res.ok
+          ? {
+              ok: true,
+              detail: `OK - Groq accepted a real transcription request on "${model}". This is the voice-note SKU, tested separately from Groq chat: both can fail independently on the same key.`,
+            }
+          : {
+              ok: false,
+              detail: `HTTP ${res.status}: ${await briefError(res)} (model: ${model}). Voice notes from shops will fall back to Gemini audio, which is measurably weaker on heavy accents.`,
+            };
+      } catch (e) {
+        result = { ok: false, detail: e instanceof Error ? e.message : "network error" };
+      }
+      break;
+    }
+
+    // ---- The vision ladder: settable since Wave 2, testable from now on -----
+    case "GEMINI_VISION_MODEL":
+    case "GROQ_VISION_MODEL":
+    case "ANTHROPIC_VISION_MODEL": {
+      const { visionProviderTestTarget } = await import("@/lib/ai");
+      const target = await visionProviderTestTarget(name);
+      if (!target) {
+        result = { ok: false, detail: "No vision provider is mapped to this key." };
+        break;
+      }
+      if (!target.token) {
+        result = { ok: false, detail: `Set ${target.tokenKey} first - the vision ladder uses the same key as this provider's text model.` };
+        break;
+      }
+      const note = value
+        ? `override "${value}"`
+        : `built-in default "${target.model}" (no override set)`;
+      try {
+        let res: Response;
+        if (target.provider === "gemini") {
+          res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${target.model}:generateContent?key=${target.token}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    role: "user",
+                    parts: [
+                      { text: "reply with the single word: ok" },
+                      { inline_data: { mime_type: "image/png", data: PIXEL_PNG_B64 } },
+                    ],
+                  },
+                ],
+                generationConfig: { maxOutputTokens: 4 },
+              }),
+            }
+          );
+        } else if (target.provider === "groq") {
+          res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` },
+            body: JSON.stringify({
+              model: target.model,
+              max_tokens: 4,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "reply with the single word: ok" },
+                    { type: "image_url", image_url: { url: `data:image/png;base64,${PIXEL_PNG_B64}` } },
+                  ],
+                },
+              ],
+            }),
+          });
+        } else {
+          res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": target.token,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: target.model,
+              max_tokens: 4,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "reply with the single word: ok" },
+                    {
+                      type: "image",
+                      source: { type: "base64", media_type: "image/png", data: PIXEL_PNG_B64 },
+                    },
+                  ],
+                },
+              ],
+            }),
+          });
+        }
+        result = res.ok
+          ? { ok: true, detail: `OK - ${target.provider} read a real image with the ${note}.` }
+          : {
+              ok: false,
+              detail: `HTTP ${res.status}: ${await briefError(res)} (model: ${target.model}). A retired multimodal id is the usual cause - paste a current one here, no redeploy needed.`,
+            };
+      } catch (e) {
+        result = { ok: false, detail: e instanceof Error ? e.message : "network error" };
+      }
+      break;
+    }
+
     case "GOOGLE_MAPS_API_KEY": {
       const { runMapsDiagnostics } = await import("@/lib/google");
       const d = await runMapsDiagnostics();
       result = {
         ok: d.placesNew.ok || d.placesLegacy.ok,
-        detail: `Places(New): ${d.placesNew.detail} | Geocoding: ${d.geocoding.detail}`,
+        detail:
+          `Places(New): ${d.placesNew.detail} | Geocoding: ${d.geocoding.detail}` +
+          // The keyless fallback is a production path (it carries geocoding
+          // whenever Google is unset, over quota or restricted) and it is the
+          // one most likely to be blocked on a datacenter IP - i.e. on any
+          // scaled deployment. It is reported here as its own line.
+          ` | OpenStreetMap fallback: ${d.nominatim.detail}`,
       };
       break;
     }
@@ -286,6 +491,141 @@ export async function GET(req: Request) {
       }
       break;
     }
+    // ---- THE WHOLE WABA BLOCK, WHICH HAD NO TEST COVERAGE AT ALL ------------
+    //
+    // Eighteen keys governing a RENTED business account whose quality rating
+    // cannot be bought back, and not one of them could be checked before the
+    // first live send. Tested as a SET, because that is how they fail: a base
+    // URL without a sender id, a sender id belonging to a different portfolio,
+    // a tier string the owner typed months ago that no longer matches Meta.
+    case "WABA_ENABLED":
+    case "WABA_DRY_RUN":
+    case "WABA_PROVIDER":
+    case "WABA_BASE_URL":
+    case "WABA_API_KEY":
+    case "WABA_SENDER_ID":
+    case "WABA_WEBHOOK_SECRET":
+    case "WABA_TEMPLATE_FIRST_CONTACT":
+    case "WABA_TEMPLATE_REENGAGE":
+    case "WABA_LINK_BASE":
+    case "WABA_QUALITY_RATING":
+    case "WABA_TIER_UNIQUE_PER_DAY":
+    case "WABA_TEMPLATE_COST_USD":
+    case "WABA_KILL":
+    case "WABA_DAILY_SPEND_CEILING_USD":
+    case "WABA_AGENCY_COOLDOWN_HOURS":
+    case "WABA_HOLD_TIMEOUT_MINUTES":
+    case "WABA_EXPECTATION_TTL_HOURS": {
+      const { wabaConfig, wabaBlockReason } = await import("@/lib/waba/config");
+      const c = await wabaConfig();
+      const blocked = wabaBlockReason(c);
+      const lines: string[] = [];
+      lines.push(
+        `Flag: ${c.enabled ? "ENABLED" : "off"} · dry run: ${c.dryRun ? "ON (nothing is sent)" : "OFF - real sends"} · provider: ${c.provider}`
+      );
+      if (blocked) lines.push(`Blocked by: ${blocked}.`);
+
+      // SHAPE first - a malformed base URL or a non-numeric sender id can be
+      // caught without touching the network, and those are the common typos.
+      const shapeProblems: string[] = [];
+      if (c.baseUrl) {
+        try {
+          const u = new URL(c.baseUrl);
+          if (u.protocol !== "https:") shapeProblems.push("WABA_BASE_URL must be https");
+          if (/\/$/.test(c.baseUrl)) shapeProblems.push("WABA_BASE_URL should have no trailing slash");
+        } catch {
+          shapeProblems.push("WABA_BASE_URL is not a valid URL");
+        }
+      } else shapeProblems.push("WABA_BASE_URL is empty");
+      if (!c.senderId) shapeProblems.push("WABA_SENDER_ID is empty");
+      if (!c.apiKey) shapeProblems.push("WABA_API_KEY is empty");
+      if (c.linkBase) {
+        try {
+          const u = new URL(c.linkBase);
+          if (u.protocol !== "https:") shapeProblems.push("WABA_LINK_BASE must be https (it is an approved button target)");
+        } catch {
+          shapeProblems.push("WABA_LINK_BASE is not a valid URL");
+        }
+      }
+      if (shapeProblems.length) {
+        result = { ok: false, detail: [...lines, `Shape: ${shapeProblems.join("; ")}.`].join("\n") };
+        break;
+      }
+      lines.push("Shape: base URL, sender id, key and link base all look right.");
+
+      // REACHABILITY. On the Meta dialect the phone-number node is a real
+      // read-only GET, so this is a genuine credential check that sends
+      // nothing and spends no quality rating. It also returns the LIVE tier
+      // and quality rating, which is the answer to the other problem here:
+      // WABA_TIER_UNIQUE_PER_DAY and WABA_QUALITY_RATING are owner-typed
+      // STRINGS that nothing ever reconciled with Meta, so the documented
+      // ceiling could drift from the real one without a trace.
+      try {
+        const url =
+          c.provider === "meta"
+            ? `${c.baseUrl}/${c.senderId}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier`
+            : `${c.baseUrl}/${c.senderId}`;
+        const headers: Record<string, string> =
+          c.provider === "meta"
+            ? { Authorization: `Bearer ${c.apiKey}` }
+            : { Authorization: `App ${c.apiKey}` };
+        const res = await fetch(url, { headers, cache: "no-store" });
+        if (!res.ok) {
+          result = {
+            ok: false,
+            detail: [
+              ...lines,
+              `Reachability: HTTP ${res.status} from ${c.provider === "meta" ? "Meta" : "the reseller"} - ${await briefError(res)}`,
+              c.provider === "reseller"
+                ? "Resellers vary: a 404 here can mean the endpoint simply is not a GET. Treat this as reachability only, not as proof the key is wrong."
+                : "The key or the sender id does not belong to this portfolio.",
+            ].join("\n"),
+          };
+          break;
+        }
+        const d = (await res.json().catch(() => ({}))) as {
+          display_phone_number?: string;
+          verified_name?: string;
+          quality_rating?: string;
+          messaging_limit_tier?: string;
+        };
+        lines.push(
+          `Reachability: OK${d.display_phone_number ? ` - ${d.display_phone_number}${d.verified_name ? ` (${d.verified_name})` : ""}` : ""}.`
+        );
+        // DRIFT, stated as drift rather than left for the reader to spot.
+        const storedQuality = ((await getConfig("WABA_QUALITY_RATING")) ?? "").trim().toUpperCase();
+        const liveQuality = (d.quality_rating ?? "").trim().toUpperCase();
+        if (liveQuality) {
+          lines.push(
+            storedQuality && storedQuality !== liveQuality
+              ? `DRIFT: WABA_QUALITY_RATING says ${storedQuality}, Meta says ${liveQuality}. The vault value is what the governor reads - correct it.`
+              : `Quality rating (live): ${liveQuality}.`
+          );
+        }
+        const storedTier = ((await getConfig("WABA_TIER_UNIQUE_PER_DAY")) ?? "").trim();
+        if (d.messaging_limit_tier) {
+          const liveN = /TIER_(\d+)K?/i.exec(d.messaging_limit_tier);
+          const liveUnique = liveN ? Number(liveN[1]) * (/K/i.test(d.messaging_limit_tier) ? 1000 : 1) : null;
+          lines.push(
+            liveUnique !== null && storedTier && Number(storedTier) !== liveUnique
+              ? `DRIFT: WABA_TIER_UNIQUE_PER_DAY says ${storedTier}, Meta reports ${d.messaging_limit_tier} (${liveUnique}/24h). The spend estimate and the governor use the vault number.`
+              : `Messaging tier (live): ${d.messaging_limit_tier}.`
+          );
+        } else if (storedTier) {
+          lines.push(
+            `Messaging tier: ${storedTier}/24h from the vault - the provider did not report one, so this number is owner-maintained and can drift.`
+          );
+        }
+        result = { ok: true, detail: lines.join("\n") };
+      } catch (e) {
+        result = {
+          ok: false,
+          detail: [...lines, `Reachability: ${e instanceof Error ? e.message : "network error"}`].join("\n"),
+        };
+      }
+      break;
+    }
+
     case "WHATSAPP_ACCESS_TOKEN":
     case "WHATSAPP_PHONE_NUMBER_ID":
     case "WHATSAPP_VERIFY_TOKEN": {

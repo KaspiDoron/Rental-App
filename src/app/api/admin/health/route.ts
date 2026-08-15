@@ -107,19 +107,76 @@ export async function GET() {
       };
     })(),
 
-    // Email (verification codes + feedback).
+    // REDIS - the hot-state tier, and the difference between an ATOMIC daily
+    // cap and one that --max-instances 20 multiplies by twenty. It appeared on
+    // no screen in this app until Wave 7, which meant "the caps are enforcing
+    // nothing" and "everything is fine" were the same picture.
     (async (): Promise<ServiceHealth> => {
-      const { emailVerificationAvailable } = await import("@/lib/verify");
-      const r = await timed(() => emailVerificationAvailable());
-      const on = r.out === true;
+      const { redisDiagnostics } = await import("@/lib/rival-cache");
+      const r = await timed(() => redisDiagnostics(), 5000);
+      const d = r.out;
+      if (!d) {
+        return { id: "redis", label: "Redis (atomic caps + hot state)", status: "down", latencyMs: r.ms, detail: "PING timed out." };
+      }
+      return {
+        id: "redis",
+        label: "Redis (atomic caps + hot state)",
+        // NOT configured is "off" and genuinely fine - it is the documented
+        // degraded mode. Configured and silent is "down", because that is the
+        // state where the caps quietly stop being atomic.
+        status: !d.configured ? "off" : d.ok ? "ok" : "down",
+        latencyMs: d.latencyMs,
+        detail: d.detail,
+      };
+    })(),
+
+    // Email (verification codes + feedback) - a LIVE credential check, not a
+    // "is the string present" check. The old probe called
+    // emailVerificationAvailable(), which only asks whether a value exists, so
+    // a revoked Gmail App Password reported HEALTHY on the path that delivers
+    // signup codes. The label now says which kind of check it was.
+    (async (): Promise<ServiceHealth> => {
+      const { emailLiveProbe, summariseEmailProbes } = await import("@/lib/email");
+      const r = await timed(() => emailLiveProbe(), 12_000);
+      if (!r.out) {
+        return {
+          id: "email",
+          label: "Email (live credential check)",
+          status: "down",
+          latencyMs: r.ms,
+          detail: "The live check timed out - that is unknown, not healthy.",
+        };
+      }
+      const s = summariseEmailProbes(r.out);
       return {
         id: "email",
-        label: "Email (Gmail/Brevo/Resend)",
-        status: on ? "ok" : "off",
-        latencyMs: on ? r.ms : null,
-        detail: on
-          ? "A provider is configured - signup codes will send."
-          : "No email key - invited testers sign up WITHOUT a code.",
+        label: s.kind === "live" ? "Email (live credential check)" : "Email (configuration check only)",
+        status: s.status,
+        latencyMs: s.kind === "live" ? r.ms : null,
+        detail: s.detail,
+      };
+    })(),
+
+    // OpenStreetMap Nominatim - the KEYLESS geocoder that carries place search
+    // and reverse geocoding whenever Google is unset, over quota or
+    // restricted. Its own source comment says it blocks datacenter IPs, which
+    // is what a scaled deployment is, and nothing had ever probed it.
+    (async (): Promise<ServiceHealth> => {
+      const { probeNominatim } = await import("@/lib/google");
+      const r = await timed(() => probeNominatim());
+      const d = r.out;
+      if (!d) {
+        return { id: "geocode-fallback", label: "OpenStreetMap (keyless geocoder)", status: "down", latencyMs: r.ms, detail: "Probe timed out." };
+      }
+      return {
+        id: "geocode-fallback",
+        label: "OpenStreetMap (keyless geocoder)",
+        // Degraded rather than down: with a healthy Google key this is a
+        // backstop, and calling the backstop "down" would drag the overall
+        // bar red over something the traveller never sees.
+        status: d.ok ? "ok" : "degraded",
+        latencyMs: r.ms,
+        detail: d.detail,
       };
     })(),
 

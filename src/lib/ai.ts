@@ -568,6 +568,43 @@ export async function aiProviderTestTarget(
     : null;
 }
 
+/**
+ * THE VISION RUNG A `*_VISION_MODEL` KEY ACTUALLY SELECTS (Wave 7).
+ *
+ * The three vision overrides were settable and UNTESTABLE: Admin -> Keys drew
+ * a "Test API" button next to each and it fell through to "No test available
+ * for this key". So the one class of failure the owner cannot see coming - a
+ * provider retiring a multimodal id, which is why these keys exist at all -
+ * was also the one the panel could not check.
+ *
+ * Returns the token and the exact model id the ladder would try FIRST for that
+ * provider, so the test exercises what production would run rather than a
+ * hard-coded guess (the same mistake `aiProviderTestTarget` exists to prevent
+ * on the text side).
+ */
+export async function visionProviderTestTarget(configKey: string): Promise<{
+  provider: "gemini" | "groq" | "anthropic";
+  model: string;
+  token: string | null;
+  tokenKey: string;
+} | null> {
+  const byKey: Record<string, { provider: "gemini" | "groq" | "anthropic"; tokenKey: string }> = {
+    GEMINI_VISION_MODEL: { provider: "gemini", tokenKey: "GEMINI_TOKEN" },
+    GROQ_VISION_MODEL: { provider: "groq", tokenKey: "GROQ_TOKEN" },
+    ANTHROPIC_VISION_MODEL: { provider: "anthropic", tokenKey: "ANTHROPIC_TOKEN" },
+  };
+  const meta = byKey[configKey];
+  if (!meta) return null;
+  const ladders = await visionLadders();
+  const token = (await getConfig(meta.tokenKey))?.trim() ?? null;
+  return {
+    provider: meta.provider,
+    model: ladders[meta.provider][0],
+    token: token || null,
+    tokenKey: meta.tokenKey,
+  };
+}
+
 /** fetch with a hard timeout so one slow provider cannot stall the request. */
 async function fetchWithTimeout(
   url: string,
