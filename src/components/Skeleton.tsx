@@ -7,12 +7,16 @@
 // screen that swaps out. That is what makes the settle feel like one continuous
 // surface rather than a flash.
 //
-// M5/M16: the Aurora glow is composed ON these, not built beside them. The
-// shimmer says "this block is a placeholder"; the glow says "the system is
-// working on it". They answer different questions and stack cleanly because
-// they use different pseudo-elements.
-
-import { aurora } from "../lib/aurora";
+// THE GLOW IS GONE, AND THE PLACEHOLDER IS BETTER FOR IT.
+//
+// These cards used to wear a coloured "aurora" bloom whose job was to say "the
+// system is working on it" while the shimmer said "this block is a
+// placeholder". Two signals, one surface, and the owner's verdict on the
+// coloured one was final. What replaced it is not a quieter glow but a better
+// plate: .skeleton is now a material - a lit top edge, a soft top-down grade,
+// and a raking sheen - which says both things at once, in the greys of the
+// background, at a fraction of the paint cost. Colour now lives only in the
+// page-level ambient wash behind the whole app.
 
 export function Skeleton({
   className = "",
@@ -27,17 +31,15 @@ export function Skeleton({
 /**
  * A card-shaped placeholder that mirrors the app's surface cards.
  *
- * `glow` is opt-out rather than opt-in: a skeleton card is by definition a
- * surface with work behind it, so the default should be the honest one. The
- * escape hatch exists for the few places that stack many cards at once, where
- * a glow per card would be noise rather than signal.
+ * The `glow` prop is gone rather than deprecated. It selected between two
+ * visual states of a thing that no longer exists, and a prop that silently
+ * does nothing is worse than a compile error at every call site - this
+ * codebase has been bitten more than once by a value that was still being
+ * passed long after anything read it.
  */
-export function SkeletonCard({ lines = 3, glow = true }: { lines?: number; glow?: boolean }) {
+export function SkeletonCard({ lines = 3 }: { lines?: number }) {
   return (
-    <div
-      className={`glass-solid glass-rim fluid-in rounded-blob p-4 ${aurora(glow)}`}
-      aria-hidden="true"
-    >
+    <div className="glass-solid glass-rim fluid-in rounded-blob p-4" aria-hidden="true">
       <Skeleton className="mb-2 h-4 w-1/3" />
       <Skeleton className="mb-3 h-3 w-2/3" />
       <div className="space-y-2">
@@ -52,16 +54,19 @@ export function SkeletonCard({ lines = 3, glow = true }: { lines?: number; glow?
 /**
  * A stack of placeholder cards for a whole tab/section that is still loading.
  *
- * ONLY THE FIRST CARD GLOWS. Ten glowing cards is a light show, not a status -
- * the eye reads the leading edge of a list as "where the work is", and the rest
- * as the shape still to fill in. One signal, at the top, is the whole point of
- * having one primitive.
+ * EVERY CARD IS IDENTICAL, AND THAT IS THE POINT. The old stack singled the
+ * first card out with a glow, on the reasoning that ten glowing cards is a
+ * light show. With the glow gone the correct arrangement is the one every
+ * shipped design system converges on: one plate, one sheen, one duration, no
+ * per-card offsets. A stack of placeholders sweeping in unison reads as a
+ * single surface still resolving; the same stack sweeping out of step reads as
+ * a page that cannot make up its mind.
  */
 export function SkeletonList({ count = 3, lines = 3 }: { count?: number; lines?: number }) {
   return (
     <div className="space-y-3" role="status" aria-label="Loading">
       {Array.from({ length: count }).map((_, i) => (
-        <SkeletonCard key={i} lines={lines} glow={i === 0} />
+        <SkeletonCard key={i} lines={lines} />
       ))}
     </div>
   );

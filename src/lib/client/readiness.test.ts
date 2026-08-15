@@ -33,11 +33,15 @@ describe("the placeholder looks alive, in both themes", () => {
 
   it("the dark shimmer is actually visible", () => {
     // It was 7% white on a dark plate - invisible on a phone, which is what
-    // "ten seconds of nothingness" was describing.
+    // "ten seconds of nothingness" was describing. The floor is unchanged; only
+    // where it lives has moved. The dark sweep used to be a whole duplicated
+    // `[data-theme="dark"] .skeleton::after` gradient; it is now one token in
+    // the dark theme block, which is what let the sheen become achromatic
+    // without maintaining two copies of the same five gradient stops.
     const src = css();
-    const dark = src.slice(src.indexOf('[data-theme="dark"] .skeleton::after'));
-    const peak = dark.match(/rgba\(255, 255, 255, (0\.\d+)\) 50%/);
-    expect(peak).toBeTruthy();
+    const dark = src.slice(src.indexOf('[data-theme="dark"] {'));
+    const peak = dark.match(/--wd-skel-sheen: rgba\(255, 255, 255, (0\.\d+)\)/);
+    expect(peak, "the dark theme must define its own sheen").toBeTruthy();
     expect(Number(peak![1])).toBeGreaterThanOrEqual(0.15);
   });
 

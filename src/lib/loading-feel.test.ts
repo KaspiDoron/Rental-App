@@ -115,13 +115,39 @@ describe("there is an ambient layer at the page level", () => {
     expect(amb![0]).toMatch(/pointer-events: none/);
   });
 
-  it("it uses ALL FIVE brand hue tokens, not invented colours", () => {
-    // Owner report 4, item 9: "more colors" - the yellow and red hues joined
-    // as low side lobes, so the full brand ramp paints the wash.
+  it("it uses ALL SEVEN hue tokens, not invented colours", () => {
+    // Owner report 4 item 9 asked for "more colors" and put the yellow and red
+    // hues on low side lobes. Report 5 asked again - "add colors and make them
+    // more visible" - and added the two BRIDGE hues (aqua between green and
+    // blue, coral between yellow and pink) that close the visible gaps. Every
+    // lobe must still come from a token: an invented colour here is how a wash
+    // stops being recognisably ours.
     const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
-    for (const v of ["--wd-hue-1", "--wd-hue-2", "--wd-hue-3", "--wd-hue-4", "--wd-hue-5"]) {
-      expect(amb, v).toContain(v);
+    for (let i = 1; i <= 7; i++) {
+      expect(amb, `--wd-hue-${i}`).toContain(`--wd-hue-${i}`);
     }
+  });
+
+  it("NO BRAND HUE LEAKS BACK INTO THE LOADING CHROME", () => {
+    // THE SEPARATION IS THE WHOLE DESIGN (owner report 5): colour belongs to
+    // the ambient wash, and the loading components are the greys of the
+    // background. This is the pin that keeps a future "just tint the spinner
+    // slightly" from undoing it. The hue tokens may be DEFINED anywhere, but
+    // the only rule allowed to reference one is .wd-ambient.
+    const chrome = [
+      /\.skeleton \{[\s\S]*?\n\}/,
+      /\.skeleton::after \{[\s\S]*?\n\}/,
+      /\.wd-horizon \{[\s\S]*?\n\}/,
+      /\.wd-horizon::after \{[\s\S]*?\n\}/,
+    ];
+    for (const re of chrome) {
+      const block = re.exec(css);
+      expect(block, `${re} moved`).toBeTruthy();
+      expect(block![0], `${re} must not reference a brand hue`).not.toMatch(/--wd-hue-/);
+    }
+    // The dots are TSX, not CSS, and were the last holdout - three brand-hue
+    // lightness steps until v4 made them neutral.
+    expect(readCode("src/components/LoadingDots.tsx")).not.toMatch(/--wd-hue-/);
   });
 
   it("...and it sits BEHIND the content, not over it", () => {
@@ -143,7 +169,7 @@ describe("there is an ambient layer at the page level", () => {
     expect(glow).toMatch(/wd-ambient-on/);
   });
 
-  it("top-heavy and fading down, like the owner asked - INTENSIFIED in v3", () => {
+  it("top-heavy and fading down, like the owner asked - INTENSIFIED again in v4", () => {
     const amb = /\.wd-ambient \{[\s\S]*?\n\}/.exec(css)![0];
     // The main lobes still hang ABOVE the viewport...
     expect(amb).toMatch(/at 22% -6%/);
@@ -151,24 +177,31 @@ describe("there is an ambient layer at the page level", () => {
     // ...the side lobes still sit LOW so the wash wraps the whole screen...
     expect(amb).toMatch(/at 12% 64%/);
     expect(amb).toMatch(/at 90% 78%/);
-    // ...Loading v3 makes it "much more intense": the radial stops now reach to
-    // 88% (fuller lobes, no early fade to transparent)...
+    // ...the two v4 bridge lobes fill the mid-height gaps on both flanks...
+    expect(amb).toMatch(/at 4% 40%/);
+    expect(amb).toMatch(/at 98% 46%/);
+    // ...every lobe reaches to 92% before fading, which is what makes
+    // neighbours OVERLAP and mix rather than each dying out against the page.
+    // That overlap is where most of v4's extra intensity comes from, so the
+    // count is pinned: seven lobes, no early fade anywhere.
     expect(amb, "the lobes must reach further before fading").not.toMatch(/transparent 7[02]%/);
-    expect((amb.match(/transparent 88%/g) ?? []).length).toBe(5);
-    // ...and the mask holds real weight (0.45) all the way to 88% down before
-    // fading out - deeper and lower than v2's 0.28/78% - but it still ENDS
-    // transparent at 100%, so the bottom edge never shouts.
-    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*rgba\(0, 0, 0, 0\.45\) 88%, transparent 100%\)/);
+    expect((amb.match(/transparent 92%/g) ?? []).length).toBe(7);
+    // ...and the mask now holds 0.62 all the way to 88% down (v3 held 0.45,
+    // v2 held 0.28 at 78%), so the lower third is genuinely coloured - but it
+    // still ENDS transparent at 100%, so the bottom edge never shouts and the
+    // TabBar never sits in a haze.
+    expect(amb).toMatch(/mask-image: linear-gradient\(to bottom,.*rgba\(0, 0, 0, 0\.62\) 88%, transparent 100%\)/);
   });
 
   it("brightness is theme work, INTENSIFIED: one raise level per canvas", () => {
-    // Owner v3: "much more intense". 0.45 -> 0.6 over near-white; the same over
-    // #17191d would glare, so dark rides 0.36 -> 0.5 (still lifted). The dark
-    // values are RULES, not tokens, so the theme-mirror test stays out of it -
-    // but both dark selectors must agree with each other.
-    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/opacity: 0\.6/);
-    expect(css).toMatch(/\[data-theme="dark"\] \.wd-ambient-on \{\s*\n\s*opacity: 0\.5;/);
-    expect(css).toMatch(/:root:not\(\[data-theme\]\) \.wd-ambient-on \{\s*\n\s*opacity: 0\.5;/);
+    // Owner v4: brighter still. 0.6 -> 0.74 over near-white; the same over
+    // #17191d would glare, so dark rides 0.5 -> 0.62 (lifted in step, never
+    // matched). The dark values are RULES, not tokens, so the theme-mirror
+    // test stays out of it - but both dark selectors must agree with each
+    // other, and dark must stay strictly below light.
+    expect(/\.wd-ambient-on \{[\s\S]*?\n\}/.exec(css)![0]).toMatch(/opacity: 0\.74/);
+    expect(css).toMatch(/\[data-theme="dark"\] \.wd-ambient-on \{\s*\n\s*opacity: 0\.62;/);
+    expect(css).toMatch(/:root:not\(\[data-theme\]\) \.wd-ambient-on \{\s*\n\s*opacity: 0\.62;/);
   });
 
   it("no blur pass - the low-end-Android budget rule", () => {
