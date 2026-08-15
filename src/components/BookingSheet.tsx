@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { vehicleLabel } from "@/lib/labels";
 import { moneyLocal } from "@/lib/currency";
@@ -426,12 +426,12 @@ export function BookingSheet({
           {fulfillment !== "in-store" && (
             <div className="mt-2">
               <PlaceAutocomplete
-                label={t(fulfillment === "shuttle" ? "Pick-up point" : "Delivery address")}
-                placeholder={t(
+                label={fulfillment === "shuttle" ? t("Pick-up point") : t("Delivery address")}
+                placeholder={
                   fulfillment === "shuttle"
-                    ? "Where should they collect you?"
-                    : "Hotel name / address for delivery"
-                )}
+                    ? t("Where should they collect you?")
+                    : t("Hotel name / address for delivery")
+                }
                 value={address}
                 onText={setAddress}
               />
@@ -532,7 +532,7 @@ export function BookingSheet({
             {submitting ? (
               <LoadingDots light label={t("Closing the deal & messaging the shop")} />
             ) : !deliveryReady ? (
-              t(fulfillment === "shuttle" ? "Add a pick-up point" : "Add a delivery address")
+              fulfillment === "shuttle" ? t("Add a pick-up point") : t("Add a delivery address")
             ) : (
               t("Yes, close this deal")
             )}
@@ -580,11 +580,13 @@ export function BookingSheet({
           <div className="mt-3 rounded-2xl bg-card2 p-3 text-left text-[12px] text-soft">
             <div className="font-extrabold text-strong">{t("Finish in your WhatsApp")} 💬</div>
             <p className="mt-1">
-              {t(
-                disconnected
-                  ? "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. You can reconnect the agents anytime from"
-                  : "Your WhatsApp stays linked and the agents have stepped back from this chat - the rest of the conversation is just you and the shop. Manage the connection anytime from"
-              )}{" "}
+              {disconnected
+                ? t(
+                    "WheelDeal has disconnected from your WhatsApp - the rest of the conversation is just you and the shop. You can reconnect the agents anytime from"
+                  )
+                : t(
+                    "Your WhatsApp stays linked and the agents have stepped back from this chat - the rest of the conversation is just you and the shop. Manage the connection anytime from"
+                  )}{" "}
               <a href="/profile" className="font-bold text-brandblue underline">
                 {t("Profile")}
               </a>

@@ -99,6 +99,10 @@ describe("W8 #15: the server-composed copy is in the catalogue", () => {
     const disconnected = classifySafety(
       {
         connection: "close",
+        // classifySafety reads neither of these; they are here because
+        // SafetySignals requires them, and null is the honest "not measured".
+        lastWebhookOkAt: null,
+        lastInboundAt: null,
         lastOutboundAt: new Date().toISOString(),
         inboundDropped24h: 0,
         sendDropped24h: 0,
@@ -108,6 +112,8 @@ describe("W8 #15: the server-composed copy is in the catalogue", () => {
     const attention = classifySafety(
       {
         connection: "open",
+        lastWebhookOkAt: null,
+        lastInboundAt: null,
         lastOutboundAt: new Date().toISOString(),
         inboundDropped24h: 2,
         sendDropped24h: 0,

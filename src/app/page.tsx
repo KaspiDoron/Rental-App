@@ -2975,6 +2975,24 @@ export default function Home() {
     offers: statusGroups.deals.length,
   };
 
+  // HAS ANYTHING ACTUALLY BEEN SENT?
+  //
+  // Two spinners claimed "contacting shops" purely because `phase === "running"`
+  // - and `running` is the FUNNEL ANIMATION: runFunnel walks the local cards
+  // from "queued" to "found" over a couple of seconds and touches no shop at
+  // all. Outreach in this app is an explicit tap (the consent flow exists
+  // precisely so nobody is messaged without one), so for the whole of that
+  // phase the app was animating a claim about work it had not done, on the
+  // paid tier, next to a request the traveller had just submitted.
+  //
+  // Evidence, not phase: a shop counts as contacted once it has been messaged,
+  // has replied, or has a queued row waiting to go out.
+  const contactingShops =
+    stageCounts.messaged +
+      stageCounts.replied +
+      Math.max(stageCounts.queued, queueItems.length) >
+    0;
+
   // Honest pacing progress ("3 of 8 sent - next at ~14:32 - done by ~14:41")
   // derived from LIVE queue rows so mid-batch removals shrink the plan.
   const queueProgress = useMemo(
@@ -3409,7 +3427,12 @@ export default function Home() {
                 }
               />
             ) : phase === "running" ? (
-              <LoadingDots light label={t("Agents contacting shops")} />
+              <LoadingDots
+                light
+                label={
+                  contactingShops ? t("Agents contacting shops") : t("Getting your shops ready")
+                }
+              />
             ) : (
               <>
                 <Icon name="bolt" className="h-5 w-5" /> {t("Find my deal")}
@@ -3476,9 +3499,15 @@ export default function Home() {
           <div className="surface mt-3 rounded-blob p-3 text-[12px] animate-slide-up">
             <div className="mb-1 flex items-center gap-1.5 font-extrabold text-brandblue">
               <Icon name="spark" className="h-3.5 w-3.5" /> {t("Structured request")}
-              {session && session.plan !== "free" && phase === "running" && (
+              {session && session.plan !== "free" && (contactingShops || phase === "running") && (
                 <span className="ml-auto font-bold text-faint">
-                  <LoadingDots label={t("Order status: contacting shops")} />
+                  <LoadingDots
+                    label={
+                      contactingShops
+                        ? t("Order status: contacting shops")
+                        : t("Order status: getting your shops ready")
+                    }
+                  />
                 </span>
               )}
             </div>
