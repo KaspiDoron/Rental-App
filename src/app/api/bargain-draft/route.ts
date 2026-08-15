@@ -5,6 +5,7 @@ import { sbInsert, sbSelect } from "@/lib/runtime-config";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { digitsOnly } from "@/lib/phone";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
+import { beatRivalTarget } from "@/lib/negotiation/beat-rival";
 
 // Adaptive Bargaining Agent: composes the next negotiation message to send.
 // This is the SAME brain the automatic funnel uses - market-floor anchored
@@ -133,23 +134,58 @@ export async function POST(req: Request) {
   }
 
   // Cross-shop leverage: the user's best OTHER offer for the same vehicle in
-  // this session (client hint accepted, server data preferred).
-  let rival: number | undefined = body.rivalPricePerDay;
+  // this session.
+  //
+  // THE SERVER OWNS THIS NUMBER (owner report 5 #2). It used to be seeded from
+  // `body.rivalPricePerDay` - a figure posted by the BROWSER - which the server
+  // could then only LOWER (`Math.min`), never replace and never reject. The
+  // client-side selector applies three fewer filters than the server one (no
+  // vehicle class, no search session, no "strictly cheaper than this shop's
+  // quote"), and when this shop had no quote yet the server check was skipped
+  // entirely and the client's number went into the prompt unexamined. So the
+  // one number the agent is forbidden to soften could arrive from the least
+  // trustworthy source in the system.
+  //
+  // Now: the server lookup is the ONLY source. The client hint is used for
+  // exactly one thing - noticing that it disagrees, which is worth an event.
+  let rival: number | undefined;
+  let rivalDerivedFromDays: number | undefined;
+  const clientHint = Number(body.rivalPricePerDay);
   try {
     if (quoted) {
       const { vehicleKeyFor } = await import("@/lib/market");
-      const { cheapestRivalFor } = await import("@/lib/search-session");
-      const server = await cheapestRivalFor(session.email, {
+      const { cheapestRivalQuoteFor } = await import("@/lib/search-session");
+      const server = await cheapestRivalQuoteFor(session.email, {
         vendorId: String(vendor.id ?? ""),
         currency: cur,
         vehicleKey: vehicleKeyFor(rfq),
         belowPrice: quoted,
+        // Duration-aware: a per-day divided out of someone's 3-day package is
+        // not a like-for-like rival for a 1-day rental.
+        durationDays: rfq.durationDays,
       });
-      if (server) rival = Math.min(rival ?? Infinity, server);
-      if (!Number.isFinite(rival ?? Infinity)) rival = undefined;
+      if (server) {
+        rival = server.pricePerDay;
+        rivalDerivedFromDays = server.derivedFromDays;
+      }
     }
   } catch {
     /* leverage is an enhancement */
+  }
+  if (Number.isFinite(clientHint) && clientHint > 0 && clientHint !== rival) {
+    // Never silent: the client believed something the server could not verify,
+    // and the owner can see the divergence in the events trail.
+    await sbInsert("agent_events", [
+      {
+        kind: "rival-hint-ignored",
+        user_email: session.email,
+        vendor_id: String(vendor.id ?? ""),
+        vendor_name: String(vendor.name ?? ""),
+        detail: `Client posted a rival of ${clientHint}; the server-authoritative rival is ${
+          rival ?? "none"
+        }. Composed on the server's.`,
+      },
+    ]).catch(() => {});
   }
 
   // Thread history: what we and the shop already said - the draft must never
@@ -208,20 +244,26 @@ export async function POST(req: Request) {
     /* history is an enhancement */
   }
 
-  // Target: aim at (or just under) the rival when we have one, floor-clamped.
+  // Target: strictly UNDER the rival when we have one, floor-clamped.
+  //
+  // BEAT, NEVER MATCH (owner report 5 #2). This was `Math.min(quoted*0.85,
+  // rival)` under a `Math.max(floor, ...)` - so a rival at or below the 15% cut
+  // became the target EXACTLY, and a floor above the rival pushed the ask to or
+  // past it. Both outcomes ask a shop to match, and the best a match can win the
+  // traveller is the price they already had. `beatRivalTarget` owns the rule.
   const target =
-    quoted !== undefined
-      ? Math.max(
-          floorPrice ?? 0,
-          rival ? Math.min(Math.round(quoted * 0.85), rival) : Math.round(quoted * 0.85)
-        )
-      : undefined;
+    quoted === undefined
+      ? undefined
+      : rival
+        ? beatRivalTarget({ rivalPricePerDay: rival, quotePerDay: quoted, floorPerDay: floorPrice })
+        : Math.max(floorPrice ?? 0, Math.round(quoted * 0.85));
 
   const draft = await composeBargain({
     rfq,
     vendor,
     currentPricePerDay: quoted,
     rivalPricePerDay: rival,
+    rivalDerivedFromDays,
     region,
     round: Math.max(0, Number(body.round ?? 0)),
     currency: cur,
@@ -239,6 +281,55 @@ export async function POST(req: Request) {
       { error: "Draft failed the safety screen - try again." },
       { status: 500 }
     );
+  }
+
+  // THE DRAFT PATH HAD NO NUMERIC RAIL AT ALL (owner report 5 #2).
+  //
+  // `runSafety` above is a blocklist plus a tone judge - it has no idea what a
+  // price is. Every money guarantee in this product (fabricated rival, ask
+  // below the floor, an inverted ask ABOVE the shop's own quote, and the
+  // provenance rule that every price-scale numeral be a number this thread
+  // actually holds) lived on the SPTE path only, and this is the route the
+  // traveller reaches by tapping Bargain. Same rail, same rules; a draft that
+  // fails is not shown, because a number we cannot verify is a number we do not
+  // send. Numbers-only, so the phrasing rails (commitment, farewell) that need
+  // a full SPTE turn context stay where they are.
+  {
+    const { checkOutboundNumbers } = await import("@/lib/graph/guardrails");
+    const { citesAMatch } = await import("@/lib/negotiation/beat-rival");
+    const check = checkOutboundNumbers({
+      text: draft.message,
+      ceiling: quoted,
+      floor: floorPrice,
+      rivalPrice: rival,
+      rivalPrices: rival ? [rival] : [],
+      excludeExact: [rfq.durationDays, rfq.engineSizeCc ?? 0].filter(Boolean) as number[],
+      grounded: [quoted, floorPrice, rival, target].filter(
+        (n): n is number => typeof n === "number" && n > 0
+      ),
+      durationDays: rfq.durationDays,
+      checkAskBounds: true,
+    });
+    // BEAT, NEVER MATCH holds here too - the live "Could you match the 200
+    // THB/day offer" was composed by this very function.
+    const matched = citesAMatch(draft.message);
+    if (!check.ok || matched) {
+      await sbInsert("agent_events", [
+        {
+          kind: "bargain-draft-rejected",
+          user_email: session.email,
+          vendor_id: String(vendor.id ?? ""),
+          vendor_name: String(vendor.name ?? ""),
+          detail: matched
+            ? `beat-not-match: the draft asked the shop to match ("${matched.phrase}")`
+            : `${check.violation ?? "numbers"}: ${check.detail ?? ""}`,
+        },
+      ]).catch(() => {});
+      return NextResponse.json(
+        { error: "Draft failed the price-integrity check - try again." },
+        { status: 500 }
+      );
+    }
   }
 
   await sbInsert("bargain_drafts", [

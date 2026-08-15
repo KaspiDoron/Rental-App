@@ -33,6 +33,9 @@ export interface RivalQuote {
   shop: string;
   pricePerDay: number;
   currency: string;
+  /** Set when the figure is package arithmetic, not a quoted daily rate. Every
+   *  surface that repeats it has to say so. See SessionShopRow.quoteBasisDays. */
+  derivedFromDays?: number;
 }
 
 export interface RivalOptions {
@@ -47,6 +50,13 @@ export interface RivalOptions {
    * tombstoned thread. Passed in rather than re-read, so this stays pure.
    */
   excludeVendorIds?: Iterable<string>;
+  /**
+   * The traveller's rental length. A rival per-day DERIVED from a longer
+   * package is not a price anyone would honour for a shorter hire, so it is not
+   * leverage - see the duration filter below. Absent = treated as 1 day, the
+   * conservative reading.
+   */
+  durationDays?: number;
 }
 
 /**
@@ -64,11 +74,27 @@ export function validRivals(rows: SessionShopRow[], opts: RivalOptions): RivalQu
     if (typeof r.pricePerDay !== "number" || !Number.isFinite(r.pricePerDay) || r.pricePerDay <= 0) continue;
     if (!r.currency || r.currency !== opts.currency) continue;
     if (r.phase && DEAD_PHASES.has(r.phase)) continue;
+    // A FOURTH KIND OF ROW THAT IS NOT LEVERAGE (owner report 5 #2): a per-day
+    // figure that only exists because we divided someone's multi-day package.
+    // "500 for 3 days" gives 167, and no shop on earth would hand a one-day
+    // traveller a bike at 167 - so citing it is an argument the traveller
+    // cannot follow through, which is this module's whole definition of noise.
+    // Dropped rather than marked up: we do not know that shop's one-day price,
+    // and guessing it would invent a second number on top of the first.
+    const basis = r.quoteBasisDays;
+    if (typeof basis === "number" && basis > 1) {
+      const renting = typeof opts.durationDays === "number" && opts.durationDays > 0 ? opts.durationDays : 1;
+      if (basis > renting) continue;
+    }
     out.push({
       vendorId: r.vendorId,
       shop: r.vendorName || r.vendorId,
       pricePerDay: r.pricePerDay,
       currency: r.currency,
+      // Survives the filter only when the traveller IS renting long enough, so
+      // it is honest arithmetic on a deal they could take - but it is still not
+      // a number the shop typed, and the prompt has to say so.
+      derivedFromDays: typeof basis === "number" && basis > 1 ? basis : undefined,
     });
   }
   out.sort((a, b) => a.pricePerDay - b.pricePerDay);

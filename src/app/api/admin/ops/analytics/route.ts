@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/session";
 import { sbSelectDark } from "@/lib/runtime-config";
 import { getActiveRev } from "@/lib/ops/rev";
+import { compileAskVariantReport, type VariantTurn } from "@/lib/ops/ask-variant-stats";
 
 // Negotiation-quality analytics: branch heatmap (usage x owner verdicts x
 // outcomes), quality-over-time split by behavior revision (= regression
@@ -18,6 +19,12 @@ interface ScoreRow {
   scores: Record<string, number> | null;
   spec_rev: number | null;
   decision_id: string | null;
+  created_at: string;
+}
+interface TurnRow {
+  user_email: string | null;
+  vendor_id: string | null;
+  detail: string | null;
   created_at: string;
 }
 interface ReviewRow {
@@ -64,7 +71,7 @@ export async function GET(req: Request) {
   // version of this mistake available, and it is why the reader below is
   // `sbSelectDark`: it returns rows, `[]` for a table that does not exist yet,
   // and `null` ONLY for a real outage. There is nothing left to catch.
-  const [tracesRead, scoresRead, reviewsRead, activeRev] = await Promise.all([
+  const [tracesRead, scoresRead, reviewsRead, activeRev, turnsRead] = await Promise.all([
     sbSelectDark<TraceRow>(
       "agent_traces",
       `select=edge_id,spec_rev,created_at&edge_id=not.is.null&created_at=gte.${encodeURIComponent(
@@ -82,6 +89,16 @@ export async function GET(req: Request) {
       `select=decision_id,edge_id,rating,verdict,branch_correct,outcome_impact,tags,created_at&order=created_at.desc&limit=400`
     ),
     getActiveRev(),
+    // THE OWNER'S PHRASING A/B (owner report 5 #2, second half). Every fact it
+    // needs is already on the turn telemetry - the arm, whether we named a
+    // counter, and the quote on the table - so this is one more capped read
+    // over rows the engine already writes, not a new table.
+    sbSelectDark<TurnRow>(
+      "agent_events",
+      `select=user_email,vendor_id,detail,created_at&kind=eq.engine-v3-turn&created_at=gte.${encodeURIComponent(
+        since
+      )}&order=created_at.desc&limit=4000`
+    ),
   ]);
 
   const traces = tracesRead ?? [];
@@ -92,7 +109,34 @@ export async function GET(req: Request) {
     tracesRead === null ? "decision traces" : null,
     scoresRead === null ? "judge scores" : null,
     reviewsRead === null ? "owner reviews" : null,
+    turnsRead === null ? "engine turns" : null,
   ].filter((x): x is string => x !== null);
+
+  // ---- The phrasing A/B ------------------------------------------------------
+  const askVariants = compileAskVariantReport(
+    (turnsRead ?? []).map((row) => {
+      let d: Partial<VariantTurn> & { move?: string } = {};
+      try {
+        d = JSON.parse(row.detail ?? "{}");
+      } catch {
+        // A truncated blob (the detail is hard-capped at 1600 chars) is simply
+        // not a scorable turn. The two long free-text fields sit LAST in that
+        // JSON precisely so truncation eats a scratchpad, never a metric - but
+        // a row that does not parse is skipped rather than guessed at.
+      }
+      return {
+        userEmail: row.user_email,
+        vendorId: row.vendor_id,
+        createdAt: row.created_at,
+        move: d.move ?? null,
+        askVariant: d.askVariant ?? null,
+        counterPricePerDay: d.counterPricePerDay ?? null,
+        variantOk: d.variantOk ?? null,
+        quote: d.quote ?? null,
+        standingQuote: d.standingQuote ?? null,
+      };
+    })
+  );
 
   // ---- Branch heatmap: every director edge that actually fired -----------------
   const heat = new Map<
@@ -249,6 +293,7 @@ export async function GET(req: Request) {
     timeline,
     calibration,
     tags,
+    askVariants,
     // UNREAD IS NULL, NOT ZERO. The panel renders a dash for null and a real
     // count for 0 - "nothing happened" and "we could not look" are different
     // answers and only one of them means the engine is idle.

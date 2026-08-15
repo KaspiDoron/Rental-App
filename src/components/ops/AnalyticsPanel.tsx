@@ -33,9 +33,20 @@ interface WeekRow {
   samples: number;
 }
 
+/** The owner's phrasing A/B (lib/ops/ask-variant-stats). */
+interface ArmRow {
+  variant: "specific-number" | "open-ended-below";
+  attempts: number;
+  concessions: number;
+  successPct: number | null;
+  medianConcessionPct: number | null;
+  offArm: number;
+}
+
 interface Analytics {
   days: number;
   activeRev: number | null;
+  askVariants?: { arms: ArmRow[]; samples: number; verdict: string | null };
   heatmap: HeatRow[];
   revisions: RevRow[];
   regression: string | null;
@@ -138,6 +149,74 @@ export function AnalyticsPanel() {
           </div>
         ))}
       </div>
+
+      {/* THE PHRASING A/B (owner report 5 #2, second half).
+          "Successful bargains where we gave a specific number" vs "where we
+          just asked for lower than X" - both arms always state X. Arms are
+          assigned per THREAD, so one traveller's hunt runs both against
+          comparable shops on the same day. */}
+      {data.askVariants && (
+        <div className="surface rounded-blob p-3.5">
+          <h4 className="text-[13px] font-extrabold text-strong">🎯 Specific number vs open-ended</h4>
+          <p className="mt-0.5 text-[11px] text-soft">
+            Both arms tell the shop the price we already have. The only difference is
+            whether we name our own counter. Scored one turn later, on whether THIS shop
+            came down.
+          </p>
+          {data.askVariants.samples === 0 ? (
+            <p className="mt-2 text-[11px] text-faint">
+              No scored bargains in this window yet - a bargain counts once the shop has
+              answered it.
+            </p>
+          ) : (
+            <>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {data.askVariants.arms.map((a) => (
+                  <div key={a.variant} className="rounded-2xl bg-card2 p-3">
+                    <p className="text-[10px] font-extrabold uppercase tracking-wide text-faint">
+                      {a.variant === "specific-number" ? "We named a number" : 'Just "below X"'}
+                    </p>
+                    <p className="tabular mt-1 text-[20px] font-extrabold text-strong">
+                      {a.successPct === null ? (
+                        <span className="text-faint">&mdash;</span>
+                      ) : (
+                        `${a.successPct}%`
+                      )}
+                    </p>
+                    <p className="text-[10px] text-soft">
+                      {a.concessions} of {a.attempts} pushes moved the price
+                    </p>
+                    <div className="mt-1.5">
+                      <Meter value={a.successPct ?? 0} max={100} tone="green" />
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-soft">
+                      Median cut when it worked:{" "}
+                      <span className="tabular font-extrabold text-strong">
+                        {a.medianConcessionPct === null ? "-" : `${a.medianConcessionPct}%`}
+                      </span>
+                    </p>
+                    {a.offArm > 0 && (
+                      <p className="mt-1 text-[10px] text-amber-400">
+                        {a.offArm} draft{a.offArm === 1 ? "" : "s"} ignored this arm - the
+                        sample is contaminated by that much.
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-soft">
+                {data.askVariants.verdict ?? (
+                  <>
+                    {data.askVariants.samples} scored push
+                    {data.askVariants.samples === 1 ? "" : "es"} so far - too thin to call a
+                    winner. Needs 20 per arm.
+                  </>
+                )}
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Branch heatmap */}
       <div className="surface rounded-blob p-3.5">

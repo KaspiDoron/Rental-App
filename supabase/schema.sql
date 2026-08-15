@@ -657,6 +657,13 @@ alter table public.offers   add column if not exists insurance_included boolean;
 alter table public.offers   add column if not exists km_limit_per_day text;
 alter table public.offers   add column if not exists fuel_policy      text;
 alter table public.offers   add column if not exists effective_daily_rate numeric;
+-- PROVENANCE FOR A DERIVED PER-DAY (owner report 5 #2, the "167" screenshot).
+-- The span the shop's amount actually covered when we DIVIDED it into a daily
+-- figure ("500 for 3 days" -> 167/day, quote_basis_days = 3). NULL = the shop
+-- stated a per-day rate. A rival whose basis exceeds the traveller's rental is
+-- not a like-for-like daily price and must never be quoted at another shop as
+-- one - see pickCheapestRival.
+alter table public.offers   add column if not exists quote_basis_days int;
 alter table public.vendor_replies add column if not exists insurance_included boolean;
 alter table public.vendor_replies add column if not exists delivery_fee        numeric;
 

@@ -14,7 +14,7 @@ import { finishBeforeResponse } from "../after";
 // call sites as the wa_outbox queue (no external cron needed).
 
 import "server-only";
-import { getConfig, setConfig, sbInsert, sbSelect, sbUpdate } from "../runtime-config";
+import { getConfig, setConfig, sbInsert, sbSelect, sbSelectStrict, sbUpdate } from "../runtime-config";
 import { runSafety, localizeMessage } from "../agents";
 import {
   getOrchestratorConfig,
@@ -1570,19 +1570,44 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       const sameVehicle = vehicleKey
         ? `&vehicle_key=eq.${encodeURIComponent(vehicleKey)}`
         : "";
-      const offers = await sbSelect<{
+      // A FEW CHATTY SHOPS USED TO CONSUME THE WHOLE WINDOW.
+      //
+      // `limit=16` is applied by Postgres BEFORE the per-vendor dedupe below,
+      // and a negotiation writes one `offers` row per round - so three shops
+      // that went five rounds each filled all sixteen slots and every other
+      // shop in the hunt was invisible to the leverage read. The bound has to
+      // be per VENDOR, not per row, and the dedupe that makes it per-vendor
+      // lives here in code. 200 rows is a session's worth of rounds and still
+      // one bounded query.
+      //
+      // `quote_basis_days` rides along: a per-day we divided out of a package
+      // is not a like-for-like rival (owner report 5 #2), and the predicate
+      // downstream needs the span to say so. Schema-graceful - a host that has
+      // not re-run schema.sql loses the provenance, not the rivals.
+      type OfferRow = {
         vendor_id: string;
         vendor_name: string;
         price_per_day: number;
         currency: string;
-      }>(
+        duration_days?: number | null;
+        quote_basis_days?: number | null;
+      };
+      const offerWhere = `&user_email=eq.${encodeURIComponent(
+        userEmail
+      )}&simulated=eq.false&created_at=gte.${encodeURIComponent(
+        since
+      )}${sameVehicle}&order=created_at.desc&limit=200`;
+      const strictOffers = await sbSelectStrict<OfferRow>(
         "offers",
-        `select=vendor_id,vendor_name,price_per_day,currency&user_email=eq.${encodeURIComponent(
-          userEmail
-        )}&simulated=eq.false&created_at=gte.${encodeURIComponent(
-          since
-        )}${sameVehicle}&order=created_at.desc&limit=16`
-      ).catch(() => []);
+        `select=vendor_id,vendor_name,price_per_day,currency,duration_days,quote_basis_days${offerWhere}`
+      );
+      const offers =
+        "rows" in strictOffers
+          ? strictOffers.rows
+          : await sbSelect<OfferRow>(
+              "offers",
+              `select=vendor_id,vendor_name,price_per_day,currency${offerWhere}`
+            ).catch(() => []);
       const threads = await sbSelect<{
         vendor_id: string | null;
         vendor_name: string | null;
@@ -1606,6 +1631,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           depositType?: string;
           depositNote?: string;
           fulfillment?: string;
+          digest?: { firmCount?: number };
         };
         rows.set(t.vendor_id, {
           vendorId: t.vendor_id,
@@ -1617,6 +1643,11 @@ export function liveGraphIO(send: LiveSend): GraphIO {
             fx.pricePerDay && (fx.depositType || fx.depositNote) && fx.fulfillment
           ),
           isThisShop: t.vendor_id === thisVendorId,
+          // Carried so the SWARM can act on this row, not only quote it: a
+          // sibling re-bargain needs the number to build a thread key, and the
+          // firm ladder to know which shops have already refused twice.
+          toNumber: t.to_number ?? undefined,
+          firmCount: typeof fx.digest?.firmCount === "number" ? fx.digest.firmCount : undefined,
         });
       }
       for (const o of offers) {
@@ -1634,6 +1665,8 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           phase: existing?.phase,
           complete: existing?.complete,
           isThisShop: o.vendor_id === thisVendorId,
+          quoteBasisDays: o.quote_basis_days ?? undefined,
+          durationDays: o.duration_days ?? undefined,
         });
       }
 
@@ -1648,6 +1681,15 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       // validRivals apply downstream either way). Rows that have a price keep
       // it - a quote the shop typed beats a board we read.
       {
+        // What every priced row in this hunt is stamped with - the fallback for
+        // a board price the reader could not attach a currency to.
+        const tally = new Map<string, number>();
+        for (const r of rows.values()) {
+          if (typeof r.pricePerDay === "number" && r.currency) {
+            tally.set(r.currency, (tally.get(r.currency) ?? 0) + 1);
+          }
+        }
+        const sessionCurrency = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
         const priceless = [...rows.values()].filter(
           (r) => typeof r.pricePerDay !== "number" && numberByVendor.has(r.vendorId)
         );
@@ -1678,7 +1720,15 @@ export function liveGraphIO(send: LiveSend): GraphIO {
               rows.set(r.vendorId, {
                 ...r,
                 pricePerDay: cheapest.pricePerDay,
-                currency: cheapest.currency ?? r.currency,
+                // A BOARD PRICE WITH NO CURRENCY IS A RIVAL NOBODY CAN USE.
+                //
+                // `validRivals` requires strict currency equality, and a
+                // priceless thread row has no currency to inherit - so a price
+                // rescued off a photo arrived with `currency: undefined` and
+                // was dropped by the very next filter. Every one of these rows
+                // came off a board in THIS session, and the session's own
+                // currency is what every other row in it is stamped with.
+                currency: cheapest.currency ?? r.currency ?? sessionCurrency,
               });
             }
           }

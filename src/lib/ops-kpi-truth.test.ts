@@ -31,7 +31,7 @@ describe("a failed read is dark, never zero", () => {
     expect(route).not.toMatch(/\.catch\(\(\) => \[\]\)/);
   });
 
-  it("all three reads use the reader that can actually answer 'unknown'", () => {
+  it("every read uses the reader that can actually answer 'unknown'", () => {
     // THIS ASSERTION USED TO COUNT `.catch(() => null)` AND IT PASSED WHILE THE
     // FIX DID NOTHING. `sbSelect` has no rejection path, so those catches were
     // unreachable, `null` never happened, `degraded` was permanently empty, and
@@ -41,7 +41,14 @@ describe("a failed read is dark, never zero", () => {
     // reader is now `sbSelectDark`, whose `T[] | null` return type makes the
     // unknown case reachable by construction - and fail-dark.test.ts executes it
     // against a stubbed outage rather than reading the source.
-    expect((route.match(/sbSelectDark</g) ?? []).length).toBe(3);
+    //
+    // W5: a FOURTH read (the engine turns behind the owner's phrasing A/B) had
+    // to be counted here too. The number is not the point of this assertion -
+    // "no read on this route can silently answer zero" is - so the bound is
+    // stated as "every sbSelect on the route is the dark one", which cannot be
+    // satisfied by adding a plain `sbSelect` beside the dark ones.
+    expect((route.match(/sbSelectDark</g) ?? []).length).toBe(4);
+    expect(route).not.toMatch(/[^k]sbSelect</);
     expect(route).not.toMatch(/\.catch\(\(\) => null\)/);
   });
 
@@ -123,8 +130,21 @@ describe("every KPI on this page has a real writer", () => {
     expect(detect).toMatch(/sbInsert\("agent_reviews"/);
   });
 
-  it("the route reads exactly those three tables and no fourth", () => {
+  it("agent_events engine-v3-turn rows are written by the live engine", () => {
+    // The A/B card's source. Same mandate as the three above: a metric whose
+    // table nothing writes renders a confident zero forever.
+    const live = stripComments(readRaw("src/lib/spte/live.ts"));
+    expect(live).toMatch(/kind: "engine-v3-turn"/);
+    // ...and the two fields the A/B is actually computed from, so a refactor
+    // that drops them fails here rather than emptying the card silently.
+    expect(live).toMatch(/askVariant:/);
+    expect(live).toMatch(/counterPricePerDay:/);
+  });
+
+  it("the route reads exactly those four tables and no fifth", () => {
     const tables = Array.from(route.matchAll(/sbSelectDark<\w+>\(\s*"(\w+)"/g)).map((m) => m[1]);
-    expect(new Set(tables)).toEqual(new Set(["agent_traces", "agent_scores", "agent_reviews"]));
+    expect(new Set(tables)).toEqual(
+      new Set(["agent_traces", "agent_scores", "agent_reviews", "agent_events"])
+    );
   });
 });

@@ -397,6 +397,9 @@ describe("the thread remembers its own turns", () => {
       tone: undefined,
       confirmAsked: undefined,
       awaitingConfirmation: null,
+      // W5: a row written before the price watch existed must read as "not
+      // armed", never as a watch that already fired.
+      priceWatchArmed: undefined,
     });
   });
 

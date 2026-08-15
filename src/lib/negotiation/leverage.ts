@@ -23,6 +23,8 @@
 // competitor, from the traveller's own number. That is the traveller's leverage
 // being spent on a shop that did not earn it, and it is not ours to give away.
 
+import { beatRivalTarget } from "./beat-rival";
+
 export type LeverageKind = "rival" | "duration" | "bundle" | "readiness";
 
 export interface LeverageCard {
@@ -44,6 +46,31 @@ export interface LeverageInput {
   round: number;
   /** How the traveller's vehicle reads in a sentence ("automatic 125cc scooter"). */
   vehicleLabel: string;
+  /** The grounded market floor, so the rival card can name a target that is
+   *  strictly below the rival without dropping into insulting-lowball range. */
+  floorPerDay?: number | null;
+  /**
+   * The rival's per-day figure was DERIVED from a longer package (their 3-day
+   * total divided out), not quoted for this rental length. The card then has to
+   * SAY so - "their 3-day price works out to about 167/day" - because
+   * presenting it as a quote for these days is a number no shop ever said.
+   */
+  rivalDerivedFromDays?: number | null;
+  /**
+   * May the card name a concrete counter-price?
+   *
+   * Defaults to true - a number is an anchor and "beat it" with no number is an
+   * ask the shop answers with the rival's own price. It is false for exactly
+   * one caller: the open-ended arm of the owner's phrasing A/B
+   * (negotiation/ask-variant), which exists to measure what happens when we
+   * state their price and let THEM pick the figure. Without this the card and
+   * the arm directive contradicted each other in the same prompt, and a
+   * contradiction is not an experiment.
+   *
+   * BEAT NEVER MATCH HOLDS EITHER WAY: with no number named, the card still
+   * demands a price strictly below the rival.
+   */
+  nameATarget?: boolean;
   /**
    * THIS shop is already the cheapest quote in the session.
    *
@@ -109,6 +136,26 @@ export function planLeverage(input: LeverageInput): LeverageCard[] {
   const rival = cheapestCheaperRival(input.rivals, input.quotePerDay);
   if (rival && typeof input.quotePerDay === "number") {
     const gap = (input.quotePerDay - rival.pricePerDay) / input.quotePerDay;
+    // BEAT, NEVER MATCH. This line used to end "ask them to match or beat it",
+    // and it is the card that reaches the LIVE engine through spte/pass - so
+    // fixing composeBargain alone left the running agent asking shops to match.
+    // A match is the traveller's strongest card spent for the price they
+    // already had; the ask is a concrete number strictly BELOW the rival.
+    const target = beatRivalTarget({
+      rivalPricePerDay: rival.pricePerDay,
+      quotePerDay: input.quotePerDay,
+      floorPerDay: input.floorPerDay,
+    });
+    const rivalCur = rival.currency ?? cur;
+    // HONEST PROVENANCE. A per-day figure we DERIVED from their multi-day
+    // package was never quoted by anyone for this rental length, so it is
+    // phrased as the arithmetic it is instead of as a quote (owner report 5
+    // #2 - the Thai draft that cited "167 baht/day", a number no shop said).
+    const derivedDays = input.rivalDerivedFromDays;
+    const offerPhrase =
+      typeof derivedDays === "number" && derivedDays > 0
+        ? `another shop's ${derivedDays}-day price works out to about ${rival.pricePerDay} ${rivalCur}/day - say it EXACTLY that way ("works out to about"), never as a per-day price they quoted you`
+        : `you have a better live offer on the same ${input.vehicleLabel} at ${rival.pricePerDay} ${rivalCur}/day`;
     cards.push({
       kind: "rival",
       // Always above every other card: a competing live quote for the same
@@ -116,9 +163,14 @@ export function planLeverage(input: LeverageInput): LeverageCard[] {
       strength: 100 + Math.round(gap * 100),
       // PRICE AND VEHICLE, NEVER THE SHOP. The rail enforces it; this is what
       // the model is given so it has nothing to leak in the first place.
-      line: `You have a better live offer on the same ${input.vehicleLabel}: ${rival.pricePerDay} ${
-        rival.currency ?? cur
-      }/day. Say you have a better offer at that price for this vehicle and ask them to match or beat it. NEVER name or hint at which shop it is - the shop's identity is not yours to give away.`,
+      line:
+        `${offerPhrase}. Say you have a better offer at that price, then ` +
+        (input.nameATarget === false
+          ? `ask THIS shop to go BELOW that number - let them name the figure, do NOT propose one yourself. `
+          : `ask THIS shop for ${target} ${rivalCur}/day - a number strictly BELOW the other offer. `) +
+        `NEVER ask them to "match", to do "the same", or to "get close to" it: ` +
+        `matching leaves the traveller exactly where they already are, so the only acceptable outcome is a LOWER price. ` +
+        `NEVER name or hint at which shop it is - the shop's identity is not yours to give away.`,
     });
   }
 

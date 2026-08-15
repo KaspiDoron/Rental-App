@@ -2453,11 +2453,28 @@ export default function Home() {
           // never verified. The server draft knows all of that. The literal
           // stays only as the offline fallback, which is the one case where
           // there is no leverage to cite anyway.
+          // ...AND THE PAYLOAD HAS TO CARRY THE LEVERAGE (owner report 5 #11).
+          //
+          // This posted `{ vendor, rfq }` and nothing else, which quietly
+          // disabled every server-side lever the comment above describes. With
+          // no `region` the route resolves currency to USD - so a Thai shop was
+          // asked for a price in DOLLARS - and the market floor, which is only
+          // adopted when its currency matches, was dropped on the floor. With
+          // no `currentPricePerDay` the whole rival lookup is skipped (it is
+          // gated on `quoted`) and no target can be computed at all, and with
+          // no `round` every push composed as the first one. The one action
+          // named "Push harder" was the one with nothing behind it.
           const drafted = vendor && rfq
             ? await fetch("/api/bargain-draft", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ vendor, rfq }),
+                body: JSON.stringify({
+                  vendor,
+                  rfq,
+                  region: origin?.label || undefined,
+                  currentPricePerDay: vendor.offer?.pricePerDay,
+                  round: vendor.offer?.round ?? 0,
+                }),
               })
                 .then((res) => (res.ok ? res.json() : null))
                 .then((d) => (typeof d?.message === "string" ? d.message.trim() : ""))
