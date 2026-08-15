@@ -4,7 +4,7 @@
 // freely among them and writes the message. Decision trees never dictate WHAT
 // to say - only what is FORBIDDEN.
 
-import type { MoveKind, TurnContext, TurnArtifact } from "./types";
+import type { ConfirmSubject, MoveKind, TurnContext, TurnArtifact, Uncertainty } from "./types";
 import { menuUnresolved } from "../offer-options";
 import { alreadyAsked, unaskedObligations, type ThreadLedger } from "../thread/ledger";
 import type { ClaimSubject } from "../thread/claims";
@@ -37,6 +37,26 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // one that keeps the thread alive.
   if (v.shopUnavailable) {
     if (!alreadyAskedStock(ctx)) moves.push("restock-probe");
+    moves.push("silent");
+    return dedupe(moves);
+  }
+
+  // THE BRUSH-OFF (W4.3). "You should try asking other shops; maybe they'll
+  // give you one."
+  //
+  // With shopUnavailable=false, declined=false, wrongVehicle=false, no question
+  // asked, firmCount 0 and no price, that message walked past every branch
+  // below to the "no price yet" default - whose only legal moves ARE rate
+  // re-asks - and coerceToLegal forced one. The shop had just told us to go
+  // somewhere else and the agent replied "could you let me know your daily rate
+  // for the automatic 125cc scooter?".
+  //
+  // It sits BELOW the stock branch on purpose, and the comprehension pass
+  // enforces the same order on the reading itself: a shop with nothing to rent
+  // today is not a shop that sent us away, and the one that keeps the thread
+  // alive wins whenever a message can be read as either.
+  if (v.deflected) {
+    if (!hasClosed(ctx)) moves.push("graceful-close");
     moves.push("silent");
     return dedupe(moves);
   }
@@ -108,6 +128,21 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
     moves.push("confirm-vehicle");
   }
 
+  // IF THE AGENT IS NOT SURE, IT ASKS - AS A QUESTION, THEN WAITS (W4.4).
+  //
+  // The move vocabulary was CLOSED and the only fact-confirmation move in it
+  // was `confirm-vehicle`; `clarify` is defined to the model as price-only. So
+  // the one thing an unsure agent could do about a deposit it had half-read was
+  // write the half-read version down and move on. The extractor has emitted a
+  // `confidence` field the whole time and the live engine read neither it nor
+  // the `clarifyMessage` beside it.
+  //
+  // Ordered ahead of every price move for the same reason `confirm-vehicle` is:
+  // haggling a number, or presenting terms, on a reading we do not trust is
+  // worse than one more question. It is NOT ordered ahead of `answer` - a shop
+  // waiting on us is owed its reply first, and our doubt can ride along.
+  if (confirmableSubjects(ctx).length > 0) moves.push("confirm");
+
   const options = d.options ?? [];
   // A MENU THE SHOP HAS ANSWERED IS NOT A MENU (owner report 4/W2.2 - the
   // coherence golden seeds caught this). `menuUnresolved` reads the tiers
@@ -132,17 +167,27 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   //             cheaper rival, or a price still far above the floor).
   //   -  0   -> bargain freely (subject to the round cap).
   const firmCount = d.firmCount ?? 0;
+  // THE THREAD'S STANDING PRICE, not only this message's (W4.5).
+  //
+  // Every price test below read `v.pricePerDay`, which is rebuilt from the
+  // CURRENT inbound frame. So the moment a shop replied without restating its
+  // number - "ok for you?", "yes we have", a photo - bargain, deposit-probe and
+  // present all became illegal, the ladder fell through to its no-price
+  // default, and `momentum` turned on against a shop we were mid-negotiation
+  // with. The quote is a fact about the THREAD; it lives in the digest, which
+  // is now durable, and this is the one place that has to say so.
+  const standingQuote = quoteOnTable(ctx);
   const rivalCheaper =
     typeof ctx.session.rivals?.[0]?.pricePerDay === "number" &&
-    typeof v.pricePerDay === "number" &&
-    ctx.session.rivals[0].pricePerDay < v.pricePerDay;
+    typeof standingQuote === "number" &&
+    ctx.session.rivals[0].pricePerDay < standingQuote;
   const priceFarAboveFloor =
     typeof ctx.guards.floorPerDay === "number" &&
-    typeof v.pricePerDay === "number" &&
+    typeof standingQuote === "number" &&
     // The owner's threshold, not a literal. Default 1.08 - the overlay's own
     // comment calls the old 1.25 "far too soft", and that tightening applied
     // only to the fallback engine until this line read it.
-    v.pricePerDay > ctx.guards.floorPerDay * (ctx.guards.priceFarAboveFloor ?? 1.25);
+    standingQuote > ctx.guards.floorPerDay * (ctx.guards.priceFarAboveFloor ?? 1.25);
   const firmAllowsBargain =
     firmCount >= 2 ? false : firmCount === 1 ? rivalCheaper || priceFarAboveFloor : true;
 
@@ -150,7 +195,7 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // delivery while a legal bargain move exists), BUT the firm ladder and the
   // round cap can retire bargaining, which is exactly what unlocks the
   // logistics close-out below.
-  const priceKnown = v.found && typeof v.pricePerDay === "number";
+  const priceKnown = typeof standingQuote === "number";
   const roundsLeft = (d.round ?? 0) < ctx.guards.maxRounds;
   // NEVER BARGAIN AGAINST YOUR OWN FLOOR - ONE NUDGE, THEN LOCK.
   //
@@ -239,8 +284,36 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // move sitting unreachable. It is not the question again; it is a light
   // re-opening, which is exactly what a shop that answered vaguely needs.
   //
-  // Once only, and only while the thing we came for is still missing.
-  if (gated.length === 0 && !priceKnown && !alreadyNudged(ctx) && !v.declined) {
+  // Once only, while the thing we came for is still missing - AND ONLY WHEN THE
+  // THREAD IS ACTUALLY QUIET.
+  //
+  // `momentum` renders as "Hi again! Just checking in - any chance on that
+  // better rate...". Nothing in its guard tested whether the shop had replied
+  // THIS turn, so it was legal against a shop that had just spoken - including
+  // one that had just dismissed us. Greeting a shop with "hi again, checking
+  // in" ten seconds after it wrote to us is not a nudge, it is proof that
+  // nobody read the message.
+  //
+  // A nudge belongs to a thread nothing is coming back to, which is precisely
+  // what the wakeup below this file schedules: a silent, priceless turn parks a
+  // 3-minute tick, the tick re-enters through the SAME engine (engine-route),
+  // and `momentum` is legal there. So the A & T thread still gets its nudge -
+  // it gets it as a re-opening rather than as a non-sequitur reply.
+  //
+  // A RELUCTANT SHOP IS NOT NUDGED AT ALL. Tone has been computed every turn
+  // since the engine shipped and read by nothing on this path; this is the
+  // first thing that acts on it, and "they sounded annoyed, so stop poking
+  // them" is the least surprising thing it could possibly do.
+  const shopSpokeThisTurn = ctx.event === "shop-message";
+  if (
+    gated.length === 0 &&
+    !priceKnown &&
+    !shopSpokeThisTurn &&
+    d.tone !== "reluctant" &&
+    !alreadyNudged(ctx) &&
+    !v.declined &&
+    !v.deflected
+  ) {
     gated.push("momentum");
   }
 
@@ -283,6 +356,57 @@ function alreadyAskedStock(ctx: TurnContext): boolean {
   return (ctx.thread.digest.lastOutbound ?? []).some((m) =>
     /\b(back in stock|available again|when.{0,20}(available|back))\b/i.test(m ?? "")
   );
+}
+
+/**
+ * THE QUOTE ON THE TABLE - this message's number, or the thread's.
+ *
+ * Exported because `atSessionLow`, the leverage planner and the prompt all have
+ * to agree on which number this negotiation is about; two modules disagreeing
+ * about the shop's price is worse than either answer.
+ */
+export function quoteOnTable(ctx: TurnContext): number | undefined {
+  const v = ctx.inbound.verified;
+  if (v.found && typeof v.pricePerDay === "number") return v.pricePerDay;
+  const standing = ctx.thread.digest.quotedPricePerDay;
+  return typeof standing === "number" ? standing : undefined;
+}
+
+/**
+ * WHICH FACTS MAY STILL BE PUT BACK AS A QUESTION.
+ *
+ * The comprehension pass says what it is unsure of; this says which of those we
+ * are still ALLOWED to ask about. Two bounds, both arithmetic:
+ *
+ *   - ONCE PER SUBJECT, EVER (`digest.confirmAsked`, durable). A shop that
+ *     answers a confirming question ambiguously a second time is not going to
+ *     be clearer the third time, and asking again is how a negotiation turns
+ *     into an interrogation.
+ *   - NOT ON A DEAD THREAD. Nothing is worth confirming with a shop that has
+ *     declined, deflected, or told us it has nothing - those branches return
+ *     before this is ever consulted, and `dealComplete` retires it too.
+ */
+export function confirmableSubjects(ctx: TurnContext): Uncertainty[] {
+  const asked = new Set<ConfirmSubject>(ctx.thread.digest.confirmAsked ?? []);
+  const seen = new Set<ConfirmSubject>();
+  const out: Uncertainty[] = [];
+  for (const u of ctx.inbound.verified.uncertain ?? []) {
+    if (asked.has(u.subject) || seen.has(u.subject)) continue;
+    if (!u.question || !u.question.trim()) continue;
+    seen.add(u.subject);
+    out.push(u);
+  }
+  return out;
+}
+
+/** The single subject a `confirm` move is about - the most-doubted one first.
+ *  The move vocabulary is closed, so the SUBJECT is what parameterizes it. */
+export function confirmSubjectFor(ctx: TurnContext): Uncertainty | undefined {
+  const all = confirmableSubjects(ctx);
+  if (!all.length) return undefined;
+  // Least confident first: the thing we understand worst is the thing worth the
+  // thread's one question. Ties keep the model's own ordering.
+  return [...all].sort((a, b) => a.confidence - b.confidence)[0];
 }
 
 /** One cash-deposit counter is due: original-passport-only terms, never asked. */

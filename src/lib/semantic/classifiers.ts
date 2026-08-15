@@ -11,6 +11,122 @@ import { semanticParse, type SemanticOutcome } from "./parse";
 // traveller's name about something the shop never said.
 
 // ---------------------------------------------------------------------------
+// THREAD COMPREHENSION (W4.3 + W4.4) - the two questions the engine has to ask
+// of every shop turn, and could not: is this shop still dealing with us, and
+// is there anything here we are not sure we read right?
+//
+// A shop replied "You should try asking other shops; maybe they'll give you
+// one." The agent answered "Could you let me know your daily rate for the
+// automatic 125cc scooter?" - because nothing in the system had a category for
+// being sent away. Dialogue acts carry ASK kinds and SHARE kinds and no refusal
+// member; the one terminal-refusal reader is a regex whose alternatives are
+// "not interested", "good luck", "take it there". A polite brush-off is none of
+// those and never will be, in any of the languages this app runs in. A phrase
+// list is always yesterday's vocabulary.
+//
+// UNCERTAINTY IS THE SECOND HALF, and it is the owner's rule verbatim: "if the
+// ai agents not sure about something - they should ask the shop 'wait, you mean
+// that I can deposit a passport or cash 4000?' then wait for the shop answer."
+// A model that has read the message is the only thing in the system that KNOWS
+// what it is unsure of, so it says so - one entry per shaky fact, each carrying
+// the reading we would otherwise have latched and the question that settles it.
+// ---------------------------------------------------------------------------
+
+/** The facts a confirming question may be put about. Mirrored (deliberately,
+ *  and asserted at compile time) by spte/types.ts ConfirmSubject: the engine's
+ *  move vocabulary is closed, so the subjects it can be parameterized by are
+ *  closed too. */
+export const ConfirmSubjectSchema = z.enum([
+  "deposit",
+  "price",
+  "availability",
+  "conditions",
+  "vehicle",
+]);
+export type ConfirmSubjectName = z.infer<typeof ConfirmSubjectSchema>;
+
+export const ThreadComprehension = z.object({
+  /**
+   * WHERE THIS SHOP STANDS WITH US, as a person would read it.
+   *
+   * engaged    - still in the conversation, whatever else they said. A firm
+   *              price, a stock-out, a question back, silence about the rate:
+   *              all engaged.
+   * deflecting - politely getting rid of us. Sending us to other shops, saying
+   *              they cannot help with this, answering a rate question with a
+   *              suggestion that we look elsewhere. NOT a refusal word, which
+   *              is exactly why a phrase list never caught it.
+   * declining  - an outright end: not interested, take the other offer.
+   * unclear    - the message does not settle it.
+   */
+  stance: z.enum(["engaged", "deflecting", "declining", "unclear"]),
+  /** Their own words for it, verbatim - so the card can quote, not claim. */
+  stanceQuote: z.string().max(200).nullable(),
+  /** One sentence of why, for the trace. Never sent to the shop. */
+  stanceReason: z.string().max(240).nullable(),
+  /**
+   * FACTS THIS MESSAGE DID NOT SETTLE CLEANLY. Empty when the message is plain.
+   * `reading` is what we would otherwise have written down; `question` is the
+   * confirming question to put back, in the traveller's voice.
+   */
+  uncertain: z
+    .array(
+      z.object({
+        subject: ConfirmSubjectSchema,
+        reading: z.string().max(200),
+        question: z.string().max(220),
+        confidence: z.number().min(0).max(1),
+      })
+    )
+    .max(3),
+  confidence: z.number().min(0).max(1),
+});
+export type ThreadComprehension = z.infer<typeof ThreadComprehension>;
+
+export function readComprehension(
+  text: string,
+  context?: string,
+  options?: { budgetMs?: number; tier?: "premium"; once?: boolean }
+): Promise<SemanticOutcome<ThreadComprehension>> {
+  return semanticParse({
+    schema: ThreadComprehension,
+    shape:
+      '{"stance": "engaged"|"deflecting"|"declining"|"unclear", "stanceQuote": string|null, ' +
+      '"stanceReason": string|null, "uncertain": [{"subject": "deposit"|"price"|"availability"' +
+      '|"conditions"|"vehicle", "reading": string, "question": string, "confidence": 0..1}], ' +
+      '"confidence": 0..1}',
+    instructions:
+      "You are the traveller's agent reading a rental shop's WhatsApp reply. Answer TWO " +
+      "questions.\n" +
+      "FIRST, where does this shop stand? Telling us to try other shops, to look elsewhere, " +
+      "or that someone else will help us, is DEFLECTING - a polite way of ending the " +
+      "conversation without saying no. Saying outright they are not interested, or to take " +
+      "the other offer, is DECLINING. Everything else is ENGAGED, and this matters: having " +
+      "no vehicle right now is a stock-out, refusing to lower a price is firmness, asking us " +
+      "a question back is interest - NONE of those is a refusal to deal, and treating them " +
+      "as one ends a live negotiation. Use unclear only when the message genuinely does not " +
+      "settle it.\n" +
+      "SECOND, is there anything in this message you are NOT confident you read correctly? " +
+      "List at most three. A deposit stated as a choice or with an unclear amount, a price " +
+      "that could be per day or for the whole rental, an availability word that could mean " +
+      "'in stock' or 'at no cost', a vehicle that could be a different model - each of those " +
+      "is worth confirming rather than assuming. For each one give the reading you would " +
+      "otherwise assume, and a SHORT, warm question the traveller could send to settle it " +
+      "('wait - do you mean I can leave a passport OR 4,000 cash?'). Write the question in " +
+      "simple everyday English, first person, one sentence. If the message is plain, return " +
+      "an empty list - a needless question wastes the shop's patience.",
+    text,
+    context,
+    options: {
+      budgetMs: options?.budgetMs ?? 6_000,
+      maxTokens: 600,
+      once: options?.once,
+      ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // CALL INTENT (M14) - "can we speak?", "phone?", a missed-call frame.
 // ---------------------------------------------------------------------------
 
@@ -160,7 +276,11 @@ export const AvailabilityMeaning = z.object({
 });
 export type AvailabilityMeaning = z.infer<typeof AvailabilityMeaning>;
 
-export function readAvailability(text: string, context?: string): Promise<SemanticOutcome<AvailabilityMeaning>> {
+export function readAvailability(
+  text: string,
+  context?: string,
+  options?: { budgetMs?: number; tier?: "premium"; once?: boolean }
+): Promise<SemanticOutcome<AvailabilityMeaning>> {
   return semanticParse({
     schema: AvailabilityMeaning,
     shape:
@@ -173,7 +293,12 @@ export function readAvailability(text: string, context?: string): Promise<Semant
       "out. Set freeMeansNoCost to null when they did not use the word at all.",
     text,
     context,
-    options: { budgetMs: 6_000, maxTokens: 250 },
+    options: {
+      budgetMs: options?.budgetMs ?? 6_000,
+      maxTokens: 250,
+      once: options?.once,
+      ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
+    },
   });
 }
 
@@ -199,7 +324,11 @@ export const DepositTerms = z.object({
 });
 export type DepositTerms = z.infer<typeof DepositTerms>;
 
-export function readDepositTerms(text: string, context?: string): Promise<SemanticOutcome<DepositTerms>> {
+export function readDepositTerms(
+  text: string,
+  context?: string,
+  options?: { budgetMs?: number; tier?: "premium"; once?: boolean }
+): Promise<SemanticOutcome<DepositTerms>> {
   return semanticParse({
     schema: DepositTerms,
     shape:
@@ -213,6 +342,11 @@ export function readDepositTerms(text: string, context?: string): Promise<Semant
       "Never convert currencies; report the number and currency exactly as written.",
     text,
     context,
-    options: { budgetMs: 6_000, maxTokens: 300 },
+    options: {
+      budgetMs: options?.budgetMs ?? 6_000,
+      maxTokens: 300,
+      once: options?.once,
+      ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
+    },
   });
 }

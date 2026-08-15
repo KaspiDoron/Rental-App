@@ -182,8 +182,12 @@ describe("the pause is real, not just a data field", () => {
   it("every entry point sees the same pending choice", () => {
     // Read in buildTurnContext, which runThreadTurn reaches for an inbound
     // reply, a scheduled wakeup and a user action alike.
+    // W4.5 folded this into the SINGLE state read the turn now makes (the
+    // persisted digest rides on the same row), so the pin follows the read
+    // rather than the old inline call - same fact, one round trip.
     const live = readCode("src/lib/spte/live.ts");
-    expect(live).toMatch(/const state = await io\.loadState\(input\.event\.threadKey\);/);
+    expect(live).toMatch(/io\.loadState\(input\.event\.threadKey\)/);
+    expect(live).toMatch(/const stored = \(state\?\.fields as \{ alternativeOffer/);
     expect(live).toMatch(/Date\.now\(\) - stored\.at < CHOICE_TTL_MS/);
   });
 

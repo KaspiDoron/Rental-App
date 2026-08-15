@@ -208,6 +208,7 @@ export const I18N_CATALOG: string[] = [
   "Dismiss",
   "Do not close or refresh - we are not sending a new code while this finishes.",
   "Done for today - sending resumes automatically a bit later.",
+  "Double-checking something with the shop before we trust it.",
   "Drop a pin",
   "Drop the pin on a map",
   "Dropped price",

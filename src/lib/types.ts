@@ -234,6 +234,14 @@ export interface Vendor {
    *  the second quiet line. */
   lastInboundEnglish?: string;
   lastInboundAt?: string;
+  /**
+   * THE AGENT IS DOUBLE-CHECKING SOMETHING (W4.4). The fact it was not sure it
+   * had understood and has put back to the shop as a question - "deposit",
+   * "price", "availability", "conditions", "vehicle". A thread waiting on that
+   * answer used to be indistinguishable from an idle one, so the panel told the
+   * traveller their agent was chasing a price it had already been given.
+   */
+  confirming?: string;
   /** When the newest agent message left (from /api/activity's lastByVendor) -
    *  keeps sentText/sentGloss fresh past the first outreach response. */
   lastOutboundAt?: string;

@@ -9,7 +9,7 @@
 
 import { chat, chatDetailed, extractJson } from "../ai";
 import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
-import { coerceToLegal, passportCounterDue, atSessionLow } from "./policy";
+import { coerceToLegal, passportCounterDue, atSessionLow, confirmSubjectFor, quoteOnTable } from "./policy";
 import { moveGlossary, normalizeMove } from "./moves";
 import { composePassportCounter } from "../negotiation/deposit-counter";
 import { isRepetitive } from "../wa/similarity";
@@ -29,6 +29,11 @@ export function pickRoute(ctx: TurnContext): ModelRoute {
   const highStakes =
     ctx.legalMoves.includes("farewell") ||
     ctx.legalMoves.includes("closing-message") ||
+    // A goodbye to a shop that brushed us off is exactly as final as a farewell
+    // to one that declined, and a confirming question is the turn where getting
+    // the wording wrong ("so you want my passport?") reads as an accusation.
+    ctx.legalMoves.includes("graceful-close") ||
+    ctx.legalMoves.includes("confirm") ||
     (ctx.legalMoves.includes("bargain") && (ctx.thread.digest.round ?? 0) === 0);
   return highStakes
     ? { tier: "M", reason: "high-stakes" }
@@ -202,6 +207,44 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
         ctx.inbound.verified.vehicleQuestion || "confirm exactly which vehicle it is"
       } Ask that, warmly, in ONE short message. Do NOT bargain, do NOT confirm a deal and do NOT repeat the price as if it were theirs: a number for the wrong vehicle is worse than no number, because the traveller's licence covers only what they searched for.\n`
     : "";
+  // WHEN YOU ARE NOT SURE, ASK - AS A QUESTION - AND WAIT (the owner's rule).
+  //
+  // The engine has already decided WHICH fact is unsettled; this hands the
+  // model the reading it would otherwise have written down and the question
+  // that settles it, and forbids the two things an unsure agent must not do:
+  // guess, or carry on as though it had understood.
+  const doubt = confirmSubjectFor(ctx);
+  const confirmPlay =
+    ctx.legalMoves.includes("confirm") && doubt
+      ? `YOUR JOB THIS TURN: you are NOT certain you understood what they said about the ${doubt.subject}. ` +
+        `What you would otherwise have assumed: "${doubt.reading}". Do NOT assume it. Put it back to ` +
+        `them as ONE short, warm question in the traveller's own voice - something very close to: ` +
+        `"${doubt.question}" - and nothing else. No price talk, no second question, no moving on. ` +
+        `Getting this wrong is worse than asking: a misread deposit is a passport handed over that ` +
+        `never had to be.\n`
+      : "";
+
+  // WHERE THIS SHOP STANDS, in the model's own reading rather than ours. Only
+  // ever appears when the comprehension pass was sure enough to act on it.
+  const stancePlay =
+    ctx.legalMoves.includes("graceful-close")
+      ? `THIS SHOP IS DONE WITH US. They pointed us elsewhere or bowed out${
+          ctx.inbound.verified.stanceQuote
+            ? ` - their words: "${ctx.inbound.verified.stanceQuote}"`
+            : ""
+        }. Thank them warmly for their time in ONE short line and stop. Do NOT ask for a price, do ` +
+        `NOT ask anything, do NOT try to change their mind, do NOT mention other shops.\n`
+      : "";
+
+  // TONE, FINALLY READ BY SOMETHING. It has been computed on every turn since
+  // the engine shipped and consumed by nothing on this path.
+  const tonePlay =
+    dg.tone === "reluctant"
+      ? "THEIR TONE: this shop has sounded reluctant or short with us. Be extra brief and extra warm, ask for less, and never push twice in one message.\n"
+      : dg.tone === "friendly"
+        ? "THEIR TONE: this shop has been friendly. Match it - a little warmth here is worth more than a clever argument.\n"
+        : "";
+
   const optionPlay = ctx.legalMoves.includes("option-probe")
     ? `YOUR JOB THIS TURN: the traveller cannot choose between these yet. In ONE short message, ask what actually separates them - ${
         nextGap(options) === "mileage"
@@ -241,7 +284,7 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
   // cheaper shop's identity to its direct competitor from the traveller's own
   // number. The price and the vehicle are the leverage; the name is not ours to
   // give away. spte/rails enforces it on the finished draft as well.
-  const quoteNow = ctx.inbound.verified.pricePerDay ?? ctx.thread.digest.quotedPricePerDay;
+  const quoteNow = quoteOnTable(ctx);
   const plan = ctx.legalMoves.includes("bargain")
     ? planLeverage({
         rivals: s.rivals,
@@ -311,6 +354,9 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
     firmNote +
     depositCounterNote +
     questionNote +
+    stancePlay +
+    confirmPlay +
+    tonePlay +
     vehiclePlay +
     optionPlay +
     locationBlock +
@@ -341,7 +387,12 @@ function buildPrompt(ctx: TurnContext): { system: string; user: string } {
       : "") +
     (ctx.inbound.verified.found && ctx.inbound.verified.pricePerDay
       ? `VERIFIED: the shop's live quote is ${ctx.inbound.verified.pricePerDay} ${ctx.inbound.verified.currency ?? s.currency}/day.\n`
-      : "") +
+      : // THE QUOTE THEY ALREADY GAVE US STANDS. Without this line the model saw
+        // a thread with no number every time a shop replied without restating
+        // one ("ok for you?"), and asked for the price it had already been told.
+        typeof quoteNow === "number"
+        ? `VERIFIED: this shop's standing quote is ${quoteNow} ${s.currency}/day (from an earlier message in this chat - they did not repeat it just now, and you must NOT ask for it again).\n`
+        : "") +
     (ctx.guards.floorPerDay ? `Do not ask below ${ctx.guards.floorPerDay}/day.\n` : "") +
     // WITH THEIR MEANINGS. A bare token list left the model to infer what each
     // word meant, and on Ko Tao it inferred that `close` meant close the deal.
@@ -435,6 +486,21 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
     }
     case "redirect-close":
       return `No worries, thanks for letting me know - have a great day!`;
+    case "graceful-close":
+      // WARM, SHORT, AND WITHOUT A SINGLE QUESTION IN IT. This is the move that
+      // exists because the ladder's no-price default sent "could you let me
+      // know your daily rate?" to a shop that had just told us to try
+      // elsewhere; a template with a question mark in it would rebuild the bug.
+      return `No problem at all - thanks for your time and have a great day! 🙏`;
+    case "confirm": {
+      // THE MODEL ALREADY PHRASED IT. The comprehension pass returns the
+      // confirming question in the traveller's voice precisely so that the
+      // LLM-down path can still send something a person would write, instead of
+      // silently latching the reading it was unsure of.
+      const d = confirmSubjectFor(ctx);
+      if (d?.question?.trim()) return d.question.trim();
+      return undefined;
+    }
     case "farewell":
       return `All good, thank you so much for your time!`;
     case "answer":

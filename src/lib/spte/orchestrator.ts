@@ -12,7 +12,7 @@ import type {
   ModelRoute,
   VerifiedExtraction,
 } from "./types";
-import { legalMovesFor, reflexTurn } from "./policy";
+import { confirmSubjectFor, legalMovesFor, reflexTurn } from "./policy";
 import { runSinglePass, fallbackArtifact } from "./pass";
 import { runPostRails } from "./rails";
 import { mergeDigest } from "./digest";
@@ -90,6 +90,14 @@ function finalize(
   finalText?: string
 ): TurnOutcome {
   const v = ctx.inbound.verified;
+  // WHICH FACT A CONFIRM IS ABOUT is decided by the policy, never by the model:
+  // the model picks the MOVE from a closed vocabulary, and the subject is
+  // already determined by what the comprehension pass could not settle. Stamped
+  // here so every path - reflex, replay and the single pass - records it, and
+  // so the ask-once bound below cannot be sidestepped by a route.
+  if (artifact.move === "confirm" && !artifact.confirmSubject) {
+    artifact.confirmSubject = confirmSubjectFor(ctx)?.subject;
+  }
   const digest = mergeDigest(ctx.thread.digest, artifact, v);
 
   // A material improvement: a fresh, lower quote than the session's current

@@ -1805,6 +1805,23 @@ export default function Home() {
             )
           );
         }
+        // THE AGENT IS NOT SURE, SO IT ASKED (W4.4). A thread paused on a
+        // confirming question is doing something specific and useful; from
+        // outside it looked exactly like an idle one, and the panel filled the
+        // silence with "your agent is asking for a price" - which was false and
+        // made a careful agent look like a stuck one.
+        const confirmingByVendor = new Map<string, string>();
+        for (const r of (d.replies ?? []) as Array<{ vendorId: string; confirming?: string | null }>) {
+          if (r.confirming && !confirmingByVendor.has(r.vendorId)) {
+            confirmingByVendor.set(r.vendorId, r.confirming);
+          }
+        }
+        setVendors((vs) =>
+          vs.map((v) => {
+            const c = confirmingByVendor.get(v.id);
+            return c === v.confirming ? v : { ...v, confirming: c };
+          })
+        );
         // OUT OF STOCK is its own state - the shop is willing, it simply has no
         // vehicle today. A card that sat on "awaiting reply" forever is what
         // this replaces; when they restock the flag clears and the card returns
@@ -3698,7 +3715,9 @@ export default function Home() {
                             ? t("They have run out - your agent asked when they are back.")
                             : v.stage === "declined"
                               ? t("They passed on this one.")
-                              : t("No price yet - your agent is asking for one.")}
+                              : v.confirming
+                                ? t("Double-checking something with the shop before we trust it.")
+                                : t("No price yet - your agent is asking for one.")}
                         </div>
                       </div>
                     ))}

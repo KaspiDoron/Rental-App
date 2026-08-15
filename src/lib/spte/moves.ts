@@ -34,6 +34,20 @@ const MEANING: Record<MoveKind, string> = {
   "confirm-vehicle": "check the quote is for the exact vehicle the traveller asked for",
   "restock-probe": "they have nothing right now - ask warmly when it comes back",
   "redirect-close": "they do not offer what we need - thank them and end it",
+  // The token IS the definition (the `close` lesson): a move the model reads as
+  // "graceful close" cannot be mistaken for a rate question, which is exactly
+  // what the ladder's no-price default used to send to a shop that had just
+  // pointed us at its competitors.
+  "graceful-close":
+    "they have politely sent us elsewhere or bowed out - thank them warmly for " +
+    "their time and STOP. Never ask for a price again, never ask anything at " +
+    "all, never mention another shop, never try to win them back. One short, " +
+    "genuinely friendly line and the conversation is over",
+  confirm:
+    "you are NOT sure you understood something they said - put it back to them " +
+    "as ONE short question in your own words (\"wait - do you mean I can leave " +
+    "a passport OR 4,000 cash?\") and wait for their answer. Do not guess, do " +
+    "not bargain, do not move on: confirm the fact first",
   momentum: "the thread went quiet - one light nudge to restart it",
   "closing-message": "hand the conversation to the traveller to finish in person",
   silent: "say nothing this turn",

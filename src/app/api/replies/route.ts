@@ -158,6 +158,11 @@ export async function GET(req: Request) {
       // A substitution the shop offered, waiting on the traveller. While this
       // is set the thread is PAUSED, not closed - see vehicle/substitution.ts.
       alternativeOffer?: import("@/lib/vehicle/substitution").AlternativeOffer | null;
+      // THE AGENT IS NOT SURE AND HAS ASKED (W4.4). A thread paused on a
+      // confirming question looks identical to an idle one from outside, and
+      // "your agent is asking for a price" is simply false while it is waiting
+      // to hear whether the deposit is a passport OR the cash.
+      awaitingConfirmation?: { subject?: string; question?: string; at?: string };
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -438,6 +443,11 @@ export async function GET(req: Request) {
       // asked when one is back.
       unavailable: st?.shopUnavailable === true,
       restockHint: st?.restockHint ?? null,
+      // The fact the agent is double-checking, and the exact question it put.
+      // The subject is what the card shows; the question is there so the panel
+      // can quote us rather than paraphrase.
+      confirming: st?.awaitingConfirmation?.subject ?? null,
+      confirmingQuestion: st?.awaitingConfirmation?.question ?? null,
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
       // Every tier this shop offered, so the card can show the CHOICE instead

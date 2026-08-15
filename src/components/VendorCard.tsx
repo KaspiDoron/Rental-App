@@ -864,6 +864,15 @@ function VendorCardInner({
               <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
                 🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
+            ) : vendor.confirming ? (
+              // THE AGENT IS NOT SURE, SO IT ASKED (W4.4). Outranks the generic
+              // completeness banner below because it is more specific and more
+              // urgent: a number on this card may be about to change, and the
+              // honest thing is to say we do not trust it yet rather than let
+              // the traveller compare on a reading we are still checking.
+              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                💬 {t("Double-checking something with the shop before we trust it.")}
+              </div>
             ) : (
               // ONE banner per concern: the vehicle note above already tells
               // the mismatch/confirming story - repeating it here is exactly
