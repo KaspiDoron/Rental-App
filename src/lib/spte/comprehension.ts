@@ -37,6 +37,7 @@
 import "server-only";
 import type { ConfirmSubject, ShopStance, Uncertainty } from "./types";
 import type { ClaimSubject } from "../thread/claims";
+import type { LanguageStatement } from "../wa/thread-language";
 
 /**
  * How sure the model has to be before a stance ENDS a negotiation.
@@ -83,6 +84,16 @@ export interface TurnComprehension {
   freeMeansNoCost?: boolean;
   /** Facts worth putting back as a question, already phrased. */
   uncertain: Uncertainty[];
+  /**
+   * W4.6 - THE SHOP STATED A LANGUAGE PREFERENCE.
+   *
+   * Only ever set for an EXPLICIT statement ("I don't speak Thai", "English
+   * please"), never for a message that merely happens to be in English. The
+   * doctrine that consumes it lives in wa/thread-language.nextThreadLanguage,
+   * which also holds the confidence floor - this pass reports what it read and
+   * decides nothing.
+   */
+  languageRequest?: LanguageStatement;
   /** No provider answered - the caller must keep its deterministic reads. */
   degraded: boolean;
   /** Which provider answered the stance read (telemetry). */
@@ -280,10 +291,23 @@ export async function readTurnComprehension(
     });
   }
 
+  // W4.6: reported, never decided here. The floor and the persistence live in
+  // wa/thread-language, so an outage degrades to "no statement" -> no change.
+  const lang = c.languageRequest;
+  const languageRequest: LanguageStatement | undefined =
+    lang && (lang.prefers === "english" || lang.prefers === "local")
+      ? {
+          prefers: lang.prefers,
+          ...(lang.quote ? { quote: lang.quote.slice(0, 200) } : {}),
+          confidence: lang.confidence,
+        }
+      : undefined;
+
   return {
     stance: c.stance,
     stanceQuote: c.stanceQuote ?? undefined,
     stanceReason: c.stanceReason ?? undefined,
+    ...(languageRequest ? { languageRequest } : {}),
     deflected: sure && !stockOut && c.stance === "deflecting",
     declined: sure && !stockOut && c.stance === "declining",
     availability: avail.value?.state,

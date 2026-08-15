@@ -36,6 +36,12 @@ import { shopAskedLocation, shopAskedLicense, shopAskedLicensePhoto } from "../w
 import { shopAskedQuestion } from "../graph/nodes";
 import { classifyActs } from "../wa/dialogue-acts";
 import { vehicleKeyFor, groundedBenchmarkFor } from "../market";
+import {
+  nextThreadLanguage,
+  threadLanguageFromStored,
+  threadWritesEnglish,
+  type ThreadLanguage,
+} from "../wa/thread-language";
 
 export interface SpteLiveResult {
   ran: true;
@@ -653,8 +659,10 @@ async function persistThreadOutcome(args: {
   /** Where the turn's message ended up - a question that never left is not a
    *  question the card may claim we are waiting on. */
   delivered?: SpteLiveResult["delivered"];
+  /** W4.6 - the thread's language decision after this turn. */
+  language?: ThreadLanguage;
 }): Promise<void> {
-  const { input, io, prior, digest, verified, delivered } = args;
+  const { input, io, prior, digest, verified, delivered, language } = args;
   try {
     const { newThreadState, derivePhase } = await import("../graph/state");
     const base =
@@ -668,6 +676,12 @@ async function persistThreadOutcome(args: {
       });
     const fields = { ...base.fields };
     fields.digest = persistableDigest(digest);
+    // WHICH LANGUAGE THIS THREAD IS IN, AND WHY (W4.6). The one field
+    // /api/replies reads to tell the card and the status panel "Switched to
+    // English - this shop asked". Written unconditionally so the decision is a
+    // stored fact rather than something re-derived from the last two messages
+    // on every single turn.
+    if (language) fields.language = language;
 
     // A THREAD IS DEAD ONLY WHILE IT STAYS DEAD. Same rule the graph engine
     // applies: a fresh, concrete price on a declined thread is a re-engagement
@@ -703,6 +717,99 @@ async function persistThreadOutcome(args: {
     await io.saveState(next);
   } catch {
     /* memory is an enhancement to the turn, never a condition of it */
+  }
+}
+
+/**
+ * THE PRIMARY ENGINE FINALLY SPEAKS THE LOCAL LANGUAGE (W4.6).
+ *
+ * `localizeMessage` was imported nowhere under src/lib/spte. SPTE is the engine
+ * that actually answers shops - `engineV3Enabled` returns true even when config
+ * is unreadable, and engine-route demoted the graph engine to failover - so
+ * EVERY message the live path sent went out in English, and the Ultra
+ * local-language feature ran only on the two engines that almost never run.
+ * That is not a switch that was off; it is a feature that was never wired to
+ * the thing it describes.
+ *
+ * Parity with the graph engine's `localize` tail gate, deliberately, so the two
+ * engines cannot drift again:
+ *   - the COUNTRY comes from the shop's own phone number when the thread has no
+ *     region label (`countryForShop`) - the label-only lookup was the
+ *     4-country ceiling that sent English to every +52/+51/+90 shop;
+ *   - the number-integrity rail is `localizeMessage`'s own (it refuses a
+ *     rewrite whose 3+ digit numbers drifted, retries once, then falls back to
+ *     English that at least quotes the right figure), re-asserted here so a
+ *     future change to that function cannot silently ship a drifted price in a
+ *     script the traveller cannot proofread;
+ *   - a fallback emits the same honest `localize-fallback` event, with this
+ *     path named;
+ *   - the English gloss is returned so the caller can stamp it on the outbound
+ *     row as `raw.englishGloss`, which is what W1.5 already renders everywhere.
+ *
+ * NEVER throws and never blocks a send: every failure returns the English text.
+ */
+async function localizeSpteOutbound(args: {
+  text: string;
+  input: GraphTurnInput;
+  io: GraphIO;
+  language: ThreadLanguage;
+  /** Wall-clock left in this serverless turn. */
+  remainingMs: number;
+}): Promise<{ text: string; gloss?: string; skipped?: string }> {
+  const { text, input, io, language } = args;
+  const fallbackEvent = async (reason: string, region?: string) => {
+    await io
+      .recordEvent?.({
+        kind: "localize-fallback",
+        vendorId: input.ctx.vendorId,
+        vendorName: input.ctx.vendorName ?? input.event.toDigits,
+        detail: JSON.stringify({ reason, region: region ?? null, path: "spte-reply" }).slice(0, 500),
+      })
+      .catch(() => {});
+  };
+  try {
+    // THE THREAD'S OWN DECISION OUTRANKS THE HUNT'S SETTING. A shop that asked
+    // for English gets English until they ask otherwise - that is the whole
+    // point of persisting the switch rather than re-deriving it per turn.
+    if (threadWritesEnglish(language)) return { text, skipped: "thread-english" };
+    const { localLanguageAllowed } = await import("../entitlements");
+    if (!localLanguageAllowed({ requested: input.ctx.localLang, plan: input.ctx.plan })) {
+      return { text, skipped: "not-entitled" };
+    }
+    // A LOCALIZE IS UP TO TWO LLM ROUND TRIPS (9s each). The reply path has a
+    // hard serverless deadline and a message in English beats no message at
+    // all, so the pass is skipped - honestly, with an event - when the budget
+    // cannot hold it.
+    if (args.remainingMs < 12_000) return { text, skipped: "budget" };
+    const { countryForShop } = await import("../copy/region");
+    const region = input.ctx.region || countryForShop(input.event.toDigits) || undefined;
+    const street = await getGraphSpec()
+      .then((spec) => spec.settings.streetLocal)
+      .catch(() => true);
+    const { localizeMessage } = await import("../agents");
+    const localized = await localizeMessage(text, region, input.ctx.sender, street, {
+      // W4.7: SPTE only ever runs on a turn INSIDE an open thread (an inbound
+      // reply or a tick), so a greeting here is always a repeat greeting.
+      greet: false,
+    });
+    if (localized.localized && localized.text && localized.text !== text) {
+      // BELT AND BRACES on the one rail that matters. localizeMessage already
+      // refuses a drifted rewrite; asserting it again here means a change to
+      // that function can never quietly ship a wrong price to a shop.
+      const { numbersPreserved } = await import("../integrity/translation");
+      if (!numbersPreserved(text, localized.text)) {
+        await fallbackEvent("numbers-drifted", region);
+        return { text, skipped: "numbers-drifted" };
+      }
+      return { text: localized.text, gloss: localized.english ?? text };
+    }
+    if (!localized.localized && localized.reason && localized.reason !== "english-region") {
+      await fallbackEvent(localized.reason, region);
+    }
+    return { text, skipped: localized.reason };
+  } catch {
+    // A localization is an enhancement to a message, never a condition of it.
+    return { text: args.text, skipped: "threw" };
   }
 }
 
@@ -821,9 +928,44 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // that has been read as a delivery bug more than once. Ops can now join to
   // the row and render what it is ACTUALLY doing right now.
   let outboxRowId: number | null = null;
-  const send = outcome.text && outcome.move !== "silent" ? outcome.text : undefined;
+  // ---- W4.6: WHICH LANGUAGE THIS THREAD IS IN --------------------------------
+  //
+  // A DECISION, not a per-turn recomputation. `nextThreadLanguage` changes it
+  // only on an EXPLICIT statement the comprehension pass read ("sorry, I don't
+  // speak Thai", "English please") - a shop merely replying in English changes
+  // nothing, which is the inversion owner report 5 item 15 asked for. Ticks are
+  // guarded inside the doctrine, so both engines behave the same on one (the
+  // graph engine guarded ticks and the legacy loop did not).
+  const langOutcome = nextThreadLanguage({
+    persisted: threadLanguageFromStored(priorState?.fields?.language),
+    statement: comp?.languageRequest,
+    isTick: input.event.kind === "tick",
+    localRequested: Boolean(input.ctx.localLang),
+    now: io.now(),
+  });
+
+  let send = outcome.text && outcome.move !== "silent" ? outcome.text : undefined;
 
   if (send) {
+    // THE PRIMARY ENGINE LOCALIZES (W4.6). Before the human pause, so the pause
+    // is computed from what is actually left, and before the guard, because
+    // guardOutbound is where the message becomes final.
+    const local = await localizeSpteOutbound({
+      text: send,
+      input,
+      io,
+      language: langOutcome.language,
+      remainingMs: input.deadlineAt - io.now(),
+    });
+    send = local.text;
+    // The gloss rides the outbound row as `raw.englishGloss` (guardAndSend
+    // spreads `meta` into `raw`), which is the field W1.5 already renders in
+    // the thread peek, the activity feed, the deals view and the Ops
+    // transcript. Without it a localized reply was unreadable to the traveller
+    // whose name it went out in.
+    if (local.gloss) meta.englishGloss = local.gloss;
+    meta.localized = Boolean(local.gloss);
+    meta.language = langOutcome.language.mode;
     try {
       // INLINE DELIVERY (the "agent never replies" structural fix): the reply
       // leaves in the SAME serverless invocation that received the shop's
@@ -877,6 +1019,10 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     digest: outcome.digest,
     verified: tc.inbound.verified,
     delivered,
+    // W4.6: the language SWITCH is durable. Persisted whenever the thread has a
+    // decision at all (not only when it changed), so a row written before this
+    // existed adopts the hunt's setting once and stops re-deriving it.
+    language: langOutcome.language,
   });
 
   // Strategic wait (deliberate patience) -> a wakeup re-enters this thread later.

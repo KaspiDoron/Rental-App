@@ -283,7 +283,12 @@ export async function POST(req: Request) {
       : null;
   const compiledRecent: string[] = [];
   const wantLocalLang = localLanguageAllowed({ requested: body.localLang, plan: session.plan });
-  const openerFor = async (vendorId: string, shopDigits: string): Promise<{ text: string; gloss?: string }> => {
+  const openerFor = async (
+    vendorId: string,
+    shopDigits: string,
+    /** W4.7 - false when this shop already has an open thread with us. */
+    firstOutbound: boolean
+  ): Promise<{ text: string; gloss?: string }> => {
     if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
     const { compileOpener } = await import("@/lib/copy/promptCompiler");
     const { openerSeed } = await import("@/lib/copy/matrix");
@@ -302,7 +307,13 @@ export async function POST(req: Request) {
     const { countryForShop } = await import("@/lib/copy/region");
     const localized = await localizeMessage(
       unique.text,
-      countryForShop(shopDigits, String(body.region ?? ""))
+      countryForShop(shopDigits, String(body.region ?? "")),
+      undefined,
+      true,
+      // W4.7: rule 1 of the localize prompt ORDERS a local greeting. On a shop
+      // we have already messaged that re-introduces the exact greeting the
+      // English strip removed - in a script the English strip cannot read.
+      { greet: firstOutbound }
     );
     return localized.localized
       ? { text: localized.text, gloss: localized.english ?? unique.text }
@@ -390,9 +401,17 @@ export async function POST(req: Request) {
       }
     }
 
+    // W4.7 - HAVE WE EVER MESSAGED THIS SHOP? Hoisted above the opener compile
+    // (it used to be computed only for the introductions budget, below) because
+    // it is also the thread-position fact: a SECOND search that reaches a shop
+    // from a previous hunt opens a fresh "Hi there!" inside a WhatsApp thread
+    // that is already running, which is exactly the bot tell owner report 5
+    // item 3 photographed. The localizer is told too, so it cannot answer a
+    // stripped English greeting with a fresh local one.
+    const isNewIntro = !knownNumbers.has(digits);
     // Per-shop compiled opener (falls back to the legacy single message when
     // the caller sent no rfq). Computed before meta so the gloss rides along.
-    const opener = await openerFor(v.id, digits);
+    const opener = await openerFor(v.id, digits, isNewIntro);
     const meta = {
       sender: session.email,
       vendorId: v.id,
@@ -424,7 +443,6 @@ export async function POST(req: Request) {
 
     // BUDGET: a brand-new shop beyond today's introductions budget gets the
     // honest tomorrow-morning slot - told to the user, never a fake ETA.
-    const isNewIntro = !knownNumbers.has(digits);
     if (isNewIntro && newIntrosLeft <= 0) {
       // Beyond this window's introductions budget: park on the ROLLING-window
       // anchor (when the next slot frees - at most windowHours away), not a
@@ -450,7 +468,9 @@ export async function POST(req: Request) {
           sender_key: session.email,
           to_number: digits,
           to_key: outboxKey(digits),
-          body: humanizeForOutbound(session.email, digits, opener.text),
+          body: humanizeForOutbound(session.email, digits, opener.text, {
+            firstOutbound: isNewIntro,
+          }),
           not_before: notBefore,
           meta: { ...meta, reason: holdReason },
         },
@@ -494,7 +514,9 @@ export async function POST(req: Request) {
           to_key: outboxKey(digits),
           // Same humanize-at-park rule as the budget hold above: parked slots
           // are delivered verbatim by the drain, so the pass runs at enqueue.
-          body: humanizeForOutbound(session.email, digits, opener.text),
+          body: humanizeForOutbound(session.email, digits, opener.text, {
+            firstOutbound: isNewIntro,
+          }),
           not_before: notBefore,
           meta: { ...rowMeta, reason: "batch-spacing" },
         },

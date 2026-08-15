@@ -2034,15 +2034,24 @@ export async function processVendorReply(opts: {
   let followUp: string | null = null;
   let followKind: string = direction;
   let englishGloss: string | undefined;
-  // LANGUAGE ADAPTATION: a shop that DEMONSTRATES English gets English back -
-  // matching the human beats the local-language setting. THREAD level (owner
-  // report 4): the current message and the previous inbound must both look
-  // English, so one English line in a Thai thread cannot make the agent
-  // alternate languages turn by turn.
-  const { threadPrefersEnglish } = await import("./agents");
-  const priorInboundBodies = thread
-    .filter((m) => m.direction === "inbound")
-    .map((m) => m.body ?? "");
+  // W4.6 - THE LANGUAGE DOCTRINE, INVERTED, AND THE TICK ASYMMETRY CLOSED.
+  //
+  // This used to call `threadPrefersEnglish(text, priorInboundBodies)` - the
+  // demonstration test - with NO tick guard, while the graph engine wrapped the
+  // same call in `input.event.kind !== "tick"`. So one engine could flip a
+  // thread to English on our own timer firing and the other could not, on the
+  // same conversation. Both now READ the thread's stored decision, which is
+  // taken only on an explicit statement from the shop, so there is nothing left
+  // for a tick to flip and nothing left for the two engines to disagree about.
+  const { threadWritesEnglish, threadLanguageFromStored } = await import("./wa/thread-language");
+  const { loadThreadState: loadLangState, threadKeyFor: langThreadKey } = await import(
+    "./graph/state"
+  );
+  const storedLanguage = threadLanguageFromStored(
+    (
+      await loadLangState(langThreadKey(ctx.sender ?? undefined, from)).catch(() => null)
+    )?.fields?.language
+  );
   // ONE PREDICATE (entitlements.localLanguageAllowed). This read
   // `ctx.plan === "ultra"` - a hardcoded tier on the one path that actually
   // composes the message to the shop, so a new tier would have been honoured by
@@ -2053,7 +2062,7 @@ export async function processVendorReply(opts: {
       requested: ctx.localLang,
       plan: ctx.plan,
       enabled: await localLanguageEnabled(),
-    }) && !threadPrefersEnglish(text, priorInboundBodies);
+    }) && !threadWritesEnglish(storedLanguage);
   const register = registerRules(cfg, cur, ctx.region || undefined);
   // The shop's phone number resolves the country when the thread carries no
   // region label - the 4-country ceiling fix (owner report 4). Feeds every

@@ -29,6 +29,12 @@ import { getConfig, setConfig, sbInsert } from "./runtime-config";
 import { chat, extractJson } from "./ai";
 import { defaultDecisionGraph, type DecisionGraph } from "./branching";
 import { isLowEnglish } from "./locale";
+// W4.7: ONE definition of "this message opens with a greeting", in
+// copy/greeting.ts, shared with the send-time choke point
+// (wa-guard.humanizeForOutbound). The local copy that used to live below was
+// English-only, mangled "Hi again!" into "Again! ..." and had no right
+// boundary, so "Hitting the road" lost its first two letters.
+import { hasLeadingGreeting, stripLeadingGreeting } from "./copy/greeting";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -440,13 +446,9 @@ export async function runStrategist(inp: StrategistInput): Promise<StrategistDec
 // Validator - the critique/revise iterations before anything sends
 // ---------------------------------------------------------------------------
 
-const GREETING_RX = /^\s*(hey there|hey|hi there|hi|hello|hallo|yo)\s*[!,.]*\s*/i;
-
 /** Deterministic repair: a mid-conversation message never greets again. */
 export function stripGreeting(text: string): string {
-  const stripped = text.replace(GREETING_RX, "");
-  if (!stripped.trim()) return text; // never strip a message down to nothing
-  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+  return stripLeadingGreeting(text);
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -471,7 +473,7 @@ export async function validateDraft(args: {
 
   // Deterministic layer ALWAYS runs (also the no-AI fallback):
   // 1. never greet again mid-thread
-  if (args.priorOutbound.length > 0 && GREETING_RX.test(text)) {
+  if (args.priorOutbound.length > 0 && hasLeadingGreeting(text)) {
     text = stripGreeting(text);
     reasons.push("stripped repeated greeting mid-conversation");
   }

@@ -51,10 +51,23 @@ export function voiceProfileFor(key: string): VoiceProfile {
   };
 }
 
-/** Prompt block that makes the LLM WRITE as this specific person. */
-export function voiceDirectives(v: VoiceProfile): string {
+/**
+ * Prompt block that makes the LLM WRITE as this specific person.
+ *
+ * W4.7 - `greeting: false` for every MID-CONVERSATION composer. The persona
+ * used to tell the model, in the same system prompt that forbade mid-thread
+ * greetings, that this person "usually opens with 'Hey there'". A model handed
+ * two contradictory rules obeys the more concrete one, which is why "Hey
+ * there!" kept appearing on turn four of a thread. The habit is real and it
+ * belongs to the OPENER; after that it is simply wrong.
+ */
+export function voiceDirectives(v: VoiceProfile, opts?: { greeting?: boolean }): string {
+  const opening =
+    opts?.greeting === false
+      ? "we are MID-CONVERSATION so this message opens with NO greeting at all (never hi/hello/hey, and never a local-language greeting)"
+      : `usually opens with "${v.greeting}"`;
   return (
-    `WRITE AS THIS SPECIFIC PERSON (stay in character): usually opens with "${v.greeting}", ` +
+    `WRITE AS THIS SPECIFIC PERSON (stay in character): ${opening}, ` +
     `usually closes with "${v.signoff}". Tone: ${v.energy}. Emoji: ${
       v.emoji === "never"
         ? "never uses emoji"

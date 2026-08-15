@@ -74,6 +74,8 @@ import type {
 } from "./types";
 import { shopAskedQuestion } from "./nodes";
 import { can, localLanguageAllowed } from "../entitlements";
+// W4.6 - the thread's durable language decision (read here, written by SPTE).
+import { threadLanguageFromStored } from "../wa/thread-language";
 
 // ---------------------------------------------------------------------------
 // Graph spec persistence (app_config key, hot-applied, legacy auto-migration)
@@ -826,6 +828,8 @@ export async function runGraphTurn(
       target,
       rivalPrice,
       leverageNote: choice.leverageNote,
+      // W4.6: the thread's stored language decision - read, never re-derived.
+      threadLanguage: threadLanguageFromStored(state.fields.language),
       // The inverted-ask ceiling is the shop's CURRENT SPOKEN quote - NOT the
       // posted list price, which (when higher than the spoken quote) would mask
       // an inverted ask (asking 600 after they verbally offered 500).
@@ -959,6 +963,8 @@ async function runTailGates(args: {
   leverageNote?: string;
   shopCeiling?: number;
   sheetRef?: number;
+  /** W4.6 - the thread's stored language decision (never re-derived here). */
+  threadLanguage?: import("../wa/thread-language").ThreadLanguage;
   input: GraphTurnInput;
   io: GraphIO;
   spec: GraphSpec;
@@ -975,16 +981,20 @@ async function runTailGates(args: {
   // re-gloss block at the bottom uses it to keep the traveller's translation
   // alive (owner report 4, item 8).
   let glossInvalidated = false;
-  // LANGUAGE ADAPTATION: when the shop DEMONSTRATES English we answer in
-  // English - matching the human beats the local-language setting. THREAD
-  // level (owner report 4): one English line in an otherwise local thread
-  // does not flip the reply (the per-turn test made the agent alternate
-  // languages on mixed threads - the exact bot tell stickiness prevents);
-  // the current message AND the previous inbound must both look English.
-  const { threadPrefersEnglish } = await import("../agents");
-  const shopWroteEnglish =
-    input.event.kind !== "tick" &&
-    threadPrefersEnglish(input.event.shopMessage, input.priorInbound ?? []);
+  // W4.6 - THE LANGUAGE DOCTRINE, INVERTED. This used to call
+  // `threadPrefersEnglish`, which flipped a thread to English the moment the
+  // shop DEMONSTRATED English (and on the very first inbound, with no prior at
+  // all). The owner's doctrine is the opposite: stay local, and switch only
+  // when the shop SAYS they do not speak the local language. That statement is
+  // read by the comprehension pass and stored on the thread, so this engine -
+  // the failover - reads the decision instead of re-deriving one, and the two
+  // engines can never disagree about the language of the same conversation.
+  //
+  // A tick needs no guard any more: a decision is not recomputed, so there is
+  // nothing for a tick to accidentally flip (the old asymmetry - guarded here,
+  // unguarded in the legacy loop - is gone by construction).
+  const { threadWritesEnglish } = await import("../wa/thread-language");
+  const shopWroteEnglish = threadWritesEnglish(args.threadLanguage);
   const useLocalLang =
     localLanguageAllowed({ requested: input.ctx.localLang, plan: input.ctx.plan }) &&
     !shopWroteEnglish;
@@ -1140,7 +1150,11 @@ async function runTailGates(args: {
       text,
       localeRegion,
       input.ctx.sender,
-      spec.settings.streetLocal
+      spec.settings.streetLocal,
+      // W4.7: rule 1 of the localize prompt orders a LOCAL greeting, which put
+      // straight back the greeting `stripGreeting` had just removed - in a
+      // script no deterministic rail downstream can read.
+      { greet: input.priorOutbound.length === 0 }
     );
     if (localized.text && localized.text !== text) {
       englishGloss = localized.english ?? text;

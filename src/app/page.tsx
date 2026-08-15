@@ -1811,15 +1811,37 @@ export default function Home() {
         // silence with "your agent is asking for a price" - which was false and
         // made a careful agent look like a stuck one.
         const confirmingByVendor = new Map<string, string>();
-        for (const r of (d.replies ?? []) as Array<{ vendorId: string; confirming?: string | null }>) {
+        // W4.6: ...and WHICH LANGUAGE we are writing to this shop in, when the
+        // shop themselves asked us to change it. Carried on the same rows so
+        // the status panel and the card tell the traveller the same thing.
+        const langByVendor = new Map<string, { mode: "english" | "local"; quote?: string }>();
+        for (const r of (d.replies ?? []) as Array<{
+          vendorId: string;
+          confirming?: string | null;
+          languageSwitch?: "english" | "local" | null;
+          languageSwitchQuote?: string | null;
+        }>) {
           if (r.confirming && !confirmingByVendor.has(r.vendorId)) {
             confirmingByVendor.set(r.vendorId, r.confirming);
+          }
+          if (r.languageSwitch && !langByVendor.has(r.vendorId)) {
+            langByVendor.set(r.vendorId, {
+              mode: r.languageSwitch,
+              quote: r.languageSwitchQuote ?? undefined,
+            });
           }
         }
         setVendors((vs) =>
           vs.map((v) => {
             const c = confirmingByVendor.get(v.id);
-            return c === v.confirming ? v : { ...v, confirming: c };
+            const lang = langByVendor.get(v.id);
+            if (c === v.confirming && lang?.mode === v.languageSwitch) return v;
+            return {
+              ...v,
+              confirming: c,
+              languageSwitch: lang?.mode,
+              languageSwitchQuote: lang?.quote,
+            };
           })
         );
         // OUT OF STOCK is its own state - the shop is willing, it simply has no
@@ -2886,6 +2908,19 @@ export default function Home() {
       return next;
     });
   });
+  // W4.6 - THE LANGUAGE DECISION, WHERE THE TRAVELLER CAN SEE IT.
+  //
+  // Their agent writes to shops in the shop's own language. When a shop tells us
+  // they do not speak it, the agent switches that ONE thread to English - and
+  // until now nothing said so anywhere: the localize trace stage is filtered out
+  // of the activity feed, the localize-fallback event kind is not in its
+  // allow-list, and the only "override" signal that was computed is thrown away
+  // by its caller. Silence about a language change reads as the agent being
+  // sloppy; the shop's own request explains it in one line.
+  const languageSwitched = useMemo(
+    () => vendors.filter((v) => v.languageSwitch === "english"),
+    [vendors]
+  );
   const stageCounts = {
     messaged: statusGroups.messaged.length,
     replied: statusGroups.replied.length,
@@ -3572,6 +3607,14 @@ export default function Home() {
                     🔵 {filters.agentStatus === "active" ? t("Showing active rentals") : t("Show only active rentals")}
                   </button>
                 </div>
+                {/* W4.6 - WE CHANGED LANGUAGE, AND THE SHOP ASKED US TO. Named
+                    shops, not a count: the traveller can check the thread. */}
+                {languageSwitched.length > 0 && (
+                  <div className="rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                    🌐 {t("Switched to English for these shops - they asked")}:{" "}
+                    {languageSwitched.map((v) => v.name).join(", ")}
+                  </div>
+                )}
                 {/* SECTION 1 - Active offers & negotiations: the shops that
                     replied with a price, at full density - quote, deposit when
                     the shop stated one, rating, the latest message + time. */}

@@ -864,6 +864,20 @@ function VendorCardInner({
               <div className="mt-2 rounded-xl bg-card2 p-2 text-[11px] font-bold text-soft">
                 🚫 {t("This shop passed on the deal - the offer above was their last word. Other shops are still in play.")}
               </div>
+            ) : vendor.languageSwitch === "english" ? (
+              // W4.6 - WHY THIS THREAD IS IN ENGLISH. The agent writes to shops
+              // in their own local language on purpose; a thread that is NOT is
+              // a decision, and the traveller is entitled to the reason. Only
+              // ever rendered for an explicit request from the shop - a hunt run
+              // in English never sets this.
+              <div className="mt-2 rounded-xl bg-brandblue-soft p-2 text-[11px] font-bold text-brandblue">
+                🌐 {t("Switched to English - this shop asked")}
+                {vendor.languageSwitchQuote ? (
+                  <div className="mt-0.5 text-[10px] font-normal italic text-soft">
+                    &ldquo;{vendor.languageSwitchQuote}&rdquo;
+                  </div>
+                ) : null}
+              </div>
             ) : vendor.confirming ? (
               // THE AGENT IS NOT SURE, SO IT ASKED (W4.4). Outranks the generic
               // completeness banner below because it is more specific and more

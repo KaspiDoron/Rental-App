@@ -622,6 +622,8 @@ export const I18N_CATALOG: string[] = [
   "Structuring your request",
   "Swipe",
   "Switch plans any time - the new subscription replaces the old one and we cancel it for you. To cancel or downgrade, use the manage link in your payment receipt email.",
+  "Switched to English - this shop asked",
+  "Switched to English for these shops - they asked",
   "Tactic:",
   "Take me to the offers",
   "Take over",

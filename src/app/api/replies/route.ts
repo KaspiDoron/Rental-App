@@ -4,6 +4,7 @@ import { sbSelect } from "@/lib/runtime-config";
 import { identityKey } from "@/lib/wa/phone-key";
 import { clampSince } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
+import { languageSwitchNotice } from "@/lib/wa/thread-language";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -163,6 +164,14 @@ export async function GET(req: Request) {
       // "your agent is asking for a price" is simply false while it is waiting
       // to hear whether the deposit is a passport OR the cash.
       awaitingConfirmation?: { subject?: string; question?: string; at?: string };
+      // W4.6 - WHICH LANGUAGE THIS THREAD IS IN, AND WHY. Until now no language
+      // decision reached the traveller anywhere: the localize trace stage is
+      // filtered out of the feed, `localize-fallback` is not in its allow-list,
+      // and the one "override" signal that was computed is discarded by its
+      // caller. The owner asked for the opposite - "present the user in the
+      // status panel and the card map/vendor card that we switched to English
+      // because they are not speaking the local language".
+      language?: import("@/lib/wa/thread-language").ThreadLanguage;
     } | null;
   }
   const threads = await sbSelect<ThreadRow>(
@@ -448,6 +457,11 @@ export async function GET(req: Request) {
       // can quote us rather than paraphrase.
       confirming: st?.awaitingConfirmation?.subject ?? null,
       confirmingQuestion: st?.awaitingConfirmation?.question ?? null,
+      // Only an EXPLICIT switch is news. A thread that is English because the
+      // hunt was English is not something to announce (languageSwitchNotice
+      // returns null for it), so the card stays quiet in the ordinary case.
+      languageSwitch: languageSwitchNotice(st?.language)?.mode ?? null,
+      languageSwitchQuote: languageSwitchNotice(st?.language)?.quote ?? null,
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
       // Every tier this shop offered, so the card can show the CHOICE instead

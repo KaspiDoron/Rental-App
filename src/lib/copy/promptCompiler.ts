@@ -236,7 +236,13 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
 export function compileStyleDirectives(seed: CopySeed, region?: string): string {
   const s = drawStyle(seed, region);
   const parts = [
-    `STYLE (this message only): open ${s.greeting === "" ? "without a greeting" : `in the spirit of "${s.greeting}" (but NOT verbatim - we are mid-conversation, so no literal greeting word)`}.`,
+    // W4.7: THE DEAD BRANCH IS GONE. `s.greeting === ""` was never true -
+    // neither GREETINGS nor PLAIN_GREETINGS has an empty entry - so this
+    // directive ALWAYS named a greeting to the model and then asked it not to
+    // write one verbatim. The composers this compiles for (bargain/reply turns)
+    // are mid-conversation by construction, so the honest instruction is the
+    // one the branch could never reach.
+    "STYLE (this message only): we are MID-CONVERSATION - open with NO greeting at all (no hi/hello/hey, and no local-language greeting either); go straight into the substance.",
     s.order === "intro-first"
       ? "Lead with the substance, pleasantries after."
       : "One warm beat first, then the substance.",
@@ -246,7 +252,12 @@ export function compileStyleDirectives(seed: CopySeed, region?: string): string 
       ? "Avoid contractions - slightly formal-simple English."
       : "Mix contractions naturally.",
     s.emoji ? `End with exactly one ${s.emoji} (no other emoji).` : "No emoji this time.",
-    s.particle ? `You may add the polite particle "${s.particle}" to your greeting, once.` : "",
+    // ...and the particle rode the greeting, which re-opened the same door.
+    // In Thai/Filipino the politeness particle attaches to ANY sentence, so it
+    // keeps its warmth without smuggling an opener back in.
+    s.particle
+      ? `You may add the polite particle "${s.particle}" once, at the end of a sentence - never as a greeting.`
+      : "",
     s.regionalThanks ? `You may close with the local thank-you "${s.regionalThanks}" (at the END only).` : "",
     "Never reuse the sentence structure of your previous messages in this chat.",
   ].filter(Boolean);

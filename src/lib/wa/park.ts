@@ -126,11 +126,21 @@ export async function parkOutboxOnce(row: {
   // hashes stay stable. Everything this function parks is auto-composed (the
   // dedup scope above is auto-kind by definition), so no user-typed text can
   // reach this rewording.
+  //
+  // W4.7: the humanize pass is THREAD-POSITION aware, and this park has to say
+  // where it is - the drain re-guards the row with `alreadyHumanized: true` and
+  // never looks again. Everything parked here is an auto-composed REPLY: the
+  // dedup scope above is auto-kind by definition (REPLY_KIND_FILTER excludes
+  // rfq, custom and human-manual), and a reply is mid-conversation by
+  // construction. So the position is known statically - `firstOutbound: false`,
+  // no query - which strips any leading greeting and never rolls a new one in.
   const record = {
     sender_key: row.senderKey,
     to_number: row.toNumber,
     ...(hasToKey ? { to_key: key } : {}),
-    body: row.alreadyHumanized ? row.body : humanizeForOutbound(row.senderKey, row.toNumber, row.body),
+    body: row.alreadyHumanized
+      ? row.body
+      : humanizeForOutbound(row.senderKey, row.toNumber, row.body, { firstOutbound: false }),
     not_before: new Date(row.notBeforeMs).toISOString(),
     meta: row.meta ?? {},
   };

@@ -216,3 +216,62 @@ describe("the strongest brain, only where it is worth paying for", () => {
     expect(isHighStakesComprehension({ hasStandingPrice: true })).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// W4.6 - THE LANGUAGE STATEMENT
+// ---------------------------------------------------------------------------
+//
+// The old doctrine flipped a thread to English on DEMONSTRATION: the shop's
+// current inbound and its previous one both "looked English" (and with no
+// previous one, the very first reply flipped it). Half the shops in the markets
+// this app runs in type "ok 300 per day" at tourists, so the local-language
+// feature silently ended for them on contact.
+//
+// The owner inverted it: switch only on an explicit statement. That is a
+// judgement about a sentence, so it belongs to the model that has read it -
+// never a phrase list ("we should never use if/else" for understanding). This
+// pass REPORTS it; the confidence floor and the persistence live in
+// wa/thread-language, which is where the decision is made.
+
+describe("the pass reads an explicit language statement", () => {
+  it("carries the statement through, with the shop's own words", async () => {
+    ai.answers.stance = stance({
+      languageRequest: {
+        prefers: "english",
+        quote: "sorry i am not thai, please write english",
+        confidence: 0.92,
+      },
+    });
+    const c = await readTurnComprehension({ text: "sorry i am not thai, please write english" });
+    expect(c.degraded).toBe(false);
+    expect(c.languageRequest).toEqual({
+      prefers: "english",
+      quote: "sorry i am not thai, please write english",
+      confidence: 0.92,
+    });
+  });
+
+  it("a message that merely IS English carries no statement at all", async () => {
+    // The model returns null; nothing downstream may invent one from the text.
+    ai.answers.stance = stance({ languageRequest: null });
+    const c = await readTurnComprehension({ text: "We have Honda Click, best price today" });
+    expect(c.languageRequest).toBeUndefined();
+  });
+
+  it("an omitted key is not a schema violation - the stance read survives it", async () => {
+    // Older providers answer the shape they were trained on. A stricter schema
+    // here would have taken the whole comprehension phase down with it.
+    ai.answers.stance = stance({ stance: "deflecting", confidence: 0.9 });
+    const c = await readTurnComprehension({ text: "try the shop down the road" });
+    expect(c.degraded).toBe(false);
+    expect(c.deflected).toBe(true);
+    expect(c.languageRequest).toBeUndefined();
+  });
+
+  it("NO PROVIDER means no statement - an outage can never flip a language", async () => {
+    ai.answers.stance = null;
+    const c = await readTurnComprehension({ text: "please write english" });
+    expect(c.degraded).toBe(true);
+    expect(c.languageRequest).toBeUndefined();
+  });
+});
