@@ -56,7 +56,17 @@ export function regionForShop(shopDigits: string, fallbackLabel?: string): ShopR
 
 // Calling code -> country name. Longest prefix wins at match time. The names
 // line up with locale.ts's lists (lowercased there) - keep them in step.
-const PREFIX_COUNTRY: Record<string, string> = {
+//
+// W4.7b: `as const` is LOAD-BEARING, not tidiness. This table is the list of
+// markets the app routes to `localizeMessage`, and the greeting rail's second
+// line of defence (copy/greeting.LOCAL_GREETINGS) is typed `Record<
+// LocalizedCountry, ...>` off it. The audit found Khmer, Lao and Burmese shops
+// being localized into scripts the strip regex had never heard of - three real
+// scooter-rental markets with a PROMPT as their only defence against a
+// re-greeting. Keying one off the other means adding a market here now FAILS
+// TYPECHECK until its greetings are covered, instead of silently leaving the
+// rail behind.
+const PREFIX_COUNTRY = {
   // North America (shared +1 - the English-speaking default is right for both)
   "1": "United States",
   // Africa + MENA
@@ -94,7 +104,18 @@ const PREFIX_COUNTRY: Record<string, string> = {
   "886": "Taiwan", "976": "Mongolia",
   // Oceania
   "61": "Australia", "64": "New Zealand",
-};
+} as const;
+
+/** Every country this app will localize a message into - the union, from the
+ * one table. Anything typed against it stays in step with the map by
+ * construction (see LOCAL_GREETINGS in copy/greeting.ts). */
+export type LocalizedCountry = (typeof PREFIX_COUNTRY)[keyof typeof PREFIX_COUNTRY];
+
+/** The same set at runtime (deduplicated - "+1" maps two entries to one name),
+ * so a test can walk every market the map claims to serve. */
+export const LOCALIZED_COUNTRIES: readonly LocalizedCountry[] = Array.from(
+  new Set(Object.values(PREFIX_COUNTRY))
+) as LocalizedCountry[];
 
 /**
  * The COUNTRY a shop's phone number is in, for the language decision.
@@ -106,8 +127,11 @@ const PREFIX_COUNTRY: Record<string, string> = {
  */
 export function countryForShop(shopDigits: string, fallbackLabel?: string): string | undefined {
   const digits = (shopDigits || "").replace(/\D/g, "").replace(/^0+/, "");
+  // The `as const` above narrows the keys to literals, so the lookup needs a
+  // widened view to be indexed by a runtime string.
+  const table: Record<string, string | undefined> = PREFIX_COUNTRY;
   for (const len of [3, 2, 1]) {
-    const hit = PREFIX_COUNTRY[digits.slice(0, len)];
+    const hit = table[digits.slice(0, len)];
     if (hit) return hit;
   }
   const label = (fallbackLabel ?? "").trim();

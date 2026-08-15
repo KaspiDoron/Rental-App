@@ -126,17 +126,35 @@ describe("W4: region-true, particle-safe openers", () => {
     }
   });
 
-  it("a PHILIPPINES shop: 'po' only attaches to the greeting, 'Salamat!' only terminal", () => {
+  // REWRITTEN IN PLACE, W4.7b - same intent, corrected placement rule.
+  //
+  // This test used to REQUIRE `^(Hi|Hello|...)\s+po!`: the particle glued onto
+  // the English greeting. That is what the compiler did, and it is a tell in
+  // the opposite direction from the repeated greeting the owner reported -
+  // "Hi there po!" / "Hi ka!" is a foreign-sounding hybrid no local writes.
+  // The intent the test was protecting is intact and unchanged: the particle
+  // must appear in ONE grammatical role, never region-blind, and "Salamat!"
+  // stays terminal-only. Only the role is corrected - a Filipino/Thai particle
+  // attaches to the end of a SENTENCE ("Salamat po!", "How much per day po?"),
+  // which is also what compileStyleDirectives has always told the LLM.
+  it("a PHILIPPINES shop: 'po' ends a sentence, never rides the greeting; 'Salamat!' only terminal", () => {
+    let seenParticle = 0;
     for (let i = 0; i < 200; i++) {
       const msg = compile("philippines", i);
       if (/\bpo\b/.test(msg)) {
-        // 'po' rides the greeting: it appears within the first few words.
-        expect(msg).toMatch(/^(Hi|Hello|Hey|Good day|Hi there|Hello there)\s+po!/);
+        seenParticle++;
+        // NEVER glued to the greeting - the defect this rewrite closes.
+        expect(msg, msg).not.toMatch(/^(Hi|Hello|Hey|Good day|Hi there|Hello there)\s+po\b/);
+        // It sits at the end of a sentence: the closing punctuation follows it.
+        expect(msg, msg).toMatch(/\bpo[!?.]/);
+        // Exactly one - a particle per message, not a sprinkle.
+        expect((msg.match(/\bpo\b/g) ?? []).length).toBe(1);
       }
       if (/Salamat/.test(msg)) {
-        expect(msg).toMatch(/Salamat!\s*[🙂🙏😊🤙👌]?\s*$/u);
+        expect(msg).toMatch(/Salamat( po)?!\s*[🙂🙏😊🤙👌]?\s*$/u);
       }
     }
+    expect(seenParticle).toBeGreaterThan(0); // the courtesy still appears at all
   });
 
   it("a THAILAND shop never mixes genders within one message and is stable across nonces", () => {
@@ -153,6 +171,27 @@ describe("W4: region-true, particle-safe openers", () => {
     const genderOf = (m: string) => (/krub/i.test(m) ? "m" : /\bka\b/i.test(m) ? "f" : "none");
     // If both messages carry a Thai marker, it must be the same gender.
     if (genderOf(a) !== "none" && genderOf(b) !== "none") expect(genderOf(a)).toBe(genderOf(b));
+  });
+
+  it("W4.7b: no opener in ANY region ever writes the 'Hi there po!' hybrid", () => {
+    // The refuter's finding: compileOpener glued the particle onto the greeting,
+    // so a Thai shop got "Hi ka!" and a Filipino one "Hi there po!". A greeting
+    // is English; a particle belongs to the local sentence that follows.
+    for (const region of ["philippines", "thailand"]) {
+      let particled = 0;
+      for (let i = 0; i < 200; i++) {
+        const msg = compile(region, i);
+        expect(msg, msg).not.toMatch(/^(Hi|Hello|Hey|Good day|Hi there|Hello there)\s+(po|krub|ka)\b/i);
+        if (/\b(po|krub|ka)\b/i.test(msg)) {
+          particled++;
+          // ...and it lands where a native writer puts it: closing a sentence.
+          expect(msg, msg).toMatch(/\b(po|krub|ka)[!?.]/i);
+        }
+        // A local thank-you that ALREADY carries the particle never doubles it.
+        expect(msg, msg).not.toMatch(/khop khun (krub|ka)\s+(krub|ka)/i);
+      }
+      expect(particled, region).toBeGreaterThan(0);
+    }
   });
 
   it("no message ever ends on a bare greeting or contains a doubled greeting", () => {
