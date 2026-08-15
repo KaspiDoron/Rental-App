@@ -455,6 +455,24 @@ input, textarea, select, button {
   scroll-margin-top: var(--topbar-h);
 }
 
+/* EVERY JUMP TARGET NEEDS THE MARGIN, NOT JUST THE ONE WE REMEMBERED.
+ *
+ * `goToSection` is used for two anchors, and only the views bar got the
+ * scroll-margin above. Jumping to the shop list therefore landed its first card
+ * 53px under the sticky top bar - the name row, Demo badge, rating, review
+ * count and distance all hidden. On a notched iPhone the buried band grows with
+ * the safe-area inset (`--topbar-h` is `calc(var(--safe-top) + 3.25rem)`), so it
+ * swallows most of the first card; and under prefers-reduced-motion the top bar
+ * never collapses, so the target is covered in BOTH scroll directions rather
+ * than only when jumping upward.
+ *
+ * Attribute-scoped rather than added to a className, because the margin is a
+ * property of BEING a jump target - anything `goToSection` can address should
+ * get it by construction, without a second place to remember. */
+[data-tour="vendors"] {
+  scroll-margin-top: var(--topbar-h);
+}
+
 /* Bottom global navigation - a floating glass capsule.
  *
  * The look is layered rather than flat: a heavily blurred, over-saturated plate
