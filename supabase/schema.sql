@@ -176,6 +176,16 @@ create table if not exists public.searches (
 -- Additive for existing deploys (safe to re-run):
 alter table public.searches add column if not exists rfq jsonb;
 alter table public.searches add column if not exists snapshot jsonb;
+-- THE PLACE THE TRAVELLER NAMED, not just its coordinates.
+--
+-- lat/lng were stored and the LABEL was not, so a restored hunt came back with
+-- `origin.label = ""` - and that label is the app's `region`. Everything
+-- downstream that takes a region silently fell back to its no-region default:
+-- /api/bargain-draft resolves currency to USD (a Thai shop asked for a price in
+-- dollars) and drops the market floor entirely, because a floor is only adopted
+-- when its currency matches. Re-opening a hunt therefore disarmed the two
+-- levers the whole negotiation runs on, with nothing on screen to show it.
+alter table public.searches add column if not exists origin_label text;
 
 -- ---- Offers (real + simulated, flagged) ---------------------------------------
 create table if not exists public.offers (

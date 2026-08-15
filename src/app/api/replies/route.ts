@@ -226,7 +226,22 @@ export async function GET(req: Request) {
     for (const r of rows) if (r.vendor_id) numberByVendor.set(r.vendor_id, "");
     // `reading:raw->reading` is a JSON-path projection on a column every deploy
     // has, so it degrades to null on rows without media - never a blanked feed.
-    const inbound = await sbSelect<{
+    // NEWEST 200, NOT OLDEST 200.
+    //
+    // This asked for `received_at.asc LIMIT 200` - the FIRST two hundred inbound
+    // messages of the session. Every message after that was invisible to this
+    // block for the rest of the hunt, and this block is where the card's price
+    // MENU and the shop's "where are you staying?" question come from. So on any
+    // session busy enough to cross two hundred inbound messages - a 24-shop
+    // batch answering, plus photo bursts, reaches it easily - both froze on
+    // early chatter: a menu the shop had since revised, and a location question
+    // that had already been answered, pinned to the card permanently.
+    //
+    // Asked newest-first and reversed back into arrival order, because both
+    // consumers below are order-sensitive: `optionsFromThread` reads a
+    // conversation forwards, and the location scan walks backwards from the end
+    // to find the shop's LATEST asking.
+    const inboundDesc = await sbSelect<{
       from_number: string;
       body: string;
       reading?: { prices?: import("@/lib/media/reading").ReadPrice[] } | null;
@@ -238,8 +253,9 @@ export async function GET(req: Request) {
         sinceMs > 0
           ? `&received_at=gte.${encodeURIComponent(new Date(sinceMs).toISOString())}`
           : ""
-      }&order=received_at.asc&limit=200`
+      }&order=received_at.desc&limit=200`
     ).catch(() => []);
+    const inbound = [...inboundDesc].reverse();
     // Keyed by IDENTITY, not by the raw string. Inbound rows carry WhatsApp's
     // spelling and outbound rows carry discovery's; joining the two on the raw
     // text silently matched nothing, so a shop's option menu and its

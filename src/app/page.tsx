@@ -2191,7 +2191,9 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          origin: { lat: origin.lat, lng: origin.lng },
+          // The LABEL travels with the coordinates: it is the app's `region`,
+          // and the search row is what a restored hunt reads it back from.
+          origin: { lat: origin.lat, lng: origin.lng, label: origin.label ?? "" },
           radiusKm,
           vehicleClass,
           lang,

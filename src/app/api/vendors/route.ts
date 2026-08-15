@@ -8,7 +8,11 @@ import type { Vendor, VehicleClass, Fulfillment } from "@/lib/types";
 import { can } from "@/lib/entitlements";
 
 interface Body {
-  origin: { lat: number; lng: number };
+  /** `label` is the place the traveller NAMED, and it is the app's `region` -
+   *  the input that decides the negotiation currency and whether the market
+   *  floor applies. Storing only the coordinates is what made a restored hunt
+   *  bargain in USD (see the origin_label note in supabase/schema.sql). */
+  origin: { lat: number; lng: number; label?: string };
   radiusKm: number;
   vehicleClass?: VehicleClass | "any";
   fulfillment?: Fulfillment;
@@ -176,10 +180,18 @@ export async function POST(req: Request) {
     basePricePerDay: v.basePricePerDay,
     photoUrl: v.photoUrl ?? null,
   }));
+  // SEATBELT: `origin_label` arrives by `alter table ... add column if not
+  // exists`, so a database that has not re-run schema.sql does not have it, and
+  // PostgREST rejects a whole record for one unknown column. A missing column
+  // must cost the label, never the search row.
+  const { tableReady } = await import("@/lib/schema-probe");
+  const label = String(body.origin.label ?? "").trim().slice(0, 200);
+  const hasLabel = label ? (await tableReady("searches", "origin_label")) === "ready" : false;
   const searchRow = {
     user_email: session?.email ?? null,
     lat: body.origin.lat,
     lng: body.origin.lng,
+    ...(hasLabel ? { origin_label: label } : {}),
     radius_km: radius,
     vehicle_class: vClass,
     source,

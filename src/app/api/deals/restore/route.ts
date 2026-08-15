@@ -56,6 +56,9 @@ interface SearchRow {
   source: string | null;
   rfq: Record<string, unknown> | null;
   snapshot: SnapshotVendor[] | null;
+  /** The place the traveller NAMED. It is the app's `region`, so losing it
+   *  makes every later bargain compose in USD and drops the market floor. */
+  origin_label?: string | null;
   created_at: string;
 }
 
@@ -97,10 +100,21 @@ export async function GET(req: Request) {
   // exactly "that column is not there yet", which is the one case this fallback
   // exists for. `unavailable` is an outage and must NOT trigger the fallback -
   // retrying the same unreachable database with fewer columns just fails twice.
-  const wide = await sbSelectStrict<SearchRow>(
+  // THREE TIERS, because `origin_label` is newer than `rfq`/`snapshot`, which
+  // are newer than the table. Collapsing them into two would mean a database
+  // missing only the newest column ALSO loses the RFQ and the vendor snapshot -
+  // trading one degradation for a much worse one.
+  const widest = await sbSelectStrict<SearchRow>(
     "searches",
-    `select=id,query_text,lat,lng,radius_km,vehicle_class,source,rfq,snapshot,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
+    `select=id,query_text,lat,lng,radius_km,vehicle_class,source,rfq,snapshot,origin_label,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
   );
+  const wide =
+    "rows" in widest || widest.error !== "missing"
+      ? widest
+      : await sbSelectStrict<SearchRow>(
+          "searches",
+          `select=id,query_text,lat,lng,radius_km,vehicle_class,source,rfq,snapshot,created_at&user_email=eq.${enc}&order=created_at.desc&limit=40`
+        );
   let rows: SearchRow[];
   if ("rows" in wide) {
     rows = wide.rows;
@@ -422,9 +436,27 @@ export async function GET(req: Request) {
             round: priced.round ?? 0,
             verified: Boolean(priced.verified),
             simulated: false,
-            // The live polls fill in deposit + fulfillment; until then the card
-            // says "confirming details" rather than offering a premature lock.
-            presentable: false,
+            // NOT `false` - UNKNOWN.
+            //
+            // `presentable` is a three-state field: true (the deal is complete),
+            // false (we have checked and it is not), undefined (we have not
+            // checked). Restore has read a price row and nothing else - no
+            // deposit, no fulfillment, no thread state - so it knows only the
+            // third thing. Stamping `false` was a positive claim, and it was
+            // PERMANENT: the replies poll answers `st ? isComplete(...) :
+            // undefined`, and a restored hunt whose thread state has aged out
+            // returns undefined, which the client merges as
+            // `r.presentable ?? v.offer?.presentable` - i.e. it can only ever
+            // fall back to the false already sitting there. So every restored
+            // offer carried "Your agent is still confirming the deposit and how
+            // you get the vehicle" for the life of the session, about a
+            // conversation that had finished days earlier.
+            //
+            // Undefined renders no banner (VendorCard tests `=== false`) and is
+            // still polled (`presentable !== true`), so a live thread can raise
+            // it to a real answer - which is exactly what "we have not checked"
+            // should do.
+            presentable: undefined,
           },
         };
       }
@@ -440,9 +472,25 @@ export async function GET(req: Request) {
     source,
     sourceError: null,
     rawText: query,
+    // THE LABEL IS THE REGION, AND IT WAS BEING THROWN AWAY.
+    //
+    // This returned `label: ""` unconditionally, and the client applies the
+    // whole origin object. So a restored hunt had no region, and every surface
+    // that passes `origin?.label` as `region` - the bargain draft, the mass
+    // push, the market hint - passed nothing: /api/bargain-draft then resolves
+    // currency to USD and drops the market floor (a floor is only adopted when
+    // its currency matches). Re-opening a hunt silently disarmed the two levers
+    // the negotiation runs on.
     origin:
       originRow?.lat != null && originRow?.lng != null
-        ? { lat: originRow.lat, lng: originRow.lng, label: "" }
+        ? {
+            lat: originRow.lat,
+            lng: originRow.lng,
+            // Any row in the session may carry it (only the first search
+            // stamped a label if the traveller edited nothing afterwards).
+            label:
+              group.find((r) => (r.origin_label ?? "").trim())?.origin_label?.trim() ?? "",
+          }
         : null,
     radiusKm: typeof radiusKm === "number" ? radiusKm : 8,
     searchEpoch: start,
