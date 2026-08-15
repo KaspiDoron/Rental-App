@@ -234,6 +234,46 @@ describe("W8 #16: the transcript signature notices a patched-in row", () => {
     ];
     expect(reconcileMessages(withReading, [msg()])).not.toBe(withReading);
   });
+
+  // A ROW IS PATCHED TWICE, AND THE SIGNATURE ONLY EVER SAW THE FIRST WRITE.
+  //
+  // The turn stamps the reading when the photo is read, and stamps it AGAIN
+  // once the engine has chosen and sent its move - the second write is the
+  // whole of `followUp`, i.e. "what your agent actually did about this photo",
+  // the one line in the panel that connects the picture to an action. Encoding
+  // reading PRESENCE alone meant the signature had already moved on the first
+  // write and never moved again, so the follow-up stayed invisible until the
+  // traveller closed and reopened the sheet.
+  const read = (over: Record<string, unknown> = {}) =>
+    ({ outcome: "empty", prices: [], vehicles: [], conditions: [], confidence: "low", ...over }) as
+      unknown as ThreadMsg["reading"];
+
+  it("THE SECOND STAMP: the follow-up landing repaints the transcript", () => {
+    const before = [msg({ reading: read() })];
+    const after = [
+      msg({ reading: read({ followUp: { move: "clarify", delivered: "sent", at: "now" } }) }),
+    ];
+    // Everything the count-based signature looks at is identical, and so is
+    // "does this message have a reading?" - the only input that used to exist.
+    expect(after).toHaveLength(before.length);
+    expect(Boolean(after[0].reading)).toBe(Boolean(before[0].reading));
+    expect(reconcileMessages(before, after)).toBe(after);
+  });
+
+  it("a re-stamp that changes what the panel SAYS also repaints", () => {
+    // A burst follower's row is re-stamped with the leader's reading, which can
+    // turn "nothing readable" into a real board.
+    const before = [msg({ reading: read({ outcome: "empty" }) })];
+    const after = [msg({ reading: read({ outcome: "read" }) })];
+    expect(reconcileMessages(before, after)).toBe(after);
+  });
+
+  it("...and an unchanged reading still keeps its array identity", () => {
+    const followUp = { move: "clarify", delivered: "sent", at: "now" };
+    const before = [msg({ reading: read({ followUp }) })];
+    const after = [msg({ reading: read({ followUp }) })];
+    expect(reconcileMessages(before, after)).toBe(before);
+  });
 });
 
 // ---------------------------------------------------------------------------

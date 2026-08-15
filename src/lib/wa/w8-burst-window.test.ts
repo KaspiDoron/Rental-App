@@ -157,4 +157,81 @@ describe("W8 A1: the burst window is anchored on the leader, not on the clock", 
     expect(burstAnchor(album(), "m-not-here")).toBeNull();
     expect(burstWindowSince(null, T0)).toBe(new Date(T0 - 6000).toISOString());
   });
+
+  // THE ANCHOR COULD ONLY EVER BE FOUND FROM PROBE 2 ONWARD.
+  //
+  // Probe 1 is the probe that DISCOVERS the anchor, and it asked for
+  // `now - 6s` - which quietly assumed the coalescer runs within the burst
+  // window of the row it is trying to find. It does not: ingest inserts the
+  // inbound row and only then reaches the coalescer, with an AWAITED
+  // finishBeforeResponse in between. Whenever that stretch took longer than six
+  // seconds the frame could not see its OWN row, `burstAnchor` returned null,
+  // the window fell back to exactly the sliding bound that had just failed, and
+  // every frame of an album ran as its own one-frame turn.
+  //
+  // That is how a legible five-photo price menu reaches the reader as one fifth
+  // of a board and comes back found=false.
+  it("THE REGRESSION: a coalescer starting 9s after the album still sees it", async () => {
+    db.all = album();
+    db.now = T0 + 9_000; // the pre-coalescer latency the old probe could not survive
+    const v = await assembleImageBurst({
+      email: "u@x.com",
+      fromDigits: "66111",
+      ownMsgId: "m-14",
+      fetchOwn: async () => bytes("own"),
+      fetchByKey: async (key) => bytes((key as { id: string }).id),
+      sleep: async (ms) => {
+        db.now += ms;
+      },
+    });
+    expect(v.standDown).toBe(false);
+    if (!v.standDown) {
+      // The whole album, not just our own frame.
+      expect(v.frames.map((f) => f.waMessageId)).toEqual([
+        "m-10",
+        "m-11",
+        "m-12",
+        "m-13",
+        "m-14",
+      ]);
+      expect(v.burstSize).toBe(5);
+    }
+    // The anchor was found on the FIRST probe, so every window after it is the
+    // frozen one - measured from our own arrival, not from the late clock.
+    expect(db.windows[1]).toBe(burstWindowSince(new Date(T0).toISOString(), db.now));
+  });
+
+  it("...and the wide discovery probe never widens the BURST", async () => {
+    // A photo this shop sent a minute ago is visible to the discovery probe and
+    // must not become a frame of this album - nor a sibling worth standing down
+    // to, which would drop the frame we are holding out of the read entirely.
+    db.all = [frame(1, "m-old", T0 - 60_000), frame(10, "m-10", T0)];
+    db.now = T0 + 9_000;
+    const v = await assembleImageBurst({
+      email: "u@x.com",
+      fromDigits: "66111",
+      ownMsgId: "m-10",
+      fetchOwn: async () => bytes("own"),
+      fetchByKey: async () => bytes("sib"),
+      sleep: async () => {},
+    });
+    expect(v.standDown).toBe(false);
+    if (!v.standDown) expect(v.frames.map((f) => f.waMessageId)).toEqual(["m-10"]);
+  });
+
+  it("an OLDER frame of a late-coalesced burst still stands down", async () => {
+    // The other half of the protocol has to keep working at the same latency:
+    // the newest frame owns the album, and everyone else defers to it.
+    db.all = album();
+    db.now = T0 + 9_000;
+    const v = await assembleImageBurst({
+      email: "u@x.com",
+      fromDigits: "66111",
+      ownMsgId: "m-11",
+      fetchOwn: async () => bytes("own"),
+      fetchByKey: async () => bytes("sib"),
+      sleep: async () => {},
+    });
+    expect(v).toEqual({ standDown: true, leaderId: "m-14" });
+  });
 });

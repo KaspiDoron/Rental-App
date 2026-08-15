@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { confirmSubjectFor, confirmableSubjects, legalMovesFor } from "./policy";
-import { emptyDigest, mergeDigest } from "./digest";
+import { advanceConfirmState, emptyDigest, mergeDigest } from "./digest";
 import { fallbackArtifact } from "./pass";
 import { moveGlossary } from "./moves";
 import { buildLedger, subjectState } from "../thread/ledger";
@@ -214,8 +214,22 @@ describe("W4.4 - the doubt is a model judgement, and it is remembered", () => {
     expect(d.awaitingConfirmation?.question).toBe(DEPOSIT_DOUBT.question);
   });
 
-  it("...and cleared the moment the fact reads cleanly again", () => {
+  // REWRITTEN (W8.1), intent preserved, mechanism corrected.
+  //
+  // The intent has always been: the card must stop claiming we are
+  // double-checking something once the question is settled, and must keep
+  // claiming it while it is not. The old mechanism was "this turn's message
+  // carries no uncertainty -> settled", and that is false of every turn that
+  // carries no message at all: a scheduled tick erased the wait and left
+  // `bargain` legal, so the agent asked "passport OR 4,000 cash?" and then
+  // pushed on price without an answer. The clearing signal is now the MODEL's
+  // verdict that the shop answered (advanceConfirmState `resolved`), which is
+  // the same question asked of the only thing that can answer it.
+  it("...and cleared when the MODEL reads the shop's reply as an answer", () => {
     const prev = emptyDigest();
+    prev.pending = [
+      { subject: "deposit", question: DEPOSIT_DOUBT.question, state: "waiting", turns: 0 },
+    ];
     prev.awaitingConfirmation = { subject: "deposit", question: DEPOSIT_DOUBT.question };
     const artifact: TurnArtifact = {
       read: { intent: "" },
@@ -224,13 +238,19 @@ describe("W4.4 - the doubt is a model judgement, and it is remembered", () => {
       leverageUsed: [],
       digestPatch: [],
     };
-    // The shop answered plainly -> nothing is uncertain -> the card stops
-    // claiming we are double-checking something.
-    const d = mergeDigest(prev, artifact, { found: true, pricePerDay: 280 });
-    expect(d.awaitingConfirmation).toBeNull();
-    // ...but it is HELD while the fact is still unsettled.
-    const held = mergeDigest(prev, artifact, { found: false, uncertain: [DEPOSIT_DOUBT] });
+    // The shop answered it -> the card stops claiming we are double-checking.
+    const settled = advanceConfirmState(prev, ["deposit"]);
+    expect(settled.awaitingConfirmation).toBeNull();
+    expect(settled.pending).toBeUndefined();
+    expect(mergeDigest(settled, artifact, { found: true, pricePerDay: 280 }).awaitingConfirmation)
+      .toBeNull();
+
+    // ...and HELD otherwise - including on a turn whose message says nothing
+    // about it, which is exactly where the old rule dropped it.
+    const held = advanceConfirmState(prev, []);
     expect(held.awaitingConfirmation?.subject).toBe("deposit");
+    expect(mergeDigest(held, artifact, { found: true, pricePerDay: 280 }).awaitingConfirmation?.subject)
+      .toBe("deposit");
   });
 
   it("the subject is decided by the policy, never by the model", () => {

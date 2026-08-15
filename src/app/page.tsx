@@ -292,12 +292,20 @@ export default function Home() {
   const planWindow = usePlanWindow(session?.plan);
   const [startDate, setStartDate] = useState("");
   const [days, setDays] = useState(4);
-  // Whether the traveller has ACTUALLY touched the window. It matters: the
-  // control always shows a date, but an untouched default must not out-rank a
-  // date the profiler read from their own words ("from the 20th for a week").
-  // Touched, it wins - a visible control that a hidden parse silently overrides
-  // is the same class of lie this whole item is about.
-  const [windowTouched, setWindowTouched] = useState(false);
+  // Whether the traveller has ACTUALLY touched the window - TWO controls, TWO
+  // flags. It matters: the control always shows a date, but an untouched default
+  // must not out-rank a date the profiler read from their own words ("from the
+  // 20th for a week"). Touched, it wins - a visible control that a hidden parse
+  // silently overrides is the same class of lie this whole item is about.
+  //
+  // W9: ONE flag for both was the bug. Either handler set it, so a single tap on
+  // the DATE picker promoted the untouched 4-day default into an explicit
+  // duration override: "scooter for a week from the 20th" shipped as a 4-day
+  // rental, and the "we searched for N days, not M" note could not fire because
+  // the app had asked for 4 and got 4. The symmetric case (tap the stepper,
+  // lose a stated date) was just as reachable.
+  const [startTouched, setStartTouched] = useState(false);
+  const [daysTouched, setDaysTouched] = useState(false);
   // What the SERVER did to the window on the last search. `clampRfqWindow` has
   // always returned a `reason`; every caller discarded it, so a clamped date
   // just looked like a typo the traveller had made.
@@ -2169,14 +2177,25 @@ export default function Home() {
         ...(structuredFields
           ? { structured: true, fields: structuredFields }
           : { text: requestText }),
-        // W-7: THE TYPED PATH CARRIES A WINDOW TOO.
+        // W-7 / W9: THE TYPED PATH CARRIES A WINDOW TOO - ON EVERY SEARCH.
         //
-        // Only sent when the traveller actually set it. An untouched default
-        // must not silently overrule a date they stated in their own words -
-        // the profiler reads "from the 20th for a week" and, unset here, keeps
-        // it. Touched, this wins, because it is the value on screen.
-        ...(windowTouched && !structuredFields
-          ? { startDate: startDate || planWindow.startDate, durationDays: days }
+        // This used to be gated on the traveller having touched the control, so
+        // the DEFAULT search sent no window at all: no start date reached the
+        // shops and the server's duration fell back to a hard-coded 3, while the
+        // card right above this button read "From <today> - For 4 days". The
+        // window the traveller can SEE is the window that must go on the wire.
+        //
+        // `windowExplicit` carries the other half of the truth: which control
+        // they actually set. Untouched values fill what their sentence left
+        // unsaid and yield to what it states ("from the 20th for a week");
+        // touched values are statements and win outright. Two independent flags,
+        // because they are two independent controls.
+        ...(!structuredFields
+          ? {
+              startDate: startDate || planWindow.startDate,
+              durationDays: days,
+              windowExplicit: { startDate: startTouched, durationDays: daysTouched },
+            }
           : {}),
         // THE TRAVELLER'S DAY, not Greenwich's. clampRfqWindow already accepted
         // a zone and already did the right thing with one - the client simply
@@ -2231,10 +2250,14 @@ export default function Home() {
     // Syncing the control back from the compiled RFQ also settles the other
     // direction: a date the PROFILER read out of their prose ("from the 20th")
     // appears in the picker instead of being invisible.
-    if (pData.rfq?.startDate) {
-      setStartDate(pData.rfq.startDate);
-      setWindowTouched(true);
-    }
+    //
+    // W9: SYNCING THE DISPLAY IS NOT THE TRAVELLER TOUCHING THE CONTROL. This
+    // used to flip the touched flag, which was the only way an unstated window
+    // could survive to the next search - and now that the window travels on
+    // every search anyway, flipping it would only mean search #2 silently
+    // overruling a date search #2's own prose states. The picker shows what ran;
+    // "explicit" still means they set it.
+    if (pData.rfq?.startDate) setStartDate(pData.rfq.startDate);
     // W4.1: A DURATION OVERWRITE IS NOT ALLOWED TO BE SILENT.
     //
     // The picker is overwritten from the server's answer (right below) with no
@@ -2244,9 +2267,15 @@ export default function Home() {
     // control simply read "1" afterwards and twenty shops were asked about a
     // one-day rental. The fix upstream stops the collapse; this makes any
     // remaining disagreement visible, on the channel the clamp already uses.
-    const askedDays = windowTouched ? days : null;
+    //
+    // W9: the comparison is against what the CARD SAID when they pressed the
+    // button, touched or not - that is the number they saw, so that is the
+    // number a change has to be explained against. Gated on `windowTouched` it
+    // could not fire at all on the default search (the flag was false), which is
+    // exactly the search that was silently collapsing 4 days into 3.
+    const askedDays = days;
     const gotDays = Number(pData.rfq?.durationDays);
-    const durationChanged = askedDays !== null && Number.isFinite(gotDays) && gotDays !== askedDays;
+    const durationChanged = Number.isFinite(gotDays) && gotDays !== askedDays;
     if (Number.isFinite(pData.rfq?.durationDays)) setDays(pData.rfq.durationDays);
     setWindowNote(
       pData.windowAdjusted
@@ -3286,12 +3315,13 @@ export default function Home() {
               maxStartDate={planWindow.maxStartDate}
               onStartDateChange={(d) => {
                 setStartDate(d);
-                setWindowTouched(true);
+                // Only THIS control is now a statement - see the two flags.
+                setStartTouched(true);
                 setWindowNote(null);
               }}
               onDaysChange={(n) => {
                 setDays(n);
-                setWindowTouched(true);
+                setDaysTouched(true);
                 setWindowNote(null);
               }}
               adjustedReason={windowNote}

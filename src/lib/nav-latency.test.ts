@@ -44,7 +44,10 @@ describe("tab hops are client navigations", () => {
     // in a MOUNT effect, which re-runs on client remounts - the pins hold the
     // two halves of that contract.
     const deals = readCode("src/app/deals/page.tsx");
-    expect(deals).toMatch(/saveSearch\(sessionStorage, "wd_search", d\.payload\)/);
+    // `d.payload` became a local `payload` - the same object with the re-open
+    // epoch clamped forward (reopenEpoch). The handoff this test pins is the
+    // slot and the ladder, neither of which moved.
+    expect(deals).toMatch(/saveSearch\(sessionStorage, "wd_search", payload\)/);
     expect(deals).toMatch(/startNav\(\);\s*\n\s*router\.push\("\/"\)/);
     const home = readCode("src/app/page.tsx");
     expect(home).toMatch(/sessionStorage\.getItem\("wd_search"\)/);

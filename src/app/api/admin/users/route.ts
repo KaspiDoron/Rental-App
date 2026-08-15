@@ -155,7 +155,46 @@ export async function POST(req: Request) {
     if (isOwner(String(email))) {
       return NextResponse.json({ error: "The owner cannot be blocked." }, { status: 400 });
     }
-    await setUserStatus(String(email), status);
+    // BLOCKING AN ADMIN HAS TO ACTUALLY STOP THEM, AND IT IS THE OWNER'S CALL.
+    //
+    // The panel offered Block on every non-owner row, this route wrote
+    // status=blocked for admins too - and getSession only consulted status for
+    // `user` sessions, so the write changed nothing. The owner saw a success
+    // toast while a rogue admin kept the Key Vault, the user list and every
+    // /api/admin/* route. Two halves to the fix: session.ts now refuses a
+    // blocked session at every role below owner, and membership of management
+    // stays the owner's decision here, for the same reason promote/demote is -
+    // an admin who could block their peers could clear the room, and this is
+    // now an action with teeth rather than a no-op.
+    //
+    // The owner therefore HAS a way to stop a rogue admin immediately (block
+    // takes effect on their next request), separate from demoting them, which
+    // only removes the extra privilege and leaves the account signed in.
+    const target = String(email).trim().toLowerCase();
+    const targetIsManagement = (await adminEmails()).includes(target);
+    if (targetIsManagement && session.role !== "owner") {
+      return NextResponse.json(
+        { error: "Only the owner can block or unblock an admin." },
+        { status: 403 }
+      );
+    }
+    await setUserStatus(target, status);
+    // AND THE ANSWER HAS TO BE TRUE. setUserStatus returns void and swallows
+    // the durable write's result, so a failed upsert looked exactly like a
+    // successful block. Read the list back (it comes from Supabase, not the
+    // cache) and report what it actually says.
+    const after = await payload();
+    const row = after.users.find((u) => u.email === target);
+    if (!row || row.status !== status) {
+      return NextResponse.json(
+        {
+          error: `Could not ${status === "blocked" ? "block" : "unblock"} ${target} - the change did not persist. Check Supabase and retry.`,
+          ...after,
+        },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json(after);
   } else {
     return NextResponse.json({ error: "Provide an action or status." }, { status: 400 });
   }

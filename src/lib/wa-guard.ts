@@ -1548,6 +1548,41 @@ export function humanizeForOutbound(
  * a rule that is off somewhere. `null` means the answer could not be read - the
  * caller decides, and both callers choose "not the first", because the failure
  * being closed is a REPEATED greeting.
+ *
+ * W4.7b - THE OWNER'S SCREENSHOT, STILL LIVE UNTIL THIS COMMIT. The last line
+ * used to be `return Boolean(row.last_sent_at)`, so "a recipient row EXISTS but
+ * last_sent_at is NULL" answered a confident "we have NEVER messaged this
+ * shop". A null timestamp is not evidence of absence of a message - it is the
+ * ordinary state of a row written by any of the other writers of this table:
+ *
+ *   - the shop wrote FIRST (ingest stamps first_reply_at / last_reply_at),
+ *   - a send failed and was stamped (blocked / last_error_at),
+ *   - the shop asked us to stop (opted_out_at),
+ *   - recordOutboundSend's upsert lost its best-effort try/catch after the
+ *     message itself was already on the wire.
+ *
+ * In every one of those a thread EXISTS, and the old answer flipped
+ * `firstOutbound` back to true MID-THREAD: the message kept its greeting AND
+ * got re-rolled through GREETING_SWAP_POOL, which is precisely why the owner's
+ * thread read "Hi", then "Hi there!", then "Hey there!".
+ *
+ * So the question this answers is now the honest one - IS THERE ALREADY A
+ * THREAD WITH THIS SHOP - and the evidence is:
+ *
+ *   row exists            -> true. The row IS the relationship; nothing creates
+ *                            one before a first send (recordOutboundSend runs
+ *                            AFTER delivery, on `afterSend`), so its presence
+ *                            can only mean contact in one direction or another.
+ *   no row + an outbound  -> true. The ledger is the durable half; the recipient
+ *     in the ledger          upsert is best-effort and swallows its own errors.
+ *   no row + no outbound  -> false. The only shape that actually proves "we have
+ *                            never written to this shop".
+ *   either read failed    -> null. Unknown, and guardOutbound resolves unknown
+ *                            toward NOT greeting.
+ *
+ * The direction is deliberate and asymmetric: a missed greeting on a genuine
+ * first contact is a wording nit, a re-greeting mid-thread is the bot tell the
+ * owner reported.
  */
 export async function hasMessagedShopBefore(
   senderKey: string,
@@ -1555,18 +1590,39 @@ export async function hasMessagedShopBefore(
 ): Promise<boolean | null> {
   const digits = waDigits(toNumber) || toNumber;
   if (!senderKey || !digits) return null;
-  // `last_sent_at` only - it is in the base schema.sql table, so this read
-  // cannot 400 on a database that has not taken the later migrations (which is
-  // how a column probe would turn every thread into "unknown" at once).
-  const res = await sbSelectStrict<{ last_sent_at: string | null }>(
+  const sender = encodeURIComponent(senderKey);
+  // `id` only - it is in the base schema.sql table, so this read cannot 400 on
+  // a database that has not taken the later migrations (which is how a column
+  // probe would turn every thread into "unknown" at once). Tail-tolerant
+  // (`numberFilter`), like every other read of this table, because our send
+  // carries discovery's spelling of the number and the shop's reply carries
+  // WhatsApp's.
+  const res = await sbSelectStrict<{ id: number }>(
     "wa_recipient_state",
-    `select=last_sent_at&sender_key=eq.${encodeURIComponent(senderKey)}` +
-      `&limit=1${numberFilter("to_number", digits)}`
+    `select=id&sender_key=eq.${sender}&limit=1${numberFilter("to_number", digits)}`
   );
   if (!("rows" in res)) return null;
-  const row = res.rows[0];
-  if (!row) return false; // no row at all - we have never touched this shop
-  return Boolean(row.last_sent_at);
+  if (res.rows[0]) return true;
+  // NO ROW IS NOT PROOF EITHER. The recipient upsert is best-effort inside a
+  // try/catch, so a send can reach the shop and leave no row behind; the
+  // outbound message row is the durable record of the same event. Only reached
+  // on the genuinely-cold path, so it costs one extra read per NEW shop, never
+  // per reply.
+  //
+  // A BELT, NOT A SECOND PROOF: `raw->>sender` is a convention, and not all of
+  // the outbound-writing call sites keep it (that is why the unanswered meters
+  // were moved off this table onto the recipient ledger). So this read can miss
+  // a real send - it can never invent one - which keeps the fail direction the
+  // same as the rest of the function: it only ever moves the answer toward NOT
+  // greeting, and the sender scope is what stops one traveller's thread with a
+  // popular shop from silencing another traveller's genuine first hello.
+  const prior = await sbSelectStrict<{ id: number }>(
+    "whatsapp_messages",
+    `select=id&direction=eq.outbound&raw->>sender=eq.${sender}` +
+      `&limit=1${numberFilter("to_number", digits)}`
+  );
+  if (!("rows" in prior)) return null;
+  return prior.rows.length > 0;
 }
 
 /**
@@ -1742,7 +1798,10 @@ export async function guardOutbound(rawOpts: {
   // drain must NOT re-run the unseeded persona/variance pass on it - doing so
   // mutates the text on every drainer, which changes its idempotency slot hash
   // and lets two concurrent drainers both send. When true, only the idempotent
-  // stripWaFormatting runs; the stored text is delivered verbatim.
+  // stripWaFormatting runs - plus, since W4.7b, the equally idempotent
+  // greeting strip when the thread is DEMONSTRABLY already open (see the
+  // `repositioned` note below): the variance is what must not be re-rolled,
+  // and a greeting frozen into a row at park time is not variance.
   alreadyHumanized?: boolean;
   /**
    * W4.7 - a caller's OPINION on whether this is the first outbound to this
@@ -1791,9 +1850,28 @@ export async function guardOutbound(rawOpts: {
   // greeting is the bug, a missing one on a genuine opener is a wording nit.
   const priorSend = await hasMessagedShopBefore(opts.senderKey, opts.toDigits).catch(() => null);
   const firstOutbound = priorSend === null ? opts.firstOutbound === true : priorSend === false;
+  // W4.7b: A PARKED ROW'S POSITION IS RE-DECIDED AT SEND TIME, NOT FROZEN AT
+  // PARK TIME. `alreadyHumanized` correctly means "do not re-roll the variance"
+  // (that is the idempotency-hash contract above) - but it was also silently
+  // freezing the GREETING decision a caller made minutes or hours earlier. The
+  // mass route computes its own `isNewIntro` from a 500-row `knownNumbers` set
+  // matched by exact string, so a traveller with more recipient rows than that,
+  // or a shop whose stored spelling differs from this hunt's discovery result,
+  // parked a fresh "Hi there!" into a thread that was already open - and the
+  // drain never re-asked. Now it does, but only on POSITIVE evidence
+  // (`priorSend === true`, i.e. a thread demonstrably exists) and only with the
+  // deterministic strip, never a re-humanize:
+  //   - deterministic + idempotent, so re-guarding the same row yields the same
+  //     bytes and the idempotency slot hash stays stable for the claim,
+  //   - positive-evidence-only, so an unreadable database cannot rewrite a
+  //     parked body (it is left verbatim, exactly as before),
+  //   - never ADDS a greeting: a parked opener that turns out to be first stays
+  //     as it was composed.
+  const repositioned =
+    opts.alreadyHumanized && priorSend === true ? stripLeadingGreeting(opts.text) : opts.text;
   const text = opts.auto
     ? opts.alreadyHumanized
-      ? stripWaFormatting(opts.text)
+      ? stripWaFormatting(repositioned)
       : humanizeForOutbound(opts.senderKey, opts.toDigits, opts.text, { firstOutbound })
     : opts.text;
   const now = Date.now();

@@ -168,6 +168,7 @@ function AdminReplyThread({
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   const replies = report.replies ?? [];
 
   async function send() {
@@ -180,7 +181,11 @@ function AdminReplyThread({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedbackId: report.id, body: text }),
       });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; rejected?: string }
+        | null;
       if (res.ok) {
+        setErr("");
         onReplied({
           id: Date.now(),
           author_role: "owner",
@@ -189,7 +194,19 @@ function AdminReplyThread({
           created_at: new Date().toISOString(),
         });
         setDraft("");
+      } else {
+        // THE REPLY DID NOT LAND, SO DO NOT PAINT IT AS IF IT HAD.
+        //
+        // The route used to answer {ok:true} even when the insert failed, and
+        // this panel painted the reply optimistically - so an owner reply could
+        // vanish while both sides believed it had been delivered, which is
+        // exactly the "users cannot see my responses" complaint. The route is
+        // honest now (502 for a refused insert, 400 for language), and the
+        // draft is kept so the text can be re-sent rather than retyped.
+        setErr(data?.error || "That reply did not send - it has not been stored. Try again.");
       }
+    } catch {
+      setErr("That reply did not send - check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -233,6 +250,11 @@ function AdminReplyThread({
           >
             Send
           </button>
+        </div>
+      )}
+      {err && (
+        <div className="mt-1 text-[10px] font-bold text-brandred" role="alert">
+          {err}
         </div>
       )}
     </div>
@@ -590,6 +612,19 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   const [userSort, setUserSort] = useState<"new" | "old" | "management">("new");
   const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
+  // THE PANEL USED TO RENDER THE PAGE SIZE UNDER THE WORD "TOTAL".
+  //
+  // The route caps a page at 100 rows, and this panel counted the rows it had
+  // been handed - so with 101+ reports it stated a Total of exactly 100, the
+  // 101st was unreachable through any UI, and nothing anywhere said reports
+  // were missing. The owner asked to be "fully visible to each and every
+  // feedback". `total` is now the real count from the database (null when that
+  // count is unreadable, which renders as "-" rather than as a number we made
+  // up), and the page itself is labelled Shown.
+  const [feedbackTotal, setFeedbackTotal] = useState<number | null>(null);
+  const [feedbackNextOffset, setFeedbackNextOffset] = useState(0);
+  const [feedbackHasMore, setFeedbackHasMore] = useState(false);
+  const [feedbackLoadingMore, setFeedbackLoadingMore] = useState(false);
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | "high" | "issues" | "noise">("all");
   // W6.2: the owner asked for feedback that is "categorized properly". The
   // category was collected, stored and displayed but drove NOTHING - severity
@@ -717,6 +752,9 @@ export default function AdminPage() {
       setMemory(tr.examples ?? []);
       setFeedbackRows(fb.feedback ?? []);
       setFeedbackByCategory(fb.byCategory ?? {});
+      setFeedbackTotal(typeof fb.total === "number" ? fb.total : null);
+      setFeedbackNextOffset(Number(fb.nextOffset) || 0);
+      setFeedbackHasMore(Boolean(fb.hasMore));
       // Costs are non-blocking - never make first paint wait on them.
       refreshCosts().catch(() => {});
     })().catch(() => setAuthorized(false));
@@ -751,10 +789,31 @@ export default function AdminPage() {
     return list;
   }, [users, userSearch, userSort]);
 
-  async function runDiag(kind: "supabase" | "maps" | "email") {
+  async function runDiag(kind: "supabase" | "maps" | "email" | "rpc") {
     setDiagBusy(kind);
     setDiag(null);
     try {
+      if (kind === "rpc") {
+        // Asks the DATABASE whether the dangerous SECURITY DEFINER prune
+        // function is still reachable with the public anon key - the probe
+        // calls it exactly as an attacker would, with a 100-year window so a
+        // still-exposed function deletes nothing. "unknown" is reported as
+        // unknown: a green light that only means "we did not check" is worse
+        // than no light at all.
+        const res = await fetch("/api/admin/rpc-exposure");
+        const d = await res.json();
+        setDiag({
+          kind,
+          ok: d.state === "locked",
+          text:
+            d.state === "locked"
+              ? `✅ Locked. ${d.detail}`
+              : d.state === "exposed"
+                ? `🚨 EXPOSED. ${d.detail}`
+                : `❔ Unknown. ${d.detail}`,
+        });
+        return;
+      }
       if (kind === "email") {
         // Sends a REAL email through the production chain to the admin's own
         // address, so "I entered the env values" becomes a verified fact.
@@ -910,8 +969,11 @@ export default function AdminPage() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    // A refused or half-applied action still ships the CURRENT list (the erase
+    // and block paths both do), so render it rather than leaving the panel on a
+    // stale row that no longer matches the database.
+    if (Array.isArray(data.users)) setUsers(data.users);
     if (data.error) setUserMsg(data.error);
-    else setUsers(data.users ?? []);
   }
 
   if (authorized === null) {
@@ -1851,6 +1913,20 @@ export default function AdminPage() {
                 {diagBusy === "email" ? <LoadingDots label="Sending" /> : "Send live test email"}
               </button>
             </div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => runDiag("rpc")}
+                disabled={diagBusy !== null}
+                className="btn btn-ghost btn-sm flex-1 rounded-xl text-[12px] disabled:opacity-60"
+                title="Checks whether the public anon key can still call prune_old_rows"
+              >
+                {diagBusy === "rpc" ? (
+                  <LoadingDots label="Probing" />
+                ) : (
+                  "Check anon RPC lockdown"
+                )}
+              </button>
+            </div>
             {diag && (
               <pre
                 className={`mt-2 whitespace-pre-wrap rounded-xl p-2.5 font-sans text-[11px] font-bold ${
@@ -2435,6 +2511,12 @@ export default function AdminPage() {
                     {u.role === "admin" ? "Remove admin" : "Make admin"}
                   </button>
                   )}
+                  {/* Blocking an ADMIN is an owner action (the route enforces
+                      it), and it is a real one now: a blocked admin's session
+                      is refused on their next request. Hiding the button from a
+                      peer admin keeps the panel from offering something that
+                      will come back 403. */}
+                  {(u.role !== "admin" || isOwner) && (
                   <button
                     onClick={() =>
                       userAction({
@@ -2447,9 +2529,15 @@ export default function AdminPage() {
                         ? "bg-brandred-soft text-brandred"
                         : "bg-savings-soft text-savings"
                     }`}
+                    title={
+                      u.role === "admin"
+                        ? "Blocks this admin immediately - their next request is refused, including the Key Vault"
+                        : undefined
+                    }
                   >
                     {u.status === "active" ? "Block" : "Unblock"}
                   </button>
+                  )}
                   <button
                     onClick={() => {
                       if (
@@ -2543,8 +2631,19 @@ export default function AdminPage() {
               accent
             />
             <Metric label="Real issues" value={String(feedbackRows.filter((f) => f.is_real_issue).length)} />
-            <Metric label="Total" value={String(feedbackRows.length)} />
+            {/* Two different facts, named apart: how many exist, and how many
+                are on screen right now. They used to be the same number by
+                accident, which is how 100 could mean "all of them". */}
+            <Metric
+              label={feedbackTotal == null ? "Shown" : "Total"}
+              value={feedbackTotal == null ? String(feedbackRows.length) : String(feedbackTotal)}
+            />
           </div>
+          {feedbackTotal != null && feedbackTotal > feedbackRows.length && (
+            <div className="text-center text-[11px] font-bold text-faint">
+              Showing {feedbackRows.length} of {feedbackTotal}
+            </div>
+          )}
           {/* Filter chips */}
           <div className="flex gap-1.5">
             {(["all", "high", "issues", "noise"] as const).map((fl) => (
@@ -2580,6 +2679,12 @@ export default function AdminPage() {
                       .then((d) => {
                         setFeedbackRows(d.feedback ?? []);
                         setFeedbackByCategory(d.byCategory ?? {});
+                        // A new filter is a new list - carrying the old
+                        // paging cursor over would append page 2 of the
+                        // previous category onto page 1 of this one.
+                        setFeedbackTotal(typeof d.total === "number" ? d.total : null);
+                        setFeedbackNextOffset(Number(d.nextOffset) || 0);
+                        setFeedbackHasMore(Boolean(d.hasMore));
                       })
                       .catch(() => {});
                   }}
@@ -2746,6 +2851,37 @@ export default function AdminPage() {
               </div>
             </div>
           ))}
+          {/* THE REST OF THEM. Without this the 101st report was unreachable
+              through any UI - the list stopped at the route's page cap and the
+              category chips were capped with it. */}
+          {feedbackHasMore && (
+            <button
+              onClick={async () => {
+                setFeedbackLoadingMore(true);
+                try {
+                  const q = new URLSearchParams({ offset: String(feedbackNextOffset) });
+                  if (feedbackCategory) q.set("category", feedbackCategory);
+                  const d = await fetch(`/api/admin/feedback?${q.toString()}`).then((r) => r.json());
+                  // Append, never replace - the reader keeps their place.
+                  setFeedbackRows((rows) => [...rows, ...(d.feedback ?? [])]);
+                  setFeedbackNextOffset(Number(d.nextOffset) || 0);
+                  setFeedbackHasMore(Boolean(d.hasMore));
+                } catch {
+                  /* leave the button so it can simply be pressed again */
+                } finally {
+                  setFeedbackLoadingMore(false);
+                }
+              }}
+              disabled={feedbackLoadingMore}
+              className="btn w-full rounded-2xl border-2 border-line py-2 text-[12px] font-extrabold text-strong disabled:opacity-60"
+            >
+              {feedbackLoadingMore ? (
+                <LoadingDots label="Loading more feedback" />
+              ) : (
+                `Load more${feedbackTotal != null ? ` (${feedbackTotal - feedbackRows.length} left)` : ""}`
+              )}
+            </button>
+          )}
         </div>
       )}
 

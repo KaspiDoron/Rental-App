@@ -89,6 +89,25 @@ export const READING_FAILURE_OUTCOMES: ReadonlySet<ReadingOutcome> = new Set<Rea
 /** WHAT THE MODEL PASS DID WRONG - the half of the taxonomy the reader stamps. */
 export type ModelReadFailure = "parse-failed" | "truncated" | "sanity-nulled";
 
+/**
+ * THE VISION READ BROKE AND THE CAPTION CARRIED THE PRICE ANYWAY.
+ *
+ * `parse-failed` and `truncated` are failures of the PHOTO read. When the model
+ * pass fails, the extractor still runs the deterministic reader over the
+ * message text beside the photo (agents.ts, `deterministicPriceHit`) and
+ * returns that hit WITH the failure marker still attached. The panel then
+ * headlined "Your agent is re-reading this one" and hid the confidence chip,
+ * directly above the rows it had read and a "-> used 250/day for your offer" -
+ * one card contradicting itself twice.
+ *
+ * `sanity-nulled` is deliberately NOT recoverable: there the price we hold is
+ * exactly the one we refuse to quote, so the refusal is still the whole story.
+ */
+const RECOVERABLE_MODEL_FAILURES: ReadonlySet<string> = new Set<string>([
+  "parse-failed",
+  "truncated",
+]);
+
 const MODEL_FAILURES: ReadonlySet<string> = new Set<string>([
   "parse-failed",
   "truncated",
@@ -154,6 +173,15 @@ export interface MediaReading {
    * photo was read on its own.
    */
   fromBurstLeader?: string;
+  /**
+   * THE PHOTO'S OWN READ FAILED AND THE MESSAGE TEXT RESCUED THE PRICE.
+   *
+   * Set only when the failure was `parse-failed`/`truncated` AND a usable price
+   * survived, which on the live path can only be the caption's deterministic
+   * hit. The outcome is then an honest "read" - there ARE rows to show - and
+   * this field is what stops the panel implying the picture is what was read.
+   */
+  recoveredFrom?: ModelReadFailure;
 }
 
 /** The shape the vision/extraction step produces. Deliberately loose - this is
@@ -243,6 +271,16 @@ export function holdsMediaReading(
 }
 
 /**
+ * THE ONE WINDOW THAT DEFINES A BURST, for the coalescer AND for the stamp.
+ *
+ * It lives here, in the pure module, because `wa/image-burst` is server-only
+ * and the stamp selection has to be testable without a database - but it is the
+ * SAME number by contract: a frame is a follower of this leader if and only if
+ * the coalescer would have handed it to the leader's reader.
+ */
+export const BURST_WINDOW_MS = 6_000;
+
+/**
  * EVERY FRAME OF A BURST CARRIES THE BURST'S READING.
  *
  * A shop sent two menu photos. Burst coalescing (wa/image-burst) makes the
@@ -257,6 +295,17 @@ export function holdsMediaReading(
  * are owed it: same shop, same burst window, media on them, and NO reading of
  * their own (a row that was read on its own turn is never overwritten).
  *
+ * A FRAME IS ONLY EVER STAMPED WITH A READING THAT INCLUDED IT.
+ *
+ * This window was 30s while the coalescer's is 6s, and stand-downs CHAIN: three
+ * frames at t=0/5/11 hand off 0 -> 5 -> 11, and the leader at t=11 froze its
+ * window at t=5, so its reader never saw the t=0 frame. The 30s stamp reached
+ * it anyway and labelled it "Read together with the other photos in this
+ * batch", under prices read off a different picture. The window is now the
+ * coalescer's own, and one-sided: the leader is by construction the NEWEST
+ * frame it saw, so anything that landed after it is a leader of its own and
+ * gets its own turn - never this reading.
+ *
  * Pure, so the selection is testable without a database.
  */
 export function burstFollowerRows<
@@ -265,7 +314,7 @@ export function burstFollowerRows<
     received_at?: string | null;
     raw?: { media?: unknown; reading?: unknown } | null;
   }
->(rows: T[], leader: { id: number; received_at?: string | null }, windowMs = 30_000): T[] {
+>(rows: T[], leader: { id: number; received_at?: string | null }, windowMs = BURST_WINDOW_MS): T[] {
   const leaderAt = Date.parse(String(leader.received_at ?? "")) || 0;
   return rows.filter((r) => {
     if (r.id === leader.id) return false;
@@ -273,7 +322,8 @@ export function burstFollowerRows<
     if (r.raw?.reading) return false; // it was read on its own turn - leave it
     if (!leaderAt) return false;
     const at = Date.parse(String(r.received_at ?? "")) || 0;
-    return at > 0 && Math.abs(leaderAt - at) <= windowMs;
+    // `leaderAt - at` deliberately, not an absolute difference.
+    return at > 0 && leaderAt - at >= 0 && leaderAt - at <= windowMs;
   });
 }
 
@@ -306,11 +356,42 @@ export function classifyReading(
 ): ReadingOutcome {
   const r = extraction?.imageRead;
   const stamped = clean(r?.modelFailure);
+  // A BROKEN PHOTO READ THE TURN THEN RECOVERED FROM IS NOT A FAILED READING.
+  // The panel used to headline "Your agent is re-reading this one", suppress
+  // the confidence chip, and print the prices and "-> used 250/day for your
+  // offer" immediately below it. See `recoveredModelFailure`.
+  if (recoveredModelFailure(extraction)) return "read";
   if (MODEL_FAILURES.has(stamped)) return stamped as ReadingOutcome;
   // The ladder itself can end on our ceiling rather than on an outage.
   if (clean(r?.failure) === "truncated") return "truncated";
   if (r?.seen === false) return "unavailable";
   return blank ? "empty" : "read";
+}
+
+/** A per-day price survived, from wherever the extractor got it. */
+function hasUsablePrice(e: ExtractionLike): boolean {
+  if (Number(e.pricePerDay) > 0) return true;
+  return (e.options ?? []).some((o) => Number(o?.pricePerDay) > 0);
+}
+
+/**
+ * WHICH BROKEN PHOTO READ THIS READING RECOVERED FROM, if any.
+ *
+ * Exported so the panel can say the true thing - the picture was not what we
+ * read - instead of either lying about a re-read or hiding the failure.
+ */
+export function recoveredModelFailure(
+  extraction: ExtractionLike | null | undefined
+): ModelReadFailure | undefined {
+  const e = extraction ?? {};
+  const stamped = clean(e.imageRead?.modelFailure);
+  const kind = RECOVERABLE_MODEL_FAILURES.has(stamped)
+    ? (stamped as ModelReadFailure)
+    : clean(e.imageRead?.failure) === "truncated"
+      ? ("truncated" as const)
+      : undefined;
+  if (!kind) return undefined;
+  return hasUsablePrice(e) ? kind : undefined;
 }
 
 function clean(v: unknown): string {
@@ -362,7 +443,21 @@ export function readingFrom(
     prices.push({ pricePerDay: headline, currency: clean(e.currency) || undefined });
     seen.add(headline);
   }
-  prices.sort((a, b) => a.pricePerDay - b.pricePerDay);
+  // CHEAPEST FIRST - AMONG THE ROWS THAT ARE ACTUALLY ON OFFER.
+  //
+  // A plain price sort put a CROSSED-OUT row at `prices[0]`, and both consumers
+  // that turn a reading into a number take the head of this list: the rival
+  // table the live engine quotes to other shops, and the traveller's own card
+  // ("Read from their price-menu photo"). We were advertising a model the shop
+  // no longer rents, at a price nobody could book. Struck rows still travel -
+  // the board really does list them and the owner wants to see them - they just
+  // sink below every quotable row. Consumers filter as well (readings stored
+  // before this sort existed keep the old order forever).
+  prices.sort(
+    (a, b) =>
+      Number(a.available === false) - Number(b.available === false) ||
+      a.pricePerDay - b.pricePerDay
+  );
 
   const vehicles: string[] = [];
   for (const v of [e.vehicleAssessment?.model, ...(e.options ?? []).map((o) => o?.model)]) {
@@ -405,6 +500,7 @@ export function readingFrom(
     rejectedPricePerDay: outcome === "sanity-nulled" && rejected > 0 ? rejected : undefined,
     rejectedCurrency:
       outcome === "sanity-nulled" ? clean(e.imageRead?.rejectedCurrency) || undefined : undefined,
+    recoveredFrom: recoveredModelFailure(e),
     followUp: opts.followUp,
     prices: prices.slice(0, 8),
     vehicles: vehicles.slice(0, 6),
@@ -415,6 +511,72 @@ export function readingFrom(
     usedPricePerDay: opts.usedPricePerDay,
     notUsedReason: opts.notUsedReason,
   };
+}
+
+/**
+ * THE ROWS THIS SHOP WILL ACTUALLY RENT.
+ *
+ * `available === false` means the board CROSSED THE ROW OUT. Until this
+ * existed, only the proof panel honoured the flag - the two places that turn a
+ * reading into a NUMBER (graph/engine's cross-thread rival table, and the
+ * card's "Read from their price-menu photo") both took `prices[0]` straight,
+ * so a struck-out row became a live quote: to the traveller on their own card,
+ * and to every OTHER shop as "another shop does 150".
+ *
+ * Availability SELECTION from an already-parsed structure is arithmetic, so it
+ * belongs here in code and not in any model's judgement. Generic over the row
+ * shape because the persisted `raw.reading.prices` JSON is read back with
+ * narrower local types.
+ */
+export function quotablePrices<T extends { available?: boolean | null }>(
+  prices: readonly T[] | null | undefined
+): T[] {
+  return (prices ?? []).filter((p) => p?.available !== false);
+}
+
+/** The cheapest row that is genuinely on offer, or null when none is. */
+export function cheapestQuotable<
+  T extends { pricePerDay?: number | null; available?: boolean | null }
+>(prices: readonly T[] | null | undefined): T | null {
+  let best: T | null = null;
+  for (const p of quotablePrices(prices)) {
+    const v = Number(p?.pricePerDay);
+    if (!(v > 0)) continue;
+    if (!best || v < Number(best.pricePerDay)) best = p;
+  }
+  return best;
+}
+
+/**
+ * THE PRICE A PHOTOGRAPHED BOARD CONTRIBUTES TO THE TRAVELLER'S CARD.
+ *
+ * /api/replies runs this when the reply row itself carries no price: the
+ * cheapest row of the shop's photographed menu, preferring a row that names
+ * the displacement the traveller declared, tagged so the card can say WHERE the
+ * number came from ("Read from their price-menu photo - being confirmed").
+ *
+ * It lives here, beside `quotablePrices`, because the availability rule and the
+ * pick are one decision: the route used to reduce over EVERY row and advertise
+ * the cheapest struck-through model on the board - a price that does not exist,
+ * for a bike the shop no longer has. Pure, so the pick is executed under test
+ * instead of pinned by a grep over a route handler.
+ */
+export function pickBoardPrice<
+  T extends {
+    pricePerDay?: number | null;
+    available?: boolean | null;
+    vehicle?: string | null;
+    line?: string | null;
+  }
+>(prices: readonly T[] | null | undefined, engineSizeCc = 0): T | null {
+  const live = quotablePrices(prices).filter((p) => Number(p?.pricePerDay) > 0);
+  if (!live.length) return null;
+  const cc = engineSizeCc > 0 ? String(engineSizeCc) : null;
+  const onSpec = cc
+    ? live.filter((p) => `${p.vehicle ?? ""} ${p.line ?? ""}`.includes(cc))
+    : [];
+  const pool = onSpec.length ? onSpec : live;
+  return pool.reduce((a, b) => (Number(a.pricePerDay) <= Number(b.pricePerDay) ? a : b));
 }
 
 /** Did the reader get anything at all out of this? Drives the empty state. */
@@ -457,28 +619,41 @@ export function readingIsFailure(r: MediaReading | null | undefined): boolean {
  */
 export function readingEmptyLine(r: MediaReading | null | undefined): string {
   if (!r) return "Nothing to show for this one.";
+  // WHAT THE TURN ACTUALLY DID, appended to whichever failure sentence applies.
+  //
+  // THE PROMISE HALF OF THE SAME BUG (owner report 5, second pass). The
+  // replacement copy for the failure branches said "it is being retried",
+  // "your agent is reading it again with more room", "your agent reads it
+  // again on the next message" and "your agent is asking the shop to confirm
+  // it" - four dispatches nothing had scheduled. The retries these describe
+  // all happened INSIDE the turn (agents.ts `regionReRead`, one budgeted
+  // second pass) and there is no queue, no wakeup and no code path that looks
+  // at the photo a second time afterwards. So every branch below states what
+  // happened, in the past tense, and the only forward-looking clause is the
+  // one the turn RECORDED in `followUp`.
+  const did = followUpClause(r.followUp);
   if (r.outcome === "unavailable") {
-    return `We did not get to read this one - ${r.unavailableReason ?? "the image reader was unavailable"}. Nothing here was guessed, and your agent reads it again on the next message.`;
+    return `We did not get to read this one - ${r.unavailableReason ?? "the image reader was unavailable"}. Nothing here was guessed.${did}`;
   }
   // OUR FAILURES, IN OUR OWN NAME. None of these three may borrow the sentence
   // below: that one says the picture held nothing, and here the picture is
   // fine - a typed 3x3 price menu, in the reported case - while our reader,
   // our token ceiling or our own plausibility check is what came up short.
   if (r.outcome === "parse-failed") {
-    return "Your agent could not read this one yet - our reader answered with something we could not use. That is our side failing, not your photo, and it is being retried.";
+    return `Our reader answered about this one with something we could not use, and the closer second look we took straight afterwards did not recover it either. That is our side failing, not your photo.${did}`;
   }
   if (r.outcome === "truncated") {
-    return "This board is longer than our reader was allowed to answer, so its reading was cut off part-way. That is our limit, not your photo - your agent is reading it again with more room.";
+    return `This board is longer than our reader was allowed to answer, so its reading was cut off part-way - and the compact second pass we ran on it did not finish it either. That is our limit, not your photo.${did}`;
   }
   if (r.outcome === "sanity-nulled") {
     const amount = r.rejectedPricePerDay
       ? `${r.rejectedPricePerDay}${r.rejectedCurrency ? " " + r.rejectedCurrency : ""}`
-      : "";
-    return amount
-      ? `We read ${amount}/day off this one, which cannot be right for this area - so your agent is asking the shop to confirm it instead of quoting a number we do not trust.`
-      : "We read a price off this one that cannot be right for this area - so your agent is asking the shop to confirm it instead of quoting a number we do not trust.";
+      : "a price";
+    return `We read ${amount}/day off this one, which cannot be right for this area - so we did not quote it.${did}`;
   }
   const base = "We could not read anything usable from this one";
+  // The empty branch keeps its own phrasing: the clause reads as a
+  // continuation of the sentence rather than a new one.
   const f = r.followUp;
   if (!f) return `${base}.`;
   if (f.move === "silent") {
@@ -490,6 +665,23 @@ export function readingEmptyLine(r: MediaReading | null | undefined): string {
   if (f.delivered === "queued") return `${base} - your agent is ${pair[0]}.`;
   // held / blocked / failed: something stopped the message. Claim nothing.
   return `${base}.`;
+}
+
+/**
+ * The observed follow-up as a trailing sentence, or "" when nothing was
+ * recorded - the panel then claims nothing, which is the whole rule.
+ */
+function followUpClause(f: ReadingFollowUp | undefined): string {
+  if (!f) return "";
+  if (f.move === "silent") {
+    return " Your agent had already asked for this, so it is waiting rather than asking twice.";
+  }
+  const pair = MOVE_ACTION[f.move];
+  if (!pair) return "";
+  if (f.delivered === "sent") return ` Your agent ${pair[1]}.`;
+  if (f.delivered === "queued") return ` Your agent is ${pair[0]}.`;
+  // held / blocked / failed: something stopped the message. Claim nothing.
+  return "";
 }
 
 /** [in flight, already done] per move. Only moves that can follow media appear. */
@@ -518,15 +710,55 @@ const MOVE_ACTION: Record<string, [string, string]> = {
   "closing-message": ["wrapping the conversation up", "wrapped the conversation up"],
 };
 
+/**
+ * AN IMAGE ROW WITH NO READING AT ALL - THE STATE THAT RENDERED AS SILENCE.
+ *
+ * The bubble drew the photo unconditionally and the panel only when a reading
+ * existed, so every stamp failure degraded to a picture with nothing under it.
+ * The traveller could not tell "still working" from "we are blind" from "the
+ * panel is broken" - the field report verbatim, and the half of the owner's
+ * "reading placeholder then repaint" that was never built.
+ *
+ * The two states are separated by the clock, which is the only evidence there
+ * is: a turn that is going to stamp does it within its own budget (the vision
+ * ladder is capped at 45s inside a 60s route, plus the burst defer), so past
+ * the grace the absence IS the finding. Pure, and exported so both sentences
+ * are testable without a browser.
+ */
+export const READING_GRACE_MS = 120_000;
+
+/** Is this photo still inside the window in which a reading may yet land? */
+export function readingIsPending(mediaAtIso: string | null | undefined, nowMs: number): boolean {
+  const at = Date.parse(String(mediaAtIso ?? ""));
+  // An unparseable timestamp is not evidence that anything failed.
+  if (!Number.isFinite(at)) return true;
+  return nowMs - at < READING_GRACE_MS;
+}
+
+/** The collapsed row for a photo we hold no reading for. */
+export function missingReadingHeadline(pending: boolean): string {
+  return pending ? "Reading this photo" : "No reading was recorded for this one";
+}
+
+/** ...and the sentence inside it. Neither invents anything about the picture. */
+export function missingReadingLine(pending: boolean): string {
+  return pending
+    ? "Your agent is looking at this photo - what it reads appears here as soon as it lands."
+    : "Your agent's reading of this photo was never stored, so there is nothing to show you about it. That is our side failing, not your photo - the photo itself is above, exactly as it arrived.";
+}
+
 /** A one-line headline for the collapsed state - what the traveller sees first. */
 export function readingHeadline(r: MediaReading | null | undefined): string {
   if (readingUnavailable(r)) return "Could not read this one yet";
   // A COLLAPSED ROW LIES FASTEST. These three used to fall through to "Nothing
   // readable in this one" - the single line most travellers ever see - about
   // photos we had, in two of the three cases, already read.
-  if (r?.outcome === "parse-failed") return "Your agent is re-reading this one";
-  if (r?.outcome === "truncated") return "Too long to read in one go - re-reading";
-  if (r?.outcome === "sanity-nulled") return "One price here looks wrong - checking";
+  // ...and none of the three may promise a retry either: the collapsed row is
+  // the line most travellers ever see, and "re-reading"/"checking" described
+  // work that had already finished inside the turn (see readingEmptyLine).
+  if (r?.outcome === "parse-failed") return "Our reader could not handle this one";
+  if (r?.outcome === "truncated") return "Too long for our reader to finish";
+  if (r?.outcome === "sanity-nulled") return "One price here cannot be right";
   if (readingIsEmpty(r)) return "Nothing readable in this one";
   const parts: string[] = [];
   if (r!.prices.length === 1) parts.push("1 price");

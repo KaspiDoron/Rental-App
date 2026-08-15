@@ -23,7 +23,9 @@ describe("a subscription can always be traced back to a traveller", () => {
   it("the account is resolved from OUR verified record when PayPal carries no hint", () => {
     const h = hook();
     expect(h).toMatch(/subscriberFor\(subscriptionId\)/);
-    expect(h).toMatch(/hintEmail \|\|/);
+    // The hint is still read - it is how a redirect checkout nobody has claimed
+    // gets applied - but only for an UNLINKED subscription (hintUsable).
+    expect(h).toMatch(/hintUsable \? hintEmail : ""/);
   });
 
   it("the id is read from both shapes PayPal uses", () => {
@@ -46,14 +48,17 @@ describe("a subscription can always be traced back to a traveller", () => {
     const s = readCode("src/lib/billing/subscription-link.ts");
     expect(s).toMatch(/return null/);
     const h = hook();
-    // The two attribution channels are now split by stakes: a GRANT may
-    // bootstrap from the attacker-settable custom_id hint (harmless), but a
-    // DOWNGRADE trusts ONLY the verified link. `downgradeEmail = linked || ""`,
-    // never the hint - so a signature-verified CANCELLED carrying "victim@|pro"
-    // on the attacker's own subscription cannot downgrade the victim.
+    // The two attribution channels are split by stakes: a GRANT may bootstrap
+    // from the attacker-settable custom_id hint, but a DOWNGRADE trusts ONLY the
+    // verified link. `downgradeEmail = linked || ""`, never the hint - so a
+    // signature-verified CANCELLED carrying "victim@|pro" on the attacker's own
+    // subscription cannot downgrade the victim.
     expect(h).toMatch(/const downgradeEmail = linked \|\| ""/);
     expect(h).toMatch(/if \(verified && grantEmail && activates && tier\)/);
     expect(h).toMatch(/\} else if \(verified && downgradeEmail\) \{/);
+    // AND the grant branch is not a second downgrade path: "bootstrap" was only
+    // harmless once a grant could no longer LOWER a plan (setPlan overwrites).
+    expect(h).toMatch(/PLAN_RANK\[tier\] <= PLAN_RANK\[before\]/);
   });
 });
 

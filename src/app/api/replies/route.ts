@@ -6,6 +6,7 @@ import { clampSince } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 import { languageSwitchNotice } from "@/lib/wa/thread-language";
 import { termsComplete } from "@/lib/deal-terms";
+import { pickBoardPrice } from "@/lib/media/reading";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -388,14 +389,16 @@ export async function GET(req: Request) {
           };
         }
         // 2. The photographed board, preferring a row naming the declared cc.
-        const reads = readingPricesByVendor.get(r.vendor_id);
-        if (reads?.length) {
-          const cc = specCc > 0 ? String(specCc) : null;
-          const onSpec = cc
-            ? reads.filter((p) => `${p.vehicle ?? ""} ${p.line ?? ""}`.includes(cc))
-            : [];
-          const pool = onSpec.length ? onSpec : reads;
-          const pick = pool.reduce((a, b) => (a.pricePerDay <= b.pricePerDay ? a : b));
+        //
+        // ONLY THE ROWS THE SHOP WILL ACTUALLY RENT. `available === false` is
+        // the reader's marker for a row the board CROSSED OUT, and this pick
+        // used to run over every row - so the card advertised, as "Read from
+        // their price-menu photo", the cheapest struck-through model on the
+        // board: a price that does not exist, on a bike they no longer have.
+        // The struck rows stay in the reading and stay in the proof panel;
+        // they are simply never the number.
+        const pick = pickBoardPrice(readingPricesByVendor.get(r.vendor_id), specCc);
+        if (pick) {
           return {
             pricePerDay: pick.pricePerDay,
             currency: pick.currency ?? null,

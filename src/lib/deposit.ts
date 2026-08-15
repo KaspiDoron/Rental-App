@@ -225,8 +225,43 @@ function dedupeParts(parts: DepositPart[]): DepositPart[] {
   return out;
 }
 
+/**
+ * HOW A DEPOSIT IS SAID, and the two audiences it is said to.
+ *
+ * `chip` is the traveller's screen - short, capitalized, no articles.
+ * `spoken` is a SENTENCE, and the sentence is usually one we send to the SHOP
+ * (the Trips re-check reads their own terms back to them). Both voices render
+ * the same structure from the same place, because the incident this file exists
+ * for was two renderers disagreeing about how many options the shop had offered.
+ */
+export type DepositVoice = "chip" | "spoken";
+
 /** Human-readable label for one part, in the app's own voice. */
-export function describePart(part: DepositPart, money?: (amount: number, currency?: string) => string): string {
+export function describePart(
+  part: DepositPart,
+  money?: (amount: number, currency?: string) => string,
+  voice: DepositVoice = "chip"
+): string {
+  const cash =
+    part.kind === "cash" && part.amount != null
+      ? money
+        ? money(part.amount, part.currency)
+        : `${part.amount}${part.currency ? " " + part.currency : ""}`
+      : undefined;
+  if (voice === "spoken") {
+    switch (part.kind) {
+      case "passport_original":
+        return "the passport";
+      case "passport_copy":
+        return "a passport copy";
+      case "id":
+        return "an ID card";
+      case "license":
+        return "a licence";
+      case "cash":
+        return cash ? `${cash} in cash` : "cash";
+    }
+  }
   switch (part.kind) {
     case "passport_original":
       return "Original passport";
@@ -237,12 +272,74 @@ export function describePart(part: DepositPart, money?: (amount: number, currenc
     case "license":
       return "Licence";
     case "cash":
-      return part.amount != null
-        ? money
-          ? money(part.amount, part.currency)
-          : `${part.amount}${part.currency ? " " + part.currency : ""}`
-        : "Cash";
+      return cash ?? "Cash";
   }
+}
+
+/** The fields any caller has about a deposit, whatever row shape it came from. */
+export interface DepositView {
+  deposit?: string | null;
+  depositType?: DepositType | null;
+  depositAmount?: number | null;
+  depositCurrency?: string | null;
+  /** The offer's currency - the amount's default when the shop named none. */
+  currency?: string | null;
+}
+
+/**
+ * EVERY ALTERNATIVE THE SHOP STATED, one rendered phrase each.
+ *
+ * THE SINGLE SOURCE for anything that says a deposit out loud. It was not
+ * single, and that is the whole incident: the chip learned to render the OR-menu
+ * while `deal-terms.depositPhrase` - the phrase we SEND TO THE SHOP in the
+ * re-check - still collapsed "passport or money4000" to "a passport/ID deposit".
+ * Reading a shop's terms back with half of them missing is worse than silence:
+ * it CONFIRMS terms they never offered, and the half we dropped was the one that
+ * keeps the traveller's passport in their own pocket.
+ *
+ * Precedence is the same everywhere: the shop's own words first (parseDeposit
+ * finds the alternatives), then the structured type+amount pair, and nothing
+ * invented. An empty array means nobody ever stated a deposit.
+ */
+export function depositOptionPhrases(
+  input: DepositView,
+  money?: (amount: number, currency?: string) => string,
+  voice: DepositVoice = "chip"
+): string[] {
+  const cur = input.depositCurrency || input.currency || undefined;
+  const parsed = parseDeposit(input.deposit, cur);
+  if (parsed?.type === "none") return [];
+  if (parsed?.options.length) {
+    return parsed.options.map((o) =>
+      o.parts.map((p) => describePart(p, money, voice)).join(voice === "spoken" ? " plus " : " + ")
+    );
+  }
+  // NO READABLE LABEL -> the flat pair, and BOTH halves of it. A `passport` type
+  // sitting next to a 4,000 amount is the field case with its raw text lost; one
+  // of them alone is a different, cheaper-sounding deal than the shop offered.
+  //
+  // The flat enum cannot tell an ORIGINAL passport from a photocopy, so this
+  // branch says neither - "Passport", not "Original passport". Inventing the
+  // harder reading would be as wrong as dropping the cash route.
+  const out: string[] = [];
+  const doc =
+    input.depositType === "passport"
+      ? voice === "spoken"
+        ? "the passport"
+        : "Passport"
+      : input.depositType === "id"
+        ? describePart({ kind: "id" }, money, voice)
+        : input.depositType === "license"
+          ? describePart({ kind: "license" }, money, voice)
+          : null;
+  if (doc) out.push(doc);
+  if (typeof input.depositAmount === "number" && input.depositAmount > 0) {
+    const part: DepositPart = { kind: "cash", amount: input.depositAmount, currency: cur };
+    out.push(voice === "spoken" ? describePart(part, money, voice) : `${describePart(part, money, voice)} cash`);
+  } else if (input.depositType === "cash") {
+    out.push(describePart({ kind: "cash" }, money, voice));
+  }
+  return out;
 }
 
 /**
@@ -259,40 +356,47 @@ export function describePart(part: DepositPart, money?: (amount: number, currenc
  * via the caller's money formatter so the chip shows real local currency.
  */
 export function depositSummary(
-  input: {
-    deposit?: string | null;
-    depositType?: DepositType | null;
-    depositAmount?: number | null;
-    depositCurrency?: string | null;
-    /** The offer's currency - the amount's default when the shop named none. */
-    currency?: string | null;
-  },
+  input: DepositView,
   money?: (amount: number, currency?: string) => string
 ): string | null {
-  const cur = input.depositCurrency || input.currency || undefined;
-  const parsed = parseDeposit(input.deposit, cur);
-  if (parsed?.options.length) {
-    return parsed.options
-      .map((o) => o.parts.map((p) => describePart(p, money)).join(" + "))
-      .join(" or ");
-  }
-  const parts: string[] = [];
-  const doc =
-    input.depositType === "passport"
-      ? "Passport"
-      : input.depositType === "id"
-        ? "ID card"
-        : input.depositType === "license"
-          ? "Licence"
-          : null;
-  if (doc) parts.push(doc);
-  if (typeof input.depositAmount === "number" && input.depositAmount > 0) {
-    const amt = money
-      ? money(input.depositAmount, cur)
-      : `${input.depositAmount}${cur ? " " + cur : ""}`;
-    parts.push(`${amt} cash`);
-  }
-  if (parts.length) return parts.join(" or ");
+  const options = depositOptionPhrases(input, money, "chip");
+  if (options.length) return options.join(" or ");
   if (input.depositType === "none") return "No deposit";
+  if (parseDeposit(input.deposit)?.type === "none") return "No deposit";
   return input.deposit ?? null;
+}
+
+/**
+ * THE SAME TERMS, AS A CLAUSE INSIDE A SENTENCE WE SEND TO THE SHOP.
+ *
+ * The re-check message reads a shop's own conditions back to them ("Same as
+ * before: ... and pick-up at your shop?"). Until this existed that clause came
+ * from a three-branch enum switch that returned "a passport/ID deposit" for
+ * anything document-shaped - so the shop that wrote "deposit passport or
+ * money4000" was asked to confirm a passport-only deal it had never offered,
+ * and the traveller was shown the same halved terms.
+ *
+ * Returns null when the shop never stated a deposit; `"no deposit"` when they
+ * said there is none. Never invents an option, and never drops one.
+ */
+export function depositSpokenPhrase(
+  input: DepositView,
+  money?: (amount: number, currency?: string) => string
+): string | null {
+  if (input.depositType === "none" || parseDeposit(input.deposit)?.type === "none") {
+    return "no deposit";
+  }
+  const options = depositOptionPhrases(input, money, "spoken");
+  if (!options.length) return null;
+  // One plain cash figure keeps the wording it has always had; anything with a
+  // real choice in it is spelled out as a choice, because that IS the term.
+  if (options.length === 1) {
+    const only = options[0];
+    return /in cash$/.test(only) && !/ plus /.test(only)
+      ? `a ${only.replace(/ in cash$/, "")} cash deposit`
+      : `a deposit of ${only}`;
+  }
+  const last = options[options.length - 1];
+  const head = options.slice(0, -1).join(", ");
+  return `a deposit of either ${head} or ${last}`;
 }

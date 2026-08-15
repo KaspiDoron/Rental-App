@@ -126,14 +126,24 @@ describe("the top bar is the top", () => {
     expect(i, `${sel} block not found`).toBeGreaterThan(-1);
     return src.slice(i, src.indexOf("}", i) + 1);
   };
-  /** The `.substick` rule - the views bar's surface styling. It is deliberately
-   *  NOT sticky any more (the owner reported it blocked the screen), so this
-   *  grabs the block to assert the ABSENCE of positioning. */
+  /** EVERY `.substick` rule, not just the first one.
+   *
+   *  This used to `indexOf(".substick {")` and inspect that one block, which
+   *  meant the ABSENCE assertions below only ever examined the first
+   *  declaration in the file. An adversarial pass proved the hole: a duplicate
+   *  rule appended at the end of the stylesheet, a re-stick inside a media
+   *  query, and a re-stick via a compound selector added later ALL re-pinned
+   *  the bar in a real browser while every assertion here still passed. The
+   *  cascade does not care which block came first, so neither can this.
+   *
+   *  Returns the concatenation of every rule whose selector list mentions
+   *  `.substick`, so "the bar is never given positioning" is asserted against
+   *  all of them at once. */
   const substickBlock = () => {
     const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
-    const i = src.indexOf(".substick {");
-    expect(i, ".substick block not found").toBeGreaterThan(-1);
-    return src.slice(i, src.indexOf("}", i) + 1);
+    const rules = src.match(/[^{}]*\.substick[^{}]*\{[^}]*\}/g) ?? [];
+    expect(rules.length, ".substick block not found").toBeGreaterThan(0);
+    return rules.join("\n");
   };
 
   it("is opaque - the page does not read through it", () => {
@@ -180,6 +190,30 @@ describe("the top bar is the top", () => {
     // element must never receive the top bar's collapse translate.
     const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
     expect(src).not.toMatch(/\.substick\[data-collapsed="true"\]/);
+  });
+
+  it("EVERY jump target carries the scroll-margin, not just the views bar", () => {
+    // `goToSection` addresses two anchors. Only `.substick` had the margin, so
+    // jumping to the shop list buried the first card's name row, rating and
+    // distance under the sticky top bar - and on a notched phone, most of the
+    // card, in both scroll directions once reduced-motion stops the top bar
+    // collapsing. Both anchors must clear it.
+    const src = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    const targets =
+      read("src/app/page.tsx").match(/goToSection\(\s*["'`]\[data-tour=['"]?([a-z-]+)/g) ?? [];
+    expect(targets.length, "no goToSection call sites found - did the selector change?")
+      .toBeGreaterThan(0);
+    for (const call of new Set(targets)) {
+      const name = /data-tour=['"]?([a-z-]+)/.exec(call)![1];
+      // The margin may come from the anchor's own class or an attribute rule;
+      // what matters is that SOMETHING gives this selector the clearance.
+      const viaAttr = new RegExp(`\\[data-tour="${name}"\\][^{}]*\\{[^}]*scroll-margin-top`);
+      const viaClass = name === "views" && /\.substick\s*\{[^}]*scroll-margin-top/.test(src);
+      expect(
+        viaAttr.test(src) || viaClass,
+        `goToSection targets [data-tour=${name}] but nothing gives it scroll-margin-top`
+      ).toBe(true);
+    }
   });
 
   it("the top bar height is still a CSS contract, measured by nothing", () => {

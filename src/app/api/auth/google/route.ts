@@ -54,11 +54,12 @@ export async function POST(req: Request) {
   // token verifies (so there is nothing else to key on), and an email-keyed
   // counter here would turn a 429 into an account-existence oracle.
   const { authLockLeft, noteAuthFailure, clearAuthFailures } = await import("@/lib/cooldown");
-  const callerKey = `ip:${
-    (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown"
-  }`;
+  // The IP comes from clientIp, not from hop 0 of X-Forwarded-For. Google's
+  // front end APPENDS the address it saw, so the leftmost hop is whatever the
+  // caller typed - a brute-force throttle keyed on it is bypassed by rotating a
+  // header. See lib/rate-limit.
+  const { clientIp } = await import("@/lib/rate-limit");
+  const callerKey = `ip:${clientIp(req)}`;
   const callerLock = await authLockLeft(callerKey, "google");
   if (callerLock > 0) {
     return NextResponse.json(

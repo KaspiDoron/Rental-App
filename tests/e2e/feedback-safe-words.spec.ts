@@ -82,14 +82,35 @@ test.describe("feedback: safe words", () => {
     await expect(page.getByText("You can follow it under Your reports.")).toHaveCount(0);
   });
 
-  test("a team reply is unread ON THE ROW, from the server's own count", async ({ page }) => {
+  // THIS TEST USED TO STUB THE THING UNDER TEST.
+  //
+  // It fulfilled GET /api/feedback with `unread: 1` unconditionally, for every
+  // request, so the badge could not go away no matter what the client did - and
+  // the client was erasing it with the very click that revealed it. The modal
+  // PATCHed with the body "{}", which the route reads as "no id" and therefore
+  // stamps `user_seen_at` on EVERY report; the reload then returned unread 0
+  // for all of them, so the badge flashed for one round trip and died.
+  //
+  // The stub is now a tiny STATEFUL server: `seen` starts false, PATCH sets it,
+  // and GET answers from it. That is the whole difference between a test that
+  // asserts a fixture and a test that asserts the app.
+  test("a team reply stays unread until the reporter opens THAT report", async ({ page }) => {
     await asPlan(page, "free");
+    const patches: unknown[] = [];
+    let seen = false;
     await page.route(
       (url) => url.pathname === "/api/feedback",
-      (route) =>
-        route.fulfill({
+      async (route) => {
+        const req = route.request();
+        if (req.method() === "PATCH") {
+          patches.push(req.postDataJSON());
+          seen = true;
+          return route.fulfill({ json: { ok: true } });
+        }
+        const unread = seen ? 0 : 1;
+        return route.fulfill({
           json: {
-            unread: 1,
+            unread,
             byCategory: { bug: 1 },
             reports: [
               {
@@ -100,7 +121,7 @@ test.describe("feedback: safe words", () => {
                 severity: "high",
                 summary: "map blank",
                 created_at: new Date().toISOString(),
-                unread: 1,
+                unread,
                 replies: [
                   {
                     id: 1,
@@ -113,14 +134,67 @@ test.describe("feedback: safe words", () => {
               },
             ],
           },
-        })
+        });
+      }
     );
     await openFeedback(page);
     await page.getByRole("button", { name: /Your reports/ }).click();
+    // THE ASSERTION THE OLD STUB COULD NOT MAKE: opening the tab does not mark
+    // anything read, so the badge is still there to be seen.
     await expect(page.getByText("new reply")).toBeVisible();
+    expect(patches).toHaveLength(0);
+
     // The owner's answer is really readable, which is the point of the thread.
     await page.getByRole("button", { name: /map blank/ }).click();
     await expect(page.getByText("Fixed in the next build - thank you!")).toBeVisible();
     await expect(page.getByText("WheelDeal team")).toBeVisible();
+
+    // ...and reading it is what clears it - for that report, by id.
+    await expect.poll(() => patches).toEqual([{ id: 7 }]);
+    await expect(page.getByText("new reply")).toHaveCount(0);
+  });
+
+  test("a reply the server could not store does not paint as sent", async ({ page }) => {
+    await asPlan(page, "free");
+    await page.route(
+      (url) => url.pathname === "/api/feedback",
+      (route) =>
+        route.fulfill({
+          json: {
+            unread: 0,
+            byCategory: { bug: 1 },
+            reports: [
+              {
+                id: 7,
+                category: "bug",
+                body: "the map is blank",
+                status: "open",
+                severity: "high",
+                summary: "map blank",
+                created_at: new Date().toISOString(),
+                unread: 0,
+                replies: [],
+              },
+            ],
+          },
+        })
+    );
+    // The field repro: a deployment with no `feedback_replies` table. Every
+    // reply used to answer 200, paint, and vanish - which IS the owner's
+    // complaint that users cannot see his responses.
+    await page.route((url) => url.pathname === "/api/feedback/reply", (route) =>
+      route.fulfill({
+        status: 502,
+        json: { ok: false, stored: false, error: "We could not save that reply just now - it was not sent. Please try again." },
+      })
+    );
+    await openFeedback(page);
+    await page.getByRole("button", { name: /Your reports/ }).click();
+    await page.getByRole("button", { name: /map blank/ }).click();
+    await page.getByPlaceholder("Reply to the team...").fill("any update on this?");
+    await page.getByRole("button", { name: "Send reply" }).click();
+    await expect(page.getByText(/could not save that reply/)).toBeVisible();
+    // The text stays in the box, so it can be sent again rather than retyped.
+    await expect(page.getByPlaceholder("Reply to the team...")).toHaveValue("any update on this?");
   });
 });

@@ -98,18 +98,23 @@ export function FeedbackModal({ email, onClose }: { email?: string; onClose: () 
     loadReports();
   }, [loadReports]);
 
+  // THE CLICK THAT REVEALS THE BADGE MUST NOT BE THE CLICK THAT ERASES IT.
+  //
+  // This used to PATCH /api/feedback with the body "{}", which the route reads
+  // as "no id" (`Number(undefined)` is not finite) and therefore stamps
+  // `user_seen_at` on EVERY one of the caller's reports - then reloaded. So the
+  // per-row "new reply" badge appeared for the length of one round trip and
+  // every row came back `unread: 0`. The route's per-report `id` branch existed
+  // and no client had ever exercised it.
+  //
+  // Opening the TAB now only dismisses the tab's own dot (a local fact: you are
+  // looking at the list). A report is marked read when the reporter actually
+  // OPENS it - see ReportRow - which is the only moment we know they read
+  // anything.
   const openYours = () => {
     setTab("yours");
     setHasUnread(false);
-    // Stamp `user_seen_at` server-side, then re-read. Best-effort: a failed
-    // stamp shows the dot again next time, which is the safe direction.
-    fetch("/api/feedback", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    })
-      .catch(() => {})
-      .finally(() => loadReports());
+    loadReports();
   };
 
   return (
@@ -520,22 +525,63 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  /** A reply the server refused or could not store, said out loud. */
+  const [replyErr, setReplyErr] = useState<string | null>(null);
   const status = report.status ?? "open";
   const meta = STATUS_META[status] ?? STATUS_META.open;
+
+  /**
+   * Expand - and, the first time, mark THIS report read.
+   *
+   * The per-report `id` branch of PATCH /api/feedback had no caller: the modal
+   * stamped every report the moment the tab opened, so the badge died before it
+   * could be seen. Reading a thread is the honest moment to clear its badge,
+   * and it is scoped to the one report that was actually read.
+   */
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && (report.unread ?? 0) > 0) {
+      fetch("/api/feedback", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: report.id }),
+      })
+        .catch(() => {})
+        // A failed stamp shows the badge again next time, which is the safe
+        // direction: an unread answer is better than a lost one.
+        .finally(() => onChanged());
+    }
+  }
 
   async function sendReply() {
     if (!reply.trim() || busy) return;
     setBusy(true);
+    setReplyErr(null);
     try {
       const res = await fetch("/api/feedback/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedbackId: report.id, body: reply.trim() }),
       });
-      if (res.ok) {
-        setReply("");
-        onChanged();
+      const data = await res.json().catch(() => ({}));
+      // A REPLY THAT DID NOT LAND MUST NOT LOOK SENT. The route used to answer
+      // `{ok:true}` whatever the insert did, and this cleared the box and
+      // re-rendered on `res.ok` alone - so a reply into a database that never
+      // stored it read exactly like one that did. The text stays in the box now
+      // so it can be sent again rather than retyped.
+      if (!res.ok || data?.ok === false) {
+        setReplyErr(
+          data?.rejected === "language"
+            ? String(data.error ?? t("Please rephrase this and send it again."))
+            : String(data?.error ?? t("Could not send that reply. Please try again."))
+        );
+        return;
       }
+      setReply("");
+      onChanged();
+    } catch {
+      setReplyErr(t("Could not send that reply. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -557,10 +603,7 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
 
   return (
     <div className="surface rounded-2xl p-3">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-start justify-between gap-2 text-left"
-      >
+      <button onClick={toggle} className="flex w-full items-start justify-between gap-2 text-left">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${meta.cls}`}>
@@ -643,6 +686,10 @@ function ReportRow({ report, onChanged }: { report: Report; onChanged: () => voi
                 <Icon name="send" className="h-4 w-4" />
               </button>
             </div>
+          )}
+
+          {replyErr && (
+            <p className="mt-1.5 text-[11.5px] font-bold text-brandred">{replyErr}</p>
           )}
 
           <div className="mt-2 flex justify-end">

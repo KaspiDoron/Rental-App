@@ -5,6 +5,7 @@
 // both the web and the worker runtime and is unit-testable without a DB.
 
 import type {
+  ConfirmSubject,
   MoveKind,
   ThreadDigest,
   TurnArtifact,
@@ -12,10 +13,10 @@ import type {
   ModelRoute,
   VerifiedExtraction,
 } from "./types";
-import { confirmSubjectFor, legalMovesFor, reflexTurn } from "./policy";
+import { confirmSubjectFor, legalMovesFor, reflexTurn, waitingOn } from "./policy";
 import { runSinglePass, fallbackArtifact } from "./pass";
 import { runPostRails } from "./rails";
-import { mergeDigest } from "./digest";
+import { advanceConfirmState, mergeDigest } from "./digest";
 
 export interface TurnOutcome {
   move: MoveKind;
@@ -40,6 +41,12 @@ export interface TurnOutcome {
  * never goes silent on a composable move, never sends an unverified number.
  */
 export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
+  // THE DOUBTS THIS THREAD IS CARRYING, ADVANCED ONE TURN - before anything is
+  // decided, because whether we are still waiting on an answer changes which
+  // moves exist at all. The MODEL says whether the shop answered; the state
+  // machine and its bound are arithmetic. See settleConfirmState.
+  ctx.thread.digest = await settleConfirmState(ctx);
+
   // PRE-RAILS: legal move set (0 tokens).
   ctx.legalMoves = legalMovesFor(ctx);
 
@@ -81,6 +88,64 @@ export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
     return finalize(ctx, fb, { tier: "R", reason: "quota-overflow" }, fbRail.ok ? fbRail.finalText : undefined);
   }
   return finalize(ctx, artifact, route, rail.finalText);
+}
+
+/**
+ * THE WAIT, RESOLVED OR AGED BY ONE TURN.
+ *
+ * "If they are not positive about something they should ask the shop, but in a
+ * way of a question... then wait for the shop answer." The waiting half needs an
+ * exit, and the exit is a judgement about what their reply MEANT - which is the
+ * model's job, never a keyword test (a shop settles "passport or 4,000 cash?"
+ * with "yes both ok", "up to you", "cash better", or a correction). The read is
+ * zod-validated and lives in comprehension.readConfirmResolution.
+ *
+ * Everything around it is deterministic: which doubt we are waiting on, how many
+ * turns it has left, and what expiry does (release the thread, and record that
+ * the shop never answered - never that they confirmed).
+ *
+ * THREE CASES WHERE NO MODEL RUNS AT ALL, each degrading to PATIENCE:
+ *   - nothing is waiting -> nothing to read;
+ *   - the turn carries no shop message (a tick, a wakeup, a swarm poke) -> there
+ *     is no reply to judge, and this is precisely the turn that used to erase
+ *     the wait;
+ *   - replay/deterministic mode -> the golden suite makes no network calls, so a
+ *     frozen thread yields the same bytes on every run.
+ * A provider outage lands in the same place: the wait holds until the bound
+ * releases it, which is the only safe direction.
+ */
+async function settleConfirmState(ctx: TurnContext): Promise<ThreadDigest> {
+  const waiting = waitingOn(ctx);
+  const text = (ctx.inbound.text ?? "").trim();
+  if (!waiting || ctx.deterministic || ctx.event !== "shop-message" || !text) {
+    return advanceConfirmState(ctx.thread.digest, []);
+  }
+  const resolved: ConfirmSubject[] = [];
+  try {
+    const { readConfirmResolution } = await import("./comprehension");
+    const r = await readConfirmResolution({
+      pending: waiting,
+      text,
+      context: contextForResolution(ctx),
+    });
+    if (r?.answered) resolved.push(r.subject);
+  } catch {
+    // The read owns its own failures; this is the last net, and its answer is
+    // "keep waiting" - the same thing an outage means.
+  }
+  return advanceConfirmState(ctx.thread.digest, resolved);
+}
+
+/** What the resolution read needs to know beyond the two texts: what we asked
+ *  about, and the reading we refused to latch. Deliberately small - the
+ *  question itself carries the rest. */
+function contextForResolution(ctx: TurnContext): string {
+  const p = waitingOn(ctx);
+  if (!p) return "";
+  return (
+    `We are waiting for this shop to confirm the ${p.subject}.` +
+    (p.reading ? ` The reading we did not trust: ${p.reading}` : "")
+  );
 }
 
 function finalize(

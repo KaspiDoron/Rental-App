@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect, sbSelectStrict, sbInsert } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict, sbInsert, pgTimestamp } from "@/lib/runtime-config";
 import { digitsOnly } from "@/lib/phone";
 import { killSwitchOn } from "@/lib/usage";
-import { groupSearchSessions, sessionIdOf } from "@/lib/session-life";
+import {
+  groupSearchSessions,
+  sessionIdOf,
+  huntWindow,
+  huntWindowFilter,
+} from "@/lib/session-life";
 import { recheckMessage } from "@/lib/wa/recheck-message";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
@@ -137,8 +142,21 @@ export async function POST(req: Request) {
     ? groups.findIndex((g) => sessionIdOf(g) === sid)
     : groups.findIndex((g) => Math.abs(Date.parse(g[0].created_at) - startMs) < 1000);
   if (gi < 0) return NextResponse.json({ error: "That hunt is no longer available." }, { status: 404 });
-  const start = Date.parse(groups[gi][0].created_at);
-  const end = gi === 0 ? Infinity : Date.parse(groups[gi - 1][0].created_at);
+  // THE HUNT'S WINDOW, AND IT NOW BOUNDS THE QUERIES AS WELL AS THE FILTER.
+  //
+  // This route read offers, replies and outbound messages with NO date bound
+  // and `limit=200`, newest first, and then filtered them in memory. For an
+  // ordinary active traveller (MAX_HUNTS is 20) an older hunt's rows fall
+  // outside that 200-row window entirely - so the card offered "Ask if these
+  // deals still stand (5)", `contactedInHunt` came out 0, and the answer was
+  // "No shops were messaged in that hunt." with HTTP 200, about five shops the
+  // traveller could see listed by name on the same card.
+  //
+  // `huntWindow` is the same object /api/deals builds the card from, and
+  // `huntWindowFilter` turns it into the PostgREST bound - so what this route
+  // READS and what the card COUNTED can no longer come from different windows.
+  const win = huntWindow(groups, gi);
+  const bound = (column: string) => huntWindowFilter(column, win, pgTimestamp);
 
   // A CLEARED HUNT CANNOT BE RE-CHECKED - the clear tombstoned its recipients,
   // so every send this route queued would die at the guard while the response
@@ -175,18 +193,22 @@ export async function POST(req: Request) {
       raw: { vendorId?: string; vendorName?: string } | null;
     }>(
       "whatsapp_messages",
-      `select=to_number,received_at,raw&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)&order=received_at.desc&limit=200`
+      `select=to_number,received_at,raw&direction=eq.outbound&raw->>sender=eq.${enc}&to_number=not.in.(session,takeover,cancel)${bound(
+        "received_at"
+      )}&order=received_at.desc&limit=250`
     ).catch(() => []),
     sbSelect<OfferRow>(
       "offers",
-      `select=vendor_id,vendor_name,price_per_day,currency,created_at&user_email=eq.${enc}&simulated=eq.false&order=created_at.desc&limit=200`
+      `select=vendor_id,vendor_name,price_per_day,currency,created_at&user_email=eq.${enc}&simulated=eq.false${bound(
+        "created_at"
+      )}&order=created_at.desc&limit=250`
     ).catch(() => []),
     // Two column tiers, exactly like /api/replies: an unknown column silently
     // blanks the whole select, and a pre-migration database must degrade to
     // "we do not know the deposit" (which refuses the send) rather than to a
     // crash or, worse, to messaging everyone again.
     (async () => {
-      const filter = `user_email=eq.${enc}&order=created_at.desc&limit=200`;
+      const filter = `user_email=eq.${enc}${bound("created_at")}&order=created_at.desc&limit=250`;
       let rows = await sbSelect<ReplyTermsRow>(
         "vendor_replies",
         `select=vendor_id,vendor_name,deposit,deposit_type,deposit_amount,deposit_currency,delivers,created_at&${filter}`
@@ -208,10 +230,9 @@ export async function POST(req: Request) {
     ).catch(() => [] as ThreadRow[]),
   ]);
 
-  const inWindow = (iso: string) => {
-    const ms = Date.parse(iso);
-    return ms >= start - 1000 && ms < end;
-  };
+  // Belt to the query's braces: the bound above already fenced every read, and
+  // this keeps the in-memory filter reading from the SAME window object.
+  const inWindow = (iso: string) => win.contains(iso);
 
   const priceByVendor = new Map<string, OfferRow>();
   for (const o of offers) {

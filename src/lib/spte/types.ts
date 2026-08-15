@@ -100,6 +100,41 @@ export interface Uncertainty {
   confidence: number;
 }
 
+/**
+ * A DOUBT THE THREAD IS CARRYING - durable, with the state machine that bounds it.
+ *
+ * Uncertainty used to live for exactly one turn. `verified.uncertain` is rebuilt
+ * from the CURRENT message, and `digest.depositKnown` is a regex over ALL inbound
+ * text, so the moment the ambiguous message became history the engine decided it
+ * knew the deposit again - on the very reading it had just told itself not to
+ * trust. Worse, `policy.depositKnown` OR-ed in a scan of the durable model notes
+ * that the per-turn ambiguity never suppressed, so `present` became legal on a
+ * reading nobody had confirmed.
+ *
+ * So the doubt is a FACT OF THE THREAD, not a property of a frame:
+ *
+ *   open    - the model flagged it; the question has not gone out yet.
+ *   waiting - we asked, and the thread WAITS (the owner's second half:
+ *             "then wait for the shop answer").
+ *
+ * `turns` is the bound, and it is arithmetic - deterministic code owns the state
+ * machine, the model owns every judgement about MEANING (did they answer?).
+ * Without a bound a shop that never replies would freeze a thread forever.
+ */
+export interface PendingConfirm {
+  subject: ConfirmSubject;
+  /** The reading we refuse to latch until the shop settles it. */
+  reading?: string;
+  /** The confirming question, in the traveller's voice. */
+  question: string;
+  /** The model's own confidence that this is worth asking about, carried so a
+   *  doubt raised three turns ago still sorts against a fresh one. */
+  confidence?: number;
+  state: "open" | "waiting";
+  /** Turns spent in the CURRENT state. Incremented once per engine turn. */
+  turns: number;
+}
+
 /** Where a shop stands with us, as a person would read it (W4.3). */
 export type ShopStance = "engaged" | "deflecting" | "declining" | "unclear";
 
@@ -186,8 +221,22 @@ export interface ThreadDigest {
    * THE CONFIRMING QUESTION CURRENTLY IN FLIGHT. Surfaced on the shop card as
    * "double-checking with the shop", so a traveller watching a thread pause on
    * a question can see WHY instead of watching an idle card.
+   *
+   * A MIRROR of the `pending` entry in state "waiting" - it is what the card
+   * reads, and it is written from the state machine rather than re-derived from
+   * the current frame. It used to be the latter, which is how a scheduled tick
+   * erased the wait: no inbound message meant nothing was uncertain, so the
+   * engine forgot it had asked and bargained without its answer.
    */
   awaitingConfirmation?: { subject: ConfirmSubject; question: string } | null;
+  /**
+   * EVERY DOUBT THIS THREAD IS CARRYING, durable (see PendingConfirm).
+   *
+   * A subject in here is NOT known - from any source, including the durable
+   * `facts` notes - until the model reads the shop's answer as an answer, or the
+   * wait runs out of turns.
+   */
+  pending?: PendingConfirm[];
   /**
    * THE PRICE WATCH HAS ALREADY BEEN ARMED FOR THIS THREAD (owner report 5 #9).
    *

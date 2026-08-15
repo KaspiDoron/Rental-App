@@ -4,7 +4,14 @@
 // freely among them and writes the message. Decision trees never dictate WHAT
 // to say - only what is FORBIDDEN.
 
-import type { ConfirmSubject, MoveKind, TurnContext, TurnArtifact, Uncertainty } from "./types";
+import type {
+  ConfirmSubject,
+  MoveKind,
+  PendingConfirm,
+  TurnContext,
+  TurnArtifact,
+  Uncertainty,
+} from "./types";
 import { menuUnresolved } from "../offer-options";
 import { alreadyAsked, unaskedObligations, type ThreadLedger } from "../thread/ledger";
 import type { ClaimSubject } from "../thread/claims";
@@ -94,6 +101,32 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   // (The out-of-stock branch moved ABOVE `declined` - see the note there. It
   // outranks every price move for the same reason it outranks a decline: a
   // shop that has just said it has no vehicle is not a shop to haggle with.)
+
+  // ...AND WAITS (W8.1). The half of the doctrine that was never enforced.
+  //
+  // The owner's rule has two clauses: ask when unsure, "THEN WAIT FOR THE SHOP
+  // ANSWER". Only the asking was implemented. `awaitingConfirmation` was
+  // recomputed from the CURRENT frame - it survived only while this turn's
+  // message was still ambiguous - so a scheduled tick, which carries no message
+  // at all, erased it and left `bargain` legal. The agent asked "you mean
+  // passport OR 4,000 cash?" and then, with no answer, pushed on price. Proven
+  // end to end.
+  //
+  // The wait is now a durable fact of the thread (digest.pending, state
+  // "waiting"), and this is where it binds: while it holds, the only legal moves
+  // are silence and - because a shop waiting on US is still owed its reply - an
+  // answer. No bargain, no present, no probe, no second question. It sits BELOW
+  // the terminal branches on purpose: a shop that declines or runs out of stock
+  // while we wait gets its goodbye, not a stare.
+  //
+  // The bound lives in digest.ts (CONFIRM_WAIT_TURNS): the state machine is
+  // arithmetic, and only the model decides whether their reply was an answer.
+  const waiting = waitingOn(ctx);
+  if (waiting) {
+    if (v.askedQuestion || v.askedLicense || v.askedLicensePhoto) moves.push("answer");
+    moves.push("silent");
+    return dedupe(moves);
+  }
 
   // ANSWER-FIRST when the shop asked something. This MUST precede bargain in the
   // ladder: coerceToLegal and the fallback both take legal[0], so if bargain led
@@ -240,7 +273,14 @@ export function legalMovesFor(ctx: TurnContext): MoveKind[] {
   }
 
   // A complete, priced deal -> present it to the traveller.
-  if (dealComplete(ctx)) moves.push("present");
+  //
+  // ...UNLESS SOMETHING IN IT IS STILL A GUESS. `present` is where a reading
+  // stops being an internal note and becomes the terms of the deal, so ANY
+  // subject the thread is carrying a doubt about - not only the deposit -
+  // withholds it. `confirm` sits above this in the ladder, so the thread's
+  // answer to "we are not sure" is to ask; the turn bound in digest.ts stops a
+  // doubt nobody resolves from holding the presentation forever.
+  if (dealComplete(ctx) && !(ctx.thread.digest.pending ?? []).length) moves.push("present");
 
   // DO NOT ASK WHAT WE HAVE ALREADY ASKED. A fact-question whose answer is still
   // outstanding is not a legal move - not discouraged in a prompt, ABSENT. This
@@ -390,13 +430,60 @@ export function confirmableSubjects(ctx: TurnContext): Uncertainty[] {
   const asked = new Set<ConfirmSubject>(ctx.thread.digest.confirmAsked ?? []);
   const seen = new Set<ConfirmSubject>();
   const out: Uncertainty[] = [];
-  for (const u of ctx.inbound.verified.uncertain ?? []) {
+  // THIS TURN'S DOUBTS, AND THE THREAD'S. `verified.uncertain` is rebuilt from
+  // the current message, so on its own it means the engine forgets it was unsure
+  // the moment the ambiguous message scrolls into history - and then acts on the
+  // reading it had distrusted. The durable half (digest.pending) is what makes
+  // "unsure" a property of the negotiation instead of a property of one frame.
+  const durable: Uncertainty[] = (ctx.thread.digest.pending ?? [])
+    .filter((p) => p.state === "open")
+    .map((p) => ({
+      subject: p.subject,
+      reading: p.reading ?? "",
+      question: p.question,
+      // The model's own number, carried with the doubt, so the
+      // least-understood-first ordering in `confirmSubjectFor` still means
+      // something for a doubt raised three turns ago. 1 (fully confident, so
+      // last in line) only when a stored row predates the field.
+      confidence: typeof p.confidence === "number" ? p.confidence : 1,
+    }));
+  for (const u of [...(ctx.inbound.verified.uncertain ?? []), ...durable]) {
     if (asked.has(u.subject) || seen.has(u.subject)) continue;
     if (!u.question || !u.question.trim()) continue;
     seen.add(u.subject);
     out.push(u);
   }
   return out;
+}
+
+/**
+ * THE DOUBT THIS THREAD IS WAITING ON AN ANSWER FOR, if any.
+ *
+ * Read from the durable state machine only. A turn with no inbound message
+ * (a tick, a wakeup, a swarm poke) must see exactly what the previous turn left
+ * behind - that is the entire difference between waiting and forgetting.
+ */
+export function waitingOn(ctx: TurnContext): PendingConfirm | undefined {
+  return (ctx.thread.digest.pending ?? []).find((p) => p.state === "waiting");
+}
+
+/**
+ * IS THIS FACT STILL UNCONFIRMED - from ANY source?
+ *
+ * A subject carried in `digest.pending` (flagged this turn or ten turns ago) is
+ * one we have decided we do not understand. Until the shop settles it, or the
+ * turn bound releases it, no reader may report it as known: not the thread-facts
+ * regex, not the ledger's typed claim, and not the durable model notes.
+ *
+ * That last one was the hole the audit found. `depositKnown` OR-ed in a scan of
+ * `digest.facts` that the per-turn ambiguity never suppressed, so the same
+ * context with the deposit line in the model's notes read as KNOWN despite the
+ * ambiguity - and `present` became legal on a reading nobody had confirmed.
+ */
+function unconfirmed(ctx: TurnContext, subject: ConfirmSubject): boolean {
+  if ((ctx.thread.digest.pending ?? []).some((p) => p.subject === subject)) return true;
+  // The live read still counts on the turn it lands, before anything is merged.
+  return (ctx.inbound.verified.uncertain ?? []).some((u) => u.subject === subject);
 }
 
 /** The single subject a `confirm` move is about - the most-doubted one first.
@@ -595,6 +682,11 @@ function dealComplete(ctx: TurnContext): boolean {
 // scan was permanently false (facts was always []), which is why the logistics
 // close-out never triggered. Keep the facts scan as a belt-and-braces OR.
 function depositKnown(ctx: TurnContext): boolean {
+  // A HALF-READ DEPOSIT IS NOT A KNOWN ONE, WHICHEVER SOURCE SAYS IT IS. The
+  // suppression has to sit here, above the OR, because the `facts` scan below
+  // re-latched the subject from the model's own durable notes on every later
+  // turn - the ambiguity had no way to reach it. See `unconfirmed`.
+  if (unconfirmed(ctx, "deposit")) return false;
   return (
     ctx.thread.digest.depositKnown === true ||
     ctx.thread.digest.facts.some((f) => /deposit/i.test(f))

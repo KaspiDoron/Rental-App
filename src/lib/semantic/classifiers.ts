@@ -160,6 +160,72 @@ export function readComprehension(
 }
 
 // ---------------------------------------------------------------------------
+// DID THEY ANSWER THE QUESTION WE ASKED? - the other half of the confirm
+// doctrine, and the half that had no reader at all.
+//
+// The owner: "if the ai agents not sure about something - they should ask the
+// shop 'wait, you mean that I can deposit a passport or cash 4000?' THEN WAIT
+// FOR THE SHOP ANSWER."
+//
+// Waiting only means something if something can end the wait, and "did this
+// reply answer my question" is a judgement about MEANING - the shop answers
+// "yes both ok", "up to you", "passport better but cash also fine", "we take
+// 4000", a photo of a price board, or a sentence about something else entirely.
+// A keyword test over that is the phrase-list mistake in its purest form, so
+// this is a schema-validated model read like every other judgement here. The
+// STATE MACHINE around it (are we waiting, for what, for how many turns) stays
+// deterministic in spte/digest.ts, because a bound is arithmetic.
+// ---------------------------------------------------------------------------
+
+export const ConfirmAnswer = z.object({
+  /** Does this message answer the question we put to them? */
+  answered: z.boolean(),
+  /** What they settled it as, in their words - for the thread's memory. */
+  answer: z.string().max(200).nullable(),
+  /**
+   * They responded to it and it is STILL not clear (they repeated the same
+   * ambiguous thing, or answered a different question). Answered=false covers
+   * "they talked about something else"; this covers "they tried and we are no
+   * wiser", which must not end the wait either.
+   */
+  stillUnclear: z.boolean(),
+  confidence: z.number().min(0).max(1),
+});
+export type ConfirmAnswer = z.infer<typeof ConfirmAnswer>;
+
+export function readConfirmAnswer(
+  question: string,
+  text: string,
+  context?: string,
+  options?: { budgetMs?: number; tier?: "premium"; once?: boolean }
+): Promise<SemanticOutcome<ConfirmAnswer>> {
+  return semanticParse({
+    schema: ConfirmAnswer,
+    shape:
+      '{"answered": boolean, "answer": string|null, "stillUnclear": boolean, "confidence": 0..1}',
+    instructions:
+      "We are the traveller's agent. We asked this shop ONE question and have been waiting for " +
+      `their reply. OUR QUESTION WAS: "${question.slice(0, 220)}"\n` +
+      "Decide whether the message below ANSWERS that question. Answering it does not require " +
+      "repeating it: 'yes both are ok', 'up to you', 'passport is better but cash also fine', " +
+      "'4000 only', a correction, or a plain 'yes' to a yes/no question all answer it. Talking " +
+      "about something else - the price, the pickup time, a greeting, a photo of a bike - does " +
+      "NOT, however friendly it is. If they responded but we are still no wiser (they repeated " +
+      "the same ambiguous wording, or answered a different question), set answered false and " +
+      "stillUnclear true. Report what they settled it as in their own words when they did " +
+      "settle it, and never invent an answer they did not give.",
+    text,
+    context,
+    options: {
+      budgetMs: options?.budgetMs ?? 6_000,
+      maxTokens: 250,
+      once: options?.once,
+      ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // CALL INTENT (M14) - "can we speak?", "phone?", a missed-call frame.
 // ---------------------------------------------------------------------------
 

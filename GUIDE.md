@@ -49,7 +49,15 @@ This lets you paste all other keys inside the app and have them stick.
    saved keys.)
 5. In Supabase, open **SQL Editor**, paste the contents of
    `supabase/schema.sql` from this repo, and click **Run**.
-6. Redeploy the Cloud Run web service so the new variables load.
+6. In the same SQL Editor, run `supabase/retention.sql`. **This one is not
+   optional and it is not only about disk space.** It creates the nightly prune
+   job *and* revokes the `prune_old_rows` grant that PostgreSQL hands to
+   PUBLIC by default - without it, anyone holding your public anon key (it ships
+   inside every browser) can call `/rest/v1/rpc/prune_old_rows` with
+   `retain_days: 0` and delete your operational history. The file is idempotent;
+   re-run it any time. Verify from **Admin -> Keys -> Connection tests ->
+   "Check anon RPC lockdown"**, which asks your real database.
+7. Redeploy the Cloud Run web service so the new variables load.
 
 Now sign in to your live app with `kaspidoron@gmail.com` (the owner signs in
 with email only - no phone or terms needed), open **Admin -> Keys**, and you'll
@@ -240,7 +248,11 @@ the merge instead of before is the one sequence that can half-land.
    `schema.sql` deletes duplicate *pending* `wa_outbox` rows and recreates an
    index - expected, but it touches data, so do it at a quiet moment.
 2. **Run `supabase/schema.sql`** in the Supabase SQL editor, whole file. There
-   is no in-app way to do this; PostgREST cannot run DDL.
+   is no in-app way to do this; PostgREST cannot run DDL. **Then run
+   `supabase/retention.sql`** - it re-applies the `prune_old_rows` lockdown
+   (revoked from `anon`/`authenticated`, granted to `service_role`) as part of
+   creating the function, and raises an exception rather than finishing quietly
+   if the revoke did not take.
 3. **Check the backlog before you wake the drain:**
    `select count(*), min(not_before) from wa_outbox where not_before <= now();`
    Anything older than a few hours would have been sent the moment the new

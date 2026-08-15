@@ -32,15 +32,82 @@ function store(): Map<string, Window> {
   return (globalThis.__wd_ratelimit__ ??= new Map());
 }
 
-/** Best-effort client IP from the proxy headers Cloud Run / CDNs set. */
+/**
+ * The one bucket every caller we cannot identify shares.
+ *
+ * FAIL CLOSED, NOT OPEN. The old code answered "unknown" for a caller with no
+ * usable header, which reads the same but was reached from the WRONG side: it
+ * was the fallback after trusting attacker-written values. Now it is the answer
+ * whenever the platform's own value is absent or unparseable, and everyone who
+ * lands here shares a single window - a limiter that over-refuses costs one
+ * retry; one that under-refuses is the bug this file exists to prevent.
+ */
+export const SHARED_BUCKET = "unattributable";
+
+/**
+ * How many proxy hops sit BETWEEN the real client and this process, each of
+ * which appends its own address AFTER the client's. See clientIp.
+ *
+ * Cloud Run + a Cloud Run domain mapping (what this app deploys onto - see
+ * .github/workflows/deploy-gcp.yml and docs/LAUNCH-wheeldeal.pro.md, where the
+ * apex A/AAAA records point straight at Google) is ZERO: the Google front end
+ * appends the client address and nothing follows it. Put a global external
+ * Application Load Balancer, Cloudflare or any other proxy in front and each
+ * one appends its own address too - set TRUSTED_PROXY_HOPS to how many, or the
+ * app keys its limits on that proxy's constant address (one shared bucket:
+ * over-strict, never exploitable).
+ */
+function trustedHops(): number {
+  const n = Number(process.env.TRUSTED_PROXY_HOPS ?? 0);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 8) : 0;
+}
+
+/** An IPv4/IPv6 literal, with the optional `:port` and `[...]` bracket form removed. */
+function normalizeIp(raw: string | undefined): string | null {
+  let v = String(raw ?? "").trim();
+  if (!v) return null;
+  // "[2001:db8::1]:443" / "1.2.3.4:5678" - the port is noise for a rate key and
+  // keeping it would let one client occupy many buckets.
+  if (v.startsWith("[")) v = v.slice(1, v.indexOf("]") > 0 ? v.indexOf("]") : undefined);
+  else if ((v.match(/:/g) ?? []).length === 1) v = v.split(":")[0];
+  const ipv4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+  const ipv6 = /^[0-9A-Fa-f:]+$/;
+  if (!ipv4.test(v) && !(v.includes(":") && ipv6.test(v))) return null;
+  return v.toLowerCase();
+}
+
+/**
+ * The caller's IP, read from the ONE position this platform actually guarantees.
+ *
+ * HOP 0 IS A VALUE THE ATTACKER WRITES. Google's front end (Cloud Run, and any
+ * Google load balancer in front of it) does not replace X-Forwarded-For - it
+ * APPENDS the address it observed to whatever the caller already sent. So a
+ * request carrying `X-Forwarded-For: 1.2.3.4` arrives as `1.2.3.4, <real ip>`,
+ * and the leftmost entry - the one this function used to return - is chosen by
+ * the client. Rotating it per request bypassed every IP-keyed limit in the app,
+ * including the forgot-password throttle whose entire job is to stop a known
+ * account being locked out and its inbox flooded.
+ *
+ * The trustworthy position is therefore the RIGHT-hand end: the last entry was
+ * written by infrastructure we run behind, and nothing a client sends can move
+ * it. `TRUSTED_PROXY_HOPS` shifts left by the number of extra proxies that
+ * appended after it (0 here - see above); anything that cannot be resolved to a
+ * real address becomes the shared bucket rather than a free pass.
+ *
+ * The x-real-ip / cf-connecting-ip / fly-client-ip fallbacks are GONE on
+ * purpose: nothing in this deployment writes them, so they were pure
+ * attacker-controlled input wearing a trustworthy name.
+ */
 export function clientIp(req: Request): string {
-  const h = req.headers;
-  const xff = h.get("x-forwarded-for");
-  if (xff) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first;
-  }
-  return h.get("x-real-ip") || h.get("cf-connecting-ip") || h.get("fly-client-ip") || "unknown";
+  const xff = req.headers.get("x-forwarded-for");
+  if (!xff) return SHARED_BUCKET;
+  const hops = xff
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const idx = hops.length - 1 - trustedHops();
+  if (idx < 0) return SHARED_BUCKET;
+  return normalizeIp(hops[idx]) ?? SHARED_BUCKET;
 }
 
 export interface RateVerdict {

@@ -123,6 +123,23 @@ function applyContraction(text: string, style: "contracted" | "plain" | "mixed")
 }
 
 /**
+ * Put a politeness particle where a NATIVE writer puts it: at the end of a
+ * sentence, inside its final punctuation ("Thanks krub!", "Salamat po!",
+ * "How much per day po?").
+ *
+ * W4.7b: it used to be glued onto the greeting - "Hi there po!", "Hi ka!" - a
+ * hybrid nobody writes in either language, and a bot tell in the opposite
+ * direction from the repeated greeting the owner reported. Thai and Filipino
+ * particles attach to a SENTENCE, not to an English hello; that is also exactly
+ * what compileStyleDirectives has been telling the LLM composers to do all
+ * along, so the two halves of the copy engine now agree.
+ */
+function attachParticle(sentence: string, particle: string): string {
+  const m = sentence.match(/^([\s\S]*?)([!?.…]+)\s*$/);
+  return m ? `${m[1]} ${particle}${m[2]}` : `${sentence} ${particle}`;
+}
+
+/**
  * Compile one COMPLETE cold-outreach opener. Every structural dimension comes
  * from the seeded matrix, so a 40-shop batch (one seed per vendor) produces 40
  * different skeletons - the direct kill for the "same message to every shop"
@@ -132,12 +149,22 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   const s = drawStyle(seed, region);
   const vehicle = s.vehiclePhrase(vehicleWording(rfq));
   const duration = s.durationPhrase(Math.max(1, rfq.durationDays));
-  // A politeness PARTICLE (po / krub / ka) attaches to the greeting only. The
-  // regional THANK-YOU (Salamat! / Cảm ơn! / gender-matched Thai) is a terminal
-  // sign-off ONLY - it can never be glued onto a greeting (the "Hello! cam on"
-  // bug). Thanks wins the sign-off slot when present.
-  const greet = s.particle ? s.greeting.replace(/!+$/, "") + ` ${s.particle}!` : s.greeting;
-  const signOff = s.regionalThanks ?? s.signOff;
+  // THE GREETING IS NEVER THE PARTICLE'S HOST (W4.7b). The regional THANK-YOU
+  // (Salamat! / Cảm ơn! / gender-matched Thai) was already terminal-only - it
+  // can never be glued onto a greeting (the "Hello! cam on" bug) - and the
+  // particle now follows the same rule for the same reason: it rides the
+  // closing sign-off when there is one ("Salamat po!", "Thanks krub!") and the
+  // ask sentence when there is not ("How much per day po?"). Thanks still wins
+  // the sign-off slot when present, and a thank-you that ALREADY carries the
+  // particle ("Khop khun krub!") never gets a second one.
+  const greet = s.greeting;
+  let ask = s.ask;
+  let signOff = s.regionalThanks ?? s.signOff;
+  if (s.particle) {
+    const alreadyHas = new RegExp(`(^|\\s)${s.particle}\\b`, "i").test(signOff);
+    if (signOff && !alreadyHas) signOff = attachParticle(signOff, s.particle);
+    else if (!signOff) ask = attachParticle(ask, s.particle);
+  }
 
   // A VEHICLE PHRASE IS A PREDICATE, SO GIVE IT A SUBJECT.
   //
@@ -169,20 +196,20 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
 
   let body: string;
   if (s.order === "greet-intro-ask") {
-    body = `${greet} ${intro} ${s.ask}`;
+    body = `${greet} ${intro} ${ask}`;
   } else if (s.order === "greet-detail-ask") {
     // Detail first, no self-intro at all - a traveller who gets to the point
     // and is still a person about it.
-    body = `${greet} ${standalone} ${s.ask}`;
+    body = `${greet} ${standalone} ${ask}`;
   } else if (s.order === "intro-ask-plain") {
     // Two sentences, no greeting: the shortest shape that is still whole.
-    body = `${standalone} ${s.ask}`;
+    body = `${standalone} ${ask}`;
   } else if (s.order === "greet-ask-intro") {
     // The detail follows the ask as its own SENTENCE. The old form used
     // `s.selfIntro` as a boolean and threw its text away, keeping the
     // fragment either way - in brackets when an intro existed, bare when it
     // did not.
-    body = `${greet} ${s.ask} ${intro}`;
+    body = `${greet} ${ask} ${intro}`;
   } else {
     // "intro-first": a terse, substance-led opener (a busy traveller getting
     // straight to the point) - the warmth is the appended sign-off + emoji, not
@@ -191,7 +218,7 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
     // defect "...best price? Hi there btw! Thanks!". This variant now simply
     // omits the greeting word, keeping it structurally distinct from the two
     // greet-first orders without ever misplacing a greeting.
-    body = `${intro} ${s.ask}`;
+    body = `${intro} ${ask}`;
   }
 
   // WHAT ELSE THE TRAVELLER ASKED FOR. Until now this opener rendered the

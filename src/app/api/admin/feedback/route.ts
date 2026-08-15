@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireManagement } from "@/lib/session";
-import { sbSelect, sbUpdate, sbDelete } from "@/lib/runtime-config";
+import { sbSelect, sbUpdate, sbDelete, sbCountDark } from "@/lib/runtime-config";
 
 // In-app feedback inbox with a triage WORKFLOW: every report has a status
 // (open / in-progress / resolved / dismissed) and an owner note, so feedback
@@ -18,6 +18,21 @@ import { sbSelect, sbUpdate, sbDelete } from "@/lib/runtime-config";
  */
 const IMAGES_PER_REPORT = 2;
 const IMAGES_TOTAL = 24;
+
+/** How many reports one page carries, and the most a caller may ask for. */
+const PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 200;
+
+/** A caller-supplied integer, or the fallback. Never NaN, never unbounded. */
+function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
+  // The blank check is load-bearing: `Number("")` is 0, not NaN, so an absent
+  // parameter would clamp to `min` and serve a one-row page.
+  const s = String(raw ?? "").trim();
+  if (!s) return fallback;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
 
 const CATEGORIES = ["bug", "ui", "performance", "crash", "suggestion", "question", "other"];
 
@@ -37,15 +52,31 @@ export async function GET(req: Request) {
   const select =
     "select=id,category,body,reporter_email,is_real_issue,severity,summary,triage_reason,image_count,status,owner_note,created_at";
 
-  const [rows, allCategories] = await Promise.all([
+  // "FULLY VISIBLE TO EACH AND EVERY FEEDBACK" - AND IT WAS CAPPED AT 100.
+  //
+  // The read was a hard `limit=100` with no pagination and no way to ask for
+  // the next page, and the response then reported `total: rows.length` - the
+  // PAGE SIZE - which the panel renders as a metric labelled "Total". With 101
+  // reports the 101st-oldest was unreachable through any UI, the owner was told
+  // he had exactly 100, and nothing anywhere said otherwise. The window is now
+  // a real one (`offset` + `limit`) and `total` is a real count.
+  const limit = clampInt(url.searchParams.get("limit"), PAGE_SIZE, 1, MAX_PAGE_SIZE);
+  const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1_000_000);
+  const categoryFilter = filtered ? `&category=eq.${encodeURIComponent(category)}` : "";
+
+  const [rows, allCategories, total] = await Promise.all([
     sbSelect<{ id: number; image_count: number; category: string }>(
       "feedback",
-      `${select}${filtered ? `&category=eq.${encodeURIComponent(category)}` : ""}&order=created_at.desc&limit=100`
+      `${select}${categoryFilter}&order=created_at.desc&offset=${offset}&limit=${limit}`
     ),
     sbSelect<{ category: string | null }>(
       "feedback",
       "select=category&order=created_at.desc&limit=1000"
     ).catch(() => [] as { category: string | null }[]),
+    // THE REAL NUMBER, and `null` rather than a lie when it cannot be read.
+    // `sbCount` answers 0 on any failure, which on a counter labelled "Total"
+    // means an outage renders as "you have no feedback".
+    sbCountDark("feedback", `select=id${categoryFilter}`),
   ]);
 
   const byCategory: Record<string, number> = {};
@@ -115,7 +146,18 @@ export async function GET(req: Request) {
     categories: CATEGORIES,
     /** Which filter produced this list, so the panel cannot claim another. */
     category: filtered ? category : null,
-    total: rows.length,
+    /** EVERY report matching the current filter - not the page size. `null`
+     *  means the count could not be read, which a panel must render as
+     *  "unknown" rather than as a number it made up. */
+    total,
+    /** How many are on THIS page, and where the page sits. */
+    shown: rows.length,
+    offset,
+    limit,
+    /** Is there another page? Falls back to a full page meaning "probably",
+     *  so an unreadable count still offers the owner a way forward. */
+    hasMore: total != null ? offset + rows.length < total : rows.length === limit,
+    nextOffset: offset + rows.length,
   });
 }
 

@@ -96,7 +96,15 @@ describe("explicit traveller input beats LLM inference", () => {
   it("/api/profile overrides the DURATION, not only the date", () => {
     const route = read("src/app/api/profile/route.ts");
     expect(route).toMatch(/function requestedDays/);
-    expect(route).toMatch(/\.\.\.\(days \? \{ durationDays: days \} : \{\}\)/);
+    // W9 - REWRITTEN, INTENT PRESERVED. The pin was `...(days ? {durationDays:
+    // days} : {})`, which was correct only while the page sent the field ONLY
+    // when touched - and that gate is exactly what stopped the default search
+    // from carrying any window at all. The window now travels on every typed
+    // search and `windowExplicit` says which half was set, so the override the
+    // traveller SET still wins outright while the one they merely saw does not
+    // overrule their own words. Same doctrine, one more bit on the wire.
+    expect(route).toMatch(/\.\.\.\(days && explicit\.durationDays \? \{ durationDays: days \} : \{\}\)/);
+    expect(route).toMatch(/function explicitWindow/);
     // ...and the return date is derived from the OVERRIDDEN pair, by the one
     // writer - never computed from the profiler's number.
     expect(route).toMatch(/deriveReturnDate\(\{/);
@@ -108,7 +116,13 @@ describe("explicit traveller input beats LLM inference", () => {
     // The old precedence let an invented 1 beat the traveller's 3.
     expect(agents).not.toMatch(/clampDuration\(rfq\.durationDays \|\| durationHint\)/);
     expect(agents).toMatch(/const hinted = requestedDuration\(durationHint\)/);
-    expect(agents).toMatch(/clampDuration\(hinted \?\? rfq\.durationDays\)/);
+    // W9 - REWRITTEN, INTENT PRESERVED. Was `clampDuration(hinted ??
+    // rfq.durationDays)`. The precedence it pins is unchanged - the picker
+    // outranks the parse - but the LAST resort is no longer a hard-coded 3
+    // buried in clampDuration: it is the day count the window control was
+    // showing when the traveller pressed the button, which is the only number
+    // they can be said to have seen. Executed coverage in w9-duration-truth.
+    expect(agents).toMatch(/clampDuration\(hinted \?\? stated \?\? defaultDurationDays\)/);
   });
 
   it("the profiler is no longer FORCED to invent a length", () => {
@@ -162,6 +176,24 @@ describe("the mid-thread flip: a composer cannot outrank the promise", () => {
     // Both stamp sites carry the reconciled value, never the raw client rfq.
     expect(route).not.toMatch(/rfq: body\.rfq \?\? null/);
     expect((route.match(/rfq: settledRfq \?\? null/g) ?? []).length).toBe(2);
+  });
+
+  // W9 - THE BAN ABOVE READ THE WRONG FILE, WHICH IS WORSE THAN NOT EXISTING.
+  //
+  // `rfq: body.rfq ?? null` - the exact anti-pattern the assertion above bans -
+  // lived verbatim in the SIBLING route, /api/outreach/mass, and no test read
+  // that file. Mass is the primary hunt send path (page.tsx calls it for the
+  // whole batch), so the guarded route was the quiet one and the unguarded one
+  // sent the volume. A ban is only as good as the files it is pointed at.
+  it("...INCLUDING the mass route, which sends the whole hunt", () => {
+    // Comments stripped: the post-mortem above the fix quotes the banned line.
+    const route = read("src/app/api/outreach/mass/route.ts").replace(/\/\/.*$/gm, "");
+    expect(route, "the banned stamp is back on the mass path").not.toMatch(
+      /rfq: body\.rfq \?\? null/
+    );
+    expect(route).toMatch(/const settledRfq = isNewIntro/);
+    expect(route).toMatch(/promisedRfq\(digits, session\.email, body\.rfq as StructuredRFQ/);
+    expect(route).toMatch(/rfq: settledRfq \?\? null/);
   });
 
   it("promisedRfq degrades to the client rfq - it can only pull toward the promise", () => {

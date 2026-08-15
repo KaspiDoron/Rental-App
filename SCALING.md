@@ -253,7 +253,9 @@ concurrent Realtime connections (cap 500). Egress over 250 GB is **$0.09/GB**.
    is idempotent and carries the hot-path indexes.
 4. Run `supabase/retention.sql` once. It prunes 90-day-old rows and rolls usage
    up into daily summaries, which is what keeps the tables (and the bill) from
-   growing forever.
+   growing forever - and it revokes the default PUBLIC grant on
+   `prune_old_rows`, without which anyone holding the browser-side anon key can
+   call that function and delete your history.
 
 Console steps: Supabase Dashboard -> your project -> Settings -> Add-ons ->
 Compute size -> pick the tier -> confirm. It restarts the database, so do it at
@@ -295,6 +297,24 @@ What those numbers actually mean:
   month. A single warm `--min-instances 1` container costs roughly
   **$10-12/month** - that is most of your current Google bill, and it buys you
   no cold starts.
+
+**Where the client's IP comes from, and why it matters here.** Every
+sessionless limit in the app (forgot-password, feedback, the billed Places
+proxy) is keyed on the caller's address, and Google's front end does **not**
+replace `X-Forwarded-For` - it **appends** the address it observed to whatever
+the caller already sent. So `X-Forwarded-For: 1.2.3.4` arrives as
+`1.2.3.4, <real ip>`: the *left* end is written by the attacker and the *right*
+end is written by Google. `lib/rate-limit.ts` reads the right end. Today that is
+the last entry, because this service is reached through a **Cloud Run domain
+mapping** (`wheeldeal.pro` A/AAAA records point straight at Google - see
+`docs/LAUNCH-wheeldeal.pro.md`), with no load balancer or CDN in front.
+
+If you ever put one in front - a global external Application Load Balancer,
+Cloudflare, anything - **set `TRUSTED_PROXY_HOPS`** to the number of addresses
+that proxy appends after the client's (a Google external ALB appends its own, so
+`1`). Get it wrong in that direction and nothing is exploitable: the app keys
+its limits on the proxy's constant address, which is one shared bucket - strict,
+not open. The one thing it will never do is trust hop 0.
 
 **One deliberate non-decision:** the deploy does **not** pass
 `--no-cpu-throttling`, and that is correct. With request-based billing, the CPU
@@ -660,7 +680,13 @@ document.
 
 1. **Retention is owner-run SQL.** `supabase/retention.sql` exists and is
    idempotent, but nothing runs it for you. Until you paste it into the SQL
-   editor once, your tables grow forever and so does the bill.
+   editor once, your tables grow forever and so does the bill - **and the
+   `prune_old_rows` function stays callable by the public anon key**, because
+   PostgreSQL grants EXECUTE to PUBLIC by default and Supabase publishes that
+   over the Data API. The revoke now lives in the same file, immediately after
+   the CREATE, so running it once closes both. Admin -> Keys -> Connection tests
+   -> **"Check anon RPC lockdown"** asks your live database which state it is in
+   (and says "unknown" rather than green when it cannot tell).
 2. **There is no error tracking.** Nothing in this codebase talks to Sentry or
    any equivalent. The three event kinds that `PRODUCTION-READINESS.md` says
    should page someone - `wa-send-dropped`, `wa-ban-risk`,

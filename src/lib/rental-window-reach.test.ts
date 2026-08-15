@@ -117,13 +117,26 @@ describe("the window is asked once, for both input modes", () => {
   });
 
   it("the typed path posts the window it is showing", () => {
-    expect(page).toMatch(/startDate: startDate \|\| planWindow\.startDate, durationDays: days/);
+    expect(page).toMatch(/startDate: startDate \|\| planWindow\.startDate,/);
+    expect(page).toMatch(/durationDays: days,/);
   });
 
-  it("...but only once the traveller has actually set it", () => {
-    // An untouched default must not out-rank a date stated in the request
-    // itself ("from the 20th for a week"), which the profiler does parse.
-    expect(page).toMatch(/windowTouched && !structuredFields/);
+  // W9 - REWRITTEN, INTENT PRESERVED. This asserted `windowTouched &&
+  // !structuredFields`, i.e. that the window is posted ONLY once touched. That
+  // gate was the defect: a typed search with the default window sent NEITHER
+  // field, so the shops got no start date at all and a hard-coded 3-day
+  // duration while the card on screen said 4. The intent it was protecting - an
+  // untouched default must not out-rank a date stated in the request itself
+  // ("from the 20th for a week") - is now carried by `windowExplicit` instead of
+  // by silence, and per control rather than for both at once.
+  it("...and says which half the traveller actually set, so a default cannot out-rank prose", () => {
+    expect(page).toMatch(
+      /windowExplicit: \{ startDate: startTouched, durationDays: daysTouched \}/
+    );
+    // The two controls set two independent flags.
+    expect(page).toMatch(/setStartTouched\(true\)/);
+    expect(page).toMatch(/setDaysTouched\(true\)/);
+    expect(page, "one flag for two controls is the bug").not.toMatch(/setWindowTouched\(/);
   });
 });
 
@@ -154,8 +167,13 @@ describe("the server says what it did to the date", () => {
     // and the return date is then derived from the reconciled pair by the one
     // writer in lib/rental-window - never from the profiler's guess.
     expect(route).toMatch(/requestedStart\(body\?\.startDate\)/);
-    expect(route).toMatch(/requestedDays\(body\?\.durationDays\)/);
-    expect(route).toMatch(/\.\.\.\(days \? \{ durationDays: days \} : \{\}\)/);
+    expect(route).toMatch(/requestedDays\(durationDays\)/);
+    // W9 - REWRITTEN, INTENT PRESERVED. The pin was `...(days ? {durationDays:
+    // days} : {})`: any day count on the wire overrode the parse. The wire now
+    // carries the window on EVERY typed search (it has to - the traveller sees
+    // it), so "present" no longer means "explicit"; `windowExplicit` does. The
+    // override the traveller SET still wins outright, which is the intent.
+    expect(route).toMatch(/\.\.\.\(days && explicit\.durationDays \? \{ durationDays: days \} : \{\}\)/);
     expect(route).toMatch(/deriveReturnDate\(\{/);
     expect(route).not.toMatch(/returnDate: addDays\(start, profiled\.durationDays\)/);
   });
@@ -175,7 +193,10 @@ describe("the server says what it did to the date", () => {
   });
 
   it("the picker then shows the window the search actually ran with", () => {
-    expect(page).toMatch(/if \(pData\.rfq\?\.startDate\) \{/);
-    expect(page).toMatch(/setStartDate\(pData\.rfq\.startDate\)/);
+    expect(page).toMatch(/if \(pData\.rfq\?\.startDate\) setStartDate\(pData\.rfq\.startDate\)/);
+    // W9: ...and showing it is NOT the traveller having set it. Marking the
+    // control touched here meant search #2 overruled a date search #2's own
+    // words stated.
+    expect(page).not.toMatch(/setStartTouched\(true\);\s*[\r\n]\s*\}/);
   });
 });

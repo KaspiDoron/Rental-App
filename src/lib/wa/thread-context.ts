@@ -24,6 +24,11 @@ import type { StructuredRFQ } from "../types";
 import { citedDurationDays, promiseOf, reconcileRfq, rfqDrifted } from "./rental-params";
 
 export interface ThreadRaw extends GateRaw {
+  /** The row's stamped rfq. On the value this resolver RETURNS as `ctx` this is
+   *  always the reconciled promise, never the raw stamp - see `ctx` below. */
+  rfq?: StructuredRFQ | null;
+  /** Set when the rfq on this row came from anchor RECOVERY, not from the send. */
+  rfqRecovered?: boolean;
   sender?: string;
   region?: string;
   vendorName?: string;
@@ -36,8 +41,22 @@ export interface ThreadContext {
   /** Ingestible: a real shop thread inside its window. */
   ok: boolean;
   reason: IngestReason;
-  /** The newest outbound raw that carries an RFQ (not merely the newest row). */
+  /** The newest outbound raw that carries an RFQ (not merely the newest row),
+   *  reconciled against the thread's opening promise. */
   rfq: StructuredRFQ | null;
+  /**
+   * The anchor row's raw - identity, sender, round, region - WITH `rfq` replaced
+   * by the reconciled value above.
+   *
+   * W9: it used to hand back the raw drifted row while `.rfq` carried the
+   * reconciled promise, and the two callers disagreed about which one to read:
+   * the wakeup/tick path took `resolved.rfq`, the LIVE inbound turn took
+   * `ctx.rfq`. So one thread answered a scheduled follow-up on 3 days and the
+   * shop's own reply on 1 - the mid-thread flip, on the path the traveller
+   * actually watches. A context whose `rfq` disagrees with `.rfq` is a footgun
+   * no call site should have to know about, so the disagreement is removed
+   * HERE: `ctx.rfq === rfq`, always, on every branch including self-heal.
+   */
   ctx: ThreadRaw | null;
   vendorId?: string;
   vendorName?: string;
@@ -173,12 +192,22 @@ export async function resolveThreadContext(
       // recovery per thread, not one per inbound message) and the WA doctor
       // reports a healthy anchor from here on. Best-effort: if the write fails
       // we still proceed with THIS turn using the recovered rfq.
+      // W9: THE HEAL IS APPLIED IN MEMORY BEFORE IT IS APPLIED IN THE DB.
+      //
+      // This used to hand sbUpdate a fresh object literal and return
+      // `target.raw` untouched, so the caller got a ctx with NO rfq at all -
+      // past the `!resolved.rfq` guard (which reads the other field), straight
+      // into `rfq.vehicleClass` on the live inbound path. The repaired row IS
+      // the context from here on, so build it once and use it for both.
+      const healed: ThreadRaw | null = target?.raw
+        ? { ...target.raw, rfq: recovered, rfqRecovered: true }
+        : null;
       if (target) {
         const { sbUpdate } = await import("../runtime-config");
         await sbUpdate(
           "whatsapp_messages",
           `id=eq.${target.id}`,
-          { raw: { ...(target.raw ?? {}), rfq: recovered, rfqRecovered: true } }
+          { raw: healed ?? { rfq: recovered, rfqRecovered: true } }
         ).catch(() => {});
       }
       // Never silent: the repair is an event the owner can see in the doctor.
@@ -195,7 +224,7 @@ export async function resolveThreadContext(
         ok: gate.ok,
         reason: gate.reason,
         rfq: recovered,
-        ctx: (target?.raw ?? null) as ThreadRaw | null,
+        ctx: healed,
         vendorId: identity?.raw?.vendorId,
         vendorName: identity?.raw?.vendorName,
         region: identity?.raw?.region || undefined,
@@ -225,6 +254,12 @@ export async function resolveThreadContext(
   if (rfqDrifted(anchorRfq, promise)) {
     // Never silent: a drift means some other surface wrote an rfq into this
     // thread, and the owner should be able to see that it was overruled.
+    //
+    // W9: "Kept what the shop was told" was a FALSE claim until the ctx above
+    // stopped disagreeing with `rfq` - the live inbound turn read the drifted
+    // anchor while this trail told the owner it had been overruled, which is
+    // very likely how the flip survived an audit. It is true on every path now
+    // because there is only one rfq to keep.
     const { sbInsert } = await import("../runtime-config");
     await sbInsert("agent_events", [
       {
@@ -236,11 +271,18 @@ export async function resolveThreadContext(
     ]).catch(() => {});
   }
 
+  // ONE RFQ LEAVES THIS FUNCTION. The base row supplies identity and thread
+  // state; the reconciled promise supplies the rental terms, overwriting the
+  // stamp the row happens to carry. A caller that reads `ctx.rfq` and a caller
+  // that reads `.rfq` now get the same answer, which is the only way two entry
+  // points into the same thread can stop contradicting each other.
+  const base = anchor?.raw ?? identity?.raw ?? null;
+
   return {
     ok: gate.ok,
     reason: gate.reason,
     rfq: resolvedRfq,
-    ctx: anchor?.raw ?? identity?.raw ?? null,
+    ctx: base ? { ...base, rfq: resolvedRfq } : null,
     vendorId: identity?.raw?.vendorId,
     vendorName: identity?.raw?.vendorName,
     region: (anchor?.raw?.region ?? identity?.raw?.region) || undefined,

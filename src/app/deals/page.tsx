@@ -28,7 +28,7 @@ import { moneyLocal } from "@/lib/currency";
 import { can } from "@/lib/entitlements";
 import { partitionHunts } from "@/lib/trips";
 import { PLANS } from "@/lib/plans";
-import { SEARCH_SESSION_TTL_MS } from "@/lib/session-life";
+import { SEARCH_SESSION_TTL_MS, isSessionFresh } from "@/lib/session-life";
 import { useI18n } from "@/lib/i18n";
 
 interface SessionOffer {
@@ -82,6 +82,14 @@ interface SessionSummary {
     /** Rental length, so an in-progress rental stays in the active section. */
     durationDays: number | null;
     at: string;
+  } | null;
+  /** THE RENTAL: dates and length. Shipped by /api/deals for every hunt now,
+   *  booked or not - it appeared on no card at all before (owner report 5). */
+  rental?: {
+    durationDays: number | null;
+    startDate: string | null;
+    returnDate: string | null;
+    scheduledAt: string | null;
   } | null;
   attention: string[];
   plannedMoves: { at: string; vendorName: string | null; reason: string }[];
@@ -139,6 +147,43 @@ function timeAgo(iso: string, t: (s: string) => string): string {
 
 function timeAt(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * A calendar day, short. A bare `YYYY-MM-DD` is parsed at LOCAL midnight on
+ * purpose: `new Date("2026-03-03")` is UTC midnight, which renders as the 2nd
+ * for every traveller west of UTC - i.e. exactly the audience.
+ */
+function fmtDay(iso: string): string {
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00` : iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/**
+ * THE DATES AND THE DURATION, IN ONE LINE - the facts the owner listed for a
+ * collapsed card and that appeared on no card at all. `booking.durationDays`
+ * was shipped and consumed only by `partitionHunts`; `booking.scheduledAt`
+ * rendered only in the separate "Booked earlier" section; and a hunt with no
+ * booking carried no duration in the response whatsoever.
+ */
+function rentalLine(
+  r: SessionSummary["rental"],
+  t: (s: string) => string
+): string | null {
+  if (!r) return null;
+  const parts: string[] = [];
+  if (r.startDate) {
+    const from = fmtDay(r.startDate);
+    const to = r.returnDate ? fmtDay(r.returnDate) : "";
+    parts.push(to && to !== from ? `${from} - ${to}` : from);
+  } else if (r.scheduledAt) {
+    parts.push(`${t("Pick-up")} ${fmtDay(r.scheduledAt)}`);
+  }
+  const d = r.durationDays;
+  if (d != null && d > 0) parts.push(`${d} ${d === 1 ? t("day") : t("days")}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 const TIMELINE_ICON: Record<TimelineEvent["kind"], string> = {
@@ -209,6 +254,17 @@ export default function DealsPage() {
       const asked = Number(d?.asked ?? 0);
       const skipped = Number(d?.skipped ?? 0);
       const eligible = Number(d?.eligible ?? 0);
+      // THE ROUTE'S OWN WORDS WIN WHEN IT DECLINED TO ASK ANYONE.
+      //
+      // The route answers HTTP 200 with an `error` string for the two "nothing
+      // to do" cases, so `!r.ok` never fired and the client invented its own
+      // reason from the counters - which could contradict the route outright
+      // ("no shops were messaged" vs "none gave a full deal") about the same
+      // hunt the card had just offered a re-ask for.
+      if (asked === 0 && typeof d?.error === "string" && d.error) {
+        setRecheckNote((n) => ({ ...n, [startedAt]: t(d.error) }));
+        return;
+      }
       setRecheckNote((n) => ({
         ...n,
         [startedAt]:
@@ -271,12 +327,29 @@ export default function DealsPage() {
         setRestoreErr(t("Could not re-open that hunt. Try again."));
         return;
       }
+      // A DELIBERATE RE-OPEN MUST SURVIVE THE FRESHNESS GUARD.
+      //
+      // The Find-deals screen deletes any `wd_search` blob whose `searchEpoch`
+      // is past SEARCH_SESSION_TTL_MS - which is every hunt in the "Earlier
+      // hunts" drawer, by construction. The server stamps a fresh epoch for a
+      // re-open now (`reopenEpoch`), and this is the belt to that braces: a
+      // server that has not been redeployed yet still sends the hunt's original
+      // start, and the traveller would land on a blank search screen with no
+      // error. Moving the epoch FORWARD is the strict direction - it is what
+      // keeps an ancient `since=` off the live polls, which is the one thing
+      // the TTL exists to prevent.
+      const payload = { ...d.payload } as { vendors: unknown[] } & Record<string, unknown>;
+      if (!isSessionFresh(Number(payload.searchEpoch), Date.now(), SEARCH_SESSION_TTL_MS)) {
+        payload.huntStartedAt = payload.huntStartedAt ?? startedAt;
+        payload.searchEpoch = Date.now();
+        payload.reopened = true;
+      }
       // THE SAME BUDGET LADDER THE LIVE SEARCH USES. A raw setItem here threw
       // on a big restored hunt and the `catch` swallowed it, so the traveller
       // was navigated home to an EMPTY workspace with no error - the one
       // failure mode this ladder exists to prevent. saveSearch sheds galleries,
       // then message bodies, until the write lands.
-      const saved = saveSearch(sessionStorage, "wd_search", d.payload);
+      const saved = saveSearch(sessionStorage, "wd_search", payload);
       if (!saved.ok) {
         setRestoring(null);
         setRestoreErr(t("That hunt is too big to hold on this device."));
@@ -617,9 +690,19 @@ export default function DealsPage() {
                               </span>
                             </div>
                           )}
+                          {/* WHEN THE RENTAL IS FOR, AND FOR HOW LONG. */}
+                          {rentalLine(s.rental, t) && (
+                            <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] font-bold text-soft">
+                              <Icon name="clock" className="h-3 w-3 shrink-0 text-faint" />
+                              <span className="truncate">{rentalLine(s.rental, t)}</span>
+                            </div>
+                          )}
+                          {/* ...and WHEN THE HUNT RAN. "3d ago" is a duration,
+                              not a date: a traveller looking back at a trip
+                              wants the day it happened on. */}
                           <div className="mt-0.5 truncate text-[11px] text-faint">
                             {s.query ? `"${s.query}"` : `${s.shopsFound} ${t("shops found")}`} ·{" "}
-                            {timeAgo(s.startedAt, t)}
+                            {fmtDay(s.startedAt)} · {timeAgo(s.startedAt, t)}
                           </div>
                         </div>
                       </div>

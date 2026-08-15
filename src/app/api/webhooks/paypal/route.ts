@@ -8,8 +8,31 @@ import {
   RESUMED_KIND,
 } from "@/lib/billing/subscription-link";
 import { effectForEvent, clearsSuspension } from "@/lib/billing/suspension";
-import { setPlan } from "@/lib/access";
-import { getConfig, sbInsert } from "@/lib/runtime-config";
+import { setPlan, normalizePlan, type PlanId } from "@/lib/access";
+import { getConfig, sbInsert, sbSelectStrict } from "@/lib/runtime-config";
+
+// The plan ladder. A GRANT may only ever move an account UP it - see the grant
+// branch for why that is a security property and not a nicety.
+const PLAN_RANK: Record<PlanId, number> = { free: 0, pro: 1, ultra: 2 };
+
+/**
+ * What plan an account is on right now, read STRICTLY.
+ *
+ * "absent" (no such account) and "unknown" (we could not read) are different
+ * answers and the caller must treat them differently: there is nothing to grant
+ * to an account that does not exist, but an unreadable row means we cannot
+ * prove a grant would raise rather than lower a plan - and this route refuses
+ * to write a plan it cannot prove.
+ */
+async function currentPlanFor(email: string): Promise<PlanId | "absent" | "unknown"> {
+  const read = await sbSelectStrict<{ plan: string | null }>(
+    "app_users",
+    `select=plan&email=eq.${encodeURIComponent(email)}&limit=1`
+  ).catch(() => ({ error: "unavailable" as const }));
+  if ("error" in read) return read.error === "missing" ? "absent" : "unknown";
+  if (!read.rows.length) return "absent";
+  return normalizePlan(read.rows[0]?.plan);
+}
 
 // PayPal webhook: signature-verified subscription lifecycle -> plan grants.
 // Configure in PayPal -> Developer Dashboard -> Apps & Credentials -> your app
@@ -64,10 +87,14 @@ export async function POST(req: Request) {
   // custom_id (subscription events) / custom (sale events) MAY carry
   // "email|plan" - a checkout created elsewhere can set it. Subscriptions
   // created by our own button do not, so it is a hint, not the answer.
+  //
+  // Only the EMAIL half is read at all. The plan half used to be a fallback for
+  // `tier`, which meant a subscription to a plan we never sold - one the
+  // attacker created in their own PayPal account for a cent - could name its
+  // own tier and be redeemed as Ultra. The tier now comes from PayPal's plan id
+  // (or from asking PayPal about the subscription) and from nowhere else.
   const customId = String(resource.custom_id ?? resource.custom ?? "");
-  const [emailRaw, planRaw] = customId.split("|");
-  const hintEmail = String(emailRaw ?? "").toLowerCase();
-  const hintPlan = String(planRaw ?? "");
+  const hintEmail = String(customId.split("|")[0] ?? "").trim().toLowerCase();
 
   // Capture the funding source when PayPal reports it (V2-6 wallet adoption):
   // card / apple_pay / google_pay / paypal_balance. Best-effort - the field
@@ -109,27 +136,33 @@ export async function POST(req: Request) {
   // The TRUSTED attribution is our own verified activation record
   // (`subscriberFor`), which is written ONLY by the server-side confirm flow
   // for a subscription an authenticated traveller actually claimed. `custom_id`
-  // is attacker-settable: a raw PayPal checkout can carry "victim@|pro", so a
-  // signature-verified CANCELLED on the attacker's own subscription would
-  // downgrade the victim if the hint were allowed to win.
+  // is attacker-settable: a raw PayPal checkout can carry "victim@|pro".
   //
-  //   - GRANTS may bootstrap from the hint for a subscription we have not linked
-  //     yet (a checkout created outside the in-app flow). Over-granting a victim
-  //     a plan they did not buy is harmless, and the webhook writes no durable
-  //     link from a hint, so it cannot be leveraged into a later downgrade.
   //   - DOWNGRADES trust the verified link ONLY. Without one we do not act - the
   //     reconcile sweep still catches a genuinely-lapsed subscriber.
+  //   - GRANTS may bootstrap from the hint for a subscription NOBODY has claimed
+  //     yet (the redirect checkout, where the traveller may never return to the
+  //     app and the webhook is the only thing that can apply what they paid
+  //     for). A hint can never RE-POINT a subscription that is already linked,
+  //     and - see the grant branch - it can never LOWER a plan either.
+  //
+  // WHY THE SECOND HALF OF THAT MATTERS. Splitting the two channels was not
+  // enough on its own: `setPlan` OVERWRITES, so the same grant that lifts a free
+  // account to Pro drops an Ultra account to Pro. An attacker whose own real
+  // Pro subscription carried "victim@|pro" therefore reached, through the GRANT
+  // branch, exactly the downgrade the DOWNGRADE branch refuses them - which is
+  // why a grant is now a raise-only operation for every caller.
   const linked = subscriptionId ? await subscriberFor(subscriptionId) : null;
-  const grantEmail = linked || hintEmail || "";
+  // A hint is only ever an email address; anything else is not attribution.
+  const hintUsable = !linked && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(hintEmail);
+  const grantEmail = linked || (hintUsable ? hintEmail : "");
+  const hintDriven = !linked && Boolean(grantEmail);
   const downgradeEmail = linked || "";
 
   // WHICH tier? PayPal's plan id is the authority, matched against the plan ids
-  // the owner configured. The custom_id hint is only a fallback for a checkout
-  // that predates the subscription buttons.
+  // the owner configured - never the caller's custom_id (see above).
   const planId = String(resource.plan_id ?? "");
-  let tier =
-    (planId ? await tierForPaypalPlan(planId) : null) ??
-    (hintPlan === "pro" || hintPlan === "ultra" ? hintPlan : null);
+  let tier = planId ? await tierForPaypalPlan(planId) : null;
 
   // A renewal (PAYMENT.SALE.COMPLETED) names the subscription but not the plan,
   // so ask PayPal directly rather than letting a paying traveller's renewal be
@@ -143,21 +176,81 @@ export async function POST(req: Request) {
   // Only grant from a VERIFIED event (the sole trusted grant path).
   if (verified && grantEmail && activates && tier) {
     const email = grantEmail;
-    // A WEBHOOK IS THE LAST LINE - NOBODY IS WATCHING IT. There is no traveller
-    // on the other end of this request to notice that the grant did not land,
-    // so a failed write has to leave a trace the owner can actually find.
-    // PayPal retries a non-2xx delivery, which is the recovery we want here.
-    const granted = await setPlan(email, tier).catch(() => false);
-    if (!granted) {
+    // A GRANT MAY ONLY EVER RAISE. Read the account first and compare on the
+    // plan ladder: over-granting a tier somebody did not buy costs the owner
+    // money and nobody else anything, while LOWERING a tier on the strength of
+    // an attacker-settable hint is the account takeover this whole route is
+    // written around. When the hint names an account that already has a
+    // subscription of its own, this is the rule that saves it - the attacker's
+    // Pro event simply does not move an Ultra subscriber.
+    //
+    // A deliberate downgrade still works, from the two places that have real
+    // evidence for it: the in-app confirm flow (session-authenticated, PayPal
+    // consulted server-side) and the CANCELLED/EXPIRED branch below.
+    const before = await currentPlanFor(email);
+    if (before === "unknown") {
+      // We cannot prove this is a raise. Refuse, and let PayPal redeliver into
+      // a moment when the database answers - the same fail-closed trade the
+      // rest of this route makes.
+      console.error(`[paypal] plan unreadable for ${email}; asking PayPal to retry`);
+      return NextResponse.json({ error: "plan unreadable" }, { status: 503 });
+    }
+    if (before === "absent") {
+      // Nothing to grant to, and a retry cannot conjure an account: record it so
+      // the owner can find a payment that has no home (a mistyped checkout, or a
+      // hint aimed at nobody) instead of making PayPal retry for days.
       await sbInsert("billing_events", [
-        { type: `plan_grant_failed_${tier}`, verified: true, provider_event_id: String(body?.id ?? "") || null },
+        {
+          provider_event_id: String(body?.id ?? "") || null,
+          type: `pp_grant_no_account_${tier}`,
+          verified: true,
+        },
       ]).catch(() => {});
-      console.error(`[paypal] setPlan failed for ${email} -> ${tier}; asking PayPal to retry`);
-      return NextResponse.json({ error: "grant failed" }, { status: 503 });
+      return NextResponse.json({ ok: true });
+    }
+    if (PLAN_RANK[tier] <= PLAN_RANK[before]) {
+      // Not a raise - leave the account exactly as it is. Recorded because a
+      // refused grant is also how an attempted hint attack looks from here.
+      await sbInsert("billing_events", [
+        {
+          provider_event_id: String(body?.id ?? "") || null,
+          type: `pp_grant_not_raised_${tier}${hintDriven ? "_hint" : ""}`,
+          verified: true,
+        },
+      ]).catch(() => {});
+    } else {
+      // A WEBHOOK IS THE LAST LINE - NOBODY IS WATCHING IT. There is no traveller
+      // on the other end of this request to notice that the grant did not land,
+      // so a failed write has to leave a trace the owner can actually find.
+      // PayPal retries a non-2xx delivery, which is the recovery we want here.
+      const granted = await setPlan(email, tier).catch(() => false);
+      if (!granted) {
+        await sbInsert("billing_events", [
+          { type: `plan_grant_failed_${tier}`, verified: true, provider_event_id: String(body?.id ?? "") || null },
+        ]).catch(() => {});
+        console.error(`[paypal] setPlan failed for ${email} -> ${tier}; asking PayPal to retry`);
+        return NextResponse.json({ error: "grant failed" }, { status: 503 });
+      }
+      // A hint-driven grant is worth seeing on its own: it is the one plan
+      // change in this app with no verified link behind it.
+      if (hintDriven) {
+        await sbInsert("billing_events", [
+          {
+            provider_event_id: String(body?.id ?? "") || null,
+            type: `pp_hint_grant_${tier}`,
+            verified: true,
+          },
+        ]).catch(() => {});
+      }
     }
     // Payment recovered - end any open grace window so a LATER suspension
     // starts its own clock instead of inheriting an expired one.
-    if (subscriptionId && clearsSuspension(event)) {
+    //
+    // LINKED SUBSCRIPTIONS ONLY. This writes the traveller's email against a
+    // subscription id; doing it from a hint would let an attacker file their own
+    // subscription under a victim's name in our own evidence trail - the exact
+    // durable link the hint path is forbidden to create.
+    if (linked && subscriptionId && clearsSuspension(event)) {
       await markSubscriptionState(RESUMED_KIND, { email, subscriptionId });
     }
   } else if (verified && downgradeEmail) {

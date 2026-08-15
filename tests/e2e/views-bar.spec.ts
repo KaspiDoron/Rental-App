@@ -5,9 +5,21 @@ import { dismissTour } from "./fixtures/init";
 
 // OWNER REPORT 5: the List/Map/Activity + Feed/Swipe bar was sticky and "blocks
 // the whole screen - we need that space". It is now a normal in-flow element.
-// The unit tests pin the CSS/hook; this pins the BEHAVIOUR in a real browser,
-// which nothing did before: after scrolling the page, the bar must travel up
-// with the content rather than staying pinned below the top bar.
+//
+// THE FIRST VERSION OF THIS TEST DID NOT WORK, AND IT IS WORTH SAYING WHY.
+// It scrolled 400px from the top and asserted the bar's viewport-top had
+// dropped by at least 0.7x that. But the bar sits ~1450px down the document at
+// 320px wide, so a 400px scroll never brings it anywhere near its pin point:
+// sticky and static both move it exactly 400px. An adversarial pass re-stuck
+// the bar with a plain later rule and this spec still passed - delta 400 either
+// way - which made it a guard in name only, while its own header claimed to be
+// the one thing pinning the BEHAVIOUR in a real browser.
+//
+// A sticky element only reveals itself once the page has scrolled PAST it. So
+// the assertion now scrolls to the very bottom of the document, where an
+// in-flow bar is far off the top of the screen and a pinned one is parked just
+// under the top bar. Measured today: bottom is -1384 in flow, and +159 when
+// deliberately re-stuck.
 
 test.describe("the views bar is not sticky @allwidths", () => {
   test.beforeEach(async ({ context }) => {
@@ -23,19 +35,61 @@ test.describe("the views bar is not sticky @allwidths", () => {
 
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(50);
-    const before = await bar.evaluate((el) => el.getBoundingClientRect().top);
+    const startTop = await bar.evaluate((el) => el.getBoundingClientRect().top);
 
-    await page.evaluate(() => window.scrollBy(0, 400));
-    await page.waitForTimeout(120);
+    // All the way down, so the bar is genuinely scrolled past.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(200);
+
+    const seen = await bar.evaluate((el) => ({
+      bottom: el.getBoundingClientRect().bottom,
+      position: getComputedStyle(el).position,
+    }));
     const scrolled = await page.evaluate(() => window.scrollY);
-    const after = await bar.evaluate((el) => el.getBoundingClientRect().top);
 
-    // The hunt must actually have room to scroll, or the assertion is vacuous.
-    expect(scrolled, "page did not scroll - seed has too little content").toBeGreaterThan(50);
-    // In flow: the bar's viewport-top drops by ~the scroll amount. Pinned: it
-    // would barely move. 0.7x leaves slack for the top bar's own collapse.
-    expect(before - after, "the views bar stayed pinned instead of scrolling off").toBeGreaterThan(
-      scrolled * 0.7
-    );
+    // The hunt must actually have room to scroll past the bar, or the assertion
+    // below is vacuous again - this is the check whose absence hid the defect.
+    expect(
+      scrolled,
+      "page did not scroll far enough to pass the bar - seed has too little content"
+    ).toBeGreaterThan(startTop);
+
+    // THE ASSERTION. Off the top of the viewport entirely, not merely "moved".
+    expect(
+      seen.bottom,
+      `the views bar is pinned below the top bar (position: ${seen.position})`
+    ).toBeLessThanOrEqual(0);
+
+    // ...and the mechanism, so a future re-stick fails here with a clear reason
+    // rather than only as a mysterious geometry mismatch.
+    expect(seen.position, "the views bar must stay in flow").not.toBe("sticky");
+    expect(seen.position).not.toBe("fixed");
+  });
+
+  test("a jump to the shop list lands the first card BELOW the top bar", async ({ page }) => {
+    // The other half of un-sticking: `goToSection` scrolls these anchors into
+    // view, and a target with no scroll-margin lands under the still-sticky top
+    // bar. The views bar had the margin; the vendors anchor did not, so the
+    // first shop card's whole name row was hidden behind the bar.
+    await seedLiveHunt(page);
+    await page.goto("/");
+    const vendors = page.locator('[data-tour="vendors"]');
+    await expect(vendors).toBeAttached({ timeout: 20_000 });
+
+    const covered = await page.evaluate(async () => {
+      const el = document.querySelector('[data-tour="vendors"]') as HTMLElement | null;
+      const bar = document.querySelector(".topbar") as HTMLElement | null;
+      if (!el || !bar) return null;
+      // Jump from the bottom, which is the direction that buries the target.
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      el.scrollIntoView({ behavior: "auto", block: "start" });
+      await new Promise((r) => setTimeout(r, 400));
+      return bar.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
+    });
+
+    expect(covered, "[data-tour=vendors] is not reachable").not.toBeNull();
+    // A couple of px of rounding is fine; a buried card is not.
+    expect(covered!, "the shop list landed underneath the top bar").toBeLessThanOrEqual(2);
   });
 });
