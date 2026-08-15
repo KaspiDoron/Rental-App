@@ -269,4 +269,21 @@ describe("a board photographed in thread A is leverage in thread B", () => {
     // Tolerant number matching, like every cross-spelling comparison.
     expect(engine).toMatch(/sameNumber\(m\.from_number, digits\)/);
   });
+
+  it("...and a CROSSED-OUT row never becomes a rival price", () => {
+    // The selection itself is executed in src/lib/media/reading-quotes.test.ts
+    // ("a crossed-out row is LISTED, and is never the quote"); what can only be
+    // pinned here is that this call site uses it. `prices[0]` was a struck-out
+    // row whenever the board's cheapest model was the one they had stopped
+    // renting - and this table is quoted AT other shops as "another shop does
+    // 150", so one strike moved every rival negotiation's floor.
+    const engine = readCode("src/lib/graph/engine.ts");
+    expect(engine).toMatch(/const cheapest = cheapestQuotable\(read\?\.raw\?\.reading\?\.prices\)/);
+    expect(engine).toMatch(/cheapestQuotable\(m\.raw\?\.reading\?\.prices\) !== null/);
+    expect(engine).not.toMatch(/reading\?\.prices\?\.\[0\]/);
+    // ...and the card-facing route picks through the same shared arithmetic.
+    expect(readCode("src/app/api/replies/route.ts")).toMatch(
+      /pickBoardPrice\(readingPricesByVendor\.get\(r\.vendor_id\), specCc\)/
+    );
+  });
 });

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { sbSelect, sbSelectStrict, pgTimestamp } from "@/lib/runtime-config";
 import { toTrip } from "@/lib/trips";
-import { groupSearchSessions } from "@/lib/session-life";
+import { groupSearchSessions, huntWindow } from "@/lib/session-life";
 import {
   termsComplete,
   depositPhrase,
@@ -34,6 +34,10 @@ interface SearchRow {
   vehicle_class: string | null;
   source: string | null;
   results: number | null;
+  /** WHEN the rental is for, and for how long. Never selected before, so no
+   *  card - collapsed or open - could state a date or a duration for a hunt
+   *  that had not been booked. /api/deals/recheck has always read it. */
+  rfq?: { durationDays?: number; startDate?: string; returnDate?: string } | null;
   /** WHERE the hunt happened. Never selected before, so no card could say. */
   lat?: number | null;
   lng?: number | null;
@@ -143,6 +147,25 @@ export interface SessionSummary {
     durationDays: number | null;
     at: string;
   } | null;
+  /**
+   * THE RENTAL ITSELF - the dates and the length.
+   *
+   * The owner listed them among the facts a COLLAPSED card must show, and no
+   * card showed either: `booking.durationDays` was shipped but consumed only by
+   * `partitionHunts` and never rendered, `booking.scheduledAt` rendered only in
+   * the separate "Booked earlier" list, and for a hunt with no booking there
+   * was no duration in the response at all.
+   */
+  rental: {
+    /** Days, from the booking's own arithmetic or from the hunt's RFQ. */
+    durationDays: number | null;
+    /** YYYY-MM-DD, as the traveller asked for it. */
+    startDate: string | null;
+    /** Stated by the RFQ, or derived from startDate + durationDays. */
+    returnDate: string | null;
+    /** The agreed pick-up moment, when a booking named one. */
+    scheduledAt: string | null;
+  } | null;
   attention: string[];
   plannedMoves: { at: string; vendorName: string | null; reason: string }[];
   queuedSends: number;
@@ -177,6 +200,26 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_HUNTS = 20;
 const SEARCH_ROW_LIMIT = 40;
 
+/**
+ * A calendar day from the RFQ, or null. Never a Date - the RFQ stores plain
+ * `YYYY-MM-DD` and re-parsing it through a timezone is how a rental starting on
+ * the 3rd renders as the 2nd for anyone west of UTC.
+ */
+function isoDay(v: unknown): string | null {
+  const s = String(v ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/** startDate + durationDays, as a calendar day. Null when either is unknown. */
+function addDays(day: string | null, days: number | null): string | null {
+  if (!day || days == null || days <= 0) return null;
+  // UTC arithmetic on a date-only string cannot drift: no local offset is ever
+  // applied on the way in or on the way out.
+  const t = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + days * DAY_MS).toISOString().slice(0, 10);
+}
+
 function progressFor(s: {
   booked: boolean;
   bestVerified: boolean;
@@ -210,20 +253,52 @@ export async function GET() {
   // /api/deals/restore and /api/deals/recheck now (40 rows, newest first), so
   // all three routes agree about which hunts exist.
   //
-  // Two column tiers: `lat`/`lng` have shipped since the first schema, but an
-  // unknown column silently blanks a select and blanking THIS one empties the
-  // whole tab - the one failure this route has already been bitten by.
-  const wideSearch = await sbSelectStrict<SearchRow>(
-    "searches",
-    `select=id,query_text,radius_km,vehicle_class,source,results,lat,lng,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
-  );
-  const searchRows =
-    "rows" in wideSearch
-      ? wideSearch.rows
-      : await sbSelect<SearchRow>(
-          "searches",
-          `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
-        ).catch(() => [] as SearchRow[]);
+  // THREE COLUMN TIERS, AND AN UNREADABLE DATABASE IS NOT AN EMPTY ONE (M1).
+  //
+  // `rfq` is newer than `lat`/`lng`, which are newer than the table, so each
+  // tier drops only the newest column - collapsing them would mean a database
+  // missing only `rfq` ALSO loses the map centre.
+  //
+  // THE DEFECT THIS SHAPE KILLS. The old read fell from `sbSelectStrict` into a
+  // narrow `sbSelect` on ANY error - including `unavailable` - and `sbSelect`
+  // returns `[]` on failure too. So a transient Supabase blip answered HTTP 200
+  // with `sessions: []`, the client only sets `loadFailed` on `!r.ok`, and a Pro
+  // traveller with ten hunts was told "No hunts yet - and I'm ready". The page
+  // has an honest "Couldn't load your trips" state that this path could not
+  // reach: the same fail-green defect the file's own comment claimed to have
+  // fixed. `missing` (schema not migrated) still degrades - that is what the
+  // tiers are for - but `unavailable` now says so out loud.
+  const readSearches = async (): Promise<{ rows: SearchRow[] } | { error: "unavailable" }> => {
+    const widest = await sbSelectStrict<SearchRow>(
+      "searches",
+      `select=id,query_text,radius_km,vehicle_class,source,results,rfq,lat,lng,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
+    );
+    if ("rows" in widest) return widest;
+    if (widest.error === "unavailable") return { error: "unavailable" };
+    const wide = await sbSelectStrict<SearchRow>(
+      "searches",
+      `select=id,query_text,radius_km,vehicle_class,source,results,lat,lng,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
+    );
+    if ("rows" in wide) return wide;
+    if (wide.error === "unavailable") return { error: "unavailable" };
+    const narrow = await sbSelectStrict<SearchRow>(
+      "searches",
+      `select=id,query_text,radius_km,vehicle_class,source,results,created_at&user_email=eq.${enc}&order=created_at.desc&limit=${SEARCH_ROW_LIMIT}`
+    );
+    if ("rows" in narrow) return narrow;
+    // The narrowest tier missing means the TABLE is not there - a fresh
+    // install, vacuously empty. Demo mode lands here too, which is why this
+    // must stay a real zero rather than a dark screen.
+    return narrow.error === "missing" ? { rows: [] } : { error: "unavailable" };
+  };
+  const searchRead = await readSearches();
+  if ("error" in searchRead) {
+    return NextResponse.json(
+      { error: "unavailable", hint: "Could not reach your trips just now." },
+      { status: 503 }
+    );
+  }
+  const searchRows = searchRead.rows;
 
   // Same discriminator the restore route uses: /api/profile records a `searches`
   // row for every RFQ BUILD (source `panel` / `profiler`, `results: 0`, no
@@ -404,12 +479,13 @@ export async function GET() {
   // 3. Build each session's living summary from its activity window.
   const sessions: SessionSummary[] = kept.map((group, gi) => {
     const start = Date.parse(group[0].created_at);
-    // The next-newer session's start closes this window.
-    const end = gi === 0 ? Infinity : Date.parse(kept[gi - 1][0].created_at);
-    const inWindow = (iso: string) => {
-      const t = Date.parse(iso);
-      return t >= start && t < end;
-    };
+    // ONE window object, shared with /api/deals/restore and /api/deals/recheck
+    // (see huntWindow). Three private copies of this arithmetic is how the
+    // re-ask count on this card came to disagree with what the re-ask route
+    // could actually see.
+    const win = huntWindow(kept, gi);
+    const end = win.end; // the next-newer session's start closes this window
+    const inWindow = (iso: string) => win.contains(iso);
     const isLatest = gi === 0;
     // Same bounds as the restore route's gate: the marker must fall AFTER this
     // group's newest row and BEFORE the next group begins - comparing against
@@ -449,6 +525,27 @@ export async function GET() {
       booking && booking.total_price != null && Number(booking.price_per_day) > 0
         ? Math.max(1, Math.round(Number(booking.total_price) / Number(booking.price_per_day)))
         : null;
+
+    // THE DATES AND THE LENGTH - which appeared on no card at all.
+    //
+    // The header showed `timeAgo(startedAt)` and nothing else time-shaped, so a
+    // traveller could not tell a three-day Krabi hunt from a week-long Bali one.
+    // A hunt with no booking had no duration in the response whatsoever, even
+    // though the re-check route has always read `searches.rfq.durationDays` from
+    // the very same rows. The newest row in the group wins - a traveller who
+    // widened the request mid-hunt meant the newer answer.
+    const rfqRow = [...group].reverse().find((r) => r.rfq && typeof r.rfq === "object");
+    const rfqDays =
+      typeof rfqRow?.rfq?.durationDays === "number" && rfqRow.rfq.durationDays > 0
+        ? Math.round(rfqRow.rfq.durationDays)
+        : null;
+    // The BOOKING's own arithmetic wins when there is one: it is what the
+    // traveller actually pays for, not what they asked for.
+    const durationDays = bookedDays ?? rfqDays;
+    const startDate = isoDay(rfqRow?.rfq?.startDate) ?? null;
+    // "Return date; when absent it is derived from startDate + durationDays"
+    // (lib/types) - said in the schema and never once derived.
+    const returnDate = isoDay(rfqRow?.rfq?.returnDate) ?? addDays(startDate, durationDays);
 
     // WHO WE REACHED, WHO ANSWERED, AND WHO NEVER DID - BY NAME.
     //
@@ -692,6 +789,17 @@ export async function GET() {
             at: booking.created_at,
           }
         : null,
+      // Null only when we know NOTHING about the rental - a card that has a
+      // length but no dates still gets to say the length.
+      rental:
+        durationDays != null || startDate || returnDate || booking?.scheduled_at
+          ? {
+              durationDays,
+              startDate,
+              returnDate,
+              scheduledAt: booking?.scheduled_at ?? null,
+            }
+          : null,
       attention,
       plannedMoves,
       queuedSends,
@@ -731,7 +839,11 @@ export async function GET() {
                 scheduledAt: booking.scheduled_at,
               }
             : null,
-          durationDays: bookedDays,
+          // bookedDays FIRST, then the RFQ's length: a hunt that quoted but
+          // never booked could not total its saving at all before, so every
+          // un-booked trip reported "cannot total" and the headline stayed
+          // blank. The RFQ length is the traveller's own stated rental.
+          durationDays: bookedDays ?? rfqDays,
           isLatest,
           lastEventAt,
         },

@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { semanticParse } from "../semantic/parse";
-import { containsAbuse } from "../safety/blocklist";
+import { abuseKind } from "../safety/blocklist";
 
 // W6.2 - "DON'T ALLOW TO ADD CURSES / LANGUAGE WHICH IS NOT GOOD BEHAVIOUR -
 // WE WANT SAFE WORDS FEEDBACK PAGE." (owner report 5, item 18)
@@ -76,13 +76,20 @@ export async function moderateFeedback(text: string): Promise<ModerationVerdict>
   if (!trimmed) return { allowed: false, kind: "none", source: "blocklist", message: REFUSALS.profanity };
 
   // The floor runs FIRST: it is free, instant and cannot be unavailable.
-  if (containsAbuse(trimmed)) {
+  //
+  // AND IT NAMES WHAT IT REFUSED. The floor used to answer a bare boolean, so
+  // every deterministic refusal came back as "please send this again without
+  // the swearing" - including the ones that were a threat or a racial slur,
+  // where that copy is the wrong thing to say and reads as if we had not
+  // noticed. `abuseKind` reports the family; the copy follows it.
+  const floor = abuseKind(trimmed);
+  if (floor) {
     return {
       allowed: false,
-      kind: "profanity",
+      kind: floor,
       source: "blocklist",
-      reason: "matched the shared abuse blocklist",
-      message: REFUSALS.profanity,
+      reason: `matched the shared abuse blocklist (${floor})`,
+      message: REFUSALS[floor],
     };
   }
 

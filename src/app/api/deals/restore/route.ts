@@ -3,7 +3,13 @@ import { getSession } from "@/lib/session";
 import { sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
-import { isSessionFresh, groupSearchSessions, sessionIdOf } from "@/lib/session-life";
+import {
+  isSessionFresh,
+  groupSearchSessions,
+  sessionIdOf,
+  huntWindow,
+  reopenEpoch,
+} from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 
 export const dynamic = "force-dynamic";
@@ -206,11 +212,11 @@ export async function GET(req: Request) {
 
   const group = groups[gi];
   const start = Date.parse(group[0].created_at);
-  const end = gi === 0 ? Infinity : Date.parse(groups[gi - 1][0].created_at);
-  const inWindow = (iso: string) => {
-    const t = Date.parse(iso);
-    return t >= start - 1000 && t < end;
-  };
+  // ONE window object, shared with /api/deals and /api/deals/recheck - see
+  // huntWindow. The three routes each carried their own copy of this arithmetic
+  // and one of them (recheck) then queried without it entirely.
+  const win = huntWindow(groups, gi);
+  const inWindow = (iso: string) => win.contains(iso);
 
   // CLEARED MEANS CLEARED, AT ANY AGE.
   //
@@ -466,6 +472,26 @@ export async function GET(req: Request) {
     });
   }
 
+  // THE EPOCH A DELIBERATE RE-OPEN CARRIES (see `reopenEpoch`).
+  //
+  // This used to be `searchEpoch: start` unconditionally - the ORIGINAL hunt's
+  // start - and the Find-deals screen refuses any stored blob whose epoch is
+  // past the TTL. So the server served the hunt correctly and the CLIENT
+  // deleted it on arrival, landing on a blank search screen. Every hunt in the
+  // "Earlier hunts" drawer is past that cliff by construction, which is to say
+  // the feature worked only for the hunts that did not need it.
+  //
+  // The TTL is not protecting us from an old hunt; it is protecting us from an
+  // ancient epoch becoming the `since=` of every live poll. A re-open the
+  // traveller asked for therefore starts its polling clock NOW, and the hunt's
+  // own history rides in this payload (shops, stages, offers) instead of being
+  // re-hydrated out of a week of activity rows. `huntStartedAt` keeps the real
+  // start for anything that wants to SAY how old the hunt is.
+  const ttlForReopen = await searchSessionTtlMs();
+  const nowMs = Date.now();
+  const searchEpoch = reopenEpoch(start, nowMs, ttlForReopen);
+  const reopened = searchEpoch !== start;
+
   const payload = {
     vendors,
     rfq,
@@ -493,8 +519,14 @@ export async function GET(req: Request) {
           }
         : null,
     radiusKm: typeof radiusKm === "number" ? radiusKm : 8,
-    searchEpoch: start,
+    searchEpoch,
+    /** When the hunt REALLY ran - never used as a polling floor. */
+    huntStartedAt: group[0].created_at,
+    /** The hunt's stable identity, so the client can tell Trips which card. */
+    sid: sessionIdOf(group),
+    /** True when the epoch was moved forward because the hunt is history. */
+    reopened,
   };
 
-  return NextResponse.json({ ok: true, partial, payload });
+  return NextResponse.json({ ok: true, partial, reopened, payload });
 }

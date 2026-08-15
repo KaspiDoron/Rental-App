@@ -216,3 +216,115 @@ export function groupSearchSessions<T extends GroupableSearchRow>(rows: T[]): T[
 export function sessionIdOf<T extends GroupableSearchRow>(group: T[]): number | null {
   return group[0]?.id ?? null;
 }
+
+// ---- one definition of "this hunt's activity window" -----------------------
+
+/**
+ * The clock slack applied to the START of a hunt's window.
+ *
+ * The `searches` row and the first outbound message are written by two
+ * different requests; a message stamped a few hundred ms before its own search
+ * row is an ordinary race, not a message from the previous hunt.
+ */
+export const WINDOW_GRACE_MS = 1000;
+
+/**
+ * The window a hunt OWNS: from its first search row until the next (newer)
+ * hunt begins.
+ *
+ * THREE ROUTES COMPUTED THIS INLINE AND ONE OF THEM DID NOT USE IT AT ALL.
+ * `/api/deals` filtered its rows with `t >= start && t < end`, restore and
+ * recheck with `t >= start - 1000 && t < end` - and recheck then QUERIED with
+ * no date bound whatsoever, taking the newest 200 rows of all time and hoping
+ * the hunt was inside them. For any traveller with a few hunts behind them it
+ * was not: the card offered "Ask if these deals still stand (5)" and the route
+ * answered "No shops were messaged in that hunt." about the same five shops.
+ *
+ * One window object, and the same object also builds the PostgREST bound - so
+ * what a route READS and what it then FILTERS can no longer disagree.
+ */
+export interface HuntWindow {
+  /** First row of the hunt, epoch ms (already carrying the grace). */
+  start: number;
+  /** Where the next hunt begins, epoch ms; Infinity for the newest hunt. */
+  end: number;
+  startIso: string;
+  /** Null for the newest hunt - it has no upper bound. */
+  endIso: string | null;
+  contains(iso: string | null | undefined): boolean;
+}
+
+export function huntWindow<T extends GroupableSearchRow>(
+  groups: readonly T[][],
+  gi: number
+): HuntWindow {
+  const first = groups[gi]?.[0]?.created_at ?? "";
+  const rawStart = Date.parse(first);
+  const start = Number.isFinite(rawStart) ? rawStart - WINDOW_GRACE_MS : 0;
+  const nextIso = gi > 0 ? (groups[gi - 1]?.[0]?.created_at ?? null) : null;
+  const nextMs = nextIso ? Date.parse(nextIso) : NaN;
+  const end = Number.isFinite(nextMs) ? nextMs : Infinity;
+  return {
+    start,
+    end,
+    startIso: new Date(start).toISOString(),
+    endIso: Number.isFinite(end) ? new Date(end).toISOString() : null,
+    contains(iso) {
+      const t = Date.parse(String(iso ?? ""));
+      if (!Number.isFinite(t)) return false;
+      return t >= start && t < end;
+    },
+  };
+}
+
+/**
+ * The same window as PostgREST filter fragments, so a route's QUERY is bounded
+ * by exactly what its in-memory filter will keep.
+ *
+ * The encoder is a PARAMETER, and it is named `pgTimestamp` on purpose. It has
+ * to be injected - importing `runtime-config` here would drag `server-only`
+ * into a module the browser rehydrate depends on - but a raw `+00:00` from the
+ * database decodes to a space and 400s the read, which `sbSelect` then renders
+ * as an empty table. So the name at the interpolation site says which encoder
+ * is required, and the repo-wide check in pg-timestamp.test.ts can still see it.
+ */
+export function huntWindowFilter(
+  column: string,
+  w: HuntWindow,
+  pgTimestamp: (v: string) => string
+): string {
+  const from = `&${column}=gte.${pgTimestamp(w.startIso)}`;
+  return w.endIso ? `${from}&${column}=lt.${pgTimestamp(w.endIso)}` : from;
+}
+
+// ---- re-opening a hunt ON PURPOSE ------------------------------------------
+
+/**
+ * The epoch a DELIBERATELY re-opened hunt should carry.
+ *
+ * THE BUG THIS KILLS. `/api/deals/restore` stamped the payload with the
+ * ORIGINAL hunt's start; the Trips page wrote that to `wd_search`; and the
+ * Find-deals screen refuses any blob whose epoch is past the TTL - so it
+ * deleted the payload on arrival and landed on a blank search screen. Every
+ * hunt in the "Earlier hunts" drawer is past that cliff BY CONSTRUCTION
+ * (`partitionHunts` archives on the same TTL), so "Re-open this hunt" worked
+ * only for hunts that did not need re-opening.
+ *
+ * WHAT THE TTL IS ACTUALLY PROTECTING, AND HOW THIS KEEPS IT. The danger was
+ * never the age of the hunt - it was the ancient epoch silently becoming the
+ * `since=` of every live poll, which dragged a week of old traces onto the
+ * board. So a deliberate re-open gets a FRESH epoch: the polls start from the
+ * moment the traveller asked, and everything the hunt already produced arrives
+ * in the restore payload itself (shops, stages, offers) rather than by
+ * re-hydrating a week of history through /api/activity.
+ *
+ * A hunt still inside the TTL keeps its real start, because there the two are
+ * the same question and nothing is gained by moving it.
+ */
+export function reopenEpoch(
+  huntStartMs: number,
+  nowMs: number,
+  ttlMs: number = SEARCH_SESSION_TTL_MS
+): number {
+  return isSessionFresh(huntStartMs, nowMs, ttlMs) ? huntStartMs : nowMs;
+}

@@ -60,7 +60,13 @@ describe("REPRODUCTION: the manual restore could land an empty workspace", () =>
   it("it writes through the budget ladder, like every other search write", () => {
     // A raw setItem threw on a big restored hunt and the catch swallowed it -
     // so the traveller was navigated home to nothing, with no error at all.
-    expect(deals).toMatch(/const saved = saveSearch\(sessionStorage, "wd_search", d\.payload\);/);
+    //
+    // The pin used to name `d.payload` literally. It is now `payload`, a local
+    // copy of the same object with the re-open epoch clamped forward (see
+    // reopenEpoch: the server's stamp is the fix, this is the belt to it) -
+    // which does not touch the fact this test is about, so the assertion tracks
+    // the ladder rather than the variable name.
+    expect(deals).toMatch(/const saved = saveSearch\(sessionStorage, "wd_search", payload\);/);
     expect(deals).not.toMatch(/sessionStorage\.setItem\("wd_search"/);
   });
 

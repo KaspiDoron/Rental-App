@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { containsAbuse, matchesAny, ABUSE_PATTERNS, OUTBOUND_BLOCKLIST } from "../safety/blocklist";
+import {
+  containsAbuse,
+  abuseKind,
+  matchesAny,
+  ABUSE_PATTERNS,
+  OUTBOUND_BLOCKLIST,
+} from "../safety/blocklist";
 import { normalizeVerdict } from "./verdict";
 
 // W6.2 - "Don't allow to add curses / language which is not good behavior - we
@@ -26,6 +32,78 @@ describe("the deterministic floor", () => {
     }
   });
 
+  // EVERY STRING BELOW WAS PROVED LIVE AGAINST THE OLD FLOOR, with no LLM key
+  // configured - i.e. in exactly the configuration the floor exists for. All of
+  // them were accepted with HTTP 200, stored, and rendered to the owner.
+  it("catches obfuscation - the normal way abuse is actually typed", () => {
+    for (const bad of [
+      "fuk you",
+      "your app is f*cking broken",
+      "fvck this",
+      "phuck your support",
+      "you are an a$$hole",
+      "f.u.c.k this app",
+      "f u c k you",
+      "sh1t app",
+      "b4stards",
+    ]) {
+      expect(containsAbuse(bad), bad).toBe(true);
+    }
+  });
+
+  it("catches slurs - a whole family the list simply did not have", () => {
+    for (const bad of ["you retard", "what a faggot", "n1gger", "you are a retard", "retarded app team"]) {
+      expect(containsAbuse(bad), bad).toBe(true);
+    }
+  });
+
+  it("catches a VEILED threat, which contains no threatening word at all", () => {
+    for (const bad of [
+      "I know where you live",
+      "we know where you work",
+      "watch your back",
+      "I will find you",
+      "I will get you for this",
+    ]) {
+      expect(containsAbuse(bad), bad).toBe(true);
+    }
+  });
+
+  it("catches directed personal insults the old list had no noun for", () => {
+    for (const bad of ["you are a dick", "you are a prick", "you people are scumbags", "whore"]) {
+      expect(containsAbuse(bad), bad).toBe(true);
+    }
+  });
+
+  it("names the FAMILY, so the refusal is not always about swearing", () => {
+    expect(abuseKind("I know where you live")).toBe("threat");
+    expect(abuseKind("n1gger")).toBe("hate");
+    expect(abuseKind("you are an idiot")).toBe("insult");
+    expect(abuseKind("f*ck this")).toBe("profanity");
+    expect(abuseKind("the map is blank on iOS")).toBeNull();
+  });
+
+  it("normalisation does not eat word boundaries - the Scunthorpe rule", () => {
+    for (const fine of [
+      "Scunthorpe pickup was fine",
+      "the flame retardant seat cover is torn",
+      "shiitake mushrooms at the shop next door",
+      "the bus hit a pothole and the app crashed",
+      "I had to kill the app to get it working",
+      "this is a fake shop listing",
+      "please classify this as a bug",
+      // OUTBOUND SENTENCES THE AGENT REALLY WRITES. This list is a superset for
+      // the WhatsApp guard, so a threat pattern that eats an offer would gag
+      // the negotiator - and "come to your hotel" IS the delivery product.
+      "I will find you a better price",
+      "I will get you two more quotes today",
+      "the shop can come to your hotel with the scooter",
+      "they will deliver to your room in the morning",
+    ]) {
+      expect(containsAbuse(fine), fine).toBe(false);
+    }
+  });
+
   it("does NOT catch anger at the product - that is the feedback we want", () => {
     for (const fine of [
       "This is terrible, nothing works and I want a refund",
@@ -36,6 +114,10 @@ describe("the deterministic floor", () => {
       // and they ARE refused on the outbound path, where the reader is a shop.
       "the price radar is useless and feels like a scam",
       "this whole flow is stupid",
+      // The audit's own false-positive guards: ordinary rental complaints.
+      "this shop screwed me",
+      "the scooter was crap",
+      "the shop was a nightmare and I lost a day",
     ]) {
       expect(containsAbuse(fine), fine).toBe(false);
     }

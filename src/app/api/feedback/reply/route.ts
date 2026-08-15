@@ -2,12 +2,22 @@ import { NextResponse } from "next/server";
 import { getSession, adminEmails } from "@/lib/session";
 import { sbSelect, sbInsert } from "@/lib/runtime-config";
 import { sendEmail } from "@/lib/email";
+import { moderateFeedback } from "@/lib/feedback/moderation";
 
 // One threaded reply on a feedback report. Two authors, one shared endpoint:
 //  - management (owner/admin) can reply to ANY report (author_role owner/admin)
 //    and the reporter is emailed that they got an answer.
 //  - a user can reply only to THEIR OWN report (ownership matched by email),
 //    author_role 'user'.
+//
+// HALF THE FEEDBACK PAGE IS THIS THREAD, AND IT WAS COMPLETELY UNSCREENED.
+//
+// The owner asked for a "safe words feedback page". `moderateFeedback` had
+// exactly ONE caller in the repo - POST /api/feedback - so the opening message
+// was screened and every reply after it was not: this route took the text
+// straight to the insert, and any slur or threat was stored verbatim, rendered
+// to the owner in the admin panel, and emailed to every admin address. A screen
+// on one of two doors is not a screen.
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
@@ -36,15 +46,58 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const authorRole = isManagement ? (session.role === "owner" ? "owner" : "admin") : "user";
-  await sbInsert("feedback_replies", [
+  // THE SAME SCREEN THE OPENING MESSAGE GETS, BEFORE ANYTHING IS STORED OR
+  // EMAILED. Model first, deterministic floor underneath (lib/feedback/
+  // moderation). Applied to BOTH authors on purpose: a thread is read by both
+  // sides, and a rule that exempts whoever happens to hold the admin cookie is
+  // not a rule about the page. Anger at the product still passes - the
+  // moderator is told so in as many words.
+  const moderation = await moderateFeedback(text);
+  if (!moderation.allowed) {
+    return NextResponse.json(
+      {
+        error:
+          moderation.message ?? "Please rephrase this without the language and send it again.",
+        rejected: "language",
+        stored: false,
+      },
+      { status: 400 }
+    );
+  }
+
+  // A REPLY THAT NEVER PERSISTED MUST NOT ANSWER {ok:true}.
+  //
+  // `sbInsert` returns a BOOLEAN - false on no connection, a 404, an RLS
+  // refusal or a network error - and this route discarded it and returned
+  // `{ok:true}` regardless. Both UIs then optimistically painted the reply as
+  // sent. The most plausible field repro is the owner's own complaint that
+  // users cannot see his responses: a deployment whose schema predates the
+  // feedback-threads block has no `feedback_replies` table at all, so every
+  // owner reply returned 200, painted, and vanished. This is the identical
+  // dishonesty the POST /api/feedback route already fixed with its `stored`
+  // flag, left un-fixed one file over.
+  const stored = await sbInsert("feedback_replies", [
     {
       feedback_id: feedbackId,
       author_email: session.email,
-      author_role: authorRole,
+      author_role: isManagement ? (session.role === "owner" ? "owner" : "admin") : "user",
       body: text,
     },
-  ]);
+  ]).catch(() => false);
+
+  if (!stored) {
+    // 502, so `res.ok` is false and no client can paint this as delivered. No
+    // email either: notifying the other side about a message that does not
+    // exist sends them to a thread that will never show it.
+    return NextResponse.json(
+      {
+        ok: false,
+        stored: false,
+        error: "We could not save that reply just now - it was not sent. Please try again.",
+      },
+      { status: 502 }
+    );
+  }
 
   // Notify the OTHER side by email (best-effort, no-op without a mail key).
   try {
@@ -70,7 +123,7 @@ export async function POST(req: Request) {
     /* email is best-effort */
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, stored: true });
 }
 
 function escapeHtml(s: string): string {
