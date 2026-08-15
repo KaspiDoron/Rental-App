@@ -14,13 +14,28 @@ const agents = readCode("src/lib/agents.ts");
 // the rest are simply absent - which is how a real Thai board came back with no
 // usable row at all.
 describe("the region-directed re-read (multi-crop, without pixels)", () => {
-  it("fires ONLY on a price board that yielded nothing usable", () => {
-    // A good first read must never be spent on a second call, and a positively
-    // WRONG vehicle must not be re-read into an offer.
-    expect(agents).toMatch(/const boardMissed =/);
-    expect(agents).toMatch(/first\.imageKind === "price_sheet"/);
-    expect(agents).toMatch(/!first\.found/);
-    expect(agents).toMatch(/first\.vehicleVerdict !== "mismatch"/);
+  it("fires on the FAILURE CLASS, never on the model's self-report", () => {
+    // It used to demand `imageKind === "price_sheet"` - the model's own
+    // classification of the photo - so the failures that most needed a second
+    // pass (unparseable JSON, a cut-off answer, an omitted or "other"
+    // imageKind) all skipped it: the mechanism built for dense boards never
+    // fired for the boards that actually failed (owner report 5, #5).
+    expect(agents).not.toMatch(/first\.imageKind === "price_sheet"/);
+    expect(agents).toMatch(/const gotNothing = !first\.found && \(first\.options\?\.length \?\? 0\) === 0;/);
+    // A good first read is never spent on a second call, a positively WRONG
+    // vehicle is not re-read into an offer, and a photo of the bike itself
+    // legitimately carries no price.
+    expect(agents).toMatch(
+      /\(first\.vehicleVerdict !== "mismatch" \|\| unsupportedMismatch\) &&\s*first\.imageKind !== "vehicle"/
+    );
+    // ...and a "mismatch" that read NOTHING is a self-report, not a finding.
+    expect(agents).toMatch(/const unsupportedMismatch =/);
+    // ...and it also runs when the model's answer never parsed at all.
+    expect(agents).toMatch(/imageRead\.modelFailure = "parse-failed";/);
+    // BUDGETED: readImages owns 45s and the route is capped at 60s, so the
+    // second pass gets an explicit slice, never a second full ladder.
+    expect(agents).toMatch(/budgetMs: VISION_REREAD_BUDGET_MS/);
+    expect(agents).toMatch(/const VISION_REREAD_BUDGET_MS = 14_000;/);
   });
 
   it("directs ATTENTION region by region and transcribes before extracting", () => {

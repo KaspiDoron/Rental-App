@@ -103,9 +103,13 @@ describe("the vision ladder is current and hot-fixable", () => {
     // 2_048 covers ONE dense board; a coalesced burst scales the ceiling with
     // the frame count (owner report 4) so 8 boards cannot be truncated back
     // into the mid-JSON failure the base value fixed. Capped at 6_144.
-    expect(ai).toMatch(
-      /maxOutputTokens: Math\.min\(6_144, 2_048 \+ 512 \* Math\.max\(0, images\.length - 1\)\)/
-    );
+    expect(ai).toMatch(/const base = Math\.min\(6_144, 2_048 \+ 512 \* Math\.max\(0, frames - 1\)\)/);
+    // EVERY rung, not just Gemini's. The Groq rung claimed "same reason as the
+    // Gemini ceiling above" over a flat 2_048 - the asymmetry survived because
+    // this pin only ever asserted the Gemini formula (owner report 5).
+    expect(ai).toMatch(/maxOutputTokens: visionCeiling\(images\.length, raiseCeiling\)/);
+    expect(ai).toMatch(/max_tokens: visionCeiling\(images\.length, raiseCeiling\)/);
+    expect(ai.match(/visionCeiling\(images\.length, raiseCeiling\)/g)?.length).toBe(3);
     expect(ai).toMatch(/responseMimeType: "application\/json"/);
     expect(ai).toMatch(/response_format: \{ type: "json_object" \}/);
     expect(readCode("src/lib/agents.ts")).toMatch(/\{ json: true \}/);

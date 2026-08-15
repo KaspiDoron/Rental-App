@@ -24,6 +24,7 @@ export type VisionFailure =
   | "rate-limit" // 429 - quota, this minute
   | "bad-model" // 400/404 - the model id drifted
   | "blocked" // 200 with no content - safety filter / empty generation
+  | "truncated" // the generation hit OUR token ceiling - a cut-off answer, not a read
   | "timeout" // our own budget aborted the call
   | "network" // fetch threw
   | "upstream"; // 5xx and anything else
@@ -69,12 +70,20 @@ export const RETRYABLE_VISION: ReadonlySet<VisionFailure> = new Set<VisionFailur
   "timeout",
   "network",
   "upstream",
+  // A CUT-OFF ANSWER IS THE ONE FAILURE WE CAN FIX OURSELVES. The 17-row board
+  // that came back "unreadable" had actually been read - the generation just
+  // ran past maxOutputTokens and ended mid-JSON, which the ladder then handed
+  // on as good text. It is retried ONCE at a raised ceiling (readImages).
+  "truncated",
 ]);
 
 /** Most-actionable first: what an operator should be told when several differ. */
 const FAILURE_RANK: VisionFailure[] = [
   "auth",
   "rate-limit",
+  // Ranked above "blocked" because it is ACTIONABLE and specific: it names our
+  // own ceiling rather than a provider mood, and it is what the panel must say.
+  "truncated",
   "blocked",
   "bad-model",
   "timeout",

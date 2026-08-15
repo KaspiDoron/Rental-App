@@ -138,7 +138,7 @@ describe("the caller can tell an outage from a blank photo", () => {
   it("one bounded retry, gated on the retryable set", () => {
     const ai = readCode("src/lib/ai.ts");
     expect(ai).toMatch(/RETRYABLE_VISION\.has\(firstFailure\)/);
-    expect(ai).toMatch(/\(retry\)/);
+    expect(ai).toMatch(/retry\$\{raise \? ", raised ceiling" : ""\}/);
   });
 });
 
@@ -176,8 +176,11 @@ describe("the provenance reaches the extraction", () => {
 
   it("an outage is reported to Ops by name", () => {
     const loop = readCode("src/lib/agent-loop.ts");
-    expect(loop).toMatch(/kind: "vision-unavailable"/);
-    expect(loop).toMatch(/extraction\.imageRead\?\.seen === false/);
+    // Still by name - but the name is now chosen per OUTCOME, because an
+    // outage, an unparseable answer, a cut-off answer and a rejected price are
+    // four different things and only one of them is about the photo.
+    expect(loop).toMatch(/unavailable: "vision-unavailable"/);
+    expect(loop).toMatch(/READING_EVENT\[mediaReading\.outcome\]/);
   });
 });
 

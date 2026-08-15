@@ -19,6 +19,7 @@ import {
   readingEmptyLine,
   readingHeadline,
   readingIsEmpty,
+  readingIsFailure,
   type MediaReading,
 } from "@/lib/media/reading";
 
@@ -34,6 +35,13 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
   if (!reading) return null;
 
   const empty = readingIsEmpty(reading);
+  // DID WE FAIL, OR DID THE PHOTO? Everything below hangs off this one
+  // question. A reader that broke, a generation cut off at our token ceiling
+  // and a price our own plausibility net rejected are all failures of OURS -
+  // they get their own sentence, they never borrow "nothing readable in this
+  // one", and they never carry a confidence, because "CONFIDENCE: LOW" on a
+  // failed read is not a statement about the picture (owner report 5, #1/#8).
+  const failed = readingIsFailure(reading);
 
   return (
     <div className="mt-1.5">
@@ -56,23 +64,29 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
 
       {open && (
         <div className="glass glass-rim fluid-swap mt-1.5 space-y-2 rounded-2xl p-2.5">
-          {empty ? (
-            // WHAT THE TURN RECORDED, NOT WHAT THE PANEL HOPES.
-            //
-            // This used to be one hardcoded sentence promising the agent was
-            // "asking the shop to type it instead" - a dispatch nothing had
-            // performed and nothing had observed. readingEmptyLine reads the
-            // outcome and the follow-up the turn actually stamped, and says
-            // nothing at all when there is nothing recorded to say.
+          {/* WHAT THE TURN RECORDED, NOT WHAT THE PANEL HOPES.
+              This used to be one hardcoded sentence promising the agent was
+              "asking the shop to type it instead" - a dispatch nothing had
+              performed and nothing had observed. readingEmptyLine reads the
+              OUTCOME and the follow-up the turn actually stamped, and says
+              nothing at all when there is nothing recorded to say. A failure
+              outcome prints its line ABOVE whatever was still read, so a
+              sanity-rejected price shows the rows AND why we will not quote. */}
+          {(failed || empty) && (
             <p className="text-[11px] text-soft">{t(readingEmptyLine(reading))}</p>
-          ) : (
+          )}
+          {!empty && (
             <>
               {reading.prices.length > 0 && (
                 <Block label={t("Prices read")}>
                   <ul className="space-y-1">
                     {reading.prices.map((p, i) => (
                       <li key={i} className="flex items-baseline gap-1.5 text-[11.5px]">
-                        <span className="font-extrabold text-strong">
+                        <span
+                          className={`font-extrabold text-strong ${
+                            p.available === false ? "line-through opacity-60" : ""
+                          }`}
+                        >
                           {p.pricePerDay} {p.currency ?? ""}
                         </span>
                         <span className="text-faint">/{t("day")}</span>
@@ -80,6 +94,14 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
                         {p.tierLabel && (
                           <span className="shrink-0 rounded-full bg-card2 px-1.5 text-[9px] font-extrabold text-faint">
                             {p.tierLabel}
+                          </span>
+                        )}
+                        {/* A ROW THE BOARD CROSSED OUT is still on the board, so
+                            it stays in the reading - but it is not on offer, and
+                            the traveller must see which of the two it is. */}
+                        {p.available === false && (
+                          <span className="shrink-0 rounded-full bg-card2 px-1.5 text-[9px] font-extrabold text-brandyellow">
+                            {t("crossed out")}
                           </span>
                         )}
                       </li>
@@ -123,9 +145,21 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
           {/* WHAT IT CHANGED. A reading nobody acted on is trivia; this is the
               line that connects the picture to the price on the card. */}
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-            <span className={`text-[10px] font-extrabold uppercase ${TONE[reading.confidence]}`}>
-              {t("Confidence")}: {t(reading.confidence)}
-            </span>
+            {/* NO CONFIDENCE ON A FAILURE. "CONFIDENCE: LOW" under an empty
+                panel was never a judgement about the photo - it is the constant
+                the failure branches hardcode (and the extractor's own default),
+                so it read as "we looked hard and your picture is poor" about
+                photos we had either not read or not parsed. */}
+            {!failed && (
+              <span className={`text-[10px] font-extrabold uppercase ${TONE[reading.confidence]}`}>
+                {t("Confidence")}: {t(reading.confidence)}
+              </span>
+            )}
+            {reading.fromBurstLeader && (
+              <span className="text-[10px] font-bold text-faint">
+                {t("Read together with the other photos in this batch")}
+              </span>
+            )}
             {reading.usedPricePerDay ? (
               <span className="text-[10.5px] font-bold text-soft">
                 → {t("used")} {reading.usedPricePerDay}/{t("day")} {t("for your offer")}

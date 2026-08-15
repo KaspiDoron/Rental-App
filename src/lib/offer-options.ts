@@ -53,6 +53,14 @@ export interface VehicleOption {
   maxDays?: number;
   /** The shop's own words for the range ("3-7 days", "Monthly"). */
   tierLabel?: string;
+  /**
+   * FALSE when the board CROSSED THIS ROW OUT (a red X, a line through it).
+   *
+   * A struck-through row is still a row - the board really does list it, and
+   * "never drop a tier" applies - but the model is not on offer, so its price
+   * is never quoted. Undefined means the board said nothing either way.
+   */
+  available?: boolean;
 }
 
 const MODEL_NAMES =

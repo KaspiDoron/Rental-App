@@ -1093,11 +1093,34 @@ export async function processVendorReply(opts: {
           detail: `${verdict.reason ?? ""} (${cur}, ${ctx.region ?? "?"})`.slice(0, 500),
         },
       ]).catch(() => {});
+      // THE NET MUST NOT REWRITE THE READING INTO A LIE (owner report 5, #4).
+      //
+      // This ran ~400 lines BEFORE readingFrom, and on an implausible read it
+      // nulled pricePerDay, flipped found=false and forced confidence="low" by
+      // direct mutation - so a photo the model had read perfectly produced the
+      // byte-identical "We could not read anything usable from this one.
+      // CONFIDENCE: LOW" panel as a genuinely blank picture. The negotiation
+      // still refuses to quote the number (found=false is what keeps the agent
+      // from bargaining off a misread); what changes is that the READING keeps
+      // the number and says out loud that it was seen and rejected.
+      const rejected = typeof extraction.pricePerDay === "number" ? extraction.pricePerDay : undefined;
       usablePrice = verdict.pricePerDay ?? undefined;
       extraction.pricePerDay = verdict.pricePerDay ?? undefined;
       if (!verdict.pricePerDay) {
         extraction.found = false;
+        // `confidence` stays "low" for the ENGINE (a rejected read is not a
+        // confident one) - the panel no longer renders a confidence at all on a
+        // failure outcome, so it can no longer be read as a claim about the
+        // photo (readingIsFailure, media/reading.ts).
         extraction.confidence = "low";
+        if (images.length > 0 || extraction.imageRead) {
+          extraction.imageRead = {
+            ...(extraction.imageRead ?? { seen: true }),
+            modelFailure: "sanity-nulled",
+            rejectedPricePerDay: rejected,
+            rejectedCurrency: cur,
+          };
+        }
       }
     }
   }
@@ -1453,16 +1476,58 @@ export async function processVendorReply(opts: {
   // artefact - see `recordMediaFollowUp` below. Writing the whole object again
   // rather than patching it also makes the two writes order-independent.
   let mediaReading: import("./media/reading").MediaReading | null = null;
+  /** The stood-down frames of this burst get the leader's reading. See below. */
+  const stampBurstFollowers = async (
+    leader: { id: number; wa_message_id?: string | null; received_at?: string | null },
+    reading: import("./media/reading").MediaReading
+  ) => {
+    if (!ctx.sender) return;
+    try {
+      const { burstFollowerRows } = await import("./media/reading");
+      const siblings = await sbSelect<{
+        id: number;
+        wa_message_id: string | null;
+        received_at: string | null;
+        raw: { media?: unknown; reading?: unknown } | null;
+      }>(
+        "whatsapp_messages",
+        `select=id,wa_message_id,received_at,raw&direction=eq.inbound` +
+          `&raw->>receiver=eq.${encodeURIComponent(ctx.sender)}` +
+          `&order=received_at.desc&limit=12${numberFilter("from_number", from)}`
+      );
+      const leaderRow =
+        siblings.find((r) => r.id === leader.id) ??
+        ({ ...leader, received_at: leader.received_at ?? null } as { id: number; received_at: string | null });
+      for (const follower of burstFollowerRows(siblings, leaderRow)) {
+        await sbUpdate("whatsapp_messages", `id=eq.${follower.id}`, {
+          raw: {
+            ...(follower.raw ?? {}),
+            reading: {
+              ...reading,
+              fromBurstLeader: leader.wa_message_id ?? String(leader.id),
+            },
+          },
+        }).catch(() => {});
+      }
+    } catch {
+      /* the follower stamp is an upgrade on the leader's - never the turn */
+    }
+  };
   const stampMediaReading = async (reading: import("./media/reading").MediaReading) => {
     try {
       const receiverScope = `&raw->>receiver=eq.${encodeURIComponent(ctx.sender!)}`;
-      const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+      const rows = await sbSelect<{
+        id: number;
+        wa_message_id: string | null;
+        received_at: string | null;
+        raw: Record<string, unknown> | null;
+      }>(
         "whatsapp_messages",
         opts.waMessageId
-          ? `select=id,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
+          ? `select=id,wa_message_id,received_at,raw&direction=eq.inbound&wa_message_id=eq.${encodeURIComponent(
               opts.waMessageId
             )}&limit=1`
-          : `select=id,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
+          : `select=id,wa_message_id,received_at,raw&direction=eq.inbound${receiverScope}&order=received_at.desc&limit=1${numberFilter(
               "from_number",
               from
             )}`
@@ -1472,6 +1537,15 @@ export async function processVendorReply(opts: {
         await sbUpdate("whatsapp_messages", `id=eq.${row.id}`, {
           raw: { ...(row.raw ?? {}), reading },
         });
+        // EVERY FRAME OF A BURST, NOT JUST THE ONE THAT RAN THE TURN.
+        //
+        // A shop sent two menu photos; the second got no reading panel at all
+        // (owner report 5, #6). Burst coalescing gives the whole album to the
+        // NEWEST frame's invocation - the earlier frames stand down and never
+        // get a turn of their own - and the stamp wrote onto that one row. The
+        // stood-down rows keep their media, so they render, forever unexplained.
+        // They get the leader's reading, marked as coming from it.
+        await stampBurstFollowers(row, reading);
         return;
       }
       // NO ROW TO STAMP is itself the bug we spent a field test chasing. An
@@ -1520,30 +1594,50 @@ export async function processVendorReply(opts: {
   // and the extraction answers that whether or not the bytes came with it.
   const { holdsMediaReading: turnHoldsMedia } = await import("./media/reading");
   if (turnHoldsMedia(images.length, extraction as never) && ctx.sender) {
-    const { readingFrom } = await import("./media/reading");
-    mediaReading = readingFrom(extraction as never, {
-      usedPricePerDay: usablePrice,
-      notUsedReason: usablePrice
-        ? undefined
-        : extraction.found === false
-          ? "No usable price in this image."
-          : undefined,
-    });
+    const { readingFrom, readingIsFailure } = await import("./media/reading");
+    const draft = readingFrom(extraction as never, { usedPricePerDay: usablePrice });
+    // "No usable price in this image" IS A CLAIM ABOUT THE IMAGE, so it may
+    // only be made when the image is genuinely what came up short. On a
+    // parse-failed / truncated / sanity-nulled / unavailable reading the panel
+    // states OUR failure instead (readingEmptyLine), and this line - printed
+    // right under it in the same box - would have contradicted it.
+    mediaReading =
+      !usablePrice && extraction.found === false && !readingIsFailure(draft)
+        ? { ...draft, notUsedReason: "No usable price in this image." }
+        : draft;
     void stampMediaReading(mediaReading);
 
-    // AN OUTAGE IS AN EVENT, NOT A READING. When no provider ever looked at the
-    // photo the Ops feed gets told so by name - previously the only trace was a
-    // per-instance diagnostics array nobody read, and the traveller was shown a
-    // confident "nothing readable in this one" about an image nobody had seen.
-    if (extraction.imageRead?.seen === false) {
+    // A FAILURE IS AN EVENT, AND WHICH FAILURE IS THE WHOLE POINT.
+    //
+    // The only event here used to be `vision-unavailable`, fired only when the
+    // entire provider ladder failed - so the three failures that actually hurt
+    // (an unparseable answer, a cut-off answer, a price we read and rejected)
+    // left NO trace at all and were indistinguishable, in the feed and in the
+    // panel, from a blank photo. One kind per outcome, so telemetry can tell
+    // model-failed from photo-bad.
+    const READING_EVENT: Partial<Record<string, string>> = {
+      unavailable: "vision-unavailable",
+      "parse-failed": "vision-parse-failed",
+      truncated: "vision-truncated",
+      "sanity-nulled": "vision-sanity-nulled",
+      empty: "vision-empty",
+    };
+    const eventKindForReading = READING_EVENT[mediaReading.outcome];
+    if (eventKindForReading) {
+      const ir = extraction.imageRead;
       void sbInsert("agent_events", [
         {
-          kind: "vision-unavailable",
+          kind: eventKindForReading,
           vendor_id: ctx.vendorId ?? "",
           vendor_name: ctx.vendorName ?? "",
-          detail: `${extraction.imageRead.failure ?? "unknown"}${
-            extraction.imageRead.retryable ? " (retryable)" : ""
-          }: ${extraction.imageRead.detail ?? ""}`.slice(0, 500),
+          user_email: ctx.sender ?? "",
+          detail: (
+            mediaReading.outcome === "sanity-nulled"
+              ? `read ${ir?.rejectedPricePerDay ?? "?"} ${ir?.rejectedCurrency ?? ""} /day and rejected it as implausible`
+              : `${ir?.failure ?? mediaReading.outcome}${ir?.retryable ? " (retryable)" : ""}: ${
+                  ir?.detail ?? ""
+                }`
+          ).slice(0, 500),
         },
       ]).catch(() => {});
     }
