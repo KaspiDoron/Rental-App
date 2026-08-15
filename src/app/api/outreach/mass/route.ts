@@ -16,6 +16,8 @@ import { digitsOnly } from "@/lib/phone";
 import { lidKey } from "@/lib/wa/phone-key";
 import { outboxToKeyPatch } from "@/lib/wa/outbox-columns";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
+import { promisedRfq } from "@/lib/wa/thread-context";
+import type { StructuredRFQ } from "@/lib/types";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
@@ -413,13 +415,28 @@ export async function POST(req: Request) {
     // Per-shop compiled opener (falls back to the legacy single message when
     // the caller sent no rfq). Computed before meta so the gloss rides along.
     const opener = await openerFor(v.id, digits, isNewIntro);
+    // W9 - THE STAMP MAY NOT REWRITE A RUNNING THREAD'S PROMISE.
+    //
+    // This is the PRIMARY hunt send path, and it was the one drift generator
+    // left unguarded: `rfq: body.rfq ?? null` stamped the client's live rfq onto
+    // every row, including the shops `isNewIntro` had just told it were already
+    // mid-conversation. That stamp becomes the thread's anchor, so a second
+    // search for a different duration silently re-quoted every live thread - the
+    // exact mid-thread flip /api/outreach was fixed for, on the route that sends
+    // far more messages. The sibling's doctrine applies unchanged: a genuinely
+    // FIRST contact IS the promise and passes through untouched; anything else
+    // is reconciled against what that shop was actually told, which is what the
+    // inbound resolver will compute for this thread regardless.
+    const settledRfq = isNewIntro
+      ? ((body.rfq as StructuredRFQ | undefined) ?? null)
+      : (await promisedRfq(digits, session.email, body.rfq as StructuredRFQ | undefined)).rfq;
     const meta = {
       sender: session.email,
       vendorId: v.id,
       vendorName: v.name,
       kind: "rfq",
       round: 0,
-      rfq: body.rfq ?? null,
+      rfq: settledRfq ?? null,
       region: String(body.region ?? ""),
       plan: session.plan,
       localLang: localLanguageAllowed({ requested: body.localLang, plan: session.plan }),

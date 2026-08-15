@@ -26,10 +26,20 @@ import { beatRivalTarget } from "./negotiation/beat-rival";
 // Profiler Agent - free text → structured, vendor-ready RFQ
 // ---------------------------------------------------------------------------
 
+/**
+ * @param durationDaysHint The day count the traveller EXPLICITLY set on the
+ *   window control. Outranks anything read from prose.
+ * @param defaultDurationDays The day count the window control was SHOWING when
+ *   they searched, untouched (W9). It does not outrank prose - "for a week"
+ *   still wins - but it is what fills the gap when the traveller stated no
+ *   length at all. Without it the gap was filled by a hard-coded 3 that
+ *   contradicted the "For 4 days" card sitting above the search button.
+ */
 export async function runProfiler(
   input: string,
   durationDaysHint?: number,
-  voiceKey?: string
+  voiceKey?: string,
+  defaultDurationDays?: number
 ): Promise<StructuredRFQ> {
   const { getPrompt } = await import("./prompts");
   const system = await getPrompt("profiler");
@@ -87,10 +97,10 @@ export async function runProfiler(
   if (llm) {
     const parsed = extractJson<StructuredRFQ>(llm);
     if (parsed && parsed.vehicleClass) {
-      return normalizeRFQ(parsed, input, durationDaysHint);
+      return normalizeRFQ(parsed, input, durationDaysHint, defaultDurationDays);
     }
   }
-  return heuristicRFQ(input, durationDaysHint);
+  return heuristicRFQ(input, durationDaysHint, defaultDurationDays);
 }
 
 /**
@@ -110,7 +120,8 @@ export function deterministicRFQ(fields: Partial<StructuredRFQ>): StructuredRFQ 
 function normalizeRFQ(
   rfq: StructuredRFQ,
   input: string,
-  durationHint?: number
+  durationHint?: number,
+  defaultDurationDays?: number
 ): StructuredRFQ {
   // W4.1: THE HINT IS NOT A FALLBACK, IT IS THE TRAVELLER. `durationHint` only
   // exists when the picker was actually set (the page sends it on no other
@@ -118,8 +129,16 @@ function normalizeRFQ(
   // let any truthy LLM value (including an invented 1) beat the traveller's 3.
   // Explicit input outranks inference; the LLM only fills the gap when the
   // traveller stated nothing.
+  // W9: ...AND THE UNTOUCHED CONTROL IS THE LAST RESORT, NOT 3. A traveller who
+  // states no length gets the number their own screen was showing, which is the
+  // only number they can be said to have seen. The hard-coded 3 inside
+  // clampDuration remains for callers that pass nothing at all.
   const hinted = requestedDuration(durationHint);
-  const durationDays = clampDuration(hinted ?? rfq.durationDays);
+  // The prompt makes durationDays OPTIONAL ("only if the traveller stated how
+  // long"), so this field is genuinely absent on most parses even though the
+  // type says number - read it defensively.
+  const stated = Number(rfq.durationDays) > 0 ? Number(rfq.durationDays) : undefined;
+  const durationDays = clampDuration(hinted ?? stated ?? defaultDurationDays);
   // One compute, reconciled once: the return date is start + duration, by the
   // one writer (lib/rental-window). An LLM returnDate that contradicts the
   // reconciled pair does not survive - it is the same lie in another field.
@@ -250,7 +269,11 @@ function rentalFields(rfq: Partial<StructuredRFQ>, input: string): {
   };
 }
 
-function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
+function heuristicRFQ(
+  input: string,
+  durationHint?: number,
+  defaultDurationDays?: number
+): StructuredRFQ {
   const t = input.toLowerCase();
   const vehicleClass: VehicleClass = /scooter|vespa|moped/.test(t)
     ? "scooter"
@@ -285,20 +308,35 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
 
   // W4.1: the picker hint - only ever sent when the traveller SET it - outranks
   // the prose read, same precedence as normalizeRFQ: the value on screen is the
-  // statement, the sentence is the fallback, 3 days is the last resort.
-  let durationDays = 3;
+  // statement, the sentence is the fallback.
+  // W9: and the last resort is the window control's UNTOUCHED value, not a
+  // hard-coded 3. This is the path a typed search takes in demo mode and on
+  // every LLM miss, and it was answering "I need a scooter in Chiang Mai" with
+  // 3 days while the card above the search button read "For 4 days".
+  let prose: number | undefined;
   if (daysMatch) {
     const n = parseInt(daysMatch[1], 10);
-    durationDays = clampDuration(/week/.test(daysMatch[2]) ? n * 7 : n);
+    prose = clampDuration(/week/.test(daysMatch[2]) ? n * 7 : n);
   }
-  durationDays = clampDuration(requestedDuration(durationHint) ?? durationDays);
+  const durationDays = clampDuration(
+    requestedDuration(durationHint) ?? prose ?? defaultDurationDays
+  );
 
   const rfq: StructuredRFQ = {
     vehicleClass,
-    // Cheapest by default (item #14): no size named = smallest 110cc; no car
-    // spec named = regular 4-seat economy.
+    // NO INVENTED ENGINE SIZE - the same rule normalizeRFQ carries at :148, and
+    // the same post-mortem (owner report 5 #11, the 110cc trap). That fix landed
+    // on the tap-to-build panel and the LLM-success path and left THIS one
+    // standing, which is the path every LLM miss takes: demo mode, an
+    // unparseable answer, the 9s profiler budget expiring, or an exhausted
+    // LIMIT_AI_PER_DAY. Displacement is DISQUALIFYING in the vehicle-identity
+    // gate, so a 110 nobody asked for stamped every real 125cc quote
+    // "wrong-vehicle", barred it from BEST PRICE and flagged the card red - in a
+    // 125cc market the traveller saw no prices at all, on a constraint they
+    // never stated and could not see. "Any / cheapest" means NO cc constraint;
+    // cheapest is then the lowest price the shops come back with.
     engineSizeCc:
-      vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : 110,
+      vehicleClass === "car" ? undefined : ccMatch ? parseInt(ccMatch[1], 10) : undefined,
     // NO SEAT DEFAULT - the same rule normalizeRFQ carries at :122, and for
     // the same reason. This path was missed when that one was fixed, and it is
     // not a rare path: runProfiler returns heuristicRFQ DIRECTLY whenever the

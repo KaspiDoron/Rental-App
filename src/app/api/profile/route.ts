@@ -20,6 +20,30 @@ function requestedDays(v: unknown): number | undefined {
   return Number.isFinite(n) && n >= 1 && n <= 90 ? n : undefined;
 }
 
+/**
+ * WHICH HALF OF THE WINDOW THE TRAVELLER ACTUALLY TOUCHED (W9).
+ *
+ * The client always sends the window it is SHOWING - that is the whole point,
+ * the on-screen card is what the traveller believes they searched - and marks
+ * each control independently as touched or not. Untouched is a default the
+ * traveller merely saw, so it fills a gap but never overrules their own words;
+ * touched is a statement and always wins.
+ *
+ * One shared flag for both controls is what made this unfixable before: any tap
+ * on the date picker promoted the untouched 4-day default into an explicit
+ * override, so "scooter for a week from the 20th" plus one date tap shipped a
+ * 4-day rental - and the mismatch note could not fire, because the app had
+ * asked for 4 and got 4.
+ */
+function explicitWindow(v: unknown): { startDate: boolean; durationDays: boolean } {
+  // NO FLAGS = THE OLD CONTRACT, WHICH WAS "only sent when touched". A client
+  // running a cached bundle still gets its window honoured as an override
+  // rather than quietly demoted to a fallback mid-deploy.
+  if (!v || typeof v !== "object") return { startDate: true, durationDays: true };
+  const o = v as { startDate?: unknown; durationDays?: unknown };
+  return { startDate: o.startDate === true, durationDays: o.durationDays === true };
+}
+
 // THE SAME AUTHORITY, AT THE START OF THE FUNNEL. Without this the opener asked
 // twenty shops about a start date the traveller's plan cannot arrange - twenty
 // real conversations built on a promise the app would refuse at the close.
@@ -85,8 +109,14 @@ export async function POST(req: Request) {
   // The profiler is an LLM call and was ungoverned. Over-cap it falls back to
   // heuristicRFQ - the same deterministic path it already uses when no provider
   // key is configured or the 9s budget expires - so the search still runs.
+  const explicit = explicitWindow(body?.windowExplicit);
+  const start = requestedStart(body?.startDate);
+  const days = requestedDays(durationDays);
   const profiled = await runWithAiBudget(session?.email ?? "", () =>
-    runProfiler(text, durationDays, session?.email)
+    // The hint is the traveller's STATEMENT (touched), the default is what their
+    // screen was showing (untouched). Both are the same number on the wire; only
+    // `windowExplicit` says which of the two it is.
+    runProfiler(text, explicit.durationDays ? days : undefined, session?.email, days)
   );
   // W-7 / W4.1: THE WINDOW CONTROL WINS OVER THE PARSE - BOTH HALVES OF IT.
   //
@@ -99,14 +129,28 @@ export async function POST(req: Request) {
   // traveller input always beats LLM inference - date AND duration alike - and
   // the return date is derived arithmetic (start + days) by the one writer in
   // lib/rental-window, never a parse of its own.
-  // The page sends these ONLY when the traveller actually set them, so a request
-  // that says "from the 20th for a week" and never touches the picker still parses.
-  const start = requestedStart(body?.startDate);
-  const days = requestedDays(body?.durationDays);
+  //
+  // W9: THE WINDOW ON THE WIRE IS THE WINDOW ON THE SCREEN - ALWAYS.
+  //
+  // The page used to send neither field unless the traveller touched the
+  // control, so the DEFAULT search - type a sentence, press the button - sent no
+  // start date and no duration at all. The profiler then had nothing to work
+  // with: no date reached the RFQ (deriveReturnDate and clampRfqWindow both
+  // no-op without one) and the duration fell to a hard-coded 3, while the card
+  // above the button said "From today - For 4 days". Twenty shops were asked
+  // about a rental the traveller had never seen described anywhere.
+  //
+  // Both halves now travel on every typed search, and `windowExplicit` says
+  // which of them the traveller actually set. An untouched control is a
+  // FALLBACK - it fills what the prose left unsaid ("I need a scooter") and
+  // yields to what the prose states ("from the 20th for a week"). A touched one
+  // is an override and wins outright. The duration's fallback is applied inside
+  // the profiler, which is the only layer that knows whether prose stated a
+  // length at all.
   const withWindow: StructuredRFQ = deriveReturnDate({
     ...profiled,
-    ...(start ? { startDate: start } : {}),
-    ...(days ? { durationDays: days } : {}),
+    ...(start && (explicit.startDate || !profiled.startDate) ? { startDate: start } : {}),
+    ...(days && explicit.durationDays ? { durationDays: days } : {}),
   });
   const decided = applyWindow(withWindow, session?.plan, body?.timeZone);
   const rfq = decided.rfq;

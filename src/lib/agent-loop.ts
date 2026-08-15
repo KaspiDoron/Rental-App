@@ -470,7 +470,16 @@ export async function processVendorReply(opts: {
     }
   }
 
-  const rfq = ctx.rfq as StructuredRFQ;
+  // W9: THE RECONCILED PROMISE, NOT THE ROW'S STAMP.
+  //
+  // This read `ctx.rfq` - the raw anchor - while the wakeup/tick entry read
+  // `resolved.rfq`, the promise-reconciled value. Same thread, same shop, two
+  // durations: a scheduled follow-up said 3 days and the shop's own reply said
+  // 1. It flows straight into turnInput.rfq -> SPTE's session -> the duration
+  // rail, which then "corrected" a right draft into the wrong number. The
+  // resolver no longer lets the two disagree (ctx.rfq === resolved.rfq by
+  // construction); reading it from `resolved` here says so out loud.
+  const rfq = resolved.rfq as StructuredRFQ; // non-null: guarded at the top
   const round = Number(ctx.round ?? 0);
 
   // A reply arrived: build the sender's trust score (anti-ban engagement).

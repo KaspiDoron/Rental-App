@@ -34,7 +34,9 @@ describe("a seat count nobody asked for", () => {
     // runProfiler returns heuristicRFQ DIRECTLY when the model gives nothing
     // back: no key, unparseable JSON, or the 9s budget expiring.
     const agents = readCode("src/lib/agents.ts");
-    expect(agents).toMatch(/return heuristicRFQ\(input, durationDaysHint\);/);
+    // W9: the same return, now also carrying the window control's shown value
+    // as the last resort (see w9-duration-truth) - the path itself is unchanged.
+    expect(agents).toMatch(/return heuristicRFQ\(input, durationDaysHint, defaultDurationDays\);/);
   });
 
   it("seats really is disqualifying, which is why a phantom 4 silenced shops", () => {
