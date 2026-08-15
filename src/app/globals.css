@@ -43,6 +43,28 @@
   --faint: #6b7486;
   --line: #e2e7ef;
 
+  /* LOADING CHROME IS ACHROMATIC. NO BRAND HUE LIVES HERE.
+   *
+   * The owner's rule, in their words: remove the blue completely from the
+   * loading components, build the skeletons out of "the colors of the grey
+   * background", and put the colour where it is loved - the ambient waves.
+   * So the split is absolute and these tokens are the enforcement point:
+   * every loader (skeleton plate, sheen, horizon rail, dots) draws ONLY from
+   * this neutral set, and the five `--wd-hue-*` tokens below are now the
+   * AMBIENT's alone. A colourless loader over a deeply coloured wash is also
+   * simply the more expensive-looking of the two arrangements - the chrome
+   * stays quiet and the light behind it does the talking. */
+  --wd-skel-base: #e6eaf1;
+  --wd-skel-grade: rgba(255, 255, 255, 0.55);
+  --wd-skel-edge: rgba(255, 255, 255, 0.9);
+  --wd-skel-sheen: rgba(255, 255, 255, 0.62);
+  --wd-load-track: #e2e7ef;
+  /* On a LIGHT rail the travelling glint has to be DARKER than its track or it
+     is invisible - the same lesson the dark-mode shimmer learned the hard way,
+     applied in the opposite direction. */
+  --wd-load-sheen: #7c8698;
+  --wd-load-ink: #8d97a8;
+
   --blue: #2f6fed;
   --blue-strong: #1d5cd6;
   --blue-soft: #e3ecff;
@@ -82,6 +104,17 @@
   --faint: #99a2b1;
   --line: #33383f;
 
+  /* The neutral loading set, dark. Every value is re-authored rather than
+     alpha-shifted: a white sheen strong enough to read on a light plate is a
+     glare on a dark one, and a dark glint on a dark rail is nothing at all. */
+  --wd-skel-base: #2f343b;
+  --wd-skel-grade: rgba(255, 255, 255, 0.04);
+  --wd-skel-edge: rgba(255, 255, 255, 0.07);
+  --wd-skel-sheen: rgba(255, 255, 255, 0.16);
+  --wd-load-track: #343a42;
+  --wd-load-sheen: #aeb7c5;
+  --wd-load-ink: #99a2b1;
+
   --blue: #6ea2ff;
   --blue-strong: #8ab4ff;
   --blue-soft: #253654;
@@ -118,6 +151,14 @@
     --muted: #aab2bf;
     --faint: #99a2b1;
     --line: #33383f;
+
+    --wd-skel-base: #2f343b;
+    --wd-skel-grade: rgba(255, 255, 255, 0.04);
+    --wd-skel-edge: rgba(255, 255, 255, 0.07);
+    --wd-skel-sheen: rgba(255, 255, 255, 0.16);
+    --wd-load-track: #343a42;
+    --wd-load-sheen: #aeb7c5;
+    --wd-load-ink: #99a2b1;
 
     --blue: #6ea2ff;
     --blue-strong: #8ab4ff;
@@ -663,10 +704,31 @@ input, textarea, select, button {
  * the sweep is wider and slower so it reads as motion rather than a flicker,
  * and the plate itself breathes underneath, so even a stationary frame of the
  * animation still says "working". */
+/* MATERIAL, NOT A SLAB.
+ *
+ * What separates an expensive placeholder from a cheap one is that the
+ * expensive one looks like a SURFACE catching light, and the cheap one looks
+ * like a grey rectangle with a bar sliding over it. Three things buy that, and
+ * all three are free:
+ *   - a faint top-down grade, so the plate has a lit edge and a shaded floor;
+ *   - a hairline highlight along the very top pixel, the way a real raised
+ *     surface catches the light source every other card in this app implies;
+ *   - a sheen that is TILTED (100deg, not 90deg) and wide, so it reads as light
+ *     raking across the surface instead of a progress bar in disguise.
+ * The colours are the greys of the background, per the owner - no brand hue
+ * anywhere in this block.
+ *
+ * DELIBERATELY NOT STAGGERED. The instinct is to offset each line's sweep for a
+ * cascade; every design system that has shipped this says the opposite (eBay's
+ * playbook and the Helix system both: keep grouped skeletons in sync, never
+ * offset their delays). Offsetting reads as chaos, not luxury. So every
+ * .skeleton on screen shares one duration, one direction and zero delay. */
 .skeleton {
   position: relative;
   overflow: hidden;
-  background: var(--card2);
+  background-color: var(--wd-skel-base);
+  background-image: linear-gradient(180deg, var(--wd-skel-grade) 0%, transparent 45%);
+  box-shadow: inset 0 1px 0 var(--wd-skel-edge);
   animation: skeleton-breathe 2.4s ease-in-out infinite;
 }
 .skeleton::after {
@@ -675,24 +737,14 @@ input, textarea, select, button {
   inset: 0;
   transform: translateX(-100%);
   background: linear-gradient(
-    90deg,
+    100deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.1) 35%,
-    rgba(255, 255, 255, 0.42) 50%,
-    rgba(255, 255, 255, 0.1) 65%,
+    color-mix(in oklch, var(--wd-skel-sheen) 25%, transparent) 34%,
+    var(--wd-skel-sheen) 50%,
+    color-mix(in oklch, var(--wd-skel-sheen) 25%, transparent) 66%,
     transparent 100%
   );
-  animation: shimmer 1.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-[data-theme="dark"] .skeleton::after {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.05) 35%,
-    rgba(255, 255, 255, 0.2) 50%,
-    rgba(255, 255, 255, 0.05) 65%,
-    transparent 100%
-  );
+  animation: shimmer 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 /* THE SHIMMER SWEEP, DEFINED WHERE IT IS USED.
  *
@@ -705,9 +757,13 @@ input, textarea, select, button {
 @keyframes shimmer {
   to { transform: translateX(100%); }
 }
+/* The breath is now a WHISPER, not a pulse. It exists for one reason: a
+   stationary frame - the moment between sweeps - must still say "working".
+   At the old 0.72 it competed with the sheen and the pair read as a cheap
+   double-blink; at 0.9 the plate merely settles while the light crosses it. */
 @keyframes skeleton-breathe {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.72; }
+  50% { opacity: 0.9; }
 }
 /* Someone who asked for less motion still gets a visible placeholder - it just
    holds still instead of sweeping. */
@@ -716,123 +772,43 @@ input, textarea, select, button {
   .skeleton::after { animation: none; transform: none; opacity: 0.5; }
 }
 
-/* ---- AURORA GLOW - Wave D / M5 + M16 ------------------------------------
+/* ---- THE AMBIENT'S PALETTE ----------------------------------------------
  *
- * ONE definition of "this surface is working", worn by the loading primitives
- * that already exist rather than shipped as a parallel set beside them. The
- * module text is explicit about that, and the reason is the one this codebase
- * keeps re-learning: a second implementation of the same idea drifts from the
- * first, and then two screens disagree about what waiting looks like.
+ * THE COMPONENT GLOW IS GONE. `.aurora` was a coloured bloom + rim worn by the
+ * skeleton cards and the loader. The owner's verdict on the coloured loading
+ * chrome was final ("remove completely the blue color from the loading
+ * components"), and a NEUTRALISED aurora would have been worse than none: an
+ * achromatic haze behind a frosted card is invisible at a glance and still
+ * costs two full-size pseudo-element paints on every placeholder, on the
+ * low-end Android this product is built for. So it was deleted outright -
+ * class, helper module and all - rather than quietly defanged. The skeletons
+ * carry "this surface is working" on their own now (material plate + raking
+ * sheen, above), and the COLOUR moved to the one place the owner wants it: the
+ * full-viewport wash below.
  *
- * Three layers, all on pseudo-elements so nothing in the DOM changes:
- *   - the EDGE: an iridescent rim that travels around the border
- *   - the BLOOM: a soft coloured haze behind the surface
- *   - the BREATH: the whole thing swells and settles
- *
- * `overflow: hidden` is deliberately NOT set here - the bloom has to escape the
- * box to read as a glow, and .skeleton (which does clip) composes with it
- * because the two use different pseudo-elements.
- */
-.aurora {
-  position: relative;
-  isolation: isolate;
-}
-
-/* ONE GEOMETRY FOR EVERY GLOW - now SINGLE-HUE (Loading v3).
- *
- * The component glow was a CONIC rainbow sweeping 360 degrees; Loading v2 made
- * it stacked radial lobes but kept all FIVE brand hues, and at box scale five
- * hues still read as the amateur colour wheel the owner named. The aurora now
- * paints ONE brand hue walked across oklch lightness - no rotation, no blur
- * filter (soft gradient stops carry the haze for free, the same low-end-Android
- * budget rule the ambient lives by). Motion is the breath alone. The five-hue
- * ramp did not disappear: it moved wholesale to the page-level `.wd-ambient`,
- * where a full-viewport wash is the one place a multi-hue spread reads as light
- * rather than as a status wheel.
- */
-
-/* THE HUE SET, SEEDED FROM THE BRAND.
- *
- * These five tokens are the AMBIENT's palette now (the single-hue aurora and
- * the LoadingDots ramp both draw from `--wd-hue-1` alone). Each is a real brand
- * colour mixed toward a saturated carrier, so the wash is recognisably ours.
+ * THESE SEVEN TOKENS ARE THE AMBIENT'S ALONE. Nothing in the loading chrome may
+ * reference them - that separation is what keeps "intensify the waves" from
+ * ever bleeding a hue back into a loader. loading-feel.test.ts pins it.
  *
  * `in oklch` is load-bearing, not decoration. sRGB interpolation between a blue
  * and a green drives the midpoint through grey - the muddy band the old glow
  * showed halfway round. oklch keeps chroma up across the whole arc.
  *
- * One held violet stays. Without it, blue -> green -> yellow -> red is a
- * traffic light; the violet is what makes the ambient read as light rather than
- * as a status.
- */
+ * SEVEN, not five, and each mixed HARDER toward its saturated carrier than
+ * before ("add colors and make them much more visible"). The two new ones are
+ * bridge hues, chosen for the gaps rather than for brand identity: aqua sits
+ * between the green and the blue, coral between the yellow and the pink. Filled
+ * gaps are what make a multi-lobe wash read as one field of LIGHT instead of as
+ * separate coloured blobs - which is also why the held violet stays. Without
+ * it, blue -> green -> yellow -> red is a traffic light. */
 :root {
-  --wd-hue-1: color-mix(in oklch, var(--blue) 78%, #4f8bff);
-  --wd-hue-2: #7c5cff; /* the held violet - deliberately not a status colour */
-  --wd-hue-3: color-mix(in oklch, var(--wa-green) 70%, #12b981);
-  --wd-hue-4: color-mix(in oklch, var(--yellow) 72%, #ff9f1c);
-  --wd-hue-5: color-mix(in oklch, var(--red) 62%, #ff5c8a);
-}
-
-.aurora::before {
-  /* THE BLOOM, NOW SINGLE-HUE (Loading v3).
-   *
-   * The owner ditched the colour wheel: five brand hues stacked in a small box
-   * read as an amateur rainbow. The bloom is now ONE brand hue (`--wd-hue-1`)
-   * walked across three oklch lightness steps - a light crown, the pure hue,
-   * and a deep floor - which gives the same sense of depth with none of the
-   * traffic-signal tell. NO blur filter - soft, far-reaching stops only. */
-  content: "";
-  position: absolute;
-  inset: -16%;
-  z-index: -1;
-  pointer-events: none;
-  border-radius: inherit;
-  /* OPACITY BELONGS TO THE THEME, AND ONLY TO THE THEME. The breath rides on
-   * `scale` (nothing else claims it), so opacity is a plain declaration the
-   * dark-mode override below can actually win. */
-  opacity: 0.5;
-  background:
-    radial-gradient(60% 60% at 30% 20%, color-mix(in oklch, var(--wd-hue-1) 90%, #fff) 0%, transparent 88%),
-    radial-gradient(58% 58% at 72% 80%, var(--wd-hue-1) 0%, transparent 88%),
-    radial-gradient(66% 60% at 50% 52%, color-mix(in oklch, var(--wd-hue-1) 72%, #000) 0%, transparent 90%);
-  animation: aurora-breathe 3.6s ease-in-out infinite;
-}
-.aurora::after {
-  /* THE EDGE. A SINGLE-HUE gradient ring, masked to the border only - no extra
-     wrapper element and no double-border artefact on a rounded card. One brand
-     hue on an oklch lightness ramp reads as a jewel setting; static by design,
-     because the breath on the bloom is the whole motion. */
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in oklch, var(--wd-hue-1) 55%, #fff),
-    var(--wd-hue-1) 50%,
-    color-mix(in oklch, var(--wd-hue-1) 72%, #000)
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-}
-/* The bloom is what carries the effect in dark mode; the rim is what carries it
-   in daylight. Trading their weight rather than shipping one washed-out
-   compromise is the same lesson the skeleton shimmer learned the hard way.
-   These now actually apply - see the opacity note above. */
-[data-theme="dark"] .aurora::before { opacity: 0.62; }
-[data-theme="dark"] .aurora::after { opacity: 0.75; }
-
-@keyframes aurora-breathe {
-  0%, 100% { scale: 1; }
-  50% { scale: 1.045; }
+  --wd-hue-1: color-mix(in oklch, var(--blue) 55%, #3d7bff);
+  --wd-hue-2: #7a4dff; /* the held violet - deliberately not a status colour */
+  --wd-hue-3: color-mix(in oklch, var(--wa-green) 50%, #00c98d);
+  --wd-hue-4: color-mix(in oklch, var(--yellow) 55%, #ff9500);
+  --wd-hue-5: color-mix(in oklch, var(--red) 45%, #ff4f86);
+  --wd-hue-6: #0fd0c3; /* aqua bridge: green -> blue */
+  --wd-hue-7: #ff7a45; /* coral bridge: yellow -> pink */
 }
 
 /* THE HORIZON LINE - the whole loader's motion (Loading v3).
@@ -851,9 +827,10 @@ input, textarea, select, button {
   height: 2px;
   border-radius: 999px;
   overflow: hidden;
-  /* The faint rail - ~12% of the brand hue, so the track still reads when the
-     specular segment is parked at the far end. */
-  background: color-mix(in oklch, var(--wd-hue-1) 12%, transparent);
+  /* The rail, in the background's own grey - no brand hue. It still has to
+     read when the glint is parked at the far end, which is why it is a solid
+     neutral rather than a tint of one. */
+  background: var(--wd-load-track);
 }
 .wd-horizon::after {
   content: "";
@@ -863,15 +840,18 @@ input, textarea, select, button {
   left: 0;
   width: 42%;
   border-radius: inherit;
-  /* THE SPECULAR SEGMENT. The one brand hue brightened at its centre (an oklch
-     lightness walk toward white) and fading to nothing at both ends, so it
-     reads as a travelling glint of light rather than a coloured block. */
+  /* THE SPECULAR SEGMENT, NOW COLOURLESS. A neutral walked in oklch lightness -
+     deepest at its centre, fading to nothing at both ends - so it reads as a
+     travelling glint of light across a grey rail. The contrast direction is
+     theme-dependent and lives in the tokens: on the light rail the glint is
+     DARKER than its track, on the dark rail it is lighter. Either way it is
+     the only thing on this bar that moves. */
   background: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklch, var(--wd-hue-1) 45%, transparent) 28%,
-    color-mix(in oklch, var(--wd-hue-1) 92%, #fff) 50%,
-    color-mix(in oklch, var(--wd-hue-1) 45%, transparent) 72%,
+    color-mix(in oklch, var(--wd-load-sheen) 45%, transparent) 28%,
+    var(--wd-load-sheen) 50%,
+    color-mix(in oklch, var(--wd-load-sheen) 45%, transparent) 72%,
     transparent 100%
   );
   transform: translateX(-110%);
@@ -895,21 +875,18 @@ input, textarea, select, button {
 }
 
 /* Motion is not mandatory to understand a loader. Someone who asked for less
-   motion keeps the colour and loses the travel - the same contract .skeleton
-   already honours. The mark already holds still; here the aurora breath and the
-   horizon's travelling glint both stop, leaving a calm, coloured, static bar. */
+   motion keeps the SUBSTANCE and loses the travel - the same contract
+   .skeleton already honours. The mark already holds still, so all that stops
+   here is the horizon's travelling glint. */
 @media (prefers-reduced-motion: reduce) {
-  .aurora::before,
-  .aurora::after { animation: none; }
-  .aurora::before { opacity: 0.4; }
-  /* The horizon settles to a full, still, single-hue bar - never a frozen
-     glint parked mid-track. Keep the colour, drop the travel. */
+  /* The horizon settles to a full, still, neutral bar - never a frozen glint
+     parked mid-track. Keep the presence, drop the travel. */
   .wd-horizon::after {
     animation: none;
     left: 0;
     width: 100%;
     transform: none;
-    background: color-mix(in oklch, var(--wd-hue-1) 30%, transparent);
+    background: color-mix(in oklch, var(--wd-load-sheen) 30%, transparent);
   }
 }
 
@@ -1346,8 +1323,9 @@ input, textarea, select, button {
  * loading on iOS: around the whole screen, more on the top, fading into the
  * bottom").
  *
- * `.aurora::before` is box-scoped - it decorates the element it is on. This
- * is the PAGE-level wash behind a real wait: fixed, pointer-transparent, and
+ * This is the PAGE-level wash behind a real wait, and since the box-scoped
+ * component glow was deleted it is now the ONLY coloured element in any
+ * loading state: fixed, pointer-transparent, and
  * permanently mounted by <AmbientGlow/> in the root layout (raiseAmbient /
  * lowerAmbient drive `.wd-ambient-on`; loading-feel.test.ts kills the
  * dead-layer failure mode where this shipped as CSS no component rendered).
@@ -1373,14 +1351,28 @@ input, textarea, select, button {
    * here - join as low, wide side lobes so the wash reads around the WHOLE
    * screen instead of only crowning it. Still top-heavy: the mask (below)
    * carries real weight further down but never lets the bottom shout. */
+  /* SEVEN lobes now. The five originals keep their exact geometry so the wash
+   * the owner already loves is not re-composed underneath them; the two bridge
+   * hues (aqua, coral) fill the two visible gaps - mid-left and mid-right,
+   * where the eye previously found flat canvas between the crown and the low
+   * side lobes. Stops run to 92% rather than 88%, so neighbouring lobes now
+   * OVERLAP and mix in oklch instead of each fading out against the page. That
+   * overlap is most of the extra intensity: colour meeting colour, not more
+   * opacity. */
   background:
-    radial-gradient(70% 55% at 22% -6%, var(--wd-hue-1) 0%, transparent 88%),
-    radial-gradient(60% 48% at 78% 4%, var(--wd-hue-2) 0%, transparent 88%),
-    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 88%),
-    radial-gradient(55% 38% at 12% 64%, var(--wd-hue-4) 0%, transparent 88%),
-    radial-gradient(58% 40% at 90% 78%, var(--wd-hue-5) 0%, transparent 88%);
-  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.45) 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.6) 48%, rgba(0, 0, 0, 0.45) 88%, transparent 100%);
+    radial-gradient(70% 55% at 22% -6%, var(--wd-hue-1) 0%, transparent 92%),
+    radial-gradient(60% 48% at 78% 4%, var(--wd-hue-2) 0%, transparent 92%),
+    radial-gradient(85% 45% at 50% 26%, var(--wd-hue-3) 0%, transparent 92%),
+    radial-gradient(52% 40% at 4% 40%, var(--wd-hue-6) 0%, transparent 92%),
+    radial-gradient(52% 40% at 98% 46%, var(--wd-hue-7) 0%, transparent 92%),
+    radial-gradient(55% 38% at 12% 64%, var(--wd-hue-4) 0%, transparent 92%),
+    radial-gradient(58% 40% at 90% 78%, var(--wd-hue-5) 0%, transparent 92%);
+  /* The mask carries the wash further down the screen than it ever has: the
+     floor at 88% lifts 0.45 -> 0.62, so the lower third is genuinely coloured
+     rather than a hint, while the very bottom still releases to transparent so
+     the TabBar never sits in a haze. */
+  mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.74) 48%, rgba(0, 0, 0, 0.62) 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgba(0, 0, 0, 0.74) 48%, rgba(0, 0, 0, 0.62) 88%, transparent 100%);
   opacity: 0;
   transform-origin: 50% 0%;
   transition: opacity 420ms ease;
@@ -1388,10 +1380,13 @@ input, textarea, select, button {
   animation-play-state: paused;
 }
 .wd-ambient-on {
-  /* INTENSIFIED (Loading v3). The owner loves this wash and wanted it "much
-   * more intense": 0.45 -> 0.6 over the near-white canvas, with the fuller
-   * radial stops and the deeper/lower mask above doing the rest. */
-  opacity: 0.6;
+  /* INTENSIFIED AGAIN (Loading v4). v3 took this 0.45 -> 0.6; the owner came
+   * back wanting the waves brighter still, with more colours in them. 0.6 ->
+   * 0.74 is the last of the three levers (the other two - seven overlapping
+   * lobes and the deeper mask - are above), and it is the one with the most
+   * headroom left, because the loading chrome in front of the wash is now
+   * colourless and no longer competes with it for attention. */
+  opacity: 0.74;
   transition: none;
   animation-play-state: running;
 }
@@ -1399,11 +1394,11 @@ input, textarea, select, button {
  * same over #17191d is a glare - dark rides lower (0.36 -> 0.5, still lifted).
  * A RULE (not a token) so the prefers-color-scheme mirror test is untouched. */
 [data-theme="dark"] .wd-ambient-on {
-  opacity: 0.5;
+  opacity: 0.62;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .wd-ambient-on {
-    opacity: 0.5;
+    opacity: 0.62;
   }
 }
 

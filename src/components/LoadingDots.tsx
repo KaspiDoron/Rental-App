@@ -1,25 +1,25 @@
 "use client";
 
-// The app-wide inline loading indicator: three breathing dots, in the brand hue.
+// The app-wide inline loading indicator: three breathing dots, in the greys of
+// the background.
 //
-// WHY THESE DO NOT CARRY THE GLOW. There are roughly sixty LoadingDots sites in
-// this app - inline, in buttons, inside list rows. Giving each one a conic
-// gradient under an 18px blur would be sixty full-glow elements competing for
-// repaint on the phone this product is built for, and visually it would be a
-// light show rather than a status.
+// NO BRAND HUE, BY RULE (Loading v4). These went from three different brand
+// hues (a small rainbow) to one brand hue on a lightness ramp, and now to no
+// hue at all: the owner's instruction was to take the blue out of the loading
+// components completely and let the ambient wash behind the app carry every
+// colour. The ramp survives, because the ramp was never the problem - three
+// dots walked deep -> mid -> light in oklch read as one material with depth,
+// which is exactly as true of a neutral as it was of a blue.
 //
-// ONE HUE, A LIGHTNESS RAMP (Loading v3). The dots used to take three DIFFERENT
-// brand hues (--wd-hue-1/2/3) - the same rainbow tell the owner named on the
-// aurora, just smaller. Now all three are ONE hue (--wd-hue-1) walked across
-// three oklch lightness steps (deep -> pure -> light), so the row reads as one
-// premium colour with depth rather than a traffic light, and still ties to the
-// single-hue horizon on the search screen. The heavy signal stays where it
-// means something: one horizon per screen, on the surface doing the work.
+// There are roughly sixty LoadingDots sites in this app - inline, in buttons,
+// inside list rows. That is the other reason they stay this cheap: three
+// background-colours and one keyframe, no gradients, no blur, nothing that
+// asks the phone for a composite layer per row.
 const DOT_RAMP = [
-  // Deep -> pure -> light: one hue, three oklch lightness steps.
-  "color-mix(in oklch, var(--wd-hue-1) 82%, #000)",
-  "var(--wd-hue-1)",
-  "color-mix(in oklch, var(--wd-hue-1) 78%, #fff)",
+  // Deep -> mid -> light: one neutral, three oklch lightness steps.
+  "color-mix(in oklch, var(--wd-load-ink) 78%, #000)",
+  "var(--wd-load-ink)",
+  "color-mix(in oklch, var(--wd-load-ink) 72%, #fff)",
 ];
 export function LoadingDots({
   label,
