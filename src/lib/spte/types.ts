@@ -50,9 +50,58 @@ export type MoveKind =
   // ask ONE question worth asking: when does it come back?
   | "restock-probe"
   | "redirect-close" // NEW (B7): wrong-vehicle / not-offering -> thank + close
+  // THE BRUSH-OFF (W4.3). "You should try asking other shops; maybe they'll
+  // give you one." That is a shop ending the conversation politely, and the
+  // engine had no category for it at all: dialogue acts carry ASK kinds and
+  // SHARE kinds with no refusal member, and the one terminal-refusal regex
+  // lists "not interested" / "good luck" / "take it there". So the turn walked
+  // the whole ladder to its "no price yet" default - whose only legal moves ARE
+  // rate re-asks - and coerceToLegal sent one. The shop had just told us to go
+  // away and we asked it for its daily rate.
+  //
+  // Distinct from `farewell` (a decline we were TOLD) and from `redirect-close`
+  // (they do not stock what we need) because it is neither, and the model reads
+  // these tokens as English: this one is "they are done with us, thank them and
+  // stop". Never a re-ask, never a price, never a second message.
+  | "graceful-close"
+  // THE CONFIRM-QUESTION DOCTRINE (W4.4, the owner's rule verbatim): "if they
+  // are not positive about something (anything) they should ask the shop, but
+  // in a way of a question." Subject-parameterized (see ConfirmSubject) so one
+  // move covers deposit, price, availability, conditions and vehicle instead of
+  // the single hard-coded `confirm-vehicle` that was the entire vocabulary for
+  // checking a fact. Legal only while the comprehension pass reports it is not
+  // sure, and only ONCE per subject - see the ledger's third state.
+  | "confirm"
   | "momentum"
   | "closing-message"
   | "silent";
+
+/**
+ * The facts a confirming question may be put about. Closed, like the move
+ * vocabulary it parameterizes, and mirrored by the zod enum in
+ * semantic/classifiers.ts (the model may only name one of these).
+ */
+export type ConfirmSubject = "deposit" | "price" | "availability" | "conditions" | "vehicle";
+
+/**
+ * ONE THING THIS TURN IS NOT SURE IT READ RIGHT.
+ *
+ * `reading` is the fact we would otherwise have latched (and, before this,
+ * always did - `depositKnown` went true on the bare word "passport" anywhere in
+ * any inbound message, so a misread deposit was permanent). `question` is the
+ * confirming question the model already phrased in the traveller's voice, so
+ * even the LLM-down composer can send something that reads like a person.
+ */
+export interface Uncertainty {
+  subject: ConfirmSubject;
+  reading: string;
+  question: string;
+  /** The model's own confidence that this is genuinely worth asking about. */
+  confidence: number;
+}
+
+/** Where a shop stands with us, as a person would read it (W4.3). */
+export type ShopStance = "engaged" | "deflecting" | "declining" | "unclear";
 
 export type LeverageKind = "rival" | "benchmark" | "duration-volume" | "condition";
 
@@ -109,6 +158,23 @@ export interface ThreadDigest {
    * legal-move set can act on, instead of hopes expressed in a prompt.
    */
   ledger?: import("../thread/ledger").ThreadLedger;
+  /**
+   * SUBJECTS WE HAVE ALREADY PUT A CONFIRMING QUESTION ABOUT.
+   *
+   * The ask-once ledger is subject-keyed with a BOOLEAN answered state, so it
+   * has no way to say "asked, answered, and the answer was ambiguous" - which
+   * made a confirming re-ask structurally impossible. This is the bound on the
+   * third state: one confirming question per subject, ever. Durable, because
+   * the digest is now persisted (W4.5) - before that it restarted empty every
+   * turn and any "we already asked" fact was a fiction.
+   */
+  confirmAsked?: ConfirmSubject[];
+  /**
+   * THE CONFIRMING QUESTION CURRENTLY IN FLIGHT. Surfaced on the shop card as
+   * "double-checking with the shop", so a traveller watching a thread pause on
+   * a question can see WHY instead of watching an idle card.
+   */
+  awaitingConfirmation?: { subject: ConfirmSubject; question: string } | null;
 }
 
 export interface VerifiedExtraction {
@@ -173,6 +239,31 @@ export interface VerifiedExtraction {
   imageUnread?: boolean;
   /** A price that came from a PHOTO rather than typed text. */
   sheetPricePerDay?: number;
+  // ---- the comprehension pass (spte/comprehension.ts) -----------------------
+  /**
+   * THE SHOP IS GETTING RID OF US POLITELY. Read by a model over the whole
+   * message, never by a phrase list - "you should try asking other shops" is
+   * a brush-off in every language and matches no refusal vocabulary in any of
+   * them. Terminal, like `declined`, but its own state so the card can say
+   * "they passed" rather than inventing a decline the shop never made.
+   */
+  deflected?: boolean;
+  /** The comprehension pass's stance verdict, carried for the trace + prompt. */
+  stance?: ShopStance;
+  /** The shop's own words behind the stance, so nothing has to be paraphrased. */
+  stanceQuote?: string;
+  /**
+   * FACTS THIS TURN IS NOT SURE IT READ RIGHT (W4.4). Empty on a plain message.
+   * Non-empty makes `confirm` a legal move - the engine asks rather than
+   * latching a reading it does not trust.
+   */
+  uncertain?: Uncertainty[];
+  /**
+   * The comprehension pass could not run - no reachable provider. Distinct from
+   * "it ran and found nothing": one is an outage that must degrade to the old
+   * deterministic behaviour, the other is a clean read.
+   */
+  comprehensionDegraded?: boolean;
 }
 
 export interface TurnContext {
@@ -246,6 +337,10 @@ export interface TurnArtifact {
   think: string; // <=80 tok scratchpad - logged, never sent
   move: MoveKind; // MUST be in legalMoves (validated + coerced)
   message?: string; // the draft (absent for silent)
+  /** Which fact a `confirm` move is putting back to the shop. Set by the
+   *  engine from the legal-move computation, never by the model - the model
+   *  picks the MOVE, the policy already decided which subject is unsettled. */
+  confirmSubject?: ConfirmSubject;
   counterPricePerDay?: number; // guards verify against floor/quote/rival
   leverageUsed: LeverageKind[];
   digestPatch: string[]; // <=3 new durable facts

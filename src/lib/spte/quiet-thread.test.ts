@@ -30,7 +30,13 @@ const readCode = (p: string) =>
 
 const digest = (over: Partial<ThreadDigest> = {}): ThreadDigest => ({ ...emptyDigest(), ...over });
 
-function ctx(partial: { verified: VerifiedExtraction; digest?: ThreadDigest }): TurnContext {
+function ctx(partial: {
+  verified: VerifiedExtraction;
+  digest?: ThreadDigest;
+  /** W4.3: `momentum` is a re-opening, so it belongs to the WAKEUP the silent
+   *  turn schedules - not to the reply that answers a shop mid-sentence. */
+  event?: TurnContext["event"];
+}): TurnContext {
   return {
     session: {
       sessionId: "s1",
@@ -53,7 +59,7 @@ function ctx(partial: { verified: VerifiedExtraction; digest?: ThreadDigest }): 
     inbound: { text: "Sorry,we do already discount.", verified: partial.verified },
     legalMoves: [],
     guards: { maxRounds: 4 },
-    event: "shop-message",
+    event: partial.event ?? "shop-message",
   };
 }
 
@@ -69,15 +75,34 @@ const ASKED_PRICE = digest({
 
 describe("a thread with no price is not a finished thread", () => {
   it("REPRODUCTION: the vague reply no longer ends in bare silence", () => {
-    const legal = legalMovesFor(ctx({ verified: { found: false }, digest: ASKED_PRICE }));
+    // The turn the shop spoke on still goes quiet - but it now schedules the
+    // 3-minute wakeup below, and the wakeup is where the nudge lives.
+    const legal = legalMovesFor(
+      ctx({ verified: { found: false }, digest: ASKED_PRICE, event: "tick" })
+    );
     expect(legal).toContain("momentum");
     expect(legal[0]).not.toBe("silent");
+  });
+
+  it("...but NEVER as a reply to a shop that just spoke (W4.3)", () => {
+    // `momentum` renders "Hi again! Just checking in - any chance on that
+    // better rate...". Nothing in its guard tested whether the shop had
+    // replied THIS turn, so it was legal against a shop that had just
+    // dismissed us - greeting someone ten seconds after they wrote to us,
+    // which is proof nobody read the message. The thread still comes back:
+    // silent -> wakeup -> tick -> momentum.
+    const legal = legalMovesFor(
+      ctx({ verified: { found: false }, digest: ASKED_PRICE, event: "shop-message" })
+    );
+    expect(legal).not.toContain("momentum");
+    expect(legal).toEqual(["silent"]);
   });
 
   it("ONCE. A thread already nudged goes quiet, and stays quiet", () => {
     const legal = legalMovesFor(
       ctx({
         verified: { found: false },
+        event: "tick",
         digest: digest({
           ...ASKED_PRICE,
           lastOutbound: ["Hi again! Just checking in - any chance on that better rate for 3 days?"],
@@ -89,15 +114,47 @@ describe("a thread with no price is not a finished thread", () => {
   });
 
   it("a shop that DECLINED is not nudged - that is pestering, not momentum", () => {
-    const legal = legalMovesFor(ctx({ verified: { found: false, declined: true }, digest: ASKED_PRICE }));
+    const legal = legalMovesFor(
+      ctx({ verified: { found: false, declined: true }, digest: ASKED_PRICE, event: "tick" })
+    );
     expect(legal).not.toContain("momentum");
+  });
+
+  it("neither is a shop that sounded RELUCTANT (tone, finally read by something)", () => {
+    // Tone has been computed on every turn since the engine shipped and
+    // consumed by nothing on the primary path. A shop that was short with us
+    // does not want a cheerful check-in three minutes later.
+    const legal = legalMovesFor(
+      ctx({
+        verified: { found: false },
+        event: "tick",
+        digest: digest({ ...ASKED_PRICE, tone: "reluctant" }),
+      })
+    );
+    expect(legal).not.toContain("momentum");
+    expect(legal).toEqual(["silent"]);
   });
 
   it("neither is a shop that has already given us a price", () => {
     // With a price on the table there is always a real move, and `momentum`
     // must never displace one.
     const legal = legalMovesFor(
-      ctx({ verified: { found: true, pricePerDay: 180 }, digest: ASKED_PRICE })
+      ctx({ verified: { found: true, pricePerDay: 180 }, digest: ASKED_PRICE, event: "tick" })
+    );
+    expect(legal).not.toContain("momentum");
+    expect(legal).toContain("bargain");
+  });
+
+  it("...including a price they gave EARLIER and did not repeat (W4.5)", () => {
+    // The standing quote is a fact about the thread. Before the digest was
+    // durable, a shop replying "ok for you?" wiped it, bargain went illegal
+    // and the engine nudged a shop it was mid-negotiation with.
+    const legal = legalMovesFor(
+      ctx({
+        verified: { found: false },
+        event: "tick",
+        digest: digest({ ...ASKED_PRICE, quotedPricePerDay: 180 }),
+      })
     );
     expect(legal).not.toContain("momentum");
     expect(legal).toContain("bargain");

@@ -756,10 +756,24 @@ export async function replaySpteTurns(args: {
       outboundKinds,
       currentInbound: turn.shopSays,
     });
+    // WHAT THE COMPREHENSION PASS SAID, FROZEN (W4.3/W4.4). Replay never calls
+    // a model, so a case that wants to exercise the deflection branch or the
+    // confirm ladder freezes the verdict the same way it freezes an extraction.
+    // Absent on every existing case -> undefined/empty, so they replay
+    // byte-identically.
+    const uncertain = Array.isArray(stub.uncertain)
+      ? (stub.uncertain as import("./spte/types").Uncertainty[])
+      : undefined;
+    const ambiguous = (uncertain ?? [])
+      .map((u) => u.subject)
+      .filter((s): s is "deposit" | "price" | "availability" =>
+        s === "deposit" || s === "price" || s === "availability"
+      );
     const ledger = buildLedger({
       inbound: priorInbound,
       outbound,
       currentInbound: turn.shopSays,
+      ambiguous,
     });
     const stock = stockState(ledger);
 
@@ -768,6 +782,11 @@ export async function replaySpteTurns(args: {
       pricePerDay: typeof stub.pricePerDay === "number" ? stub.pricePerDay : undefined,
       currency,
       declined: stub.declined === true,
+      // The brush-off state (W4.3) - live reads it from the comprehension pass;
+      // a frozen case pins it, exactly like `declined`.
+      deflected: stub.deflected === true,
+      stance: typeof stub.stance === "string" ? (stub.stance as import("./spte/types").ShopStance) : undefined,
+      uncertain,
       wrongVehicle: stub.vehicleVerdict === "mismatch",
       vehicleUnclear: stub.vehicleVerdict === "unclear",
       // The identity gate's frozen verdict (Wave 3): live carries it via
@@ -862,7 +881,11 @@ export async function replaySpteTurns(args: {
           firmCount: Math.max(firmSoFar, facts.firmCount),
           // Same OR-shape as live.ts buildDigest: the ledger's typed claims
           // widen the regex facts, never narrow them.
-          depositKnown: facts.depositKnown || ledger.known.includes("deposit"),
+          // Same suppression live applies (live.ts buildDigest): a deposit the
+          // comprehension pass could not settle is not a known deposit.
+          depositKnown:
+            !ambiguous.includes("deposit") &&
+            (facts.depositKnown || ledger.known.includes("deposit")),
           fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
           deliveryOffered: facts.deliveryOffered,
           fulfillmentCostKnown: facts.fulfillmentCostKnown,

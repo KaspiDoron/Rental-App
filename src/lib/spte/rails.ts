@@ -215,7 +215,15 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   // number or agrees to one does not go out. `restock-probe` is held to the
   // same rule for the same reason - a shop that just ran out is the single
   // most dangerous moment to sound like we are accepting terms.
-  if (artifact.move === "farewell" || artifact.move === "redirect-close" || artifact.move === "restock-probe") {
+  // ...and `graceful-close` is a goodbye by any other name (W4.3): the shop
+  // pointed us elsewhere, so a number or an agreement in that message is the
+  // same failure wearing a new move token.
+  if (
+    artifact.move === "farewell" ||
+    artifact.move === "redirect-close" ||
+    artifact.move === "graceful-close" ||
+    artifact.move === "restock-probe"
+  ) {
     const AGREE_RX =
       /\b(deal|agreed?|i'?ll take it|we'?ll take it|book(ing|ed)? it|i'?ll book|confirm(ed|ing)?|sounds good|that works|good price|great price|perfect price|i accept|works for me)\b/i;
     const agreed = AGREE_RX.exec(text);

@@ -78,6 +78,43 @@ export interface ThreadLedger {
    * required once every hand-built ThreadLedger carries it.
    */
   shopAsked?: ClaimSubject[];
+  /**
+   * THE THIRD STATE: ANSWERED, BUT WE ARE NOT SURE WHAT THE ANSWER WAS.
+   *
+   * `known` and `outstanding` are a two-state book - a subject has been settled
+   * by the shop or it has not - and that shape is exactly why a misread could
+   * never be repaired. "We have deposit passport or money4000" settles the
+   * deposit subject by every test this file applies, so `depositKnown` latched,
+   * the deposit probe retired forever, and whichever of the two readings the
+   * extractor happened to take became permanent. There was no way to say "they
+   * told us, and we are not confident we understood".
+   *
+   * Populated from the comprehension pass (spte/comprehension.ts), not from the
+   * text: only something that has READ the message knows it is ambiguous. A
+   * subject in here is NOT known, and a confirming question about it is legal
+   * exactly once (bounded by ThreadDigest.confirmAsked).
+   */
+  ambiguous?: ClaimSubject[];
+}
+
+/**
+ * Where a subject stands, as one value instead of three boolean lookups.
+ *
+ *   unasked   - nobody has raised it
+ *   asked     - we asked; the shop has not answered since
+ *   answered  - the shop settled it, either way
+ *   ambiguous - the shop answered and we are not confident what they meant
+ *
+ * `ambiguous` deliberately outranks `answered`: the whole point is that an
+ * answer we cannot trust must not count as one.
+ */
+export type SubjectState = "unasked" | "asked" | "answered" | "ambiguous";
+
+export function subjectState(ledger: ThreadLedger, subject: ClaimSubject): SubjectState {
+  if ((ledger.ambiguous ?? []).includes(subject)) return "ambiguous";
+  if (ledger.outstanding.includes(subject)) return "asked";
+  if (ledger.known.includes(subject)) return "answered";
+  return "unasked";
 }
 
 export interface LedgerInput {
@@ -93,6 +130,12 @@ export interface LedgerInput {
    * real question. Omitted, the claim layer decides from the clause itself.
    */
   force?: ForceHint;
+  /**
+   * Subjects the comprehension pass reported it is NOT confident it read. They
+   * are struck from `known` (an answer nobody understood is not an answer) and
+   * surfaced as the ledger's third state. Absent -> today's two-state book.
+   */
+  ambiguous?: ClaimSubject[];
 }
 
 /**
@@ -123,7 +166,13 @@ export function buildLedger(input: LedgerInput): ThreadLedger {
   // subject known; what it ASKED goes on the other side of the book, where it
   // reads as an obligation on us instead of a fact about the deal.
   const shopTold = shopClaims.filter((c) => c.force !== "ask");
-  const known = [...new Set(shopTold.map((c) => c.subject))];
+  // ...AND AN ANSWER WE DID NOT UNDERSTAND IS NOT AN ANSWER. A subject the
+  // comprehension pass flagged as ambiguous is struck from `known`, which is
+  // what stops depositKnown latching on a reading nobody trusts.
+  const ambiguous = [...new Set(input.ambiguous ?? [])];
+  const known = [...new Set(shopTold.map((c) => c.subject))].filter(
+    (s) => !ambiguous.includes(s)
+  );
   const shopAsked = [...new Set(shopClaims.filter((c) => c.force === "ask").map((c) => c.subject))];
 
   // OUTSTANDING = we asked about it AFTER the shop's last word on it. Comparing
@@ -151,12 +200,13 @@ export function buildLedger(input: LedgerInput): ThreadLedger {
   // already settled. A deposit is a term of a price; until there is a price it
   // is not yet this thread's turn to ask.
   const owed = REQUIRED_SUBJECTS.filter((s) => {
+    if (ambiguous.includes(s)) return true; // told, not understood - still owed
     if (settled(shopClaims, s)) return false;
     const after = OBLIGATION_AFTER[s];
     return !after || settled(shopClaims, after);
   });
 
-  return { claims, known, outstanding, owed, shopAsked };
+  return { claims, known, outstanding, owed, shopAsked, ambiguous };
 }
 
 /** Would asking about this subject repeat a question already outstanding? */

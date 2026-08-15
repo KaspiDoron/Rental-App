@@ -214,6 +214,28 @@ export interface ThreadFields {
     at: string;
     askedAt?: string;
   };
+  /**
+   * THE THREAD'S DURABLE MEMORY (W4.5) - the persisted half of the SPTE digest
+   * (spte/digest persistableDigest): the model's durable facts, the standing
+   * quote, the round count, the tone, and which confirming questions have been
+   * spent.
+   *
+   * `runTurn` has always produced this and `runSpteLiveTurn` never read it
+   * back, so `buildDigest` restarted from empty on every single turn: facts was
+   * permanently [], which made the one-warm-goodbye rule unenforceable, and the
+   * quote was rebuilt from the current message alone, so a shop that did not
+   * repeat its number looked to the whole ladder like a shop that had never
+   * quoted. Free-form JSON on purpose - it is read back defensively
+   * (digestFromStored) so rows written before this existed simply seed empty.
+   */
+  digest?: Record<string, unknown>;
+  /**
+   * A CONFIRMING QUESTION THE AGENT IS WAITING ON (W4.4). Set when the engine
+   * put a fact back to the shop because it was not sure it had understood;
+   * cleared once the fact reads cleanly. The card renders it as "double-
+   * checking with the shop" so a paused thread explains itself.
+   */
+  awaitingConfirmation?: { subject: string; question: string; at: string };
 }
 
 export interface NegotiationThreadState {
@@ -338,6 +360,21 @@ export interface GraphTurnInput {
   floorTypical?: number;
   sessionClosed: boolean;
   history: string;
+  /**
+   * THE ENGLISH GLOSS OF THIS INBOUND, when the loop produced one.
+   *
+   * Every comprehension judgement in spte/comprehension.ts is written in
+   * English and, until this field existed, was applied to the shop's raw words
+   * whatever language they were in - which is the root of the misreads this
+   * wave exists to fix. The gloss is already computed on the reply path and
+   * stamped on the stored row (agent-loop inbound-gloss); it simply never
+   * reached the engine. Absent -> the classifiers read the raw text, exactly as
+   * before.
+   *
+   * NOT a language decision about what we SEND: that is W4.6, and
+   * threadPrefersEnglish is deliberately untouched here.
+   */
+  inboundEnglish?: string;
   priorOutbound: string[];
   // The semantic move stamped on each `priorOutbound` entry, SAME ORDER, SAME
   // LENGTH; `undefined` where the row carries no stamp. The round counter needs

@@ -12,12 +12,18 @@
 //     throw only ever escapes before a message leaves, and the caller's fallback
 //     to the graph engine is always safe.
 
-import type { GraphIO, GraphTurnInput } from "../graph/types";
+import type { GraphIO, GraphTurnInput, NegotiationThreadState } from "../graph/types";
 import { runTurn } from "./orchestrator";
 import { newDecisionId } from "../orchestrator";
 import { clampWaitMinutes } from "./wait";
 import { optionsFromThread, signalsVariance } from "../offer-options";
-import { emptyDigest } from "./digest";
+import { digestFromStored, emptyDigest, persistableDigest } from "./digest";
+import {
+  ambiguousLedgerSubjects,
+  isHighStakesComprehension,
+  readTurnComprehension,
+  type TurnComprehension,
+} from "./comprehension";
 import { deriveThreadFacts } from "./thread-facts";
 import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
 import { getGraphSpec } from "../graph/engine";
@@ -125,17 +131,38 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
   };
 }
 
-/** Reconstruct the thread digest STATELESSLY from durable data we already hold
- *  (round count, the shop's current quote, tone). No new persistence layer -> no
- *  stale-digest traps; the round and quote are the only durable memory the
- *  single pass needs, and they are always recomputed from the source of truth. */
-function buildDigest(input: GraphTurnInput): ThreadDigest {
-  const base = emptyDigest();
+/**
+ * Reconstruct the thread digest: DERIVED facts from the rows the caller already
+ * loaded, seeded by the one half that cannot be derived.
+ *
+ * THE AMNESIA (W4.5). `runTurn` has always computed `mergeDigest(...)` and
+ * returned it as `outcome.digest`, and this function has always started from
+ * `emptyDigest()`. Nothing ever read the outcome back, so `digest.facts` was
+ * permanently `[]` - which made `hasClosed()` permanently false, so the "one
+ * warm goodbye then silence" rule was unenforced on the live path; and
+ * `quotedPricePerDay` was rebuilt from the CURRENT message alone, so a shop
+ * that replied without repeating its number looked, to the whole ladder, like a
+ * shop that had never quoted.
+ *
+ * `stored` is the persisted half (spte/digest persistableDigest): the model's
+ * durable notes, the standing quote, the round count, the tone and the
+ * confirming questions already spent. Everything else below is still recomputed
+ * from the messages every turn, so nothing derived can go stale.
+ */
+function buildDigest(
+  input: GraphTurnInput,
+  stored: ThreadDigest,
+  ambiguous: import("../thread/claims").ClaimSubject[] = []
+): ThreadDigest {
+  const base = { ...emptyDigest(), ...stored };
   const tone = ((): ThreadDigest["tone"] => {
     const t = (input.extraction as { shopTone?: string } | null)?.shopTone;
     if (t === "annoyed") return "reluctant";
     if (t === "warm") return "friendly";
-    return undefined;
+    // A tone read once STICKS until the shop reads differently: a shop that
+    // snapped at us on message three has not become neutral by sending a
+    // message with no tone cues in it, and `momentum` now reads this.
+    return stored.tone;
   })();
   // THREAD-DERIVED STATE (thread-facts.ts): round / firm / deposit / fulfillment
   // recomputed from the actual message history the caller loaded, so the round
@@ -175,17 +202,32 @@ function buildDigest(input: GraphTurnInput): ThreadDigest {
   // THE LEDGER: typed claims with POLARITY, the questions we have already put,
   // and the facts this thread still owes the traveller. Derived from the same
   // rows as everything else above, for the same reason.
-  const ledger = buildLedger({ inbound, outbound, currentInbound: curInbound });
+  //
+  // ...and `ambiguous` is the ledger's THIRD state (W4.4): a subject the
+  // comprehension pass read but does not trust is struck from `known`, so a
+  // half-understood deposit can no longer retire the deposit question forever.
+  const ledger = buildLedger({ inbound, outbound, currentInbound: curInbound, ambiguous });
   return {
     ...base,
-    round: facts.bargainRounds,
-    quotedPricePerDay: input.usablePrice,
+    round: Math.max(base.round ?? 0, facts.bargainRounds),
+    // THE STANDING QUOTE. `input.usablePrice` is this message only; the stored
+    // digest carries what the shop said before and never repeated.
+    quotedPricePerDay: input.usablePrice ?? base.quotedPricePerDay,
     tone,
     firmCount,
     // "No deposit" settles the deposit question exactly as firmly as "3000
     // baht". The old boolean only counted the second kind, so the friendliest
     // possible terms read as "unknown" and got asked about forever.
-    depositKnown: facts.depositKnown || ledger.known.includes("deposit"),
+    //
+    // ...BUT A HALF-READ DEPOSIT IS NOT A KNOWN ONE (W4.4). `facts.depositKnown`
+    // is a regex that fires on the bare word "passport" anywhere in any inbound
+    // message, so "We have deposit passport or money4000" latched a single
+    // reading permanently and there was no way back. An ambiguous subject
+    // suppresses BOTH sources, which is what makes the confirming question
+    // reachable at all.
+    depositKnown:
+      !ambiguous.includes("deposit") &&
+      (facts.depositKnown || ledger.known.includes("deposit")),
     fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
     deliveryOffered: facts.deliveryOffered,
     // The MODE and its PRICE are two facts. `fulfillmentKnown` went true on the
@@ -316,10 +358,40 @@ async function buildSession(
   };
 }
 
-function buildTail(input: GraphTurnInput): TurnContext["tail"] {
+/** How many transcript lines reach the prompt. The window itself is already
+ *  char-budgeted (wa/history-window); this is the second bound, so a long
+ *  thread cannot crowd out the blackboard blocks above it. */
+const TAIL_LINES = 8;
+
+/**
+ * THE CONVERSATION, BOTH SIDES OF IT (W4.5).
+ *
+ * `RECENT MESSAGES` in the prompt was built from `priorOutbound` alone - our
+ * own last three sends, and NOT ONE SHOP TURN. The model was shown a monologue
+ * and asked to continue a dialogue, which is a large part of why it re-asked
+ * things the shop had answered two messages earlier.
+ *
+ * The budgeted, head-preserved thread window the caller already built
+ * (wa/history-window, `input.history`) is exactly the right object and SPTE
+ * ignored it completely. It renders "Us: ..." / "Shop: ..." lines with voice
+ * transcripts inlined, so parsing it back into the tail is lossless.
+ *
+ * Falls back to the old outbound-only tail when no window was supplied (the
+ * simulator, the older call sites and every existing unit test), so nothing
+ * that does not pass `history` changes behaviour.
+ */
+export function buildTail(input: GraphTurnInput): TurnContext["tail"] {
   const at = new Date(input.deadlineAt - 40_000).toISOString();
-  const out = (input.priorOutbound ?? []).slice(-3).map((text) => ({ dir: "out" as const, text, at }));
-  return out;
+  const parsed: TurnContext["tail"] = [];
+  for (const line of String(input.history ?? "").split("\n")) {
+    const l = line.trim();
+    if (l.startsWith("Shop: ")) parsed.push({ dir: "in", text: l.slice(6).trim(), at });
+    else if (l.startsWith("Us: ")) parsed.push({ dir: "out", text: l.slice(4).trim(), at });
+    // The elision marker and anything else the window emitted are not turns.
+  }
+  const kept = parsed.filter((m) => m.text.length > 0);
+  if (kept.length) return kept.slice(-TAIL_LINES);
+  return (input.priorOutbound ?? []).slice(-3).map((text) => ({ dir: "out" as const, text, at }));
 }
 
 /** Map a closed MoveKind to the outbox meta.kind used by drain/pacing AND by the
@@ -333,6 +405,10 @@ function metaKindFor(move: MoveKind): string {
       return "auto-bargain";
     case "clarify":
       return "auto-clarify";
+    // A confirming question is a question, not a push - it must never reach the
+    // round counter, and it must not be paced as a cold intro either.
+    case "confirm":
+      return "auto-confirm";
     case "answer":
     case "deposit-probe":
     case "fulfillment-probe":
@@ -342,6 +418,7 @@ function metaKindFor(move: MoveKind): string {
     case "farewell":
     case "closing-message":
     case "redirect-close":
+    case "graceful-close":
       return "auto-close";
     default:
       return "reply";
@@ -365,10 +442,99 @@ async function resolvePolicy(
   return { overlay, maxRounds };
 }
 
-async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<TurnContext> {
+/**
+ * THE COMPREHENSION PHASE, wired into the live turn.
+ *
+ * Runs on the ENGLISH GLOSS when one exists (W1.5 stamps it on both inbound
+ * surfaces) and on the shop's raw words otherwise, because English-only
+ * judgement over raw Thai is the root of every misread in this wave. Only ever
+ * on a real shop message - a tick has nothing to comprehend.
+ *
+ * Everything it decides is ADDITIVE and every failure mode is the status quo:
+ * no provider, a timeout, a schema it could not satisfy, or a stance it is not
+ * confident about all leave `verified` exactly as the deterministic readers
+ * left it. That is the contract that lets this sit on the reply path at all.
+ */
+async function runComprehension(
+  input: GraphTurnInput,
+  verified: VerifiedExtraction,
+  digestSeed: ThreadDigest
+): Promise<TurnComprehension | null> {
+  const raw =
+    input.event.kind === "inbound-text" || input.event.kind === "inbound-image"
+      ? (input.event.shopMessage ?? "").trim()
+      : "";
+  if (!raw) return null;
+  // THE GLOSS FIRST. Not a language decision (that is W4.6's) - a COMPREHENSION
+  // one: the judgement below is written in English and every one of its failure
+  // reports came from reading a language it was not written for.
+  const gloss = (input.inboundEnglish ?? "").trim();
+  const text = gloss || raw;
+  const r = input.rfq;
+  const context =
+    `The traveller wants: ${r.vehicleClass}${r.engineSizeCc ? ` ${r.engineSizeCc}cc` : ""}` +
+    `${r.transmission && r.transmission !== "any" ? ` (${r.transmission})` : ""} for ${r.durationDays} days.\n` +
+    (digestSeed.facts.length ? `This thread so far: ${digestSeed.facts.join("; ")}\n` : "") +
+    (typeof digestSeed.quotedPricePerDay === "number"
+      ? `They have already quoted ${digestSeed.quotedPricePerDay} ${input.currency}/day.\n`
+      : "");
+  try {
+    return await readTurnComprehension({
+      text,
+      context,
+      highStakes: isHighStakesComprehension({
+        hasStandingPrice:
+          typeof input.usablePrice === "number" ||
+          typeof digestSeed.quotedPricePerDay === "number",
+        declined: verified.declined,
+        firm: verified.firm,
+        vehicleUnclear: verified.vehicleUnclear,
+      }),
+    });
+  } catch {
+    // The pass owns its own failures; this is the last net, and its answer is
+    // always "change nothing".
+    return null;
+  }
+}
+
+async function buildTurnContext(
+  input: GraphTurnInput,
+  io: GraphIO
+): Promise<{ tc: TurnContext; state: NegotiationThreadState | null; comp: TurnComprehension | null }> {
   const policy = await resolvePolicy(input);
   const verified = mapVerified(input);
-  const digest = buildDigest(input);
+  // ONE state read for the whole turn: the persisted digest (W4.5), the pending
+  // substitution choice, and the row the outcome is written back onto.
+  // Wrapped in a resolved promise rather than called bare: an IO object that
+  // does not implement `loadState` (the simulator, a unit-test double) throws
+  // SYNCHRONOUSLY, which `.catch()` cannot catch - the same trap documented on
+  // the trace write below.
+  const state = await Promise.resolve()
+    .then(() => io.loadState(input.event.threadKey))
+    .catch(() => null);
+  const seed = digestFromStored(
+    (state?.fields as { digest?: unknown } | undefined)?.digest
+  );
+
+  // COMPREHENSION BEFORE DERIVATION: the ledger's third state and the deposit
+  // latch both depend on what the model could not settle, so it has to run
+  // before the digest is built from the thread's text.
+  const comp = await runComprehension(input, verified, seed);
+  if (comp) {
+    verified.stance = comp.stance;
+    verified.stanceQuote = comp.stanceQuote;
+    verified.deflected = comp.deflected;
+    // OR-ed, never overwritten: the deterministic DECLINED_RX still catches the
+    // explicit walk-aways it always did, and the model adds the polite ones it
+    // never could. Neither reader can un-decline what the other found.
+    verified.declined = verified.declined === true || comp.declined;
+    verified.uncertain = comp.uncertain;
+    verified.comprehensionDegraded = comp.degraded;
+  }
+  const ambiguous = ambiguousLedgerSubjects(comp);
+
+  const digest = buildDigest(input, seed, ambiguous);
   // OUT OF STOCK IS A STATE (thread/ledger stockState), derived from the same
   // claims every other durable fact comes from - so "we have one now" un-sticks
   // it with no special case, and nothing has to be persisted.
@@ -377,6 +543,17 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
     const stock = stockState(digest.ledger);
     verified.shopUnavailable = stock.state === "out-of-stock";
     verified.restockHint = stock.restockHint;
+    // `readAvailability` returns exactly this state and had ZERO callers. Its
+    // own schema says "none" is a stock-out and "explicitly not a refusal to
+    // deal" - which is the distinction the claim scanner cannot make from
+    // wording alone, and the one that decides whether a thread pauses or dies.
+    if (comp?.availability === "none") {
+      verified.shopUnavailable = true;
+      verified.restockHint = verified.restockHint ?? comp.restockHint;
+    } else if (comp?.availability === "has") {
+      verified.shopUnavailable = false;
+      verified.restockHint = undefined;
+    }
   }
   // A SUBSTITUTION WAITING ON THE TRAVELLER pauses this thread instead of
   // closing it (policy.ts). Read from the stored thread state, so every entry
@@ -388,7 +565,6 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
   // A shop that offered a 150 six hours ago has rented it, and a thread paused
   // on a tap that is never coming is a dead thread the traveller cannot see.
   try {
-    const state = await io.loadState(input.event.threadKey);
     const stored = (state?.fields as { alternativeOffer?: { at?: number } } | undefined)
       ?.alternativeOffer;
     const { CHOICE_TTL_MS } = await import("../vehicle/substitution");
@@ -414,7 +590,7 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
     addressText: resolved.addressText ?? undefined,
     mapsLink: resolved.mapsLink,
   };
-  return {
+  const tc: TurnContext = {
     session,
     share,
     thread: {
@@ -444,6 +620,90 @@ async function buildTurnContext(input: GraphTurnInput, io: GraphIO): Promise<Tur
     },
     event: input.event.kind === "tick" ? "tick" : "shop-message",
   };
+  return { tc, state, comp };
+}
+
+/**
+ * WRITE THE THREAD'S MEMORY BACK (W4.3 persistence + W4.5).
+ *
+ * Two separate gaps, one row.
+ *
+ * `negotiation_threads.fields.declined` / `.shopUnavailable` are what
+ * /api/replies reads to tell the card "this shop passed" or "they have run
+ * out", and the ONLY writer was `applyExtractionToState` - which lives on the
+ * graph engine, the FAILOVER. SPTE is the engine that actually answers shops,
+ * so on the live path those fields were never written and the card could not
+ * say either thing, whatever the agent had understood.
+ *
+ * `fields.digest` is the durable half of the thread digest (W4.5). Without it
+ * `buildDigest` restarted from empty every turn: no facts, so `hasClosed()` was
+ * permanently false; no standing quote, so a shop that did not repeat its
+ * number looked unquoted.
+ *
+ * Best-effort by construction. This runs AFTER the move is decided, where this
+ * file's contract is that nothing throws - a throw here would risk the caller
+ * failing over to the graph engine and sending the same message twice.
+ */
+async function persistThreadOutcome(args: {
+  input: GraphTurnInput;
+  io: GraphIO;
+  prior: NegotiationThreadState | null;
+  digest: ThreadDigest;
+  verified: VerifiedExtraction;
+  /** Where the turn's message ended up - a question that never left is not a
+   *  question the card may claim we are waiting on. */
+  delivered?: SpteLiveResult["delivered"];
+}): Promise<void> {
+  const { input, io, prior, digest, verified, delivered } = args;
+  try {
+    const { newThreadState, derivePhase } = await import("../graph/state");
+    const base =
+      prior ??
+      newThreadState({
+        threadKey: input.event.threadKey,
+        userEmail: input.ctx.sender ?? "",
+        vendorId: input.ctx.vendorId ?? "",
+        vendorName: input.ctx.vendorName ?? "",
+        toNumber: input.event.toDigits,
+      });
+    const fields = { ...base.fields };
+    fields.digest = persistableDigest(digest);
+
+    // A THREAD IS DEAD ONLY WHILE IT STAYS DEAD. Same rule the graph engine
+    // applies: a fresh, concrete price on a declined thread is a re-engagement
+    // ("ok ok, 250 is fine, come"), and it clears the flag rather than leaving
+    // the card frozen on a goodbye the shop has taken back.
+    const freshPrice = typeof input.usablePrice === "number" && input.usablePrice > 0;
+    if (verified.declined === true || verified.deflected === true) fields.declined = true;
+    else if (freshPrice && base.fields.declined === true) fields.declined = false;
+
+    if (typeof verified.shopUnavailable === "boolean") {
+      fields.shopUnavailable = verified.shopUnavailable;
+      fields.restockHint = verified.shopUnavailable ? verified.restockHint : undefined;
+    }
+    if (typeof input.usablePrice === "number" && input.usablePrice > 0) {
+      fields.pricePerDay = input.usablePrice;
+      fields.currency = input.currency;
+    }
+    // WHAT THE CARD SHOWS WHILE THE AGENT WAITS ON AN ANSWER (W4.4). Only for a
+    // question that actually reached the shop: "blocked" and "failed" mean
+    // nobody was asked anything.
+    const asked = delivered === undefined || delivered === "sent" || delivered === "queued" || delivered === "held";
+    fields.awaitingConfirmation =
+      digest.awaitingConfirmation && asked
+      ? {
+          subject: digest.awaitingConfirmation.subject,
+          question: digest.awaitingConfirmation.question.slice(0, 220),
+          at: new Date(io.now()).toISOString(),
+        }
+      : undefined;
+
+    const next: NegotiationThreadState = { ...base, fields };
+    next.phase = derivePhase(next);
+    await io.saveState(next);
+  } catch {
+    /* memory is an enhancement to the turn, never a condition of it */
+  }
 }
 
 /**
@@ -455,7 +715,7 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   // Turn wall-clock, stamped on the telemetry event -> the response-latency KPI.
   const startedAt = Date.now();
   // ---- pre-send (fallible): build the blackboard context + run the pass ------
-  const tc = await buildTurnContext(input, io);
+  const { tc, state: priorState, comp } = await buildTurnContext(input, io);
 
   // WHAT THE LAST MOVE ACHIEVED. The learning update needs the shop's ANSWER,
   // so it is credited one turn late - the digest still holds the quote the shop
@@ -599,6 +859,26 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     }
   }
 
+  // THE THREAD REMEMBERS THIS TURN (W4.3 + W4.5).
+  //
+  // AFTER the send, deliberately, for two reasons. It is three Supabase round
+  // trips (the optimistic-version dance in graph/state) and the reply path has
+  // a latency budget the traveller can feel; and `awaitingConfirmation` is a
+  // claim that we ASKED the shop something - a card that says "double-checking
+  // with the shop" about a message the guard blocked would be a lie.
+  //
+  // Awaited, not detached: Cloud Run freezes the CPU the moment the response
+  // flushes, so a detached write is a write that may never happen. Internally
+  // total - it can never fail a turn that has already been sent.
+  await persistThreadOutcome({
+    input,
+    io,
+    prior: priorState,
+    digest: outcome.digest,
+    verified: tc.inbound.verified,
+    delivered,
+  });
+
   // Strategic wait (deliberate patience) -> a wakeup re-enters this thread later.
   // Clamped AGAIN here: this is the last gate before a durable not_before, and a
   // wait measured in hours is never a tactic, only a bug (the "until 08:28 AM"
@@ -614,7 +894,12 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
   //
   // Ko Tao, 12:38: LLL had quoted 180, the best of the hunt, and withdrew. The
   // phone said nothing.
-  if (input.ctx.sender && (tc.inbound.verified.declined || tc.inbound.verified.shopUnavailable)) {
+  if (
+    input.ctx.sender &&
+    (tc.inbound.verified.declined ||
+      tc.inbound.verified.deflected ||
+      tc.inbound.verified.shopUnavailable)
+  ) {
     const low = tc.session.lowest;
     const mine = tc.inbound.verified.pricePerDay ?? tc.thread.digest.quotedPricePerDay;
     const wasBest =
@@ -665,6 +950,7 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
     outcome.move === "silent" &&
     typeof (tc.inbound.verified.pricePerDay ?? tc.thread.digest.quotedPricePerDay) !== "number" &&
     !tc.inbound.verified.declined &&
+    !tc.inbound.verified.deflected &&
     !tc.inbound.verified.shopUnavailable;
   const waitMinutes = clampWaitMinutes(outcome.waitMinutes) ?? (silentAndPriceless ? 3 : undefined);
   if (waitMinutes) {
@@ -729,6 +1015,17 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         options: tc.thread.digest.options?.length ?? 0,
         hadImage: Boolean(tc.inbound.verified.hadImage),
         imageKind: tc.inbound.verified.imageKind ?? null,
+        // WHAT THE COMPREHENSION PASS UNDERSTOOD, and what it cost. Without
+        // these, "the agent misread them" is an anecdote: the stance it acted
+        // on, the facts it did not trust, whether it ran at all, and its wall
+        // clock against the reply budget are the four things Ops needs to tell
+        // a bad reading from an outage from a timeout.
+        stance: tc.inbound.verified.stance ?? null,
+        deflected: Boolean(tc.inbound.verified.deflected),
+        unsure: (tc.inbound.verified.uncertain ?? []).map((u) => u.subject),
+        comprehension: comp ? (comp.degraded ? "degraded" : "ok") : "skipped",
+        comprehensionMs: comp?.ms ?? null,
+        standingQuote: tc.thread.digest.quotedPricePerDay ?? null,
         think: outcome.artifact.think?.slice(0, 180),
         text: send?.slice(0, 180) ?? null,
       }).slice(0, 1600),

@@ -50,6 +50,20 @@ export interface SemanticOptions {
   /** Skip the retry - for callers where a second round trip costs more than
    *  the answer is worth (a background sweep, say). */
   once?: boolean;
+  /**
+   * THE STRONGEST BRAIN, FOR THE TURNS THAT CAN END A NEGOTIATION.
+   *
+   * `chatDetailed` runs the paid providers FIRST when the caller asks for the
+   * premium tier (ai.ts) - it is the same escalation SPTE's pickRoute uses for
+   * a farewell or a first push. Reading a shop's message is the other half of
+   * that decision and it was pinned to the free chain: a brush-off misread as
+   * "they just have not quoted yet" costs the same booking a bad farewell does.
+   *
+   * Deliberately per-CALL rather than per-classifier, because the same
+   * judgement is high-stakes on the turn that could close the thread and
+   * routine on the turn that could not - see spte/comprehension.ts.
+   */
+  tier?: "premium";
 }
 
 /** Turn a Zod issue list into one line a model can act on. */
@@ -111,7 +125,11 @@ export async function semanticParse<T>(opts: {
                 `${user}\n\nYour previous answer did not match the shape. Fix exactly this: ${lastError}`,
         },
       ],
-      { budgetMs: options?.budgetMs ?? 8_000, maxTokens: options?.maxTokens ?? 500 }
+      {
+        budgetMs: options?.budgetMs ?? 8_000,
+        maxTokens: options?.maxTokens ?? 500,
+        ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
+      }
     );
     provider = res.provider ?? provider;
 

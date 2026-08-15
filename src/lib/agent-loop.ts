@@ -1401,12 +1401,20 @@ export async function processVendorReply(opts: {
   // surface (card peek, transcript) shows the translation under the original.
   // The traveller must always understand the conversation their agent is
   // having - that IS the product.
+  //
+  // ...AND SO MUST THE ENGINE. The gloss was computed here, written to the
+  // database, and never handed to the brain that answers the shop - so every
+  // comprehension judgement downstream (all of them written in English) was
+  // applied to raw Thai. `inboundEnglish` closes that loop; it is threaded onto
+  // the turn input below and read by spte/comprehension.ts.
+  let inboundEnglish: string | undefined;
   if (ctx.sender && text) {
     await finishBeforeResponse("inbound-gloss", async () => {
       try {
         const { translateToEnglish } = await import("./agents");
         const english = await translateToEnglish(text);
         if (!english) return;
+        inboundEnglish = english;
         // PRIVACY: the no-id fallback is receiver-scoped, so the gloss can
         // never be stamped onto ANOTHER user's inbound row with these digits.
         const receiverScope = ctx.sender
@@ -1749,6 +1757,10 @@ export async function processVendorReply(opts: {
     floorTypical: floorSameCur?.typical ?? undefined,
     sessionClosed,
     history,
+    // THE GLOSS REACHES THE BRAIN (W4.3/W4.6 note): comprehension runs on the
+    // English rendering when we have one, on the shop's own words when we do
+    // not. This changes nothing about what language we SEND in.
+    inboundEnglish,
     priorOutbound: thread
       .filter((m) => m.direction === "outbound")
       .map((m) => m.body ?? "")
