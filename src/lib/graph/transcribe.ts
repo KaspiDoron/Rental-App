@@ -62,6 +62,25 @@ export const TRANSCRIBE_SYSTEM =
   "local words. Prices and numbers are the most important - get every digit right. " +
   "Output ONLY the transcription text, nothing else.";
 
+/**
+ * GROQ IS TWO BILLED PRODUCTS BEHIND ONE KEY, AND ONLY ONE OF THEM WAS EVER
+ * TESTED (Wave 7).
+ *
+ * `GROQ_TOKEN` buys chat completions AND audio transcription. Admin -> Keys
+ * pressed "Test API" on the token and exercised `chat/completions` only, so a
+ * working chat key and a dead voice-note path reported the same green chip -
+ * and voice notes are how a lot of shops answer.
+ *
+ * The model id gets the same escape hatch every text model already had. A
+ * provider retiring an audio id is the identical failure the vision ladder was
+ * given `*_VISION_MODEL` for, and until now it needed a redeploy.
+ */
+export const DEFAULT_WHISPER_MODEL = "whisper-large-v3"; // NOT -turbo: strongest on accents
+
+export async function whisperModel(): Promise<string> {
+  return ((await getConfig("GROQ_WHISPER_MODEL")) ?? "").trim() || DEFAULT_WHISPER_MODEL;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ms);
@@ -113,7 +132,7 @@ export async function transcribeAudio(opts: {
           new Blob([bytes], { type: opts.mime || "audio/ogg" }),
           `note.${ext}`
         );
-        fd.append("model", "whisper-large-v3"); // NOT -turbo: strongest on accents
+        fd.append("model", await whisperModel());
         fd.append("temperature", "0");
         fd.append("response_format", "verbose_json");
         const lang = opts.localLang ? langFor(opts.region) : null;

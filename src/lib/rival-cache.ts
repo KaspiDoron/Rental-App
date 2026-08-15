@@ -20,6 +20,13 @@
 // Never throws: a Redis hiccup degrades to "no cache" (callers fall back).
 
 export type RedisLike = {
+  /**
+   * The cheapest possible proof of life. Optional on the TYPE (the test doubles
+   * in daily-cap-atomic.test.ts and budget-cache.test.ts implement only the
+   * commands they exercise), required in practice - ioredis has it - so the
+   * admin probe checks for it before calling rather than assuming.
+   */
+  ping?(): Promise<string>;
   set(...args: (string | number)[]): Promise<unknown>;
   exists(key: string): Promise<number>;
   del(...keys: string[]): Promise<number>;
@@ -67,6 +74,72 @@ async function cacheClient(): Promise<RedisLike | null> {
     client = null;
   }
   return client;
+}
+
+/**
+ * IS THE HOT-STATE TIER ACTUALLY THERE? (Wave 7)
+ *
+ * Redis is a real dependency of four subsystems - the atomic daily caps
+ * (`usage.ts`), the AI budget cache, the copy-uniqueness window and the SSE
+ * session fan-out - and it was the ONE dependency with no surface anywhere:
+ * not on the Keys page, not in the health roll-call, not in a probe. That
+ * matters more than a missing tile, because `REDIS_URL` is the documented
+ * difference between an ATOMIC daily cap and a per-process counter that
+ * `--max-instances 20` multiplies by twenty. "Nothing is enforcing the cap"
+ * and "everything is fine" looked identical.
+ *
+ * Three states, and they are genuinely different:
+ *   off  - REDIS_URL unset. Not a fault; it is the documented degraded mode,
+ *          and the detail says exactly what that costs.
+ *   ok   - a real PING round-tripped, with the milliseconds it took.
+ *   down - configured and NOT answering, which is the state where the caps
+ *          silently fall back to per-process counting.
+ */
+export async function redisDiagnostics(): Promise<{
+  configured: boolean;
+  ok: boolean;
+  latencyMs: number | null;
+  detail: string;
+}> {
+  if (!process.env.REDIS_URL) {
+    return {
+      configured: false,
+      ok: false,
+      latencyMs: null,
+      detail:
+        "REDIS_URL is not set. Daily AI/send caps fall back to a per-process counter, so with --max-instances 20 each cap can be exceeded up to 20x. Session hot state and the copy-uniqueness window are no-ops.",
+    };
+  }
+  const r = await cacheClient();
+  if (!r || typeof r.ping !== "function") {
+    return {
+      configured: true,
+      ok: false,
+      latencyMs: null,
+      detail: "REDIS_URL is set but no client could be created - check the URL and that ioredis can reach it.",
+    };
+  }
+  const t0 = Date.now();
+  try {
+    const pong = await r.ping();
+    const ms = Date.now() - t0;
+    return {
+      configured: true,
+      ok: String(pong).toUpperCase() === "PONG",
+      latencyMs: ms,
+      detail:
+        String(pong).toUpperCase() === "PONG"
+          ? `PONG in ${ms}ms - atomic caps and session hot state are live.`
+          : `Unexpected reply to PING: ${String(pong).slice(0, 40)}`,
+    };
+  } catch (e) {
+    return {
+      configured: true,
+      ok: false,
+      latencyMs: Date.now() - t0,
+      detail: `PING failed: ${e instanceof Error ? e.message : "unreachable"}. The atomic caps are silently back to per-process counting.`,
+    };
+  }
 }
 
 const TTL_S = 24 * 3600;

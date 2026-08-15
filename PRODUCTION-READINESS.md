@@ -5,6 +5,13 @@ Scope: queue architecture, concurrency, rate limiting, test mode,
 observability, cost control and the concrete path to hundreds of concurrent
 users. Complements `docs/ENTERPRISE-READINESS.md` (the earlier QA pass).
 
+> **Companion document:** `SCALING.md` is the same territory written for the
+> OWNER rather than for a reviewer - per service, what the limit is today, what
+> breaks at 100/300/500 simultaneous users, what to buy, and which button in
+> Admin -> Keys proves it worked. This file stays the engineering review; that
+> one is the runbook. The four ceilings it orders are the four readings on the
+> Keys tab's choke-point card.
+
 > **READ THIS FIRST IF YOU ARE ABOUT TO CHANGE `wa-guard.ts`, the usage limits
 > or the outbox/wakeup draining.** That instruction (in `CLAUDE.md`) is only
 > worth following while this file is TRUE. Owner report 4 changed all three,

@@ -704,9 +704,37 @@ function bumpHostCount(url: string, by = 1) {
 }
 
 /** Soft cap of paired users per host (owner-adjustable). */
-async function maxPerHost(): Promise<number> {
+export async function maxPerHost(): Promise<number> {
   const v = Number(await getConfig("EVOLUTION_MAX_PER_HOST"));
   return Number.isFinite(v) && v > 0 ? v : 40;
+}
+
+/**
+ * OCCUPANCY AGAINST THE CAP - the choke point with the worst failure mode.
+ *
+ * Every other ceiling in this system degrades into a queue. This one degrades
+ * into a BANNED PERSONAL WHATSAPP NUMBER, which no amount of capacity added
+ * afterwards reverses. The pool panel already showed "N users" per host; a
+ * bare count says nothing about how close that is to the wall, so the number
+ * that matters (used / cap) was left for the reader to compute.
+ *
+ * Exported separately from `hostsStatus` so the choke-point panel can read the
+ * cap WITHOUT re-probing every host's health.
+ */
+export async function hostCapacity(): Promise<{
+  cap: number;
+  hosts: { url: string; users: number }[];
+  users: number;
+  capacity: number;
+}> {
+  const [hosts, counts, cap] = await Promise.all([getHosts(), hostUserCounts(), maxPerHost()]);
+  const rows = hosts.map((h) => ({ url: h.url, users: counts[h.url] ?? 0 }));
+  return {
+    cap,
+    hosts: rows,
+    users: rows.reduce((s, h) => s + h.users, 0),
+    capacity: rows.length * cap,
+  };
 }
 
 /**

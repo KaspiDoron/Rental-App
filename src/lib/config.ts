@@ -26,12 +26,41 @@ export interface KeyInfo {
   masked: string;
   scope: "ai" | "data" | "messaging" | "email" | "billing" | "auth" | "maps";
   editable: boolean;
+  /**
+   * There is a real probe behind this key's "Test API" button even though it
+   * is NOT editable here.
+   *
+   * The panel gated the test button on `editable`, which made sense while
+   * every non-editable key was a bootstrap secret nobody could act on. It
+   * stopped making sense the moment REDIS_URL was listed: it is env-only AND
+   * it is the one dependency whose absence silently multiplies every daily cap
+   * by the instance count. Being unable to press PING on it was the whole
+   * problem restated.
+   */
+  testable?: boolean;
   docUrl?: string; // where to generate this key (shown when it is missing)
 }
+
+/**
+ * Non-editable keys that still have a real probe. Deliberately an explicit
+ * list rather than "everything": a Test button that always answers "No test
+ * available for this key" is worse than no button, because it teaches the
+ * reader that the button means nothing.
+ */
+const TESTABLE_READ_ONLY = new Set([
+  "REDIS_URL",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "SESSION_SECRET",
+]);
 
 // Where to obtain each key - a "Get key" link surfaces when the key is unset.
 const DOC_URLS: Record<string, string> = {
   GROQ_TOKEN: "https://console.groq.com/keys",
+  GROQ_WHISPER_MODEL: "https://console.groq.com/docs/speech-to-text",
+  // Where a managed Redis actually comes from. The free tier (500k commands +
+  // 256 MB / month) already covers a beta's cap counters.
+  REDIS_URL: "https://console.upstash.com/redis",
   GEMINI_TOKEN: "https://aistudio.google.com/app/apikey",
   OPENROUTER_TOKEN: "https://openrouter.ai/keys",
   CEREBRAS_TOKEN: "https://cloud.cerebras.ai/",
@@ -133,6 +162,11 @@ const KEYS: {
   { name: "ANTHROPIC_MODEL", label: "Anthropic model id (blank = claude-sonnet-5)", scope: "ai", editable: true, secret: false },
   { name: "OPENAI_MODEL", label: "OpenAI model id (blank = gpt-5.6-terra)", scope: "ai", editable: true, secret: false },
   { name: "KIMI_MODEL", label: "Kimi model id (blank = kimi-k3)", scope: "ai", editable: true, secret: false },
+  // The SECOND Groq SKU. One token, two billed products (chat completions and
+  // audio transcription), and the key test only ever exercised the first - so
+  // a dead voice-note path wore the same green chip as a healthy one. Its own
+  // model id, its own Test API button (see api/admin/key-test).
+  { name: "GROQ_WHISPER_MODEL", label: "Groq voice-note model id (blank = whisper-large-v3)", scope: "ai", editable: true, secret: false },
   { name: "GEMINI_VISION_MODEL", label: "Gemini vision model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "GROQ_VISION_MODEL", label: "Groq vision model id (blank = default)", scope: "ai", editable: true, secret: false },
   { name: "ANTHROPIC_VISION_MODEL", label: "Anthropic vision model id (blank = default)", scope: "ai", editable: true, secret: false },
@@ -244,6 +278,22 @@ const KEYS: {
   // Not a secret - it is a duration, and masking it would mean the owner could
   // never read back what they set. `secret: false` shows the live value.
   { name: "SEARCH_SESSION_TTL_HOURS", label: "How long a search stays the live hunt, in hours (blank = 3; older hunts move to Trips)", scope: "data", editable: true, secret: false },
+  // THE DEPENDENCY THAT APPEARED ON NO SCREEN AT ALL (Wave 7).
+  //
+  // Four subsystems read it - the atomic daily caps in usage.ts, the AI budget
+  // cache, the copy-uniqueness window and the SSE session fan-out - and it is
+  // the single documented difference between a daily cap that is ATOMIC and
+  // one that is a per-process counter, which `--max-instances 20` multiplies
+  // by twenty. It had no vault row, no probe and no status chip, so "the cap
+  // is enforcing nothing" and "everything is fine" looked the same.
+  //
+  // env-only ON PURPOSE, and NOT an oversight to be "fixed" later: the client
+  // reads `process.env.REDIS_URL` once at first use, in a module that also
+  // runs inside the workers/gateway services where the Supabase vault is not
+  // in the request path. A pasteable field here would report "configured" and
+  // change nothing - the worst possible lie for this particular key. It is
+  // listed so it can be SEEN and TESTED; set the value in GCP Secret Manager.
+  { name: "REDIS_URL", label: "Redis URL (env-only - atomic caps + hot state; unset = per-instance counters)", scope: "data", editable: false },
   { name: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", scope: "data", editable: false },
   { name: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase Service Role", scope: "data", editable: false },
   { name: "SESSION_SECRET", label: "Session Signing Secret", scope: "auth", editable: false },
@@ -285,6 +335,7 @@ export async function listKeys(): Promise<KeyInfo[]> {
         label: k.label,
         scope: k.scope,
         editable: k.editable,
+        testable: k.editable || TESTABLE_READ_ONLY.has(k.name),
         configured: Boolean(v),
         masked: displayValue(v, k.secret),
         docUrl: DOC_URLS[k.name],
@@ -308,6 +359,7 @@ export async function setKey(
       label: meta.label,
       scope: meta.scope,
       editable: meta.editable,
+      testable: meta.editable || TESTABLE_READ_ONLY.has(name),
       configured: Boolean(v),
       masked: displayValue(v, meta.secret),
     },

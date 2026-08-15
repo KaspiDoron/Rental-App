@@ -29,6 +29,13 @@ const PaypalDoctorCard = dynamic(
   () => import("@/components/admin/PaypalDoctorCard").then((m) => m.PaypalDoctorCard),
   { ssr: false, loading: () => <LoadingDots label="Loading PayPal doctor" /> }
 );
+// The four ceilings from SCALING.md, each with its threshold attached: host
+// occupancy against the per-host cap, drain-heartbeat age, database round trip,
+// and the event kinds that should page someone.
+const ChokePointsCard = dynamic(
+  () => import("@/components/admin/ChokePointsCard").then((m) => m.ChokePointsCard),
+  { ssr: false, loading: () => <LoadingDots label="Measuring the ceilings" /> }
+);
 const DeployInfoCard = dynamic(() => import("@/components/admin/DeployInfoCard"), {
   ssr: false,
   loading: () => <LoadingDots label="Reading the running service" />,
@@ -109,6 +116,11 @@ interface KeyInfo {
   masked: string;
   scope: string;
   editable: boolean;
+  /** There is a real probe behind this key even when it is not editable here
+   *  (REDIS_URL is env-only AND the one dependency whose silence multiplies
+   *  every daily cap by the instance count). Optional so an older cached
+   *  payload just falls back to the editable rule. */
+  testable?: boolean;
   docUrl?: string;
 }
 interface UserRecord {
@@ -1772,6 +1784,11 @@ export default function AdminPage() {
               failure before any code is suspected. */}
           <DeployInfoCard />
 
+          {/* WHICH CEILING ARE WE CLOSEST TO. Above the roll call on purpose:
+              every service can be answering while the pool is one user from
+              the cap that gets a personal number banned. */}
+          <ChokePointsCard />
+
           {/* Live service health with 10-minute auto-refresh (item #12) */}
           <HealthPanel />
 
@@ -2205,7 +2222,12 @@ export default function AdminPage() {
                       </a>
                     )}
               <div className="mt-2 font-mono text-[12px] text-soft">{k.masked}</div>
-              {k.editable && (
+              {/* The test button used to be gated on `editable`, which quietly
+                  meant "no probe for anything the owner cannot paste here" -
+                  and REDIS_URL is exactly that: env-only, and the one
+                  dependency whose silence multiplies every daily cap by the
+                  instance count. `testable` is the explicit allowlist. */}
+              {(k.testable ?? k.editable) && (
                 <>
                   <button
                     onClick={() => testKey(k.name)}
@@ -2216,7 +2238,10 @@ export default function AdminPage() {
                   </button>
                   {keyTests[k.name] && (
                     <p
-                      className={`mt-1 rounded-lg p-2 text-[11px] font-bold ${
+                      // Several probes answer in LINES (the host pool, the
+                      // WABA block's shape/reachability/drift report). Without
+                      // this they collapsed into one unreadable run-on.
+                      className={`mt-1 whitespace-pre-wrap break-words rounded-lg p-2 text-[11px] font-bold ${
                         keyTests[k.name].ok
                           ? "bg-savings-soft text-savings"
                           : "bg-brandred-soft text-brandred"
