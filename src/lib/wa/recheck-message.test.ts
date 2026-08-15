@@ -50,6 +50,40 @@ describe("the re-check message", () => {
     expect(m).toMatch(/passport/i);
   });
 
+  // THE OWNER'S REPORT, IN THE PLACE IT DOES THE MOST DAMAGE.
+  //
+  // A shop wrote "We have deposit passport or money4000" and the app showed
+  // "Passport deposit". Worse than a display bug: this sentence is SENT TO THE
+  // SHOP, so a dropped alternative is us confirming terms they never offered -
+  // and the dropped half is the one that lets the traveller keep their passport.
+  // `depositPhrase` returned "a passport/ID deposit" for anything document-shaped
+  // and threw the cash route away; both halves have to survive the trip.
+  it("THE OWNER'S CASE: 'passport or money4000' is read back with BOTH options", () => {
+    const m = recheckMessage({
+      ...full,
+      depositType: "passport",
+      depositAmount: 4000,
+      depositCurrency: "THB",
+      depositNote: "We have deposit passport or money4000",
+    })!;
+    expect(m).toMatch(/passport/i);
+    expect(m).toMatch(/4,?000/);
+    expect(m).toMatch(/\bor\b/);
+  });
+
+  it("...and with the raw words lost, the flat type+amount pair still says both", () => {
+    // Older rows carry only the enum and the number. `passport` + 4000 is the
+    // same offer with its sentence missing, and saying one half is still wrong.
+    const m = recheckMessage({
+      ...full,
+      depositType: "passport",
+      depositAmount: 4000,
+      depositCurrency: "THB",
+    })!;
+    expect(m).toMatch(/passport/i);
+    expect(m).toMatch(/4,?000/);
+  });
+
   it("a shop that takes NO deposit has still answered the question", () => {
     const m = recheckMessage({ ...full, depositType: "none", depositAmount: null })!;
     expect(m).toMatch(/no deposit/i);

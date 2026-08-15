@@ -720,15 +720,34 @@ async function persistThreadOutcome(args: {
     // WHAT THE CARD SHOWS WHILE THE AGENT WAITS ON AN ANSWER (W4.4). Only for a
     // question that actually reached the shop: "blocked" and "failed" mean
     // nobody was asked anything.
-    const asked = delivered === undefined || delivered === "sent" || delivered === "queued" || delivered === "held";
+    //
+    // ...BUT DELIVERY IS ONLY ASKED ON THE TURN THAT ASKS. Every turn after it -
+    // a scheduled tick, a swarm poke, an unrelated inbound - delivers nothing,
+    // so `asked` was false and this field was blanked while the engine was
+    // still, correctly, waiting. The card then dropped its "double-checking
+    // with the shop" chip and read as though the agent had moved on, which is
+    // the same class of dishonesty as a stale price: the traveller is told the
+    // thread is doing something other than what it is doing. Once the question
+    // has reached the shop, the chip belongs to the WAIT (which is durable on
+    // the digest), not to this turn's delivery.
+    const asked =
+      delivered === undefined || delivered === "sent" || delivered === "queued" || delivered === "held";
+    const alreadyAsked = Boolean(
+      (base.fields as { awaitingConfirmation?: { subject?: string } } | undefined)
+        ?.awaitingConfirmation
+    );
     fields.awaitingConfirmation =
-      digest.awaitingConfirmation && asked
-      ? {
-          subject: digest.awaitingConfirmation.subject,
-          question: digest.awaitingConfirmation.question.slice(0, 220),
-          at: new Date(io.now()).toISOString(),
-        }
-      : undefined;
+      digest.awaitingConfirmation && (asked || alreadyAsked)
+        ? {
+            subject: digest.awaitingConfirmation.subject,
+            question: digest.awaitingConfirmation.question.slice(0, 220),
+            // Keep the ORIGINAL asked-at through the wait - restamping it every
+            // tick would make a three-turn wait look permanently brand new.
+            at:
+              (base.fields as { awaitingConfirmation?: { at?: string } } | undefined)
+                ?.awaitingConfirmation?.at ?? new Date(io.now()).toISOString(),
+          }
+        : undefined;
 
     const next: NegotiationThreadState = { ...base, fields };
     next.phase = derivePhase(next);

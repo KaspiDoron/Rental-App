@@ -14,6 +14,8 @@
 // PURE: no database, no clock, no React. Callers map their own row shapes onto
 // `DealTerms` and get one answer.
 
+import { depositSpokenPhrase, type DepositType } from "./deposit";
+
 /** Every fact that decides whether a deal is complete enough to re-confirm. */
 export interface DealTerms {
   /** The shop's own last quote. Never a figure we computed. */
@@ -109,23 +111,48 @@ export function depositPhrase(
 ): string | null {
   const type = String(t.depositType ?? "").trim().toLowerCase();
   if (type === "none") return "no deposit";
-  const amount =
-    typeof t.depositAmount === "number" && t.depositAmount > 0
-      ? money
-        ? money(t.depositAmount, t.depositCurrency ?? t.currency ?? undefined)
-        : String(Math.round(t.depositAmount))
-      : null;
-  if (type === "cash" || type === "money") {
-    return amount ? `a ${amount} cash deposit` : "a cash deposit";
-  }
-  if (type === "passport" || type === "id" || type === "document") {
-    return "a passport/ID deposit";
-  }
-  if (amount) return `a ${amount} deposit`;
   const note = String(t.depositNote ?? t.depositLabel ?? "").trim();
+  // EVERY ALTERNATIVE, OR WE ARE PUTTING WORDS IN THE SHOP'S MOUTH.
+  //
+  // This function used to be its own three-branch enum switch, and the branch
+  // `passport | id | document -> "a passport/ID deposit"` silently discarded the
+  // cash route: a shop that wrote "We have deposit passport or money4000" was
+  // asked, in the traveller's name, to confirm passport-only terms. That is the
+  // owner's report, in the one place where the wrong reading is not merely
+  // displayed but SPOKEN BACK - the re-check message (wa/recheck-message).
+  //
+  // The structure lives in lib/deposit, which parses the shop's own words into
+  // alternatives; this is the only renderer left that had a second opinion.
+  const spoken = depositSpokenPhrase(
+    {
+      deposit: note || null,
+      depositType: DEPOSIT_TYPE[type] ?? null,
+      depositAmount: t.depositAmount ?? null,
+      depositCurrency: t.depositCurrency ?? null,
+      currency: t.currency ?? null,
+    },
+    money
+  );
+  if (spoken) return spoken;
+  // Terms nobody could parse: the shop's own sentence, bounded. Better than a
+  // category we guessed at.
   if (note) return note.length > 60 ? `${note.slice(0, 57)}...` : note;
   return null;
 }
+
+/** What a stored `depositType` means, including the spellings that predate the
+ *  enum: rows written by older extractors still say "money" and "document", and
+ *  dropping them on the floor would lose the only term the shop stated. */
+const DEPOSIT_TYPE: Record<string, DepositType> = {
+  cash: "cash",
+  money: "cash",
+  passport: "passport",
+  document: "passport",
+  id: "id",
+  license: "license",
+  licence: "license",
+  other: "other",
+};
 
 /** How the traveller gets the vehicle, as a short phrase. */
 export function fulfillmentPhrase(t: DealTerms): string | null {

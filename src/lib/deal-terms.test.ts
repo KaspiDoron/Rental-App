@@ -76,6 +76,37 @@ describe("the terms as words a shop would recognise", () => {
   it("does not turn a passport into a number", () => {
     expect(depositPhrase({ depositType: "passport" })).toMatch(/passport/i);
   });
+  // ...AND DOES NOT TURN A CHOICE INTO A DEMAND (the owner's report).
+  //
+  // The old body was `if (type === passport|id|document) return "a passport/ID
+  // deposit"` - a return that could not, by construction, mention the cash the
+  // shop had also offered. This phrase is spoken TO THE SHOP by the Trips
+  // re-check, so the missing half was not a display bug: it confirmed terms
+  // nobody offered. Every alternative, or we are inventing the deal.
+  it("keeps EVERY alternative the shop named - passport OR cash", () => {
+    const said = depositPhrase(
+      {
+        depositType: "passport",
+        depositAmount: 4000,
+        depositCurrency: "THB",
+        depositNote: "We have deposit passport or money4000",
+      },
+      moneyLocal
+    )!;
+    expect(said).toMatch(/passport/i);
+    expect(said).toMatch(/4,?000/);
+    expect(said).toMatch(/\bor\b/);
+  });
+  it("keeps a BUNDLE a bundle - a copy plus cash is not a choice", () => {
+    const said = depositPhrase(
+      { depositNote: "Copy of passport + 3000 THB", depositType: "passport" },
+      moneyLocal
+    )!;
+    expect(said).toMatch(/copy/i);
+    expect(said).toMatch(/3,?000/);
+    // "or" would tell the traveller they may pick one. They may not.
+    expect(said).not.toMatch(/\bor\b/);
+  });
   it("says 'no deposit' plainly", () => {
     expect(depositPhrase({ depositType: "none" })).toBe("no deposit");
   });

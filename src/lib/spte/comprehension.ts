@@ -35,7 +35,7 @@
 // turn or inventing a verdict.
 
 import "server-only";
-import type { ConfirmSubject, ShopStance, Uncertainty } from "./types";
+import type { ConfirmSubject, PendingConfirm, ShopStance, Uncertainty } from "./types";
 import type { ClaimSubject } from "../thread/claims";
 import type { LanguageStatement } from "../wa/thread-language";
 
@@ -58,6 +58,17 @@ export const STANCE_CONFIDENCE_FLOOR = 0.6;
  * were told they could replace with cash.
  */
 export const UNCERTAINTY_CONFIDENCE_FLOOR = 0.4;
+
+/**
+ * How sure the model has to be that the shop ANSWERED our confirming question.
+ *
+ * The asymmetry runs the other way from the stance floor. A false "they
+ * answered" ends the wait and lets the engine act on a reading the shop never
+ * confirmed - which is the entire failure this doctrine exists to prevent. A
+ * false "not yet" costs one more turn of patience, and the turn bound
+ * (CONFIRM_WAIT_TURNS) means it can never cost more than three.
+ */
+export const CONFIRM_ANSWER_FLOOR = 0.6;
 
 /**
  * The whole comprehension phase's wall clock.
@@ -317,5 +328,75 @@ export async function readTurnComprehension(
     degraded: false,
     provider: comp.provider,
     ms,
+  };
+}
+
+/**
+ * DID THE SHOP ANSWER THE QUESTION WE ARE WAITING ON?
+ *
+ * The second half of the owner's rule - "then wait for the shop answer" - is a
+ * state machine, and a state machine needs an exit. The exit is a JUDGEMENT
+ * about what their reply meant, so it goes to the model (semantic/classifiers
+ * readConfirmAnswer, zod-validated) and never to a keyword test: a shop settles
+ * "passport or 4000 cash?" with "yes both ok", "up to you", "cash better", or a
+ * correction, and no phrase list has ever survived contact with that.
+ *
+ * Deterministic code keeps everything around it: which doubt we are waiting on,
+ * how many turns the wait has left, and what becomes legal while it lasts
+ * (spte/digest advanceConfirmState + spte/policy).
+ *
+ * DEGRADES TO PATIENCE. No provider, a timeout, a shape it could not satisfy -
+ * all return null, which means "not answered yet", which means the thread keeps
+ * waiting until the turn bound releases it. An outage can delay an answer; it
+ * can never manufacture one.
+ */
+export interface ConfirmResolution {
+  subject: ConfirmSubject;
+  /** The shop settled it - the model's verdict, above the floor. */
+  answered: boolean;
+  /** What they settled it as, in their own words. */
+  answer?: string;
+  confidence: number;
+  /** No provider answered - keep waiting, change nothing. */
+  degraded: boolean;
+}
+
+export async function readConfirmResolution(input: {
+  pending: PendingConfirm;
+  /** The shop's message, English gloss preferred (same rule as the pass above). */
+  text: string;
+  context?: string;
+  budgetMs?: number;
+}): Promise<ConfirmResolution | null> {
+  const text = (input.text ?? "").trim();
+  const question = (input.pending.question ?? "").trim();
+  if (!text || !question) return null;
+  const { readConfirmAnswer } = await import("../semantic/classifiers");
+  const budget = input.budgetMs ?? Math.floor(COMPREHENSION_BUDGET_MS * 0.6);
+  const out = await withCeiling(
+    readConfirmAnswer(question, text, input.context, { budgetMs: budget, once: true }).catch(
+      () => null
+    ),
+    budget,
+    null
+  );
+  const v = out?.value;
+  if (!v) {
+    return {
+      subject: input.pending.subject,
+      answered: false,
+      confidence: 0,
+      degraded: out?.degraded !== false,
+    };
+  }
+  return {
+    subject: input.pending.subject,
+    // ALL THREE CONDITIONS. A reply that engaged with the question and left us
+    // no wiser (`stillUnclear`) is not an answer - it is the same ambiguity
+    // again, and ending the wait on it would re-latch the reading we distrust.
+    answered: v.answered === true && v.stillUnclear !== true && v.confidence >= CONFIRM_ANSWER_FLOOR,
+    ...(v.answer ? { answer: v.answer.slice(0, 200) } : {}),
+    confidence: v.confidence,
+    degraded: false,
   };
 }

@@ -4,9 +4,42 @@
 // evicted past a cap. This is what keeps 10 threads x 15 messages inside a lean
 // per-turn token budget.
 
-import type { ConfirmSubject, ThreadDigest, TurnArtifact, VerifiedExtraction } from "./types";
+import type {
+  ConfirmSubject,
+  PendingConfirm,
+  ThreadDigest,
+  TurnArtifact,
+  VerifiedExtraction,
+} from "./types";
 
 const MAX_FACTS = 10;
+
+/**
+ * HOW LONG A THREAD MAY WAIT ON AN ANSWER IT ASKED FOR.
+ *
+ * The owner's doctrine has two halves - ask when unsure, and WAIT for the reply
+ * - and the second half needs a bound or a shop that never answers freezes the
+ * negotiation forever. Turns, not minutes, because turns are what this engine
+ * counts: an inbound message, a scheduled tick and a swarm poke each spend one.
+ * Three is enough to survive the wakeup a paused thread schedules for itself
+ * plus a couple of unrelated messages, and short enough that a silent shop is
+ * released the same day.
+ *
+ * Durable, like the wait itself: an in-memory counter would reset on every cold
+ * start, which on serverless means "never expires" or "expires at random".
+ */
+export const CONFIRM_WAIT_TURNS = 3;
+
+/**
+ * ...AND HOW LONG A DOUBT MAY SIT UNASKED.
+ *
+ * A flagged subject blocks the fact from reading as known, so a doubt the engine
+ * never gets around to asking about would deadlock the thread just as surely.
+ * The model picks the MOVE, so `confirm` being legal is not a guarantee it is
+ * chosen; this is the escape hatch, and it releases the subject WITHOUT ever
+ * claiming the shop confirmed anything (see the fact written on expiry).
+ */
+export const CONFIRM_OPEN_TURNS = 3;
 
 export function emptyDigest(): ThreadDigest {
   return { facts: [], round: 0 };
@@ -31,6 +64,12 @@ export function persistableDigest(d: ThreadDigest): Partial<ThreadDigest> {
     ...(d.tone ? { tone: d.tone } : {}),
     ...(d.confirmAsked?.length ? { confirmAsked: d.confirmAsked } : {}),
     ...(d.awaitingConfirmation ? { awaitingConfirmation: d.awaitingConfirmation } : {}),
+    // THE DOUBTS THEMSELVES. Derived state is deliberately not persisted here -
+    // but a doubt is not derivable: the message that caused it scrolls into
+    // history and the regexes that read that history are exactly the ones that
+    // cannot see the ambiguity. Persist it or "unsure" evaporates on the next
+    // turn, which is the bug this field exists for.
+    ...(d.pending?.length ? { pending: d.pending } : {}),
     // The once-ever price-watch bound (owner report 5 #9). Durable or it is not
     // a bound at all - an in-memory flag would re-arm on every cold start.
     ...(d.priceWatchArmed ? { priceWatchArmed: true } : {}),
@@ -62,6 +101,89 @@ export function digestFromStored(stored: unknown): ThreadDigest {
     // ABSENT means not armed, so a row written before this field existed reads
     // as "no watch yet" rather than as a watch that already happened.
     priceWatchArmed: s.priceWatchArmed === true ? true : undefined,
+    // A ROW WRITTEN BEFORE `pending` EXISTED still knows it was waiting on
+    // something - `awaitingConfirmation` is the card's mirror of exactly that -
+    // so it is migrated forward rather than dropped. Threads mid-question at
+    // deploy time keep waiting instead of quietly resuming without an answer.
+    pending: pendingFromStored(s.pending) ?? pendingFromAwaiting(s.awaitingConfirmation),
+  };
+}
+
+function pendingFromAwaiting(a: ThreadDigest["awaitingConfirmation"]): PendingConfirm[] | undefined {
+  if (!a || typeof a !== "object" || typeof a.question !== "string" || !a.question.trim()) {
+    return undefined;
+  }
+  return [{ subject: a.subject, question: a.question, state: "waiting", turns: 0 }];
+}
+
+/** The doubts, read back defensively - free-form JSON older rows do not have. */
+function pendingFromStored(stored: unknown): PendingConfirm[] | undefined {
+  if (!Array.isArray(stored)) return undefined;
+  const out: PendingConfirm[] = [];
+  for (const raw of stored) {
+    const p = raw as Partial<PendingConfirm> | null;
+    if (!p || typeof p !== "object" || typeof p.subject !== "string") continue;
+    if (typeof p.question !== "string" || !p.question.trim()) continue;
+    out.push({
+      subject: p.subject as ConfirmSubject,
+      ...(typeof p.reading === "string" ? { reading: p.reading } : {}),
+      question: p.question,
+      ...(typeof p.confidence === "number" ? { confidence: p.confidence } : {}),
+      // A row whose state is missing reads as WAITING, the conservative side:
+      // it holds the thread rather than letting an unconfirmed reading through.
+      state: p.state === "open" ? "open" : "waiting",
+      turns: typeof p.turns === "number" && p.turns >= 0 ? Math.floor(p.turns) : 0,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * ONE TURN OF THE DOUBT STATE MACHINE - pure arithmetic, run before the legal
+ * move set is computed.
+ *
+ * Deterministic code owns "are we waiting, for what, and for how long"; the
+ * MODEL owns "did they answer it" and hands its verdict in as `resolved`. That
+ * split is the owner's doctrine exactly: no if/else decides what a message
+ * means, and no model decides how long a bound is.
+ *
+ * Three outcomes per doubt:
+ *   - resolved   -> gone, and the fact may read as known again.
+ *   - expired    -> gone, and a durable note says the shop never answered, so
+ *                   nothing downstream can claim they confirmed it.
+ *   - otherwise  -> carried, one turn older.
+ */
+export function advanceConfirmState(
+  d: ThreadDigest,
+  resolved: ConfirmSubject[] = []
+): ThreadDigest {
+  const pending = d.pending ?? [];
+  if (!pending.length) return d;
+  const facts = [...d.facts];
+  const next: PendingConfirm[] = [];
+  for (const p of pending) {
+    if (resolved.includes(p.subject)) continue;
+    const turns = p.turns + 1;
+    const bound = p.state === "waiting" ? CONFIRM_WAIT_TURNS : CONFIRM_OPEN_TURNS;
+    if (turns > bound) {
+      // NOT "they confirmed it" - "we never found out". The distinction is the
+      // whole point: the thread is released so it cannot deadlock, and the note
+      // is what stops a later surface presenting the unconfirmed reading as the
+      // shop's settled terms.
+      const note = `we asked the shop to confirm the ${p.subject} and they never answered - their own words are the only terms we have`;
+      if (!facts.some((f) => f.toLowerCase() === note.toLowerCase())) facts.push(note);
+      continue;
+    }
+    next.push({ ...p, turns });
+  }
+  const waiting = next.find((p) => p.state === "waiting");
+  return {
+    ...d,
+    facts: facts.slice(Math.max(0, facts.length - MAX_FACTS)),
+    pending: next.length ? next : undefined,
+    awaitingConfirmation: waiting
+      ? { subject: waiting.subject, question: waiting.question }
+      : null,
   };
 }
 
@@ -120,22 +242,62 @@ export function mergeDigest(
     ? [...new Set([...(prev.confirmAsked ?? []), confirmSubject])]
     : prev.confirmAsked;
 
-  // WHAT THE CARD SAYS WHILE WE WAIT. Set the moment the question goes out;
-  // held while the fact is still reported as unsettled; cleared as soon as it
-  // is not, so a card can never claim we are double-checking something the
-  // shop has since made plain.
-  const stillUnsure = (s: ConfirmSubject) => (verified.uncertain ?? []).some((u) => u.subject === s);
-  const awaitingConfirmation = confirmSubject
-    ? {
-        subject: confirmSubject,
-        question:
-          (verified.uncertain ?? []).find((u) => u.subject === confirmSubject)?.question ??
-          artifact.message ??
-          "",
-      }
-    : prev.awaitingConfirmation && stillUnsure(prev.awaitingConfirmation.subject)
-      ? prev.awaitingConfirmation
-      : null;
+  // THE DOUBTS THIS TURN LEAVES THE THREAD WITH.
+  //
+  // Two writers, and neither of them is "the current frame looks fine":
+  //   - the comprehension pass flags a subject -> it is carried as `open`,
+  //     durably, so the next turn cannot forget the thread is unsure;
+  //   - our confirming question goes out -> that subject flips to `waiting`,
+  //     and the thread waits (policy.ts holds the moves down to silence).
+  //
+  // Nothing here CLEARS a doubt. Clearing is a judgement about what the shop's
+  // reply meant, which belongs to the model (advanceConfirmState's `resolved`),
+  // or to the turn bound. This function used to clear the wait whenever the
+  // current message carried no uncertainty - which is true of every scheduled
+  // tick, so the agent asked its question and then bargained without the answer.
+  const pending: PendingConfirm[] = (prev.pending ?? []).map((p) => ({ ...p }));
+  for (const u of verified.uncertain ?? []) {
+    const seen = pending.find((p) => p.subject === u.subject);
+    if (seen) {
+      // The same doubt, restated: keep the state machine's clock, refresh the
+      // words. A shop repeating an ambiguous answer does not buy a fresh wait.
+      seen.reading = u.reading || seen.reading;
+      seen.question = u.question?.trim() || seen.question;
+      seen.confidence = u.confidence;
+      continue;
+    }
+    if (!u.question?.trim()) continue;
+    pending.push({
+      subject: u.subject,
+      reading: u.reading,
+      question: u.question,
+      confidence: u.confidence,
+      state: "open",
+      turns: 0,
+    });
+  }
+  if (confirmSubject) {
+    const question =
+      (verified.uncertain ?? []).find((u) => u.subject === confirmSubject)?.question ??
+      pending.find((p) => p.subject === confirmSubject)?.question ??
+      artifact.message ??
+      "";
+    const seen = pending.find((p) => p.subject === confirmSubject);
+    if (seen) {
+      seen.state = "waiting";
+      seen.turns = 0;
+      seen.question = question || seen.question;
+    } else {
+      pending.push({ subject: confirmSubject, question, state: "waiting", turns: 0 });
+    }
+  }
+
+  // WHAT THE CARD SAYS WHILE WE WAIT - a mirror of the state machine, never a
+  // second opinion about it.
+  const waiting = pending.find((p) => p.state === "waiting");
+  const awaitingConfirmation = waiting
+    ? { subject: waiting.subject, question: waiting.question }
+    : null;
 
   return {
     facts: capped,
@@ -147,5 +309,6 @@ export function mergeDigest(
     tone: prev.tone,
     confirmAsked,
     awaitingConfirmation,
+    pending: pending.length ? pending : undefined,
   };
 }
