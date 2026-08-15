@@ -139,8 +139,22 @@ export function MessageBubble({ m }: { m: ThreadMsg }) {
         {m.media && <MediaPart media={m.media} />}
         {/* THE RECEIPT. Collapsed by default so it never competes with the
             conversation; one tap proves what was understood in this exact
-            image, and what it changed. */}
-        {m.media && m.reading && <AgenticSummary reading={m.reading} />}
+            image, and what it changed.
+
+            IT RENDERS WHENEVER THERE IS AN IMAGE ROW, not only when a reading
+            landed. The gate here used to be `m.media && m.reading`, one line
+            below a picture that draws unconditionally - so every stamp failure
+            degraded to a photo with complete silence underneath it, and the
+            traveller could not tell "still working" from "we are blind" from
+            "the panel is broken". AgenticSummary takes the placeholder from
+            here and repaints itself when the reading arrives.
+
+            Only image rows: a voice note or a PDF is never sent to the reader,
+            so promising it a reading would be a new false claim, and those keep
+            the old gate - a panel only if something really was read. */}
+        {m.media && (m.reading || m.media.kind === "image") && (
+          <AgenticSummary reading={m.reading} mediaAt={m.at} />
+        )}
         {mapHref && (
           <a
             href={mapHref}

@@ -13,13 +13,17 @@
 // the reading is empty it says so, because "we could not read this one" is a
 // true and useful thing to tell somebody who can see the photo perfectly well.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
+  missingReadingHeadline,
+  missingReadingLine,
   readingEmptyLine,
   readingHeadline,
   readingIsEmpty,
   readingIsFailure,
+  readingIsPending,
+  READING_GRACE_MS,
   type MediaReading,
 } from "@/lib/media/reading";
 
@@ -29,10 +33,51 @@ const TONE: Record<MediaReading["confidence"], string> = {
   low: "text-brandyellow",
 };
 
-export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
+/**
+ * AN IMAGE ROW ALWAYS EXPLAINS ITSELF.
+ *
+ * `mediaAt` is when the photo landed, and it is what separates the two honest
+ * things we can say about a photo we hold no reading for: the turn is still
+ * running, or it finished without ever storing one. Before this, the bubble
+ * simply rendered nothing under the picture - and the traveller could not tell
+ * "still working" from "we are blind" from "the panel is broken".
+ */
+export function AgenticSummary({
+  reading,
+  mediaAt,
+}: {
+  reading?: MediaReading | null;
+  mediaAt?: string;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  if (!reading) return null;
+  // Starts optimistic and flips itself once, so a photo left unexplained stops
+  // claiming to be in progress WITHOUT waiting for the next poll to repaint it
+  // (the transcript deliberately keeps its array identity when nothing moved).
+  const [graceOver, setGraceOver] = useState(false);
+  const waiting = !reading;
+  useEffect(() => {
+    if (!waiting) return;
+    const left = readingIsPending(mediaAt, Date.now())
+      ? Math.max(0, READING_GRACE_MS - (Date.now() - Date.parse(String(mediaAt ?? ""))))
+      : 0;
+    if (!Number.isFinite(left)) return; // no usable timestamp - never accuse
+    const id = setTimeout(() => setGraceOver(true), left);
+    return () => clearTimeout(id);
+  }, [waiting, mediaAt]);
+
+  if (!reading) {
+    const pending = !graceOver && readingIsPending(mediaAt, Date.now());
+    return (
+      <Shell
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+        headline={t(missingReadingHeadline(pending))}
+      >
+        <p className="text-[11px] text-soft">{t(missingReadingLine(pending))}</p>
+      </Shell>
+    );
+  }
 
   const empty = readingIsEmpty(reading);
   // DID WE FAIL, OR DID THE PHOTO? Everything below hangs off this one
@@ -44,26 +89,12 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
   const failed = readingIsFailure(reading);
 
   return (
-    <div className="mt-1.5">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="btn btn-sm fluid-press flex w-full items-center gap-1.5 rounded-xl bg-card2/70 px-2.5 py-1.5 text-left text-[10.5px] font-extrabold text-soft"
-      >
-        <span aria-hidden>🧠</span>
-        <span className="min-w-0 flex-1 truncate">
-          {t("Agentic summary")} - {t(readingHeadline(reading))}
-        </span>
-        <span
-          className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-          aria-hidden
-        >
-          ›
-        </span>
-      </button>
-
-      {open && (
-        <div className="glass glass-rim fluid-swap mt-1.5 space-y-2 rounded-2xl p-2.5">
+    <Shell
+      open={open}
+      onToggle={() => setOpen((o) => !o)}
+      headline={t(readingHeadline(reading))}
+    >
+      <>
           {/* WHAT THE TURN RECORDED, NOT WHAT THE PANEL HOPES.
               This used to be one hardcoded sentence promising the agent was
               "asking the shop to type it instead" - a dispatch nothing had
@@ -160,6 +191,16 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
                 {t("Read together with the other photos in this batch")}
               </span>
             )}
+            {/* THE PHOTO WAS NOT WHAT WE READ. A vision pass that failed and a
+                caption that carried the price used to render as a failed read
+                WITH the prices under it - "re-reading this one" above a row and
+                a "used 250/day". Saying where the number came from is the only
+                version of that card that is not self-contradictory. */}
+            {reading.recoveredFrom && (
+              <span className="text-[10px] font-bold text-faint">
+                {t("Our reader could not use the photo itself - this came from the message with it")}
+              </span>
+            )}
             {reading.usedPricePerDay ? (
               <span className="text-[10.5px] font-bold text-soft">
                 → {t("used")} {reading.usedPricePerDay}/{t("day")} {t("for your offer")}
@@ -170,6 +211,47 @@ export function AgenticSummary({ reading }: { reading?: MediaReading | null }) {
               </span>
             )}
           </div>
+      </>
+    </Shell>
+  );
+}
+
+/**
+ * The collapsed row and the panel it opens - shared by the reading and by the
+ * placeholder, so an image row can NEVER render as a bare photo with nothing
+ * under it. That gap was the whole of the field report: the picture drew
+ * unconditionally, the panel only when a reading existed.
+ */
+function Shell({
+  open,
+  onToggle,
+  headline,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  headline: string;
+  children: React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={onToggle}
+        aria-expanded={open}
+        className="btn btn-sm fluid-press flex w-full items-center gap-1.5 rounded-xl bg-card2/70 px-2.5 py-1.5 text-left text-[10.5px] font-extrabold text-soft"
+      >
+        <span aria-hidden>🧠</span>
+        <span className="min-w-0 flex-1 truncate">
+          {t("Agentic summary")} - {headline}
+        </span>
+        <span className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden>
+          ›
+        </span>
+      </button>
+      {open && (
+        <div className="glass glass-rim fluid-swap mt-1.5 space-y-2 rounded-2xl p-2.5">
+          {children}
         </div>
       )}
     </div>

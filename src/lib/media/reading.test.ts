@@ -90,7 +90,18 @@ describe("the reading reaches the traveller", () => {
   it("is served by the transcript, and rendered under the picture", () => {
     expect(readCode("src/app/api/thread/route.ts")).toMatch(/reading: m\.raw\?\.reading/);
     const b = readCode("src/components/MessageBubble.tsx");
-    expect(b).toMatch(/m\.media && m\.reading && <AgenticSummary reading=\{m\.reading\} \/>/);
+    // WAS: a pin on the exact gate `m.media && m.reading && <AgenticSummary`.
+    // Its intent was "no panel without a reading to show" - and that intent was
+    // the field failure: the picture one line above draws unconditionally, so
+    // every stamp failure rendered as a photo with SILENCE under it, and the
+    // traveller could not tell "still working" from "we are blind" from "the
+    // panel is broken". The intent is now "an image row always explains
+    // itself", and it is asserted by RENDERING the bubble
+    // (src/components/AgenticSummary.test.tsx) rather than by matching source
+    // text - this pin passed unchanged through the whole regression. What is
+    // still worth pinning here is only the wiring: the panel gets the reading,
+    // and the timestamp it needs to tell those states apart.
+    expect(b).toMatch(/<AgenticSummary reading=\{m\.reading\} mediaAt=\{m\.at\} \/>/);
   });
 
   it("is collapsed by default, and says so when there is nothing to show", () => {

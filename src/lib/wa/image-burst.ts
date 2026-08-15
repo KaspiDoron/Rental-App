@@ -33,9 +33,31 @@ import { numberFilter } from "./phone-key";
 // a turn, and the stale-draft freshness gate drops the older reply at send
 // time - the exact behaviour the drain already has for any superseded draft.
 
-const BURST_WINDOW_MS = 6_000;
+import { BURST_WINDOW_MS } from "../media/reading";
+
 const DEFER_MS = 4_000;
 const MAX_BURST_ROWS = 16;
+
+/**
+ * HOW FAR BACK THE *DISCOVERY* PROBE LOOKS - and it is not the burst window.
+ *
+ * The first probe's only job is to find OUR OWN ROW so the window can be
+ * anchored on its `received_at`. It used to ask for `now - 6s`, which quietly
+ * assumed the coalescer runs within the burst window of the row being stored -
+ * and it does not: ingest inserts the row (ingest.ts, the inbound store) and
+ * only then reaches the coalescer, with an AWAITED finishBeforeResponse between
+ * them. Whenever that stretch exceeded six seconds the frame could not see its
+ * own row, `burstAnchor` returned null, the window fell back to the sliding
+ * `now - 6s` that had just failed, and a five-photo album ran as five separate
+ * turns each holding one frame. That is exactly how a legible price menu
+ * reaches the reader as one fifth of a board and comes back found=false.
+ *
+ * A wide lookback is safe here BECAUSE the probe decides nothing: it cannot
+ * add a NEWER sibling (a newer row is newer whatever the lookback), and every
+ * decision below - stand-down and assembly alike - is taken on the frozen
+ * anchored window, never on this set.
+ */
+const DISCOVERY_LOOKBACK_MS = 180_000;
 
 interface SiblingRow {
   id: number;
@@ -93,16 +115,33 @@ async function siblingFrames(
   fromDigits: string,
   sinceIso?: string
 ): Promise<SiblingRow[]> {
-  const since = sinceIso ?? burstWindowSince(null, Date.now());
+  const since = sinceIso ?? new Date(Date.now() - DISCOVERY_LOOKBACK_MS).toISOString();
+  // NEWEST-FIRST AT THE DATABASE, arrival order in memory. `id.asc` + LIMIT
+  // truncates to the OLDEST rows in range, which is harmless over a six-second
+  // window and actively wrong over the discovery lookback - it could drop our
+  // own row, the one thing the probe exists to find. Asking desc and reversing
+  // keeps the truncation on the far end, where it belongs.
   const rows = await sbSelect<SiblingRow>(
     "whatsapp_messages",
     `select=id,wa_message_id,received_at,type,raw&direction=eq.inbound` +
       `&raw->>receiver=eq.${encodeURIComponent(email)}` +
       `&received_at=gte.${encodeURIComponent(since)}` +
       `&type=in.(image,document)` +
-      `&order=id.asc&limit=${MAX_BURST_ROWS}${numberFilter("from_number", fromDigits)}`
+      `&order=id.desc&limit=${MAX_BURST_ROWS}${numberFilter("from_number", fromDigits)}`
   ).catch(() => [] as SiblingRow[]);
-  return rows.filter(isImageRow);
+  // Arrival order is restored HERE rather than assumed from the driver: every
+  // caller below reads this list as the burst in the order it landed.
+  return rows.filter(isImageRow).sort((a, b) => a.id - b.id);
+}
+
+/** Rows at or after the frozen window start - the burst, as of this probe. */
+function withinWindow(rows: SiblingRow[], sinceIso: string): SiblingRow[] {
+  const since = Date.parse(sinceIso);
+  if (!Number.isFinite(since)) return rows;
+  return rows.filter((r) => {
+    const at = Date.parse(String(r.received_at ?? ""));
+    return !Number.isFinite(at) || at >= since;
+  });
 }
 
 /** Is there a frame NEWER than ours? Pure, so the protocol is unit-testable. */
@@ -146,13 +185,19 @@ export async function assembleImageBurst(opts: {
 }): Promise<BurstVerdict> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  // 1) Who else is in this burst right now? This first probe is the only one
-  //    that may use the sliding window - it is what discovers the anchor.
-  let rows = await siblingFrames(opts.email, opts.fromDigits);
+  // 1) DISCOVERY. This probe answers one question - when did OUR row land? -
+  //    and it looks far enough back that a slow ingest cannot hide it (see
+  //    DISCOVERY_LOOKBACK_MS: the frame missing its own row is how an album
+  //    became five one-frame turns).
+  const discovered = await siblingFrames(opts.email, opts.fromDigits);
   // FREEZE THE WINDOW on our own arrival. Every later probe asks the same
   // question of the same set, so the seconds spent fetching and deferring can
   // never shrink the burst out from under us (including our own row).
-  const since = burstWindowSince(burstAnchor(rows, opts.ownMsgId), Date.now());
+  const since = burstWindowSince(burstAnchor(discovered, opts.ownMsgId), Date.now());
+  // The burst is the anchored window, NEVER the discovery set: a photo this
+  // shop sent two minutes ago is not a frame of this album, and standing down
+  // to it would drop the frame we are holding out of the read entirely.
+  let rows = withinWindow(discovered, since);
   const newer0 = newerSibling(rows, opts.ownMsgId);
   if (newer0) return { standDown: true, leaderId: newer0.wa_message_id ?? String(newer0.id) };
 

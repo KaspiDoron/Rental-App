@@ -51,9 +51,18 @@ describe("an honest taxonomy: our failures are never reported as their photo", (
     expect(readingIsFailure(r)).toBe(true);
     expect(readingEmptyLine(r)).not.toMatch(/could not read anything usable/i);
     expect(readingEmptyLine(r)).toMatch(/our side failing, not your photo/i);
-    expect(readingEmptyLine(r)).toMatch(/retried/i);
+    // WAS: /retried/i on the line and /re-reading/i on the headline. Same
+    // intent - the copy must name the failure as OURS and must not fall back
+    // to the blank-photo sentence - but those two words were themselves the
+    // second half of this bug: the retry they described (agents.ts's single
+    // budgeted region re-read) had already finished inside the turn, and
+    // nothing schedules another. The assertion now demands the honest version:
+    // the failure is ours, and it is stated in the past tense.
+    expect(readingEmptyLine(r)).toMatch(/second look .* did not recover it/i);
+    expect(readingEmptyLine(r)).not.toMatch(/is being retried|reading it again/i);
     expect(readingHeadline(r)).not.toMatch(/nothing readable/i);
-    expect(readingHeadline(r)).toMatch(/re-reading/i);
+    expect(readingHeadline(r)).toMatch(/our reader/i);
+    expect(readingHeadline(r)).not.toMatch(/re-reading/i);
   });
 
   it("a MAX_TOKENS cut-off is our ceiling, not their board", () => {
@@ -84,9 +93,16 @@ describe("an honest taxonomy: our failures are never reported as their photo", (
     expect(r.outcome).toBe("sanity-nulled");
     expect(r.rejectedPricePerDay).toBe(25_000);
     expect(readingEmptyLine(r)).toMatch(/we read 25000 THB\/day/i);
-    expect(readingEmptyLine(r)).toMatch(/asking the shop to confirm/i);
+    // WAS: /asking the shop to confirm/i, and /looks wrong - checking/ on the
+    // headline. The intent - "show the number, and say we will not quote it" -
+    // is preserved exactly; the dispatch it asserted was not: no ask had been
+    // made and none was scheduled, so the panel was inventing an action again.
+    // What the agent did instead is now carried by `followUp`, and is asserted
+    // where it is actually recorded (reading-quotes.test.ts).
+    expect(readingEmptyLine(r)).toMatch(/we did not quote it/i);
+    expect(readingEmptyLine(r)).not.toMatch(/asking the shop/i);
     expect(readingEmptyLine(r)).not.toMatch(/could not read anything usable/i);
-    expect(readingHeadline(r)).toMatch(/looks wrong/i);
+    expect(readingHeadline(r)).toMatch(/cannot be right/i);
   });
 
   it("...and it still degrades honestly when the number did not survive", () => {
@@ -183,7 +199,14 @@ describe("the fields the live extractor can now actually fill", () => {
         { pricePerDay: 200, model: "Yamaha Fino", available: false },
       ],
     });
-    expect(r.prices.map((p) => p.pricePerDay)).toEqual([200, 250]); // never dropped
+    // WAS: toEqual([200, 250]) - a plain cheapest-first order. Same intent
+    // ("never dropped, always marked"), but the ORDER was itself the bug: both
+    // consumers that turn a reading into a number take prices[0], so a struck
+    // row at the head of the list became a live quote to the traveller and to
+    // every rival shop. Struck rows now sink below the quotable ones and are
+    // asserted as present rather than as first.
+    expect(r.prices.map((p) => p.pricePerDay).sort((a, b) => a - b)).toEqual([200, 250]);
+    expect(r.prices[0].pricePerDay).toBe(250); // the quote candidate, never 200
     expect(r.prices.find((p) => p.pricePerDay === 200)?.available).toBe(false);
     expect(r.prices.find((p) => p.pricePerDay === 250)?.available).toBe(true);
     // Silence about availability stays silence - most boards cross nothing out.

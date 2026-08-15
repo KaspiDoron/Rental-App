@@ -374,6 +374,87 @@ export function optionsFromHits(
   return out;
 }
 
+/** Lowercased, punctuation-flattened - "Honda Click 125" and "honda click125". */
+function normId(v: unknown): string {
+  return String(v ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * THE IDENTITY OF A ROW THAT WAS NEVER GIVEN ONE.
+ *
+ * The deterministic reader stamps `keyFor(price)` on everything it produces.
+ * THE MODEL'S ROWS ARE KEYLESS BY CONTRACT - the extraction JSON asks for
+ * label/pricePerDay/currency/tierLabel/available/condition/mileageKm/model and
+ * nothing else, and `normalizeExtraction` never assigns a key. `mergeOptions`
+ * then built `new Map(prev.map((o) => [o.key, o]))` over those rows: every one
+ * of them keyed `undefined`, one surviving map entry, and the survivor was
+ * whichever row happened to be LAST. A correctly-read nine-row board was cut to
+ * one row before it was ever stored, on any photo turn whose caption also gave
+ * the deterministic reader a hit.
+ *
+ * So a keyless row gets an identity derived from what actually separates two
+ * rows of one board: the bike it names, or the stay it applies to. A row that
+ * names neither is identified by its price alone - the SAME key `keyFor` gives,
+ * so a model row and a text-derived row at that price still meet and merge.
+ */
+export function optionKey(o: {
+  key?: string;
+  pricePerDay?: number;
+  model?: string | null;
+  tierLabel?: string | null;
+}): string {
+  if (o.key) return o.key;
+  const price = Math.round(Number(o.pricePerDay) || 0);
+  const distinguishing = normId(o.model) || normId(o.tierLabel);
+  return distinguishing ? `${keyFor(price)}-${distinguishing}` : keyFor(price);
+}
+
+/**
+ * A row from the model boundary, made whole.
+ *
+ * Everything downstream reads `gaps` (`menuUnresolved`, `nextGap`, OptionList,
+ * the SPTE pass) and `photoRefs`, and a keyless model row has neither - so the
+ * merge itself used to throw on `[...old.photoRefs]` the moment two rows
+ * actually met. The boundary is normalised once, here, where the rows enter.
+ */
+function wholeOption(o: VehicleOption): VehicleOption {
+  const base: Omit<VehicleOption, "gaps"> = {
+    ...o,
+    key: optionKey(o),
+    label: o.label || o.model || `${Math.round(Number(o.pricePerDay) || 0)}/day`,
+    pricePerDay: Number(o.pricePerDay) || 0,
+    condition: o.condition === "new" || o.condition === "older" ? o.condition : "unknown",
+    photoRefs: Array.isArray(o.photoRefs) ? o.photoRefs : [],
+    source: o.source === "photo" ? "photo" : "text",
+    // The contract asks the model for `boolean|null`; null is the board saying
+    // nothing, which is silence, not "unavailable".
+    available: typeof o.available === "boolean" ? o.available : undefined,
+  };
+  return { ...base, gaps: Array.isArray(o.gaps) ? o.gaps : gapsFor(base) };
+}
+
+/**
+ * The same tier under another name: one side names a bike, the other does not.
+ *
+ * "250/day" from the caption and "Click 125 - 250" from the board are one row
+ * restated, and keying the second on its model would otherwise show the
+ * traveller the same price twice.
+ */
+function sameTierKey(byKey: Map<string, VehicleOption>, n: VehicleOption): string | null {
+  const price = Math.round(n.pricePerDay);
+  for (const [k, o] of byKey) {
+    if (Math.round(o.pricePerDay) !== price) continue;
+    if (normId(o.model) && normId(n.model) && normId(o.model) !== normId(n.model)) continue;
+    // A duration row and a plain row at the same price are different rows.
+    if (normId(o.tierLabel) && normId(n.tierLabel) && normId(o.tierLabel) !== normId(n.tierLabel))
+      continue;
+    return k;
+  }
+  return null;
+}
+
 /**
  * Merge a newly-read option set into what the thread already knew. Facts only
  * ever ACCUMULATE - a later turn that mentions mileage must enrich the tier, not
@@ -382,10 +463,16 @@ export function optionsFromHits(
  */
 export function mergeOptions(prev: VehicleOption[], next: VehicleOption[]): VehicleOption[] {
   if (!next.length) return prev;
-  const byKey = new Map(prev.map((o) => [o.key, o]));
-  for (const n of next) {
-    const old = byKey.get(n.key);
-    if (!old) {
+  const byKey = new Map<string, VehicleOption>();
+  for (const p of prev) {
+    const whole = wholeOption(p);
+    byKey.set(whole.key, whole);
+  }
+  for (const raw of next) {
+    const n = wholeOption(raw);
+    const oldKey = byKey.has(n.key) ? n.key : sameTierKey(byKey, n);
+    const old = oldKey ? byKey.get(oldKey) : undefined;
+    if (!old || !oldKey) {
       byKey.set(n.key, n);
       continue;
     }
@@ -403,8 +490,14 @@ export function mergeOptions(prev: VehicleOption[], next: VehicleOption[]): Vehi
       minDays: old.minDays ?? n.minDays,
       maxDays: old.maxDays ?? n.maxDays,
       tierLabel: old.tierLabel ?? n.tierLabel,
+      // THE CROSSED-OUT MARKER USED TO DIE HERE. This literal copies field by
+      // field and simply had no `available` line, so a struck row that survived
+      // the merge came out looking like a live one - and the consumers that
+      // must refuse to quote it would have had no flag left to respect. The
+      // NEWEST statement wins; silence never erases what we already knew.
+      available: n.available ?? old.available,
     };
-    byKey.set(n.key, { ...merged, gaps: gapsFor(merged) });
+    byKey.set(oldKey, { ...merged, gaps: gapsFor(merged) });
   }
   return [...byKey.values()].sort((a, b) => a.pricePerDay - b.pricePerDay);
 }

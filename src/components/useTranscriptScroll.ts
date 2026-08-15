@@ -44,14 +44,32 @@ import type { ThreadMsg } from "./MessageBubble";
  * translation pass. Both are per-message and cheap - one pass over a list
  * bounded at 80 - and both are exactly the "the row changed under us" case the
  * count-based signature was blind to.
+ *
+ * AND A ROW IS PATCHED TWICE, NOT ONCE.
+ *
+ * Encoding reading PRESENCE alone left the second stamp invisible. The turn
+ * writes the reading when the photo is read, and writes it AGAIN once the
+ * engine has chosen and sent its move - that second write is the whole of
+ * `followUp`, i.e. "what your agent actually did about this photo", the one
+ * line in the panel that connects the picture to an action. Presence had
+ * already flipped on the first write, so the signature never moved again and
+ * the follow-up did not appear until the traveller closed and reopened the
+ * sheet. The outcome rides along for the same reason: a burst follower's row
+ * is re-stamped with the leader's reading, and a re-stamp that changes what
+ * the panel says has to change the signature.
  */
 function signature(list: ThreadMsg[]): string {
   if (!list.length) return "0";
   let patched = "";
   for (const m of list) {
-    // A single character per message: reading present, gloss present, or
-    // neither. Enough to move the signature, small enough to build every poll.
-    patched += m.reading ? (m.english ? "b" : "r") : m.english ? "e" : ".";
+    // A few characters per message - what was patched in, and what it says.
+    // Small enough to build on every poll over a list bounded at 80.
+    // `outcome` is read back off persisted JSON, so it is treated as a
+    // boundary value rather than a guaranteed field.
+    patched += m.reading
+      ? `${String(m.reading.outcome ?? "?")[0]}${m.reading.followUp ? "!" : "-"}`
+      : ".";
+    patched += m.english ? "e" : ".";
   }
   return `${list.length}|${list[0].id}|${list[list.length - 1].id}|${
     list[list.length - 1].text.length

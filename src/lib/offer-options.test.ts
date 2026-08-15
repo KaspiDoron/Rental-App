@@ -108,6 +108,110 @@ describe("mergeOptions - facts accumulate, never regress", () => {
   });
 });
 
+// THE MERGE ANNIHILATED THE BOARD IT WAS MEANT TO PRESERVE.
+//
+// `mergeOptions(fromModel, derived)` runs on every reply turn (agent-loop):
+// `prev` is what the VISION MODEL read off the photo, `next` is what the
+// deterministic reader found in the caption. And the model's rows are KEYLESS
+// by contract - the extraction JSON asks for label/price/currency/tierLabel/
+// available/condition/mileage/model and nothing else, and `normalizeExtraction`
+// never assigns a key - so `new Map(prev.map((o) => [o.key, o]))` collapsed a
+// whole board into ONE entry keyed `undefined`, and the survivor was whichever
+// row happened to be last.
+//
+// A nine-row menu photographed perfectly, read perfectly, cut to one row before
+// it was ever stored. Executed here with the exact keyless shape the boundary
+// produces.
+describe("mergeOptions - a model-read board survives the merge", () => {
+  /** Exactly what the extractor's JSON gives us: no key, no gaps, no source. */
+  const modelRow = (o: Partial<VehicleOption>) => o as VehicleOption;
+  /** ...and exactly what the deterministic reader hands the merge as `next`. */
+  const derivedRow = (pricePerDay: number): VehicleOption => ({
+    key: `tier-${pricePerDay}`,
+    label: `${pricePerDay}/day`,
+    pricePerDay,
+    currency: "THB",
+    condition: "unknown",
+    photoRefs: [],
+    source: "text",
+    gaps: ["condition", "mileage", "photo", "deposit"],
+  });
+  const board = [
+    modelRow({ label: "Honda Click 125", pricePerDay: 250, currency: "THB", model: "Click 125" }),
+    modelRow({ label: "Yamaha Fino", pricePerDay: 200, currency: "THB", model: "Fino" }),
+    modelRow({ label: "Honda PCX 160", pricePerDay: 400, currency: "THB", model: "PCX 160" }),
+    modelRow({ label: "Honda ADV", pricePerDay: 500, currency: "THB", model: "ADV" }),
+  ];
+
+  it("THE REGRESSION: every keyless row used to collapse into one", () => {
+    // The trigger is a caption that also gives the deterministic reader a hit,
+    // which is what makes `next` non-empty and runs the merge at all.
+    const merged = mergeOptions(board, [derivedRow(250)]);
+    expect(merged.map((o) => o.pricePerDay)).toEqual([200, 250, 400, 500]);
+    expect(merged.map((o) => o.model)).toEqual(["Fino", "Click 125", "PCX 160", "ADV"]);
+    // ...and every survivor is a whole option, because everything downstream
+    // (menuUnresolved, nextGap, OptionList, the SPTE pass) reads these.
+    for (const o of merged) {
+      expect(o.key, o.label).toBeTruthy();
+      expect(Array.isArray(o.gaps), o.label).toBe(true);
+      expect(Array.isArray(o.photoRefs), o.label).toBe(true);
+    }
+    // Distinct keys are the whole fix - one shared key IS the collapse.
+    expect(new Set(merged.map((o) => o.key)).size).toBe(4);
+  });
+
+  it("THE MARKER SURVIVES: a crossed-out row stays crossed out", () => {
+    // The merged literal copied ten fields by name and simply had no
+    // `available` line, so a struck row that met a caption hit came out looking
+    // live - and the consumers that must refuse to quote it (graph/engine's
+    // rival table, /api/replies) would have had no flag left to respect.
+    const struck = [
+      modelRow({ label: "Fino", pricePerDay: 200, model: "Fino", available: false }),
+      modelRow({ label: "Click 125", pricePerDay: 250, model: "Click 125", available: true }),
+    ];
+    const merged = mergeOptions(struck, [derivedRow(200)]);
+    expect(merged.find((o) => o.pricePerDay === 200)?.available).toBe(false);
+    expect(merged.find((o) => o.pricePerDay === 250)?.available).toBe(true);
+    // Silence never erases what we already knew about a row.
+    const restated = mergeOptions(merged, [
+      modelRow({ label: "Fino", pricePerDay: 200, model: "Fino" }),
+    ]);
+    expect(restated.find((o) => o.pricePerDay === 200)?.available).toBe(false);
+  });
+
+  it("the same tier restated is still ONE tier, not a duplicate", () => {
+    // The identity has to distinguish rows without forking them: a caption's
+    // bare "250/day" and the board's "Click 125 - 250" are one row.
+    const merged = mergeOptions(
+      [modelRow({ label: "Click 125", pricePerDay: 250, model: "Click 125" })],
+      [derivedRow(250)]
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].model).toBe("Click 125");
+  });
+
+  it("two rows at the SAME price for different bikes are two rows", () => {
+    const merged = mergeOptions(
+      [
+        modelRow({ label: "Click 125", pricePerDay: 250, model: "Click 125" }),
+        modelRow({ label: "Scoopy", pricePerDay: 250, model: "Scoopy" }),
+      ],
+      [derivedRow(250)]
+    );
+    expect(merged.map((o) => o.model).sort()).toEqual(["Click 125", "Scoopy"]);
+  });
+
+  it("a duration ladder keeps every rung", () => {
+    const ladder = [
+      modelRow({ label: "1-2 days", pricePerDay: 600, tierLabel: "1-2 days" }),
+      modelRow({ label: "3-14 days", pricePerDay: 550, tierLabel: "3-14 days" }),
+      modelRow({ label: "15-29 days", pricePerDay: 500, tierLabel: "15-29 days" }),
+    ];
+    const merged = mergeOptions(ladder, [derivedRow(500)]);
+    expect(merged.map((o) => o.tierLabel)).toEqual(["15-29 days", "3-14 days", "1-2 days"]);
+  });
+});
+
 // Locking the "older 200" tier must not book the headline "newer 250" price.
 // Every downstream reader (BookingSheet, /api/bookings, the bargain draft) takes
 // the price straight off the offer, so the choice has to be applied there.

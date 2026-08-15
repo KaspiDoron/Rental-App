@@ -1697,9 +1697,21 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           // ONE query serves every priceless shop; number matching happens in
           // code (tolerant, like every other cross-spelling comparison).
           const { sameNumber } = await import("../wa/phone-key");
+          // A CROSSED-OUT ROW IS NOT A RIVAL PRICE. `available === false` means
+          // the board struck the row through - a model this shop no longer
+          // rents - and this table is quoted at OTHER shops as "another shop
+          // does 150". Taking `prices[0]` unfiltered told every sibling
+          // negotiation a number nobody could book, and moved their floor to
+          // match it. Only the panel honoured the flag; the two places that
+          // turn a reading into a NUMBER did not (this one and /api/replies).
+          const { cheapestQuotable } = await import("../media/reading");
           const readRows = await sbSelect<{
             from_number: string | null;
-            raw: { reading?: { prices?: Array<{ pricePerDay?: number; currency?: string }> } } | null;
+            raw: {
+              reading?: {
+                prices?: Array<{ pricePerDay?: number; currency?: string; available?: boolean }>;
+              };
+            } | null;
           }>(
             "whatsapp_messages",
             `select=from_number,raw&direction=eq.inbound&raw->>receiver=eq.${encodeURIComponent(
@@ -1713,9 +1725,12 @@ export function liveGraphIO(send: LiveSend): GraphIO {
               (m) =>
                 m.from_number &&
                 sameNumber(m.from_number, digits) &&
-                (m.raw?.reading?.prices?.length ?? 0) > 0
+                // ...and a message whose ONLY rows are struck out must not
+                // claim this shop, or the newest such message shadows an older
+                // one that really did carry a quotable board.
+                cheapestQuotable(m.raw?.reading?.prices) !== null
             );
-            const cheapest = read?.raw?.reading?.prices?.[0];
+            const cheapest = cheapestQuotable(read?.raw?.reading?.prices);
             if (cheapest && typeof cheapest.pricePerDay === "number" && cheapest.pricePerDay > 0) {
               rows.set(r.vendorId, {
                 ...r,
