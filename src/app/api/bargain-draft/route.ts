@@ -36,11 +36,39 @@ export async function POST(req: Request) {
     );
   }
 
-  const rfq = body.rfq as StructuredRFQ;
+  let rfq = body.rfq as StructuredRFQ;
   const vendor = body.vendor as Vendor;
   const region: string | undefined = body.region || undefined;
   const quoted: number | undefined = body.currentPricePerDay;
   const cur = currencyForRegion(region) || "USD";
+
+  // SERVER-AUTHORITATIVE DURATION (owner report 5 #7). The draft composed from
+  // the CLIENT's live rfq with no reconciliation, then the send re-stamped that
+  // rfq onto the outbound row - so tapping Bargain on a thread opened for 1 day
+  // minted a fresh 3-day anchor and the agent started quoting a duration this
+  // shop had never been asked about. The same promise the inbound path enforces
+  // now governs the draft: the opener is what the shop was actually told.
+  {
+    const digits = digitsOnly(String(vendor.whatsapp ?? ""));
+    const { promisedRfq } = await import("@/lib/wa/thread-context");
+    const settled = await promisedRfq(digits, session.email, rfq);
+    if (settled.rfq) rfq = settled.rfq;
+    if (settled.drifted) {
+      // Never silent: a drift means some other surface wrote an rfq into this
+      // thread, and the owner can see it in the events trail.
+      await sbInsert("agent_events", [
+        {
+          kind: "rfq-drift",
+          user_email: session.email,
+          vendor_id: String(vendor.id ?? ""),
+          vendor_name: String(vendor.name ?? ""),
+          detail: `Bargain draft asked for ${
+            (body.rfq as StructuredRFQ)?.durationDays
+          } days; the thread was opened for ${rfq.durationDays}. Composed on the promise.`,
+        },
+      ]).catch(() => {});
+    }
+  }
 
   // SERVER-AUTHORITATIVE LANGUAGE (owner report 5 #14). This route used to
   // trust body.language verbatim while the modal invented its own default

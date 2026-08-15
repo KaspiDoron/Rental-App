@@ -8,6 +8,7 @@
 // not where that starts.
 
 import { moneyLocal } from "../currency";
+import { nDays } from "../copy/matrix";
 
 export function recheckMessage(opts: {
   pricePerDay?: number | null;
@@ -18,7 +19,8 @@ export function recheckMessage(opts: {
     opts.pricePerDay && opts.pricePerDay > 0
       ? moneyLocal(opts.pricePerDay, opts.currency || "USD")
       : null;
-  const stay = opts.days && opts.days > 0 ? ` for ${opts.days} days` : "";
+  // nDays, not a hard-coded plural: a one-day re-ask read "for 1 days".
+  const stay = opts.days && opts.days > 0 ? ` for ${nDays(opts.days)}` : "";
   if (price) {
     return `Hi again! Planning my trip - is ${price}/day${stay} still available with you?`;
   }

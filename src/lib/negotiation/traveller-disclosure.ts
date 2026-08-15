@@ -29,6 +29,7 @@
 // true and what is allowed.
 
 import type { StructuredRFQ } from "../types";
+import { nDays } from "../copy/matrix";
 
 export type TravellerFact =
   | "start-date" // when the rental begins
@@ -125,7 +126,7 @@ export function answerGuide(
             };
       case "duration":
         return days
-          ? { fact, disclosure: "grounded", guidance: `About ${days} days - say so.` }
+          ? { fact, disclosure: "grounded", guidance: `About ${nDays(days)} - say so.` }
           : { fact, disclosure: "general", guidance: "Say it is still flexible." };
       case "vehicle":
         return {

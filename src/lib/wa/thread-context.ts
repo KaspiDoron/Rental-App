@@ -53,6 +53,50 @@ export interface ThreadContext {
 const WINDOW = 12; // recent outbound rows scanned for an RFQ anchor
 
 /**
+ * THE PROMISE, FOR THE COMPOSERS THE INBOUND PATH NEVER TOUCHED (W4.1).
+ *
+ * `resolveThreadContext` applies the promise on the INBOUND path - a shop
+ * replies, the turn runs on reconciled terms. The two OUTBOUND composers the
+ * traveller drives (the Bargain draft and a hand-typed custom send) compose
+ * from the CLIENT's live rfq with no reconciliation at all, and then re-stamp
+ * that rfq onto the outbound row - minting a fresh anchor that contradicts the
+ * opener. That is the mid-thread flip in owner report 5 #7: openers said 1 day
+ * (the duration bug), and the moment the traveller tapped Bargain the draft
+ * composed on the client's live 3 - a number this shop had never been quoted.
+ *
+ * One cheap read of the thread's FIRST outbound row, which is immutable
+ * evidence of what we actually said, then the same pure `reconcileRfq` the
+ * inbound path uses. Degrades to the client's rfq unchanged when there is no
+ * opener (a first contact has made no promise yet) or the read fails - it can
+ * only ever pull a composer back toward what the shop was told.
+ */
+export async function promisedRfq(
+  digits: string,
+  senderEmail: string,
+  clientRfq: StructuredRFQ | null | undefined
+): Promise<{ rfq: StructuredRFQ | null; drifted: boolean }> {
+  const rfq = clientRfq ?? null;
+  if (!rfq || !digits || !senderEmail) return { rfq, drifted: false };
+  const or = threadNumberOr("to_number", digits);
+  if (!or) return { rfq, drifted: false };
+  try {
+    const openerRows = await sbSelect<{ body: string | null; raw: ThreadRaw | null }>(
+      "whatsapp_messages",
+      `select=body,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+        senderEmail
+      )}&order=received_at.asc&limit=1&or=${or}`
+    );
+    const opener = openerRows[0];
+    if (!opener) return { rfq, drifted: false }; // first contact - nothing promised yet
+    const promise = promiseOf(opener.raw?.rfq as StructuredRFQ | undefined, opener.body, rfq);
+    if (!promise) return { rfq, drifted: false };
+    return { rfq: reconcileRfq(rfq, promise) ?? rfq, drifted: rfqDrifted(rfq, promise) };
+  } catch {
+    return { rfq, drifted: false };
+  }
+}
+
+/**
  * Resolve the thread for `digits` as seen by `senderEmail`. Number matching is
  * spelling-tolerant (see phone-key) so threads written before canonicalization
  * still resolve.

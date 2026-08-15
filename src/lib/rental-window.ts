@@ -171,6 +171,29 @@ export function clampRfqWindow<T extends { startDate?: string; returnDate?: stri
   };
 }
 
+/**
+ * THE ONE WRITER OF `returnDate` (W4.1). An RFQ can arrive carrying
+ * `durationDays: 3` next to a 16->17 Aug range - two facts about the same trip
+ * that disagree, because the range came from an LLM parse while the duration
+ * came from the traveller's picker. Nothing reconciled them, so the opener told
+ * shops a window the traveller never asked for.
+ *
+ * After every override has been applied, the return date is ARITHMETIC, not
+ * understanding: start + duration, deterministically. An LLM-supplied
+ * returnDate that contradicts the reconciled pair is overwritten, never kept.
+ * With no start date there is no pair to reconcile, so the RFQ is untouched.
+ */
+export function deriveReturnDate<
+  T extends { startDate?: string; returnDate?: string; durationDays: number }
+>(rfq: T): T {
+  if (!rfq.startDate || !/^\d{4}-\d{2}-\d{2}$/.test(rfq.startDate)) return rfq;
+  const days = Math.floor(Number(rfq.durationDays));
+  if (!Number.isFinite(days) || days < 1) return rfq;
+  const derived = addDays(rfq.startDate, days);
+  if (rfq.returnDate === derived) return rfq;
+  return { ...rfq, returnDate: derived };
+}
+
 /** May this plan schedule a rental starting on this day at all? */
 export function withinWindow(opts: {
   plan: string | null | undefined;

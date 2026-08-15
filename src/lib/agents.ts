@@ -2,7 +2,8 @@
 // heuristic when no LLM key is configured, so the product is always functional.
 
 import "server-only";
-import { article } from "./copy/matrix";
+import { article, nDays } from "./copy/matrix";
+import { deriveReturnDate } from "./rental-window";
 import { chat, extractJson } from "./ai";
 import type {
   StructuredRFQ,
@@ -110,6 +111,18 @@ function normalizeRFQ(
   input: string,
   durationHint?: number
 ): StructuredRFQ {
+  // W4.1: THE HINT IS NOT A FALLBACK, IT IS THE TRAVELLER. `durationHint` only
+  // exists when the picker was actually set (the page sends it on no other
+  // occasion), so it is explicit input - and `rfq.durationDays || durationHint`
+  // let any truthy LLM value (including an invented 1) beat the traveller's 3.
+  // Explicit input outranks inference; the LLM only fills the gap when the
+  // traveller stated nothing.
+  const hinted = requestedDuration(durationHint);
+  const durationDays = clampDuration(hinted ?? rfq.durationDays);
+  // One compute, reconciled once: the return date is start + duration, by the
+  // one writer (lib/rental-window). An LLM returnDate that contradicts the
+  // reconciled pair does not survive - it is the same lie in another field.
+  const rental = deriveReturnDate({ ...rentalFields(rfq, input), durationDays });
   return {
     vehicleClass: (["car", "motorbike", "scooter"].includes(rfq.vehicleClass)
       ? rfq.vehicleClass
@@ -137,15 +150,26 @@ function normalizeRFQ(
       ? rfq.transmission
       : "any") as Transmission,
     maxMileageKm: rfq.maxMileageKm,
-    durationDays: clampDuration(rfq.durationDays || durationHint),
     accessories: Array.isArray(rfq.accessories) ? rfq.accessories.slice(0, 8) : [],
     fulfillment: (["hotel-delivery", "in-store", "any"].includes(rfq.fulfillment)
       ? rfq.fulfillment
       : "any") as Fulfillment,
     notes: rfq.notes,
-    ...rentalFields(rfq, input),
-    vendorMessage: rfq.vendorMessage || buildMessage({ ...rfq, ...rentalFields(rfq, input) }, input),
+    // `rental` carries the whole reconciled window - the rental fields, the
+    // duration (traveller's picker over the LLM's read) and the returnDate
+    // derived from that pair. It is spread ONCE, as the single source, so no
+    // earlier key in this literal can quietly disagree with it.
+    ...rental,
+    // The message is built from the RECONCILED fields, so it can never state a
+    // window the rest of the RFQ disagrees with.
+    vendorMessage: rfq.vendorMessage || buildMessage({ ...rfq, ...rental }, input),
   };
+}
+
+/** A picker-provided day count, when the client sent a sane one (1-90). */
+function requestedDuration(n: number | undefined): number | undefined {
+  const v = Math.floor(Number(n));
+  return Number.isFinite(v) && v >= 1 && v <= 90 ? v : undefined;
 }
 
 // A rental duration must be sane - it directly multiplies into totalPrice.
@@ -247,12 +271,15 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
   if (/child|baby|infant/.test(t)) accessories.push("child seat");
   if (/box|storage|top case/.test(t)) accessories.push("storage box");
 
-  let durationDays = durationHint || 3;
+  // W4.1: the picker hint - only ever sent when the traveller SET it - outranks
+  // the prose read, same precedence as normalizeRFQ: the value on screen is the
+  // statement, the sentence is the fallback, 3 days is the last resort.
+  let durationDays = 3;
   if (daysMatch) {
     const n = parseInt(daysMatch[1], 10);
     durationDays = clampDuration(/week/.test(daysMatch[2]) ? n * 7 : n);
   }
-  durationDays = clampDuration(durationDays);
+  durationDays = clampDuration(requestedDuration(durationHint) ?? durationDays);
 
   const rfq: StructuredRFQ = {
     vehicleClass,
@@ -293,6 +320,9 @@ function heuristicRFQ(input: string, durationHint?: number): StructuredRFQ {
     ...rentalFields({}, input),
     vendorMessage: "",
   };
+  // Same one-writer rule as normalizeRFQ: a return date is start + duration,
+  // never an independent fact that can contradict them.
+  rfq.returnDate = deriveReturnDate(rfq).returnDate;
   rfq.vendorMessage = buildMessage(rfq, input);
   return rfq;
 }
@@ -857,10 +887,10 @@ export async function composeBargain(opts: {
           opts.rfq.seats ? `${opts.rfq.seats} seats` : "",
         ]
           .filter(Boolean)
-          .join(" ")} for ${opts.rfq.durationDays} day(s)`
+          .join(" ")} for ${nDays(opts.rfq.durationDays)}`
       : `${opts.rfq.engineSizeCc ? opts.rfq.engineSizeCc + "cc " : ""}${vehicleTerm(
           opts.rfq.vehicleClass
-        )} for ${opts.rfq.durationDays} day(s)`;
+        )} for ${nDays(opts.rfq.durationDays)}`;
 
   // Duration-based discount levers: long rentals deserve the weekly/monthly
   // rate framing - the strongest honest card a traveller holds.
@@ -881,7 +911,7 @@ export async function composeBargain(opts: {
     (opts.round <= 0
       ? `FIRST PUSH (the owner's playbook): their opening quote is above the fair local price. ` +
         `Use the rental DAYS as leverage: warmly apologize that the quote is really expensive for you, ` +
-        `mention you are renting for ${opts.rfq.durationDays} days (a long time), and ask for the target ` +
+        `mention you are renting for ${nDays(opts.rfq.durationDays)} (a long time), and ask for the target ` +
         `price per day like a friend would. The SHAPE to follow (NEVER these exact words - always fresh phrasing): ` +
         `"oh so sorry, <their price> is really expensive for me. I rent for <days> days, long time. ` +
         `Can you give me <target> a day my friend? <one warm emoji>". `
@@ -962,12 +992,14 @@ export async function composeBargain(opts: {
       `\nHARD LEVERAGE RULE: a real nearby shop in this same search gave ${money(
         opts.rivalPricePerDay,
         cur
-      )}/day for the SAME ${vehicleTerm(opts.rfq.vehicleClass)} for these ${
+      )}/day for the SAME ${vehicleTerm(opts.rfq.vehicleClass)} for these ${nDays(
         opts.rfq.durationDays
-      } days. You MUST name this ${money(
+      )}. You MUST name this ${money(
         opts.rivalPricePerDay,
         cur
-      )}/day price AND the ${opts.rfq.durationDays} days and ask this shop to match or beat it - never omit or soften it away. Very simple broken English, e.g. "another shop give me ${opts.rivalPricePerDay} per day for ${opts.rfq.durationDays} days, you can do same or better? then i rent from you".`;
+      )}/day price AND the ${nDays(
+        opts.rfq.durationDays
+      )} and ask this shop to match or beat it - never omit or soften it away. Very simple broken English, e.g. "another shop give me ${opts.rivalPricePerDay} per day for ${nDays(opts.rfq.durationDays)}, you can do same or better? then i rent from you".`;
   }
 
   // ZERO-PATTERN AUTHENTICITY: (a) a stable per-user voice persona so every
@@ -1009,10 +1041,12 @@ export async function composeBargain(opts: {
         }-day rental. Your message MUST state that a nearby shop gave ${money(
           opts.rivalPricePerDay,
           cur
-        )}/day for the ${opts.rfq.durationDays} days and ask THIS shop to match or beat it to close now - make clear you'll rent from whoever is cheaper. Friendly, never threatening. Do NOT omit the ${money(
+        )}/day for the ${nDays(
+          opts.rfq.durationDays
+        )} and ask THIS shop to match or beat it to close now - make clear you'll rent from whoever is cheaper. Friendly, never threatening. Do NOT omit the ${money(
           opts.rivalPricePerDay,
           cur
-        )} number or the ${opts.rfq.durationDays} days. `
+        )} number or the ${nDays(opts.rfq.durationDays)}. `
       : "") +
     (target
       ? `Write our single friendly ask for ${money(target, cur)}/day. All amounts in ${cur}.`
@@ -1062,31 +1096,31 @@ export async function composeBargain(opts: {
   const fallbackPool = rival
     ? opts.round <= 0
       ? [
-          `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${days} days? 🙂`,
-          `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${days} days? 🙏`,
+          `Thanks! Just being upfront - another shop offered me ${rival}/day for the same ${vt}. If you can beat that, I'll happily rent from you. Could you do ${t ?? rival}/day for the ${nDays(days)}? 🙂`,
+          `Appreciate it! I do have an offer at ${rival}/day for a similar ${vt}. I'd honestly prefer your place - any chance you could do ${t ?? rival}/day for ${nDays(days)}? 🙏`,
         ]
       : [
           // Later rounds: don't re-wave the rival card the same way - soften to
           // a meet-in-the-middle nudge that still holds the leverage.
-          `Ok! Honestly I really want to rent from you - if you can get close to ${t ?? rival}/day for the ${days} days, I book right now. 🤝`,
-          `I hear you! Just a little closer to ${t ?? rival}/day and it's done - I'd rather give you the ${days} days than the other shop. 🙂`,
-          `No pressure - even ${t ?? rival}/day for ${days} days and I confirm today. I'd love it to be your place. 🙏`,
+          `Ok! Honestly I really want to rent from you - if you can get close to ${t ?? rival}/day for the ${nDays(days)}, I book right now. 🤝`,
+          `I hear you! Just a little closer to ${t ?? rival}/day and it's done - I'd rather give you the ${nDays(days)} than the other shop. 🙂`,
+          `No pressure - even ${t ?? rival}/day for ${nDays(days)} and I confirm today. I'd love it to be your place. 🙏`,
         ]
     : t && opts.round <= 0
     ? [
         // The owner's opener: days as leverage, ask the floor, warm as a friend.
-        `Oh sorry${q ? `, ${q}` : ""} is really expensive for me 🫶 I'm renting ${days} days, long time - could you do ${t} a day my friend?`,
-        `Ah that's a bit much for me honestly! Since I take it for ${days} days, can you make it ${t}/day? Would book right away 🙏`,
-        `Ouch${q ? `, ${q}/day` : ""} is over my budget 😅 For ${days} days straight, would ${t} a day work? I'd confirm today.`,
+        `Oh sorry${q ? `, ${q}` : ""} is really expensive for me 🫶 I'm renting ${nDays(days)}, long time - could you do ${t} a day my friend?`,
+        `Ah that's a bit much for me honestly! Since I take it for ${nDays(days)}, can you make it ${t}/day? Would book right away 🙏`,
+        `Ouch${q ? `, ${q}/day` : ""} is over my budget 😅 For ${nDays(days)} straight, would ${t} a day work? I'd confirm today.`,
       ]
     : t
     ? [
-        `Okay I understand! Let's meet in the middle - ${t}/day for the ${days} days and I book now? 🙂`,
+        `Okay I understand! Let's meet in the middle - ${t}/day for the ${nDays(days)} and I book now? 🙂`,
         `Fair enough! Could we say ${t}/day since it's ${days} full days? If yes I'm in.`,
-        `Got it - what about ${t}/day for the ${days} days? That would seal it for me today 🤝`,
+        `Got it - what about ${t}/day for the ${nDays(days)}? That would seal it for me today 🤝`,
       ]
     : [
-        `Thanks! What's the very best daily rate you could do for the ${days} days? I'm ready to book if it works.`,
+        `Thanks! What's the very best daily rate you could do for the ${nDays(days)}? I'm ready to book if it works.`,
         `Appreciate it! Any wiggle room on the daily price for a ${days}-day rental? I can confirm right away.`,
       ];
   const filled = fallbackPool[Math.floor(Math.random() * fallbackPool.length)];

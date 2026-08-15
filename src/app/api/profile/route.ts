@@ -4,7 +4,7 @@ import { runWithAiBudget } from "@/lib/ai-budget";
 import { aiEnabled } from "@/lib/ai";
 import { getSession } from "@/lib/session";
 import { sbInsert } from "@/lib/runtime-config";
-import { addDays, clampRfqWindow } from "@/lib/rental-window";
+import { clampRfqWindow, deriveReturnDate } from "@/lib/rental-window";
 import type { StructuredRFQ } from "@/lib/types";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -12,6 +12,12 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** The traveller's chosen pickup date, if they sent a real one. */
 function requestedStart(v: unknown): string | undefined {
   return typeof v === "string" && ISO_DATE.test(v) ? v : undefined;
+}
+
+/** The traveller's chosen day count, if they sent a sane one (picker is 1-90). */
+function requestedDays(v: unknown): number | undefined {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 90 ? n : undefined;
 }
 
 // THE SAME AUTHORITY, AT THE START OF THE FUNNEL. Without this the opener asked
@@ -82,24 +88,26 @@ export async function POST(req: Request) {
   const profiled = await runWithAiBudget(session?.email ?? "", () =>
     runProfiler(text, durationDays, session?.email)
   );
-  // W-7: THE WINDOW CONTROL WINS OVER THE PARSE, WHEN THERE IS ONE.
+  // W-7 / W4.1: THE WINDOW CONTROL WINS OVER THE PARSE - BOTH HALVES OF IT.
   //
-  // `durationDays` was already destructured here and handed to the profiler as
-  // a hint - by a client that had never sent it, because the only date control
-  // in the app lived inside the tap builder. Now that the window is a page-level
-  // control shown in both modes, an explicit pickup date is a statement, not a
-  // hint: it overrides whatever the profiler inferred from prose, and the return
-  // date moves with it so the trip keeps the length the traveller asked for.
+  // W-7 made the explicit pickup DATE override the profiler, and its comment
+  // claimed the duration travelled with it - it did not. Only startDate was
+  // overridden; `durationDays` stayed whatever the LLM read (or invented) from
+  // prose, and the return date was computed FROM that unoverridden value. A
+  // traveller who picked 3 days got openers saying "from 16 Aug until 17 Aug"
+  // because the model guessed 1 (owner report 5 #2/#7). The doctrine: explicit
+  // traveller input always beats LLM inference - date AND duration alike - and
+  // the return date is derived arithmetic (start + days) by the one writer in
+  // lib/rental-window, never a parse of its own.
   // The page sends these ONLY when the traveller actually set them, so a request
-  // that says "from the 20th" and never touches the picker still parses.
+  // that says "from the 20th for a week" and never touches the picker still parses.
   const start = requestedStart(body?.startDate);
-  const withWindow: StructuredRFQ = start
-    ? {
-        ...profiled,
-        startDate: start,
-        returnDate: addDays(start, profiled.durationDays),
-      }
-    : profiled;
+  const days = requestedDays(body?.durationDays);
+  const withWindow: StructuredRFQ = deriveReturnDate({
+    ...profiled,
+    ...(start ? { startDate: start } : {}),
+    ...(days ? { durationDays: days } : {}),
+  });
   const decided = applyWindow(withWindow, session?.plan, body?.timeZone);
   const rfq = decided.rfq;
   await sbInsert("searches", [

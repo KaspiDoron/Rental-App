@@ -15,6 +15,7 @@ import { lidKey, outboxKey } from "@/lib/wa/phone-key";
 import { resolveOutreachIdentity } from "@/lib/wa/identity";
 import { jsonRoute } from "@/lib/http/json-route";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
+import type { StructuredRFQ } from "@/lib/types";
 
 // In-app outreach: the ONLY way messages leave the app. The user never jumps
 // to WhatsApp - we screen the message through the safety agent, resolve the
@@ -262,6 +263,22 @@ async function handlePost(req: Request) {
     );
   }
 
+  // SERVER-AUTHORITATIVE DURATION, ON THE SEND PATH TOO (owner report 5 #7).
+  //
+  // Every send re-stamps `raw.rfq` onto the outbound row, which is what the
+  // whole thread is later re-anchored from. A bargain or a hand-typed custom
+  // composed on the client's live rfq therefore did not merely SAY a duration
+  // the shop was never quoted - it made that duration the thread's new truth,
+  // and the mid-thread flip became permanent. The opener is immutable evidence
+  // of what we promised; it governs here exactly as it does on the inbound
+  // path. An `rfq` kind IS the opener (no promise exists yet), so it passes
+  // through untouched.
+  const { promisedRfq } = await import("@/lib/wa/thread-context");
+  const settledRfq =
+    kind === "rfq"
+      ? ((body.rfq as StructuredRFQ | undefined) ?? null)
+      : (await promisedRfq(digits, session.email, body.rfq as StructuredRFQ | undefined)).rfq;
+
   let outboundText = message;
   let englishGloss: string | undefined;
 
@@ -418,7 +435,7 @@ async function handlePost(req: Request) {
       vendorName,
       kind,
       round: Number(body.round ?? 0),
-      rfq: body.rfq ?? null,
+      rfq: settledRfq ?? null,
       // WHICH HUNT this introduction belongs to (the search epoch). Read back
       // by the concurrent-campaigns check above - without it, every queued row
       // would look like the same anonymous campaign.
@@ -636,7 +653,7 @@ async function handlePost(req: Request) {
           vendorName,
           kind: String(body.kind ?? "custom"),
           round: Number(body.round ?? 0),
-          rfq: body.rfq ?? null,
+          rfq: settledRfq ?? null,
           region: String(body.region ?? ""),
           plan: session.plan,
           localLang: wantsLocal,

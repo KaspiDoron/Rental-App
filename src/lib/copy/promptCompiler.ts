@@ -4,7 +4,7 @@
 // (threadId, vendorId, nonce) always compiles the same text.
 
 import type { StructuredRFQ } from "../types";
-import { drawStyle, type CopySeed } from "./matrix";
+import { drawStyle, nDays, type CopySeed } from "./matrix";
 
 /** The traveller-facing vehicle wording (mirrors the intent of buildMessage). */
 export function vehicleWording(rfq: StructuredRFQ): string {
@@ -76,16 +76,36 @@ export function formatRentalDate(iso?: string): string {
  */
 function datesClause(
   rfq: StructuredRFQ,
-  s: { datePhrase: (f: string) => string; dateRangePhrase: (f: string, t: string) => string }
+  s: { datePhrase: (f: string) => string; dateRangePhrase: (f: string, t: string) => string },
+  days: number
 ): { text: string; supersedesDuration: boolean } {
   const from = formatRentalDate(rfq.startDate);
   if (!from) return { text: "", supersedesDuration: false };
   const to = formatRentalDate(rfq.returnDate);
-  // A RANGE ALREADY SAYS HOW LONG. Rendering both produced "12 Aug to 15 Aug
-  // 3 days total" - the same fact twice, in the clumsy register of a form
-  // letter rather than a person texting. When both ends are known the range
-  // stands alone; when only the start is known the duration supplies the rest.
-  if (to && to !== from) return { text: s.dateRangePhrase(from, to), supersedesDuration: true };
+  // THE RANGE MUST CARRY ITS DAY COUNT (W4.1, owner report 5 #2).
+  //
+  // The range used to stand alone, on the reasoning that it already says how
+  // long and that "12 Aug to 15 Aug 3 days total" reads like a form letter.
+  // Two things broke because of it:
+  //
+  //   1. A WRONG duration became INVISIBLE. The traveller picked 3 days, the
+  //      profiler invented 1, and twenty shops read "16 Aug until 17 Aug" -
+  //      a plausible sentence that contradicted nothing. Stating both facts
+  //      means a wrong one argues with itself on the wire, where the traveller
+  //      and the shop can both see it.
+  //   2. The thread lost its TEXT PROVENANCE. `citedDurationDays` (the promise
+  //      fallback for a thread whose structured rfq was lost) can only read a
+  //      counted day number - a range gives it nothing, so promiseOf returned
+  //      null and the anchor could be rewritten by any later send. That is the
+  //      mid-thread flip.
+  //
+  // The register objection was fair, so the count rides in parentheses the way
+  // a person actually texts it - "16 Aug to 19 Aug (3 days)" - and, since the
+  // range is now DERIVED from the duration (lib/rental-window.deriveReturnDate),
+  // the two can no longer disagree in the first place.
+  if (to && to !== from) {
+    return { text: `${s.dateRangePhrase(from, to)} (${nDays(days)})`, supersedesDuration: true };
+  }
   return { text: s.datePhrase(from), supersedesDuration: false };
 }
 
@@ -137,7 +157,7 @@ export function compileOpener(rfq: StructuredRFQ, seed: CopySeed, region?: strin
   // date is not a question at all - it is a rate-card request, which is what a
   // reseller sends, and it is the single biggest reason our openers went
   // unanswered. Unanswered new chats are the exact quantity WhatsApp meters.
-  const dates = datesClause(rfq, s);
+  const dates = datesClause(rfq, s, Math.max(1, rfq.durationDays));
   const when = !dates.text
     ? duration
     : dates.supersedesDuration
