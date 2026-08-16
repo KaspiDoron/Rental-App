@@ -160,3 +160,154 @@ describe("a COLLAPSED hunt card carries the hunt", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE GATE, EXECUTED (owner report 5 #17).
+//
+// Everything above is source text. The paid-feature gate above - the one that
+// stops a FREE plan being handed every hunt, every shop name and every price as
+// JSON - was guarded by exactly two greps (`can(plan, "trips-history")` and
+// `locked: true`), and BOTH of them still match when the condition is inverted
+// to `if (can(plan, "trips-history"))`. A one-character revert therefore turned
+// the gate inside out - free users get the whole history, paying users get the
+// lock screen - with the entire suite green.
+//
+// So: run the real GET, for a free plan and for a paying one, and assert the
+// bytes that come back. The shop name and the price are the payload the gate
+// exists to withhold, so they are what the free assertion looks for.
+// ---------------------------------------------------------------------------
+
+import { vi, afterEach } from "vitest";
+
+const SHOP = "Krabi Bike Rent";
+const PRICE = 250;
+const HUNT_AT = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+/** Load /api/deals/route with a real-looking database behind it. */
+async function loadDealsGET(plan: string | null) {
+  vi.resetModules();
+  vi.doMock("@/lib/session", () => ({
+    getSession: async () => ({ email: "t@example.com", plan }),
+  }));
+  vi.doMock("@/lib/google", () => ({ reverseGeocode: async () => null }));
+  vi.doMock("@/lib/runtime-config", () => ({
+    pgTimestamp: (iso: string) => encodeURIComponent(iso),
+    sbSelectStrict: async (table: string) =>
+      table === "searches"
+        ? {
+            rows: [
+              {
+                id: 1,
+                query_text: "Ao Nang scooter",
+                radius_km: 5,
+                vehicle_class: "scooter",
+                source: "vendors",
+                results: 4,
+                lat: 8.03,
+                lng: 98.82,
+                created_at: HUNT_AT,
+              },
+            ],
+          }
+        : { error: "missing" as const },
+    sbSelect: async (table: string, query: string) => {
+      if (table === "offers") {
+        return [
+          {
+            id: 9,
+            vendor_id: "v1",
+            vendor_name: SHOP,
+            price_per_day: PRICE,
+            list_price_per_day: 400,
+            currency: "THB",
+            round: 2,
+            verified: true,
+            created_at: HUNT_AT,
+          },
+        ];
+      }
+      if (table === "vendor_replies") {
+        return [
+          {
+            id: 3,
+            vendor_id: "v1",
+            vendor_name: SHOP,
+            reply_text: `ok ${PRICE} per day`,
+            english_gloss: null,
+            image_count: 0,
+            deposit: "passport",
+            deposit_type: "passport",
+            deposit_amount: null,
+            deposit_currency: null,
+            delivers: true,
+            created_at: HUNT_AT,
+          },
+        ];
+      }
+      if (table === "whatsapp_messages" && query.includes("direction=eq.outbound")) {
+        return [
+          {
+            id: 2,
+            to_number: "66812345678",
+            body: "Hello, do you have a scooter?",
+            raw: { vendorId: "v1", vendorName: SHOP },
+            received_at: HUNT_AT,
+          },
+        ];
+      }
+      return [];
+    },
+  }));
+  const mod = await import("@/app/api/deals/route");
+  return mod.GET;
+}
+
+describe("EXECUTED: the Trips gate withholds the payload, it does not just look like it", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/session");
+    vi.doUnmock("@/lib/google");
+    vi.doUnmock("@/lib/runtime-config");
+  });
+
+  it("a FREE caller receives the count and nothing else - no shop, no price", async () => {
+    const GET = await loadDealsGET("free");
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.locked).toBe(true);
+    expect(body.feature).toBe("trips-history");
+    expect(body.huntCount).toBe(1); // enough for an honest upgrade card
+    expect(body.sessions).toEqual([]);
+    expect(body.bookings).toEqual([]);
+
+    // THE LEAK ITSELF. Redacting in the browser left all of this in the JSON.
+    const wire = JSON.stringify(body);
+    expect(wire).not.toContain(SHOP);
+    expect(wire).not.toContain(String(PRICE));
+    expect(wire).not.toContain("Ao Nang");
+    expect(wire).not.toContain("66812345678");
+  });
+
+  it("a caller with NO plan at all is treated as free", async () => {
+    const GET = await loadDealsGET(null);
+    const body = await (await GET()).json();
+    expect(body.locked).toBe(true);
+    expect(JSON.stringify(body)).not.toContain(SHOP);
+  });
+
+  for (const plan of ["pro", "ultra"] as const) {
+    it(`a ${plan} caller receives the hunt it paid for`, async () => {
+      const GET = await loadDealsGET(plan);
+      const body = await (await GET()).json();
+
+      expect(body.locked).toBeUndefined();
+      expect(body.sessions).toHaveLength(1);
+      const wire = JSON.stringify(body);
+      expect(wire).toContain(SHOP);
+      expect(body.sessions[0].best?.current).toBe(PRICE);
+      expect(body.sessions[0].query).toBe("Ao Nang scooter");
+    });
+  }
+});

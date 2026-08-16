@@ -1667,6 +1667,25 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           isThisShop: o.vendor_id === thisVendorId,
           quoteBasisDays: o.quote_basis_days ?? undefined,
           durationDays: o.duration_days ?? undefined,
+          // THE ACTIONABLE HALF OF THE ROW, CARRIED THROUGH THE OFFERS JOIN.
+          //
+          // This branch REPLACES the thread row wholesale, and it used to
+          // rebuild it without `toNumber` or `firmCount` - the only two fields
+          // that make a row something the swarm can act on rather than merely
+          // quote. `planSiblingRebargain` drops any row with no `toNumber`
+          // ("no live thread to re-enter"), so the exact shops this join exists
+          // to rescue - a live thread whose price lives in `offers` because the
+          // thread fields never got one - were silently unreachable by the
+          // sibling re-bargain. That is the owner's "we are not bargaining
+          // enough" (report 5 #9) surviving its own fix.
+          //
+          // `numberByVendor` is the same thread-derived map the board-price
+          // rescue below trusts; `existing` covers a thread row that was merged
+          // first. Losing `firmCount` was the quieter half: a shop that has
+          // said "last price" twice would have been re-opened anyway, breaking
+          // the firm ladder in the one path that skipped it.
+          toNumber: existing?.toNumber ?? numberByVendor.get(o.vendor_id),
+          firmCount: existing?.firmCount,
         });
       }
 
