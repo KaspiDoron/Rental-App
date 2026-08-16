@@ -92,7 +92,7 @@ services:
       - key: SERVER_PORT
         value: "8080"
       - key: AUTHENTICATION_API_KEY
-        value: wd-pool-9x7k2mQ4pL8vT1nR
+        sync: false
       # Heap ceiling below the 512MB container limit so V8 collects hard instead
       # of the box being SIGKILLed under a burst. Insurance only - the crashes
       # we actually saw were exit 1 (uncaught exception), not exit 137 (OOM).
