@@ -647,6 +647,39 @@ with what Meta actually reports.
 
 ---
 
+## Keeping GitHub Actions free
+
+This one is arithmetic, and it bit us. **GitHub bills a minimum of one minute
+per job run**, no matter how short the job is. The queue-heartbeat workflow is a
+single `curl` that finishes in seconds - but at a `*/5` schedule it ran 288
+times a day, billed as 288 minutes, or **~8,640 minutes a month**. A private
+repo gets 2,000 free. So more than four times the entire allowance was being
+spent on rounding, by a job doing almost nothing.
+
+It is hourly now (~720 min/month), which leaves the rest of the allowance for
+CI. The verify job (three typechecks, the full vitest suite, the production
+build and the browser journeys) runs about 10-15 minutes, twice per shipped
+change - once on the dev branch, once on the master merge - so roughly 20 ships
+a month costs another ~480 minutes. Total ~1,200 of 2,000.
+
+Three ways to stop paying entirely, in order of how much they cost you:
+
+1. **Make the repository public.** Public repos get UNLIMITED free Actions
+   minutes - the allowance only exists for private ones. No secret lives in this
+   repo (that is the first golden rule in CLAUDE.md), so the exposure is
+   competitive, not a security question. This is the only option that scales
+   without you thinking about it again.
+2. **Replace the GitHub heartbeat with a free external monitor.** UptimeRobot's
+   free tier does 5-minute checks at no cost and, unlike a workflow, actually
+   ALERTS somebody when the drain stops - which is the thing section 5 says you
+   need anyway. Once it and Cloud Scheduler are both confirmed live, delete
+   `.github/workflows/heartbeat.yml` and the 720 goes to zero.
+3. **Set a $0 Actions budget** in billing settings. This does not reduce usage;
+   it blocks overage spend instead of billing it, so the worst case becomes
+   "CI stops until the 1st" rather than an invoice.
+
+---
+
 ## The monthly cost envelope
 
 Ranges, not promises. Excludes Google Maps (usage-based - watch your own
