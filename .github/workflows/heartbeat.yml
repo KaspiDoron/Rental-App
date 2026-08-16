@@ -20,10 +20,34 @@
 
 name: Queue heartbeat
 
+# WHY THIS IS HOURLY AND NOT EVERY FIVE MINUTES.
+#
+# GitHub bills a MINIMUM OF ONE MINUTE per job run, however short the job is.
+# This job is a single curl that finishes in seconds, so at */5 it cost
+# 288 runs/day = ~8,640 billed minutes a month - more than four times the entire
+# 2,000-minute monthly allowance a private repo gets for free, spent entirely on
+# rounding. That is what pushed this account to 90% of its allowance.
+#
+# The cadence is therefore hourly: a genuine last-ditch backstop, ~720 minutes a
+# month, leaving the rest of the allowance for CI.
+#
+# THIS IS NOT THE REAL FIX, AND IT SHOULD NOT BE TREATED AS ONE. The primary
+# heartbeat is Cloud Scheduler (provisioned by deploy-gcp.yml, every minute,
+# effectively free). The correct SECOND opinion is an external uptime monitor -
+# UptimeRobot's free tier does 5-minute checks at no cost and, unlike this
+# workflow, actually ALERTS somebody when the drain stops. SCALING.md section 5
+# has the setup. Once both of those are confirmed live, this file can be deleted
+# outright.
+#
+# Two other ways to stop paying, for the record:
+#   - A PUBLIC repository gets UNLIMITED free Actions minutes. The allowance
+#     only applies to private repos.
+#   - Setting a $0 Actions budget in billing settings blocks overage spend
+#     instead of billing it.
 on:
   schedule:
-    # Every 5 minutes - the finest granularity GitHub honours in practice.
-    - cron: "*/5 * * * *"
+    # Hourly. See the note above before making this finer-grained again.
+    - cron: "0 * * * *"
   workflow_dispatch: {}
 
 # One ping at a time. A backed-up runner queue must never stack pings.

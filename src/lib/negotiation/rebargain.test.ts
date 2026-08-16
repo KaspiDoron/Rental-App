@@ -3,8 +3,39 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 vi.mock("server-only", () => ({}));
+vi.mock("../ai", () => ({
+  chat: async () => null,
+  chatDetailed: async () => ({ text: null }),
+  chatVision: async () => null,
+  extractJson: () => null,
+}));
+// The engine's DB boundary, driven per table by `db` below. `sessionTable` is
+// the only method these tests execute, so the rest are inert.
+const db: {
+  offers: Array<Record<string, unknown>>;
+  threads: Array<Record<string, unknown>>;
+} = { offers: [], threads: [] };
+vi.mock("../runtime-config", () => ({
+  getConfig: async () => undefined,
+  setConfig: async () => {},
+  sbInsert: async () => true,
+  sbUpdate: async () => {},
+  sbSelect: async (table: string) =>
+    table === "offers" ? db.offers : table === "negotiation_threads" ? db.threads : [],
+  sbSelectStrict: async (table: string) =>
+    table === "offers" ? { rows: db.offers } : { error: "missing" as const },
+}));
+vi.mock("../wa-guard", () => ({
+  guardOutbound: async ({ text }: { text: string }) => ({ allow: true, text }),
+  afterSend: async () => {},
+}));
+vi.mock("../search-session", () => ({
+  sessionSinceIso: async () => new Date(1_700_000_000_000 - 3 * 3600_000).toISOString(),
+  cheapestRivalFor: async () => undefined,
+}));
 
 import { planSiblingRebargain, MAX_FANOUT, STAGGER_MIN, FIRST_DELAY_MIN } from "./rebargain";
+import { liveGraphIO } from "../graph/engine";
 import type { SessionShopRow } from "../graph/types";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
@@ -184,5 +215,97 @@ describe("the emptiers that were still real", () => {
     // a shop replying "ok for you?" made every price move illegal.
     expect(read("src/lib/spte/policy.ts")).toMatch(/const standingQuote = quoteOnTable\(ctx\)/);
     expect(read("src/lib/spte/policy.ts")).toMatch(/const priceKnown = typeof standingQuote === "number"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WIRING, EXECUTED (not read as text).
+//
+// Everything above this line tests the PLANNER with rows handed to it by the
+// test. The defect that survived that suite was one layer earlier: the row the
+// planner is actually given. `liveGraphIO().sessionTable` builds the session
+// blackboard from two reads - `negotiation_threads` and `offers` - and the
+// offers branch REPLACES the thread row. It rebuilt that row without
+// `toNumber` or `firmCount`, so:
+//
+//   - a live thread whose price only exists as an `offers` row (the precise
+//     case the offers join was added to rescue) reached the planner with no
+//     number to re-enter, and was dropped by "no live thread to re-enter";
+//   - a shop that had said "last price" twice lost its firm count on the same
+//     path, so the one branch that skipped the ladder would have badgered it.
+//
+// The pins in "the emptiers that were still real" could not see either, because
+// a missing property leaves no string behind to grep for. These run the real
+// method and feed its real output to the real planner.
+// ---------------------------------------------------------------------------
+
+describe("sessionTable -> planSiblingRebargain, executed end to end", () => {
+  const io = liveGraphIO(async () => ({ ok: true }));
+
+  /** The shop we just heard from (the new low) plus one dearer sibling whose
+   *  price lives in `offers` while its thread row is priceless. */
+  const seed = (threadFields: Record<string, unknown>) => {
+    db.threads = [
+      {
+        vendor_id: "dearer",
+        vendor_name: "Dearer Shop",
+        to_number: "66812345678",
+        phase: "bargain",
+        fields: threadFields,
+      },
+    ];
+    db.offers = [
+      {
+        vendor_id: "dearer",
+        vendor_name: "Dearer Shop",
+        price_per_day: 300,
+        currency: "THB",
+        duration_days: 3,
+        quote_basis_days: null,
+      },
+    ];
+  };
+
+  it("carries the shop's NUMBER through the offers join, so the swarm can reach it", async () => {
+    seed({ fulfillment: "pickup" }); // priceless thread row - offers wins
+    const rows = await io.sessionTable("t@example.com", "cheapest", "motorbike-125");
+    const row = rows.find((r) => r.vendorId === "dearer");
+    expect(row?.pricePerDay).toBe(300);
+    expect(row?.toNumber).toBe("66812345678");
+
+    const targets = planSiblingRebargain({
+      rows,
+      excludeVendorId: "cheapest",
+      newLowPerDay: 200,
+      currency: "THB",
+    });
+    expect(targets.map((t) => t.vendorId)).toEqual(["dearer"]);
+    expect(targets[0].toNumber).toBe("66812345678");
+  });
+
+  it("...and the FIRM COUNT with it, so the ladder still bars a shop that refused twice", async () => {
+    seed({ fulfillment: "pickup", digest: { firmCount: 2 } });
+    const rows = await io.sessionTable("t@example.com", "cheapest", "motorbike-125");
+    expect(rows.find((r) => r.vendorId === "dearer")?.firmCount).toBe(2);
+
+    expect(
+      planSiblingRebargain({
+        rows,
+        excludeVendorId: "cheapest",
+        newLowPerDay: 200,
+        currency: "THB",
+      })
+    ).toEqual([]);
+  });
+
+  it("a PRICED thread row keeps winning - the offers branch never runs for it", async () => {
+    // Guards the fix from the opposite direction: the thread row already
+    // carries both fields, and short-circuiting must not change.
+    seed({ pricePerDay: 340, currency: "THB", fulfillment: "pickup", digest: { firmCount: 1 } });
+    const rows = await io.sessionTable("t@example.com", "cheapest", "motorbike-125");
+    const row = rows.find((r) => r.vendorId === "dearer");
+    expect(row?.pricePerDay).toBe(340);
+    expect(row?.toNumber).toBe("66812345678");
+    expect(row?.firmCount).toBe(1);
   });
 });

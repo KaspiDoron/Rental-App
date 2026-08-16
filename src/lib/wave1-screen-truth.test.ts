@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -8,34 +8,194 @@ import { join } from "node:path";
 // boolean (vendor_replies.found) while the app KNEW the price in four other
 // places: the thread's standing field, the photographed board (raw.reading -
 // already used as rival leverage in OTHER shops' threads!), the derived option
-// menu, and the reply text itself. These pins hold the whole path together:
-// server rollup -> client admission -> card provenance. Each assertion fails on
-// a revert of its edit.
+// menu, and the reply text itself. These hold the whole path together:
+// server rollup -> client admission -> card provenance.
+//
+// WHAT CHANGED IN THIS FILE, AND WHY.
+//
+// The server half used to be pinned by regex over the route's own source - most
+// egregiously by asserting the ORDER IN WHICH THE STRINGS "thread",
+// "menu-photo" and "menu" APPEAR in a slice of the file. That is a statement
+// about text layout, not about the resolver, and the owner's complaint was
+// about the resolver: his status panel said "No price yet" while the card beside
+// it showed a price. Re-ordering the three branches, deleting one of them, or
+// changing which one wins would all keep those greps green.
+//
+// The trust order, the "a real price on the row wins outright" rule, the
+// struck-through-board rule and the gloss field are now EXECUTED against the
+// real GET handler with a fake database behind it. What remains a pin below is
+// client-side (page.tsx, the components) - see the note above that section.
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
-describe("/api/replies - the effective price consults every source, in trust order", () => {
-  const src = read("src/app/api/replies/route.ts");
+// ---------------------------------------------------------------------------
+// EXECUTED: the real /api/replies resolver.
+// ---------------------------------------------------------------------------
 
-  it("reads the photographed board's prices (raw->reading) for the card", () => {
-    expect(src).toMatch(/reading:raw->reading/);
-    expect(src).toMatch(/readingPricesByVendor/);
+const VENDOR = "v1";
+const DIGITS = "66812345678";
+/** A shop reply that names NO price - the row the resolver has to rescue. */
+const SILENT_REPLY = "hello, what days you want?";
+/** A shop message that really does contain a two-tier menu (see offer-options). */
+const MENU_TEXT = "Hi! Normal scooters? Some models 200 and some new 250/day";
+
+interface FakeDb {
+  /** vendor_replies rows, as the route selects them. */
+  replies: Array<Record<string, unknown>>;
+  /** negotiation_threads.fields for VENDOR (the thread's standing state). */
+  threadFields?: Record<string, unknown> | null;
+  /** Inbound message bodies from the shop (the derived menu comes from these). */
+  inboundBodies?: string[];
+  /** Prices read off a PHOTOGRAPHED board, as raw.reading stores them. */
+  boardPrices?: Array<{ pricePerDay: number; currency?: string; vehicle?: string; available?: boolean }>;
+}
+
+/** Run the real GET with only its IO boundary faked. */
+async function repliesFor(db: FakeDb) {
+  vi.resetModules();
+  vi.doMock("@/lib/session", () => ({
+    getSession: async () => ({ email: "t@example.com", plan: "ultra" }),
+  }));
+  // The three drains this poll opportunistically performs are IO, not feed.
+  vi.doMock("@/lib/wa-sync", () => ({ syncInboundReplies: async () => {} }));
+  vi.doMock("@/lib/wa-guard", () => ({ drainOutbox: async () => {}, afterSend: async () => {} }));
+  vi.doMock("@/lib/evolution", () => ({ sendFromUser: async () => ({ ok: true }) }));
+  vi.doMock("@/lib/graph/engine", () => ({ drainGraphWakeups: async () => {} }));
+  vi.doMock("@/lib/runtime-config", () => ({
+    getConfig: async () => undefined,
+    sbSelect: async (table: string, query: string) => {
+      if (table === "vendor_replies") return db.replies;
+      if (table === "negotiation_threads") {
+        return db.threadFields === undefined
+          ? []
+          : [{ vendor_id: VENDOR, fields: db.threadFields }];
+      }
+      if (table === "whatsapp_messages" && query.includes("direction=eq.inbound")) {
+        const bodies = db.inboundBodies ?? [];
+        const rows: Array<Record<string, unknown>> = bodies.map((body) => ({
+          from_number: DIGITS,
+          body,
+          reading: null,
+        }));
+        if (db.boardPrices?.length) {
+          rows.push({ from_number: DIGITS, body: "", reading: { prices: db.boardPrices } });
+        }
+        // The route asks newest-first and reverses; order is irrelevant here.
+        return rows;
+      }
+      if (table === "whatsapp_messages" && query.includes("direction=eq.outbound")) {
+        // How a vendor_id is joined to the digits we actually messaged.
+        return [{ to_number: DIGITS, raw: { vendorId: VENDOR } }];
+      }
+      return [];
+    },
+  }));
+  const mod = await import("@/app/api/replies/route");
+  // vclass scopes the derived menu exactly as the client sends it.
+  const res = await mod.GET(new Request("http://localhost/api/replies?vclass=scooter"));
+  const body = (await res.json()) as {
+    replies: Array<{
+      effectivePrice: { pricePerDay: number; source: string; currency: string | null } | null;
+      pricePerDay: number | null;
+      english: string | null;
+      options: unknown;
+    }>;
+  };
+  return body.replies;
+}
+
+/** A vendor_replies row that carries NO usable price of its own. */
+const silentRow = (over: Record<string, unknown> = {}) => ({
+  id: 1,
+  vendor_id: VENDOR,
+  vendor_name: "Krabi Bike Rent",
+  reply_text: SILENT_REPLY,
+  english_gloss: null,
+  found: false,
+  price_per_day: null,
+  matches_spec: true,
+  confidence: "low",
+  auto: true,
+  currency: "THB",
+  created_at: new Date().toISOString(),
+  ...over,
+});
+
+describe("EXECUTED /api/replies - the effective price consults every source, in trust order", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/session");
+    vi.doUnmock("@/lib/runtime-config");
   });
 
-  it("computes effectivePrice: thread field, then menu photo, then derived menu", () => {
-    const block = src.slice(src.indexOf("const effectivePrice"));
-    const thread = block.indexOf('"thread"');
-    const photo = block.indexOf('"menu-photo"');
-    const menu = block.indexOf('"menu"', photo + 12);
-    expect(thread).toBeGreaterThan(-1);
-    expect(photo).toBeGreaterThan(thread);
-    expect(menu).toBeGreaterThan(photo);
-    // Only when the row itself has nothing - a confirmed price wins outright.
-    expect(block).toMatch(/if \(r\.found && r\.price_per_day\) return null/);
+  it("1st: the thread's own standing price outranks the board and the menu", async () => {
+    const [row] = await repliesFor({
+      replies: [silentRow()],
+      threadFields: { pricePerDay: 280 },
+      inboundBodies: [MENU_TEXT],
+      boardPrices: [{ pricePerDay: 150, currency: "THB" }],
+    });
+    expect(row.effectivePrice).toMatchObject({ pricePerDay: 280, source: "thread" });
   });
 
-  it("ships it to the client on every reply row", () => {
-    expect(src).toMatch(/effectivePrice,\s*[\r\n]\s*createdAt/);
+  it("2nd: with no thread price, the PHOTOGRAPHED board outranks the derived menu", async () => {
+    const [row] = await repliesFor({
+      replies: [silentRow()],
+      threadFields: {},
+      inboundBodies: [MENU_TEXT],
+      boardPrices: [{ pricePerDay: 150, currency: "THB", vehicle: "Click 125" }],
+    });
+    expect(row.effectivePrice).toMatchObject({ pricePerDay: 150, source: "menu-photo" });
+  });
+
+  it("3rd: with neither, the menu derived from the shop's own words is used", async () => {
+    const [row] = await repliesFor({
+      replies: [silentRow()],
+      threadFields: {},
+      inboundBodies: [MENU_TEXT],
+    });
+    expect(row.effectivePrice).toMatchObject({ pricePerDay: 200, source: "menu" });
+    expect(row.options).toHaveLength(2); // the menu itself still ships
+  });
+
+  it("a CROSSED-OUT board row is not a price - it falls through to the menu", async () => {
+    // The board still shows the model; the shop no longer rents it. Quoting it
+    // advertised a price nobody could book.
+    const [row] = await repliesFor({
+      replies: [silentRow()],
+      threadFields: {},
+      inboundBodies: [MENU_TEXT],
+      boardPrices: [{ pricePerDay: 90, currency: "THB", available: false }],
+    });
+    expect(row.effectivePrice).toMatchObject({ pricePerDay: 200, source: "menu" });
+  });
+
+  it("a row that carries the REAL price gets no effectivePrice at all", async () => {
+    const [row] = await repliesFor({
+      replies: [silentRow({ found: true, price_per_day: 240, confidence: "high" })],
+      threadFields: { pricePerDay: 280 },
+      inboundBodies: [MENU_TEXT],
+      boardPrices: [{ pricePerDay: 150, currency: "THB" }],
+    });
+    expect(row.pricePerDay).toBe(240);
+    expect(row.effectivePrice).toBeNull();
+  });
+
+  it("and when the app truly knows nothing, it says nothing", async () => {
+    // The honest "No price yet" case has to survive: inventing a number here
+    // is worse than the bug this whole wave fixed.
+    const [row] = await repliesFor({ replies: [silentRow()], threadFields: {} });
+    expect(row.effectivePrice).toBeNull();
+  });
+
+  it("the field is SHIPPED on every reply row, with the English gloss (W1.5)", async () => {
+    const [row] = await repliesFor({
+      replies: [silentRow({ english_gloss: "we have scooters from 200" })],
+      threadFields: { pricePerDay: 280 },
+    });
+    expect(row).toHaveProperty("effectivePrice");
+    expect(row.effectivePrice?.currency).toBe("THB");
+    expect(row.english).toBe("we have scooters from 200");
   });
 });
 

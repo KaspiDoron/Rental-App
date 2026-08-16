@@ -75,6 +75,7 @@ const EngineInspectorPanel = dynamic(
   { ssr: false, loading: () => <LoadingDots label="Reading the live blackboard" /> }
 );
 import type { AnalyticsSnapshot } from "@/lib/types";
+import { providerFailureKind, providerNeedsOwner, providerFailureCopy } from "@/lib/provider-health";
 import { StatTile, DegradedBanner, type StatHelp } from "@/components/admin/primitives";
 import { InfoTipProvider } from "@/components/InfoTip";
 
@@ -2048,6 +2049,11 @@ export default function AdminPage() {
               <div className="mb-3 space-y-1.5">
                 {aiTest.map((t) => {
                   const drifted = t.ok && t.model && t.configuredModel && t.model !== t.configuredModel;
+                  // A FAILURE IS NOT AUTOMATICALLY A FAULT. A 429 from a free
+                  // tier at peak is the chain working as designed - red there
+                  // sends the owner hunting for a broken key that is fine.
+                  const kind = t.ok ? null : providerFailureKind(t.detail);
+                  const ownerMustAct = kind !== null && providerNeedsOwner(kind);
                   return (
                     <div
                       key={t.name}
@@ -2056,7 +2062,7 @@ export default function AdminPage() {
                           ? "border-line bg-card2 text-faint"
                           : t.ok && !drifted
                             ? "border-savings/50 bg-savings-soft text-savings"
-                            : t.ok
+                            : t.ok || !ownerMustAct
                               ? "border-brandyellow bg-brandyellow-soft text-warn"
                               : "border-brandred/60 bg-brandred-soft text-brandred"
                       }`}
@@ -2077,9 +2083,18 @@ export default function AdminPage() {
                           )}
                         </>
                       ) : (
-                        <div className="mt-0.5 break-words font-mono text-[10px]">
-                          {t.detail ?? "failed"}
-                        </div>
+                        <>
+                          {kind === "busy" ? " - busy, not broken" : " - failed"}
+                          {/* The INTERPRETATION, then the evidence. Never one
+                              without the other: a classifier that swallowed the
+                              raw body would be the panel lying more politely. */}
+                          <div className="mt-0.5 font-bold">
+                            {providerFailureCopy(kind!, t.name)}
+                          </div>
+                          <div className="mt-0.5 break-words font-mono text-[10px] opacity-80">
+                            {t.detail ?? "failed"}
+                          </div>
+                        </>
                       )}
                     </div>
                   );
