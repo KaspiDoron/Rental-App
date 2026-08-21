@@ -711,6 +711,11 @@ async function persistThreadOutcome(args: {
       });
     const fields = { ...base.fields };
     fields.digest = persistableDigest(digest);
+    // The vehicle this thread negotiates (owner report 6 C4): the thread key
+    // is user:number with no vehicle dimension, so the sessionTable's rival
+    // join needs a declared key to keep a car hunt's price out of a scooter
+    // hunt's leverage.
+    fields.vehicleKey = vehicleKeyFor(input.rfq);
     // WHICH LANGUAGE THIS THREAD IS IN, AND WHY (W4.6). The one field
     // /api/replies reads to tell the card and the status panel "Switched to
     // English - this shop asked". Written unconditionally so the decision is a
@@ -733,6 +738,14 @@ async function persistThreadOutcome(args: {
     if (typeof input.usablePrice === "number" && input.usablePrice > 0) {
       fields.pricePerDay = input.usablePrice;
       fields.currency = input.currency;
+      // Provenance travels with the number (owner report 6 C3): without it,
+      // the thread row wins the sessionTable merge and a divided package
+      // per-day re-enters every sibling as a quoted daily rate.
+      if (typeof input.priceBasisDays === "number" && input.priceBasisDays > 0) {
+        fields.priceBasisDays = input.priceBasisDays;
+      } else {
+        delete fields.priceBasisDays;
+      }
     }
     // WHAT THE CARD SHOWS WHILE THE AGENT WAITS ON AN ANSWER (W4.4). Only for a
     // question that actually reached the shop: "blocked" and "failed" mean

@@ -1844,6 +1844,7 @@ export async function processVendorReply(opts: {
     rfq,
     extraction,
     usablePrice,
+    priceBasisDays,
     currency: cur,
     floorPrice: floorSameCur?.floor,
     floorTypical: floorSameCur?.typical ?? undefined,

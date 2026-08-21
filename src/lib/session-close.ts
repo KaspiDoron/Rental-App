@@ -114,6 +114,7 @@ export async function closeSearchSession(
       "pricePerDay",
       "currency",
       "priceBasisDays",
+      "vehicleKey",
       "declined",
       "waitingUntil",
       "vehicleConfirmed",
