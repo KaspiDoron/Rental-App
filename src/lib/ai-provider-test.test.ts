@@ -153,9 +153,52 @@ describe("testAllProviders contract (source pins)", () => {
       const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
       expect(drowned?.ok).toBe(false);
       expect(drowned?.detail).toMatch(/primary gpt-oss-120b:/);
-      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct:/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.1-8B-Instruct:/);
     } finally {
       delete process.env.SAMBANOVA_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("EXECUTED: a 402 'payment required' primary tries the free fallback model", async () => {
+    // The owner's live Cerebras probe (2026-08-21): gpt-oss-120b answered
+    // 402 and NO fallback was ever attempted - the one status that means
+    // "use the free model instead" was the one that never tried it. When
+    // the 402 is per-model, the free sibling rescues; when it is
+    // account-level (Cerebras' retired free tier) both attempts are named.
+    process.env.CEREBRAS_TOKEN = "fake-key";
+    try {
+      let accountLevel = false;
+      const paywall = () =>
+        new Response(
+          JSON.stringify({ message: "Payment required to access this resource. Visit your billing tab." }),
+          { status: 402 }
+        );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: { body?: string }) => {
+          if (!String(url).includes("cerebras")) return new Response("{}", { status: 200 });
+          const model = JSON.parse(init?.body ?? "{}").model as string;
+          if (accountLevel || model === "gpt-oss-120b") return paywall();
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }),
+            { status: 200 }
+          );
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+
+      const rescued = (await testAllProviders()).find((r) => r.name === "cerebras");
+      expect(rescued?.ok).toBe(true);
+      expect(rescued?.model).toBe("llama3.1-8b");
+
+      accountLevel = true;
+      const dead = (await testAllProviders()).find((r) => r.name === "cerebras");
+      expect(dead?.ok).toBe(false);
+      expect(dead?.detail).toMatch(/primary gpt-oss-120b:/);
+      expect(dead?.detail).toMatch(/fallback llama3\.1-8b:/);
+    } finally {
+      delete process.env.CEREBRAS_TOKEN;
       vi.unstubAllGlobals();
     }
   });
@@ -184,7 +227,7 @@ describe("testAllProviders contract (source pins)", () => {
 
       const rescued = (await testAllProviders()).find((r) => r.name === "sambanova");
       expect(rescued?.ok).toBe(true);
-      expect(rescued?.model).toBe("Meta-Llama-3.3-70B-Instruct");
+      expect(rescued?.model).toBe("Meta-Llama-3.1-8B-Instruct");
 
       mode = "both-fail";
       const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
@@ -192,7 +235,7 @@ describe("testAllProviders contract (source pins)", () => {
       // Both halves carry the provider's name and the honest timeout wording -
       // never the anonymous platform string.
       expect(drowned?.detail).toMatch(/primary gpt-oss-120b: sambanova timed out after \d+ms/);
-      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct: sambanova timed out/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.1-8B-Instruct: sambanova timed out/);
       expect(drowned?.detail).not.toMatch(/This operation was aborted/);
     } finally {
       delete process.env.SAMBANOVA_TOKEN;

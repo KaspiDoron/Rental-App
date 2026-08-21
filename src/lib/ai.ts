@@ -134,16 +134,6 @@ async function allProviders(): Promise<ProviderConfig[]> {
       fallbackModel: "openai/gpt-oss-20b",
     },
     {
-      name: "cerebras",
-      token: cerebras,
-      endpoint: "https://api.cerebras.ai/v1/chat/completions",
-      // llama-3.3-70b was retired 2026-02 (-> 404); Cerebras' official
-      // migration target is gpt-oss-120b. llama3.1-8b remains the small
-      // always-on fallback (inference-docs.cerebras.ai/support/deprecation).
-      model: pick(cerM, "gpt-oss-120b"),
-      fallbackModel: "llama3.1-8b",
-    },
-    {
       name: "deepseek",
       token: deepseek,
       endpoint: "https://api.deepseek.com/chat/completions",
@@ -169,10 +159,13 @@ async function allProviders(): Promise<ProviderConfig[]> {
       // any reply-path budget at peak ("experiencing high demand" 429s, or a
       // silent hold until the socket times out). Correct ids, slow tier - it
       // still earns its keep on the long-budget callers (distill, admin).
-      // gpt-oss-120b leads (SambaCloud's flagship with dedicated capacity);
-      // the crowded Llama-3.3-70B free pool is the rescue.
+      // gpt-oss-120b leads (SambaCloud's flagship with dedicated capacity).
+      // The rescue is the SMALL 8B pool: the owner's live probe caught the
+      // flagship AND the 70B pool both at capacity in the same minute -
+      // two crowded pools are one rescue that never fires. The 8B tier has
+      // the headroom precisely because nobody's default points at it.
       model: pick(sambaM, "gpt-oss-120b"),
-      fallbackModel: "Meta-Llama-3.3-70B-Instruct",
+      fallbackModel: "Meta-Llama-3.1-8B-Instruct",
     },
     {
       name: "openrouter",
@@ -204,12 +197,29 @@ async function allProviders(): Promise<ProviderConfig[]> {
       name: "gemini",
       token: gemini,
       endpoint:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
-      // gemini-2.5-flash retires 2026-10-16; 3.5-flash is the GA successor
-      // with a free tier. gemini-flash-latest is the rolling-alias rescue.
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+      // THE ROLLING ALIAS LEADS (owner's live Test AI providers, 2026-08-21):
+      // the pinned gemini-3.5-flash id FAILED on the owner's key while the
+      // alias answered - a pin is exactly the thing Google retires under
+      // you, and every call was paying a failed round trip before the
+      // rescue. gemini-flash-latest always names the current GA flash (free
+      // tier); the lite alias is the lighter sibling rescue.
       model: pick(gemM, GEMINI_MODEL),
-      fallbackModel: "gemini-flash-latest",
+      fallbackModel: "gemini-flash-lite-latest",
       dialect: "gemini",
+    },
+    // DEMOTED TO THE FREE-TIER TAIL: Cerebras retired its open free tier in
+    // July 2026 (one-time $5 trial, then 402 "payment required" on every
+    // model - account-level, so no model id fixes it). With a spent trial
+    // every attempt is a guaranteed failed round trip; it sits last so the
+    // working free providers answer first. Rows stay correct if the owner
+    // ever adds billing.
+    {
+      name: "cerebras",
+      token: cerebras,
+      endpoint: "https://api.cerebras.ai/v1/chat/completions",
+      model: pick(cerM, "gpt-oss-120b"),
+      fallbackModel: "llama3.1-8b",
     },
     // ---- PAID providers (owner report 5 #13) --------------------------------
     // The owner buys tokens here for the turns that decide money: the premium
@@ -333,7 +343,12 @@ async function cycleUsage(): Promise<{ byProvider: Record<string, number>; unrea
 // Current Gemini model used by every Gemini call (chat + vision).
 // gemini-2.5-flash is scheduled for retirement 2026-10-16; 3.5-flash is the
 // GA successor on the free tier. This const also seeds the vision ladder.
-export const GEMINI_MODEL = "gemini-3.5-flash";
+// THE ROLLING ALIAS, not a pin. gemini-3.5-flash - the pinned GA id this
+// used to be - failed live on the owner's key (Test AI providers,
+// 2026-08-21) while the alias answered; Google retires pins under you, and
+// a failed pinned primary taxes every call with a wasted round trip before
+// the rescue. The alias always names the current free-tier GA flash.
+export const GEMINI_MODEL = "gemini-flash-latest";
 
 /** Configured providers, preferred one first (automatic failover order). */
 async function providers(): Promise<ProviderConfig[]> {
@@ -816,6 +831,13 @@ async function callProvider(
     // cheap call and the cross-provider failover chain moves on as before.
     const modelIssue =
       /\b(400|404|429)\b/.test(reason) ||
+      // 402 "payment required" can arrive PER MODEL (a flagship moved behind
+      // a paid plan while a smaller sibling stays free) - there the free
+      // fallback id is exactly the right next move. When it is ACCOUNT-level
+      // instead (Cerebras retired its open free tier July 2026; a spent $5
+      // trial 402s everything), the second call just fails fast and the
+      // cross-provider chain moves on - the same shrug as the quota-429 case.
+      /\b402\b/.test(reason) ||
       // Anthropic reports overload as 529, per model pool - the cheaper
       // sibling (Haiku) routinely answers while the primary is drowning,
       // exactly the SambaNova per-model-429 pattern with a different number.
@@ -1097,12 +1119,11 @@ const GROQ_VISION_FALLBACKS = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
 ];
 // gemini-2.5-flash-lite 404s for NEW API keys ("no longer available to new
-// users" - seen verbatim in the owner's Media Lab), so the rolling aliases
-// come right after the pinned primary (now 3.5-flash, the GA generation);
-// the `-latest` aliases keep working when a pin is retired.
+// users" - seen verbatim in the owner's Media Lab), and the pinned
+// gemini-3.5-flash failed live on the owner's key too - so the ladder is
+// rolling aliases only now: they keep working when Google retires a pin.
 const GEMINI_VISION_FALLBACKS = [
-  GEMINI_MODEL,
-  "gemini-flash-latest",
+  GEMINI_MODEL, // gemini-flash-latest
   "gemini-flash-lite-latest",
 ];
 
