@@ -33,6 +33,15 @@ export function TranscriptSheet({
     lastReadAt: string | null;
   } | null>(null);
   const [takeover, setTakeover] = useState<boolean | null>(null);
+  // A POLL THAT FAILS MUST NOT ERASE THE CONVERSATION.
+  //
+  // Both failure paths used to blank the transcript: the catch called
+  // setMessages([]), and a well-formed error body (no `messages` array)
+  // reconciled the list down to nothing. Either way one bad tick on a hotel
+  // wifi turned a live negotiation into an empty sheet - and the next tick
+  // silently refilled it, so the reader could not tell what had happened.
+  // Last-good stays on screen; the chip says it is not live.
+  const [stale, setStale] = useState(false);
   const [switching, setSwitching] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -61,15 +70,23 @@ export function TranscriptSheet({
         .then((r) => r.json())
         .then((d) => {
           if (!alive || ctl.signal.aborted) return;
-          setMessages((prev) =>
-            reconcileMessages(prev, Array.isArray(d.messages) ? d.messages : [])
-          );
+          if (!Array.isArray(d.messages)) {
+            // A response we cannot read is a failed poll, not an empty thread.
+            // Only the FIRST load may legitimately render "no messages yet".
+            setMessages((prev) => (prev === null ? [] : prev));
+            setStale(true);
+            return;
+          }
+          setMessages((prev) => reconcileMessages(prev, d.messages));
           setDelivery(d.delivery ?? null);
+          setStale(false);
         })
         // An abort is this component replacing its own request, never a
         // failure - blanking the transcript for it would be the bug it fixes.
         .catch((e) => {
-          if (alive && (e as { name?: string })?.name !== "AbortError") setMessages([]);
+          if (!alive || (e as { name?: string })?.name === "AbortError") return;
+          setMessages((prev) => (prev === null ? [] : prev)); // keep last-good
+          setStale(true);
         });
     };
     load();
@@ -160,6 +177,13 @@ export function TranscriptSheet({
         ref={scrollerRef}
         className="no-scrollbar max-h-[55vh] space-y-2 overflow-y-auto rounded-2xl bg-card2 p-3"
       >
+        {stale && messages !== null && (
+          // Honest, not alarming: the conversation below is real, it is simply
+          // the last version that arrived.
+          <p className="rounded-xl bg-card px-2.5 py-1.5 text-center text-[11px] font-bold text-faint">
+            {t("Showing the last update - reconnecting…")}
+          </p>
+        )}
         {messages === null && <LoadingDots label={t("Loading the conversation")} />}
         {messages !== null && messages.length === 0 && (
           <p className="py-4 text-center text-[12px] text-faint">

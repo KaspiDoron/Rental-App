@@ -280,7 +280,11 @@ export async function GET(req: Request) {
       meta: { reason?: string; vendorName?: string; vendorId?: string } | null;
     }>(
       "wa_outbox",
-      `select=id,to_number,not_before,meta&sender_key=eq.${enc}&order=not_before.asc&limit=50`
+      // 50 was a silent ceiling: an Ultra hunt parks two dozen openers plus
+      // replies, and a queue longer than this rendered as if it ended here -
+      // the traveller counted their waiting shops and came up short. 200
+      // covers any real hunt, and the rows are tiny.
+      `select=id,to_number,not_before,meta&sender_key=eq.${enc}&order=not_before.asc&limit=200`
     ).catch(() => ({ error: "unavailable" }) as const),
     sbSelect<{
       id: number;

@@ -704,6 +704,7 @@ export const I18N_CATALOG: string[] = [
   "Show the shops",
   "Show them all",
   "Showing active rentals",
+  "Showing the last update - reconnecting…",
   "Side by side",
   "Sign in or create an account to enter",
   "Sign in to search locations.",

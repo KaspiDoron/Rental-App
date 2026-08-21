@@ -652,7 +652,12 @@ async function hostHealthDetail(h: Host): Promise<{ ok: boolean; detail: string 
   const started = Date.now();
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4500);
+    // 4500ms was BELOW the thing it measures. Render's own health check gives
+    // a host 5s, and a loaded Evolution box answering fetchInstances in ~5-6s
+    // is slow, not down - so this probe reported the fleet unhealthy at
+    // exactly the moments the owner most needed to know the difference. 9s
+    // still returns well inside any caller's budget.
+    const timer = setTimeout(() => ctrl.abort(), 9_000);
     const res = await fetch(`${h.url}/instance/fetchInstances`, {
       headers: { apikey: h.key },
       signal: ctrl.signal,

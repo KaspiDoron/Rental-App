@@ -51,6 +51,12 @@ export function historyLine(m: HistoryRowLike): string {
       : MEDIA_PLACEHOLDER.test(body) && reading
         ? `${body} (photo read: ${reading.trim().slice(0, 200)})`
         : body;
+  // AN EMPTY MESSAGE IS NOT A TURN. Returning "" lets the caller drop it on
+  // CONTENT rather than on the length of the rendered line - the old
+  // `length > 4` test measured the prefix too, so an empty outbound ("Us: ",
+  // 4 chars) was dropped while an empty inbound ("Shop: ", 6 chars) survived
+  // and fed the composer a shop turn that said nothing.
+  if (!text.trim()) return "";
   return `${who}: ${text.slice(0, 300)}`;
 }
 
@@ -65,7 +71,7 @@ export function buildHistoryWindow(
   chronological: HistoryRowLike[],
   budgetChars = HISTORY_CHAR_BUDGET
 ): string {
-  const lines = chronological.map(historyLine).filter((l) => l.length > 4);
+  const lines = chronological.map(historyLine).filter(Boolean);
   const total = lines.reduce((n, l) => n + l.length + 1, 0);
   if (total <= budgetChars) return lines.join("\n");
 
