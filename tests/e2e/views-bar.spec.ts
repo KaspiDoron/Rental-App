@@ -76,20 +76,26 @@ test.describe("the views bar is not sticky @allwidths", () => {
     const vendors = page.locator('[data-tour="vendors"]');
     await expect(vendors).toBeAttached({ timeout: 20_000 });
 
-    const covered = await page.evaluate(async () => {
-      const el = document.querySelector('[data-tour="vendors"]') as HTMLElement | null;
-      const bar = document.querySelector(".topbar") as HTMLElement | null;
-      if (!el || !bar) return null;
-      // Jump from the bottom, which is the direction that buries the target.
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      el.scrollIntoView({ behavior: "auto", block: "start" });
-      await new Promise((r) => setTimeout(r, 400));
-      return bar.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
-    });
-
-    expect(covered, "[data-tour=vendors] is not reachable").not.toBeNull();
-    // A couple of px of rounding is fine; a buried card is not.
-    expect(covered!, "the shop list landed underneath the top bar").toBeLessThanOrEqual(2);
+    // RETRY, NOT A FIXED NAP. The windowed list keeps re-measuring rows for a
+    // while after load, and each estimate->actual delta nudges the page - a
+    // 400ms settle was long enough on a fast machine and silently short on a
+    // loaded one. Re-run the jump until the geometry it asserts is quiet; the
+    // assertion itself (the card lands BELOW the bar) is unchanged.
+    await expect(async () => {
+      const covered = await page.evaluate(async () => {
+        const el = document.querySelector('[data-tour="vendors"]') as HTMLElement | null;
+        const bar = document.querySelector(".topbar") as HTMLElement | null;
+        if (!el || !bar) return null;
+        // Jump from the bottom, which is the direction that buries the target.
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        el.scrollIntoView({ behavior: "auto", block: "start" });
+        await new Promise((r) => setTimeout(r, 400));
+        return bar.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
+      });
+      expect(covered, "[data-tour=vendors] is not reachable").not.toBeNull();
+      // A couple of px of rounding is fine; a buried card is not.
+      expect(covered!, "the shop list landed underneath the top bar").toBeLessThanOrEqual(2);
+    }).toPass({ timeout: 20_000 });
   });
 });

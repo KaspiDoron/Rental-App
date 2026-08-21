@@ -71,6 +71,31 @@ export const UNCERTAINTY_CONFIDENCE_FLOOR = 0.4;
 export const CONFIRM_ANSWER_FLOOR = 0.6;
 
 /**
+ * How sure the model has to be that the shop REFUSED TO GO LOWER.
+ *
+ * Same height as the stance floor, and for the same reason: firmness retires
+ * bargaining (two of them and spte/policy stops pushing), so a false positive
+ * costs the traveller the discount the whole app exists to find, while a false
+ * negative costs one more polite question. Below the floor the read is kept for
+ * the trace and nothing retires - i.e. WE KEEP BARGAINING, which is the side
+ * the owner's "we are not bargaining enough" points at.
+ */
+export const FIRMNESS_CONFIDENCE_FLOOR = 0.6;
+
+/**
+ * How sure the model has to be that the shop STATED A TERM (deposit, handover
+ * mode, handover price).
+ *
+ * Lower than the two above because the asymmetry is milder and runs the other
+ * way: a false "they told us" retires a question that then never gets asked
+ * (this is exactly how the delivery fee stopped being asked about - see
+ * ThreadComprehension.handover), while a false "not yet" costs one polite
+ * question. So: moderate confidence to mark a term KNOWN, and unknown-by-
+ * default whenever the model is unsure or absent.
+ */
+export const TERMS_CONFIDENCE_FLOOR = 0.5;
+
+/**
  * The whole comprehension phase's wall clock.
  *
  * The reply path budgets ~9s for the single pass (spte/pass.ts) inside a 45s
@@ -86,8 +111,53 @@ export interface TurnComprehension {
   stanceReason?: string;
   /** Terminal-and-polite: they are getting rid of us without a refusal word. */
   deflected: boolean;
-  /** Terminal-and-explicit: an outright end. OR-ed with the regex reader. */
+  /**
+   * TERMINAL-AND-EXPLICIT: an outright end, and THE MODEL OWNS IT.
+   *
+   * This used to be OR-ed with `DECLINED_RX` (agents.ts) in two places at once -
+   * into the extractor's verdict and again over this one - so the model was
+   * structurally forbidden from saying "no, they are still selling". One
+   * ordinary sentence killed a live shop: "Sorry cannot deliver to your hotel,
+   * you come to shop. Scooter 300 baht per day" matched `sorry,? cannot`, and a
+   * shop QUOTING A PRICE was filed as one that had walked away. The regex is now
+   * a pre-filter only (agents.looksLikeWalkAway) that can buy a stronger model
+   * call and nothing else.
+   */
   declined: boolean;
+  /**
+   * THE SHOP EXPLICITLY REFUSED TO GO LOWER (A2). Above
+   * FIRMNESS_CONFIDENCE_FLOOR, and only for a stated refusal - never for the
+   * "best price" that opens a sale. Undefined when no model answered, which
+   * reads downstream as "no refusal seen" and keeps us bargaining.
+   */
+  firm?: boolean;
+  /** Their own words for the refusal, so the trace can quote rather than claim. */
+  firmQuote?: string;
+  /**
+   * WHAT THEY WANT HELD (A5). `readDepositTerms` has run on every turn since it
+   * shipped and everything except a narrow cash-or-document ambiguity flag was
+   * thrown on the floor, while DEPOSIT_RX - the bare word "passport" anywhere in
+   * any inbound message - decided the fact. This is the structured answer we
+   * were already paying for.
+   */
+  deposit?: {
+    stated: boolean;
+    kind: "cash" | "document" | "cash-or-document" | "card" | "none" | "unclear";
+    amount?: number;
+    currency?: string;
+    document?: string;
+    confidence: number;
+  };
+  /** HOW THE VEHICLE CHANGES HANDS AND WHAT THAT COSTS (A5) - the mode and its
+   *  price kept as two facts, because one flag answering for both is what
+   *  stopped anyone asking what delivery costs. */
+  handover?: {
+    mode: "delivery" | "pickup" | "both" | "unstated";
+    costStated: boolean;
+    cost?: number;
+    currency?: string;
+    confidence: number;
+  };
   /** The availability read, from the classifier that had zero callers. */
   availability?: "has" | "none" | "later" | "unclear";
   restockHint?: string;
@@ -244,6 +314,24 @@ export async function readTurnComprehension(
   const c = comp.value;
   const ms = Date.now() - started;
 
+  // THE DEPOSIT ANSWER WE WERE ALREADY PAYING FOR (A5). Carried whether or not
+  // the stance read survived: these are three independent calls with three
+  // independent failure modes, and a mangled stance shape must not throw away a
+  // clean deposit read. Below the terms floor it is dropped entirely - unknown,
+  // so we ask, which costs one message.
+  const dep = deposit.value;
+  const depositRead: TurnComprehension["deposit"] =
+    dep && dep.confidence >= TERMS_CONFIDENCE_FLOOR
+      ? {
+          stated: dep.stated === true,
+          kind: dep.kind,
+          ...(typeof dep.amount === "number" ? { amount: dep.amount } : {}),
+          ...(dep.currency ? { currency: dep.currency } : {}),
+          ...(dep.document ? { document: dep.document } : {}),
+          confidence: dep.confidence,
+        }
+      : undefined;
+
   // NO PROVIDER ANSWERED THE STANCE READ. Everything terminal below is derived
   // from it, so this is the honest degrade: say so and change nothing. The
   // caller keeps its deterministic reads and the ladder behaves exactly as it
@@ -259,6 +347,13 @@ export async function readTurnComprehension(
       availability: avail.value?.state,
       restockHint: avail.value?.backWhen ?? undefined,
       freeMeansNoCost: avail.value?.freeMeansNoCost ?? undefined,
+      // Same reasoning as `availability` above: an independent call answered,
+      // and a deposit read is not terminal, so it is safe to carry on its own.
+      ...(depositRead ? { deposit: depositRead } : {}),
+      // NO FIRMNESS AND NO HANDOVER READ. Both live on the stance schema, which
+      // is the read that failed. Left undefined on purpose: "we did not find out"
+      // keeps us bargaining and keeps the handover questions askable, and that
+      // is the only honest degrade - an outage may never manufacture a refusal.
     };
   }
 
@@ -289,7 +384,6 @@ export async function readTurnComprehension(
   // pick between, and the difference is a passport. The stance model usually
   // flags it; when it does not, the deposit classifier's own verdict adds it,
   // because both readings latch `depositKnown` and only one of them is right.
-  const dep = deposit.value;
   const depositIsChoice = dep?.stated === true && dep.kind === "cash-or-document";
   if (depositIsChoice && !uncertain.some((u) => u.subject === "deposit")) {
     uncertain.push({
@@ -321,6 +415,33 @@ export async function readTurnComprehension(
     ...(languageRequest ? { languageRequest } : {}),
     deflected: sure && !stockOut && c.stance === "deflecting",
     declined: sure && !stockOut && c.stance === "declining",
+    // A2 - FIRMNESS, AND ONLY FROM AN EXPLICIT REFUSAL. Undefined when the
+    // provider omitted the key (an older model, a shorter shape) rather than
+    // false, so `mergeComprehension` can tell "the model looked and saw no
+    // refusal" from "nobody looked" - only the first may ever end bargaining.
+    ...(c.firmness
+      ? {
+          firm:
+            c.firmness.refusesLower === true &&
+            c.firmness.confidence >= FIRMNESS_CONFIDENCE_FLOOR,
+          ...(c.firmness.quote ? { firmQuote: c.firmness.quote.slice(0, 200) } : {}),
+        }
+      : {}),
+    ...(depositRead ? { deposit: depositRead } : {}),
+    // A5 - the handover MODE and its PRICE, two facts. Dropped below the terms
+    // floor: an unsure read leaves both questions askable, which costs a message
+    // and never costs the traveller an unasked-about delivery fee.
+    ...(c.handover && c.handover.confidence >= TERMS_CONFIDENCE_FLOOR
+      ? {
+          handover: {
+            mode: c.handover.mode,
+            costStated: c.handover.costStated === true,
+            ...(typeof c.handover.cost === "number" ? { cost: c.handover.cost } : {}),
+            ...(c.handover.currency ? { currency: c.handover.currency } : {}),
+            confidence: c.handover.confidence,
+          },
+        }
+      : {}),
     availability: avail.value?.state,
     restockHint: avail.value?.backWhen ?? undefined,
     freeMeansNoCost: avail.value?.freeMeansNoCost ?? undefined,

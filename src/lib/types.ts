@@ -74,6 +74,19 @@ export type TrackerStage =
   | "out-of-stock"
   | "declined";
 
+/**
+ * The shop asked to move the conversation to a VOICE CALL (K7). Written once
+ * per read by the post-turn enrichment; the newest reading wins (a shop that
+ * stops asking is a state change, not an event to accumulate).
+ */
+export interface CallIntentFact {
+  /** Their own words, verbatim - the UI quotes rather than claims. */
+  quote: string | null;
+  urgency: "now" | "soon" | "whenever" | "none";
+  /** ISO timestamp of the inbound turn that said it. */
+  at: string;
+}
+
 export interface Offer {
   pricePerDay: number;
   // The vendor's opening/list rate before the agent negotiated - savings basis.
@@ -131,6 +144,13 @@ export interface Offer {
    * actively trying to do business.
    */
   alternativeOffer?: import("./vehicle/substitution").AlternativeOffer | null;
+  /**
+   * THE SHOP ASKED TO TALK BY PHONE (K7). Model-read (semantic readCallIntent,
+   * which had zero callers until this landed), persisted on the thread so the
+   * card can tell the traveller instead of the request scrolling past inside
+   * a foreign-language transcript. `quote` is the shop's own words.
+   */
+  wantsCall?: CallIntentFact | null;
   // ---- Extra shop-confirmed rental terms (only when explicitly stated) ------
   deliveryFee?: number; // in the offer's currency; 0 = free delivery
   kmLimitPerDay?: number | "unlimited";

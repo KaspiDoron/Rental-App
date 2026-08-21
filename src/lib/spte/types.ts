@@ -173,6 +173,61 @@ export interface SessionSnapshot {
   coaching?: string;
 }
 
+/**
+ * WHAT THE MODEL HAS UNDERSTOOD ABOUT THIS THREAD - DURABLE (A4).
+ *
+ * The comprehension pass was per-turn and nothing it decided survived the
+ * response. From turn two onward every THREAD-LEVEL meaning was re-derived by
+ * regex over raw history - `firmCount` by FIRM_RX, `depositKnown` by the bare
+ * word "passport", `declined` by a phrase list - and the model only ever saw
+ * the current frame. That is the architectural half of the owner's "they don't
+ * get a live instant of the whole thread's situation together": the engine had
+ * a brain for one message and a phrase list for the conversation.
+ *
+ * So the model's verdicts become facts OF THE THREAD, persisted beside the
+ * doubts (`pending`) that already work this way. Everything here is written by
+ * `mergeComprehension`, which is pure arithmetic over model verdicts: it never
+ * invents one, and on a turn where no provider answered it carries forward what
+ * an earlier turn actually read rather than re-deriving anything.
+ */
+export interface DurableComprehension {
+  /** The latest stance the model actually read (not latched - a shop that
+   *  re-engages is engaged again). */
+  stance?: ShopStance;
+  /** The shop walked away. Model-only; no regex may write this. */
+  declined?: boolean;
+  /** The shop is getting rid of us politely. Model-only. */
+  deflected?: boolean;
+  /** The availability read, carried so a stock-out survives a quiet turn. */
+  availability?: "has" | "none" | "later" | "unclear";
+  restockHint?: string;
+  /**
+   * HOW MANY TURNS THE MODEL READ AN EXPLICIT REFUSAL TO GO LOWER.
+   *
+   * Accumulates, because each refusal is a thing that happened. Two of them stop
+   * the bargaining (spte/policy), which is why the read behind it has to be an
+   * explicit statement and not a sales adjective - see
+   * classifiers.ThreadComprehension.firmness.
+   */
+  firmTurns?: number;
+  /** The shop stated its deposit terms (readDepositTerms.stated). */
+  depositStated?: boolean;
+  depositKind?: "cash" | "document" | "cash-or-document" | "card" | "none" | "unclear";
+  /** The handover mode the shop has stated at any point in the thread. */
+  handoverMode?: "delivery" | "pickup" | "both" | "unstated";
+  /** The shop has said what the handover COSTS - a number, or that it is free. */
+  handoverCostKnown?: boolean;
+  /**
+   * THIS THREAD IS CLOSED - a structured fact, written from the MOVE we took or
+   * from the model's terminal stance.
+   *
+   * `hasClosed()` used to grep the durable notes for /closed|goodbye|declined/,
+   * and those notes are PROSE THE LLM WROTE. A note reading "they have NOT
+   * declined" muted the thread permanently. Prose is evidence, never a verdict.
+   */
+  closed?: boolean;
+}
+
 export interface ThreadDigest {
   facts: string[]; // <=10 durable one-liners; the compressed conversation
   quotedPricePerDay?: number;
@@ -185,9 +240,15 @@ export interface ThreadDigest {
   alternativeOffer?: import("../vehicle/substitution").AlternativeOffer | null;
   round: number;
   tone?: "friendly" | "curt" | "eager" | "reluctant";
-  // Thread-derived negotiation state (src/lib/spte/thread-facts.ts). Recomputed
-  // every turn from the loaded rows - never persisted, never stale.
-  firmCount?: number; // shop said "last price" this many times
+  /**
+   * THE MODEL'S DURABLE READING OF THIS THREAD (A4). Persisted; every meaning
+   * flag below is projected from it, never from a regex over raw history.
+   */
+  comprehension?: DurableComprehension;
+  // Projected per turn from `comprehension` (meaning: the model) and from
+  // spte/thread-facts (arithmetic over OUR OWN stamped moves). Never persisted
+  // in projected form - the durable source above is what survives the turn.
+  firmCount?: number; // turns on which the model read an explicit refusal
   depositKnown?: boolean; // the shop already told us its deposit terms
   fulfillmentKnown?: boolean; // the shop already told us delivery-vs-pickup
   /** The shop offered to BRING it - the only mode that can carry a fee. */

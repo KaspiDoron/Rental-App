@@ -6,13 +6,88 @@
 
 import type {
   ConfirmSubject,
+  DurableComprehension,
   PendingConfirm,
   ThreadDigest,
   TurnArtifact,
   VerifiedExtraction,
 } from "./types";
+import type { TurnComprehension } from "./comprehension";
 
 const MAX_FACTS = 10;
+
+/**
+ * THE THREE NOTES THIS FILE ITSELF WRITES WHEN A THREAD ENDS.
+ *
+ * `hasClosed()` used to decide the terminal fact by grepping the durable notes
+ * for /closed|goodbye|declined/, and those notes are FREE TEXT THE MODEL WROTE:
+ * "they have NOT declined" read as declined and muted the thread forever. The
+ * verdict is a structured flag now (DurableComprehension.closed).
+ *
+ * This list exists ONLY to migrate rows persisted before that flag did. It is
+ * matched by EXACT equality against strings this module generated itself, never
+ * as a pattern over model prose, and it can be deleted once no live row predates
+ * the flag.
+ */
+const LEGACY_CLOSED_NOTES = [
+  "closed - one goodbye sent",
+  "shop declined / walked away",
+  "shop pointed us elsewhere - not dealing",
+];
+
+/**
+ * ONE TURN OF MODEL COMPREHENSION FOLDED INTO THE THREAD'S DURABLE READING (A4).
+ *
+ * Pure, so the whole memory rule is testable without a provider. Three shapes of
+ * fact, three different merge rules, each chosen by what a wrong answer costs:
+ *
+ *   - EVENTS accumulate (`firmTurns`): a refusal that happened stays happened.
+ *   - LATCHES only ever go true (`depositStated`, `handoverCostKnown`, `closed`):
+ *     a shop that has told us its deposit has told us, and a later message that
+ *     is silent on the subject is silence, not a retraction.
+ *   - STATES take the newest reading (`stance`, `declined`, `deflected`,
+ *     `availability`, `handoverMode`): a shop that re-engages is engaged again,
+ *     and a shop that restocks has stock.
+ *
+ * AND WHEN NO MODEL ANSWERED (`comp` null, `degraded`, or a field the provider
+ * omitted) NOTHING CHANGES. The previous reading is carried forward untouched -
+ * memory, not fabrication. A thread that never got a model read carries no
+ * verdicts at all, which downstream means "unknown": not declined, not firm,
+ * terms not known. Every one of those defaults keeps the negotiation alive and
+ * keeps a question askable, which is the only safe direction here.
+ */
+export function mergeComprehension(
+  prev: DurableComprehension | undefined,
+  comp: TurnComprehension | null | undefined
+): DurableComprehension | undefined {
+  const base: DurableComprehension = { ...(prev ?? {}) };
+  if (!comp || comp.degraded) return prev;
+  const next: DurableComprehension = { ...base };
+  next.stance = comp.stance;
+  next.declined = comp.declined;
+  next.deflected = comp.deflected;
+  // A terminal STANCE is not yet a closed THREAD: the goodbye this very turn
+  // sends in response is what closes it, and mergeDigest latches `closed`
+  // when that move is actually taken. Latching here silenced the goodbye
+  // itself - the policy read "closed" before the farewell could go out.
+  if (comp.availability && comp.availability !== "unclear") {
+    next.availability = comp.availability;
+    next.restockHint = comp.restockHint;
+  }
+  // `firm === undefined` means the provider omitted the key - nobody looked, so
+  // nothing is counted. Only an explicit `true` from a model above the firmness
+  // floor may ever advance the counter that stops us bargaining.
+  if (comp.firm === true) next.firmTurns = (base.firmTurns ?? 0) + 1;
+  if (comp.deposit?.stated === true) {
+    next.depositStated = true;
+    next.depositKind = comp.deposit.kind;
+  }
+  if (comp.handover) {
+    if (comp.handover.mode !== "unstated") next.handoverMode = comp.handover.mode;
+    if (comp.handover.costStated) next.handoverCostKnown = true;
+  }
+  return next;
+}
 
 /**
  * HOW LONG A THREAD MAY WAIT ON AN ANSWER IT ASKED FOR.
@@ -73,18 +148,76 @@ export function persistableDigest(d: ThreadDigest): Partial<ThreadDigest> {
     // The once-ever price-watch bound (owner report 5 #9). Durable or it is not
     // a bound at all - an in-memory flag would re-arm on every cold start.
     ...(d.priceWatchArmed ? { priceWatchArmed: true } : {}),
+    // THE MODEL'S READING OF THE THREAD (A4). Same argument as `pending` above,
+    // one layer up: a stance, a refusal to go lower and a stated deposit are not
+    // derivable from history by anything but the regexes that could not read
+    // them in the first place - and on a localized thread could not read them at
+    // all, because the English gloss only exists for the current turn. Persist it
+    // or every thread-level meaning restarts from a phrase list on turn two.
+    ...(d.comprehension && Object.keys(d.comprehension).length
+      ? { comprehension: d.comprehension }
+      : {}),
   };
 }
 
 /** Read a stored digest back, defensively - the column is free-form JSON that
  *  older rows do not have at all. */
+/** The durable model reading, read back defensively - free-form JSON that rows
+ *  written before A4 do not have at all. Every field is optional and every
+ *  malformed one drops to "we never read it", which is the safe default for all
+ *  of them (keep negotiating, keep the questions askable). */
+function comprehensionFromStored(
+  raw: unknown,
+  facts: string[]
+): DurableComprehension | undefined {
+  const c = (raw ?? null) as Partial<DurableComprehension> | null;
+  const out: DurableComprehension = {};
+  if (c && typeof c === "object") {
+    if (c.stance === "engaged" || c.stance === "deflecting" || c.stance === "declining" || c.stance === "unclear") {
+      out.stance = c.stance;
+    }
+    if (typeof c.declined === "boolean") out.declined = c.declined;
+    if (typeof c.deflected === "boolean") out.deflected = c.deflected;
+    if (c.availability === "has" || c.availability === "none" || c.availability === "later" || c.availability === "unclear") {
+      out.availability = c.availability;
+    }
+    if (typeof c.restockHint === "string" && c.restockHint.trim()) out.restockHint = c.restockHint;
+    if (typeof c.firmTurns === "number" && c.firmTurns > 0) out.firmTurns = Math.floor(c.firmTurns);
+    if (typeof c.depositStated === "boolean") out.depositStated = c.depositStated;
+    if (
+      c.depositKind === "cash" || c.depositKind === "document" || c.depositKind === "cash-or-document" ||
+      c.depositKind === "card" || c.depositKind === "none" || c.depositKind === "unclear"
+    ) {
+      out.depositKind = c.depositKind;
+    }
+    if (c.handoverMode === "delivery" || c.handoverMode === "pickup" || c.handoverMode === "both" || c.handoverMode === "unstated") {
+      out.handoverMode = c.handoverMode;
+    }
+    if (typeof c.handoverCostKnown === "boolean") out.handoverCostKnown = c.handoverCostKnown;
+    if (typeof c.closed === "boolean") out.closed = c.closed;
+  }
+  // MIGRATION ONLY. A row persisted before this block existed records its close
+  // in the durable notes, so exact-match those three self-written literals once
+  // on read rather than leaving every mid-flight thread able to send a second
+  // goodbye. This is NOT the old prose grep: equality against strings this file
+  // generated, not a pattern over anything a model wrote.
+  if (out.closed === undefined && facts.some((f) => LEGACY_CLOSED_NOTES.includes(f.trim().toLowerCase()))) {
+    out.closed = true;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function digestFromStored(stored: unknown): ThreadDigest {
   const base = emptyDigest();
   const s = (stored ?? null) as Partial<ThreadDigest> | null;
   if (!s || typeof s !== "object") return base;
+  const facts = Array.isArray(s.facts)
+    ? s.facts.filter((f) => typeof f === "string").slice(-MAX_FACTS)
+    : [];
   return {
     ...base,
-    facts: Array.isArray(s.facts) ? s.facts.filter((f) => typeof f === "string").slice(-MAX_FACTS) : [],
+    facts,
+    comprehension: comprehensionFromStored(s.comprehension, facts),
     quotedPricePerDay:
       typeof s.quotedPricePerDay === "number" && s.quotedPricePerDay > 0
         ? s.quotedPricePerDay
@@ -221,15 +354,17 @@ export function mergeDigest(
   // next event on the thread would offer a second goodbye.
   if (verified.deflected) add("shop pointed us elsewhere - not dealing");
 
-  // The model's durable notes (deposit terms, condition, tone cues).
+  // The model's durable notes (deposit terms, condition, tone cues). EVIDENCE
+  // ONLY - nothing downstream may read a verdict out of this prose again.
   for (const f of artifact.digestPatch) add(f);
-  if (
+  const closedByUs =
     artifact.move === "farewell" ||
     artifact.move === "redirect-close" ||
-    artifact.move === "graceful-close"
-  ) {
-    add("closed - one goodbye sent");
-  }
+    artifact.move === "graceful-close";
+  // The note stays for the humans reading a trace and for the prompt's memory;
+  // the VERDICT is the structured flag below (A6). We wrote this literal, so
+  // writing it can flip the flag - reading it back out of prose cannot.
+  if (closedByUs) add("closed - one goodbye sent");
 
   // Keep the freshest MAX_FACTS (evict oldest).
   const capped = facts.slice(Math.max(0, facts.length - MAX_FACTS));
@@ -299,6 +434,14 @@ export function mergeDigest(
     ? { subject: waiting.subject, question: waiting.question }
     : null;
 
+  // THE THREAD'S DURABLE READING, CARRIED (A4). `prev.comprehension` was already
+  // folded this turn by live.ts (buildDigest -> mergeComprehension) so the
+  // policy could see it; all that is left here is to make sure it survives into
+  // the row, plus the one fact only this function knows: that WE closed.
+  const comprehension: DurableComprehension | undefined = closedByUs
+    ? { ...(prev.comprehension ?? {}), closed: true }
+    : prev.comprehension;
+
   return {
     facts: capped,
     quotedPricePerDay:
@@ -307,6 +450,7 @@ export function mergeDigest(
         : prev.quotedPricePerDay,
     round: prev.round + (artifact.move === "bargain" ? 1 : 0),
     tone: prev.tone,
+    ...(comprehension ? { comprehension } : {}),
     confirmAsked,
     awaitingConfirmation,
     pending: pending.length ? pending : undefined,

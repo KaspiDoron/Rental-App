@@ -1191,6 +1191,22 @@ export async function processEvolutionWebhook(
         } catch {
           /* transcription is best-effort - engine sends a polite fallback */
         }
+        // THE SPOKEN HALF IS THE MESSAGE (owner report 6 K1). syntheticText
+        // was "[voice note]" by the time transcription finished, and nothing
+        // ever replaced it - so the LIVE engine's shopMessage was the
+        // placeholder while the transcript rode a side field only the
+        // FAILOVER graph engine read (the classic fix-on-failover pattern):
+        // the shop SPOKE a price and the primary engine never heard it. The
+        // words go into the text itself, marked "(voice note)" - the same
+        // convention the graph, the simulator and the golden cases use. A
+        // real caption keeps its place at the head: the shop wrote it first.
+        const spoken = (transcript?.text ?? "").trim();
+        if (spoken) {
+          const { isMediaPlaceholder } = await import("@/lib/wa/coalesce");
+          syntheticText = isMediaPlaceholder(syntheticText)
+            ? `(voice note) ${spoken}`
+            : `${syntheticText}\n(voice note) ${spoken}`;
+        }
         // STAMP THE TRANSCRIPT ON THE STORED ROW (owner report 3, item 8).
         // The transcript used to exist for exactly one turn - fed to the
         // engine, then gone - so "Full conversation", Ops and the message-path
@@ -1199,13 +1215,22 @@ export async function processEvolutionWebhook(
         if (transcript?.text && msgId) {
           try {
             const { sbUpdate } = await import("@/lib/runtime-config");
-            const rows = await sbSelect<{ id: number; raw: Record<string, unknown> | null }>(
+            const { isMediaPlaceholder } = await import("@/lib/wa/coalesce");
+            const rows = await sbSelect<{ id: number; body: string | null; raw: Record<string, unknown> | null }>(
               "whatsapp_messages",
-              `select=id,raw&wa_message_id=eq.${encodeURIComponent(msgId)}&direction=eq.inbound&order=id.desc&limit=1`
+              `select=id,body,raw&wa_message_id=eq.${encodeURIComponent(msgId)}&direction=eq.inbound&order=id.desc&limit=1`
             );
             if (rows[0]) {
+              // AND THE BODY, when the body is only a placeholder we wrote:
+              // the raw stamp alone fixed the surfaces that know to look for
+              // it and left every body reader - most importantly the
+              // COALESCER, which strips placeholder bodies as noise - still
+              // holding "[voice note]". A spoken price survived exactly one
+              // turn that way. A real caption is never overwritten.
+              const body = (rows[0].body ?? "").trim();
               await sbUpdate("whatsapp_messages", `id=eq.${rows[0].id}`, {
                 raw: { ...(rows[0].raw ?? {}), transcript },
+                ...(isMediaPlaceholder(body) ? { body: syntheticText } : {}),
               });
             }
           } catch {

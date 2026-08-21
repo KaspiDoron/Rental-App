@@ -1,74 +1,68 @@
 import { describe, it, expect } from "vitest";
-import { deriveThreadFacts, FIRM_RX } from "./thread-facts";
+import { deriveThreadFacts } from "./thread-facts";
 
-describe("FIRM_RX", () => {
-  it("matches the live 'last price' refusals", () => {
-    expect(FIRM_RX.test("That's a last price sir 😊 I mean that's a best price for you")).toBe(true);
-    expect(FIRM_RX.test("that's the cheapest we can offer sir")).toBe(true);
-    expect(FIRM_RX.test("300 pesos is our last price sir")).toBe(true);
-    expect(FIRM_RX.test("cannot go lower")).toBe(true);
-  });
-  it("does NOT treat a normal quote or a decline as firm", () => {
-    expect(FIRM_RX.test("yes sir it's only 400/ day for you")).toBe(false);
-    expect(FIRM_RX.test("sorry we have no scooter available")).toBe(false);
-  });
-});
+// THE W10 LANDING (owner report 6 K): thread-facts no longer reads the shop's
+// words. Six regexes used to decide firmness/deposit/handover here - FIRM_RX
+// fired on the "best price" that OPENS a sale in every market this app serves,
+// DEPOSIT_RX latched on the bare word "passport", and all six read raw
+// local-language text they could not read at all on a Thai thread. Meaning now
+// arrives as the model's durable reading (types.DurableComprehension); this
+// file keeps only arithmetic over OUR OWN stamped moves.
 
-describe("deriveThreadFacts - the John Motor Rental transcript", () => {
-  // The exact escalation from the screenshot: agent pushed 330 -> 320 -> 280
-  // and the shop said "last price" twice.
-  const inbound = [
-    "Even 350 pesos per day is okay sir. Just let us know your hotel and delivery time. Thank you",
-    "Okay let's do that sir 330/day 🙂",
-    "That's ok sir. Around what time?",
-    "Closed deal sir 300 pesos a day, free delivery",
-    "That's a last price sir 😊 I mean that's a best price for you",
-  ];
-  const outbound = [
-    "thanks for the offer! Since I'm booking for 4 days, can you give me an even better deal, like 330 PHP/day?",
-    "thanks for the offer! Since I'm booking for 4 days, can u give me an even better deal, like 320 PHP/day?",
-    "thanks for the offer! Since I'm booking for 4 days, can you give me an even better deal, like 280 PHP/day?",
-  ];
-
-  it("counts the firm refusal and detects free delivery", () => {
+describe("meaning projects from the model's durable reading", () => {
+  it("the John Motor Rental escalation, as the model read it", () => {
+    // The shop said "last price" twice; the model counted both.
     const f = deriveThreadFacts({
-      inbound,
-      outbound,
-      currentInbound: "That's a last price sir 😊 I mean that's a best price for you",
+      outbound: [
+        "thanks for the offer! Since I'm booking for 4 days, can you give me an even better deal, like 330 PHP/day?",
+        "thanks for the offer! Since I'm booking for 4 days, can u give me an even better deal, like 320 PHP/day?",
+        "thanks for the offer! Since I'm booking for 4 days, can you give me an even better deal, like 280 PHP/day?",
+      ],
+      comprehension: { firmTurns: 2, handoverMode: "delivery", handoverCostKnown: true },
     });
-    expect(f.firmCount).toBeGreaterThanOrEqual(1);
-    expect(f.fulfillmentKnown).toBe(true); // "free delivery"
-    expect(f.bargainRounds).toBeGreaterThanOrEqual(3); // three real pushes
+    expect(f.firmCount).toBe(2);
+    expect(f.fulfillmentKnown).toBe(true);
+    expect(f.deliveryOffered).toBe(true);
+    expect(f.fulfillmentCostKnown).toBe(true); // "free delivery" - the model read it
+    expect(f.bargainRounds).toBeGreaterThanOrEqual(3); // three real pushes, OUR side
     expect(f.lastOutbound.length).toBe(3);
   });
 
-  it("reaches firmCount 2 when the shop repeats the last-price line", () => {
+  it("a stated deposit is the model's verdict, never a keyword", () => {
     const f = deriveThreadFacts({
-      inbound: [...inbound, "Hello sir? That's a last price sir 😊 I mean that's a best price for you"],
-      outbound,
-    });
-    expect(f.firmCount).toBeGreaterThanOrEqual(2);
-  });
-});
-
-describe("deriveThreadFacts - deposit + pickup", () => {
-  it("detects a passport/deposit answer and shop pickup", () => {
-    const f = deriveThreadFacts({
-      inbound: ["We need a passport as deposit sir, and you can pick up at our shop"],
       outbound: [],
+      comprehension: { depositStated: true, depositKind: "document", handoverMode: "pickup" },
     });
     expect(f.depositKnown).toBe(true);
     expect(f.fulfillmentKnown).toBe(true);
+    expect(f.deliveryOffered, "pickup-only is not a delivery offer").toBe(false);
   });
+
+  it("DOCTRINE REGRESSION: raw text alone decides NOTHING anymore", () => {
+    // The exact strings that used to trip the regexes, passed as text with no
+    // model reading: every meaning fact stays at its keep-negotiating zero.
+    // (FIRM_RX read "best price for you" - the warmest opening line in these
+    // markets - as a refusal, which retired bargaining on the spot.)
+    const f = deriveThreadFacts({
+      inbound: [
+        "That's a last price sir 😊 I mean that's a best price for you",
+        "We need a passport as deposit sir",
+        "Yes we can deliver to your hotel, free",
+      ],
+      currentInbound: "cannot go lower",
+      outbound: [],
+    });
+    expect(f.firmCount).toBe(0);
+    expect(f.depositKnown).toBe(false);
+    expect(f.fulfillmentKnown).toBe(false);
+    expect(f.fulfillmentCostKnown).toBe(false);
+  });
+
   it("is empty on a fresh thread", () => {
-    const f = deriveThreadFacts({ inbound: [], outbound: [] });
-    expect(f).toEqual({
+    expect(deriveThreadFacts({ outbound: [] })).toEqual({
       firmCount: 0,
       depositKnown: false,
       fulfillmentKnown: false,
-      // The MODE and its PRICE are separate facts (see delivery-cost.test.ts):
-      // "we deliver" used to answer for both, which retired the handover probe
-      // before anyone had asked what delivery costs.
       deliveryOffered: false,
       fulfillmentCostKnown: false,
       handoverAsks: 0,
@@ -78,15 +72,32 @@ describe("deriveThreadFacts - deposit + pickup", () => {
   });
 });
 
-describe("deriveThreadFacts - round healing", () => {
-  it("honors the caller count and de-dupes the current inbound", () => {
+describe("arithmetic over our own stamped moves survives unchanged", () => {
+  it("the stamp discriminates; the wording is only the unstamped fallback", () => {
     const f = deriveThreadFacts({
-      inbound: ["last price sir"],
+      outbound: [
+        "is 250 THB/day the best you can do for 4 days?", // answer wording that LOOKS like a push
+        "can you do 300/day?",
+      ],
+      outboundKinds: ["auto-answer", "bargain"],
+    });
+    expect(f.bargainRounds).toBe(1); // the stamped answer is not a round
+  });
+
+  it("honors the caller count when it is higher (mis-stamped history heals)", () => {
+    const f = deriveThreadFacts({
       outbound: ["can you do 300/day?"],
-      currentInbound: "last price sir", // already the last stored -> not double counted
       priorBargainCount: 5,
     });
-    expect(f.firmCount).toBe(1);
-    expect(f.bargainRounds).toBe(5); // caller count wins when higher
+    expect(f.bargainRounds).toBe(5);
+  });
+
+  it("counts handover asks from the stamped moves, not our prose", () => {
+    expect(
+      deriveThreadFacts({
+        outbound: ["", "", ""],
+        outboundKinds: ["rfq", "fulfillment-probe", "fulfillment-probe"],
+      }).handoverAsks
+    ).toBe(2);
   });
 });

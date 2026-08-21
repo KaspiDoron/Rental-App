@@ -1507,6 +1507,22 @@ const ANNOYED_RX =
 const DECLINED_RX =
   /\b(you can take it there|take (?:it|that) (?:one|offer|deal)( then)?|go with (?:them|the other)|not interested|no,? thank(?:s| you)[.! ]*$|good luck( then)?|we (?:can'?t|cannot) help|sorry,? (?:no|cannot))\b/i;
 
+/**
+ * MODEL-FIRST TONE (K6). The old merge OR-ed the regex in: ANNOYED_RX could
+ * force "annoyed" over a model that read the whole glossed message as warm,
+ * while nothing could ever force "warm" - a one-way ratchet built from
+ * keywords ("enough", "no more") that appear in perfectly friendly replies
+ * ("no more than 300 and it's yours"). The model's verdict now wins BOTH
+ * ways; the regex answers only when the model was silent or off-vocabulary.
+ */
+export function mergeShopTone(
+  model: unknown,
+  heuristic: "warm" | "neutral" | "annoyed" | null
+): "warm" | "neutral" | "annoyed" | null {
+  if (model === "warm" || model === "neutral" || model === "annoyed") return model;
+  return heuristic === "annoyed" ? "annoyed" : null;
+}
+
 export function readNegotiationSignals(text: string): {
   pickupOffered: boolean | null;
   onShopOnly: boolean | null;
@@ -2290,15 +2306,12 @@ export async function extractOffer(
       pickupOffered: e.pickupOffered === true || sig.pickupOffered === true ? true : null,
       onShopOnly: e.onShopOnly === true || sig.onShopOnly === true ? true : null,
       shopFirm: e.shopFirm === true || sig.shopFirm === true ? true : null,
-      shopDeclined: e.shopDeclined === true || sig.shopDeclined === true ? true : null,
-      shopTone:
-        e.shopTone === "annoyed" || sig.shopTone === "annoyed"
-          ? "annoyed"
-          : e.shopTone === "warm"
-          ? "warm"
-          : e.shopTone === "neutral"
-          ? "neutral"
-          : null,
+      // MODEL-ONLY (K2): the DECLINED_RX half used to OR in here, making the
+      // regex un-overrulable two layers deep. It remains computed (sig) as a
+      // pre-filter/telemetry signal; the VERDICT that can kill a thread is
+      // the model's alone.
+      shopDeclined: e.shopDeclined === true ? true : null,
+      shopTone: mergeShopTone(e.shopTone, sig.shopTone),
       tags: Array.isArray(e.tags)
         ? e.tags.filter((t) => typeof t === "string").map((t) => t.toLowerCase().trim()).slice(0, 10)
         : [],

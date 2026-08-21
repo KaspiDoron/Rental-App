@@ -17,7 +17,7 @@ import { runTurn } from "./orchestrator";
 import { newDecisionId } from "../orchestrator";
 import { clampWaitMinutes } from "./wait";
 import { optionsFromThread, signalsVariance } from "../offer-options";
-import { digestFromStored, emptyDigest, persistableDigest } from "./digest";
+import { digestFromStored, emptyDigest, mergeComprehension, persistableDigest } from "./digest";
 import {
   ambiguousLedgerSubjects,
   isHighStakesComprehension,
@@ -179,9 +179,15 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
 function buildDigest(
   input: GraphTurnInput,
   stored: ThreadDigest,
-  ambiguous: import("../thread/claims").ClaimSubject[] = []
+  ambiguous: import("../thread/claims").ClaimSubject[] = [],
+  comp: import("./comprehension").TurnComprehension | null = null
 ): ThreadDigest {
   const base = { ...emptyDigest(), ...stored };
+  // THE MODEL'S DURABLE READING, FOLDED (A4/K). One turn of comprehension
+  // merges into what earlier turns actually read; on a degraded turn nothing
+  // changes - memory, not fabrication. Every meaning fact below projects from
+  // this, never from a regex over the shop's words.
+  const comprehension = mergeComprehension(base.comprehension, comp);
   const tone = ((): ThreadDigest["tone"] => {
     const t = (input.extraction as { shopTone?: string } | null)?.shopTone;
     if (t === "annoyed") return "reluctant";
@@ -202,14 +208,14 @@ function buildDigest(
       ? input.event.shopMessage ?? ""
       : "";
   const facts = deriveThreadFacts({
-    inbound,
     outbound,
     outboundKinds: input.priorOutboundKinds,
-    currentInbound: curInbound,
     priorBargainCount: input.legacyCounts?.bargain ?? 0,
+    comprehension,
   });
-  // The deterministic extractor may flag firmness (shopFirm) on wording the
-  // text regex misses; ensure at least 1 when it did.
+  // The extractor's per-turn shopFirm (its own model read, with the regex as
+  // its pre-filter) may land before the comprehension counter has - ensure at
+  // least 1 on the turn it fires so "last price" counts immediately.
   const curFirm = Boolean((input.extraction as { shopFirm?: boolean } | null)?.shopFirm);
   const firmCount = curFirm ? Math.max(facts.firmCount, 1) : facts.firmCount;
   // THE SHOP'S MENU, read across the WHOLE thread - a tier named three messages
@@ -236,6 +242,7 @@ function buildDigest(
   const ledger = buildLedger({ inbound, outbound, currentInbound: curInbound, ambiguous });
   return {
     ...base,
+    comprehension,
     round: Math.max(base.round ?? 0, facts.bargainRounds),
     // THE STANDING QUOTE. `input.usablePrice` is this message only; the stored
     // digest carries what the shop said before and never repeated.
@@ -256,11 +263,11 @@ function buildDigest(
       !ambiguous.includes("deposit") &&
       (facts.depositKnown ||
         ledger.known.includes("deposit") ||
-        // Deposit terms read from a PHOTO never touch the text regexes (the
-        // agreement-sign case: "passport OR 2,000-3,000 baht" photographed,
-        // stored, shown to the traveller - and the engine re-probed anyway).
-        // The extraction's deposit field IS the shop stating its terms,
-        // whatever medium carried them.
+        // Deposit terms read from a PHOTO never touch the ledger's text
+        // claims (the agreement-sign case: "passport OR 2,000-3,000 baht"
+        // photographed, stored, shown to the traveller - and the engine
+        // re-probed anyway). The extraction's deposit field IS the shop
+        // stating its terms, whatever medium carried them.
         Boolean((input.extraction as { deposit?: string } | null)?.deposit)),
     fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
     deliveryOffered: facts.deliveryOffered,
@@ -566,16 +573,20 @@ async function buildTurnContext(
     verified.stance = comp.stance;
     verified.stanceQuote = comp.stanceQuote;
     verified.deflected = comp.deflected;
-    // OR-ed, never overwritten: the deterministic DECLINED_RX still catches the
-    // explicit walk-aways it always did, and the model adds the polite ones it
-    // never could. Neither reader can un-decline what the other found.
-    verified.declined = verified.declined === true || comp.declined;
+    // MODEL-OWNED (K2). This used to OR the regex verdict in, so the model
+    // was structurally forbidden from saying "no, they are still selling" -
+    // one ordinary sentence ("Sorry cannot deliver... Scooter 300 baht per
+    // day") matched `sorry,? cannot` and a shop QUOTING A PRICE was filed as
+    // one that had walked away, permanently. When the model ANSWERED, its
+    // verdict IS the verdict. A degraded pass decided nothing and may erase
+    // nothing - the extractor's own model read stands on those turns.
+    if (!comp.degraded) verified.declined = comp.declined;
     verified.uncertain = comp.uncertain;
     verified.comprehensionDegraded = comp.degraded;
   }
   const ambiguous = ambiguousLedgerSubjects(comp);
 
-  const digest = buildDigest(input, seed, ambiguous);
+  const digest = buildDigest(input, seed, ambiguous, comp);
   // OUT OF STOCK IS A STATE (thread/ledger stockState), derived from the same
   // claims every other durable fact comes from - so "we have one now" un-sticks
   // it with no special case, and nothing has to be persisted.
