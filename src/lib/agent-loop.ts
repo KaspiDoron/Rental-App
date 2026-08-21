@@ -16,6 +16,7 @@
 import "server-only";
 import { sbInsert, sbSelect, sbUpdate } from "./runtime-config";
 import { finishBeforeResponse } from "./after";
+import { isMediaPlaceholder as isMediaPlaceholderText } from "./wa/coalesce";
 import { extractOffer, composeBargain, runSafety, currencyForRegion, money } from "./agents";
 import {
   checkOutboundNumbers,
@@ -268,7 +269,7 @@ export async function processVendorReply(opts: {
   // A voice note carries its transcript as the message text so the whole
   // pipeline (extract -> coherence -> director) treats it exactly like an
   // inbound text, marked so the reasoning is transparent in traces.
-  if (!text && transcript?.text) text = `(voice note) ${transcript.text}`.trim();
+  if (isMediaPlaceholderText(text) && transcript?.text) text = `(voice note) ${transcript.text}`.trim();
   // A price-list PHOTO or voice note with no caption is still a real reply.
   // When the media download FAILED (images empty, no text, but a real message
   // id exists), the shop DID answer - going silent here makes the app look
@@ -1968,6 +1969,32 @@ export async function processVendorReply(opts: {
             verdicts,
           });
       });
+    }
+    // "CAN YOU CALL ME?" WAS INVISIBLE (K7). readCallIntent existed, was
+    // zod-validated, and had zero callers - a shop asking to talk by phone
+    // scrolled past inside a foreign-language transcript while the agent kept
+    // texting. Read AFTER the reply has gone (never on the send path), gated
+    // by a SKIP-ONLY hint over the gloss + raw text so quiet turns cost no
+    // model call; the verdict that sets the chip is the model's alone.
+    if (ctx.sender && ctx.vendorId) {
+      const email = ctx.sender;
+      const vendorId = ctx.vendorId;
+      const { callIntentHint } = await import("./semantic/classifiers");
+      if (callIntentHint(`${text}\n${inboundEnglish ?? ""}`)) {
+        await finishBeforeResponse("call-intent", async () => {
+          const { readCallIntent } = await import("./semantic/classifiers");
+          const read = await readCallIntent(inboundEnglish ?? text).catch(() => null);
+          const v = read?.value;
+          if (!v || v.confidence < 0.6) return;
+          if (!v.wantsCall) return; // a phone number for messaging is not a call ask
+          const { persistCallIntent } = await import("./thread/call-intent");
+          await persistCallIntent({
+            email,
+            vendorId,
+            intent: { quote: v.quote, urgency: v.urgency, at: new Date().toISOString() },
+          });
+        });
+      }
     }
     // The turn reached an engine and produced its own outcome (sent, held or
     // deliberately silent). The message is CONSUMED either way - keeping the

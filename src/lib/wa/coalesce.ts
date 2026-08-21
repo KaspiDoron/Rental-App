@@ -29,6 +29,27 @@ export interface CoalesceMsg {
 // and must not crowd out real frames or bypass the crafted photo fallback.
 const PLACEHOLDER = /^\[[^\]]{0,20}\]$|^\(the shop sent\b/i;
 
+/**
+ * IS THIS TEXT SOMETHING THE SHOP SAID, OR SOMETHING WE WROTE FOR THEM?
+ *
+ * Exported because the coalescer is no longer the only consumer, and a SECOND
+ * copy of this judgement is what broke the never-silent photo fallback.
+ *
+ * The incident: ingest stamps `syntheticText = "[image]"` on every captionless
+ * photo so the frame is never nothing. The fallback that fires when a photo's
+ * bytes could not be downloaded was guarded on `!syntheticText` - "the shop
+ * gave us no words to work with" - and that guard became false BY
+ * CONSTRUCTION the moment the placeholder was stamped: a photo we could not
+ * read produced no clarify, no reading, and a panel with nothing in it.
+ *
+ * "The shop said nothing" and "the body is empty" are different questions.
+ * This answers the first one, in one place, for everybody who asks it.
+ */
+export function isMediaPlaceholder(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  return t.length === 0 || PLACEHOLDER.test(t);
+}
+
 export function coalesceUnreadInbound(
   thread: CoalesceMsg[],
   lastOutboundAt: string,
@@ -42,10 +63,9 @@ export function coalesceUnreadInbound(
       (m) => m.direction === "inbound" && (!lastOutboundAt || m.received_at > lastOutboundAt)
     )
     .map((m) => (m.body ?? "").trim())
-    .filter(Boolean)
-    .filter((b) => !PLACEHOLDER.test(b));
+    .filter((b) => !isMediaPlaceholder(b));
   const cur = (currentText ?? "").trim();
-  if (cur && !PLACEHOLDER.test(cur) && !unread.includes(cur)) unread.push(cur);
+  if (!isMediaPlaceholder(cur) && !unread.includes(cur)) unread.push(cur);
   // Cap by frame count keeping the OLDEST frame (it usually names the vehicle -
   // "We have available Fazzio") PLUS the newest frames (they usually carry the
   // price). Dropping the oldest would re-create the exact matchesSpec=false drop

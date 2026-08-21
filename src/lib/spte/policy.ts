@@ -672,7 +672,13 @@ function alreadyPushedAtFloor(ctx: TurnContext): boolean {
 
 // ---- fact helpers (read from the thread-derived digest; all deterministic) ---
 function hasClosed(ctx: TurnContext): boolean {
-  return ctx.thread.digest.facts.some((f) => /closed|goodbye|declined/i.test(f));
+  // STRUCTURED, NEVER PROSE (K5). This used to grep the durable notes for
+  // /closed|goodbye|declined/ - and those notes are free text the model
+  // wrote: "they have NOT declined" read as declined and muted the thread
+  // forever. The verdict is DurableComprehension.closed, written from the
+  // MOVE we took or the model's terminal stance; legacy rows migrate by
+  // exact-equality in digest.comprehensionFromStored.
+  return ctx.thread.digest.comprehension?.closed === true;
 }
 function dealComplete(ctx: TurnContext): boolean {
   return depositKnown(ctx) && fulfillmentKnown(ctx) && typeof ctx.thread.digest.quotedPricePerDay === "number";
@@ -687,16 +693,14 @@ function depositKnown(ctx: TurnContext): boolean {
   // re-latched the subject from the model's own durable notes on every later
   // turn - the ambiguity had no way to reach it. See `unconfirmed`.
   if (unconfirmed(ctx, "deposit")) return false;
-  return (
-    ctx.thread.digest.depositKnown === true ||
-    ctx.thread.digest.facts.some((f) => /deposit/i.test(f))
-  );
+  // digest.depositKnown is already the full projection (model-read durable
+  // comprehension + ledger claims + photo extraction). The prose scan that
+  // used to OR in here read verdicts out of MODEL-WRITTEN notes - the exact
+  // trap hasClosed() documents above.
+  return ctx.thread.digest.depositKnown === true;
 }
 function fulfillmentKnown(ctx: TurnContext): boolean {
-  return (
-    ctx.thread.digest.fulfillmentKnown === true ||
-    ctx.thread.digest.facts.some((f) => /delivery|pickup|on-shop|in-store/i.test(f))
-  );
+  return ctx.thread.digest.fulfillmentKnown === true;
 }
 
 /**

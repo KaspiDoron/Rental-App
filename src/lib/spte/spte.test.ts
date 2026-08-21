@@ -177,7 +177,14 @@ describe("SPTE reflex tier (0-token)", () => {
   it("a lone silent legal move resolves reflexively, no LLM", () => {
     // A declined thread that already sent its goodbye owes only silence.
     const c = ctx({ verified: { found: false, declined: true } });
-    c.thread.digest = { ...emptyDigest(), facts: ["closed - one goodbye sent"] };
+    c.thread.digest = {
+      ...emptyDigest(),
+      facts: ["closed - one goodbye sent"],
+      // The STRUCTURED flag (K5): hasClosed() no longer greps prose. Rows
+      // written before the flag migrate via digestFromStored's exact-match
+      // (covered in durable-memory.test.ts) - a hand-built digest states it.
+      comprehension: { closed: true },
+    };
     c.legalMoves = legalMovesFor(c); // -> ['silent']
     expect(c.legalMoves).toEqual(["silent"]);
     expect(reflexTurn(c)?.move).toBe("silent");

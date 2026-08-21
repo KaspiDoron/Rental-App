@@ -102,6 +102,68 @@ export const ThreadComprehension = z.object({
       confidence: z.number().min(0).max(1),
     })
     .nullish(),
+  /**
+   * A2 - IS THIS SHOP REFUSING TO GO LOWER?
+   *
+   * Firmness RETIRES BARGAINING (spte/policy counts it, two stops the pushing),
+   * and until this field existed it had no model path at all: a regex - FIRM_RX,
+   * in two drifted copies - was the entire answer. It fired on a bare "best
+   * price", which is the most common OPENING sales phrase in every market this
+   * app serves ("best price for you sir, 300 baht"), so the engine retired
+   * bargaining exactly when the shop was warmest; and it missed the phrasings
+   * shops actually refuse with, in any language. That is the direct mechanical
+   * cause of the owner's "we are not bargaining enough".
+   *
+   * `.nullish()` like the field above: an older provider that omits the key
+   * must not fail schema validation and take the stance read down with it.
+   * Absent reads as "no refusal seen", which keeps us bargaining - the safe
+   * side, because a missed refusal costs one more polite push and a false one
+   * costs the whole negotiation.
+   */
+  firmness: z
+    .object({
+      /**
+       * They EXPLICITLY said they will not go below a price they already gave.
+       * Never inferred from tone, from repeating a number, or from a sales
+       * adjective attached to an opening quote.
+       */
+      refusesLower: z.boolean(),
+      /** Their own words for the refusal, verbatim. */
+      quote: z.string().max(200).nullable(),
+      confidence: z.number().min(0).max(1),
+    })
+    .nullish(),
+  /**
+   * A5 - HOW THE VEHICLE CHANGES HANDS, AND WHAT THAT COSTS.
+   *
+   * Five regexes used to answer this (FULFILLMENT_RX / DELIVERY_OFFERED_RX /
+   * HANDOVER_FREE_RX / HANDOVER_AMOUNT_RX in spte/thread-facts, plus the
+   * money-shaped-number test inside the last one). `fulfillmentKnown` went true
+   * on the substring "deliver", which retired the handover probe the instant a
+   * shop said "yes we can deliver" - and the FEE was never asked. The traveller
+   * compared per-day rates, picked a shop, and met the delivery charge at
+   * handover: the one number a price-comparison app exists to surface BEFORE
+   * the choice.
+   *
+   * The MODE and its PRICE are two facts and this schema keeps them two.
+   */
+  handover: z
+    .object({
+      /**
+       * delivery - they offered to bring it to us
+       * pickup   - collection at their shop only
+       * both     - they named both as available
+       * unstated - this message does not say
+       */
+      mode: z.enum(["delivery", "pickup", "both", "unstated"]),
+      /** They said what the handover COSTS - a number, or that it is free. */
+      costStated: z.boolean(),
+      /** The handover fee, when they named one. 0 means they said it is free. */
+      cost: z.number().nonnegative().max(10_000_000).nullable(),
+      currency: z.string().max(8).nullable(),
+      confidence: z.number().min(0).max(1),
+    })
+    .nullish(),
   confidence: z.number().min(0).max(1),
 });
 export type ThreadComprehension = z.infer<typeof ThreadComprehension>;
@@ -118,6 +180,9 @@ export function readComprehension(
       '"stanceReason": string|null, "uncertain": [{"subject": "deposit"|"price"|"availability"' +
       '|"conditions"|"vehicle", "reading": string, "question": string, "confidence": 0..1}], ' +
       '"languageRequest": null | {"prefers": "english"|"local", "quote": string|null, "confidence": 0..1}, ' +
+      '"firmness": null | {"refusesLower": boolean, "quote": string|null, "confidence": 0..1}, ' +
+      '"handover": null | {"mode": "delivery"|"pickup"|"both"|"unstated", "costStated": boolean, ' +
+      '"cost": number|null, "currency": string|null, "confidence": 0..1}, ' +
       '"confidence": 0..1}',
     instructions:
       "You are the traveller's agent reading a rental shop's WhatsApp reply. Answer TWO " +
@@ -147,12 +212,31 @@ export function readComprehension(
       "SIMPLY REPLYING IN ENGLISH IS NOT SUCH A STATEMENT and must return null: shop owners " +
       "everywhere type a few words of English at tourists and it says nothing about what they " +
       "read comfortably. A message that merely happens to be in English, or mixes languages, " +
-      "is null. Quote their exact words when you do set it.",
+      "is null. Quote their exact words when you do set it.\n" +
+      "FOURTH, is this shop REFUSING TO GO LOWER? Set firmness.refusesLower true ONLY for an " +
+      "EXPLICIT statement that they will not go below a price they have already given - 'that " +
+      "is my last price', 'I cannot go lower', 'no discount', 'the price is fixed', 'that is " +
+      "the cheapest I can do'. IT IS NOT A REFUSAL when a shop simply advertises its opening " +
+      "quote: 'best price for you sir, 300 baht', 'special price 300', 'good price my friend' " +
+      "are SALES TALK on a first offer and shops everywhere open with them - reading those as " +
+      "a refusal makes us stop bargaining exactly when the shop is warmest. It is also not a " +
+      "refusal to repeat the same number, to be brief, to be curt, or to say they have no " +
+      "vehicle. If they have not yet given any price at all, there is nothing to refuse to " +
+      "lower: return null. When unsure, return null - we would rather ask once more than " +
+      "abandon a negotiation the shop was still having.\n" +
+      "FIFTH, HOW WOULD THE VEHICLE CHANGE HANDS, and did they price that? Set handover.mode " +
+      "from what THIS message says: delivery if they offered to bring it to us, pickup if " +
+      "collection at their shop is the only option they named, both if they named both, and " +
+      "unstated if the message does not address it - which is the answer most of the time, so " +
+      "use it freely. Set costStated true ONLY when they said what the handover costs: a " +
+      "number, or that it is free / included / no charge (report cost 0 for free). A daily " +
+      "rental rate is NOT a handover cost. Knowing HOW is not knowing HOW MUCH, and we ask " +
+      "about the fee until they have actually named one.",
     text,
     context,
     options: {
       budgetMs: options?.budgetMs ?? 6_000,
-      maxTokens: 600,
+      maxTokens: 800,
       once: options?.once,
       ...(options?.tier === "premium" ? { tier: "premium" as const } : {}),
     },
@@ -239,6 +323,21 @@ export const CallIntent = z.object({
   confidence: z.number().min(0).max(1),
 });
 export type CallIntent = z.infer<typeof CallIntent>;
+
+/**
+ * SKIP-ONLY pre-filter for readCallIntent (K7). Doctrine: a deterministic
+ * check may SAVE a model call, never make the decision - this returning true
+ * asserts nothing; the model still judges whether the shop wants a call.
+ * Runs over the English gloss plus the raw text (the local-language words
+ * only ever ADD recall for turns where the gloss failed).
+ */
+export function callIntentHint(text: string): boolean {
+  const t = text || "";
+  return (
+    /\b(call|calls|calling|called|phone|ring|speak|talk|voice|tel)\b/i.test(t) ||
+    /โทร|gọi\s?điện|telepon|telpon|hubungi|เบอร์/i.test(t)
+  );
+}
 
 export function readCallIntent(text: string, context?: string): Promise<SemanticOutcome<CallIntent>> {
   return semanticParse({

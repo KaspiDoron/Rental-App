@@ -566,6 +566,19 @@ function VendorCardInner({
               </div>
             </div>
           )}
+          {/* THE SHOP ASKED TO TALK BY PHONE (K7). The model read it off the
+              glossed thread; until this chip, "can you call me?" scrolled past
+              inside a foreign-language transcript and the agent kept texting.
+              Informational, never blocking - the traveller decides. */}
+          {offer?.wantsCall && (
+            <div className="mt-2 rounded-xl border-2 border-line bg-card2 p-2 text-[11px] font-bold text-soft">
+              📞 {t("This shop asked to talk by phone")}
+              {offer.wantsCall.urgency === "now" ? ` (${t("right now")})` : ""}
+              {offer.wantsCall.quote && (
+                <span className="block font-medium text-strong">&ldquo;{offer.wantsCall.quote}&rdquo;</span>
+              )}
+            </div>
+          )}
           {riskNote && dismissedRisk !== riskNote && (
             <div className="mt-2 flex items-start gap-1.5 rounded-xl border-2 border-brandred/40 bg-brandred-soft p-2 text-[11px] font-bold text-brandred">
               <Icon name="alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" />

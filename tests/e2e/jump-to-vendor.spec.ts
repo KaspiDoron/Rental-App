@@ -57,6 +57,24 @@ function bigHunt(now: number, count = 20) {
   };
 }
 
+/**
+ * Open the live status panel, surviving the hydration race. The expander is a
+ * React onClick on a ~5000-line page: a click that lands after paint but
+ * before hydration is silently swallowed (the DOM button exists, the handler
+ * does not), and on a slow machine that turned this spec red end-to-end. Click
+ * until the panel's own content proves the handler ran - the ASSERTIONS this
+ * file exists for (the jump lands ON the shop) are untouched.
+ */
+async function openStatusPanel(page: Page): Promise<void> {
+  const expander = page.locator('[data-tour="status"] > button').first();
+  await expect(async () => {
+    await expander.click();
+    await expect(
+      page.locator('[data-tour="status"] button:has-text("Rental Shop")').first()
+    ).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
 /** Wait until the page has stopped scrolling (smooth scroll + measurement). */
 async function scrollSettled(page: Page): Promise<number> {
   return page.evaluate(
@@ -104,7 +122,7 @@ test.describe("a jump to a shop lands ON the shop @allwidths", () => {
 
     // Open the live status panel and use its own "jump to this shop" control -
     // the surface that triggers most jumps in the product.
-    await page.locator('[data-tour="status"] > button').first().click();
+    await openStatusPanel(page);
     const target = "sh15";
     const row = page.locator(`[data-tour="status"] button:has-text("Rental Shop 15")`).first();
     await expect(row).toBeVisible({ timeout: 15_000 });
@@ -123,7 +141,7 @@ test.describe("a jump to a shop lands ON the shop @allwidths", () => {
     await seedLiveHunt(page, bigHunt(Date.now()));
     await page.goto("/");
     await expect(page.locator('[data-tour="status"]')).toBeVisible({ timeout: 20_000 });
-    await page.locator('[data-tour="status"] > button').first().click();
+    await openStatusPanel(page);
     const row = page.locator(`[data-tour="status"] button:has-text("Rental Shop 19")`).first();
     await expect(row).toBeVisible({ timeout: 15_000 });
     await row.click();

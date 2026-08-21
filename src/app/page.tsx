@@ -2000,6 +2000,9 @@ export default function Home() {
                       // the vendor object because VendorCard is memo'd - a
                       // sibling prop would not re-render the card.
                       options: r.options ?? v.offer?.options,
+                      // K7: the shop asked to talk by phone - the model read
+                      // it, the thread stored it, the card wears the chip.
+                      wantsCall: r.wantsCall ?? v.offer?.wantsCall,
                       // Their own question, so the card can say why they want
                       // it. Cleared the moment we have shared something.
                       askedLocationQuote:

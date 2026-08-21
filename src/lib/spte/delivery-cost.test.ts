@@ -23,73 +23,65 @@ const readCode = (p: string) =>
 //
 // The mode and its price are two facts. One flag was answering for both.
 
-const facts = (inbound: string[], outboundKinds: string[] = []) =>
+// K-LANDING: the mode/price facts now arrive as the model's handover verdict
+// (semantic/classifiers ThreadComprehension.handover -> DurableComprehension),
+// projected here. The judgements the old regexes faked - "a time is not a
+// price", "a daily rate in an unrelated message is not a delivery fee" - live
+// in the classifier's FIFTH prompt section, pinned below.
+const facts = (
+  comprehension: import("./types").DurableComprehension | undefined,
+  outboundKinds: string[] = []
+) =>
   deriveThreadFacts({
-    inbound,
     outbound: outboundKinds.map(() => ""),
     outboundKinds,
-    currentInbound: "",
     priorBargainCount: 0,
+    comprehension,
   });
 
 describe("REPRODUCTION: the mode answered for the price", () => {
   it("a bare delivery offer settles the MODE", () => {
-    const f = facts(["Yes we can deliver to your hotel"]);
+    const f = facts({ handoverMode: "delivery" });
     expect(f.fulfillmentKnown).toBe(true);
     expect(f.deliveryOffered).toBe(true);
   });
 
   it("...and does NOT settle what it costs - the whole defect", () => {
-    const f = facts(["Yes we can deliver to your hotel"]);
+    const f = facts({ handoverMode: "delivery" });
     expect(f.fulfillmentCostKnown, "the fee is still unknown").toBe(false);
   });
 
-  it("a number in the handover message settles it", () => {
-    for (const m of [
-      "We deliver to your hotel, 100 baht",
-      "Delivery is ฿150",
-      "We can bring it over for 200 THB",
-    ]) {
-      expect(facts([m]).fulfillmentCostKnown, m).toBe(true);
-    }
-  });
-
-  it("and so does FREE - the friendliest terms must not be asked about forever", () => {
-    for (const m of [
-      "We deliver free to your hotel",
-      "Delivery is included",
-      "We can bring it, no charge",
-    ]) {
-      expect(facts([m]).fulfillmentCostKnown, m).toBe(true);
-    }
-  });
-
-  it("a daily rate in an UNRELATED message is not a delivery fee", () => {
-    // The rate was quoted in its own message; the delivery offer carries no
-    // number. Reading the two together is how a 250/day quote would be filed
-    // as a 250 delivery charge and nobody would ever ask again.
-    const f = facts(["250 per day", "Yes we deliver to your hotel"]);
-    expect(f.fulfillmentCostKnown).toBe(false);
-  });
-
-  it("a time is not a price", () => {
-    // "we deliver at 10am" is the single most likely sentence to be misread as
-    // a priced handover.
-    expect(facts(["We can deliver at 10am"]).fulfillmentCostKnown).toBe(false);
-    expect(facts(["We deliver at 9 o'clock"]).fulfillmentCostKnown).toBe(false);
+  it("a stated cost (a number, or FREE) settles it", () => {
+    const f = facts({ handoverMode: "delivery", handoverCostKnown: true });
+    expect(f.fulfillmentCostKnown).toBe(true);
   });
 
   it("shop collection only is not a delivery offer", () => {
-    // Nothing to price, so no follow-up is due.
-    const f = facts(["You can pick it up at our shop"]);
+    const f = facts({ handoverMode: "pickup" });
     expect(f.fulfillmentKnown).toBe(true);
     expect(f.deliveryOffered).toBe(false);
   });
 
+  it("no model read = nothing settled, whatever the words looked like", () => {
+    const f = facts(undefined);
+    expect(f.fulfillmentKnown).toBe(false);
+    expect(f.fulfillmentCostKnown).toBe(false);
+  });
+
   it("the follow-up is counted from the stamped moves, not our prose", () => {
-    expect(facts(["ok"], ["rfq", "fulfillment-probe"]).handoverAsks).toBe(1);
-    expect(facts(["ok"], ["rfq", "fulfillment-probe", "bargain", "fulfillment-probe"]).handoverAsks).toBe(2);
-    expect(facts(["ok"], ["rfq", "bargain"]).handoverAsks).toBe(0);
+    expect(facts(undefined, ["rfq", "fulfillment-probe"]).handoverAsks).toBe(1);
+    expect(facts(undefined, ["rfq", "fulfillment-probe", "bargain", "fulfillment-probe"]).handoverAsks).toBe(2);
+    expect(facts(undefined, ["rfq", "bargain"]).handoverAsks).toBe(0);
+  });
+
+  it("the CLASSIFIER owns the judgements the regexes faked", () => {
+    const cls = readCode("src/lib/semantic/classifiers.ts");
+    // "we deliver at 10am" must not read as a priced handover, and a daily
+    // rate three messages back is not the delivery fee - the prompt states
+    // both, and costStated/cost are separate schema fields from the mode.
+    expect(cls).toMatch(/A daily [\s\S]{0,20}rental rate is NOT a handover cost/);
+    expect(cls).toMatch(/costStated: z\.boolean\(\)/);
+    expect(cls).toMatch(/mode: z\.enum\(\["delivery", "pickup", "both", "unstated"\]\)/);
   });
 });
 

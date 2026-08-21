@@ -91,7 +91,9 @@ describe("W4.3 - a shop that sends us elsewhere is not a shop to re-ask", () => 
     const legal = legalMovesFor(
       ctx({
         verified: { found: false, deflected: true },
-        digest: digest({ facts: ["closed - one goodbye sent"] }),
+        // The structured flag (K5) - prose notes are evidence, not verdicts;
+        // legacy rows migrate via digestFromStored's exact match.
+        digest: digest({ facts: ["closed - one goodbye sent"], comprehension: { closed: true } }),
       })
     );
     expect(legal).toEqual(["silent"]);

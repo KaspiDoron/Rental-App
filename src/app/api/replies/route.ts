@@ -162,6 +162,9 @@ export async function GET(req: Request) {
       // A substitution the shop offered, waiting on the traveller. While this
       // is set the thread is PAUSED, not closed - see vehicle/substitution.ts.
       alternativeOffer?: import("@/lib/vehicle/substitution").AlternativeOffer | null;
+      // THE SHOP ASKED TO TALK BY PHONE (K7). Model-read post-turn; the card
+      // quotes their own words instead of the request scrolling past unseen.
+      wantsCall?: import("@/lib/types").CallIntentFact | null;
       // THE AGENT IS NOT SURE AND HAS ASKED (W4.4). A thread paused on a
       // confirming question looks identical to an idle one from outside, and
       // "your agent is asking for a price" is simply false while it is waiting
@@ -460,6 +463,8 @@ export async function GET(req: Request) {
       // "No 125 today, but I have a 150 for 220." The card asks; nothing is
       // haggled until the traveller answers.
       alternativeOffer: st?.alternativeOffer ?? null,
+      // "Can you call me?" - the model's durable reading of the shop's ask.
+      wantsCall: st?.wantsCall ?? null,
       currency: r.currency ?? null, // the shop's own money - never defaulted here
       deposit: r.deposit ?? null,
       depositType: r.deposit_type ?? null,

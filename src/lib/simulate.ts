@@ -750,11 +750,22 @@ export async function replaySpteTurns(args: {
     // out-of-stock branch TESTABLE in the gate at all - the replayed context
     // used to carry none of them. Cases whose turns contain no such signals
     // derive today's values (false/empty), so existing cases replay identically.
+    // MEANING COMES FROZEN, LIKE EVERY OTHER MODEL VERDICT (K). thread-facts
+    // no longer reads the shop's words - a case that wants firmness/deposit/
+    // handover facts freezes them on the stub (stub.comprehension), exactly
+    // like stances and extractions. stub.firm keeps accumulating into
+    // firmTurns for the existing cases that pinned it that way.
+    const frozenComp = (stub.comprehension ?? undefined) as
+      | import("./spte/types").DurableComprehension
+      | undefined;
     const facts = deriveThreadFacts({
-      inbound: priorInbound,
       outbound,
       outboundKinds,
-      currentInbound: turn.shopSays,
+      comprehension: frozenComp
+        ? { ...frozenComp, firmTurns: Math.max(frozenComp.firmTurns ?? 0, firmSoFar) }
+        : firmSoFar > 0
+          ? { firmTurns: firmSoFar }
+          : undefined,
     });
     // WHAT THE COMPREHENSION PASS SAID, FROZEN (W4.3/W4.4). Replay never calls
     // a model, so a case that wants to exercise the deflection branch or the
