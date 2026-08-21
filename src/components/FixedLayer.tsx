@@ -37,8 +37,27 @@ import { createPortal } from "react-dom";
  * collapse is ~60px); above it, a software keyboard (the smallest are ~180px).
  */
 const KEYBOARD_MIN_PX = 80;
+/** Hysteresis: once hidden, the bar returns only when the inset is truly gone.
+ *  The old single threshold flapped mid-keyboard: as iOS PANS the visual
+ *  viewport toward the focused field, offsetTop grows and the old formula
+ *  (innerHeight - height - offsetTop) sank below 80 with the keyboard still
+ *  up - so the bar UN-HID, anchored to the layout viewport, and rendered at a
+ *  scroll-dependent mid-screen position. That is the owner's floating tab bar,
+ *  photographed three times. */
+const KEYBOARD_CLEAR_PX = 10;
 /** What the focusin fallback assumes when the engine has no visualViewport. */
 const FALLBACK_KEYBOARD_PX = 260;
+
+// A LOCK/RELEASE TELEPORT NEEDS A REPAINT NUDGE. scroll-lock.ts pins the body
+// (position:fixed, top:-scrollY) and later restores with window.scrollTo -
+// two instantaneous scroll teleports around every sheet, on the documented
+// WebKit stale-composite hazard for pre-promoted fixed layers. The beat
+// listeners cover resize/orientation/pageshow; this hands the locker a way to
+// bump the same beat.
+const nudgeSubs = new Set<() => void>();
+export function nudgeFixedLayers(): void {
+  for (const fn of nudgeSubs) fn();
+}
 
 function isEditable(t: EventTarget | null): boolean {
   return (
@@ -76,6 +95,8 @@ export function FixedLayer({
   const [beat, setBeat] = useState(0);
   /** Height of the software keyboard, measured from the visual viewport. */
   const [kbInset, setKbInset] = useState(0);
+  /** Hidden state carries its own memory - see KEYBOARD_CLEAR_PX. */
+  const [kbUp, setKbUp] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -84,12 +105,18 @@ export function FixedLayer({
 
     const measure = () => {
       if (!vv) return;
-      const kb = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+      // RESIZE DELTA ONLY, SCALE-AWARE. Subtracting offsetTop made the inset
+      // pan-sensitive (see KEYBOARD_CLEAR_PX above); multiplying by scale
+      // keeps pinch-zoom (explicitly enabled, maximumScale 5) from being
+      // misread as a keyboard - at 2x zoom vv.height halves while no keyboard
+      // exists.
+      const kb = Math.max(0, window.innerHeight - vv.height * (vv.scale || 1));
       // Bail out on sub-pixel noise so plain page scrolling (where the inset
       // does not change) never re-renders this portal - re-rendering the
       // backdrop-filtered tab bar per scroll frame was this file's original
       // performance sin.
       setKbInset((prev) => (Math.abs(prev - kb) < 1 ? prev : kb));
+      setKbUp((prev) => (prev ? kb > KEYBOARD_CLEAR_PX : kb > KEYBOARD_MIN_PX));
     };
     const nudge = () => {
       setBeat((b) => (b + 1) % 1_000_000);
@@ -113,20 +140,48 @@ export function FixedLayer({
     vv?.addEventListener("scroll", onVvScroll, opts);
     window.addEventListener("orientationchange", nudge, opts);
     window.addEventListener("pageshow", nudge, opts);
+    nudgeSubs.add(nudge);
+
+    // DEV SENTINEL: name the next invariant violator instead of debugging a
+    // screenshot. A non-visible overflow on the root hands page scrolling to
+    // the body box (fixed children then pin to the DOCUMENT - commit af4bf42),
+    // and a transform/filter on body makes it the containing block. Runtime
+    // injectors (an ads script, an extension) are invisible to source tests.
+    if (process.env.NODE_ENV !== "production") {
+      const html = getComputedStyle(document.documentElement);
+      const body = getComputedStyle(document.body);
+      if (html.overflowX !== "visible" || body.overflowX !== "visible") {
+        console.warn(
+          `[FixedLayer] root overflow-x is ${html.overflowX}/${body.overflowX} - fixed chrome will scroll with the page. Find the injector.`
+        );
+      }
+      if (body.transform !== "none" || body.filter !== "none") {
+        console.warn(
+          `[FixedLayer] body carries transform/filter (${body.transform} / ${body.filter}) - it is now the containing block for every fixed element.`
+        );
+      }
+    }
 
     // Engines without visualViewport cannot measure the keyboard at all - a
     // focused text field is the best available signal that one is up.
     const onFocusIn = (e: FocusEvent) => {
-      if (!vv && isEditable(e.target)) setKbInset(FALLBACK_KEYBOARD_PX);
+      if (!vv && isEditable(e.target)) {
+        setKbInset(FALLBACK_KEYBOARD_PX);
+        setKbUp(true);
+      }
     };
     const onFocusOut = () => {
-      if (!vv) setKbInset(0);
+      if (!vv) {
+        setKbInset(0);
+        setKbUp(false);
+      }
     };
     document.addEventListener("focusin", onFocusIn, opts);
     document.addEventListener("focusout", onFocusOut, opts);
 
     measure();
     return () => {
+      nudgeSubs.delete(nudge);
       vv?.removeEventListener("resize", nudge);
       vv?.removeEventListener("scroll", onVvScroll);
       window.removeEventListener("orientationchange", nudge);
@@ -139,7 +194,7 @@ export function FixedLayer({
 
   if (!mounted) return null;
 
-  const kbHidden = hostIsFixed && kbInset > KEYBOARD_MIN_PX;
+  const kbHidden = hostIsFixed && kbUp;
 
   return createPortal(
     <div

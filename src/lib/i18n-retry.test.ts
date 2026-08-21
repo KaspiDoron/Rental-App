@@ -187,8 +187,12 @@ describe("the way back to the status panel", () => {
     expect(css).toMatch(/@supports not \(background: color-mix/);
   });
 
-  it("it is mounted on the list view only", () => {
+  it("it is mounted on the vertical list view only", () => {
+    // listAxis joined the gate in owner report 6 G2: in swipe mode the pill
+    // painted over the rail cards' action row.
     const page = readCode("src/app/page.tsx");
-    expect(page).toMatch(/vendors\.length > 0 && view === "list" && \(\s*<StatusFab/);
+    expect(page).toMatch(
+      /vendors\.length > 0 && view === "list" && listAxis !== "horizontal" && \(\s*<StatusFab/
+    );
   });
 });
