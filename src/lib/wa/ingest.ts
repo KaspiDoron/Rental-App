@@ -224,6 +224,12 @@ export async function processEvolutionWebhook(
   // delay in parallel, never serially in front of the reply. Declared out here
   // so the post-loop firing block can see it.
   const readReceipts: Array<{ email: string; key: { remoteJid: string; fromMe: boolean; id: string } }> = [];
+  // E1 (owner report 6): "shop replied" pushes, deferred like the receipts.
+  // The push gate + delivery used to run INSIDE the message loop, before the
+  // agent turn - up to 8s of notify-state reads and push-service round trips
+  // paid on the reply's critical path. Each message arms a closure here; they
+  // all fire together after the replies have been composed and parked.
+  const deferredPushes: Array<() => Promise<void>> = [];
   if (!body) return { retryable };
 
   try {
@@ -880,7 +886,7 @@ export async function processEvolutionWebhook(
       // collapse tag, replacing this on the lock screen rather than adding a
       // second buzz.
       if (email) {
-        await finishBeforeResponse("ingest-push", async () => {
+        deferredPushes.push(async () => {
           try {
             const body = syntheticText || "";
             const { extractQuotedPrices } = await import("@/lib/wa/price-extract");
@@ -1317,6 +1323,14 @@ export async function processEvolutionWebhook(
   // 2-7s "just glanced" delay, all in parallel, bounded so the receipts leave
   // the instance before Cloud Run freezes CPU - and never blocking the reply
   // path above, which has already parked its answers by now.
+  // The deferred "shop replied" pushes (E1): fired only now, with every reply
+  // already composed and parked - the buzz arrives a breath later, the answer
+  // to the shop and the app's own update land seconds sooner.
+  if (deferredPushes.length) {
+    await finishBeforeResponse("ingest-push", async () => {
+      await Promise.all(deferredPushes.map((p) => p().catch(() => {})));
+    });
+  }
   if (readReceipts.length) {
     await finishBeforeResponse(
       "read-receipts",

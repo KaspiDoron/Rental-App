@@ -39,11 +39,18 @@ describe("the notification fires when the message LANDS, not when the agent fini
     // and the push stopped mid-flight. The invariant was never "detached", it
     // was "cannot hold the webhook open and cannot throw" - which is exactly
     // what finishBeforeResponse guarantees, while actually completing.
-    const start = body.lastIndexOf('finishBeforeResponse("ingest-push"', body.indexOf("`${shop} replied`"));
+    // E1 (owner report 6) moved the delivery: the message loop ARMS a closure
+    // (deferredPushes.push) and the batch tail runs them all through ONE
+    // bounded finishBeforeResponse("ingest-push") - off the reply's critical
+    // path, still inside the request so Cloud Run cannot freeze it mid-send.
+    const start = body.lastIndexOf("deferredPushes.push(", body.indexOf("`${shop} replied`"));
     expect(start).toBeGreaterThan(0);
     const block = body.slice(start, body.indexOf("markOpen", start));
     expect(block).toMatch(/sendPushToUser\(email/);
     expect(block).toMatch(/catch \{/);
+    const tail = body.indexOf('finishBeforeResponse("ingest-push"');
+    expect(tail, "the deferred pushes must actually be run at the batch tail").toBeGreaterThan(start);
+    expect(body.slice(tail)).toMatch(/deferredPushes\.map\(/);
     // Bounded: the budget is what stops a hung provider from holding Evolution.
     expect(readFileSync(join(process.cwd(), "src/lib/after.ts"), "utf8")).toMatch(
       /AFTER_BUDGET_MS = 8_000/

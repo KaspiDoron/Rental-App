@@ -62,10 +62,16 @@ begin
   get diagnostics usage_rows = row_count;
 
   -- whatsapp_messages: keep priced/read rows forever (leverage + golden cases).
+  --
+  -- L6 (owner report 6): the englishGloss exemption is GONE. Every localized
+  -- outbound carries a gloss, so in the app's core markets (Thai, Vietnamese,
+  -- Indonesian threads) that clause exempted essentially every message the
+  -- agent ever sent - the prune was defeated exactly where the volume is.
+  -- A gloss is a display convenience, not evidence: the rows worth keeping
+  -- are the ones with a media READING or a priced outcome, and they still are.
   delete from public.whatsapp_messages
    where received_at < cutoff
      and (raw ->> 'reading') is null
-     and (raw ->> 'englishGloss') is null
      and coalesce((raw ->> 'ok')::text, '') <> 'priced';
   get diagnostics msgs = row_count;
 

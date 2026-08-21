@@ -22,10 +22,16 @@ import { VendorCard } from "@/components/VendorCard";
 import { StatusFab } from "@/components/StatusFab";
 import { BrandPulse } from "@/components/BrandPulse";
 import { ShopAvatar, clearShopAvatars } from "@/components/ShopAvatar";
-import { BookingSheet } from "@/components/BookingSheet";
+const BookingSheet = dynamic(
+  () => import("@/components/BookingSheet").then((m) => m.BookingSheet),
+  { ssr: false }
+);
 import { AnimatedNumber } from "@/components/SavingsTicker";
 import { TabBar } from "@/components/TabBar";
-import { FeedbackModal } from "@/components/FeedbackModal";
+const FeedbackModal = dynamic(
+  () => import("@/components/FeedbackModal").then((m) => m.FeedbackModal),
+  { ssr: false }
+);
 import { GoogleWordmark } from "@/components/GoogleWordmark";
 import { Modal } from "@/components/Modal";
 import { BrandMark } from "@/components/BrandMark";
@@ -87,6 +93,8 @@ import { WhyThisSheet } from "@/components/activity/WhyThisSheet";
 import { TranscriptSheet } from "@/components/activity/TranscriptSheet";
 // Heavy full-screen surface, opened on demand - out of the route's first
 // parse, like MapView below. No ssr: it renders only after a tap.
+// L8 (owner report 6): every tap-gated overlay below follows the same rule -
+// none of them belongs in the route's first parse. Each loads on first open.
 const ThreadDashboard = dynamic(
   () => import("@/components/ThreadDashboard").then((m) => m.ThreadDashboard),
   { ssr: false }
@@ -101,9 +109,18 @@ import { useWillAssistant } from "@/components/will/WillAssistantProvider";
 import { deriveWillStep } from "@/lib/will-assistant";
 import { CompareSheet } from "@/components/will/CompareSheet";
 import { ReviewsSheet } from "@/components/ReviewsSheet";
-import { UpgradeSheet } from "@/components/UpgradeSheet";
-import { BargainDraftModal } from "@/components/BargainDraftModal";
-import { Onboarding } from "@/components/Onboarding";
+const UpgradeSheet = dynamic(
+  () => import("@/components/UpgradeSheet").then((m) => m.UpgradeSheet),
+  { ssr: false }
+);
+const BargainDraftModal = dynamic(
+  () => import("@/components/BargainDraftModal").then((m) => m.BargainDraftModal),
+  { ssr: false }
+);
+const Onboarding = dynamic(
+  () => import("@/components/Onboarding").then((m) => m.Onboarding),
+  { ssr: false }
+);
 import { AdBanner } from "@/components/AdBanner";
 import { LoadingDots } from "@/components/LoadingDots";
 import { AgentKillSwitch } from "@/components/AgentKillSwitch";
@@ -1161,9 +1178,25 @@ export default function Home() {
           return v || prev;
         });
       }
-      if (Array.isArray(d.items)) setActivityItems(d.items);
-      if (d.waHealth) setWaHealth(d.waHealth);
-      if (d.whyByVendor) setWhyByVendor(d.whyByVendor);
+      // IDENTITY-PRESERVING (L4): these three setters replaced their state
+      // with a brand-new object every tick whether anything changed or not,
+      // and everything memoised or effect-keyed on them woke with it - the
+      // whole 5,000-line Home re-rendered on every quiet poll. Same payload
+      // keeps the same reference; only a real change wakes the tree.
+      if (Array.isArray(d.items)) {
+        const next = d.items as FeedItem[];
+        setActivityItems((prev) =>
+          prev.length === next.length && JSON.stringify(prev) === JSON.stringify(next)
+            ? prev
+            : next
+        );
+      }
+      if (d.waHealth) {
+        setWaHealth((prev) =>
+          prev && JSON.stringify(prev) === JSON.stringify(d.waHealth) ? prev : d.waHealth
+        );
+      }
+      if (d.whyByVendor) setWhyByVendor((prev) => reconcileRecord(prev, d.whyByVendor));
       // RECONCILE, don't replace. This handed every card a brand-new
       // `agentPending` object every tick whether or not that shop's agent had
       // moved, and `memo(VendorCard)` compares by reference - so this one line
@@ -1288,7 +1321,12 @@ export default function Home() {
             byVendor.set(key, r);
           }
         }
-        setQueueItems(deduped);
+        // Identity-preserving (L4): an unchanged queue keeps its reference.
+        setQueueItems((prev) =>
+          prev.length === deduped.length && JSON.stringify(prev) === JSON.stringify(deduped)
+            ? prev
+            : deduped
+        );
       }
       setIntroBudget(d.introBudget ?? null);
       setProgress((d.progress as BatchProgress | undefined) ?? null);

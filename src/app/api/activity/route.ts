@@ -126,6 +126,11 @@ export async function GET(req: Request) {
   // Opportunistic drain: this endpoint is polled while the app is open, so it
   // inherits the queue-poll's job of actually sending due messages.
   try {
+    // ONE DRAIN OWNER PER CYCLE (E2/L2): /api/replies, this route and
+    // /api/wa/status all drained the same user's queue back-to-back. The
+    // claim lets one of them pay per interval; the rest answer fast.
+    const { claimDrainSlot } = await import("@/lib/wa/drain-owner");
+    if (claimDrainSlot(session.email)) {
     const { drainOutbox } = await import("@/lib/wa-guard");
     const { sendFromUser } = await import("@/lib/evolution");
     // Tagged failures: a broken drain must show up in the server logs, not
@@ -164,6 +169,7 @@ export async function GET(req: Request) {
         userEmail: session.email,
       }).catch((e) => console.error("[drain:wakeups]", e instanceof Error ? e.message : e))
     );
+    }
   } catch (e) {
     console.error("[drain:init]", e instanceof Error ? e.message : e);
   }
@@ -378,6 +384,20 @@ export async function GET(req: Request) {
     if (!cur || STATE_RANK[s] > STATE_RANK[cur]) vendorStates[id] = s;
   };
   // We MESSAGED the shop (RFQ delivered).
+  //
+  // NOT ONLY FROM THE 150-ROW FEED READ (L5): on a big hunt the follow-ups
+  // push the oldest RFQs out of that window, so the earliest-contacted shops
+  // silently lost their "messaged" state and the progress bar undercounted.
+  // A dedicated RFQ-only read (tiny rows, one per shop per hunt) covers the
+  // whole batch regardless of how chatty the newest threads are.
+  const rfqRows = await sbSelect<{
+    to_number: string;
+    raw: { vendorId?: string; kind?: string } | null;
+  }>(
+    "whatsapp_messages",
+    `select=to_number,raw&direction=eq.outbound&raw->>sender=eq.${enc}&raw->>kind=eq.rfq&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=400`
+  ).catch(() => []);
+  for (const m of rfqRows) bumpState(m.raw?.vendorId, "messaged");
   for (const m of outbound) if (m.raw?.kind === "rfq") bumpState(m.raw?.vendorId, "messaged");
   // The agent is ACTIVELY working the thread (any engine trace) or the shop
   // has REPLIED - either way it is a live conversation, not a queued message.
@@ -388,7 +408,7 @@ export async function GET(req: Request) {
   // coexist with a reply already sitting in whatsapp_messages.
   const { digitsOnly } = await import("@/lib/phone");
   const vendorByDigits: Record<string, string> = {};
-  for (const m of outbound) {
+  for (const m of [...outbound, ...rfqRows]) {
     const id = m.raw?.vendorId;
     const digits = digitsOnly(m.to_number);
     if (id && digits && !vendorByDigits[digits]) vendorByDigits[digits] = id;
