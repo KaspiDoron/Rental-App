@@ -99,7 +99,12 @@ describe("a failure records why, not just that", () => {
   });
 
   it("callProvider reports which model it used", () => {
-    expect(ai).toMatch(/Promise<\{ text: string; tokens: number; model: string \}>/);
+    // `primaryFailure` rides alongside it: WHICH model answered and WHY the
+    // configured one lost are two separate facts, and the panel needs both to
+    // tell a busy pool (nothing to fix) from a retired id (fix it now).
+    expect(ai).toMatch(
+      /Promise<\{ text: string; tokens: number; model: string; primaryFailure\?: string \}>/
+    );
   });
 
   it("the columns are additive, like every other schema change here", () => {

@@ -153,7 +153,7 @@ describe("testAllProviders contract (source pins)", () => {
       const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
       expect(drowned?.ok).toBe(false);
       expect(drowned?.detail).toMatch(/primary gpt-oss-120b:/);
-      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.1-8B-Instruct:/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct:/);
     } finally {
       delete process.env.SAMBANOVA_TOKEN;
       vi.unstubAllGlobals();
@@ -163,23 +163,27 @@ describe("testAllProviders contract (source pins)", () => {
   it("EXECUTED: a 402 'payment required' primary tries the free fallback model", async () => {
     // The owner's live Cerebras probe (2026-08-21): gpt-oss-120b answered
     // 402 and NO fallback was ever attempted - the one status that means
-    // "use the free model instead" was the one that never tried it. When
-    // the 402 is per-model, the free sibling rescues; when it is
-    // account-level (Cerebras' retired free tier) both attempts are named.
-    process.env.CEREBRAS_TOKEN = "fake-key";
+    // "use the free model instead" was the one that never tried it.
+    //
+    // Re-based off Cerebras deliberately: that row no longer HAS a fallback
+    // (its 402 is account-level, so a second id can never rescue it - see the
+    // single-call test below). HuggingFace is where a per-model 402 genuinely
+    // happens: the router bills credits per model, so the 70B primary can hit
+    // the credit wall while the free gpt-oss rung still answers.
+    process.env.HUGGINGFACE_TOKEN = "fake-key";
     try {
       let accountLevel = false;
       const paywall = () =>
         new Response(
-          JSON.stringify({ message: "Payment required to access this resource. Visit your billing tab." }),
+          JSON.stringify({ error: "You have exceeded your monthly included credits for Inference Providers." }),
           { status: 402 }
         );
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: unknown, init?: { body?: string }) => {
-          if (!String(url).includes("cerebras")) return new Response("{}", { status: 200 });
+          if (!String(url).includes("huggingface")) return new Response("{}", { status: 200 });
           const model = JSON.parse(init?.body ?? "{}").model as string;
-          if (accountLevel || model === "gpt-oss-120b") return paywall();
+          if (accountLevel || model === "meta-llama/Llama-3.3-70B-Instruct") return paywall();
           return new Response(
             JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }),
             { status: 200 }
@@ -188,15 +192,49 @@ describe("testAllProviders contract (source pins)", () => {
       );
       const { testAllProviders } = await import("./ai");
 
-      const rescued = (await testAllProviders()).find((r) => r.name === "cerebras");
+      const rescued = (await testAllProviders()).find((r) => r.name === "huggingface");
       expect(rescued?.ok).toBe(true);
-      expect(rescued?.model).toBe("llama3.1-8b");
+      expect(rescued?.model).toBe("openai/gpt-oss-120b");
 
       accountLevel = true;
-      const dead = (await testAllProviders()).find((r) => r.name === "cerebras");
+      const dead = (await testAllProviders()).find((r) => r.name === "huggingface");
       expect(dead?.ok).toBe(false);
-      expect(dead?.detail).toMatch(/primary gpt-oss-120b:/);
-      expect(dead?.detail).toMatch(/fallback llama3\.1-8b:/);
+      expect(dead?.detail).toMatch(/primary meta-llama\/Llama-3\.3-70B-Instruct:/);
+      expect(dead?.detail).toMatch(/fallback openai\/gpt-oss-120b:/);
+    } finally {
+      delete process.env.HUGGINGFACE_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("EXECUTED: Cerebras' account-level 402 costs ONE call, not two", async () => {
+    // The owner paid for two dead round trips per sweep: the primary 402'd
+    // (account-level - Cerebras retired its open free tier July 2026) and the
+    // rescue then 404'd on llama3.1-8b, an id the collapsed roster no longer
+    // serves. A rescue that CANNOT succeed is pure latency, so the row now
+    // carries no fallback at all and the probe makes exactly one request.
+    process.env.CEREBRAS_TOKEN = "fake-key";
+    try {
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: { body?: string }) => {
+          if (!String(url).includes("cerebras")) return new Response("{}", { status: 200 });
+          calls.push(JSON.parse(init?.body ?? "{}").model as string);
+          return new Response(
+            JSON.stringify({ message: "Payment required to access this resource." }),
+            { status: 402 }
+          );
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+      const dead = (await testAllProviders()).find((r) => r.name === "cerebras");
+
+      expect(dead?.ok).toBe(false);
+      expect(calls, "one attempt only - no unwinnable second round trip").toEqual(["gpt-oss-120b"]);
+      // ...and it reports as the provider's OWN error, never a both-ids report.
+      expect(dead?.detail).toMatch(/cerebras 402/);
+      expect(dead?.detail).not.toMatch(/fallback/);
     } finally {
       delete process.env.CEREBRAS_TOKEN;
       vi.unstubAllGlobals();
@@ -227,7 +265,7 @@ describe("testAllProviders contract (source pins)", () => {
 
       const rescued = (await testAllProviders()).find((r) => r.name === "sambanova");
       expect(rescued?.ok).toBe(true);
-      expect(rescued?.model).toBe("Meta-Llama-3.1-8B-Instruct");
+      expect(rescued?.model).toBe("Meta-Llama-3.3-70B-Instruct");
 
       mode = "both-fail";
       const drowned = (await testAllProviders()).find((r) => r.name === "sambanova");
@@ -235,10 +273,113 @@ describe("testAllProviders contract (source pins)", () => {
       // Both halves carry the provider's name and the honest timeout wording -
       // never the anonymous platform string.
       expect(drowned?.detail).toMatch(/primary gpt-oss-120b: sambanova timed out after \d+ms/);
-      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.1-8B-Instruct: sambanova timed out/);
+      expect(drowned?.detail).toMatch(/fallback Meta-Llama-3\.3-70B-Instruct: sambanova timed out/);
       expect(drowned?.detail).not.toMatch(/This operation was aborted/);
     } finally {
       delete process.env.SAMBANOVA_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("EXECUTED: an HTML error page never reaches the panel as markup", async () => {
+    // THE OWNER'S SCREENSHOT (2026-08-21): the HuggingFace card was 300
+    // characters of `<!DOCTYPE html><html>...` - the Hub's EDGE limiter
+    // answering before the request ever reached the API. The one fact that
+    // mattered (429, i.e. busy, not broken) was buried under markup, and the
+    // classifier had nothing readable to key on.
+    process.env.HUGGINGFACE_TOKEN = "fake-key";
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown) => {
+          if (!String(url).includes("huggingface")) return new Response("{}", { status: 200 });
+          return new Response(
+            "<!DOCTYPE html>\n<html><head><title>Too Many Requests</title></head>" +
+              "<body><h1>429</h1><p>You have exceeded the rate limit.</p></body></html>",
+            { status: 429, headers: { "content-type": "text/html; charset=utf-8" } }
+          );
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+      const hf = (await testAllProviders()).find((r) => r.name === "huggingface");
+
+      expect(hf?.ok).toBe(false);
+      // No markup, on either half of the both-ids report.
+      expect(hf?.detail).not.toMatch(/<!DOCTYPE|<html|<body|<h1/i);
+      // The status survives - which is what the classifier reads.
+      expect(hf?.detail).toMatch(/huggingface 429/);
+      expect(hf?.detail).toMatch(/HTML error page from the provider's edge/);
+      const { providerFailureKind } = await import("./provider-health");
+      expect(providerFailureKind(hf?.detail), "429 is busy, not a broken key").toBe("busy");
+    } finally {
+      delete process.env.HUGGINGFACE_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("EXECUTED: a rescued sweep carries WHY the primary lost, not just that it did", async () => {
+    // Without this the panel had one undifferentiated amber for two opposite
+    // situations - a busy pool (nothing to fix) and a retired id (fix it now).
+    // callProvider knew the reason and threw it away on success.
+    process.env.SAMBANOVA_TOKEN = "fake-key";
+    try {
+      let dead = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: unknown, init?: { body?: string }) => {
+          if (!String(url).includes("sambanova")) return new Response("{}", { status: 200 });
+          const model = JSON.parse(init?.body ?? "{}").model as string;
+          if (model === "gpt-oss-120b")
+            return dead
+              ? new Response(JSON.stringify({ error: { message: "model not found" } }), { status: 404 })
+              : new Response(
+                  JSON.stringify({ error: { message: "gpt-oss-120b is currently experiencing high demand." } }),
+                  { status: 429 }
+                );
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }),
+            { status: 200 }
+          );
+        })
+      );
+      const { testAllProviders } = await import("./ai");
+      const { providerFailureKind } = await import("./provider-health");
+
+      const busy = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(busy?.ok).toBe(true);
+      expect(busy?.model).toBe("Meta-Llama-3.3-70B-Instruct");
+      expect(busy?.primaryDetail).toMatch(/sambanova 429/);
+      expect(providerFailureKind(busy?.primaryDetail), "calm: the chain worked").toBe("busy");
+
+      dead = true;
+      const drifted = (await testAllProviders()).find((r) => r.name === "sambanova");
+      expect(drifted?.ok).toBe(true);
+      expect(providerFailureKind(drifted?.primaryDetail), "fix-me: the id is gone").toBe("model");
+    } finally {
+      delete process.env.SAMBANOVA_TOKEN;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a provider that answers on its primary carries NO primary-failure note", async () => {
+    // The calm/fix-me split is only meaningful if a clean pass stays clean.
+    process.env.GROQ_TOKEN = "fake-key";
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(
+            JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 5 } }),
+            { status: 200 }
+          )
+        )
+      );
+      const { testAllProviders } = await import("./ai");
+      const groq = (await testAllProviders()).find((r) => r.name === "groq");
+      expect(groq?.ok).toBe(true);
+      expect(groq?.primaryDetail).toBeUndefined();
+    } finally {
+      delete process.env.GROQ_TOKEN;
       vi.unstubAllGlobals();
     }
   });
@@ -265,9 +406,34 @@ describe("the admin panel wiring", () => {
     expect(btn, "button must precede the provider list").toBeLessThan(list);
   });
 
-  it("a fallback-rescued primary renders as a fix-me, not a pass", () => {
+  it("a DEAD primary id rescued by its fallback still renders as a fix-me", () => {
+    // The drift this panel exists to catch: a renamed model id doubles every
+    // LLM call forever while the sweep reads green.
     expect(page).toMatch(/t\.model !== t\.configuredModel/);
-    expect(page).toMatch(/the fallback answered/);
+    expect(page).toMatch(/FAILED - the fallback answered/);
+    expect(page).toMatch(/_MODEL/);
+  });
+
+  it("...but a BUSY primary rescued by its fallback reads calm, and stays green", () => {
+    // The owner's live Gemini card: flash-latest was merely rate-limited (per
+    // model, per project) while flash-lite answered, and the panel demanded
+    // they "fix it or paste a working id" for a rolling alias that is not
+    // broken. Nothing to fix is a different sentence from fix this now.
+    expect(page).toMatch(/providerFailureKind\(t\.primaryDetail\)/);
+    expect(page).toMatch(/driftKind === "busy" \|\| driftKind === "paywalled"/);
+    expect(page).toMatch(/Nothing to fix\./);
+    // Green card, not amber: the chain did exactly what it is built to do.
+    expect(page).toMatch(/t\.ok && \(!drifted \|\| driftBenign\)/);
+    // And the primary's own words stay on screen - interpretation NEVER
+    // replaces evidence.
+    expect(page).toMatch(/\{t\.primaryDetail\}/);
+  });
+
+  it("a paid-only provider is muted, never a red fault", () => {
+    // Cerebras retired its open free tier: a 402 on a product that runs on
+    // free tiers is a design decision the panel should state, not an alarm.
+    expect(page).toMatch(/kind === "paywalled"/);
+    expect(page).toMatch(/paid now, skipped by design/);
   });
 
   it("a failed sweep names WHICH layer failed, never one blanket line", () => {

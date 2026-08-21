@@ -122,10 +122,10 @@ const KEYS: {
   { name: "OPENROUTER_TOKEN", label: "OpenRouter Gateway", scope: "ai", editable: true },
   { name: "CEREBRAS_TOKEN", label: "Cerebras Gateway", scope: "ai", editable: true },
   { name: "MISTRAL_TOKEN", label: "Mistral (mistral-large - top tier)", scope: "ai", editable: true },
-  { name: "HUGGINGFACE_TOKEN", label: "Hugging Face (Llama 3.3 70B - free)", scope: "ai", editable: true },
+  { name: "HUGGINGFACE_TOKEN", label: "Hugging Face router (Llama 3.3 70B - free)", scope: "ai", editable: true },
   { name: "DEEPSEEK_TOKEN", label: "DeepSeek (deepseek-v4-pro - top tier)", scope: "ai", editable: true },
   { name: "TOGETHER_TOKEN", label: "Together AI (Llama 3.3 70B - free)", scope: "ai", editable: true },
-  { name: "SAMBANOVA_TOKEN", label: "SambaNova (Llama 3.3 70B - fast, free)", scope: "ai", editable: true },
+  { name: "SAMBANOVA_TOKEN", label: "SambaNova (gpt-oss-120b - fast, free)", scope: "ai", editable: true },
   // ---- PAID providers (owner report 5 #13) - premium brains for the turns
   // that decide money. Last in the default failover chain (a free rung
   // answering means no bill), first on premium-tier calls.
