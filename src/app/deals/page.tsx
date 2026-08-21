@@ -376,30 +376,52 @@ export default function DealsPage() {
       })
       .catch(() => {})
       .finally(() => settle("session"));
-    fetch("/api/deals", { cache: "no-store" })
-      .then((r) => {
-        if (!r.ok) throw new Error(String(r.status));
-        return r.json();
-      })
-      .then((d) => {
-        const s: SessionSummary[] = d.sessions ?? [];
-        setSessions(s);
-        setBookings(d.bookings ?? []);
-        setHuntCount(Number(d.huntCount ?? s.length) || 0);
-        setLoadFailed(false);
-        // The freshest hunt opens expanded - it's what you came to check.
-        if (s[0]) setExpanded({ [s[0].id]: true });
-      })
-      // M1 - A FAILED LOAD IS NOT AN EMPTY ONE.
-      //
-      // This catch was silent, so a 500 or a dropped connection left `sessions`
-      // at [] and the page rendered "No hunts yet - and I'm ready" to a
-      // traveller who had run ten searches. That is the same defect as the
-      // fail-green admin panels, except it is pointed at the user: the app
-      // states as fact something it never checked, and the traveller's
-      // reasonable conclusion is that their trips are gone.
-      .catch(() => setLoadFailed(true))
-      .finally(() => settle("trips"));
+    const loadTrips = (first: boolean) =>
+      fetch("/api/deals", { cache: "no-store" })
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json();
+        })
+        .then((d) => {
+          const s: SessionSummary[] = d.sessions ?? [];
+          setSessions(s);
+          setBookings(d.bookings ?? []);
+          setHuntCount(Number(d.huntCount ?? s.length) || 0);
+          setLoadFailed(false);
+          // The freshest hunt opens expanded - it's what you came to check.
+          // First load only: a refresh must not fight the traveller's own
+          // expand/collapse choices.
+          if (first && s[0]) setExpanded({ [s[0].id]: true });
+        })
+        // M1 - A FAILED LOAD IS NOT AN EMPTY ONE.
+        //
+        // This catch was silent, so a 500 or a dropped connection left
+        // `sessions` at [] and the page rendered "No hunts yet - and I'm
+        // ready" to a traveller who had run ten searches. That is the same
+        // defect as the fail-green admin panels, except it is pointed at the
+        // user: the app states as fact something it never checked, and the
+        // traveller's reasonable conclusion is that their trips are gone.
+        .catch(() => {
+          if (first) setLoadFailed(true); // a failed refresh keeps last-good data
+        })
+        .finally(() => settle("trips"));
+    void loadTrips(true);
+    // A TRIP PAGE THAT LOADED ONCE IS A SNAPSHOT, NOT A STATUS (D7). Offers
+    // land while the phone is in a pocket; coming back to a stale "waiting"
+    // is the same lie as the frozen card. Refetch when the tab regains focus
+    // or visibility, and every 60s while it stays visible - the sessions
+    // themselves say when nothing is live anymore, and the fetch is cheap.
+    const refresh = () => {
+      if (document.visibilityState === "visible") void loadTrips(false);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const tick = setInterval(refresh, 60_000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      clearInterval(tick);
+    };
   }, [settle]);
 
   const vehicleLabel = (v: string | null) =>

@@ -43,7 +43,11 @@ describe("W8 #28: the booking screen shows what the SHOP confirmed", () => {
     expect(sheet).toMatch(/off\?\.vehicleStatus === "confirmed" \|\| off\?\.verified === true/);
     expect(sheet).toMatch(/a\.state === "confirmed"/);
     expect(sheet).toMatch(/a\.state === "refused"/);
-    expect(sheet).toMatch(/off\?\.deposit/);
+    // D5: the deposit line goes through depositSummary so EVERY alternative
+    // the shop stated renders ("Passport or ฿4,000 cash"), never only the
+    // first, and never the raw stored label.
+    expect(sheet).toMatch(/depositSummary\(/);
+    expect(sheet).toMatch(/depositLine/);
   });
 
   it("nothing confirmed says so, and says what to do about it", () => {
@@ -200,8 +204,13 @@ describe("W8 #31: the order status is evidence-driven, not phase-driven", () => 
     expect(page).toMatch(
       /contactingShops \? t\("Agents contacting shops"\) : t\("Getting your shops ready"\)/
     );
-    expect(page).toMatch(/contactingShops\s*\? t\("Order status: contacting shops"\)/);
+    // D7: the ORDER-STATUS spinner claims ongoing work, so it runs only while
+    // delivery is genuinely in flight (queued/sending) - `contactingShops`
+    // stays true for the life of the hunt and animated "contacting" forever.
+    expect(page).toMatch(/const deliveringNow =/);
+    expect(page).toMatch(/deliveringNow\s*\? t\("Order status: contacting shops"\)/);
     expect(page).toMatch(/: t\("Order status: getting your shops ready"\)/);
+    expect(page).not.toMatch(/contactingShops\s*\? t\("Order status: contacting shops"\)/);
   });
 
   it("the new copy is in the translation catalogue", async () => {

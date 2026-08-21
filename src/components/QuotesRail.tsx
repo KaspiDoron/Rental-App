@@ -36,24 +36,28 @@ import { railVendors, quotedVendors, RAIL_MIN } from "@/lib/quotes-rail";
 
 export function QuotesRail({
   vendors,
+  dominantCurrency = null,
   selectedId,
   onPick,
   t,
 }: {
   /** The SAME array the vertical feed renders - already filtered and sorted. */
   vendors: Vendor[];
+  /** The hunt's dominant currency - the same one the BEST PRICE rollup uses,
+   *  so the rail's first slot and the rollup can never name different shops. */
+  dominantCurrency?: string | null;
   selectedId?: string | null;
   /** Drives the vertical feed. The caller already owns this jump. */
   onPick: (id: string) => void;
   t: (s: string) => string;
 }) {
-  const rail = railVendors(vendors);
+  const rail = railVendors(vendors, dominantCurrency);
   if (rail.length < RAIL_MIN) return null;
   // THE HEADER COUNTED THE CAPPED ARRAY. With thirteen quotes in it read
   // "Quotes so far - 12 shops", which is a silently truncated number presented
   // as a total: the same defect as a daily rate captioned as a trip total. The
   // cap is a display bound on the strip, not a fact about the hunt.
-  const quoted = quotedVendors(vendors).length;
+  const quoted = quotedVendors(vendors, dominantCurrency).length;
   const hidden = quoted - rail.length;
 
   return (

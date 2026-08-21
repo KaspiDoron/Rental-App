@@ -98,15 +98,35 @@ export function vehicleStance(offer: PresentableOffer | undefined | null): Vehic
 export function cheapestPresentable<
   T extends { offer?: PresentableOffer; stage?: string },
 >(vendors: T[], dominantCurrency: string | null): T | undefined {
+  return rankPresentable(vendors, dominantCurrency)[0];
+}
+
+/**
+ * ONE RANKING RULE FOR EVERY "BEST" SURFACE (owner report 6, D4).
+ *
+ * The rollup, the quotes rail, Will's answers and the compare list each had a
+ * private idea of which quote leads - and only THIS file knew that a
+ * wrong-vehicle price is not an offer, that an out-of-stock (or walked-away)
+ * shop's price is not takeable today, and that comparing raw numbers across
+ * currencies is dishonest. Rank here, render anywhere: presentable quotes in
+ * the dominant currency, cheapest first. Copies before sorting - callers hand
+ * in the array their feed is rendering.
+ */
+export function rankPresentable<
+  T extends { offer?: PresentableOffer; stage?: string },
+>(vendors: T[], dominantCurrency: string | null): T[] {
   return vendors
     .filter(
       (v) =>
         isPresentableOffer(v.offer) &&
-        v.offer!.currency === dominantCurrency &&
+        v.offer!.pricePerDay > 0 &&
+        (dominantCurrency === null || v.offer!.currency === dominantCurrency) &&
         // A price from a shop with nothing to rent is not a deal the traveller
         // can take today. It stays on the card (with the honest state); it just
         // never wears BEST PRICE.
-        v.stage !== "out-of-stock"
+        v.stage !== "out-of-stock" &&
+        v.stage !== "declined"
     )
-    .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay)[0];
+    .slice()
+    .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay);
 }

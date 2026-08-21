@@ -6,7 +6,7 @@ import { clampSince } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
 import { languageSwitchNotice } from "@/lib/wa/thread-language";
 import { termsComplete } from "@/lib/deal-terms";
-import { pickBoardPrice } from "@/lib/media/reading";
+import { effectivePriceFor } from "@/lib/effective-price";
 
 // A live poll - never statically cached, or new shop offers stop popping in.
 export const dynamic = "force-dynamic";
@@ -310,7 +310,9 @@ export async function GET(req: Request) {
         engineSizeCc: specCc > 0 ? specCc : undefined,
         transmission: specTx === "automatic" || specTx === "manual" ? specTx : undefined,
       });
-      if (opts.length >= 2) optionsByVendor.set(vendorId, opts);
+      // A SINGLE option is still a price (D2): the old `>= 2` gate kept a
+      // shop that named exactly one model with one price on "No price yet".
+      if (opts.length >= 1) optionsByVendor.set(vendorId, opts);
       // Did this shop ASK where the traveller is? Same rows, no extra query.
       // We keep their own wording so the card can say WHY they want it rather
       // than guessing on the traveller's behalf.
@@ -376,53 +378,18 @@ export async function GET(req: Request) {
       // later row.
       // THE EFFECTIVE PRICE - every place the app already knows a price for
       // this shop, consulted in trust order, when the row itself carries none.
-      // "No price yet" was a report on ONE boolean (vendor_replies.found), not
-      // on the shop: the thread's standing price, the photographed board and
-      // the derived option menu were all invisible to the card. Each source is
-      // tagged so the UI can say WHERE the number came from and keep it
-      // honestly unverified until the agent confirms it.
-      const effectivePrice = (() => {
-        if (r.found && r.price_per_day) return null; // the row has the real thing
-        // 1. The thread's own standing price (the engine's durable field).
-        if (typeof st?.pricePerDay === "number" && st.pricePerDay > 0) {
-          return {
-            pricePerDay: st.pricePerDay,
-            currency: r.currency ?? null,
-            source: "thread" as const,
-            vehicle: null as string | null,
-          };
-        }
-        // 2. The photographed board, preferring a row naming the declared cc.
-        //
-        // ONLY THE ROWS THE SHOP WILL ACTUALLY RENT. `available === false` is
-        // the reader's marker for a row the board CROSSED OUT, and this pick
-        // used to run over every row - so the card advertised, as "Read from
-        // their price-menu photo", the cheapest struck-through model on the
-        // board: a price that does not exist, on a bike they no longer have.
-        // The struck rows stay in the reading and stay in the proof panel;
-        // they are simply never the number.
-        const pick = pickBoardPrice(readingPricesByVendor.get(r.vendor_id), specCc, specDays);
-        if (pick) {
-          return {
-            pricePerDay: pick.pricePerDay,
-            currency: pick.currency ?? null,
-            source: "menu-photo" as const,
-            vehicle: pick.vehicle ?? null,
-          };
-        }
-        // 3. The option menu derived from the shop's own text.
-        const opts = optionsByVendor.get(r.vendor_id);
-        if (opts?.length) {
-          const pick = opts.reduce((a, b) => (a.pricePerDay <= b.pricePerDay ? a : b));
-          return {
-            pricePerDay: pick.pricePerDay,
-            currency: pick.currency ?? null,
-            source: "menu" as const,
-            vehicle: pick.label ?? null,
-          };
-        }
-        return null;
-      })();
+      // ONE shared resolver (src/lib/effective-price.ts, D2) so Trips and this
+      // feed can never disagree about what price the app knows for a shop.
+      const effectivePrice = effectivePriceFor({
+        found: Boolean(r.found),
+        rowPrice: r.price_per_day,
+        rowCurrency: r.currency ?? null,
+        threadPrice: st?.pricePerDay ?? null,
+        boardPrices: readingPricesByVendor.get(r.vendor_id) ?? null,
+        options: optionsByVendor.get(r.vendor_id) ?? null,
+        engineSizeCc: specCc,
+        durationDays: specDays,
+      });
       const rowGate = gateFor(r.reply_text, r.price_per_day);
       const conf = st?.vehicleConfirmation?.status;
       const vehicleStatus =
@@ -497,8 +464,13 @@ export async function GET(req: Request) {
       pickupOffered: st?.pickupOffered ?? null,
       pickupConsent: st?.pickupConsent ?? null,
       // Every tier this shop offered, so the card can show the CHOICE instead
-      // of the single price the app picked. Absent for an ordinary quote.
-      options: optionsByVendor.get(r.vendor_id) ?? null,
+      // of the single price the app picked. A CHOICE needs two rows - a
+      // single-option menu feeds effectivePrice below instead (D2), because
+      // "pick the one you want" over one row is not a choice.
+      options:
+        (optionsByVendor.get(r.vendor_id)?.length ?? 0) >= 2
+          ? optionsByVendor.get(r.vendor_id)
+          : null,
       // The shop asked where we are. The card explains why and lets the
       // traveller choose WHICH place to share - it is never sent automatically.
       askedLocationQuote: askedLocationByVendor.get(r.vendor_id) ?? null,

@@ -6,6 +6,7 @@
 // DOM, and there is exactly one place to read it.
 
 import type { Vendor } from "./types";
+import { rankPresentable, isPresentableOffer } from "./offer-presentation";
 
 /**
  * How many quotes the rail will show.
@@ -34,8 +35,8 @@ export const RAIL_MIN = 2;
  * A price of 0 is not a quote. It is a parse failure, and this app has already
  * shipped a card reading "bargained to 0".
  */
-export function railVendors(vendors: Vendor[]): Vendor[] {
-  return quotedVendors(vendors).slice(0, RAIL_MAX);
+export function railVendors(vendors: Vendor[], dominantCurrency?: string | null): Vendor[] {
+  return quotedVendors(vendors, dominantCurrency).slice(0, RAIL_MAX);
 }
 
 /**
@@ -48,9 +49,20 @@ export function railVendors(vendors: Vendor[]): Vendor[] {
  * summed a daily rate and captioned it a trip total. The cap is a display
  * bound, not a fact about the hunt, and the header now says so.
  */
-export function quotedVendors(vendors: Vendor[]): Vendor[] {
-  return vendors
-    .filter((v) => v.offer && v.offer.pricePerDay > 0)
-    .slice()
-    .sort((a, b) => a.offer!.pricePerDay - b.offer!.pricePerDay);
+export function quotedVendors(vendors: Vendor[], dominantCurrency?: string | null): Vendor[] {
+  // ONE BEST-PRICE RULE (D4). The rail used to admit every number: a price
+  // for the WRONG vehicle, a quote from a shop that had run out, and - with
+  // mixed currencies - a raw-number sort that put 200 THB "ahead of" 5 USD.
+  // The presentable set leads (dominant currency, cheapest first, same rule
+  // as the BEST PRICE rollup); presentable quotes in OTHER currencies follow,
+  // visible but never wearing first place against a number they cannot
+  // honestly be compared with.
+  const lead = rankPresentable(vendors, dominantCurrency ?? null);
+  if (!dominantCurrency) return lead;
+  const inLead = new Set(lead);
+  const other = rankPresentable(vendors, null).filter((v) => !inLead.has(v));
+  return [...lead, ...other];
 }
+
+/** Re-export so the rail component can label unpresentable quotes honestly. */
+export { isPresentableOffer };

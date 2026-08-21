@@ -56,6 +56,28 @@ describe("the rail carries quotes, cheapest first", () => {
     expect(railVendors([shop({ price: 0 })])).toHaveLength(0);
   });
 
+  it("D4: a wrong-vehicle price never rides the rail", () => {
+    const wrong = shop({ price: 150 });
+    (wrong.offer as { vehicleStatus?: string }).vehicleStatus = "wrong-vehicle";
+    const rail = railVendors([wrong, shop({ price: 300 })]);
+    expect(rail.map((v) => v.offer!.pricePerDay)).toEqual([300]);
+  });
+
+  it("D4: an out-of-stock shop's price is not a quote you can take today", () => {
+    const out = shop({ price: 120 });
+    (out as { stage?: string }).stage = "out-of-stock";
+    const rail = railVendors([out, shop({ price: 300 })]);
+    expect(rail.map((v) => v.offer!.pricePerDay)).toEqual([300]);
+  });
+
+  it("D4: the dominant currency leads - 200 THB never 'beats' 5 USD", () => {
+    const usd = shop({ price: 5 });
+    (usd.offer as { currency?: string }).currency = "USD";
+    const rail = railVendors([usd, shop({ price: 200 }), shop({ price: 250 })], "THB");
+    // The THB quotes lead in price order; the USD quote is visible but last.
+    expect(rail.map((v) => v.offer!.pricePerDay)).toEqual([200, 250, 5]);
+  });
+
   it("it is bounded, so the strip never needs windowing", () => {
     const many = Array.from({ length: 40 }, (_, i) => shop({ price: 100 + i }));
     expect(railVendors(many)).toHaveLength(RAIL_MAX);
@@ -104,7 +126,7 @@ describe("the cap is a display bound, not a fact about the hunt", () => {
     // It counted `rail.length`, so thirteen quotes read "12 shops" - a silently
     // truncated number presented as a total, which is the same defect as a
     // daily rate captioned as a trip total.
-    expect(rail).toMatch(/const quoted = quotedVendors\(vendors\)\.length/);
+    expect(rail).toMatch(/const quoted = quotedVendors\(vendors, dominantCurrency\)\.length/);
     expect(rail).toMatch(/\{quoted\} \{quoted === 1 \? t\("shop"\) : t\("shops"\)\}/);
     expect(rail).not.toMatch(/\{rail\.length\} \{rail\.length === 1/);
   });

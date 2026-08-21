@@ -19,6 +19,8 @@ import { MessageBubble, type ThreadMsg } from "./MessageBubble";
 import { reconcileMessages, useFollowNewMessages } from "./useTranscriptScroll";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { agentBusyLabel } from "@/lib/client/agent-busy";
+import { depositSummary } from "@/lib/deposit";
+import { moneyLocal } from "@/lib/currency";
 
 type Msg = ThreadMsg;
 interface Delivery {
@@ -73,6 +75,8 @@ export function ThreadDashboard({
   const agentBusy = (agentPending?.count ?? 0) > 0;
   const [mounted, setMounted] = useState(false);
   const [messages, setMessages] = useState<Msg[] | null>(null);
+  // The last poll failed - the transcript on screen is the last-good copy.
+  const [stale, setStale] = useState(false);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [takeover, setTakeover] = useState<boolean | null>(null);
   const [switching, setSwitching] = useState(false);
@@ -117,15 +121,33 @@ export function ThreadDashboard({
         .then((r) => r.json())
         .then((d) => {
           if (!alive || ctl.signal.aborted) return;
-          // Reconciled, so an unchanged transcript keeps its array identity
-          // and the follow-scroll effect does not fire. See useTranscriptScroll.
-          setMessages((prev) => reconcileMessages(prev, Array.isArray(d.messages) ? d.messages : []));
+          // A FAILED POLL IS NOT AN EMPTY THREAD (D8). A well-formed error
+          // payload ({error: ...}) used to reconcile to [] - one rate-limited
+          // poll wiped a transcript the traveller was reading. Non-array
+          // messages keep the last-good list and raise the stale chip; only
+          // a real array is the truth.
+          if (Array.isArray(d.messages)) {
+            // Reconciled, so an unchanged transcript keeps its array identity
+            // and the follow-scroll effect does not fire (useTranscriptScroll).
+            setMessages((prev) => reconcileMessages(prev, d.messages));
+            setStale(false);
+          } else {
+            setMessages((prev) => prev ?? []);
+            setStale(true);
+          }
           setDelivery(d.delivery ?? null);
+          // Takeover rides the same poll now (D8): switching from your own
+          // WhatsApp is reflected here within a tick, not at next mount.
+          if (typeof d.takeover === "boolean") setTakeover(d.takeover);
         })
         // An abort is this component replacing its own request, never a
-        // failure - blanking the transcript for it would be the bug it fixes.
+        // failure - and neither wipes the transcript: the last-good list
+        // stays, marked stale, until a poll succeeds again.
         .catch((e) => {
-          if (alive && (e as { name?: string })?.name !== "AbortError") setMessages([]);
+          if (alive && (e as { name?: string })?.name !== "AbortError") {
+            setMessages((prev) => prev ?? []);
+            setStale(true);
+          }
         });
     };
     load();
@@ -258,11 +280,26 @@ export function ThreadDashboard({
               </span>
             </div>
             <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-bold text-soft">
-              {o.depositAmount != null && (
-                <span className="chip rounded-full bg-card2 px-2 py-0.5">
-                  {t("Deposit")}: {o.depositCurrency ?? cur} {o.depositAmount}
-                </span>
-              )}
+              {/* depositSummary, not the bare amount (D5): every alternative
+                  the shop stated - "Passport or ฿4,000 cash" - never only the
+                  cash figure, and never silence for a document-only deposit. */}
+              {(() => {
+                const d = depositSummary(
+                  {
+                    deposit: o.deposit,
+                    depositType: o.depositType,
+                    depositAmount: o.depositAmount,
+                    depositCurrency: o.depositCurrency,
+                    currency: o.currency,
+                  },
+                  moneyLocal
+                );
+                return d ? (
+                  <span className="chip rounded-full bg-card2 px-2 py-0.5">
+                    {t("Deposit")}: {d}
+                  </span>
+                ) : null;
+              })()}
               {o.deliveryFee != null && (
                 <span className="chip rounded-full bg-card2 px-2 py-0.5">
                   {o.deliveryFee > 0 ? `${t("Delivery")}: ${cur} ${o.deliveryFee}` : t("Free delivery")}
@@ -358,9 +395,23 @@ export function ThreadDashboard({
         {/* FULL transcript (the biggest section) */}
         <div className="space-y-2 rounded-2xl bg-card2 p-3">
           <div className="text-[11px] font-extrabold text-strong">💬 {t("Full conversation")}</div>
+          {/* The last poll failed: what's below is the last-good copy, said
+              out loud instead of wiped (D8). Clears itself on the next
+              successful poll - no action needed from the reader. */}
+          {stale && (
+            <p className="rounded-lg bg-brandyellow-soft px-2 py-1 text-[10px] font-bold text-warn">
+              ⏳ {t("Connection hiccup - showing the conversation as of a moment ago.")}
+            </p>
+          )}
           {messages === null && <LoadingDots label={t("Loading the conversation")} />}
           {messages !== null && messages.length === 0 && (
-            <p className="py-4 text-center text-[12px] text-faint">{t("No messages in this thread yet.")}</p>
+            <p className="py-4 text-center text-[12px] text-faint">
+              {t(
+                stale
+                  ? "Could not load this conversation just now - it retries by itself."
+                  : "No messages in this thread yet."
+              )}
+            </p>
           )}
           {messages?.map((m) => (
             <MessageBubble key={m.id} m={m} />

@@ -27,7 +27,10 @@ describe("the trips read can fail", () => {
   });
 
   it("the catch records the failure instead of swallowing it", () => {
-    expect(deals).toMatch(/\.catch\(\(\) => setLoadFailed\(true\)\)/);
+    // D7 refined the rule: only the FIRST load's failure raises the error
+    // card - a failed background refresh keeps the last-good data on screen
+    // instead of replacing real trips with an error state.
+    expect(deals).toMatch(/if \(first\) setLoadFailed\(true\)/);
   });
 
   it("a later success clears the flag", () => {
