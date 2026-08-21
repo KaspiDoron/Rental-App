@@ -534,6 +534,7 @@ export function optionsFromThread(
       vehicleClass: opts.vehicleClass,
       durationDays: opts.durationDays,
       localCurrency: opts.localCurrency,
+      engineSizeCc: opts.engineSizeCc,
     });
     acc = mergeOptions(
       acc,

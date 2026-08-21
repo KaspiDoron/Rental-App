@@ -29,7 +29,13 @@ import { noteInboundDropped } from "@/lib/wa/webhook-trace";
 import { isVendorThread } from "@/lib/drill";
 import { digitsOnly } from "@/lib/phone";
 import { waDigits, numberFilter, waIdKind, lidKey } from "@/lib/wa/phone-key";
-import { waMessageText, waUnwrap, waMediaKind } from "@/lib/wa/message-text";
+import {
+  waMessageText,
+  waUnwrap,
+  waMediaKind,
+  waProductCard,
+  waQuotedText,
+} from "@/lib/wa/message-text";
 import { resolveChatIdentity } from "@/lib/wa/lid-alias";
 import { claimInboundStore } from "@/lib/wa/inbound-claim";
 import { kickDispatcher } from "@/lib/wa/kick";
@@ -692,6 +698,20 @@ export async function processEvolutionWebhook(
         syntheticText = `(the shop shared a contact${contact.name ? `: ${contact.name}` : ""}${contact.digits ? ` +${contact.digits}` : ""})`;
       }
 
+      // COMMERCE + QUOTE CONTEXT (owner report 6). A catalog product card is a
+      // fully structured price statement - waMessageText already transcribes it
+      // into `text` above; the structured block is stamped into raw below so
+      // the UI can render a real card. A reply that QUOTES an earlier message
+      // ("^ This one is 125 cc" quoting the Fazzio card) gets its referent
+      // appended: the model needs to know what "this one" points at. The
+      // deterministic price rails deliberately SKIP "(quoting: ...)" segments -
+      // quoting a number is not stating it.
+      const productCard = waProductCard(data);
+      const quotedText = waQuotedText(data);
+      if (quotedText && syntheticText) {
+        syntheticText = `${syntheticText}\n(quoting: ${quotedText})`;
+      }
+
       // IDEMPOTENT STORE. Evolution redelivers (and the recovery sync pulls the
       // same message), and this insert used to be unconditional - so ONE photo
       // became two "[photo]" rows a minute apart in the transcript. Claim the
@@ -720,7 +740,13 @@ export async function processEvolutionWebhook(
               ? "[video]"
               : doc
               ? `[document: ${doc.fileName ?? "file"}]`
-              : ""),
+              : // A frame we recognize but cannot read still stores its KIND -
+                // an empty body here was the blank-bubble bug: the placeholder
+                // used to be computed only AFTER this insert.
+                (() => {
+                  const kind = waMediaKind(data);
+                  return kind ? `[${kind}]` : "";
+                })()),
           type: hasImage
             ? "image"
             : hasAudio
@@ -770,6 +796,14 @@ export async function processEvolutionWebhook(
             ...(contact && (contact.name || contact.digits)
               ? { contact: { name: contact.name ?? null, digits: contact.digits ?? null } }
               : {}),
+            // The decoded catalog card (title/price/currency), so the UI can
+            // render a real product card and the engine's later turns can read
+            // the exact tier - historical cards were unrecoverable because
+            // nothing of the frame survived this whitelist.
+            ...(productCard ? { product: productCard } : {}),
+            // What this message replied to, for the transcript's quote block
+            // and the model's referent.
+            ...(quotedText ? { quoted: { text: quotedText } } : {}),
           },
         },
       ]);
@@ -987,7 +1021,13 @@ export async function processEvolutionWebhook(
       }
 
       if (!syntheticText && !hasImage && !hasAudio && !docIsImage) {
-        void noteInboundDropped(email, from, "empty-media", { via: "webhook" });
+        // Name WHAT was dropped: the frame's top-level keys are the difference
+        // between "a catalog subtype we must support" and genuine noise. The
+        // old bare trace is why catalog blindness survived three field reports.
+        void noteInboundDropped(email, from, "empty-media", {
+          via: "webhook",
+          frame: Object.keys(unwrap(data)).slice(0, 5),
+        });
         continue;
       }
 

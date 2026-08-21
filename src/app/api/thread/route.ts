@@ -89,6 +89,8 @@ export async function GET(req: Request) {
           location?: { lat: number; lng: number; name?: string | null };
           reading?: import("@/lib/media/reading").MediaReading;
           contact?: { name?: string | null; digits?: string | null };
+          product?: import("@/lib/wa/message-text").WaProductCard;
+          quoted?: { text?: string | null };
         } | null;
       }>(
         "whatsapp_messages",
@@ -145,6 +147,10 @@ export async function GET(req: Request) {
             : undefined,
         location: m.raw?.location,
         contact: m.raw?.contact,
+        // A catalog card renders as the card it is - title and price - never
+        // as an empty bubble; a quoted reply shows what it replied to.
+        product: m.raw?.product,
+        quoted: m.raw?.quoted?.text ?? undefined,
         // WHAT THE AGENTS READ IN IT. Stamped by the reply loop onto the very
         // message the media arrived on (lib/media/reading), so the transcript
         // can prove the understanding instead of asserting it.

@@ -719,6 +719,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+      engineSizeCc: rfq.engineSizeCc,
     });
     if (det && det.classMatch !== false) {
       usablePrice = det.pricePerDay;
@@ -749,6 +750,7 @@ export async function processVendorReply(opts: {
         vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
         durationDays: rfq.durationDays,
         localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+        engineSizeCc: rfq.engineSizeCc,
       });
       const dur = rfq.durationDays;
       const close = (a: number, b: number) => b > 0 && Math.abs(a - b) / b <= 0.1;
@@ -865,6 +867,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+      engineSizeCc: rfq.engineSizeCc,
     });
     const candidates = quoted.allOffers.map((h) => ({
       pricePerDay: h.pricePerDay,
@@ -1042,6 +1045,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: cur,
+      engineSizeCc: rfq.engineSizeCc,
     });
     const derived = optionsFromHits(quoted.allOffers, {
       depositNote: extraction.deposit || undefined,
@@ -1103,6 +1107,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: cur,
+      engineSizeCc: rfq.engineSizeCc,
     }).allOffers.map((h) => h.pricePerDay);
     const verdict = sanePrice(usablePrice, others, floorSameCur, {
       durationDays: rfq.durationDays,

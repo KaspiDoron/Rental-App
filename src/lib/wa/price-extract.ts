@@ -22,7 +22,12 @@
 // as a backstop that rescues a price the LLM missed.
 
 import { parseRateLadder, tierForDays } from "./rate-ladder";
-import { scanRates, CUR_SYM as RATE_CUR_SYM, CUR_WORDS as RATE_CUR_WORDS } from "./rate-expr";
+import {
+  scanRates,
+  CUR_SYM as RATE_CUR_SYM,
+  CUR_WORDS as RATE_CUR_WORDS,
+  CUR_TAIL_GENERIC,
+} from "./rate-expr";
 
 export type VehicleClassHint = "car" | "motorbike" | "scooter" | undefined;
 
@@ -87,7 +92,12 @@ const CUR_WORDS = RATE_CUR_WORDS;
 //   CUR_TRAIL - currency AFTER the number ("350 PHP"): what precedes is already
 //               a digit or space, so only the trailing guard is needed.
 const CUR_LEAD = `${CUR_SYM}|\\b(?:${CUR_WORDS})(?![a-z])`;
-const CUR_TRAIL = `${CUR_SYM}|(?:${CUR_WORDS})(?![a-z])`;
+// The STRUCTURAL tail joins the trail position: "1200b. for 6 days" was the
+// documented field lesson in rate-expr, yet only scanRates ever learned it -
+// the six patterns here kept the closed word list, so the exact same shorthand
+// killed PRICE_TOTAL. The reserved-word guard inside CUR_TAIL_GENERIC keeps
+// "for"/"in"/"or" and friends from being eaten as currency.
+const CUR_TRAIL = `${CUR_SYM}|(?:${CUR_WORDS})(?![a-z])|${CUR_TAIL_GENERIC}`;
 
 // Codes that are also ordinary English words. They may still let a price PATTERN
 // match, but they must never NAME the currency - "I will try 300/day" is not a
@@ -158,11 +168,21 @@ const URL_RX = /\b(?:https?:\/\/|www\.)\S+/gi;
 const DURATION_BEFORE = /\b(?:rentals?\s+of|minimum|min\.?|at\s+least|more\s+than|over|from)\s*$/i;
 const DURATION_AFTER = /^\s*(?:or\s+(?:more|longer|above|up)|\+|and\s+(?:up|above|over)|plus)\b/i;
 
+// A LEADING "N/Days" (or "N Days:") is a HEADER naming which duration the row
+// prices - "4/Days 110cc 220฿ 125cc 270฿" - never a 4-currency rate. The RATE
+// scanner happens to match it (amount 4, separator '/', unit Days); until this
+// guard the phantom stayed latent only because the traveller's own duration
+// equalled the header's. On any mismatch it became a 4-baht/day "offer" AND
+// poisoned the explicit-daily contradiction check.
+const DURATION_HEADER = /^\s*\d{1,2}\s*(?:\/\s*)?days?\b/i;
+
 /**
  * Is the amount at `index` part of a duration CONDITION rather than a price?
  * Pure so the judgement is unit-tested instead of inferred from a transcript.
  */
 export function isDurationConditionAt(line: string, index: number, matched: string): boolean {
+  const header = line.match(DURATION_HEADER);
+  if (header && index < header[0].length) return true;
   const before = line.slice(Math.max(0, index - 24), index);
   if (DURATION_BEFORE.test(before)) return true;
   const after = line.slice(index + matched.length, index + matched.length + 24);
@@ -346,6 +366,104 @@ function amountIndex(line: string, m: RegExpMatchArray, group: number): number {
   return inner >= 0 ? at + inner : at;
 }
 
+// ---------------------------------------------------------------------------
+// CC-KEYED PRICE LISTS.
+//
+// THE FIELD CASE (owner report 6, Buddy Motorbike, Krabi): the shop's whole
+// negotiation was three text boards -
+//
+//     110cc 250฿ 125cc 300฿ 155cc 400฿ 160cc 500฿
+//     4/Days 110cc 220฿ 125cc 270฿ 155cc 350฿ 160cc 450฿
+//     4/Days 110cc 200฿ 125cc 250฿ 155cc 350฿ 160cc 450฿   (a SELF-DROP)
+//
+// - and every reader returned nothing: scanRates requires a day/week/month
+// unit per expression, the rate-ladder wants a day range per ROW, and
+// BARE_PRICE wants the line to be one lone amount. So the shop cut its 125cc
+// price from 300 to 270 to 250 and the app never saw a single offer.
+//
+// The shape is its own grammar: pairs of <displacement>cc <amount>, keyed by
+// ENGINE rather than by duration, with an optional leading "<N>/Days" header
+// naming which stay the column prices (amounts are the shop's PER-DAY rates
+// for that stay - 4x270 for a Click 125 matches the market's quoted totals;
+// reading them as 4-day totals would price a scooter at 67/day, absurd).
+const CC_PAIR = new RegExp(
+  `\\b(\\d{2,4})\\s*cc\\b[\\s:=-]*(?:${CUR_LEAD})?\\s*${NUM}\\s*(?:${CUR_TRAIL})?`,
+  "gi"
+);
+const CC_LIST_HEADER = /^\s*(\d{1,2})\s*(?:\/\s*)?days?\b[:\s-]*/i;
+
+/**
+ * offer-options.ccMatches is the canonical badge-rounding rule; this local
+ * twin exists only because importing it here would make price-extract and
+ * offer-options mutually dependent. A test pins the two in lockstep.
+ */
+const ccClose = (want: number, got: number): boolean =>
+  Math.abs(want - got) <= Math.max(5, want * 0.06);
+
+/**
+ * Every row of a cc-keyed list in `text`, as RentalPriceHits whose `line` is
+ * the pair itself ("125cc 270฿") - so ccIn()/matchesSpec() resolve per ROW and
+ * the existing option scoping picks the requested displacement. Returns [] for
+ * anything that is not a genuine list (a single pair inside a sentence stays
+ * with the general per-line reader).
+ */
+export function parseCcTierList(text: string, localCurrency?: string): RentalPriceHit[] {
+  const lines = (text || "")
+    .replace(URL_RX, " ")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const hits: RentalPriceHit[] = [];
+  let carriedBasis: number | undefined;
+  let sawCardRow = false;
+  for (const raw of lines) {
+    const line = expandK(raw);
+    // A "[product card]" line is ingest's structural transcription of a
+    // WhatsApp catalog card - provably a priced row, never prose, so a single
+    // pair on it is accepted where a lone pair in a sentence would not be.
+    const isCard = /^\[product card\]/i.test(line);
+    const header = line.match(CC_LIST_HEADER);
+    const rest = header ? line.slice(header[0].length) : line;
+    const headerDays = header ? parseInt(header[1], 10) : undefined;
+    if (header && !rest.trim()) {
+      // A bare "4/Days" line governs the rows on the lines below it.
+      carriedBasis = headerDays;
+      continue;
+    }
+    const rows: { cc: number; amount: number; pair: string }[] = [];
+    for (const m of rest.matchAll(CC_PAIR)) {
+      const cc = parseInt(m[1], 10);
+      const amount = parseFloat(String(m[2]).replace(/[,\s]/g, ""));
+      // 50..1300cc is an engine; anything else is a price or a year. Amounts
+      // under 10 are helmet counts and typos, not daily rates in any currency
+      // a shop writes this way.
+      if (!(cc >= 50 && cc <= 1300)) continue;
+      if (!(amount >= 10) || amount === cc) continue;
+      rows.push({ cc, amount: Math.round(amount), pair: m[0].trim() });
+    }
+    if (rows.length === 0) continue;
+    // A LIST is >=2 pairs on one line, a line that is nothing but its pair, or
+    // a product-card transcription (whose leftover is the model name).
+    const leftover = rows
+      .reduce((s, r) => s.replace(r.pair, ""), rest)
+      .replace(/[\s,;|·•/-]+/g, "");
+    if (rows.length < 2 && leftover.length > 6 && !isCard) continue;
+    if (isCard) sawCardRow = true;
+    const basis = headerDays ?? carriedBasis;
+    const cur = currencyIn(line) ?? localCurrency;
+    for (const r of rows) {
+      hits.push({
+        pricePerDay: r.amount,
+        currency: cur,
+        line: r.pair,
+        listPrice: false,
+        ...(basis ? { minDays: basis, tierLabel: `${basis} days` } : {}),
+      });
+    }
+  }
+  return hits.length >= 2 || (sawCardRow && hits.length > 0) ? hits : [];
+}
+
 export interface QuotedPrices {
   /** What the shop is offering right now (null when it quoted nothing new). */
   offer: RentalPriceHit | null;
@@ -369,7 +487,12 @@ export interface QuotedPrices {
  */
 export function extractRentalDailyPrice(
   text: string,
-  opts: { vehicleClass?: VehicleClassHint; durationDays?: number; localCurrency?: string } = {}
+  opts: {
+    vehicleClass?: VehicleClassHint;
+    durationDays?: number;
+    localCurrency?: string;
+    engineSizeCc?: number;
+  } = {}
 ): RentalPriceHit | null {
   return extractQuotedPrices(text, opts).offer;
 }
@@ -382,10 +505,20 @@ export function extractRentalDailyPrice(
  */
 export function extractQuotedPrices(
   text: string,
-  opts: { vehicleClass?: VehicleClassHint; durationDays?: number; localCurrency?: string } = {}
+  opts: {
+    vehicleClass?: VehicleClassHint;
+    durationDays?: number;
+    localCurrency?: string;
+    /** The displacement the traveller declared - picks the row of a cc list. */
+    engineSizeCc?: number;
+  } = {}
 ): QuotedPrices {
   const none: QuotedPrices = { offer: null, listPrice: null, allOffers: [] };
   if (!text || !text.trim()) return none;
+  // QUOTING A NUMBER IS NOT STATING IT. Ingest appends "(quoting: ...)" so the
+  // model sees a reply's referent; the deterministic rails must skip it - a
+  // shop quoting OUR message would otherwise turn our numbers into its offer.
+  text = text.replace(/\n?\(quoting: [\s\S]{0,320}?\)(?=\s*(?:\n|$))/g, " ");
   const wantClass = opts.vehicleClass;
   const days = opts.durationDays && opts.durationDays > 0 ? opts.durationDays : 1;
   const lines = text
@@ -429,6 +562,30 @@ export function extractQuotedPrices(
     };
   }
 
+  // A CC-KEYED LIST is the other board shape (see parseCcTierList). The offer
+  // is the row whose displacement matches the request, at the most specific
+  // duration tier that COVERS this stay - never the cheapest row on the board.
+  const ccList = parseCcTierList(text, opts.localCurrency);
+  if (ccList.length > 0) {
+    const covering = ccList.filter((h) => !h.minDays || days >= h.minDays);
+    const want = opts.engineSizeCc;
+    const mine = want
+      ? // The pair's own text starts with its displacement ("125cc 270฿").
+        covering.filter((h) => {
+          const cc = parseInt(h.line, 10);
+          return Number.isFinite(cc) && ccClose(want, cc);
+        })
+      : [];
+    const offer = mine.length
+      ? mine.reduce((a, b) => ((b.minDays ?? 0) > (a.minDays ?? 0) ? b : a))
+      : null;
+    return {
+      offer,
+      listPrice: null,
+      allOffers: ccList.slice().sort((a, b) => a.pricePerDay - b.pricePerDay),
+    };
+  }
+
   // Every EXPLICITLY per-day-marked amount in the whole message, before the
   // line loop. Division (a total split over the days) is a weaker reading than
   // a rate the shop marked "per day" - when the two contradict, the divided
@@ -451,6 +608,18 @@ export function extractQuotedPrices(
     if (SERVICE_LINE.test(rawLine)) continue; // transfer / tour / shuttle - skip
     const line = expandK(rawLine);
     const cls = lineClass(line);
+    // A line that names a DIFFERENT displacement than requested is off-spec
+    // even when the class word matches: "150 baht per day, but it's a Scoopy
+    // 110cc" is a scooter, and it is still not the 125cc the traveller asked
+    // for - reading it as on-spec is how a smaller bike's price wore the card.
+    const lineCcM = line.match(/\b(\d{2,4})\s*cc\b/i);
+    const lineCc = lineCcM ? parseInt(lineCcM[1], 10) : undefined;
+    const ccMismatch =
+      opts.engineSizeCc && lineCc && lineCc >= 50 && lineCc <= 1300
+        ? !ccClose(opts.engineSizeCc, lineCc)
+        : false;
+    const classMatchOf = (): boolean | undefined =>
+      ccMismatch ? false : cls ? cls === wantClass : undefined;
     // A line naming a DIFFERENT class than requested (e.g. a car line when a
     // scooter was asked) is a candidate only if nothing better is found.
     // EVERY per-day amount on the line, not just the first: shops routinely put
@@ -473,7 +642,7 @@ export function extractQuotedPrices(
         pricePerDay: amt,
         currency: currencyIn(line) ?? opts.localCurrency,
         line: rawLine,
-        classMatch: cls ? cls === wantClass : undefined,
+        classMatch: classMatchOf(),
         listPrice: isListPriceAt(line, at),
         index: at,
       });
@@ -484,7 +653,7 @@ export function extractQuotedPrices(
           pricePerDay: alt.amount,
           currency: currencyIn(line) ?? opts.localCurrency,
           line: rawLine,
-          classMatch: cls ? cls === wantClass : undefined,
+          classMatch: classMatchOf(),
           listPrice: isListPriceAt(line, alt.index),
           index: alt.index,
         });
@@ -698,11 +867,17 @@ export function extractQuotedPrices(
 
 /** One entry per distinct price - the same amount restated is not a second tier. */
 function dedupeByPrice(hits: RentalPriceHit[]): RentalPriceHit[] {
+  // An ON-SPEC hit outranks everything; a bare number outranks a hit that
+  // names the WRONG vehicle. The old rule ("defined beats undefined") let a
+  // same-priced off-spec row swallow the on-spec one: Cee Moto's 110cc surf
+  // bike at P450 masked the 125cc Click at P450 the traveller actually asked
+  // for, once displacement-aware matching marked the surf row false.
+  const rank = (h: RentalPriceHit): number =>
+    h.classMatch === true ? 2 : h.classMatch === undefined ? 1 : 0;
   const seen = new Map<number, RentalPriceHit>();
   for (const h of hits) {
     const prev = seen.get(h.pricePerDay);
-    // Prefer the richer hit: one that names a class beats a bare number.
-    if (!prev || (prev.classMatch === undefined && h.classMatch !== undefined)) {
+    if (!prev || rank(h) > rank(prev)) {
       seen.set(h.pricePerDay, h);
     }
   }
