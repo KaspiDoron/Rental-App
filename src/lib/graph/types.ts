@@ -155,6 +155,14 @@ export interface GraphSpec {
 export type FulfillmentKind = "pickup" | "delivery" | "on-shop";
 
 export interface ThreadFields {
+  /** When pricePerDay was DIVIDED out of a package quote, the span it covered
+   *  (owner report 6 C3) - the provenance the sessionTable merge carries into
+   *  rival leverage and the session floor. */
+  priceBasisDays?: number;
+  /** The vehicle this thread negotiates (owner report 6 C4): thread keys have
+   *  no vehicle dimension, so cross-vehicle rival leakage is filtered on this
+   *  declared key. */
+  vehicleKey?: string;
   pricePerDay?: number;
   currency?: string;
   priceVerified?: boolean;
@@ -385,6 +393,11 @@ export interface GraphTurnInput {
   rfq: StructuredRFQ;
   extraction: ExtractedOffer | null;
   usablePrice?: number;
+  /** When usablePrice was DIVIDED out of a package quote, the span it covered
+   *  (owner report 6 C3): every surface that persists or cites the number
+   *  needs the provenance, or a 3-day package's 167/day re-enters siblings as
+   *  a quoted daily rate and depresses the session floor. */
+  priceBasisDays?: number;
   currency: string;
   floorPrice?: number;
   floorTypical?: number;

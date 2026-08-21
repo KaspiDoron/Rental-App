@@ -459,5 +459,16 @@ export interface ModelRoute {
    */
   error?: string;
   model?: string;
-  reason: "reflex" | "default" | "multimodal" | "high-stakes" | "quota-overflow" | "replay";
+  reason:
+    | "reflex"
+    | "default"
+    | "multimodal"
+    | "high-stakes"
+    | "quota-overflow"
+    | "replay"
+    // A post-rail rejected the model's draft and the deterministic fallback
+    // went out instead - suffixed with the rule that fired. This used to be
+    // recorded as "quota-overflow", so Ops could not tell an outage from a
+    // misbehaving model.
+    | `rail-rejected:${string}`;
 }

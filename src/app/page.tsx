@@ -1815,6 +1815,7 @@ export default function Home() {
           t: String(Date.now()),
         });
         if (rfq?.engineSizeCc) spec.set("cc", String(rfq.engineSizeCc));
+        if (rfq?.durationDays) spec.set("days", String(rfq.durationDays));
         if (rfq?.vehicleClass) spec.set("vclass", rfq.vehicleClass);
         if (rfq?.transmission && rfq.transmission !== "any") spec.set("tx", rfq.transmission);
         const res = await fetch(`/api/replies?${spec.toString()}`, {
@@ -4834,28 +4835,39 @@ export default function Home() {
           Both now use the same layering token, so neither can silently eat the
           other's taps again. */}
       {session && !willOpen && willStageNow && dismissedStages.has(willStageNow) && (
-        <button
-          onClick={() => setWillOpen(true)}
-          aria-label={t("Ask Will")}
-          // The other half of the onboarding "Meet Will" anchor: when the
-          // guide banner is dismissed for this stage, the summon chip is what
-          // "Will on the edge of your screen" IS. The two mounts are mutually
-          // exclusive, so the attribute is never duplicated.
-          data-tour="will"
-          className="layer-chrome fixed right-3 flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
+        // PORTALLED (owner report 6 G2): this chip was an inline `fixed`
+        // child of <main>, contradicting FixedLayer's own doctrine - one
+        // transform on any ancestor away from floating mid-card, and blind to
+        // the keyboard (it hovered over the panned page while typing). The
+        // slot also stands down in swipe mode, where the z-50 band painted
+        // straight over the rail cards' Bargain row.
+        <FixedLayer
+          hostIsFixed
+          className="layer-chrome fixed right-3"
           style={{
             // SLOTS from the shared bottom-right stack (globals.css, beside
             // the z ladder): slot 2 clears the status FAB in slot 1; slot 0
             // hugs the tab bar when no FAB can mount.
             bottom:
-              vendors.length > 0 && view === "list"
+              vendors.length > 0 && view === "list" && listAxis !== "horizontal"
                 ? "var(--stack-bottom-2)"
                 : "var(--stack-bottom-0)",
           }}
         >
-          <WillAvatar size={22} wave={false} />
-          {t("Ask Will")}
-        </button>
+          <button
+            onClick={() => setWillOpen(true)}
+            aria-label={t("Ask Will")}
+            // The other half of the onboarding "Meet Will" anchor: when the
+            // guide banner is dismissed for this stage, the summon chip is what
+            // "Will on the edge of your screen" IS. The two mounts are mutually
+            // exclusive, so the attribute is never duplicated.
+            data-tour="will"
+            className="flex items-center gap-1.5 rounded-full border-2 border-brandblue bg-card px-2.5 py-1.5 text-[11px] font-extrabold text-brandblue shadow-lg lift"
+          >
+            <WillAvatar size={22} wave={false} />
+            {t("Ask Will")}
+          </button>
+        </FixedLayer>
       )}
       {/* Will - the living companion on the edge of the screen. The TabBar is
           the primary bottom element; Will's full chat opens from him. */}
@@ -4906,7 +4918,7 @@ export default function Home() {
           off screen - a control pointing at something already visible is
           clutter - and it watches the element itself rather than guessing from
           a scroll offset that a collapsing header would invalidate. */}
-      {vendors.length > 0 && view === "list" && (
+      {vendors.length > 0 && view === "list" && listAxis !== "horizontal" && (
         <StatusFab
           target="[data-tour='status']"
           label={t("Live status")}

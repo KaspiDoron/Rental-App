@@ -146,13 +146,25 @@ function withinWindow(rows: SiblingRow[], sinceIso: string): SiblingRow[] {
 
 /** Is there a frame NEWER than ours? Pure, so the protocol is unit-testable. */
 export function newerSibling(
-  rows: Array<{ id: number; wa_message_id: string | null }>,
+  rows: Array<{ id: number; wa_message_id: string | null; received_at?: string }>,
   ownMsgId: string
 ): { id: number; wa_message_id: string | null } | null {
   const own = rows.find((r) => r.wa_message_id === ownMsgId);
   if (!own) return null; // our row is not visible - never stand down blind
   const newest = rows[rows.length - 1];
-  return newest && newest.id > own.id ? newest : null;
+  if (!newest || newest.id <= own.id) return null;
+  // BOUNDED, OR THE CHAIN ORPHANS FRAMES. The leader reads only frames within
+  // BURST_WINDOW_MS of ITS anchor, and the follower stamp is capped at the
+  // same window - so standing down to a sibling further away than that hands
+  // this frame to a turn that will never read it and a stamp that may never
+  // cover it: a photo nobody looks at and nobody explains. Beyond the window
+  // this frame runs its own turn instead.
+  const ownAt = Date.parse(String(own.received_at ?? ""));
+  const newestAt = Date.parse(String(newest.received_at ?? ""));
+  if (Number.isFinite(ownAt) && Number.isFinite(newestAt) && newestAt - ownAt > BURST_WINDOW_MS) {
+    return null;
+  }
+  return newest;
 }
 
 export type BurstVerdict =

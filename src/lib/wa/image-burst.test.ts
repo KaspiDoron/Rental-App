@@ -283,7 +283,9 @@ describe("a board photographed in thread A is leverage in thread B", () => {
     expect(engine).not.toMatch(/reading\?\.prices\?\.\[0\]/);
     // ...and the card-facing route picks through the same shared arithmetic.
     expect(readCode("src/app/api/replies/route.ts")).toMatch(
-      /pickBoardPrice\(readingPricesByVendor\.get\(r\.vendor_id\), specCc\)/
+      // specDays joined the pick (owner report 6 A3): a board's long-stay
+      // tier is not available to a short stay.
+      /pickBoardPrice\(readingPricesByVendor\.get\(r\.vendor_id\), specCc, specDays\)/
     );
   });
 });

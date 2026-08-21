@@ -2117,6 +2117,7 @@ export async function extractOffer(
       vehicleClass: rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: localCur || undefined,
+      engineSizeCc: rfq.engineSizeCc,
     });
     if (rentalHit && rentalHit.pricePerDay > 0) {
       return {
@@ -2195,6 +2196,7 @@ export async function extractOffer(
         vehicleClass: rfq.vehicleClass,
         durationDays: rfq.durationDays,
         localCurrency: localCur || undefined,
+        engineSizeCc: rfq.engineSizeCc,
       });
       const isListEcho =
         !quoted.offer &&

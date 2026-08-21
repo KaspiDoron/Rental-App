@@ -277,7 +277,8 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   //
   // Rejection rather than repair: the ask IS the message here, so there is no
   // sentence to strip that leaves a message behind. The orchestrator re-composes
-  // through the deterministic fallback, whose bargain template names no rival
+  // through the deterministic fallback, whose bargain template cites at most
+  // the rival PRICE (never a name) at a strictly-below target
   // number at all and therefore cannot match one.
   if (artifact.move === "bargain" || artifact.move === "momentum") {
     const matched = citesAMatch(text);
@@ -405,6 +406,49 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
   // trimmed. The caller re-parks and the next turn composes fresh.
   if (!text) {
     return { ok: false, rejected: { rule: "banned-phrase", detail: "nothing left after scrub" } };
+  }
+
+  // SEND-WORTHINESS - after the scrub, deliberately (owner report 6 C2).
+  //
+  // The live evidence: the agent burned a real, anti-ban-paced send slot on
+  // the literal message "thanks!". Two generators produce it: an LLM filler
+  // turn the prompt only ADVISES against (a prompt is advice; a rail is a
+  // guarantee - the doctrine this file states at its match rail), and the
+  // scrub above deleting a draft's substance and leaving its courtesy tail.
+  // Running after the scrub catches both.
+  //
+  // A non-terminal move must ADVANCE something: carry a question, a number,
+  // or any substance beyond courtesy tokens. Terminal moves are exempt - a
+  // bare goodbye is a farewell's whole job.
+  {
+    const TERMINAL: ReadonlyArray<string> = [
+      "farewell",
+      "redirect-close",
+      "graceful-close",
+      "silent",
+    ];
+    if (!TERMINAL.includes(artifact.move)) {
+      const stripped = text
+        .toLowerCase()
+        .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+        .replace(
+          /\b(thanks?|thank you|thankyou|ok(?:ay)?|great|perfect|awesome|cool|nice|sure|got it|no problem|cheers|khob khun|kha|krub|ka)\b/g,
+          " "
+        )
+        .replace(/[\s!.,🙏👍]+/g, " ")
+        .trim();
+      const hasQuestion = /\?/.test(text);
+      const hasNumber = /\d/.test(text);
+      if (!hasQuestion && !hasNumber && stripped.length < 8) {
+        return {
+          ok: false,
+          rejected: {
+            rule: "send-worthiness",
+            detail: `non-terminal ${artifact.move} carries no question, no number and no substance ("${text.slice(0, 60)}")`,
+          },
+        };
+      }
+    }
   }
 
   return { ok: true, finalText: text };

@@ -60,7 +60,9 @@ describe("WhatsApp formatting is read, not printed", () => {
 describe("every surface that shows a shop's words uses it", () => {
   it("chat bubbles render formatted text", () => {
     const b = readCode("src/components/MessageBubble.tsx");
-    expect(b).toMatch(/<WaText text=\{m\.text\}/);
+    // displayText = m.text minus the "(quoting: ...)" engine marker - the
+    // quote block renders the referent itself (owner report 6 A1).
+    expect(b).toMatch(/<WaText text=\{displayText\}/);
     expect(b).toMatch(/<WaText text=\{m\.english\}/);
   });
 

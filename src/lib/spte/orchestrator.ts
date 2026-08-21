@@ -85,7 +85,16 @@ export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
   if (!rail.ok) {
     const fb = fallbackArtifact(ctx);
     const fbRail = runPostRails(ctx, fb);
-    return finalize(ctx, fb, { tier: "R", reason: "quota-overflow" }, fbRail.ok ? fbRail.finalText : undefined);
+    // The HONEST reason. "quota-overflow" was hard-coded here, so Ops could
+    // not tell "providers down" from "the model misbehaved and a rail caught
+    // it" - the same blindness route.error was added to fix, re-created one
+    // layer up.
+    return finalize(
+      ctx,
+      fb,
+      { tier: "R", reason: `rail-rejected:${rail.rejected?.rule ?? "unknown"}` },
+      fbRail.ok ? fbRail.finalText : undefined
+    );
   }
   return finalize(ctx, artifact, route, rail.finalText);
 }

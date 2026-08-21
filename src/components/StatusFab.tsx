@@ -19,6 +19,7 @@
 // re-flows. Observing the element itself is simply correct.
 
 import { useEffect, useRef, useState } from "react";
+import { FixedLayer } from "./FixedLayer";
 
 export function StatusFab({
   /** CSS selector for the panel to watch and return to. */
@@ -77,35 +78,36 @@ export function StatusFab({
 
   if (!show) return null;
 
+  // PORTALLED THROUGH FixedLayer (owner report 6 G2): as an inline `fixed`
+  // child of <main> this pill depended on no ancestor ever gaining a
+  // transform/filter, and it ignored the keyboard entirely - hovering over
+  // panned content while the traveller typed. The layer gives it both
+  // defences for free.
   return (
-    <button
-      onClick={() => {
-        onOpen?.();
-        const el = observed.current ?? document.querySelector(target);
-        el?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }}
-      aria-label={label}
-      // BOTTOM-RIGHT, AND ANCHORED WITHOUT A TRANSFORM.
-      //
-      // This used to be a bottom-CENTRE pill positioned with
-      // `left-1/2 -translate-x-1/2`, which put it directly over the middle of
-      // the tab bar - and the `pop-in` animation then overwrote the centring
-      // transform outright (see globals.css), so it rendered with its left edge
-      // on the viewport centre line. Anchoring to `right` needs no transform at
-      // all, so no animation can ever displace it again.
-      //
-      // `bottom` keeps it clear of the home indicator on a notched phone and of
-      // the navigation that owns the bottom of every screen.
-      className="wd-status-fab layer-chrome fixed rounded-full px-4 py-2.5 text-[12px] font-extrabold text-strong shadow-lg pop-in"
+    <FixedLayer
+      hostIsFixed
+      className="layer-chrome fixed"
       style={{
         // A SLOT, not a hand-picked rem - see the bottom-right stack tokens
-        // beside the z ladder in globals.css.
+        // beside the z ladder in globals.css. BOTTOM-RIGHT, anchored without a
+        // transform: the old bottom-centre `left-1/2 -translate-x-1/2` pill
+        // was displaced outright when pop-in overwrote the centring transform.
         bottom: "var(--stack-bottom-1)",
         right: "calc(env(safe-area-inset-right, 0px) + 1rem)",
       }}
     >
-      <span aria-hidden className="mr-1">↑</span>
-      {label}
-    </button>
+      <button
+        onClick={() => {
+          onOpen?.();
+          const el = observed.current ?? document.querySelector(target);
+          el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }}
+        aria-label={label}
+        className="wd-status-fab rounded-full px-4 py-2.5 text-[12px] font-extrabold text-strong shadow-lg pop-in"
+      >
+        <span aria-hidden className="mr-1">↑</span>
+        {label}
+      </button>
+    </FixedLayer>
   );
 }

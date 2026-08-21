@@ -32,6 +32,13 @@ const SAFE_LINK_HOSTS = [
   "maps.app.goo.gl",
   "g.co",
   "google.com",
+  // What Google's own Share button emits since 2025 (Maps/Search/Business).
+  // THE FIELD CASE (owner report 6): a Krabi shop shared its own listing as
+  // https://share.google/... and got a red 'don't enter card details' banner
+  // in the traveller's face - a false alarm that trains people to ignore the
+  // real ones.
+  "share.google",
+  "g.page",
   "facebook.com",
   "instagram.com",
   // A shop answering "where are you?" with a pin is the single most common link
@@ -236,6 +243,9 @@ export function screenInboundDeterministic(text: string, vendorName?: string): I
       const host = new URL(link).hostname.replace(/^www\./, "");
       const safe =
         SAFE_LINK_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
+        // Every google country TLD (google.co.th, google.de, ...) - the list
+        // cannot enumerate ~190 of them.
+        /(^|\.)google\.(?:[a-z]{2,3})(?:\.[a-z]{2})?$/.test(host) ||
         // A map pin is an ANSWER to "where are you", whoever hosts it.
         isLocationLink(link) ||
         // The shop's own website (host carries the shop's name).
@@ -297,6 +307,29 @@ export async function screenInbound(
     );
     if (out) {
       const j = extractJson<InboundRisk>(out);
+      // A LINK-ONLY CAUTION IS A CANDIDATE, NOT A VERDICT (owner report 6 F2).
+      //
+      // The allow-list can only ever CLEAR a host it knows; it must never
+      // CONDEMN one it does not - "is this the shop's own site?" is a meaning
+      // question, and meaning belongs to the model (with the thread's context:
+      // the vendor name is in the system prompt above). So when the ONLY
+      // deterministic objection is an unlisted host, a confident model "none"
+      // clears it. Everything else keeps the escalate-only rule this file
+      // earned through two field incidents: hard signals (document TRANSMIT
+      // demands, card details, advance payment, thread-hops) are never
+      // downgradable by a model.
+      const linkOnlyCaution =
+        det.risk === "caution" &&
+        det.reasons.length > 0 &&
+        det.reasons.every((r) => r.startsWith("sent a link to"));
+      if (j && j.risk === "none" && linkOnlyCaution) {
+        return {
+          risk: "none",
+          reasons: [],
+          clearedHosts: det.clearedHosts,
+          ...(det.optOut ? { optOut: true } : {}),
+        };
+      }
       if (j && (j.risk === "high" || j.risk === "caution") && Array.isArray(j.reasons)) {
         // Drop any model reason that only re-raises a host we already cleared -
         // the model does not get to overrule a positive deterministic judgement.

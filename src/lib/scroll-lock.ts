@@ -55,6 +55,12 @@ export function lockBodyScroll(): () => void {
     body.style.left = "0";
     body.style.right = "0";
     body.style.width = "100%";
+    // The pin teleports the document's scroll offset to 0 in one frame - the
+    // stale-composite hazard for pre-promoted fixed layers this file's own
+    // header documents. Force a real style change on those layers so WebKit
+    // recomposites them against the new geometry (double-rAF: after the pin
+    // has actually painted).
+    nudgeFixedChrome();
   }
   locks += 1;
 
@@ -76,6 +82,26 @@ export function lockBodyScroll(): () => void {
       }
       // Restore the exact pre-lock scroll position.
       window.scrollTo(0, savedScrollY);
+      // Same hazard in the other direction: the restore is a second teleport.
+      nudgeFixedChrome();
     }
   };
+}
+
+/** Bump every FixedLayer's beat once the teleport has painted. */
+function nudgeFixedChrome(): void {
+  if (!isBrowser()) return;
+  // Double-rAF: after the teleport has actually painted. Some embedders (and
+  // the test DOM) lack rAF - a short timeout is the same "next frames" intent.
+  const frame =
+    typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16) as unknown as number;
+  frame(() =>
+    frame(() => {
+      void import("@/components/FixedLayer")
+        .then((m) => m.nudgeFixedLayers())
+        .catch(() => {});
+    })
+  );
 }

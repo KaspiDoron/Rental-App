@@ -55,6 +55,79 @@ export function waUnwrap(data: any): Record<string, any> {
   return node ?? {};
 }
 
+/** A WhatsApp Business catalog/product card, decoded from the payload. */
+export interface WaProductCard {
+  title: string;
+  description: string | null;
+  /** ISO currency code the shop's catalog uses (e.g. "THB"), when present. */
+  currency: string | null;
+  /** Price in MAJOR units - Baileys ships priceAmount1000 (thousandths). */
+  price: number | null;
+  retailerId: string | null;
+}
+
+/**
+ * The structured product card inside a `productMessage`, or null.
+ *
+ * THE FIELD CASE (owner report 6): a Krabi shop answered "which bikes do you
+ * have?" with three catalog cards - "Yamaha Fazzio Hybrid 125cc, THB 350.00"
+ * among them - and every card reached the app as an EMPTY row: no text branch
+ * knew the subtype, so the transcript showed five blank bubbles and the agent
+ * asked "do you have a 125cc?" AFTER the 125cc card had arrived. The payload
+ * is fully structured (title/description/currencyCode/priceAmount1000), so
+ * decoding it is payload STRUCTURE, not meaning - doctrine-clean deterministic
+ * code. What the numbers MEAN for the negotiation stays with the model.
+ */
+export function waProductCard(message: any): WaProductCard | null {
+  const m = waUnwrap(message);
+  const p = m.productMessage?.product;
+  if (!p || typeof p !== "object") return null;
+  const price1000 = Number(p.priceAmount1000);
+  return {
+    title: String(p.title ?? "").trim() || "(untitled product)",
+    description: String(p.description ?? "").trim() || null,
+    currency: p.currencyCode ? String(p.currencyCode).toUpperCase() : null,
+    price: Number.isFinite(price1000) && price1000 > 0 ? price1000 / 1000 : null,
+    retailerId: p.retailerId != null ? String(p.retailerId) : null,
+  };
+}
+
+/** Compact money rendering for transcriptions: 350, not 350.000000. */
+function productMoney(price: number): string {
+  return Number.isInteger(price) ? String(price) : String(Math.round(price * 100) / 100);
+}
+
+/** The one-line structural transcription of a product card. */
+export function waProductLine(card: WaProductCard): string {
+  const price =
+    card.price != null
+      ? ` - ${card.currency ? `${card.currency} ` : ""}${productMoney(card.price)}`
+      : "";
+  const desc = card.description ? ` (${card.description.slice(0, 140)})` : "";
+  return `[product card] ${card.title}${price}${desc}`;
+}
+
+/**
+ * What an inbound message QUOTED, when it replied to an earlier message.
+ *
+ * Nothing in the codebase read contextInfo.quotedMessage (only lid-alias reads
+ * contextInfo.participant for identity), so "^ This one is 125 cc" reached the
+ * engine with no referent at all. The quoted payload runs through the same
+ * extractor recursively - which also covers quoted product cards.
+ */
+export function waQuotedText(message: any): string | null {
+  const m = waUnwrap(message);
+  for (const key of Object.keys(m)) {
+    const sub = (m as Record<string, any>)[key];
+    const quoted = sub?.contextInfo?.quotedMessage;
+    if (quoted && typeof quoted === "object") {
+      const t = waMessageText({ message: quoted }).trim();
+      return t ? t.slice(0, 300) : null;
+    }
+  }
+  return null;
+}
+
 /**
  * Readable text for ANY Evolution/Baileys message, or a short placeholder for
  * media that carries no caption.
@@ -65,6 +138,20 @@ export function waUnwrap(data: any): Record<string, any> {
 export function waMessageText(message: any): string {
   if (!message || typeof message !== "object") return "";
   const m = waUnwrap(message);
+
+  // Structured commerce frames first - they carry real content, not captions.
+  const card = waProductCard(message);
+  if (card) return waProductLine(card);
+  if (m.orderMessage) {
+    const o = m.orderMessage;
+    const count = Number(o.itemCount) > 0 ? `${o.itemCount} item${Number(o.itemCount) === 1 ? "" : "s"}` : "items";
+    const total1000 = Number(o.totalAmount1000);
+    const total =
+      Number.isFinite(total1000) && total1000 > 0
+        ? ` - ${o.totalCurrencyCode ? `${String(o.totalCurrencyCode).toUpperCase()} ` : ""}${productMoney(total1000 / 1000)} total`
+        : "";
+    return `[order] ${count}${total}`;
+  }
 
   const text =
     m.conversation ??
@@ -78,6 +165,15 @@ export function waMessageText(message: any): string {
     m.templateButtonReplyMessage?.selectedDisplayText ??
     m.listResponseMessage?.title ??
     m.reactionMessage?.text ??
+    // Outbound-style interactive frames a business account can SEND us:
+    // list menus, button prompts, template bodies, native-flow cards.
+    m.interactiveMessage?.body?.text ??
+    m.interactiveMessage?.header?.title ??
+    m.templateMessage?.hydratedTemplate?.hydratedContentText ??
+    m.templateMessage?.hydratedFourRowTemplate?.hydratedContentText ??
+    m.listMessage?.description ??
+    m.listMessage?.title ??
+    m.buttonsMessage?.contentText ??
     "";
   if (String(text).trim()) return String(text);
 
@@ -106,5 +202,12 @@ export function waMediaKind(message: any): string | null {
   if (m.contactMessage || m.contactsArrayMessage) return "contact";
   if (m.reactionMessage) return "reaction";
   if (m.pollCreationMessage || m.pollUpdateMessage) return "poll";
+  // Commerce/interactive frames: real turns, previously invisible (dropped as
+  // "empty-media" with an empty stored row - the blank-bubble bug).
+  if (m.productMessage) return "product";
+  if (m.orderMessage) return "order";
+  if (m.catalogMessage) return "catalog";
+  if (m.interactiveMessage || m.templateMessage || m.listMessage || m.buttonsMessage)
+    return "interactive";
   return null;
 }

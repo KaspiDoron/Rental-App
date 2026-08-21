@@ -43,6 +43,15 @@ export interface ThreadMsg {
   location?: { lat: number; lng: number; name?: string | null };
   /** A shared contact card. */
   contact?: { name?: string | null; digits?: string | null };
+  /** A WhatsApp Business catalog card - render the card, never an empty bubble. */
+  product?: {
+    title: string;
+    description?: string | null;
+    currency?: string | null;
+    price?: number | null;
+  };
+  /** What this message replied to ("^ This one is 125 cc" needs its referent). */
+  quoted?: string;
 }
 
 const clock = (iso: string) =>
@@ -54,6 +63,7 @@ const mediaSrc = (id: string) => `/api/wa/media?id=${encodeURIComponent(id)}`;
 function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
   const { t } = useI18n();
   const [broken, setBroken] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = mediaSrc(media.id);
 
   if (media.kind === "audio") {
@@ -75,6 +85,19 @@ function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
       </a>
     );
   }
+  // A video is watched, not <img>-decoded: the old fallthrough handed video
+  // bytes to the image renderer, which fired onError and told the traveller
+  // "Photo no longer available on WhatsApp" about a video that was fine.
+  if (media.kind === "video") {
+    return (
+      <video
+        controls
+        preload="metadata"
+        src={src}
+        className="mt-1 max-h-72 w-full rounded-xl bg-black/5"
+      />
+    );
+  }
   // An image that will not load is not worth an empty grey box - say so.
   if (broken) {
     return (
@@ -90,19 +113,33 @@ function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
   //   - orientation was left entirely to the browser's unpinned default. The
   //     property is pinned here and floored in globals.css, and the parsed EXIF
   //     value drives the @supports fallback for engines that ignore it.
+  // RESERVED SPACE + SKELETON. The bare <img> was width-full x ZERO pixels
+  // until bytes arrived, so a slow redemption looked like nothing at all and
+  // then the photo popped in ~10s later with no warning. A 4:3 plate holds the
+  // layout, the shared neutral `.skeleton` shimmer says "loading" in the
+  // Loading-v4 chrome (no brand hue), and the image fades over it on load.
   return (
     <a href={src} target="_blank" rel="noreferrer" className="mt-1 block">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={t("Photo from the shop")}
-        loading="lazy"
-        decoding="async"
-        onError={() => setBroken(true)}
-        data-exif-orientation={orientationAttrValue(media.orientation)}
-        style={{ imageOrientation: "from-image" }}
-        className="max-h-72 w-full rounded-xl bg-black/5 object-contain"
-      />
+      <span
+        className="relative block overflow-hidden rounded-xl"
+        style={loaded ? undefined : { aspectRatio: "4 / 3" }}
+      >
+        {!loaded && <span aria-hidden className="skeleton absolute inset-0 rounded-xl" />}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={t("Photo from the shop")}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => setBroken(true)}
+          data-exif-orientation={orientationAttrValue(media.orientation)}
+          style={{ imageOrientation: "from-image" }}
+          className={`max-h-72 w-full rounded-xl bg-black/5 object-contain transition-opacity duration-300 ${
+            loaded ? "opacity-100" : "absolute inset-0 h-full opacity-0"
+          }`}
+        />
+      </span>
     </a>
   );
 }
@@ -117,8 +154,14 @@ export function MessageBubble({ m }: { m: ThreadMsg }) {
     : null;
   // "[photo]" is a placeholder the ingest writes when there is no caption; once
   // the photo itself is on screen the placeholder is noise.
-  const placeholder = /^\[(photo|voice note|document[^\]]*)\]$/i.test(m.text.trim());
-  const showText = m.text && !(m.media && placeholder);
+  const placeholder = /^\[(photo|video|voice note|document[^\]]*)\]$/i.test(m.text.trim());
+  // The product card's structural transcription is the CARD's data - once the
+  // card itself renders, repeating "[product card] ..." as text is noise.
+  const productText = Boolean(m.product) && /^\[product card\]/i.test(m.text.trim());
+  // The quote block renders the referent itself - the inline "(quoting: ...)"
+  // marker ingest appends for the engine would show it twice.
+  const displayText = m.quoted ? m.text.replace(/\n?\(quoting: [\s\S]*$/, "").trim() : m.text;
+  const showText = displayText && !(m.media && placeholder) && !productText;
 
   return (
     <div className={`flex ${out ? "justify-end" : "justify-start"}`}>
@@ -171,13 +214,35 @@ export function MessageBubble({ m }: { m: ThreadMsg }) {
             {m.contact.digits ? ` · +${m.contact.digits}` : ""}
           </div>
         )}
+        {m.product && (
+          <div className="mt-1 rounded-xl bg-black/10 px-2 py-1.5">
+            <div className="text-[9px] font-extrabold uppercase tracking-wide opacity-70">
+              🛍️ {t("From the shop's catalog")}
+            </div>
+            <div className="text-[12px] font-extrabold">{m.product.title}</div>
+            {m.product.price != null && (
+              <div className="text-[11px] font-bold opacity-90">
+                {m.product.currency ? `${m.product.currency} ` : ""}
+                {m.product.price}
+              </div>
+            )}
+            {m.product.description && (
+              <div className="text-[10px] font-normal opacity-80">{m.product.description}</div>
+            )}
+          </div>
+        )}
+        {m.quoted && (
+          <div className="mt-1 rounded-lg border-l-2 border-white/40 bg-black/10 px-2 py-1 text-[10px] font-normal opacity-85">
+            {m.quoted}
+          </div>
+        )}
         {showText ? (
-          <div className={m.media ? "mt-1" : ""}>
-            <WaText text={m.text} />
+          <div className={`whitespace-pre-wrap break-words ${m.media ? "mt-1" : ""}`}>
+            <WaText text={displayText} />
           </div>
         ) : null}
         {m.english && m.english !== m.text && (
-          <div className="mt-1 border-t border-white/25 pt-1 text-[10px] font-normal opacity-85">
+          <div className="mt-1 whitespace-pre-wrap break-words border-t border-white/25 pt-1 text-[10px] font-normal opacity-85">
             <WaText text={m.english} />
           </div>
         )}

@@ -178,6 +178,13 @@ export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
     found: false,
     matchesSpec: true,
     confidence: "low",
+    // THE STAMP MUST FIRE ON THIS PATH TOO. Without imageRead this result was
+    // indistinguishable from a text turn: holdsMediaReading() said false, no
+    // reading (not even 'unavailable') was ever stored, and the transcript
+    // showed the honest-placeholder "reading was never stored" under a photo
+    // we KNEW we failed to download. The taxonomy's unavailable state was
+    // unreachable exactly where nobody could look.
+    imageRead: { seen: false, failure: "network", detail: "media download failed", retryable: true },
     clarifyMessage:
       "We couldn't read that photo clearly - could you type the daily price out for us? 🙂",
   } as import("./agents").ExtractedOffer;
@@ -434,14 +441,22 @@ export async function processVendorReply(opts: {
   // WHY closed, for the drop trace: a user-cleared hunt and a quietly expired
   // one are different stories when the owner asks "why did the agent go quiet".
   let sessionClosedReason: "session-terminated" | "session-expired" = "session-terminated";
-  if (ctx.sender && priorAt) {
+  // THE SEARCH BOUNDARY (owner report 6 B). The newest session-closed marker
+  // is not only the dead-thread gate: it is where the CURRENT search begins.
+  // Every context read below (history window, working thread, coalescing,
+  // ask-once counters) is cut at it, so a re-contacted shop's turns from the
+  // PREVIOUS hunt can never feed this hunt's composer - the '5 days' the
+  // agent kept citing on a 4-day search came from exactly that leak.
+  let sessionBoundaryAt: string | null = null;
+  if (ctx.sender) {
     const marker = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&raw->>sender=eq.${encodeURIComponent(
         ctx.sender
       )}&to_number=eq.session&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
     );
-    sessionClosed = Boolean(marker[0] && marker[0].received_at > priorAt);
+    sessionBoundaryAt = marker[0]?.received_at ?? null;
+    if (priorAt) sessionClosed = Boolean(sessionBoundaryAt && sessionBoundaryAt > priorAt);
   }
   // ...OR THE HUNT SIMPLY EXPIRED. The 3h TTL was enforced only by the CLIENT
   // dropping sessionStorage - the server kept no tombstone, so a shop replying
@@ -495,17 +510,22 @@ export async function processVendorReply(opts: {
   let mine: ThreadMsg[] = [];
   if (opts.senderEmail) {
     const encMe = encodeURIComponent(opts.senderEmail);
+    // Cut at the search boundary: one search, one memory. (No marker = no
+    // previous search = unbounded, exactly as before.)
+    const sinceBound = sessionBoundaryAt
+      ? `&received_at=gt.${encodeURIComponent(sessionBoundaryAt)}`
+      : "";
     const [outRows, inRows] = await Promise.all([
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
           "to_number",
           from
         )}`
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
           "from_number",
           from
         )}`
@@ -719,6 +739,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+      engineSizeCc: rfq.engineSizeCc,
     });
     if (det && det.classMatch !== false) {
       usablePrice = det.pricePerDay;
@@ -749,6 +770,7 @@ export async function processVendorReply(opts: {
         vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
         durationDays: rfq.durationDays,
         localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+        engineSizeCc: rfq.engineSizeCc,
       });
       const dur = rfq.durationDays;
       const close = (a: number, b: number) => b > 0 && Math.abs(a - b) / b <= 0.1;
@@ -865,6 +887,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: currencyForRegion(ctx.region || undefined) ?? undefined,
+      engineSizeCc: rfq.engineSizeCc,
     });
     const candidates = quoted.allOffers.map((h) => ({
       pricePerDay: h.pricePerDay,
@@ -1042,6 +1065,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: cur,
+      engineSizeCc: rfq.engineSizeCc,
     });
     const derived = optionsFromHits(quoted.allOffers, {
       depositNote: extraction.deposit || undefined,
@@ -1103,6 +1127,7 @@ export async function processVendorReply(opts: {
       vehicleClass: rfq.vehicleClass === "car" ? "car" : rfq.vehicleClass,
       durationDays: rfq.durationDays,
       localCurrency: cur,
+      engineSizeCc: rfq.engineSizeCc,
     }).allOffers.map((h) => h.pricePerDay);
     const verdict = sanePrice(usablePrice, others, floorSameCur, {
       durationDays: rfq.durationDays,
@@ -1644,13 +1669,13 @@ export async function processVendorReply(opts: {
     }
   };
   /** Record the move this turn took on the media, so the panel can stop guessing. */
-  const recordMediaFollowUp = (
+  const recordMediaFollowUp = async (
     move: string,
     delivered: import("./media/reading").ReadingFollowUp["delivered"]
   ) => {
     if (!mediaReading) return;
     mediaReading = { ...mediaReading, followUp: { move, delivered, at: new Date().toISOString() } };
-    void stampMediaReading(mediaReading);
+    await stampMediaReading(mediaReading);
   };
 
   // THE TURN THAT LOOKED IS NOT ALWAYS THE TURN THAT HOLDS THE BYTES.
@@ -1676,7 +1701,11 @@ export async function processVendorReply(opts: {
       !usablePrice && extraction.found === false && !readingIsFailure(draft)
         ? { ...draft, notUsedReason: "No usable price in this image." }
         : draft;
-    void stampMediaReading(mediaReading);
+    // AWAITED: `void` here meant the stamp rode a detached promise, and on
+    // Cloud Run a detached promise dies the instant the response flushes
+    // (after.ts documents exactly this) - the other half of every
+    // "reading was never stored" placeholder the owner photographed.
+    await stampMediaReading(mediaReading);
 
     // A FAILURE IS AN EVENT, AND WHICH FAILURE IS THE WHOLE POINT.
     //
@@ -1815,6 +1844,7 @@ export async function processVendorReply(opts: {
     rfq,
     extraction,
     usablePrice,
+    priceBasisDays,
     currency: cur,
     floorPrice: floorSameCur?.floor,
     floorTypical: floorSameCur?.typical ?? undefined,
@@ -1874,7 +1904,7 @@ export async function processVendorReply(opts: {
   if (routed.engine !== "none") {
     // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
     // proof panel renders this; with nothing recorded it now claims nothing.
-    if (routed.spte) recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
+    if (routed.spte) await recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
     // WHAT THE SHOP SAID ABOUT EACH EXTRA THE TRAVELLER ASKED FOR.
     //
     // The request - helmets, a phone mount, delivery - left the app in the

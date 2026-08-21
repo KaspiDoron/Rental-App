@@ -110,6 +110,13 @@ export async function POST(req: Request) {
   //    tombstone the whole session below.
   await clearCancellation(session.email, digits).catch(() => {});
   let sent = false;
+  // The closing message may be PARKED rather than sent (anti-ban gate, shop
+  // closed overnight). That is a success state, not a failure: the row drains
+  // at the next safe slot. Track it so (a) the outbox purge below never
+  // deletes it, and (b) the traveller is told "queued", not nothing.
+  let queued = false;
+  let queuedUntil: string | null = null;
+  let closingRowId: number | null = null;
   try {
     const result = await runUserAction({
       userEmail: session.email,
@@ -128,6 +135,9 @@ export async function POST(req: Request) {
       send: (senderKey, dest, text) => sendFromUser(senderKey, dest, text),
     });
     sent = result?.delivered?.delivered === "sent";
+    queued = result?.delivered?.delivered === "queued";
+    queuedUntil = result?.delivered?.queuedUntil ?? null;
+    closingRowId = result?.delivered?.outboxRowId ?? null;
   } catch {
     /* the disconnect + wa.me link below still let the traveller finish */
   }
@@ -137,9 +147,14 @@ export async function POST(req: Request) {
   //      strategic wakeups (AWAITED - a race here could fire a tick against
   //      the closing session), and tombstone every recipient including this
   //      shop (the deal is done - nothing automated chases it afterwards).
+  // NEVER PURGE THE CLOSING MESSAGE ITSELF. When the guard parked it, the row
+  // sits in this very outbox - an unfiltered purge deleted the booking handoff
+  // the traveller just watched the app promise to send.
   const purged = await sbDeleteReturning<{ to_number: string }>(
     "wa_outbox",
-    `sender_key=eq.${encodeURIComponent(session.email)}`
+    `sender_key=eq.${encodeURIComponent(session.email)}${
+      closingRowId ? `&id=neq.${closingRowId}` : ""
+    }`
   ).catch(() => [] as { to_number: string }[]);
   // EXACT owner match on the stamped column only. The old
   // `thread_key=like.<email>:*` sweep was a cross-user hazard (an underscore in
@@ -246,8 +261,13 @@ export async function POST(req: Request) {
   }
 
   // The wa.me deep link opens the exact shop chat in the traveller's own app.
+  // `queued` is a SUCCESS state (the guard parked the closing message for the
+  // next safe slot; the deal-close exemption in wa-guard lets it drain through
+  // the tombstones) - the client must not render it as a failure.
   return NextResponse.json({
     sent,
+    queued,
+    queuedUntil,
     disconnected,
     stillLinked: !disconnected,
     waLink: `https://wa.me/${digits}`,

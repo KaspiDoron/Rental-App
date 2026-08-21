@@ -139,8 +139,18 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     imageSummary: ex?.imageSummary || undefined,
     // Our own read's provenance, not the shop's. `seen:false` means the vision
     // providers failed, so the engine must not act as though it had looked.
-    imageUnread:
-      (ex as { imageRead?: { seen?: boolean } } | null)?.imageRead?.seen === false || undefined,
+    imageUnread: (() => {
+      const ir = (ex as { imageRead?: { seen?: boolean; modelFailure?: string } } | null)?.imageRead;
+      // parse-failed/truncated mean the reader ran and WE still have nothing -
+      // the composer must not act as though it had looked, exactly as when the
+      // ladder never answered. (sanity-nulled keeps its number and is handled
+      // by the panel; blinding the composer over it would hide a real price.)
+      return ir?.seen === false ||
+        ir?.modelFailure === "parse-failed" ||
+        ir?.modelFailure === "truncated"
+        ? true
+        : undefined;
+    })(),
     sheetPricePerDay:
       ex?.imageKind === "price_sheet" && typeof input.usablePrice === "number"
         ? input.usablePrice
@@ -244,7 +254,14 @@ function buildDigest(
     // reachable at all.
     depositKnown:
       !ambiguous.includes("deposit") &&
-      (facts.depositKnown || ledger.known.includes("deposit")),
+      (facts.depositKnown ||
+        ledger.known.includes("deposit") ||
+        // Deposit terms read from a PHOTO never touch the text regexes (the
+        // agreement-sign case: "passport OR 2,000-3,000 baht" photographed,
+        // stored, shown to the traveller - and the engine re-probed anyway).
+        // The extraction's deposit field IS the shop stating its terms,
+        // whatever medium carried them.
+        Boolean((input.extraction as { deposit?: string } | null)?.deposit)),
     fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
     deliveryOffered: facts.deliveryOffered,
     // The MODE and its PRICE are two facts. `fulfillmentKnown` went true on the
@@ -694,6 +711,11 @@ async function persistThreadOutcome(args: {
       });
     const fields = { ...base.fields };
     fields.digest = persistableDigest(digest);
+    // The vehicle this thread negotiates (owner report 6 C4): the thread key
+    // is user:number with no vehicle dimension, so the sessionTable's rival
+    // join needs a declared key to keep a car hunt's price out of a scooter
+    // hunt's leverage.
+    fields.vehicleKey = vehicleKeyFor(input.rfq);
     // WHICH LANGUAGE THIS THREAD IS IN, AND WHY (W4.6). The one field
     // /api/replies reads to tell the card and the status panel "Switched to
     // English - this shop asked". Written unconditionally so the decision is a
@@ -716,6 +738,14 @@ async function persistThreadOutcome(args: {
     if (typeof input.usablePrice === "number" && input.usablePrice > 0) {
       fields.pricePerDay = input.usablePrice;
       fields.currency = input.currency;
+      // Provenance travels with the number (owner report 6 C3): without it,
+      // the thread row wins the sessionTable merge and a divided package
+      // per-day re-enters every sibling as a quoted daily rate.
+      if (typeof input.priceBasisDays === "number" && input.priceBasisDays > 0) {
+        fields.priceBasisDays = input.priceBasisDays;
+      } else {
+        delete fields.priceBasisDays;
+      }
     }
     // WHAT THE CARD SHOWS WHILE THE AGENT WAITS ON AN ANSWER (W4.4). Only for a
     // question that actually reached the shop: "blocked" and "failed" mean
@@ -1333,6 +1363,12 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         // real reply that actually went out is a meaningful latency sample.
         latencyMs: delivered === "sent" ? Date.now() - startedAt : null,
         vehicleKey: vehicleKeyFor(input.rfq),
+        // THE CONTAMINATION SENSOR (owner report 6 B5). The '5 days on a
+        // 4-day search' bug was unreconstructable after the fact because no
+        // turn record said which duration the turn believed. Now every turn
+        // states its terms, so a drift shows in the record, not a screenshot.
+        durationDays: input.rfq.durationDays ?? null,
+        startDate: (input.rfq as { startDate?: string }).startDate ?? null,
         // WHICH LEVERAGE ACTUALLY GOT PLAYED. `leverageUsed` was written by the
         // model every turn and read by nobody, so "the agents never use the
         // other shop's price" could not be measured, only noticed.

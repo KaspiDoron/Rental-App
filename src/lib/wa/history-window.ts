@@ -36,10 +36,21 @@ export const HISTORY_ELISION = "(... earlier messages elided ...)";
 export function historyLine(m: HistoryRowLike): string {
   const who = m.direction === "outbound" ? "Us" : "Shop";
   const body = (m.body ?? "").trim();
-  const transcript = (m.raw as { transcript?: { text?: string } } | null | undefined)?.transcript
-    ?.text;
+  const raw = m.raw as
+    | { transcript?: { text?: string }; reading?: { text?: string } }
+    | null
+    | undefined;
+  const transcript = raw?.transcript?.text;
+  // A photographed board read on turn N was INVISIBLE on turn N+1: history
+  // inlined voice transcripts but never image readings, so the composer
+  // negotiated against "[photo]" while the reading sat one JSONB field away.
+  const reading = raw?.reading?.text;
   const text =
-    MEDIA_PLACEHOLDER.test(body) && transcript ? `${body} ${transcript.trim()}` : body;
+    MEDIA_PLACEHOLDER.test(body) && transcript
+      ? `${body} ${transcript.trim()}`
+      : MEDIA_PLACEHOLDER.test(body) && reading
+        ? `${body} (photo read: ${reading.trim().slice(0, 200)})`
+        : body;
   return `${who}: ${text.slice(0, 300)}`;
 }
 

@@ -72,6 +72,32 @@ export interface ThreadContext {
 const WINDOW = 12; // recent outbound rows scanned for an RFQ anchor
 
 /**
+ * WHERE THE CURRENT SEARCH BEGINS (owner report 6 B - the '5 days' bug).
+ *
+ * The opener/promise reads below used to fetch the first outbound EVER to a
+ * number. When a new search re-contacted a shop from a previous hunt, that
+ * row was the OLD search's opening message, promiseOf() preferred it, and
+ * reconcileRfq() overwrote the new search's durationDays with the old one -
+ * after which the duration RAIL enforced the wrong number on every draft. A
+ * new search makes a NEW promise: everything promise-shaped is bounded by the
+ * newest session-closed marker (stamped by clear, new-search, TTL expiry and
+ * deal-close alike).
+ */
+async function sessionBoundary(senderEmail: string): Promise<string | null> {
+  try {
+    const rows = await sbSelect<{ received_at: string }>(
+      "whatsapp_messages",
+      `select=received_at&raw->>sender=eq.${encodeURIComponent(
+        senderEmail
+      )}&to_number=eq.session&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
+    );
+    return rows[0]?.received_at ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * THE PROMISE, FOR THE COMPOSERS THE INBOUND PATH NEVER TOUCHED (W4.1).
  *
  * `resolveThreadContext` applies the promise on the INBOUND path - a shop
@@ -99,11 +125,13 @@ export async function promisedRfq(
   const or = threadNumberOr("to_number", digits);
   if (!or) return { rfq, drifted: false };
   try {
+    const boundary = await sessionBoundary(senderEmail);
+    const sinceBound = boundary ? `&received_at=gt.${encodeURIComponent(boundary)}` : "";
     const openerRows = await sbSelect<{ body: string | null; raw: ThreadRaw | null }>(
       "whatsapp_messages",
       `select=body,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
         senderEmail
-      )}&order=received_at.asc&limit=1&or=${or}`
+      )}${sinceBound}&order=received_at.asc&limit=1&or=${or}`
     );
     const opener = openerRows[0];
     if (!opener) return { rfq, drifted: false }; // first contact - nothing promised yet
@@ -142,6 +170,8 @@ export async function resolveThreadContext(
   //   - the thread's FIRST outbound, which is the promise we made this shop
   // The opener is what fixes the duration and vehicle for the whole thread; see
   // lib/wa/rental-params for why the newest rfq cannot be trusted with them.
+  const boundary = await sessionBoundary(senderEmail);
+  const sinceBound = boundary ? `&received_at=gt.${encodeURIComponent(boundary)}` : "";
   const [rows, openerRows] = await Promise.all([
     sbSelect<{ id: number; received_at: string; raw: ThreadRaw | null }>(
       "whatsapp_messages",
@@ -149,11 +179,14 @@ export async function resolveThreadContext(
         senderEmail
       )}&order=received_at.desc&limit=${WINDOW}&or=${or}`
     ).catch(() => []),
+    // The opener of the CURRENT search - the first thing we told this shop
+    // THIS hunt, which is the promise that binds. The previous hunt's opener
+    // (before the boundary) binds nothing anymore.
     sbSelect<{ id: number; body: string | null; raw: ThreadRaw | null }>(
       "whatsapp_messages",
       `select=id,body,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
         senderEmail
-      )}&order=received_at.asc&limit=1&or=${or}`
+      )}${sinceBound}&order=received_at.asc&limit=1&or=${or}`
     ).catch(() => []),
   ]);
 
@@ -161,10 +194,14 @@ export async function resolveThreadContext(
 
   const gate = classifyIngestDetailed(rows, Date.now());
 
-  // The newest row that actually carries an RFQ - NOT simply rows[0]. This is
-  // the whole fix: a human-manual or rfq-less row on top no longer orphans the
-  // conversation.
-  const anchor = rows.find((r) => r.raw?.rfq != null) ?? null;
+  // The newest IN-SESSION row that actually carries an RFQ - NOT simply
+  // rows[0]. A human-manual or rfq-less row on top no longer orphans the
+  // conversation, and a stale anchor from the PREVIOUS search (its rfq stamp
+  // carries the old duration) never supplies this search's terms. The full
+  // window still feeds the gate and identity - vendor name/id are durable.
+  const inSession = (r: { received_at: string }) =>
+    !boundary || r.received_at > boundary;
+  const anchor = rows.find((r) => inSession(r) && r.raw?.rfq != null) ?? null;
   // Identity (vendor/region) can come from any recent row, newest wins.
   const identity = rows.find((r) => r.raw?.vendorId) ?? anchor ?? rows[0];
 
@@ -172,7 +209,7 @@ export async function resolveThreadContext(
   // gate says the thread is live, yet NO row carries an rfq - so every reply
   // would die as "no-rfq-thread" forever. Recover the RFQ from the traveller's
   // own recent search and repair the row, instead of going permanently silent.
-  if (!anchor && gate.ok) {
+  if (!anchor && gate.ok && rows.some(inSession)) {
     const { recoverRfqForSender } = await import("./anchor-recovery");
     // Recover against what THIS thread asked for, not merely the newest search.
     // The opener's own sentence still states the duration even when its

@@ -481,10 +481,33 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
   const v = ctx.inbound.verified;
   const days = ctx.session.rfq.durationDays;
   switch (move) {
-    case "bargain":
+    case "bargain": {
+      // LEVERAGE-BLIND NO MORE. This template is what actually goes out on
+      // EVERY provider-failure and rail-rejection turn - the exact live weak
+      // message the owner screenshotted ("any chance you can do a bit
+      // better?") sent while a cheaper sibling quote sat in ctx.session. The
+      // rival cite and the beat target are pure arithmetic the prompt builder
+      // already computes; the fallback now plays the same hand. Never the
+      // rival's NAME (the disclosure rail's rule) - the price and the vehicle
+      // are the leverage.
+      const quoteNow = quoteOnTable(ctx);
+      const rival = cheapestCheaperRival(ctx.session.rivals, quoteNow);
+      if (rival && typeof quoteNow === "number" && quoteNow > 0) {
+        const cur = rival.currency ?? ctx.session.currency ?? "";
+        const target = beatRivalTarget({
+          rivalPricePerDay: rival.pricePerDay,
+          quotePerDay: quoteNow,
+          floorPerDay: ctx.guards.floorPerDay,
+        });
+        const money = (n: number) => `${cur ? `${cur} ` : ""}${n}`;
+        return target > 0 && target < rival.pricePerDay
+          ? `Thanks! Another shop offered ${money(rival.pricePerDay)}/day for the same ${ctx.session.rfq.vehicleClass} - could you do ${money(target)}/day for ${nDays(days)}?`
+          : `Thanks! Another shop offered ${money(rival.pricePerDay)}/day for the same ${ctx.session.rfq.vehicleClass} - could you go lower than that for ${nDays(days)}?`;
+      }
       return v.pricePerDay
         ? `Thanks! Any chance you can do a bit better for ${nDays(days)}?`
         : `Could you share your best price for ${nDays(days)}?`;
+    }
     case "confirm-vehicle":
       // The gate already phrased the question from the traveller's own declared
       // spec; the fallback simply sends it. Never invents a price.

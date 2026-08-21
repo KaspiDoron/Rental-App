@@ -2042,19 +2042,31 @@ export async function guardOutbound(rawOpts: {
   //                              briefly and let a later drain re-check. A
   //                              missing (un-migrated) table reads as false.
   if (opts.auto) {
+    // THE ONE TOMBSTONE EXEMPTION: the deal-close closing message. Confirming
+    // a deal tombstones EVERY shop in the same request that parks the closing
+    // message - so without this carve-out the tombstone swallowed the very
+    // message that tells the shop the deal is on (the traveller booked; the
+    // shop never heard). A tombstone means "nothing AUTOMATED chases this
+    // shop"; the closing message is the traveller's own explicit action,
+    // parked only for pacing. Takeover below still applies - if the human is
+    // typing themselves, even the closing message stays ours to not send.
+    const isDealClose =
+      (opts.meta as { kind?: string } | null | undefined)?.kind === "deal-close";
     const { isCancelled, recordSuppressedSend } = await import("./wa/cancellations");
-    const cancelled = await isCancelled(opts.senderKey, opts.toDigits);
-    if (cancelled === true) {
-      void recordSuppressedSend(opts.senderKey, opts.toDigits, "cancelled-send-blocked");
-      return {
-        allow: false,
-        terminal: true,
-        reason: "cancelled-by-user - you removed the messages to this shop",
-        text,
-      };
-    }
-    if (cancelled === null) {
-      return await queue(syncRetryHold(), "sync-retry");
+    if (!isDealClose) {
+      const cancelled = await isCancelled(opts.senderKey, opts.toDigits);
+      if (cancelled === true) {
+        void recordSuppressedSend(opts.senderKey, opts.toDigits, "cancelled-send-blocked");
+        return {
+          allow: false,
+          terminal: true,
+          reason: "cancelled-by-user - you removed the messages to this shop",
+          text,
+        };
+      }
+      if (cancelled === null) {
+        return await queue(syncRetryHold(), "sync-retry");
+      }
     }
     {
       const { isThreadTakenOver } = await import("./session-flags");
@@ -2848,8 +2860,17 @@ async function staleDraftDropped(
   rowKind: string | undefined
 ): Promise<boolean> {
   // Cold introductions answer nothing, and a user's own typed message is theirs
-  // to send. Only auto REPLIES can go stale.
-  if (rowKind === "rfq" || rowKind === "custom" || rowKind === "human-manual") return false;
+  // to send. Only auto REPLIES can go stale. The deal-close closing message is
+  // exempt too: "the deal is on" stays true whatever the shop said in between,
+  // and the recompose a stale-drop schedules would never re-say it (the
+  // session is already closed) - dropping it here loses the booking handoff.
+  if (
+    rowKind === "rfq" ||
+    rowKind === "custom" ||
+    rowKind === "human-manual" ||
+    rowKind === "deal-close"
+  )
+    return false;
   const meta = (row.meta ?? {}) as { composedAgainst?: import("./wa/freshness").ComposedAgainst };
   const composedAgainst = meta.composedAgainst;
   if (!composedAgainst) return false; // parked before this shipped - not our business
@@ -3240,10 +3261,15 @@ export async function drainOutbox(
       continue;
     }
     // Last-instant cancellation re-check (the user may have tapped Remove
-    // between the guard verdict and this send).
+    // between the guard verdict and this send). The deal-close closing message
+    // is exempt - close-deal tombstones the shop in the same breath it parks
+    // this row, and the tombstone must never swallow the booking handoff.
     try {
       const { isCancelled } = await import("./wa/cancellations");
-      if ((await isCancelled(row.sender_key, row.to_number)) === true) {
+      if (
+        rowKind !== "deal-close" &&
+        (await isCancelled(row.sender_key, row.to_number)) === true
+      ) {
         await completeOutboxRow(row.id); // the user removed it - it is gone for good
         continue;
       }

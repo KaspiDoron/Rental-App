@@ -158,7 +158,11 @@ describe("a heartbeat with one source of failure is not a heartbeat", () => {
 
   it("a backstop pinger runs on GitHub's own schedule, needing no GCP role", () => {
     const hb = read(".github/workflows/heartbeat.yml");
-    expect(hb).toMatch(/cron: "\*\/5 \* \* \* \*"/);
+    // HOURLY, deliberately: GitHub bills a 1-minute minimum per run, so */5
+    // was ~8,640 billed minutes a month - 4x the free allowance, spent on
+    // rounding (commit 32b4310). The backstop stays a backstop.
+    expect(hb).toMatch(/cron: "0 \* \* \* \*"/);
+    expect(hb).not.toMatch(/cron: "\*\/5/);
     expect(hb).toMatch(/\/api\/wa\/ping\?token=/);
     // Same token derivation - no new secret for the owner to manage.
     expect(hb).toMatch(/printf 'wd-webhook:%s' "\$SESSION_SECRET" \| sha256sum \| cut -c1-32/);

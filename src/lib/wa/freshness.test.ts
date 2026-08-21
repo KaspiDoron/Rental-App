@@ -163,9 +163,12 @@ describe("the wiring", () => {
       guard.indexOf("async function staleDraftDropped"),
       guard.indexOf("export async function drainOutbox")
     );
-    expect(fn).toMatch(
-      /rowKind === "rfq" \|\| rowKind === "custom" \|\| rowKind === "human-manual"/
-    );
+    // deal-close joined the exemption (owner report 6 A0): "the deal is on"
+    // stays true whatever the shop said in between, and the recompose a
+    // stale-drop schedules could never re-say it against a closed session.
+    for (const kind of ['"rfq"', '"custom"', '"human-manual"', '"deal-close"']) {
+      expect(fn).toContain(`rowKind === ${kind}`);
+    }
   });
 
   it("every engine stamps what its draft is an answer to", () => {

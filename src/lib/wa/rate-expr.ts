@@ -51,7 +51,12 @@ export interface RateExpr {
 export const CUR_SYM = "[$€฿₱₹₫]";
 export const CUR_WORDS =
   "usd|idr|rp|eur|thb|rm|php|inr|vnd|myr|aud|nzd|sgd|mxn|try|ils|zar|brl|mad|egp|lkr|npr|twd|jpy|krw" +
-  "|baht|pesos?|piso|rupiah|rupees?|dong|ringgit|dollars?|euros?|shekels?|dirhams?";
+  // The MISSPELLINGS shops actually type. "Special price 900 bath for 4 day"
+  // (a real Krabi reply) extracted NOTHING: 'bath' is four letters, so even
+  // the structural tail (capped at 3) could not save it, and the price
+  // vanished from the card. Spelling is not meaning - the vocabulary's job is
+  // to recognize what people write, not what dictionaries prefer.
+  "|baht|bath|bht|pesos?|piso|rupiah|rupees?|dong|ringgit|dollars?|euros?|shekels?|dirhams?";
 // Letter boundaries are not optional - "rp" in "airport", "mad" in "nomad".
 export const CUR_LEAD = `${CUR_SYM}|\\b(?:${CUR_WORDS})(?![a-z])`;
 export const CUR_TRAIL = `${CUR_SYM}|(?:${CUR_WORDS})(?![a-z])`;

@@ -87,7 +87,98 @@ export async function closeSearchSession(
   // rare event instead of on every hot-path request.
   await pruneCancellations(email).catch(() => {});
 
-  // 3. Stamp the close marker (a system row in the message log - no schema
+  // 3. PER-SEARCH THREAD STATE DIES WITH THE SESSION (owner report 6 B3).
+  //    negotiation_threads is keyed user:number with no search dimension, so a
+  //    re-contacted shop used to inherit the WHOLE previous hunt: its round
+  //    count, its standing quote, its confirm-questions-already-spent, even a
+  //    terminal 'closing'/'declined' state - and the new search started
+  //    mid-negotiation or, worse, permanently mute. Reset the per-search half;
+  //    keep what is genuinely durable about the SHOP (tone, language, deposit
+  //    policy facts). Best-effort per row, bounded to the closing window.
+  try {
+    const { sbUpdate } = await import("./runtime-config");
+    const threads = await sbSelect<{
+      thread_key: string;
+      fields: Record<string, unknown> | null;
+      phase: string | null;
+    }>(
+      "negotiation_threads",
+      `select=thread_key,fields,phase&user_email=eq.${enc}&updated_at=gte.${encodeURIComponent(
+        fromIso
+      )}&limit=200`
+    ).catch(() => []);
+    const SEARCH_FIELD_KEYS = [
+      "round",
+      "rounds",
+      "firmCount",
+      "pricePerDay",
+      "currency",
+      "priceBasisDays",
+      "vehicleKey",
+      "declined",
+      "waitingUntil",
+      "vehicleConfirmed",
+    ];
+    const SEARCH_DIGEST_KEYS = [
+      "quotedPricePerDay",
+      "round",
+      "confirmAsked",
+      "awaitingConfirmation",
+      "pending",
+      "priceWatchArmed",
+    ];
+    await Promise.all(
+      threads.map(async (t) => {
+        const f = { ...(t.fields ?? {}) } as Record<string, unknown>;
+        let changed = false;
+        for (const k of SEARCH_FIELD_KEYS) {
+          if (k in f) {
+            delete f[k];
+            changed = true;
+          }
+        }
+        const digest = f.digest as Record<string, unknown> | undefined;
+        if (digest && typeof digest === "object") {
+          for (const k of SEARCH_DIGEST_KEYS) {
+            if (k in digest) {
+              delete digest[k];
+              changed = true;
+            }
+          }
+          // 'shop declined / walked away' answered the PREVIOUS request; a new
+          // search is a new request, and policy's hasClosed() scan over these
+          // facts would otherwise keep the thread mute forever.
+          const facts = digest.facts;
+          if (Array.isArray(facts)) {
+            const kept = facts.filter(
+              (x) => typeof x !== "string" || !/closed|goodbye|declined|walked away/i.test(x)
+            );
+            if (kept.length !== facts.length) {
+              digest.facts = kept;
+              changed = true;
+            }
+          }
+        }
+        const patch: Record<string, unknown> = {};
+        if (changed) patch.fields = f;
+        // Terminal-ish phases never reopen implicitly (graph/state.ts) - so a
+        // new search against a 'closing'/'dead' thread would be born stuck.
+        if (t.phase && t.phase !== "opening") patch.phase = "opening";
+        patch.waiting_until = null;
+        if (Object.keys(patch).length) {
+          await sbUpdate(
+            "negotiation_threads",
+            `thread_key=eq.${encodeURIComponent(t.thread_key)}`,
+            patch
+          ).catch(() => {});
+        }
+      })
+    );
+  } catch {
+    /* best-effort - the boundary reads (thread-context) still fence the rfq */
+  }
+
+  // 4. Stamp the close marker (a system row in the message log - no schema
   //    change needed, and to_number "session" can never match a real thread).
   await sbInsert("whatsapp_messages", [
     {

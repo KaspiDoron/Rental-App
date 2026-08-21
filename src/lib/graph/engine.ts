@@ -1608,6 +1608,9 @@ export function liveGraphIO(send: LiveSend): GraphIO {
               "offers",
               `select=vendor_id,vendor_name,price_per_day,currency${offerWhere}`
             ).catch(() => []);
+      // Newest-first and per-session-sized (owner report 6 C4): the old
+      // `limit=16` with NO order clause was an arbitrary sample of the hunt -
+      // large hunts starved the swarm and the dead-shop filter of whole shops.
       const threads = await sbSelect<{
         vendor_id: string | null;
         vendor_name: string | null;
@@ -1618,7 +1621,7 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         "negotiation_threads",
         `select=vendor_id,vendor_name,to_number,phase,fields&user_email=eq.${encodeURIComponent(
           userEmail
-        )}&updated_at=gte.${encodeURIComponent(since)}&limit=16`
+        )}&updated_at=gte.${encodeURIComponent(since)}&order=updated_at.desc&limit=200`
       ).catch(() => []);
       const rows = new Map<string, SessionShopRow>();
       const numberByVendor = new Map<string, string>();
@@ -1627,16 +1630,27 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         if (t.to_number) numberByVendor.set(t.vendor_id, t.to_number);
         const fx = (t.fields ?? {}) as {
           pricePerDay?: number;
+          priceBasisDays?: number;
           currency?: string;
+          vehicleKey?: string;
           depositType?: string;
           depositNote?: string;
           fulfillment?: string;
           digest?: { firmCount?: number };
         };
+        // SAME VEHICLE OR IT IS NOT A RIVAL - for THREAD rows too. The offers
+        // query filters vehicle_key; this join never did, so a thread priced
+        // in a different-vehicle hunt inside the window walked straight into
+        // the rival set (negotiation_threads is keyed user:number with no
+        // vehicle dimension at all). A row that DECLARES a different vehicle
+        // is out; undeclared legacy rows stay (dropping them would silently
+        // empty the swarm for every pre-stamp thread).
+        if (vehicleKey && fx.vehicleKey && fx.vehicleKey !== vehicleKey) continue;
         rows.set(t.vendor_id, {
           vendorId: t.vendor_id,
           vendorName: t.vendor_name ?? t.vendor_id,
           pricePerDay: fx.pricePerDay,
+          quoteBasisDays: typeof fx.priceBasisDays === "number" ? fx.priceBasisDays : undefined,
           currency: fx.currency,
           phase: t.phase as SessionShopRow["phase"],
           complete: Boolean(
@@ -1656,7 +1670,20 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         // thread row always short-circuited (`if (rows.has) continue`), so a
         // stale/empty negotiation_threads row masked a genuine offer - which is
         // exactly why Shop A's confirmed 300 never reached Shop B's prompt.
-        if (existing && typeof existing.pricePerDay === "number") continue;
+        if (existing && typeof existing.pricePerDay === "number") {
+          // ...but the basis must not be masked with it (owner report 6 C3):
+          // when the winning thread row carries no provenance and the offers
+          // row for the SAME number does, adopt it - otherwise a divided
+          // package per-day re-enters siblings as a quoted daily rate.
+          if (
+            existing.quoteBasisDays == null &&
+            o.quote_basis_days != null &&
+            existing.pricePerDay === o.price_per_day
+          ) {
+            existing.quoteBasisDays = o.quote_basis_days;
+          }
+          continue;
+        }
         rows.set(o.vendor_id, {
           vendorId: o.vendor_id,
           vendorName: o.vendor_name || o.vendor_id,

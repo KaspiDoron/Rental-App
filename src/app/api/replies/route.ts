@@ -38,6 +38,7 @@ export async function GET(req: Request) {
   // re-derives the same scope server-side from the real RFQ for anything it
   // actually negotiates, so a tampered value can only show the sender more rows.
   const specCc = Number(params.get("cc") ?? 0);
+  const specDays = Number(params.get("days") ?? 0);
   const specClass = params.get("vclass");
   const specTx = params.get("tx");
   const sinceFilter =
@@ -397,7 +398,7 @@ export async function GET(req: Request) {
         // board: a price that does not exist, on a bike they no longer have.
         // The struck rows stay in the reading and stay in the proof panel;
         // they are simply never the number.
-        const pick = pickBoardPrice(readingPricesByVendor.get(r.vendor_id), specCc);
+        const pick = pickBoardPrice(readingPricesByVendor.get(r.vendor_id), specCc, specDays);
         if (pick) {
           return {
             pricePerDay: pick.pricePerDay,
