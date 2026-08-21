@@ -86,9 +86,13 @@ describe("the vision ladder is current and hot-fixable", () => {
 
   it("retired model ids are gone; the current ones lead", () => {
     expect(ai).toMatch(/qwen\/qwen3\.6-27b/);
-    // The pinned Gemini generation moved to 3.5-flash (2.5-flash retires
-    // 2026-10-16); the preview id it replaced must not linger as a dead rung.
-    expect(ai).toMatch(/"gemini-3\.5-flash"/);
+    // Gemini pins are GONE entirely: the pinned 3.5-flash id failed live on
+    // the owner's key (2026-08-21) while the rolling alias answered, so the
+    // default and the vision ladder are aliases only - Google keeps those
+    // valid across generations, which is the whole point.
+    expect(ai).toMatch(/"gemini-flash-latest"/);
+    expect(ai).toMatch(/"gemini-flash-lite-latest"/);
+    expect(ai).not.toMatch(/"gemini-3\.5-flash"/);
     expect(ai).not.toMatch(/gemini-3-flash-preview/);
     // Google retired this one - a dead rung is pure wasted latency.
     expect(ai).not.toMatch(/"gemini-2\.0-flash"/);

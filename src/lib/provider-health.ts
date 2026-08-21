@@ -25,6 +25,9 @@ export type ProviderFailureKind =
   | "auth"
   /** The model id does not exist for this key - the drift the overrides exist for. */
   | "model"
+  /** 402: this MODEL needs a paid plan (or its free allowance is spent) -
+   *  the key is fine, and the free fallback model takes over. */
+  | "paywalled"
   /** Never got an answer. Could be them, could be the network. */
   | "timeout"
   /** Unclassified: show the raw detail and claim nothing. */
@@ -41,8 +44,14 @@ export function providerFailureKind(detail: string | null | undefined): Provider
   const d = (detail ?? "").toLowerCase();
   if (!d) return "unknown";
 
+  // 402 "payment required" on a free-tier provider is its own story (the
+  // owner's live Cerebras probe): the MODEL moved behind a paid plan, or the
+  // free allowance for it is spent - the key is fine and the free fallback
+  // model answers. Telling the owner to "check the account has credit" for
+  // a product they run on free tiers was wrong twice over.
+  if (/\b402\b|payment.?required/.test(d)) return "paywalled";
   // Quota EXHAUSTED is an owner problem even though it often arrives as a 429.
-  if (/insufficient_quota|quota exceeded|billing|payment required|\b402\b/.test(d)) return "auth";
+  if (/insufficient_quota|quota exceeded|billing/.test(d)) return "auth";
   if (/\b401\b|\b403\b|unauthorized|forbidden|invalid api key|invalid_api_key|api key not valid/.test(d))
     return "auth";
 
@@ -60,6 +69,9 @@ export function providerFailureKind(detail: string | null | undefined): Provider
 
 /** Whether this failure needs the owner to do something. */
 export function providerNeedsOwner(kind: ProviderFailureKind): boolean {
+  // "paywalled" is deliberately NOT owner-must-act: the chain skips the
+  // provider and the app keeps working on the genuinely free ones. Paying
+  // the provider is an OPTION the copy names, never a nagging red task.
   return kind === "auth" || kind === "model";
 }
 
@@ -79,6 +91,8 @@ export function providerFailureCopy(kind: ProviderFailureKind, name: string): st
       return `${who} refused the key. Paste a working ${name.toUpperCase()}_TOKEN, or check the account has credit.`;
     case "model":
       return `${who} does not know that model id - it has probably been retired. Paste a current one as ${name.toUpperCase()}_MODEL.`;
+    case "paywalled":
+      return `${who} wants payment now - it retired its open free tier (Cerebras did this July 2026: a one-time $5 trial, then paid). Your key is fine; nothing is broken. The chain skips it and the next free provider answers. Add billing at ${who} only if you want it back.`;
     case "timeout":
       return `${who} never answered in time. That is slow-or-down, not misconfigured; the chain moves on.`;
     default:

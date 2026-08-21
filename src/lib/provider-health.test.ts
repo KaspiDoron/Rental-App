@@ -46,7 +46,18 @@ describe("but a real fault still reads as one", () => {
     expect(providerFailureKind("openai 429 - insufficient_quota: You exceeded your current quota")).toBe(
       "auth"
     );
-    expect(providerFailureKind("402 payment required")).toBe("auth");
+    // ...but a 402 is its OWN story now (the owner's live Cerebras probe):
+    // the provider retired its free tier or the model went paid. The key is
+    // fine, the chain skips it - "check the account has credit" for a
+    // free-tier product was wrong twice over. Not owner-must-act: paying is
+    // an option the copy names, never a nagging red task.
+    expect(providerFailureKind("402 payment required")).toBe("paywalled");
+    expect(
+      providerFailureKind(
+        'cerebras 402 - {"message":"Payment required to access this resource."}'
+      )
+    ).toBe("paywalled");
+    expect(providerNeedsOwner("paywalled")).toBe(false);
   });
 
   it("a retired model id points at the override that fixes it", () => {
