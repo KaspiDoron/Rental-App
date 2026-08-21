@@ -10,6 +10,7 @@ import {
   type DealTerms,
 } from "@/lib/deal-terms";
 import { moneyLocal } from "@/lib/currency";
+import { effectivePriceFor } from "@/lib/effective-price";
 import { can } from "@/lib/entitlements";
 import type { PlanId } from "@/lib/access";
 
@@ -458,12 +459,27 @@ export async function GET() {
   // own windowed rows already name.
   const threadRows = await sbSelect<{
     vendor_id: string | null;
-    fields: { fulfillment?: string; depositType?: string; depositNote?: string } | null;
+    fields: {
+      fulfillment?: string;
+      depositType?: string;
+      depositNote?: string;
+      pricePerDay?: number;
+      currency?: string;
+    } | null;
   }>(
     "negotiation_threads",
     `select=vendor_id,fields&user_email=eq.${enc}&order=updated_at.desc&limit=100`
   ).catch(() => [] as { vendor_id: string | null; fields: null }[]);
-  const threadByVendor = new Map<string, { fulfillment?: string; depositType?: string; depositNote?: string }>();
+  const threadByVendor = new Map<
+    string,
+    {
+      fulfillment?: string;
+      depositType?: string;
+      depositNote?: string;
+      pricePerDay?: number;
+      currency?: string;
+    }
+  >();
   for (const th of threadRows) {
     if (th.vendor_id && th.fields && !threadByVendor.has(th.vendor_id)) {
       threadByVendor.set(th.vendor_id, th.fields);
@@ -639,9 +655,20 @@ export async function GET() {
       const offer = byVendor.get(id)?.newest;
       const reply = rep.find((r) => (r.vendor_id || r.vendor_name) === id);
       const th = threadByVendor.get(id);
+      // THE SHARED RESOLVER (D2). Trips rebuilt its idea of a shop's price
+      // from offers rows alone, so a thread deep in negotiation with a
+      // standing price - but no offers row yet - read as priceless here while
+      // the live hunt showed the number. Same lib as /api/replies, so the two
+      // surfaces cannot disagree.
+      const eff = effectivePriceFor({
+        found: (offer?.price_per_day ?? 0) > 0,
+        rowPrice: offer?.price_per_day ?? null,
+        rowCurrency: th?.currency ?? offer?.currency ?? null,
+        threadPrice: th?.pricePerDay ?? null,
+      });
       termsById.set(id, {
-        pricePerDay: offer?.price_per_day ?? null,
-        currency: offer?.currency ?? null,
+        pricePerDay: offer?.price_per_day ?? eff?.pricePerDay ?? null,
+        currency: offer?.currency ?? eff?.currency ?? null,
         depositType: th?.depositType ?? reply?.deposit_type ?? null,
         depositNote: th?.depositNote ?? null,
         depositLabel: reply?.deposit ?? null,

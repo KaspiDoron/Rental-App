@@ -40,7 +40,12 @@ export async function composeStatus(email: string, ctx: WillContext): Promise<st
     (v) => (v.pricePerDay ?? 0) > 0 && !v.outOfStock && v.vehicleStatus !== "wrong-vehicle"
   );
   if (priced.length > 0) {
-    const best = priced.sort((a, b) => (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0))[0];
+    // topVendors carries the ONE ranking rule (D4): presentable quotes,
+    // dominant currency first, cheapest first - so "best so far" here names
+    // the same shop as the BEST PRICE rollup and the quotes rail.
+    const best = topVendors(ctx, ctx.vendors.length).filter(
+      (v) => (v.pricePerDay ?? 0) > 0
+    )[0] ?? priced[0];
     // Has anyone actually come DOWN? The single most-asked question, and the
     // opening quote was in the snapshot all along.
     const moved =

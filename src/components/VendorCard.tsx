@@ -1045,7 +1045,20 @@ function VendorCardInner({
         ) : (
           <div className="mt-3 rounded-2xl bg-card2 p-3">
             <div className="text-[12px] font-bold text-soft">
-              {t("No price yet - we first ask the shop. Real prices come only from its reply.")}
+              {/* STAGE-AWARE (D3). "We first ask the shop" was rendered for a
+                  thread DEEP in negotiation (the ask long sent, price lists
+                  received) - the copy reported the missing offer object, not
+                  the conversation. Say where this thread actually is. */}
+              {t(
+                vendor.stage === "negotiating" || vendor.stage === "counter-offer"
+                  ? "The shop replied - your agent is pinning the exact price down. It lands here the moment it's stated."
+                  : vendor.stage === "rfq-sent" ||
+                      vendor.stage === "awaiting-response" ||
+                      vendor.stage === "sending" ||
+                      askDone
+                    ? "Price asked - the shop's reply lands here."
+                    : "No price yet - we first ask the shop. Real prices come only from its reply."
+              )}
             </div>
             {plan === "free" && (
               <div className="mt-1.5 text-[11px] font-bold text-brandyellow">

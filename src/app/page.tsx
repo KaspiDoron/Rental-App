@@ -581,7 +581,14 @@ export default function Home() {
   } | null>(null);
   const [priceHintLoading, setPriceHintLoading] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const appliedReplies = useRef<Set<number>>(new Set());
+  // D1 (owner report 6): id -> CONTENT FINGERPRINT of the reply row as last
+  // applied. The old Set applied each row id exactly once - but the server
+  // merges live thread state (deposit, fulfillment, presentable, verified,
+  // wantsCall...) onto the SAME newest row every poll, so everything learned
+  // after the row's first appearance was silently frozen out of the card.
+  // Content deciding (not id-once) re-applies the winning row whenever what
+  // it says has changed; the round counter still bumps only on a NEW row.
+  const appliedReplies = useRef<Map<number, string>>(new Map());
   // ATOMIC SESSION: a monotonic epoch stamped when a search starts. Only shop
   // replies created AFTER this moment belong to THIS session - anything older
   // (a previous search's offers/threads) is rejected, so a "New search" can
@@ -683,7 +690,10 @@ export default function Home() {
           // re-applied all replies over the restored offers, inflating the
           // round count and (with out-of-order rows) reverting the price.
           if (Array.isArray(s.appliedReplyIds)) {
-            for (const id of s.appliedReplyIds) appliedReplies.current.add(id);
+            // "" = known row, content unknown: the next poll re-applies it
+            // idempotently (no round bump - the id is not new) so a restore
+            // can refresh thread facts without inflating counters.
+            for (const id of s.appliedReplyIds) appliedReplies.current.set(id, "");
           }
           setPhase("done");
         }
@@ -771,7 +781,7 @@ export default function Home() {
           radiusKm,
           filters,
           searchEpoch,
-          appliedReplyIds: [...appliedReplies.current].slice(-200),
+          appliedReplyIds: [...appliedReplies.current.keys()].slice(-200),
         });
         if (!res.ok) {
           setActionNote({
@@ -793,7 +803,11 @@ export default function Home() {
     setSourceError(null);
     setPhase("idle");
     setClearConfirm(false);
-    appliedReplies.current = new Set();
+    appliedReplies.current = new Map();
+    // The mass-bargain blast belongs to the OLD hunt (D6): its "running"
+    // spinner and "Asked N shops" note must never survive into the next one.
+    setMassState("idle");
+    setMassNote(null);
     // Shop avatars are ephemeral: a new search must never show the previous
     // session's shops (they belong to people who never signed up here).
     clearShopAvatars();
@@ -1862,8 +1876,18 @@ export default function Home() {
             });
           }
         }
+        // ABSENCE IS NOT EVIDENCE (owner report 6, L7/D). The feed is capped
+        // at 40 rows ACROSS ALL SHOPS - on a busy hunt an older shop's rows
+        // fall out of the window while its state is unchanged. Clearing a
+        // fact because its row scrolled away is how "confirming" flapped and
+        // out-of-stock shops sprang back to life. Only a shop with rows IN
+        // this payload gets its state re-derived; the rest keep what they had.
+        const inWindow = new Set<string>(
+          ((d.replies ?? []) as Array<{ vendorId: string }>).map((r) => r.vendorId)
+        );
         setVendors((vs) =>
           vs.map((v) => {
+            if (!inWindow.has(v.id)) return v;
             const c = confirmingByVendor.get(v.id);
             const lang = langByVendor.get(v.id);
             if (c === v.confirming && lang?.mode === v.languageSwitch) return v;
@@ -1886,6 +1910,9 @@ export default function Home() {
         );
         setVendors((vs) =>
           vs.map((v) => {
+            // Absence is not evidence (L7): a shop whose rows fell out of the
+            // 40-row window keeps its state - only an explicit row may flip it.
+            if (!inWindow.has(v.id)) return v;
             const out = outOfStockIds.has(v.id);
             if (out && v.stage !== "out-of-stock" && !declinedIds.has(v.id)) {
               return { ...v, stage: "out-of-stock" as TrackerStage };
@@ -1926,8 +1953,15 @@ export default function Home() {
           }
         }
         for (const r of newestByVendor.values()) {
-          if (appliedReplies.current.has(r.id)) continue;
-          appliedReplies.current.add(r.id);
+          // Content decides (D1). Same id, changed payload = the thread
+          // learned something (a deposit landed, presentable flipped, the
+          // vehicle got confirmed) - re-apply it. Same id, same payload =
+          // nothing new, skip exactly like the old id-once gate.
+          const fp = JSON.stringify(r);
+          const prev = appliedReplies.current.get(r.id);
+          if (prev === fp) continue;
+          const isNewRow = prev === undefined;
+          appliedReplies.current.set(r.id, fp);
           // Confirmed rows carry the price on themselves; sourced rows carry it
           // in effectivePrice with a provenance tag the card will show.
           const confirmedRow = Boolean(r.found && r.pricePerDay);
@@ -1969,8 +2003,14 @@ export default function Home() {
                       // surface that quotes the shop can show the translation.
                       messageEnglish: r.english?.slice(0, 200) ?? undefined,
                       // A sourced price is not a negotiation round - only a
-                      // confirmed reply advances the counter.
-                      round: v.offer ? (confirmedRow ? v.offer.round + 1 : v.offer.round) : 0,
+                      // NEW confirmed reply advances the counter (a re-apply
+                      // of the same row for fresher thread facts is not a
+                      // round, or every poll would inflate it).
+                      round: v.offer
+                        ? confirmedRow && isNewRow
+                          ? v.offer.round + 1
+                          : v.offer.round
+                        : 0,
                       verified: confirmedRow && Boolean(r.verified),
                       // false = the shop quoted a DIFFERENT vehicle; the card
                       // flags it and it is excluded from the best-price picker.
@@ -2129,7 +2169,11 @@ export default function Home() {
     // applied by the previous session.
     const epoch = Date.now();
     setSearchEpoch(epoch);
-    appliedReplies.current = new Set();
+    appliedReplies.current = new Map();
+    // The mass-bargain blast belongs to the OLD hunt (D6): its "running"
+    // spinner and "Asked N shops" note must never survive into the next one.
+    setMassState("idle");
+    setMassNote(null);
     // Shop avatars are ephemeral: a new search must never show the previous
     // session's shops (they belong to people who never signed up here).
     clearShopAvatars();
@@ -2931,7 +2975,11 @@ export default function Home() {
     // spoke to is not a shop we are waiting on.
     const removed: Vendor[] = [];
     for (const v of vendors) {
-      if (v.offer) deals.push(v);
+      // AN OFFER FROM A SHOP THAT RAN OUT (or walked away) IS NOT A DEAL
+      // (D3). The old test was `v.offer` alone, so a stale price kept a shop
+      // under "Active offers" after it had said it had nothing to rent - the
+      // replied bucket below carries the honest per-stage line for both.
+      if (v.offer && v.stage !== "out-of-stock" && v.stage !== "declined") deals.push(v);
       else if (v.lastInboundAt || v.stage === "negotiating" || v.stage === "counter-offer")
         replied.push(v);
       // Cancelled BY THE USER with nothing ever sent: terminal, and counted
@@ -3025,6 +3073,14 @@ export default function Home() {
       stageCounts.replied +
       Math.max(stageCounts.queued, queueItems.length) >
     0;
+  // ...AND IS ANY DELIVERY STILL IN FLIGHT? (D7). The order-status SPINNER
+  // used `contactingShops`, which stays true for the life of the hunt (a shop
+  // that replied an hour ago still counts) - so "contacting shops" animated
+  // forever over a hunt with nothing left to send. A spinner is a claim of
+  // ongoing work; only queued/sending rows are that.
+  const deliveringNow =
+    Math.max(stageCounts.queued, queueItems.length) > 0 ||
+    vendors.some((v) => v.stage === "sending");
 
   // Honest pacing progress ("3 of 8 sent - next at ~14:32 - done by ~14:41")
   // derived from LIVE queue rows so mid-batch removals shrink the plan.
@@ -3503,15 +3559,24 @@ export default function Home() {
             {t("Demo shop list - no Google Maps key is set yet (owner: Admin -> Keys). Prices are never invented either way: we first ask each shop.")}
           </div>
         )}
-        {source === "google-error" && (
-          <div className="mt-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred animate-slide-up">
-            {t("Your Google Maps key is set but Google rejected the request:")}{" "}
-            <span className="font-mono text-[11px]">{sourceError}</span>
-            <div className="mt-1 font-semibold">
-              {t("Owner: open Admin -> Keys -> Test Google key for a one-tap diagnosis.")}
+        {source === "google-error" &&
+          (session && session.role !== "user" ? (
+            // The DIAGNOSTIC belongs to whoever can fix it (D7): a raw Google
+            // API error string plus "open Admin -> Keys" is admin homework.
+            <div className="mt-3 rounded-2xl border-2 border-brandred bg-brandred-soft p-3 text-[12px] font-bold text-brandred animate-slide-up">
+              {t("Your Google Maps key is set but Google rejected the request:")}{" "}
+              <span className="font-mono text-[11px]">{sourceError}</span>
+              <div className="mt-1 font-semibold">
+                {t("Owner: open Admin -> Keys -> Test Google key for a one-tap diagnosis.")}
+              </div>
             </div>
-          </div>
-        )}
+          ) : (
+            // A traveller can act on exactly one fact: live shop lookup is
+            // down and the demo list is standing in. Say that, in words.
+            <div className="mt-3 rounded-2xl bg-brandyellow-soft p-3 text-[12px] font-bold text-warn animate-slide-up">
+              {t("Live shop lookup hit a snag, so this list may be limited - prices are still real and come only from the shops' own replies.")}
+            </div>
+          ))}
         {/* A failed DISCOVERY CALL (500/network) sets sourceError without a
             source verdict - it must still be said out loud. Without this the
             error string lived in state and rendered nowhere: the funnel
@@ -3533,11 +3598,11 @@ export default function Home() {
           <div className="surface mt-3 rounded-blob p-3 text-[12px] animate-slide-up">
             <div className="mb-1 flex items-center gap-1.5 font-extrabold text-brandblue">
               <Icon name="spark" className="h-3.5 w-3.5" /> {t("Structured request")}
-              {session && session.plan !== "free" && (contactingShops || phase === "running") && (
+              {session && session.plan !== "free" && (deliveringNow || phase === "running") && (
                 <span className="ml-auto font-bold text-faint">
                   <LoadingDots
                     label={
-                      contactingShops
+                      deliveringNow
                         ? t("Order status: contacting shops")
                         : t("Order status: getting your shops ready")
                     }
@@ -3870,7 +3935,9 @@ export default function Home() {
                               ? t("They passed on this one.")
                               : v.confirming
                                 ? t("Double-checking something with the shop before we trust it.")
-                                : t("No price yet - your agent is asking for one.")}
+                                : v.stage === "counter-offer" || v.stage === "negotiating"
+                                  ? t("A price is on the table - your agent is bargaining it down.")
+                                  : t("No price yet - your agent is asking for one.")}
                         </div>
                       </div>
                     ))}
@@ -4204,8 +4271,16 @@ export default function Home() {
           </p>
         )}
 
-        {/* Mass bargain: one tap asks several shops at once (Pro/Ultra) */}
-        {vendors.length > 1 && rfq && (
+        {/* Mass bargain: one tap asks several shops at once (Pro/Ultra).
+            GATED ON ELIGIBILITY (D6, the owner's item 9): once the hunt is
+            live and every shop already has a conversation open, there is
+            nobody left for this button to message - `vendors.length > 1`
+            kept it on screen promising a blast it could not send. The same
+            eligibility rule the confirm sheet uses decides the render. */}
+        {vendors.length > 1 &&
+          rfq &&
+          (massState === "running" ||
+            massBargainTargets(vendors, session?.plan).targets.length > 0) && (
           <div className="mt-3">
             <button
               onClick={() => {
@@ -4229,10 +4304,13 @@ export default function Home() {
                 </span>
               )}
             </button>
-            {massNote && (
-              <p className="mt-1 text-center text-[11px] font-bold text-soft">{massNote}</p>
-            )}
           </div>
+        )}
+        {/* The blast's outcome note outlives the button: once everyone is
+            contacted the button honestly disappears, but "Asked N shops"
+            must not vanish with it. */}
+        {massNote && rfq && (
+          <p className="mt-1 text-center text-[11px] font-bold text-soft">{massNote}</p>
         )}
 
         {vendors.length > 0 && (
@@ -4321,6 +4399,7 @@ export default function Home() {
             {listAxis === "vertical" && (
               <QuotesRail
                 vendors={filtered}
+                dominantCurrency={dominantCurrency}
                 selectedId={selectedId}
                 onPick={scrollToVendor}
                 t={t}

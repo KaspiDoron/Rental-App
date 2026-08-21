@@ -215,7 +215,11 @@ describe("the client ADMITS a sourced price instead of dropping the row", () => 
 
   it("a sourced price never replaces a confirmed offer and never inflates the round", () => {
     expect(page).toMatch(/if \(!confirmedRow && v\.offer && !v\.offer\.priceSource\) return v;/);
-    expect(page).toMatch(/confirmedRow \? v\.offer\.round \+ 1 : v\.offer\.round/);
+    // D1 made application content-keyed (the same row re-applies when the
+    // thread learns something), so the round bump needs BOTH: a confirmed
+    // row AND a row this client has never seen before.
+    expect(page).toMatch(/confirmedRow && isNewRow/);
+    expect(page).toMatch(/const isNewRow = prev === undefined;/);
   });
 });
 

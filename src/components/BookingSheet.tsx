@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Vendor, StructuredRFQ } from "@/lib/types";
 import { vehicleLabel } from "@/lib/labels";
 import { moneyLocal } from "@/lib/currency";
+import { depositSummary } from "@/lib/deposit";
 import { Modal } from "./Modal";
 import { Icon } from "./icons";
 import { PlaceAutocomplete } from "./PlaceAutocomplete";
@@ -101,7 +102,22 @@ export function BookingSheet({
   // that - which is a fact the traveller can act on, unlike a spinner.
   const confirmedLines: { text: string; tone: "yes" | "no" }[] = [];
   const off = vendor.offer;
-  if (off?.deposit) confirmedLines.push({ text: `${t("Deposit")}: ${off.deposit}`, tone: "yes" });
+  // depositSummary, not the raw label (D5): "deposit passport or money4000"
+  // must read "Passport or ฿4,000 cash" on the last screen before a deposit
+  // changes hands - every alternative the shop stated, never only the first.
+  const depositLine = off
+    ? depositSummary(
+        {
+          deposit: off.deposit,
+          depositType: off.depositType,
+          depositAmount: off.depositAmount,
+          depositCurrency: off.depositCurrency,
+          currency: off.currency,
+        },
+        moneyLocal
+      )
+    : null;
+  if (depositLine) confirmedLines.push({ text: `${t("Deposit")}: ${depositLine}`, tone: "yes" });
   for (const a of off?.accessories ?? []) {
     if (a.state === "confirmed") {
       confirmedLines.push({
@@ -486,7 +502,7 @@ export function BookingSheet({
                   {moneyLocal(vendor.offer.totalPrice, vendor.offer.currency)} {t("total")} ({durationDays}d)
                 </div>
               )}
-              {vendor.offer?.deposit && <div>🔒 {t("Deposit")}: {vendor.offer.deposit}</div>}
+              {depositLine && <div>🔒 {t("Deposit")}: {depositLine}</div>}
               {/* The traveller's OWN choice, in all three modes - not the
                   shop's offer overriding it. */}
               <div>

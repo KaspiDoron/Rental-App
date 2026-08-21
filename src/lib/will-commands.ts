@@ -82,9 +82,30 @@ export function clampRadius(km: number): number {
 
 /** Top-N vendors by cheapest offer first, then by presence in the list. */
 export function topVendors(ctx: WillContext, n: number): WillVendorSnapshot[] {
-  const priced = ctx.vendors.filter((v) => (v.pricePerDay ?? 0) > 0);
-  priced.sort((a, b) => (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0));
-  const rest = ctx.vendors.filter((v) => !((v.pricePerDay ?? 0) > 0));
+  // THE SAME BEST-PRICE RULE AS EVERY OTHER SURFACE (owner report 6, D4).
+  // "Top" used to mean "smallest raw number": a price for the WRONG vehicle,
+  // a shop that had run out, and a 200-THB quote "beating" a 5-USD one could
+  // all lead Will's compare list while the rollup named a different shop.
+  const presentable = ctx.vendors.filter(
+    (v) => (v.pricePerDay ?? 0) > 0 && !v.outOfStock && v.vehicleStatus !== "wrong-vehicle"
+  );
+  // Dominant currency among the presentable quotes - raw cross-currency
+  // number comparison is dishonest, so other currencies rank after it.
+  const count = new Map<string, number>();
+  for (const v of presentable) {
+    const c = v.currency ?? "";
+    count.set(c, (count.get(c) ?? 0) + 1);
+  }
+  const dom = [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const priced = presentable
+    .slice()
+    .sort(
+      (a, b) =>
+        Number((b.currency ?? "") === dom) - Number((a.currency ?? "") === dom) ||
+        (a.pricePerDay ?? 0) - (b.pricePerDay ?? 0)
+    );
+  const inPriced = new Set(priced);
+  const rest = ctx.vendors.filter((v) => !inPriced.has(v));
   return [...priced, ...rest].slice(0, n);
 }
 

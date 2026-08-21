@@ -180,7 +180,19 @@ export async function GET(req: Request) {
           lastReadAt: null,
           lastReplyAt: null,
         };
-    return NextResponse.json({ messages, delivery, state: "ok" });
+    // TAKEOVER RIDES THE POLL (D8). It was a separate fetch-once: take over
+    // from your own WhatsApp mid-conversation and the open panel kept
+    // claiming the agent was driving until remount. Same rows, no extra
+    // query cost worth naming - and the panel updates within a poll tick.
+    const takeover = await (async () => {
+      try {
+        const { isThreadTakenOver } = await import("@/lib/session-flags");
+        return (await isThreadTakenOver(session.email, digits)) === true;
+      } catch {
+        return false;
+      }
+    })();
+    return NextResponse.json({ messages, delivery, state: "ok", takeover });
   }
 
   let received: { body: string; received_at: string; raw?: { english?: string } | null } | null =

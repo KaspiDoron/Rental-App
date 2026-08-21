@@ -281,11 +281,17 @@ describe("a board photographed in thread A is leverage in thread B", () => {
     expect(engine).toMatch(/const cheapest = cheapestQuotable\(read\?\.raw\?\.reading\?\.prices\)/);
     expect(engine).toMatch(/cheapestQuotable\(m\.raw\?\.reading\?\.prices\) !== null/);
     expect(engine).not.toMatch(/reading\?\.prices\?\.\[0\]/);
-    // ...and the card-facing route picks through the same shared arithmetic.
-    expect(readCode("src/app/api/replies/route.ts")).toMatch(
-      // specDays joined the pick (owner report 6 A3): a board's long-stay
-      // tier is not available to a short stay.
-      /pickBoardPrice\(readingPricesByVendor\.get\(r\.vendor_id\), specCc, specDays\)/
-    );
+    // ...and the card-facing route picks through the same shared arithmetic -
+    // now via the ONE effective-price resolver (owner report 6 D2), which
+    // still hands the board rows plus cc AND duration to pickBoardPrice.
+    const replies = readCode("src/app/api/replies/route.ts");
+    expect(replies).toMatch(/effectivePriceFor\(\{/);
+    expect(replies).toMatch(/boardPrices: readingPricesByVendor\.get\(r\.vendor_id\)/);
+    expect(replies).toMatch(/engineSizeCc: specCc/);
+    expect(replies).toMatch(/durationDays: specDays/);
+    const effective = readCode("src/lib/effective-price.ts");
+    expect(effective).toMatch(/pickBoardPrice\(/);
+    expect(effective).toMatch(/args\.engineSizeCc \?\? 0/);
+    expect(effective).toMatch(/args\.durationDays \?\? 0/);
   });
 });
