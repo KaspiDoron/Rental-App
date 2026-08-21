@@ -18,16 +18,35 @@ const MAX_KEYS = 2000;
 export interface TraceThrottle {
   /** True (and records the timestamp) when a trace for `key` is allowed now. */
   allow(key: string, nowMs?: number): boolean;
+  /**
+   * How many events this key SWALLOWED since the last allowed one - and reset.
+   *
+   * The throttle protects the DB, but it was also quietly destroying the
+   * magnitude: a burst of twenty drops wrote one row, and the panel then said
+   * "1 drop" for an incident that lost twenty messages. The rate limit is
+   * right; losing the count was not. Callers stamp this on the row they are
+   * about to write, so one row can honestly say it stands for twenty.
+   */
+  takeSuppressed(key: string): number;
 }
 
 export function makeTraceThrottle(windowMs: number): TraceThrottle {
   const last = new Map<string, number>();
+  const suppressed = new Map<string, number>();
   return {
     allow(key: string, nowMs = Date.now()): boolean {
       const prev = last.get(key);
-      if (prev !== undefined && nowMs - prev < windowMs) return false;
+      if (prev !== undefined && nowMs - prev < windowMs) {
+        boundedSet(suppressed, key, (suppressed.get(key) ?? 0) + 1, MAX_KEYS);
+        return false;
+      }
       boundedSet(last, key, nowMs, MAX_KEYS);
       return true;
+    },
+    takeSuppressed(key: string): number {
+      const n = suppressed.get(key) ?? 0;
+      suppressed.delete(key);
+      return n;
     },
   };
 }

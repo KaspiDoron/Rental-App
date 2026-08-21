@@ -484,6 +484,31 @@ export async function sbCountDark(table: string, filter: string): Promise<number
 }
 
 /** Insert rows into a Supabase table via the service role. No-op if unset. */
+// WHEN THE OBSERVABILITY LAYER ITSELF GOES BLIND.
+//
+// Every telemetry write in this codebase is `.catch(() => {})` by design: a
+// failed trace must never break a real turn. The cost is that a Supabase blip
+// silences the panels completely, and a silent panel is indistinguishable from
+// a quiet system - the owner reads "no drops today" when the truth is "nothing
+// could be written today". This counts what was lost, per process, so
+// /api/admin/health can say so out loud.
+const TELEMETRY_TABLES = new Set(["agent_events", "agent_traces"]);
+declare global {
+  // eslint-disable-next-line no-var
+  var __wd_lost_telemetry__: { count: number; lastAt: string | null } | undefined;
+}
+function noteLostTelemetryWrite(table: string): void {
+  if (!TELEMETRY_TABLES.has(table)) return;
+  const g = (globalThis.__wd_lost_telemetry__ ??= { count: 0, lastAt: null });
+  g.count += 1;
+  g.lastAt = new Date().toISOString();
+}
+
+/** How many telemetry rows this instance failed to write (and when last). */
+export function lostTelemetryWrites(): { count: number; lastAt: string | null } {
+  return globalThis.__wd_lost_telemetry__ ?? { count: 0, lastAt: null };
+}
+
 export async function sbInsert(
   table: string,
   rows: Record<string, unknown>[],
@@ -507,8 +532,10 @@ export async function sbInsert(
       },
       body: JSON.stringify(rows),
     });
+    if (!res.ok) noteLostTelemetryWrite(table);
     return res.ok;
   } catch {
+    noteLostTelemetryWrite(table);
     return false;
   }
 }

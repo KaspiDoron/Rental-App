@@ -19,6 +19,13 @@ export function PhotoGallery({
 }) {
   const { t } = useI18n();
   const [ok, setOk] = useState<boolean[]>(() => photos.map(() => true));
+  // A FULL-SCREEN BLACK RECTANGLE IS NOT A LOADING STATE.
+  //
+  // Place photos are large and arrive over hotel wifi, so opening the gallery
+  // showed nothing at all - no plate, no motion - until the bytes landed. The
+  // reader could not tell "loading" from "broken", which is the exact
+  // ambiguity the loading doctrine exists to remove.
+  const [loaded, setLoaded] = useState<boolean[]>(() => photos.map(() => false));
   const [idx, setIdx] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
@@ -92,15 +99,25 @@ export function PhotoGallery({
           {photos.map((u, i) =>
             ok[i] ? (
               <div key={i} className="flex h-full w-full shrink-0 snap-center items-center justify-center p-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={u}
-                  alt=""
-                  loading={i === 0 ? "eager" : "lazy"}
-                  decoding="async"
-                  className="max-h-full max-w-full rounded-2xl object-contain"
-                  onError={() => setOk((prev) => prev.map((v, j) => (j === i ? false : v)))}
-                />
+                <div className="relative flex h-full w-full items-center justify-center">
+                  {!loaded[i] && (
+                    // Reserved space, neutral chrome, honest shimmer - the same
+                    // plate every other surface uses while bytes are in flight.
+                    <div className="skeleton absolute inset-3 rounded-2xl" aria-hidden />
+                  )}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={u}
+                    alt=""
+                    loading={i === 0 ? "eager" : "lazy"}
+                    decoding="async"
+                    className={`max-h-full max-w-full rounded-2xl object-contain transition-opacity duration-300 ${
+                      loaded[i] ? "opacity-100" : "opacity-0"
+                    }`}
+                    onLoad={() => setLoaded((prev) => prev.map((v, j) => (j === i ? true : v)))}
+                    onError={() => setOk((prev) => prev.map((v, j) => (j === i ? false : v)))}
+                  />
+                </div>
               </div>
             ) : null
           )}

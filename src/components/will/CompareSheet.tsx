@@ -9,7 +9,7 @@ import { Icon } from "../icons";
 import type { Vendor } from "@/lib/types";
 import { moneyLocal } from "@/lib/currency";
 import { depositSummary } from "@/lib/deposit";
-import { isPresentableOffer } from "@/lib/offer-presentation";
+import { isPresentableOffer, rankPresentable } from "@/lib/offer-presentation";
 import { useI18n } from "@/lib/i18n";
 
 export function CompareSheet({
@@ -24,13 +24,21 @@ export function CompareSheet({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  // Never compare a price the shop quoted for a DIFFERENT vehicle - it would
-  // rank an off-spec quote (e.g. an e-bike) against the real matches.
-  const cols = vendors.filter((v) => isPresentableOffer(v.offer)).slice(0, 3);
-  const cheapest = cols.reduce<Vendor | null>(
-    (best, v) => (!best || v.offer!.pricePerDay < best.offer!.pricePerDay ? v : best),
-    null
-  );
+  // ONE RANKING RULE, EVERYWHERE (owner report 6, D4 - finished here).
+  //
+  // This sheet kept its own idea of "cheapest": a raw reduce over pricePerDay.
+  // It knew to exclude a wrong-vehicle quote, but not the two things the
+  // shared ranker knows - that comparing across CURRENCIES is dishonest (500
+  // THB is not cheaper than 20 EUR), and that a price from a shop with nothing
+  // to rent is not a deal the traveller can take today. So the compare sheet
+  // could crown a green "cheapest" that the card, the rail and Will all
+  // disagreed with, which is exactly the surfaces-contradicting-each-other
+  // problem this rule exists to end.
+  const dominantCurrency =
+    vendors.find((v) => isPresentableOffer(v.offer))?.offer?.currency ?? null;
+  const ranked = rankPresentable(vendors, dominantCurrency);
+  const cols = ranked.slice(0, 3);
+  const cheapest = ranked[0] ?? null;
 
   const rows: { label: string; render: (v: Vendor) => React.ReactNode }[] = [
     {

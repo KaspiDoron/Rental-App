@@ -56,7 +56,12 @@ export async function noteInboundDropped(
   reason: string,
   extra?: Record<string, unknown>
 ): Promise<void> {
-  if (!dropThrottle.allow(`drop:${email ?? "?"}|${digits ?? "?"}|${reason}`)) return;
+  const throttleKey = `drop:${email ?? "?"}|${digits ?? "?"}|${reason}`;
+  if (!dropThrottle.allow(throttleKey)) return;
+  // How many identical drops this row stands for. Without it a burst of twenty
+  // wrote one row and the panel reported one - the throttle was protecting the
+  // DB and destroying the magnitude at the same time.
+  const alsoSuppressed = dropThrottle.takeSuppressed(throttleKey);
   await sbInsert("agent_events", [
     {
       kind: "inbound-dropped",
@@ -68,7 +73,12 @@ export async function noteInboundDropped(
       // exactly these drops.
       ...(digits ? { to_number: digits } : {}),
       ...(email ? { user_email: email } : {}),
-      detail: JSON.stringify({ reason, digits: digits ?? null, ...(extra ?? {}) }),
+      detail: JSON.stringify({
+        reason,
+        digits: digits ?? null,
+        ...(alsoSuppressed > 0 ? { alsoSuppressed } : {}),
+        ...(extra ?? {}),
+      }),
     },
   ]).catch(() => {});
 }

@@ -221,7 +221,7 @@ export async function GET() {
   // the send pipeline - a spike here is the first sign something is being
   // held back (cancellations firing, claims contended, fail-closed holds,
   // structurally illegal phase jumps).
-  const { sbSelect, sbCountDark } = await import("@/lib/runtime-config");
+  const { sbSelect, sbCountDark, lostTelemetryWrites } = await import("@/lib/runtime-config");
   const sinceIso = new Date(Date.now() - 24 * 3600_000).toISOString();
   const guardKinds = [
     "cancelled-send-blocked",
@@ -388,6 +388,12 @@ export async function GET() {
     guardCountersUnreadable,
     webhookSilent,
     webhookLastAcceptedAt: webhookOk30[0]?.created_at ?? null,
+    // I4: THE PANELS' OWN BLIND SPOT. Every telemetry write is best-effort by
+    // design, so a Supabase blip silences all of them at once - and a silent
+    // panel reads exactly like a quiet system. A non-zero count here means the
+    // numbers on this page are UNDER-reported, not reassuring. Per-instance
+    // and in-memory, so it resets on a redeploy - a live signal, not a ledger.
+    lostTelemetryWrites: lostTelemetryWrites(),
     // The cron watchdog. "never" and "stale" are different failures with
     // different fixes, and the tile says which - see lib/ops/vitals.
     heartbeat: pulse(lastPing[0]?.created_at ?? null, now),
