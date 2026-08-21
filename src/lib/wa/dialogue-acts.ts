@@ -29,7 +29,14 @@ export type AskKind =
   | "substantive"; // a real question we have no finer name for
 
 /** What the shop volunteered, independent of any question. */
-export type ShareKind = "price" | "price-board" | "deposit" | "hours" | "options" | "location";
+export type ShareKind =
+  | "price"
+  | "price-board"
+  | "photo"
+  | "deposit"
+  | "hours"
+  | "options"
+  | "location";
 
 export interface DialogueActs {
   ask: AskKind;
@@ -152,7 +159,11 @@ export function classifyActs(input: ActInput): DialogueActs {
 
   const shared: ShareKind[] = [];
   if (input.hadImage || input.imageKind) {
-    shared.push(input.imageKind === "price_sheet" ? "price-board" : "price-board");
+    // Both branches of this ternary said "price-board" - so a vehicle photo,
+    // an agreement sign, and a FAILED read were all narrated to the composer
+    // as "shared a price board photo", asserting a board on exactly the turns
+    // that had no reading at all.
+    shared.push(input.imageKind === "price_sheet" ? "price-board" : "photo");
   }
   if (typeof input.pricePerDay === "number" && input.pricePerDay > 0) shared.push("price");
   if ((input.optionCount ?? 0) > 1) shared.push("options");
@@ -195,6 +206,7 @@ export function describeActs(acts: DialogueActs): string {
     const names: Record<ShareKind, string> = {
       price: "a price",
       "price-board": "a price board photo",
+      photo: "a photo",
       deposit: "their deposit terms",
       hours: "their opening hours",
       options: "several options",

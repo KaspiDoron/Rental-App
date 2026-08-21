@@ -567,16 +567,46 @@ export function pickBoardPrice<
     available?: boolean | null;
     vehicle?: string | null;
     line?: string | null;
+    tierLabel?: string | null;
   }
->(prices: readonly T[] | null | undefined, engineSizeCc = 0): T | null {
+>(prices: readonly T[] | null | undefined, engineSizeCc = 0, durationDays = 0): T | null {
   const live = quotablePrices(prices).filter((p) => Number(p?.pricePerDay) > 0);
   if (!live.length) return null;
+  // DURATION TIERS BIND. A board's "15-29 days" column is not available to a
+  // 5-day traveller, yet this pick used to run over every row - so the
+  // CHEAPEST (long-stay) tier became the card price and cross-thread rival
+  // leverage. Rows whose tier does not cover this stay are out; untiered rows
+  // always qualify; if NOTHING covers the stay, the answer is honestly null.
+  const covered =
+    durationDays > 0 ? live.filter((p) => tierCoversStay(p.tierLabel, durationDays)) : live;
+  if (!covered.length) return null;
   const cc = engineSizeCc > 0 ? String(engineSizeCc) : null;
   const onSpec = cc
-    ? live.filter((p) => `${p.vehicle ?? ""} ${p.line ?? ""}`.includes(cc))
+    ? covered.filter((p) => `${p.vehicle ?? ""} ${p.line ?? ""}`.includes(cc))
     : [];
-  const pool = onSpec.length ? onSpec : live;
+  const pool = onSpec.length ? onSpec : covered;
   return pool.reduce((a, b) => (Number(a.pricePerDay) <= Number(b.pricePerDay) ? a : b));
+}
+
+/**
+ * Does a board row's own tier wording ("3-7 days", "8+ days", "Monthly")
+ * cover a stay of `days`? Unlabelled rows always do - a bare price is the
+ * shop's general rate. Pure and deliberately forgiving: an unparseable label
+ * counts as covering, because dropping a row over wording we cannot read
+ * would hide a real price.
+ */
+export function tierCoversStay(label: string | null | undefined, days: number): boolean {
+  const l = (label ?? "").trim().toLowerCase();
+  if (!l) return true;
+  const range = l.match(/(\d{1,3})\s*(?:-|to|–)\s*(\d{1,3})/);
+  if (range) return days >= Number(range[1]) && days <= Number(range[2]);
+  const plus = l.match(/(\d{1,3})\s*\+|(\d{1,3})\s*days?\s*(?:or more|and up|\+)/);
+  if (plus) return days >= Number(plus[1] ?? plus[2]);
+  if (/month/.test(l)) return days >= 28;
+  if (/week/.test(l)) return days >= 7;
+  const single = l.match(/(\d{1,3})\s*d/);
+  if (single) return days >= Number(single[1]);
+  return true;
 }
 
 /** Did the reader get anything at all out of this? Drives the empty state. */

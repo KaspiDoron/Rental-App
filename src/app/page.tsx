@@ -1815,6 +1815,7 @@ export default function Home() {
           t: String(Date.now()),
         });
         if (rfq?.engineSizeCc) spec.set("cc", String(rfq.engineSizeCc));
+        if (rfq?.durationDays) spec.set("days", String(rfq.durationDays));
         if (rfq?.vehicleClass) spec.set("vclass", rfq.vehicleClass);
         if (rfq?.transmission && rfq.transmission !== "any") spec.set("tx", rfq.transmission);
         const res = await fetch(`/api/replies?${spec.toString()}`, {

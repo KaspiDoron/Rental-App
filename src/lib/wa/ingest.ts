@@ -1238,7 +1238,13 @@ export async function processEvolutionWebhook(
         // captionless video carries, so the guard reads as "video and nothing
         // else to go on".
         preExtracted:
-          mediaFetchFailed && !syntheticText
+          // '[photo]'/'[image]' is what a CAPTIONLESS photo carries by the
+          // time it gets here (the shared reader's placeholder) - so the old
+          // `!syntheticText` guard made the never-silent clarify dead code on
+          // the live path: a failed download ran a bare text turn over the
+          // placeholder instead.
+          mediaFetchFailed &&
+          (!syntheticText || syntheticText === "[photo]" || syntheticText === "[image]")
             ? (await import("@/lib/agent-loop")).photoClarifyExtraction()
             : videoUnreadable && syntheticText === "[video]"
               ? (await import("@/lib/agent-loop")).videoClarifyExtraction()

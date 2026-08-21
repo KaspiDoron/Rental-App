@@ -63,6 +63,7 @@ const mediaSrc = (id: string) => `/api/wa/media?id=${encodeURIComponent(id)}`;
 function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
   const { t } = useI18n();
   const [broken, setBroken] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = mediaSrc(media.id);
 
   if (media.kind === "audio") {
@@ -112,19 +113,33 @@ function MediaPart({ media }: { media: NonNullable<ThreadMsg["media"]> }) {
   //   - orientation was left entirely to the browser's unpinned default. The
   //     property is pinned here and floored in globals.css, and the parsed EXIF
   //     value drives the @supports fallback for engines that ignore it.
+  // RESERVED SPACE + SKELETON. The bare <img> was width-full x ZERO pixels
+  // until bytes arrived, so a slow redemption looked like nothing at all and
+  // then the photo popped in ~10s later with no warning. A 4:3 plate holds the
+  // layout, the shared neutral `.skeleton` shimmer says "loading" in the
+  // Loading-v4 chrome (no brand hue), and the image fades over it on load.
   return (
     <a href={src} target="_blank" rel="noreferrer" className="mt-1 block">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={t("Photo from the shop")}
-        loading="lazy"
-        decoding="async"
-        onError={() => setBroken(true)}
-        data-exif-orientation={orientationAttrValue(media.orientation)}
-        style={{ imageOrientation: "from-image" }}
-        className="max-h-72 w-full rounded-xl bg-black/5 object-contain"
-      />
+      <span
+        className="relative block overflow-hidden rounded-xl"
+        style={loaded ? undefined : { aspectRatio: "4 / 3" }}
+      >
+        {!loaded && <span aria-hidden className="skeleton absolute inset-0 rounded-xl" />}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={t("Photo from the shop")}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => setBroken(true)}
+          data-exif-orientation={orientationAttrValue(media.orientation)}
+          style={{ imageOrientation: "from-image" }}
+          className={`max-h-72 w-full rounded-xl bg-black/5 object-contain transition-opacity duration-300 ${
+            loaded ? "opacity-100" : "absolute inset-0 h-full opacity-0"
+          }`}
+        />
+      </span>
     </a>
   );
 }

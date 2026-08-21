@@ -139,8 +139,18 @@ function mapVerified(input: GraphTurnInput): VerifiedExtraction {
     imageSummary: ex?.imageSummary || undefined,
     // Our own read's provenance, not the shop's. `seen:false` means the vision
     // providers failed, so the engine must not act as though it had looked.
-    imageUnread:
-      (ex as { imageRead?: { seen?: boolean } } | null)?.imageRead?.seen === false || undefined,
+    imageUnread: (() => {
+      const ir = (ex as { imageRead?: { seen?: boolean; modelFailure?: string } } | null)?.imageRead;
+      // parse-failed/truncated mean the reader ran and WE still have nothing -
+      // the composer must not act as though it had looked, exactly as when the
+      // ladder never answered. (sanity-nulled keeps its number and is handled
+      // by the panel; blinding the composer over it would hide a real price.)
+      return ir?.seen === false ||
+        ir?.modelFailure === "parse-failed" ||
+        ir?.modelFailure === "truncated"
+        ? true
+        : undefined;
+    })(),
     sheetPricePerDay:
       ex?.imageKind === "price_sheet" && typeof input.usablePrice === "number"
         ? input.usablePrice
@@ -244,7 +254,14 @@ function buildDigest(
     // reachable at all.
     depositKnown:
       !ambiguous.includes("deposit") &&
-      (facts.depositKnown || ledger.known.includes("deposit")),
+      (facts.depositKnown ||
+        ledger.known.includes("deposit") ||
+        // Deposit terms read from a PHOTO never touch the text regexes (the
+        // agreement-sign case: "passport OR 2,000-3,000 baht" photographed,
+        // stored, shown to the traveller - and the engine re-probed anyway).
+        // The extraction's deposit field IS the shop stating its terms,
+        // whatever medium carried them.
+        Boolean((input.extraction as { deposit?: string } | null)?.deposit)),
     fulfillmentKnown: facts.fulfillmentKnown || ledger.known.includes("handover"),
     deliveryOffered: facts.deliveryOffered,
     // The MODE and its PRICE are two facts. `fulfillmentKnown` went true on the

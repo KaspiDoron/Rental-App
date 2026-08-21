@@ -178,6 +178,13 @@ export function photoClarifyExtraction(): import("./agents").ExtractedOffer {
     found: false,
     matchesSpec: true,
     confidence: "low",
+    // THE STAMP MUST FIRE ON THIS PATH TOO. Without imageRead this result was
+    // indistinguishable from a text turn: holdsMediaReading() said false, no
+    // reading (not even 'unavailable') was ever stored, and the transcript
+    // showed the honest-placeholder "reading was never stored" under a photo
+    // we KNEW we failed to download. The taxonomy's unavailable state was
+    // unreachable exactly where nobody could look.
+    imageRead: { seen: false, failure: "network", detail: "media download failed", retryable: true },
     clarifyMessage:
       "We couldn't read that photo clearly - could you type the daily price out for us? 🙂",
   } as import("./agents").ExtractedOffer;
@@ -1649,13 +1656,13 @@ export async function processVendorReply(opts: {
     }
   };
   /** Record the move this turn took on the media, so the panel can stop guessing. */
-  const recordMediaFollowUp = (
+  const recordMediaFollowUp = async (
     move: string,
     delivered: import("./media/reading").ReadingFollowUp["delivered"]
   ) => {
     if (!mediaReading) return;
     mediaReading = { ...mediaReading, followUp: { move, delivered, at: new Date().toISOString() } };
-    void stampMediaReading(mediaReading);
+    await stampMediaReading(mediaReading);
   };
 
   // THE TURN THAT LOOKED IS NOT ALWAYS THE TURN THAT HOLDS THE BYTES.
@@ -1681,7 +1688,11 @@ export async function processVendorReply(opts: {
       !usablePrice && extraction.found === false && !readingIsFailure(draft)
         ? { ...draft, notUsedReason: "No usable price in this image." }
         : draft;
-    void stampMediaReading(mediaReading);
+    // AWAITED: `void` here meant the stamp rode a detached promise, and on
+    // Cloud Run a detached promise dies the instant the response flushes
+    // (after.ts documents exactly this) - the other half of every
+    // "reading was never stored" placeholder the owner photographed.
+    await stampMediaReading(mediaReading);
 
     // A FAILURE IS AN EVENT, AND WHICH FAILURE IS THE WHOLE POINT.
     //
@@ -1879,7 +1890,7 @@ export async function processVendorReply(opts: {
   if (routed.engine !== "none") {
     // WHAT WE ACTUALLY DID ABOUT THE PHOTO, written next to the photo. The
     // proof panel renders this; with nothing recorded it now claims nothing.
-    if (routed.spte) recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
+    if (routed.spte) await recordMediaFollowUp(routed.spte.move, routed.spte.delivered);
     // WHAT THE SHOP SAID ABOUT EACH EXTRA THE TRAVELLER ASKED FOR.
     //
     // The request - helmets, a phone mount, delivery - left the app in the

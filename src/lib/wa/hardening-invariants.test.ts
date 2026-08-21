@@ -435,10 +435,16 @@ describe("shop media proxy: scoped to your own thread, never cached publicly", (
     expect(code).toMatch(/status:\s*400/);
   });
 
-  it("is private, no-store - never the public max-age of /api/photo", () => {
+  it("is private with a browser-only cache - never the public max-age of /api/photo", () => {
     const code = readCode(MEDIA);
-    expect(code).toMatch(/private,\s*no-store/);
+    // `private, max-age=3600` (owner report 6 A4): the bytes behind one
+    // message id are immutable, and `no-store` forced the full multi-second
+    // redemption on every reopen of the panel - the 10s photo pop. The
+    // invariant that matters survives unchanged: never `public`, never a
+    // shared cache; one traveller's price board stays theirs.
+    expect(code).toMatch(/private,\s*max-age=3600/);
     expect(code).not.toMatch(/public,\s*max-age/);
+    expect(code).not.toMatch(/s-maxage/);
   });
 
   it("falls back to the Storage audit copy when WhatsApp has expired the media", () => {
