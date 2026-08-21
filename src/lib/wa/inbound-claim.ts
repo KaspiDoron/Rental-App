@@ -23,6 +23,24 @@ import "server-only";
 import { sbInsertReturning, sbSelect } from "../runtime-config";
 
 /**
+ * RECEIVER-SCOPED CLAIM KEY (owner report 6, H4). Both claim tables are keyed
+ * by the bare provider message id - which WhatsApp does NOT promise is unique
+ * across RECEIVERS. A shop broadcasting one promo to two travellers delivers
+ * the same id to both; whoever's webhook lands first claims it globally and
+ * the second traveller's copy is silently dropped as a "duplicate" of a
+ * message they never saw. Scoping the key by the receiving account makes the
+ * claim mean what it always intended: "THIS user's copy is handled."
+ *
+ * Legacy rows carry the bare id; every reader below honors BOTH spellings so
+ * a deploy never re-answers what an older instance already claimed.
+ */
+export function claimKey(receiverEmail: string | null | undefined, waMessageId: string): string {
+  const id = (waMessageId || "").trim();
+  const who = (receiverEmail || "").trim().toLowerCase();
+  return who && id ? `${who}:${id}` : id;
+}
+
+/**
  * Hand a reply claim BACK.
  *
  * The claim is a LEASE on "someone is answering this message", not a tombstone
@@ -35,12 +53,21 @@ import { sbInsertReturning, sbSelect } from "../runtime-config";
  *
  * That is one shop out of seven going quiet with nothing in any log.
  */
-export async function releaseReplyClaim(waMessageId: string): Promise<void> {
+export async function releaseReplyClaim(
+  waMessageId: string,
+  receiverEmail?: string | null
+): Promise<void> {
   const id = (waMessageId || "").trim();
   if (!id) return;
   try {
     const { sbDelete } = await import("../runtime-config");
-    await sbDelete("wa_processed", `wa_message_id=eq.${encodeURIComponent(id)}`);
+    // Both spellings (H4): the claim may have been taken scoped or bare.
+    const scoped = claimKey(receiverEmail, id);
+    const keys = scoped === id ? [id] : [id, scoped];
+    await sbDelete(
+      "wa_processed",
+      `wa_message_id=in.(${keys.map((k) => `"${k}"`).join(",")})`
+    );
   } catch {
     /* best effort - the next redelivery or sweep retries */
   }
@@ -51,12 +78,20 @@ export async function releaseReplyClaim(waMessageId: string): Promise<void> {
  * claim without a row behind it turned every redelivery into a silent no-op:
  * the message existed nowhere, and the dedup layer guaranteed it never would.
  */
-export async function releaseInboundStore(waMessageId: string): Promise<void> {
+export async function releaseInboundStore(
+  waMessageId: string,
+  receiverEmail?: string | null
+): Promise<void> {
   const id = (waMessageId || "").trim();
   if (!id) return;
   try {
     const { sbDelete } = await import("../runtime-config");
-    await sbDelete("wa_inbound_seen", `wa_message_id=eq.${encodeURIComponent(id)}`);
+    const scoped = claimKey(receiverEmail, id);
+    const keys = scoped === id ? [id] : [id, scoped];
+    await sbDelete(
+      "wa_inbound_seen",
+      `wa_message_id=in.(${keys.map((k) => `"${k}"`).join(",")})`
+    );
   } catch {
     /* best effort - the sweep can still re-pull the window */
   }
@@ -71,12 +106,26 @@ export async function releaseInboundStore(waMessageId: string): Promise<void> {
  * `releaseReplyClaim`, so every IDE hover on that function showed the contract
  * of a different one - "fails open (true)" for a function that returns void.)
  */
-export async function claimInboundStore(waMessageId: string): Promise<boolean> {
+export async function claimInboundStore(
+  waMessageId: string,
+  receiverEmail?: string | null
+): Promise<boolean> {
   const id = (waMessageId || "").trim();
   if (!id) return true; // no id to dedupe on - store it
+  const key = claimKey(receiverEmail, id);
   try {
+    // Legacy first (H4): a bare-id row from before scoping means THIS message
+    // was already stored by an older instance - honor it before writing a
+    // scoped claim beside it would double-store the row.
+    if (key !== id) {
+      const legacy = await sbSelect<{ wa_message_id: string }>(
+        "wa_inbound_seen",
+        `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(id)}&limit=1`
+      );
+      if (legacy.length > 0) return false;
+    }
     const claimed = await sbInsertReturning<{ wa_message_id: string }>("wa_inbound_seen", [
-      { wa_message_id: id },
+      { wa_message_id: key },
     ]);
     if (claimed.length > 0) return true; // we won the race
     // Insert returned nothing: either a duplicate-key conflict (someone else
@@ -84,7 +133,7 @@ export async function claimInboundStore(waMessageId: string): Promise<boolean> {
     // silences inbound.
     const existing = await sbSelect<{ wa_message_id: string }>(
       "wa_inbound_seen",
-      `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(id)}&limit=1`
+      `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(key)}&limit=1`
     );
     return existing.length === 0; // present => already stored => skip
   } catch {

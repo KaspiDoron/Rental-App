@@ -1370,6 +1370,11 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         materialDrop: outcome.materialDrop,
         delivered,
         outboxRowId,
+        // I5 (owner report 6): a BLIND turn - an image arrived and the read
+        // failed - was indistinguishable from a sighted one in this record,
+        // so "the agent ignored the price board" and "the agent never saw
+        // it" could not be told apart after the fact.
+        imageUnread: tc.inbound.verified.imageUnread === true ? true : undefined,
         // Response latency (ms) for this turn - feeds the p50/p95 KPI. Only a
         // real reply that actually went out is a meaningful latency sample.
         latencyMs: delivered === "sent" ? Date.now() - startedAt : null,

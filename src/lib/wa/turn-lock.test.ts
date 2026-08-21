@@ -91,7 +91,9 @@ describe("the reply claim is a LEASE, not a tombstone", () => {
   it("...and the release actually deletes the row", () => {
     const c = readCode("src/lib/wa/inbound-claim.ts");
     expect(c).toMatch(/export async function releaseReplyClaim/);
-    expect(c).toMatch(/sbDelete\("wa_processed"/);
+    // H4: the release deletes BOTH claim spellings (scoped + legacy bare id)
+    // in one in.() call - the row is still genuinely removed.
+    expect(c).toMatch(/sbDelete\(\s*"wa_processed",\s*`wa_message_id=in\./);
   });
 
   it("a turn that reached an engine KEEPS the claim, so redelivery cannot loop", () => {

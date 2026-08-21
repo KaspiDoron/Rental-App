@@ -260,6 +260,19 @@ export async function GET() {
     // Which brain answered. A wakeup turn silently running the old engine is
     // exactly the failure that survived a full deploy-and-verify cycle.
     "engine-graph-turn",
+    // I3 (owner report 6): the media pipeline's own failure classes. The
+    // "reading was never stored" agreement photos and the empty catalog
+    // bubbles each had a sensor already firing - none of them reached an
+    // admin number, so the owner's screenshots were the monitoring.
+    "vision-parse-failed",
+    "vision-truncated",
+    "vision-sanity-nulled",
+    "vision-unavailable",
+    "media-fetch-failed",
+    "media-unreadable",
+    // An inbound that never became a turn, with its reason - the difference
+    // between "the shop went quiet" and "we dropped their message".
+    "inbound-dropped",
   ];
   // ONE BUDGET SHARED BY TWELVE COUNTERS IS ELEVEN COUNTERS THAT CAN BE STARVED.
   //

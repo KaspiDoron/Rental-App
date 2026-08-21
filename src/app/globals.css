@@ -711,6 +711,20 @@ input, textarea, select, button {
     border-color 0.15s ease;
 }
 .chip:active { transform: scale(0.94); }
+/* M4 (owner report 6): a 44px TAP FLOOR for interactive chips without moving
+ * a pixel of layout - the filter/sort rows render 22px-tall pills, half the
+ * platform minimum, and mis-taps on a phone read as "the filter is broken".
+ * The invisible overlay widens the HIT AREA only; visuals are untouched. */
+button.chip { position: relative; }
+button.chip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: max(44px, 100%);
+  transform: translateY(-50%);
+}
 
 /* ---- Bits --------------------------------------------------------------- */
 /* A PLACEHOLDER HAS TO LOOK ALIVE.
