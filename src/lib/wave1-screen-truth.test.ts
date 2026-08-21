@@ -61,34 +61,38 @@ async function repliesFor(db: FakeDb) {
   vi.doMock("@/lib/wa-guard", () => ({ drainOutbox: async () => {}, afterSend: async () => {} }));
   vi.doMock("@/lib/evolution", () => ({ sendFromUser: async () => ({ ok: true }) }));
   vi.doMock("@/lib/graph/engine", () => ({ drainGraphWakeups: async () => {} }));
+  const sb = (table: string, query: string): unknown[] => {
+    if (table === "vendor_replies") return db.replies;
+    if (table === "negotiation_threads") {
+      return db.threadFields === undefined
+        ? []
+        : [{ vendor_id: VENDOR, fields: db.threadFields }];
+    }
+    if (table === "whatsapp_messages" && query.includes("direction=eq.inbound")) {
+      const bodies = db.inboundBodies ?? [];
+      const rows: Array<Record<string, unknown>> = bodies.map((body) => ({
+        from_number: DIGITS,
+        body,
+        reading: null,
+      }));
+      if (db.boardPrices?.length) {
+        rows.push({ from_number: DIGITS, body: "", reading: { prices: db.boardPrices } });
+      }
+      // The route asks newest-first and reverses; order is irrelevant here.
+      return rows;
+    }
+    if (table === "whatsapp_messages" && query.includes("direction=eq.outbound")) {
+      // How a vendor_id is joined to the digits we actually messaged.
+      return [{ to_number: DIGITS, raw: { vendorId: VENDOR } }];
+    }
+    return [];
+  };
   vi.doMock("@/lib/runtime-config", () => ({
     getConfig: async () => undefined,
-    sbSelect: async (table: string, query: string) => {
-      if (table === "vendor_replies") return db.replies;
-      if (table === "negotiation_threads") {
-        return db.threadFields === undefined
-          ? []
-          : [{ vendor_id: VENDOR, fields: db.threadFields }];
-      }
-      if (table === "whatsapp_messages" && query.includes("direction=eq.inbound")) {
-        const bodies = db.inboundBodies ?? [];
-        const rows: Array<Record<string, unknown>> = bodies.map((body) => ({
-          from_number: DIGITS,
-          body,
-          reading: null,
-        }));
-        if (db.boardPrices?.length) {
-          rows.push({ from_number: DIGITS, body: "", reading: { prices: db.boardPrices } });
-        }
-        // The route asks newest-first and reverses; order is irrelevant here.
-        return rows;
-      }
-      if (table === "whatsapp_messages" && query.includes("direction=eq.outbound")) {
-        // How a vendor_id is joined to the digits we actually messaged.
-        return [{ to_number: DIGITS, raw: { vendorId: VENDOR } }];
-      }
-      return [];
-    },
+    // L3: the reply feed's first tier reads STRICT so a missing column and an
+    // empty feed stop being the same []. Same data either way in this mock.
+    sbSelectStrict: async (table: string, query: string) => ({ rows: sb(table, query) }),
+    sbSelect: async (table: string, query: string) => sb(table, query),
   }));
   const mod = await import("@/app/api/replies/route");
   // vclass scopes the derived menu exactly as the client sends it.

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { sbSelect } from "@/lib/runtime-config";
+import { sbSelect, sbSelectStrict } from "@/lib/runtime-config";
 import { identityKey } from "@/lib/wa/phone-key";
 import { clampSince } from "@/lib/session-life";
 import { searchSessionTtlMs } from "@/lib/session-life-config";
@@ -75,22 +75,30 @@ export async function GET(req: Request) {
   // (Cloud Scheduler -> /api/wa/ping) drains globally, which is the job of a
   // worker rather than of somebody else's poll.
   try {
-    const { drainOutbox } = await import("@/lib/wa-guard");
-    const { sendFromUser } = await import("@/lib/evolution");
-    const DRAIN_BUDGET_MS = 8_000;
-    const bounded = <T,>(p: Promise<T>) =>
-      Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
-    await bounded(
-      drainOutbox((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }), {
-        senderKey: session.email,
-      }).catch((e) => console.error("[drain:outbox]", e instanceof Error ? e.message : e))
-    );
-    const { drainGraphWakeups } = await import("@/lib/graph/engine");
-    await bounded(
-      drainGraphWakeups((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }), {
-        userEmail: session.email,
-      }).catch((e) => console.error("[drain:wakeups]", e instanceof Error ? e.message : e))
-    );
+    // ONE DRAIN OWNER PER CYCLE (E2/L2): this poll and its siblings all
+    // drained the same queue back-to-back, and the app's most frequent
+    // request could wait 16s on a slow host before answering. The claim
+    // makes roughly every third poll pay the drain; the rest answer at
+    // payload speed. The webhook tail + heartbeat still drain on their own.
+    const { claimDrainSlot } = await import("@/lib/wa/drain-owner");
+    if (claimDrainSlot(session.email)) {
+      const { drainOutbox } = await import("@/lib/wa-guard");
+      const { sendFromUser } = await import("@/lib/evolution");
+      const DRAIN_BUDGET_MS = 8_000;
+      const bounded = <T,>(p: Promise<T>) =>
+        Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
+      await bounded(
+        drainOutbox((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }), {
+          senderKey: session.email,
+        }).catch((e) => console.error("[drain:outbox]", e instanceof Error ? e.message : e))
+      );
+      const { drainGraphWakeups } = await import("@/lib/graph/engine");
+      await bounded(
+        drainGraphWakeups((senderKey, to, text, lane) => sendFromUser(senderKey, to, text, true, { lane }), {
+          userEmail: session.email,
+        }).catch((e) => console.error("[drain:wakeups]", e instanceof Error ? e.message : e))
+      );
+    }
   } catch (e) {
     console.error("[drain:init]", e instanceof Error ? e.message : e);
   }
@@ -119,23 +127,32 @@ export async function GET(req: Request) {
   const filter = `user_email=eq.${encodeURIComponent(session.email)}${sinceFilter}&order=created_at.desc&limit=40`;
   // english_gloss (W1.5) rides in the FIRST tier only - the degrade tiers
   // below keep the feed alive before the owner runs the newest schema.
-  let rows = await sbSelect<ReplyRow>(
+  //
+  // STRICT, NOT SILENT (L3): sbSelect collapses a missing-column 400 and a
+  // genuinely empty feed into the same [], so every tick of every user with
+  // no replies yet re-ran all three tiers - 3x the queries, forever, and no
+  // signal if the schema ever actually regressed. sbSelectStrict tells the
+  // two apart: the ladder now steps down ONLY on a real schema error.
+  let rows: ReplyRow[] = [];
+  const tier1 = await sbSelectStrict<ReplyRow>(
     "vendor_replies",
     `select=id,vendor_id,vendor_name,reply_text,english_gloss,found,price_per_day,matches_spec,confidence,auto,currency,deposit,deposit_type,deposit_amount,deposit_currency,delivers,insurance_included,delivery_fee,created_at&${filter}`
   );
-  if (rows.length === 0) {
-    // A select naming a not-yet-migrated column fails SILENTLY as [] - the
-    // feed must keep working before the owner runs the newest schema.
-    rows = await sbSelect<ReplyRow>(
+  if ("rows" in tier1) {
+    rows = tier1.rows;
+  } else {
+    const tier2 = await sbSelectStrict<ReplyRow>(
       "vendor_replies",
       `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,currency,deposit,delivers,created_at&${filter}`
     );
-  }
-  if (rows.length === 0) {
-    rows = await sbSelect<ReplyRow>(
-      "vendor_replies",
-      `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,created_at&${filter}`
-    );
+    if ("rows" in tier2) {
+      rows = tier2.rows;
+    } else {
+      rows = await sbSelect<ReplyRow>(
+        "vendor_replies",
+        `select=id,vendor_id,vendor_name,reply_text,found,price_per_day,matches_spec,confidence,auto,created_at&${filter}`
+      );
+    }
   }
 
   // Merge the digraph engine's per-thread state so the card can show the

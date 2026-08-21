@@ -95,6 +95,11 @@ export async function GET(req: Request) {
   // our free "worker tick" for business-hours / pacing-queued messages.
   if (!pairing) {
     try {
+      // ONE DRAIN OWNER PER CYCLE (E2/L2) - shared claim with /api/replies
+      // and /api/activity, so the three sibling polls stop draining the same
+      // queue back-to-back inside one traveller's cycle.
+      const { claimDrainSlot } = await import("@/lib/wa/drain-owner");
+      if (claimDrainSlot(session.email)) {
       const { drainOutbox } = await import("@/lib/wa-guard");
       const { sendFromUser } = await import("@/lib/evolution");
       // AWAITED, not fire-and-forget - the same Cloud Run truth the activity
@@ -125,6 +130,7 @@ export async function GET(req: Request) {
           { userEmail: session.email }
         ).catch(() => {})
       );
+      }
     } catch {
       /* best-effort */
     }

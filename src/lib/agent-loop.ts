@@ -372,6 +372,10 @@ export async function processVendorReply(opts: {
     }
   }
 
+  // E1 (owner report 6): the informational risk screen, deferred off the
+  // reply's critical path. Declared HERE so the turn body (runVendorTurn)
+  // can arm it and the finally below can run it on every exit path.
+  let riskScreenDeferred: (() => Promise<void>) | null = null;
   // Captured ONCE so claim and release compute the SAME buckets - a release
   // computed at its own time deleted a slot the claim never took whenever
   // the turn straddled a 60s bucket boundary (see wa/turn-lock).
@@ -410,6 +414,10 @@ export async function processVendorReply(opts: {
     // your AI allowance" than degrading it.
     return await runWithAiBudget(opts.senderEmail ?? "", runVendorTurn);
   } finally {
+    // E1: the informational risk screen, off the reply's critical path but
+    // never off the request - Cloud Run freezes the CPU after the response,
+    // so it must still finish (bounded) before this function returns.
+    if (riskScreenDeferred) await finishBeforeResponse("risk-screen", riskScreenDeferred);
     const { releaseThreadTurn } = await import("./wa/turn-lock");
     if (holdsTurn) await releaseThreadTurn(senderKeyForTurn, from, turnClaimedAtMs);
     // A turn that did not deliver has not consumed the message. Give the claim
@@ -626,8 +634,35 @@ export async function processVendorReply(opts: {
   // NEVER SELF-FLAG: a message the user wrote themselves (a lost fromMe flag
   // upstream can mislabel it inbound) must not be screened as "the shop's
   // reply" - anything matching our recent outbound to this number is skipped.
+  // E1 (owner report 6): the screen is INFORMATIONAL - it warns the traveller
+  // and never freezes the engine - yet it sat on the reply's critical path,
+  // spending its budget (a DB read, a possible model link-clearing call, a
+  // push round trip) BEFORE extraction even started. The one part that must
+  // precede composing is the opt-out veto, which is a regex: it stays here,
+  // costing nothing on ordinary messages. Everything else is ARMED here and
+  // run by the enclosing function's finally, whichever way the turn ends.
   if (ctx.sender && text) {
-    await finishBeforeResponse("risk-screen", async () => {
+    try {
+      const { detectOptOutIntent } = await import("./inbound-risk");
+      if (detectOptOutIntent(text)) {
+        const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+        const ours = await sbSelect<{ body: string }>(
+          "whatsapp_messages",
+          `select=body&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+            ctx.sender
+          )}&received_at=gte.${encodeURIComponent(
+            new Date(Date.now() - 24 * 3600_000).toISOString()
+          )}&order=received_at.desc&limit=30${numberFilter("to_number", from)}`
+        ).catch(() => [] as { body: string }[]);
+        if (!ours.some((o) => norm(o.body || "") === norm(text))) {
+          const { markRecipientOptedOut } = await import("./wa-guard");
+          await markRecipientOptedOut(ctx.sender, from, ctx.vendorName ?? undefined).catch(() => {});
+        }
+      }
+    } catch {
+      /* the full screen below still runs post-turn */
+    }
+    riskScreenDeferred = async () => {
       try {
         const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
         const ours = await sbSelect<{ body: string }>(
@@ -693,7 +728,7 @@ export async function processVendorReply(opts: {
       } catch {
         /* screening is best-effort */
       }
-    });
+    };
   }
 
   const extraction =
