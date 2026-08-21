@@ -87,7 +87,9 @@ describe("inbound: a live thread can never die of a missing RFQ anchor", () => {
     const ctx = readCode("src/lib/wa/thread-context.ts");
     // Recovery is attempted ONLY for a thread we actually messaged and whose
     // gate passed - never as a way to invent an outreach that never happened.
-    expect(ctx).toMatch(/if \(!anchor && gate\.ok\)/);
+    // Owner report 6 B added the third condition: the CURRENT search must have
+    // touched this shop, or the heal would adopt a dead thread into a new hunt.
+    expect(ctx).toMatch(/if \(!anchor && gate\.ok && rows\.some\(inSession\)\)/);
     expect(ctx).toMatch(/recoverRfqForSender/);
     // ...and the heal is persisted, so it is one repair per thread, not one
     // per inbound message.

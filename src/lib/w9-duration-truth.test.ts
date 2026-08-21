@@ -245,7 +245,14 @@ async function loadResolver(opts: { rows: Row[]; recovered?: StructuredRFQ | nul
   const asc = [...opts.rows].sort((a, b) => (a.received_at < b.received_at ? -1 : 1));
 
   vi.doMock("@/lib/runtime-config", () => ({
-    sbSelect: async (_t: string, q: string) => (q.includes("received_at.asc") ? [asc[0]] : desc),
+    sbSelect: async (_t: string, q: string) =>
+      // The session-boundary marker read (owner report 6 B): these threads
+      // have no previous search, so no marker exists.
+      q.includes("to_number=eq.session")
+        ? []
+        : q.includes("received_at.asc")
+          ? [asc[0]]
+          : desc,
     sbInsert: async (_t: string, rows: Array<Record<string, unknown>>) => {
       events.push(...rows);
       return true;

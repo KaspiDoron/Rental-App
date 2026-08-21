@@ -189,7 +189,12 @@ describe("the engine never claims to have read a photo it did not open", () => {
     const types = readCode("src/lib/spte/types.ts");
     expect(types).toMatch(/imageUnread\?: boolean;/);
     const live = readCode("src/lib/spte/live.ts");
-    expect(live).toMatch(/imageUnread:[\s\S]{0,160}imageRead\?\.seen === false/);
+    // Widened in owner report 6 B: parse-failed/truncated are also "we did
+    // not really look" - the composer must not act on a read that returned
+    // nothing, whichever layer lost it.
+    expect(live).toMatch(/imageUnread:[\s\S]{0,900}ir\?\.seen === false/);
+    expect(live).toMatch(/ir\?\.modelFailure === "parse-failed"/);
+    expect(live).toMatch(/ir\?\.modelFailure === "truncated"/);
   });
 
   it("the prompt tells the model plainly that we have not seen it", () => {

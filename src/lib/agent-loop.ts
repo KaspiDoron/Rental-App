@@ -441,14 +441,22 @@ export async function processVendorReply(opts: {
   // WHY closed, for the drop trace: a user-cleared hunt and a quietly expired
   // one are different stories when the owner asks "why did the agent go quiet".
   let sessionClosedReason: "session-terminated" | "session-expired" = "session-terminated";
-  if (ctx.sender && priorAt) {
+  // THE SEARCH BOUNDARY (owner report 6 B). The newest session-closed marker
+  // is not only the dead-thread gate: it is where the CURRENT search begins.
+  // Every context read below (history window, working thread, coalescing,
+  // ask-once counters) is cut at it, so a re-contacted shop's turns from the
+  // PREVIOUS hunt can never feed this hunt's composer - the '5 days' the
+  // agent kept citing on a 4-day search came from exactly that leak.
+  let sessionBoundaryAt: string | null = null;
+  if (ctx.sender) {
     const marker = await sbSelect<{ received_at: string }>(
       "whatsapp_messages",
       `select=received_at&raw->>sender=eq.${encodeURIComponent(
         ctx.sender
       )}&to_number=eq.session&raw->>kind=eq.session-closed&order=received_at.desc&limit=1`
     );
-    sessionClosed = Boolean(marker[0] && marker[0].received_at > priorAt);
+    sessionBoundaryAt = marker[0]?.received_at ?? null;
+    if (priorAt) sessionClosed = Boolean(sessionBoundaryAt && sessionBoundaryAt > priorAt);
   }
   // ...OR THE HUNT SIMPLY EXPIRED. The 3h TTL was enforced only by the CLIENT
   // dropping sessionStorage - the server kept no tombstone, so a shop replying
@@ -502,17 +510,22 @@ export async function processVendorReply(opts: {
   let mine: ThreadMsg[] = [];
   if (opts.senderEmail) {
     const encMe = encodeURIComponent(opts.senderEmail);
+    // Cut at the search boundary: one search, one memory. (No marker = no
+    // previous search = unbounded, exactly as before.)
+    const sinceBound = sessionBoundaryAt
+      ? `&received_at=gt.${encodeURIComponent(sessionBoundaryAt)}`
+      : "";
     const [outRows, inRows] = await Promise.all([
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.outbound&raw->>sender=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
           "to_number",
           from
         )}`
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}&order=received_at.desc&limit=24${numberFilter(
+        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
           "from_number",
           from
         )}`

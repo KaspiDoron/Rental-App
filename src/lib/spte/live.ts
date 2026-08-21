@@ -1350,6 +1350,12 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         // real reply that actually went out is a meaningful latency sample.
         latencyMs: delivered === "sent" ? Date.now() - startedAt : null,
         vehicleKey: vehicleKeyFor(input.rfq),
+        // THE CONTAMINATION SENSOR (owner report 6 B5). The '5 days on a
+        // 4-day search' bug was unreconstructable after the fact because no
+        // turn record said which duration the turn believed. Now every turn
+        // states its terms, so a drift shows in the record, not a screenshot.
+        durationDays: input.rfq.durationDays ?? null,
+        startDate: (input.rfq as { startDate?: string }).startDate ?? null,
         // WHICH LEVERAGE ACTUALLY GOT PLAYED. `leverageUsed` was written by the
         // model every turn and read by nobody, so "the agents never use the
         // other shop's price" could not be measured, only noticed.

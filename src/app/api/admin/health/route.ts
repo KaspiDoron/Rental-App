@@ -226,6 +226,12 @@ export async function GET() {
   const guardKinds = [
     "cancelled-send-blocked",
     "takeover-send-blocked",
+    // A surface tried to rewrite a live thread's rental terms and was
+    // overruled (the '5 days' contamination sensor). Written since W4.1,
+    // read by NOTHING until owner report 6 - the exact bug it was built to
+    // catch shipped to the field unseen while its sensor fired.
+    "rfq-drift-blocked",
+    "rfq-drift",
     // CONTENTION, which is the system pacing itself and is expected...
     "claim-lost",
     // ...and its opposite, which used to share the counter above: a fail-closed
