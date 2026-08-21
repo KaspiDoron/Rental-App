@@ -584,11 +584,18 @@ export interface GraphIO {
   }): Promise<void>;
   recentOutboundGlobal(hours: number, limit: number): Promise<string[]>;
   writeTrace(rows: import("../orchestrator").TraceRow[]): Promise<void>;
-  /** Optional observability sink (live IO only - simulators omit it). */
+  /** Optional observability sink (live IO only - simulators omit it).
+   *
+   *  ADDRESSING IS PART OF THE EVENT, not an afterthought: the message-path
+   *  panel finds a thread's trail by (user_email, to_number), so a row written
+   *  without them is invisible on the one screen built to read it. `userEmail`
+   *  and `toDigits` are what make an event belong to a conversation. */
   recordEvent?(args: {
     kind: string;
     vendorId?: string;
     vendorName?: string;
+    userEmail?: string | null;
+    toDigits?: string | null;
     detail: string;
   }): Promise<void>;
   llmAllowed: boolean; // simulator can force deterministic-only runs

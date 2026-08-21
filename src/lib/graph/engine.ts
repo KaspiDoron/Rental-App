@@ -748,6 +748,8 @@ export async function runGraphTurn(
             kind: "awaiting-location",
             vendorId: input.ctx.vendorId ?? "",
             vendorName: input.ctx.vendorName ?? "",
+            userEmail: input.ctx.sender,
+            toDigits: input.event.toDigits,
             detail: JSON.stringify({ email: input.ctx.sender }),
           })
           .catch(() => {});
@@ -860,6 +862,8 @@ export async function runGraphTurn(
             kind: "bargain-blocked",
             vendorId: input.ctx.vendorId ?? "",
             vendorName: input.ctx.vendorName ?? "",
+            userEmail: input.ctx.sender,
+            toDigits: input.event.toDigits,
             detail: `Bargain to +${input.event.toDigits} blocked (${delivered.detail}) - run budget rolled back, next event retries.`,
           })
           .catch(() => {});
@@ -1176,6 +1180,7 @@ async function runTailGates(args: {
           kind: "localize-fallback",
           user_email: input.ctx.sender ?? "",
           vendor_name: input.ctx.vendorName ?? input.event.toDigits,
+          to_number: input.event.toDigits,
           detail: JSON.stringify({
             reason: localized.reason,
             region: localeRegion ?? null,
@@ -1905,6 +1910,18 @@ export function liveGraphIO(send: LiveSend): GraphIO {
             finalText: verdict.text,
           };
         }
+        // The same last-instant question for the OTHER absolute veto: the
+        // traveller may have started typing in this shop's chat since the
+        // guard ran. Fails closed on an unreadable store - talking over a
+        // human is the harm this cannot risk.
+        const { isThreadTakenOver } = await import("../session-flags");
+        if ((await isThreadTakenOver(senderKey, toNumber)) !== false) {
+          return {
+            delivered: "blocked",
+            detail: "human-takeover - the traveller is handling this thread",
+            finalText: verdict.text,
+          };
+        }
       } catch {
         /* guard already enforced the readable cases */
       }
@@ -2036,10 +2053,18 @@ export function liveGraphIO(send: LiveSend): GraphIO {
       return rows.map((r) => r.body ?? "").filter(Boolean);
     },
     writeTrace,
-    async recordEvent({ kind, vendorId, vendorName, detail }) {
-      await sbInsert("agent_events", [
-        { kind, vendor_id: vendorId ?? "", vendor_name: vendorName ?? "", detail },
-      ]);
+    async recordEvent({ kind, vendorId, vendorName, userEmail, toDigits, detail }) {
+      const base = { kind, vendor_id: vendorId ?? "", vendor_name: vendorName ?? "", detail };
+      // Addressed, so the message-path trail can find it. Same degrade ladder
+      // the stale-draft event uses: retry bare if `to_number` is missing on a
+      // pre-migration deployment - an unaddressed event still beats none.
+      const addressed = {
+        ...base,
+        ...(userEmail ? { user_email: userEmail } : {}),
+        ...(toDigits ? { to_number: toDigits } : {}),
+      };
+      const ok = await sbInsert("agent_events", [addressed]).catch(() => false);
+      if (!ok) await sbInsert("agent_events", [base]);
     },
     llmAllowed: true,
     now: () => Date.now(),

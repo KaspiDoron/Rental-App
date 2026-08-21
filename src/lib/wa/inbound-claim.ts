@@ -140,3 +140,90 @@ export async function claimInboundStore(
     return true; // store unreachable - never drop a real shop reply
   }
 }
+
+/**
+ * THE LAST-RESORT WINNER ELECTION, WHEN `wa_processed` IS GONE.
+ *
+ * The reply claim above is the normal path. When its table is missing or
+ * unreachable, something still has to decide which of two concurrent webhook
+ * deliveries composes the answer - and the fallback that used to do it COUNTED
+ * stored inbound rows and stood down when it saw more than one.
+ *
+ * That is symmetric, which makes it the one answer that cannot work: both
+ * deliveries read the same two rows, both conclude "the other one has this",
+ * and the shop gets ZERO replies. A traveller watching a dead thread is a far
+ * worse outcome than the duplicate the rule was written to prevent.
+ *
+ * So: elect, don't count. `wa_send_claims` is an atomic conditional insert in
+ * a DIFFERENT table, so the outage that took `wa_processed` out does not take
+ * the election with it, and exactly one caller is told it won.
+ *
+ * FAILS OPEN, like every other claim here: if that table is unreachable too,
+ * the answer is "you won". A rare duplicate beats a silent conversation, and
+ * the per-thread turn lock still stands in front of the common case.
+ */
+export async function electReplyOwner(
+  senderEmail: string | null | undefined,
+  replyKey: string
+): Promise<boolean> {
+  if (!replyKey) return true;
+  try {
+    const { sbInsertClaim } = await import("../runtime-config");
+    const claim = await sbInsertClaim("wa_send_claims", {
+      sender_key: senderEmail ?? "",
+      slot_key: `inbound:${replyKey}`,
+    });
+    return claim !== "lost";
+  } catch {
+    return true; // claims unreachable - never silence a shop
+  }
+}
+
+
+/** How long an unsettled claim is honored before it is treated as a dead turn.
+ *  A whole turn is bounded at ~60s, so ten minutes is far past any live one -
+ *  and every failed turn releases its claim explicitly, so reaching this
+ *  threshold means the process itself went away mid-turn. */
+export const CLAIM_LEASE_MS = 10 * 60_000;
+
+/**
+ * Mark a claim as SETTLED: a reply actually went out for this message.
+ *
+ * Without this the claim was a tombstone that could not tell "answered" from
+ * "the instance died holding it", so the recovery sweep skipped a dead turn's
+ * message forever. Best-effort by design - on a pre-migration deployment the
+ * column is absent and everything behaves exactly as it did before.
+ */
+export async function settleReplyClaim(
+  waMessageId: string,
+  receiverEmail?: string | null
+): Promise<void> {
+  const id = (waMessageId || "").trim();
+  if (!id) return;
+  const { sbUpdate } = await import("../runtime-config");
+  const key = claimKey(receiverEmail, id);
+  await sbUpdate(
+    "wa_processed",
+    `wa_message_id=eq.${encodeURIComponent(key)}`,
+    { settled_at: new Date().toISOString() }
+  ).catch(() => {});
+}
+
+/**
+ * Is this claim a dead turn's leftover - held past the lease, never settled?
+ *
+ * Deliberately conservative: anything settled, anything young, and anything we
+ * cannot read is treated as a LIVE claim. Re-answering a message that was in
+ * fact answered would put a second message into a real shop's chat, which is a
+ * worse failure than the silence this repairs.
+ */
+export function claimIsDeadTurn(
+  row: { created_at?: string | null; settled_at?: string | null } | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (!row) return false;
+  if (row.settled_at) return false; // a reply really did go out
+  const started = Date.parse(row.created_at ?? "");
+  if (!Number.isFinite(started)) return false; // unreadable - assume live
+  return nowMs - started > CLAIM_LEASE_MS;
+}

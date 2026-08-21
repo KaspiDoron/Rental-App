@@ -631,8 +631,19 @@ alter table public.agent_traces enable row level security;
 -- concurrent webhook deliveries can never both reply (or both bail).
 create table if not exists public.wa_processed (
   wa_message_id text primary key,
-  created_at    timestamptz not null default now()
+  created_at    timestamptz not null default now(),
+  -- THE CLAIM IS A LEASE, NOT A TOMBSTONE.
+  -- A turn that fails DELETES its claim, so a surviving row was meant to mean
+  -- "answered". But an instance killed mid-turn (Cloud Run recycles freely)
+  -- deletes nothing - the claim outlives the turn that owned it, and the
+  -- recovery sweep then skips that message forever as already-answered. The
+  -- shop's reply is stored, silent and unrecoverable.
+  -- settled_at is stamped only when a reply actually went out, which makes the
+  -- two cases distinguishable: an unsettled claim past its lease is a dead
+  -- turn and may be retaken.
+  settled_at    timestamptz
 );
+alter table public.wa_processed add column if not exists settled_at timestamptz;
 
 -- STORE-level inbound idempotency (distinct from wa_processed, which guards the
 -- agent REPLY). Evolution redelivers webhooks and the recovery sync re-pulls the

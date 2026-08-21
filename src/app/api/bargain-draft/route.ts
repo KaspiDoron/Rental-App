@@ -63,6 +63,7 @@ export async function POST(req: Request) {
           user_email: session.email,
           vendor_id: String(vendor.id ?? ""),
           vendor_name: String(vendor.name ?? ""),
+          to_number: digits,
           detail: `Bargain draft asked for ${
             (body.rfq as StructuredRFQ)?.durationDays
           } days; the thread was opened for ${rfq.durationDays}. Composed on the promise.`,

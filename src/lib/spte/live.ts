@@ -841,6 +841,8 @@ async function localizeSpteOutbound(args: {
         kind: "localize-fallback",
         vendorId: input.ctx.vendorId,
         vendorName: input.ctx.vendorName ?? input.event.toDigits,
+        userEmail: input.ctx.sender,
+        toDigits: input.event.toDigits,
         detail: JSON.stringify({ reason, region: region ?? null, path: "spte-reply" }).slice(0, 500),
       })
       .catch(() => {});
@@ -1350,6 +1352,8 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
       kind: "engine-v3-turn",
       vendorId: input.ctx.vendorId,
       vendorName: input.ctx.vendorName,
+      userEmail: input.ctx.sender,
+      toDigits: input.event.toDigits,
       // FIELD ORDER IS LOAD-BEARING. The blob is hard-capped below, so every
       // short analytical field comes first and the two long free-text fields
       // (`think`, `text`) come last - truncation can then only ever eat the tail
