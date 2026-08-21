@@ -160,12 +160,13 @@ async function allProviders(): Promise<ProviderConfig[]> {
       // silent hold until the socket times out). Correct ids, slow tier - it
       // still earns its keep on the long-budget callers (distill, admin).
       // gpt-oss-120b leads (SambaCloud's flagship with dedicated capacity).
-      // The rescue is the SMALL 8B pool: the owner's live probe caught the
-      // flagship AND the 70B pool both at capacity in the same minute -
-      // two crowded pools are one rescue that never fires. The 8B tier has
-      // the headroom precisely because nobody's default points at it.
+      // The rescue is the 70B pool - SambaNova's own designated replacement
+      // after it removed the whole Llama-3.1-8B line (March 2026). The owner's
+      // live probe caught the previous 8B rescue returning 410 GONE on every
+      // call: a rescue rung must be a model the provider still SERVES, and
+      // 3.3-70B is the one SambaNova routes retired-model traffic to.
       model: pick(sambaM, "gpt-oss-120b"),
-      fallbackModel: "Meta-Llama-3.1-8B-Instruct",
+      fallbackModel: "Meta-Llama-3.3-70B-Instruct",
     },
     {
       name: "openrouter",
@@ -212,14 +213,16 @@ async function allProviders(): Promise<ProviderConfig[]> {
     // July 2026 (one-time $5 trial, then 402 "payment required" on every
     // model - account-level, so no model id fixes it). With a spent trial
     // every attempt is a guaranteed failed round trip; it sits last so the
-    // working free providers answer first. Rows stay correct if the owner
-    // ever adds billing.
+    // working free providers answer first. The row stays correct if the
+    // owner ever adds billing. NO fallbackModel, deliberately: the roster
+    // collapsed to essentially gpt-oss-120b (the old llama3.1-8b rescue
+    // 404s - the owner's live probe paid for BOTH dead calls), and a 402
+    // is account-level anyway, so a second id can never rescue it.
     {
       name: "cerebras",
       token: cerebras,
       endpoint: "https://api.cerebras.ai/v1/chat/completions",
       model: pick(cerM, "gpt-oss-120b"),
-      fallbackModel: "llama3.1-8b",
     },
     // ---- PAID providers (owner report 5 #13) --------------------------------
     // The owner buys tokens here for the turns that decide money: the premium
@@ -643,7 +646,17 @@ async function errorDetail(res: Response, name: string): Promise<string> {
   } catch {
     /* ignore */
   }
-  const msg = body.replace(/\s+/g, " ").trim();
+  let msg = body.replace(/\s+/g, " ").trim();
+  // An HTML error page is the provider's EDGE talking (HuggingFace's Hub
+  // limiter 429s with a full branded page before the request ever reaches
+  // the API). Dumping 300 chars of markup into the admin panel buries the
+  // one fact that matters - the status - under angle-bracket noise, so it
+  // becomes a short honest note instead. The `name status` prefix survives,
+  // which is what providerFailureKind classifies on (429 -> busy).
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("text/html") || /^\s*<(!doctype|html)/i.test(msg)) {
+    msg = "HTML error page from the provider's edge - blocked before reaching the API";
+  }
   return `${name} ${res.status}${msg ? ` - ${msg}` : ""}`;
 }
 
@@ -794,7 +807,11 @@ async function callProvider(
   // `model` is the id that actually ANSWERED. The fallback retry below means
   // the configured id and the served id are two different facts, and the
   // telemetry is worthless if it records the one we hoped for.
-): Promise<{ text: string; tokens: number; model: string }> {
+  // `primaryFailure` is WHY the primary lost, kept only on a successful
+  // rescue: without it, "the fallback answered" was one undifferentiated
+  // amber - a busy pool at peak (nothing to fix) and a retired id (fix it
+  // now) rendered as the same nagging note.
+): Promise<{ text: string; tokens: number; model: string; primaryFailure?: string }> {
   // `timeoutMs` is a DEADLINE for the whole provider attempt, primary and
   // fallback together - not a per-call duration. Duplicating the full budget
   // on the rescue used to let one provider spend 2x its share of the caller's
@@ -868,7 +885,8 @@ async function callProvider(
         // The rescue gets whatever the deadline has left (a fast-failing
         // primary leaves nearly everything; a hung one leaves its reserved
         // ~40%), never a duplicated budget.
-        return await run(cfg.fallbackModel, Math.max(2_000, deadline - Date.now()));
+        const rescued = await run(cfg.fallbackModel, Math.max(2_000, deadline - Date.now()));
+        return { ...rescued, primaryFailure: reason };
       } catch (e2) {
         // BOTH ids failed. Reporting only one of the two errors made the
         // live panel ambiguous: a red card naming the primary's error reads
@@ -903,6 +921,9 @@ export interface ProviderTestResult {
   configuredModel?: string;
   ms?: number;
   detail?: string;
+  /** WHY the primary lost when the fallback answered (ok && drifted). The
+   *  panel classifies this: a busy pool reads calm, a dead id reads fix-me. */
+  primaryDetail?: string;
 }
 
 export async function testAllProviders(): Promise<ProviderTestResult[]> {
@@ -936,6 +957,8 @@ export async function testAllProviders(): Promise<ProviderTestResult[]> {
           model: r.model,
           configuredModel: p.model,
           ms: Date.now() - t0,
+          // Bounded like `detail`: the panel renders it verbatim.
+          primaryDetail: r.primaryFailure?.slice(0, 500),
         };
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);

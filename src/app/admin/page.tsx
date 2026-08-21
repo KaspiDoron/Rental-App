@@ -501,6 +501,7 @@ export default function AdminPage() {
         configuredModel?: string;
         ms?: number;
         detail?: string;
+        primaryDetail?: string;
       }[]
     | null
   >(null);
@@ -2054,17 +2055,26 @@ export default function AdminPage() {
                   // sends the owner hunting for a broken key that is fine.
                   const kind = t.ok ? null : providerFailureKind(t.detail);
                   const ownerMustAct = kind !== null && providerNeedsOwner(kind);
+                  // The same distinction INSIDE a green result: the fallback
+                  // answering because the primary pool is busy/paywalled is
+                  // the chain working (calm note, card stays green); the
+                  // fallback answering because the primary id is dead is the
+                  // drift this panel exists to catch (fix-me note, amber).
+                  const driftKind = drifted ? providerFailureKind(t.primaryDetail) : null;
+                  const driftBenign = driftKind === "busy" || driftKind === "paywalled";
                   return (
                     <div
                       key={t.name}
                       className={`rounded-2xl border-2 px-3 py-2 text-[11.5px] font-bold ${
                         !t.configured
                           ? "border-line bg-card2 text-faint"
-                          : t.ok && !drifted
+                          : t.ok && (!drifted || driftBenign)
                             ? "border-savings/50 bg-savings-soft text-savings"
-                            : t.ok || !ownerMustAct
-                              ? "border-brandyellow bg-brandyellow-soft text-warn"
-                              : "border-brandred/60 bg-brandred-soft text-brandred"
+                            : kind === "paywalled"
+                              ? "border-line bg-card2 text-faint"
+                              : t.ok || !ownerMustAct
+                                ? "border-brandyellow bg-brandyellow-soft text-warn"
+                                : "border-brandred/60 bg-brandred-soft text-brandred"
                       }`}
                     >
                       <span className="capitalize">{t.name}</span>
@@ -2077,14 +2087,26 @@ export default function AdminPage() {
                           {typeof t.ms === "number" ? ` · ${t.ms}ms` : ""}
                           {drifted && (
                             <div className="mt-0.5 font-mono text-[10px]">
-                              primary {t.configuredModel} FAILED - the fallback answered.
-                              Fix it or paste a working id as {t.name.toUpperCase()}_MODEL.
+                              {driftBenign
+                                ? `primary ${t.configuredModel} is ${
+                                    driftKind === "busy" ? "busy right now" : "behind a paywall"
+                                  } - the fallback answered. Nothing to fix.`
+                                : `primary ${t.configuredModel} FAILED - the fallback answered. Fix it or paste a working id as ${t.name.toUpperCase()}_MODEL.`}
+                              {t.primaryDetail && (
+                                <span className="mt-0.5 block break-words opacity-80">
+                                  {t.primaryDetail}
+                                </span>
+                              )}
                             </div>
                           )}
                         </>
                       ) : (
                         <>
-                          {kind === "busy" ? " - busy, not broken" : " - failed"}
+                          {kind === "busy"
+                            ? " - busy, not broken"
+                            : kind === "paywalled"
+                              ? " - paid now, skipped by design"
+                              : " - failed"}
                           {/* The INTERPRETATION, then the evidence. Never one
                               without the other: a classifier that swallowed the
                               raw body would be the panel lying more politely. */}

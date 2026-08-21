@@ -75,7 +75,7 @@ describe("a model id that drifted is visible instead of merely expensive", () =>
     // (The fallback run is awaited in a try with its own remaining-budget
     // argument; the ordering invariant - record BEFORE retry - is unchanged.)
     expect(body.indexOf("recordUsage(cfg.name, 0, true")).toBeLessThan(
-      body.indexOf("return await run(cfg.fallbackModel")
+      body.indexOf("await run(cfg.fallbackModel")
     );
   });
 
