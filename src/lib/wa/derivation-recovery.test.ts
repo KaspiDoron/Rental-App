@@ -22,14 +22,17 @@ describe("the sweep's skip predicate is ANSWERED, not STORED", () => {
   const sync = readCode("src/lib/wa-sync.ts");
 
   it("reads the wa_processed lease (the durable record of a delivered turn)", () => {
-    expect(sync).toMatch(/sbSelectStrict<\{ wa_message_id: string \}>\(\s*"wa_processed"/);
+    expect(sync).toMatch(/sbSelectStrict<\{[\s\S]{0,200}?wa_message_id: string;[\s\S]{0,200}?\}>\(\s*"wa_processed"/);
   });
 
   it("skips on answeredIds - a stored row whose turn died is retried", () => {
     expect(sync).toMatch(/if \(answeredIds\.has\(m\.id\)\) continue;/);
     // The old predicate must be gone: seenIds only guards the INSERT mirror.
     expect(sync).not.toMatch(/if \(seenIds\.has\(m\.id\)\) continue;/);
-    expect(sync).toMatch(/if \(!seenIds\.has\(m\.id\)\) \{/);
+    // seenIds still guards the mirror - now ANDed with the atomic claim, so a
+    // row the webhook stored mid-sweep (after this snapshot was read) cannot
+    // be double-written. Both halves must survive.
+    expect(sync).toMatch(/if \(!seenIds\.has\(m\.id\) && \(await claimInboundStore\(m\.id, email\)\)\) \{/);
   });
 
   it("pre-migration (wa_processed missing) degrades to stored-means-done", () => {

@@ -13,6 +13,7 @@ import { sbInsert } from "@/lib/runtime-config";
 import { killSwitchOn } from "@/lib/usage";
 import { can, localLanguageAllowed } from "@/lib/entitlements";
 import { digitsOnly } from "@/lib/phone";
+import { mapLimit } from "@/lib/concurrency";
 import { lidKey } from "@/lib/wa/phone-key";
 import { outboxToKeyPatch } from "@/lib/wa/outbox-columns";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
@@ -286,12 +287,20 @@ export async function POST(req: Request) {
       : null;
   const compiledRecent: string[] = [];
   const wantLocalLang = localLanguageAllowed({ requested: body.localLang, plan: session.plan });
-  const openerFor = async (
+  // COMPILE IS SEQUENTIAL, LOCALIZE IS NOT.
+  //
+  // These used to be one function awaited once per shop inside the dispatch
+  // loop, which made the whole batch serial on its slowest part - the LLM
+  // localization. They are split because they have opposite constraints:
+  // compiling shares mutable state (`compiledRecent`, the cross-shop
+  // uniqueness ledger) and MUST run one at a time, while localizing is pure
+  // per-shop work and can run in a bounded pool.
+  const compileFor = async (
     vendorId: string,
     shopDigits: string,
     /** W4.7 - false when this shop already has an open thread with us. */
     firstOutbound: boolean
-  ): Promise<{ text: string; gloss?: string }> => {
+  ): Promise<{ text: string; gloss?: string; localize?: { digits: string; firstOutbound: boolean } }> => {
     if (!rfqForCompile) return { text: opener.text, gloss: englishGloss };
     const { compileOpener } = await import("@/lib/copy/promptCompiler");
     const { openerSeed } = await import("@/lib/copy/matrix");
@@ -304,12 +313,23 @@ export async function POST(req: Request) {
     const unique = await ensureGloballyUnique(english, compiledRecent);
     compiledRecent.push(unique.text);
     if (!wantLocalLang) return { text: unique.text };
+    // Hand the localization back to the caller's pool rather than awaiting it
+    // here - this is the one slow step, and it is the reason the batch used to
+    // run out of request budget.
+    return { text: unique.text, localize: { digits: shopDigits, firstOutbound } };
+  };
+
+  const localizeFor = async (
+    englishText: string,
+    shopDigits: string,
+    firstOutbound: boolean
+  ): Promise<{ text: string; gloss?: string }> => {
     const { localizeMessage } = await import("@/lib/agents");
     // The LANGUAGE comes from the full phone-prefix country map; the narrow
     // 4-market shopRegion above stays what it always was - greeting flavor.
     const { countryForShop } = await import("@/lib/copy/region");
     const localized = await localizeMessage(
-      unique.text,
+      englishText,
       countryForShop(shopDigits, String(body.region ?? "")),
       undefined,
       true,
@@ -319,8 +339,8 @@ export async function POST(req: Request) {
       { greet: firstOutbound }
     );
     return localized.localized
-      ? { text: localized.text, gloss: localized.english ?? unique.text }
-      : { text: unique.text };
+      ? { text: localized.text, gloss: localized.english ?? englishText }
+      : { text: englishText };
   };
 
   // CLICK-TIME BUDGET TRUTH. The anti-ban engine only allows a limited number
@@ -378,6 +398,44 @@ export async function POST(req: Request) {
   newIntrosLeft = Math.max(0, newIntrosLeft - parkedNewIntros);
   let deferredTomorrow = 0;
 
+  // ---- OPENERS, PREPARED BEFORE THE DISPATCH LOOP -------------------------
+  //
+  // Every shop's opener used to be compiled AND localized inside the loop, one
+  // awaited LLM call at a time. At Ultra's 24-shop batch that is ~24 sequential
+  // model round trips inside a 60s request ceiling: the request died partway
+  // and the shops at the tail were silently never queued. The traveller saw a
+  // hunt that had simply stopped.
+  //
+  // Two passes instead. Compiling stays strictly sequential because it shares
+  // the cross-shop uniqueness ledger; localizing - the slow half - runs in a
+  // bounded pool, so the batch costs about one round trip per POOL, not per
+  // shop, and stays inside the ceiling with room to spare.
+  const openerByVendor = new Map<string, { text: string; gloss?: string }>();
+  {
+    const withPhone = vendors
+      .map((v) => ({ v, digits: digitsOnly((v.whatsapp ?? "").trim()) }))
+      .filter((x) => x.digits.length > 0);
+    const compiled = [];
+    for (const { v, digits } of withPhone) {
+      compiled.push({
+        v,
+        digits,
+        out: await compileFor(String(v.id), digits, !knownNumbers.has(digits)),
+      });
+    }
+    const POOL = 6; // enough to collapse the wall clock, low enough to stay under provider RPM
+    const finished = await mapLimit(compiled, POOL, async ({ out, digits }) => {
+      if (!out.localize) return { text: out.text, gloss: out.gloss };
+      // One shop's localization failing must never take the batch down - the
+      // English opener is a correct message, just not a localized one.
+      return await localizeFor(out.text, digits, out.localize.firstOutbound).catch(() => ({
+        text: out.text,
+        gloss: out.gloss,
+      }));
+    });
+    compiled.forEach((c, i) => openerByVendor.set(String(c.v.id), finished[i]));
+  }
+
   for (const v of vendors) {
     let to = (v.whatsapp ?? "").trim();
     if (!to && v.placeId) to = (await placeDetails(v.placeId))?.phone ?? "";
@@ -414,7 +472,10 @@ export async function POST(req: Request) {
     const isNewIntro = !knownNumbers.has(digits);
     // Per-shop compiled opener (falls back to the legacy single message when
     // the caller sent no rfq). Computed before meta so the gloss rides along.
-    const opener = await openerFor(v.id, digits, isNewIntro);
+    // Prepared above in the bounded pool; a shop whose phone only resolved via
+    // placeDetails (rare) was not in that pass and compiles on the spot.
+    const opener =
+      openerByVendor.get(String(v.id)) ?? (await compileFor(String(v.id), digits, isNewIntro));
     // W9 - THE STAMP MAY NOT REWRITE A RUNNING THREAD'S PROMISE.
     //
     // This is the PRIMARY hunt send path, and it was the one drift generator

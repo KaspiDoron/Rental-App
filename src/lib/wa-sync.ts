@@ -16,6 +16,7 @@ import { noteInboundDropped } from "./wa/webhook-trace";
 import { digitsOnly } from "./phone";
 import { numberFilter, sameNumber, lidKey } from "./wa/phone-key";
 import { rememberAlias, lidAliasForShop } from "./wa/lid-alias";
+import { claimInboundStore, claimIsDeadTurn } from "./wa/inbound-claim";
 import { boundedSet } from "./bounded-map";
 
 const SYNC_MIN_GAP_MS = 12_000; // at most one real sync per user per 12s (snappy recovery)
@@ -177,9 +178,13 @@ export async function syncInboundReplies(email: string): Promise<number> {
         const scoped = claimKey(email, i);
         return scoped === i ? [i] : [i, scoped];
       });
-      const answeredRes = await sbSelectStrict<{ wa_message_id: string }>(
+      const answeredRes = await sbSelectStrict<{
+        wa_message_id: string;
+        created_at?: string | null;
+        settled_at?: string | null;
+      }>(
         "wa_processed",
-        `select=wa_message_id&wa_message_id=in.(${claimSpellings
+        `select=wa_message_id,created_at,settled_at&wa_message_id=in.(${claimSpellings
           .map((i) => `"${i}"`)
           .join(",")})&limit=${claimSpellings.length}`
       );
@@ -190,11 +195,23 @@ export async function syncInboundReplies(email: string): Promise<number> {
       const answeredIds =
         "rows" in answeredRes
           ? new Set(
-              answeredRes.rows.map((r) =>
-                r.wa_message_id.startsWith(scopePrefix)
-                  ? r.wa_message_id.slice(scopePrefix.length)
-                  : r.wa_message_id
-              )
+              answeredRes.rows
+                // A CLAIM HELD BY A TURN THAT DIED IS NOT AN ANSWER.
+                //
+                // Every failed turn releases its claim, so a surviving one was
+                // taken to mean "answered". An instance killed mid-turn
+                // releases nothing, and this sweep - the ONLY recovery path -
+                // then skipped that message forever. Past the lease, an
+                // unsettled claim is a dead turn and the message is fair game
+                // again. Conservative by construction: settled, young, or
+                // unreadable all still count as answered, because a second
+                // message in a real shop's chat is worse than a late one.
+                .filter((r) => !claimIsDeadTurn(r))
+                .map((r) =>
+                  r.wa_message_id.startsWith(scopePrefix)
+                    ? r.wa_message_id.slice(scopePrefix.length)
+                    : r.wa_message_id
+                )
             )
           : seenIds;
 
@@ -223,7 +240,14 @@ export async function syncInboundReplies(email: string): Promise<number> {
         if (m.text.trim() && ourBodies.has(norm(m.text))) continue; // self-echo
         // Mirror the webhook's insert so the thread history stays coherent
         // (only for messages the webhook never stored).
-        if (!seenIds.has(m.id)) {
+        //
+        // `seenIds` is a SNAPSHOT read taken before this loop, so it cannot see
+        // a row the webhook stored while the sweep was running - and this sweep
+        // is precisely the thing that runs concurrently with live webhooks.
+        // The claim closes that window: it is the same conditional insert the
+        // webhook itself takes, so whichever arrives second is told so instead
+        // of writing a duplicate "[photo]" into the traveller's transcript.
+        if (!seenIds.has(m.id) && (await claimInboundStore(m.id, email))) {
           await sbInsert("whatsapp_messages", [
             {
               wa_message_id: m.id,

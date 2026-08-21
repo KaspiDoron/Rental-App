@@ -62,6 +62,11 @@ export async function noteInboundDropped(
       kind: "inbound-dropped",
       vendor_id: "",
       vendor_name: digits ?? "",
+      // The panel joins on to_number; vendor_name here is BARE digits, which
+      // matches neither side of its (to_number | "+digits") filter - so every
+      // drop this function recorded was invisible on the screen built to show
+      // exactly these drops.
+      ...(digits ? { to_number: digits } : {}),
       ...(email ? { user_email: email } : {}),
       detail: JSON.stringify({ reason, digits: digits ?? null, ...(extra ?? {}) }),
     },

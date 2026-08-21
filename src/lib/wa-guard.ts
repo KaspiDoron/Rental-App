@@ -3273,6 +3273,26 @@ export async function drainOutbox(
         await completeOutboxRow(row.id); // the user removed it - it is gone for good
         continue;
       }
+      // ...AND THE OTHER ABSOLUTE VETO, WHICH THIS PATH NEVER RE-ASKED.
+      //
+      // A parked row can sit for minutes. If the traveller started typing in
+      // that shop's chat themselves in the meantime, the guard's compose-time
+      // verdict is stale and the agent talks straight over a human - the one
+      // thing takeover exists to prevent. Cancellation got a last-instant
+      // re-check here; takeover, which is exactly as absolute, did not.
+      //
+      // Held, not killed: a takeover is a pause, not a removal, so the row
+      // waits for handback instead of being completed away.
+      if (rowKind !== "deal-close") {
+        const { isThreadTakenOver } = await import("./session-flags");
+        const takenOver = await isThreadTakenOver(row.sender_key, row.to_number);
+        // FAIL CLOSED on null: an unreadable store must not license a send
+        // over a human (the tri-state exists for precisely this call site).
+        if (takenOver !== false) {
+          await release(120_000, { reason: "human-takeover" });
+          continue;
+        }
+      }
     } catch {
       /* the guard already enforced the readable cases */
       await release(60_000, { reason: "sync-retry" });

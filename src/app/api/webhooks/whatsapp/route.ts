@@ -262,15 +262,66 @@ export async function POST(req: Request) {
     // arrives during a database blip (no other recovery path exists for the
     // Cloud channel; wa-sync only reconciles the Evolution channel).
     if (rows.length) {
-      const stored = await sbInsert("whatsapp_messages", rows);
-      const { supabaseConfigured } = await import("@/lib/runtime-config");
-      if (stored === false && supabaseConfigured()) {
-        return NextResponse.json({ error: "store unavailable - retry" }, { status: 503 });
+      // CLAIM BEFORE STORING. Meta retries a batch whenever our 200 is slow or
+      // lost, and this insert had no dedupe of any kind - so every retry wrote
+      // a second copy of every message in it. The traveller saw the shop's
+      // price twice and the agent counted a burst that never happened.
+      //
+      // The Evolution path has claimed its stores since owner report 6; this
+      // one simply never did. Same claim, same receiver scoping, same
+      // fail-open: an unreachable claim table stores the row rather than
+      // dropping a real shop reply.
+      const { claimInboundStore } = await import("@/lib/wa/inbound-claim");
+      const fresh: typeof rows = [];
+      for (const r of rows) {
+        const owner = (r.raw as { receiver?: string | null } | null)?.receiver ?? null;
+        if (await claimInboundStore(String(r.wa_message_id ?? ""), owner)) fresh.push(r);
+      }
+      if (fresh.length) {
+        const stored = await sbInsert("whatsapp_messages", fresh);
+        const { supabaseConfigured } = await import("@/lib/runtime-config");
+        if (stored === false && supabaseConfigured()) {
+          // Hand the claims back, or this batch can never be retried: the
+          // claim would say "stored" for rows that are not in the table.
+          const { releaseInboundStore } = await import("@/lib/wa/inbound-claim");
+          for (const r of fresh) {
+            const owner = (r.raw as { receiver?: string | null } | null)?.receiver ?? null;
+            await releaseInboundStore(String(r.wa_message_id ?? ""), owner).catch(() => {});
+          }
+          return NextResponse.json({ error: "store unavailable - retry" }, { status: 503 });
+        }
       }
     }
 
-    // Agentic processing (bounded so Meta always gets a fast 200).
-    for (const { msg, receiver } of inbound.slice(0, 3)) {
+    // Agentic processing, bounded so Meta always gets its 200.
+    //
+    // The bound used to be `inbound.slice(0, 3)`: messages four and beyond were
+    // dropped on the floor, silently, with no trace and no recovery - and
+    // unlike the Evolution channel there is no wa-sync sweep behind this one to
+    // pick them up later. A shop answering with a four-message burst simply
+    // lost its tail.
+    //
+    // A CLOCK is the honest bound. The ceiling is 60s, so spend at most 40 of
+    // them here and let whatever is left over be RECORDED rather than
+    // forgotten. In practice that processes the whole burst; when it genuinely
+    // cannot, the drop is visible on the same panel every other drop is.
+    const PROCESS_BUDGET_MS = 40_000;
+    const processingDeadline = Date.now() + PROCESS_BUDGET_MS;
+    let processed = 0;
+    for (const { msg, receiver } of inbound) {
+      if (Date.now() >= processingDeadline) {
+        const { noteInboundDropped } = await import("@/lib/wa/webhook-trace");
+        for (const left of inbound.slice(processed)) {
+          await noteInboundDropped(left.receiver, digitsOnly(left.msg.from), "meta-batch-overflow", {
+            note: "webhook ran out of request budget before this message could be answered",
+            retryable: true,
+            batchSize: inbound.length,
+            processed,
+          }).catch(() => {});
+        }
+        break;
+      }
+      processed++;
       const media = msg.image ?? msg.document;
       const images =
         media?.id && (media.mime_type ?? "").startsWith("image/")

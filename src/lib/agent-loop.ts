@@ -366,17 +366,51 @@ export async function processVendorReply(opts: {
     ]);
     if (claimed.length === 0) {
       const keys = replyKey === opts.waMessageId ? [replyKey] : [replyKey, opts.waMessageId];
-      const existing = await sbSelect(
+      const existing = await sbSelect<{
+        wa_message_id: string;
+        created_at?: string | null;
+        settled_at?: string | null;
+      }>(
         "wa_processed",
-        `select=wa_message_id&wa_message_id=in.(${keys.map((k) => `"${k}"`).join(",")})&limit=1`
+        `select=wa_message_id,created_at,settled_at&wa_message_id=in.(${keys
+          .map((k) => `"${k}"`)
+          .join(",")})&limit=1`
       ).catch(() => []);
-      if (existing.length > 0) return; // another delivery already owns it
-      // wa_processed missing/unreachable -> legacy best-effort dedupe.
-      const dup = await sbSelect(
-        "whatsapp_messages",
-        `select=id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&direction=eq.inbound&limit=2`
-      );
-      if (dup.length > 1) return;
+      if (existing.length > 0) {
+        // ...UNLESS THE HOLDER IS GONE. A claim is a lease: a turn that fails
+        // hands it back, so only an instance killed mid-turn leaves one
+        // hanging. Past the lease with nothing settled, that message has been
+        // sitting answered-by-nobody, and this is the one place that can take
+        // it over. Deleting first keeps the retake atomic - whoever wins the
+        // re-insert owns the turn.
+        const { claimIsDeadTurn } = await import("./wa/inbound-claim");
+        if (!claimIsDeadTurn(existing[0])) return; // a live delivery owns it
+        const { sbDelete } = await import("./runtime-config");
+        await sbDelete(
+          "wa_processed",
+          `wa_message_id=eq.${encodeURIComponent(existing[0].wa_message_id)}`
+        ).catch(() => {});
+        const retaken = await sbInsertReturning<{ wa_message_id: string }>("wa_processed", [
+          { wa_message_id: replyKey },
+        ]);
+        if (retaken.length === 0) return; // someone else retook it first
+        claimedReply = true;
+      }
+
+      // wa_processed is missing or unreachable. The old fallback here COUNTED
+      // stored inbound rows and stood down when it saw more than one - which
+      // is symmetric, and therefore the worst possible answer: both concurrent
+      // deliveries see the same two rows, both conclude "someone else has
+      // this", and the shop gets ZERO replies. A dedupe that can silence a
+      // conversation entirely is worse than no dedupe at all.
+      //
+      // Elect a winner instead, on `wa_send_claims` - an atomic conditional
+      // insert in a DIFFERENT table, so the very outage that took wa_processed
+      // out does not take the election with it. Exactly one delivery wins.
+      if (!claimedReply) {
+        const { electReplyOwner } = await import("./wa/inbound-claim");
+        if (!(await electReplyOwner(opts.senderEmail, replyKey))) return;
+      }
     } else {
       claimedReply = true;
     }
@@ -435,6 +469,13 @@ export async function processVendorReply(opts: {
     if (claimedReply && !turnDelivered && opts.waMessageId) {
       const { releaseReplyClaim } = await import("./wa/inbound-claim");
       await releaseReplyClaim(opts.waMessageId, opts.senderEmail);
+    } else if (claimedReply && turnDelivered && opts.waMessageId) {
+      // SETTLE it. A kept claim used to mean two different things - "answered"
+      // and "the instance died holding this" - and the recovery sweep could
+      // not tell them apart, so a turn killed mid-flight silenced that message
+      // forever. Now only a settled claim means answered.
+      const { settleReplyClaim } = await import("./wa/inbound-claim");
+      await settleReplyClaim(opts.waMessageId, opts.senderEmail);
     }
   }
 
@@ -1268,6 +1309,10 @@ export async function processVendorReply(opts: {
             vendor_id: ctx.vendorId,
             vendor_name: ctx.vendorName ?? "",
             user_email: ctx.sender,
+            // vendor_name here is the shop's NAME, which the message-path
+            // panel cannot join on - without to_number every vision row was
+            // written for a screen that could never find it.
+            to_number: from,
             detail: JSON.stringify({
               agreement: verdict.agreement,
               sheet,
@@ -1777,6 +1822,7 @@ export async function processVendorReply(opts: {
           vendor_id: ctx.vendorId ?? "",
           vendor_name: ctx.vendorName ?? "",
           user_email: ctx.sender ?? "",
+          to_number: from,
           detail: (
             mediaReading.outcome === "sanity-nulled"
               ? `read ${ir?.rejectedPricePerDay ?? "?"} ${ir?.rejectedCurrency ?? ""} /day and rejected it as implausible`

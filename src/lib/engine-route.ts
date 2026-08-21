@@ -72,6 +72,8 @@ export async function runThreadTurn(
           kind: "engine-v3-fallback",
           vendorId: input.ctx.vendorId,
           vendorName: input.ctx.vendorName,
+          userEmail: input.ctx.sender,
+          toDigits: input.event.toDigits,
           detail: `SPTE failover -> graph engine (${entry}): ${reason}`.slice(0, 500),
         })
         .catch(() => {});
@@ -108,6 +110,8 @@ async function recordGraphTurn(
       kind: "engine-graph-turn",
       vendorId: input.ctx.vendorId,
       vendorName: input.ctx.vendorName,
+      userEmail: input.ctx.sender,
+      toDigits: input.event.toDigits,
       detail: JSON.stringify({ entry, why }).slice(0, 500),
     })
     .catch(() => {});
