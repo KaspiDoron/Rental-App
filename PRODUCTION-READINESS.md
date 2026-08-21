@@ -684,3 +684,33 @@ security-relevant columns only, not for the whole record.
   budget with an 8s deadline reserve, request caching on paid lookups.
 - Graceful degradation everywhere: no key → mock, no Supabase → in-memory,
   webhook never 500s.
+
+## Owner actions outstanding (owner report 6, as of 2026-08-21)
+
+One list, checked off as you go - everything below is a thing only you can do:
+
+1. **Rotate the Evolution API key** (J1, security). The old
+   `AUTHENTICATION_API_KEY` literal was committed to render.yaml and is
+   burned. render.yaml now says `sync: false`, so the dashboard owns it:
+   set a fresh random key on wd-evolution in the Render dashboard
+   (Environment -> AUTHENTICATION_API_KEY), then paste the same value in
+   the app under Admin -> Keys so the app's Evolution calls keep
+   authenticating. Until rotated, anyone reading the repo history can
+   control the WhatsApp fleet.
+2. **Run `supabase/perf-indexes.sql` once** (L1) in the Supabase SQL
+   editor - additive expression indexes for the hot poll/thread reads.
+   Safe to re-run.
+3. **Re-run `supabase/retention.sql` once** (L6) - the englishGloss
+   keep-forever exemption is gone, so pruning finally works in localized
+   markets. (Replaces the stored function; same file, run again.)
+4. **Optionally enable the Evolution-Postgres prune cron** (J4): uncomment
+   the `wd-evo-prune` block in render.yaml (monthly, 30-day retention,
+   defensive no-op if Evolution's schema ever changes).
+5. **wd-evolution sizing** (J2, unchanged decision): standard plan
+   (~$25/mo) or cap occupancy at ~25-30 numbers per host.
+6. **Disable AdSense Auto ads** (G3, unchanged): manual slots stay; Auto
+   ads inject runtime styles on html/body that can re-break fixed chrome.
+7. **Golden cases re-blessing** (K): thread-level meaning now comes from
+   the model's durable comprehension, not FIRM_RX-style regexes. DB golden
+   cases that asserted firm/deposit verdicts from raw text may drift -
+   review them in Admin -> Ops after the K wave settles and re-bless.

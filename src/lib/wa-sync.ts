@@ -169,12 +169,34 @@ export async function syncInboundReplies(email: string): Promise<number> {
       // "done" signal. STRICT read: pre-migration ("missing") degrades to the
       // old stored-means-done behavior instead of re-answering everything.
       const { sbSelectStrict } = await import("./runtime-config");
+      // BOTH claim spellings (H4): claims are receiver-scoped now
+      // (email:msgId) with legacy bare-id rows still standing - a claim in
+      // either spelling means this user's copy was answered.
+      const { claimKey } = await import("./wa/inbound-claim");
+      const claimSpellings = ids.flatMap((i) => {
+        const scoped = claimKey(email, i);
+        return scoped === i ? [i] : [i, scoped];
+      });
       const answeredRes = await sbSelectStrict<{ wa_message_id: string }>(
         "wa_processed",
-        `select=wa_message_id&wa_message_id=in.(${ids.map((i) => `"${i}"`).join(",")})&limit=${ids.length}`
+        `select=wa_message_id&wa_message_id=in.(${claimSpellings
+          .map((i) => `"${i}"`)
+          .join(",")})&limit=${claimSpellings.length}`
       );
+      // Normalize back to the bare id so the skip test below matches. Only
+      // OUR OWN scope prefix is stripped - a provider id that happens to
+      // contain a colon is left exactly as it came.
+      const scopePrefix = `${email.trim().toLowerCase()}:`;
       const answeredIds =
-        "rows" in answeredRes ? new Set(answeredRes.rows.map((r) => r.wa_message_id)) : seenIds;
+        "rows" in answeredRes
+          ? new Set(
+              answeredRes.rows.map((r) =>
+                r.wa_message_id.startsWith(scopePrefix)
+                  ? r.wa_message_id.slice(scopePrefix.length)
+                  : r.wa_message_id
+              )
+            )
+          : seenIds;
 
       // SELF-ECHO GUARD (mirrors the webhook's): if Evolution's stored record
       // lost the fromMe flag, a message the USER typed would come back here

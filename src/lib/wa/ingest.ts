@@ -591,7 +591,34 @@ export async function processEvolutionWebhook(
               continue;
             }
           } else if (byIdRead.rows.length > 0) continue;
-          // Echo check 2: same body already stored as OUR outbound recently
+          // Echo check 2 (H2): the DURABLE SEND INTENT. Checks 1 and 3 read
+          // the outbound ROW - which is written only after the network send
+          // returns - and WhatsApp's fromMe echo can arrive in that gap, so a
+          // fast echo of our own message carried no record and was convicted
+          // as a human takeover (agents stood down, queue purged, "You've got
+          // the wheel" pushed - for a message WE sent). The send CLAIM
+          // (wa_send_claims, msg:<digits>:<hash>) is written BEFORE the wire
+          // by every app send path and uses this exact normalization, so it
+          // is the positive evidence that survives the race. Matched by hash
+          // across number spellings - the claim may carry the international
+          // spelling while the echo arrives with the national one.
+          try {
+            const { messageSlotKey } = await import("@/lib/wa/pacing");
+            const slot = messageSlotKey(from, text);
+            const hash = slot.split(":")[2] ?? "";
+            const claimRead = hash
+              ? await sbSelectStrict(
+                  "wa_send_claims",
+                  `select=slot_key&sender_key=eq.${encodeURIComponent(
+                    email
+                  )}&slot_key=like.msg:*:${encodeURIComponent(hash)}&limit=1`
+                )
+              : { rows: [] as unknown[] };
+            if ("rows" in claimRead && claimRead.rows.length > 0) continue;
+          } catch {
+            /* the intent probe is extra evidence - the checks below still run */
+          }
+          // Echo check 3: same body already stored as OUR outbound recently
           // (every bot/app send is inserted at send time).
           const recentRead = await sbSelectStrict<{ body: string | null }>(
             "whatsapp_messages",
@@ -724,7 +751,7 @@ export async function processEvolutionWebhook(
       // provider message id first; only the winner writes the row. Redis/BullMQ
       // dedupe layers only exist on the worker path, so on the serverless path
       // this claim is the ONLY thing standing between a retry and a duplicate.
-      if (msgId && !(await claimInboundStore(msgId))) {
+      if (msgId && !(await claimInboundStore(msgId, email))) {
         // A lost claim means another worker already stored this exact frame -
         // normal on redelivery, but traced so a dedup bug can never eat
         // messages invisibly again.
@@ -820,7 +847,7 @@ export async function processEvolutionWebhook(
         // absent while the claim made every retry a silent no-op.
         if (msgId) {
           const { releaseInboundStore } = await import("@/lib/wa/inbound-claim");
-          await releaseInboundStore(msgId).catch(() => {});
+          await releaseInboundStore(msgId, email).catch(() => {});
         }
         retryable = true;
         void noteInboundDropped(email, from, "store-failed", { via: "webhook", msgId });
@@ -1315,8 +1342,16 @@ export async function processEvolutionWebhook(
         );
       }
     }
-  } catch {
-    // Never fail the webhook.
+  } catch (e) {
+    // Never fail the webhook - but never lose the fact either (I4): this
+    // outer catch covers the whole BATCH, so an exception here means every
+    // message in the delivery was dropped with, until now, zero trace. The
+    // recovery sweep can re-answer them; it just needs the breadcrumb to
+    // exist when the owner asks where a reply went.
+    void noteInboundDropped(undefined, "", "batch-error", {
+      error: e instanceof Error ? e.message.slice(0, 120) : "unknown",
+      retryable: true,
+    });
   }
 
   // BLUE TICKS (anti-ban A1), the whole batch at once. Each fires after its own

@@ -33,7 +33,11 @@ describe("the sweep's skip predicate is ANSWERED, not STORED", () => {
   });
 
   it("pre-migration (wa_processed missing) degrades to stored-means-done", () => {
-    expect(sync).toMatch(/"rows" in answeredRes \? new Set\(.*\) : seenIds/);
+    // H4 made the claim receiver-scoped, so the ternary spans lines now: the
+    // invariant is unchanged - a strict-read miss falls back to seenIds.
+    expect(sync).toMatch(/"rows" in answeredRes[\s\S]{0,600}?: seenIds;/);
+    // ...and the sweep honors BOTH claim spellings (scoped + legacy bare id).
+    expect(sync).toMatch(/claimKey\(email, i\)/);
   });
 
   it("counts `recovered` only AFTER the turn ran, and traces a failed turn", () => {

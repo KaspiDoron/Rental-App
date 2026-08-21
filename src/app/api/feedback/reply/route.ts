@@ -22,6 +22,21 @@ export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
 
+  // M6 (owner report 6): the moderation screen below is an LLM call, so an
+  // unthrottled loop was paid AI spend even when every reply got rejected.
+  // Session-keyed - 10 thread replies an hour is far beyond any real
+  // conversation; management is exempt (answering a busy inbox is the job).
+  if (session.role === "user") {
+    const { rateLimit } = await import("@/lib/rate-limit");
+    const gate = await rateLimit("feedback-reply", session.email, 10, 3600);
+    if (!gate.ok) {
+      return NextResponse.json(
+        { error: "That's a lot of replies in a row - give it a little while and try again." },
+        { status: 429, headers: { "Retry-After": String(gate.retryAfter) } }
+      );
+    }
+  }
+
   const body = await req.json().catch(() => ({}));
   const feedbackId = Number(body.feedbackId);
   const text = String(body.body ?? "").trim().slice(0, 2000);

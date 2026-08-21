@@ -140,13 +140,21 @@ describe("9. the trail shows every fate a queued message can meet", () => {
   const path = readCode("src/lib/wa/message-path.ts");
 
   it("expired, stale and both claim outcomes are read into the trail", () => {
-    expect(path).toMatch(
-      /kind=in\.\(wa-hold,wa-send-dropped,wa-send-unconfirmed,wa-park-failed,wa-send-expired,wa-send-stale,claim-lost,claim-error\)/
-    );
+    // I1 (owner report 6): the filter is DERIVED from the stage map now, so
+    // the fetched kinds and the labels can never drift apart - the old
+    // hand-maintained list is exactly how six vision kinds went unfetched.
+    expect(path).toMatch(/kind=in\.\(\$\{EVENT_KINDS\}\)/);
+    expect(path).toMatch(/const EVENT_KINDS = Object\.keys\(EVENT_STAGE\)\.join\(","\)/);
     expect(path).toMatch(/"wa-send-expired": "send-expired"/);
     expect(path).toMatch(/"wa-send-stale": "send-stale"/);
     expect(path).toMatch(/"claim-lost": "claim-lost"/);
     expect(path).toMatch(/"claim-error": "claim-error"/);
+    // ...and the screenshot-only failure classes are in the trail too.
+    expect(path).toMatch(/"inbound-dropped": "inbound-dropped"/);
+    expect(path).toMatch(/"vision-parse-failed": "vision"/);
+    expect(path).toMatch(/"media-fetch-failed": "media"/);
+    expect(path).toMatch(/"localize-fallback": "localize"/);
+    expect(path).toMatch(/"engine-v3-turn": "engine-turn"/);
   });
 
   it("the emitting sites stamp the join keys the trail query matches on", () => {

@@ -33,6 +33,17 @@ export interface PathStep {
     | "claim-lost"
     | "claim-error"
     | "park-failed"
+    // I1 (owner report 6): the failure classes the owner could only see via
+    // screenshots. A dropped inbound, a duration rewritten by the drift rail,
+    // every vision outcome, a media fetch that failed, a localization that
+    // fell back to English, and the engine's own turn record - all of them
+    // were real events in agent_events that this trail never fetched.
+    | "inbound-dropped"
+    | "drift"
+    | "vision"
+    | "media"
+    | "localize"
+    | "engine-turn"
     | "wakeup";
   detail: string;
   /** Structured leftovers for machines; the UI shows `detail`. */
@@ -61,7 +72,25 @@ const EVENT_STAGE: Record<string, PathStep["stage"]> = {
   "wa-send-stale": "send-stale",
   "claim-lost": "claim-lost",
   "claim-error": "claim-error",
+  // I1: the failure classes the owner previously proved with screenshots.
+  "inbound-dropped": "inbound-dropped",
+  "rfq-drift": "drift",
+  "rfq-drift-blocked": "drift",
+  "vision-check": "vision",
+  "vision-empty": "vision",
+  "vision-parse-failed": "vision",
+  "vision-sanity-nulled": "vision",
+  "vision-truncated": "vision",
+  "vision-unavailable": "vision",
+  "media-fetch-failed": "media",
+  "media-unreadable": "media",
+  "localize-fallback": "localize",
+  "engine-v3-turn": "engine-turn",
 };
+
+/** The agent_events kinds the trail fetches - derived from the map above so
+ *  the filter and the stage labels can never drift apart. */
+const EVENT_KINDS = Object.keys(EVENT_STAGE).join(",");
 
 export async function messagePath(opts: {
   senderKey: string;
@@ -111,7 +140,7 @@ export async function messagePath(opts: {
     sbSelect<{ kind: string; detail: string | null; created_at: string; to_number?: string | null }>(
       "agent_events",
       `select=kind,detail,created_at,to_number&user_email=eq.${enc(opts.senderKey)}` +
-        `&kind=in.(wa-hold,wa-send-dropped,wa-send-unconfirmed,wa-park-failed,wa-send-expired,wa-send-stale,claim-lost,claim-error)` +
+        `&kind=in.(${EVENT_KINDS})` +
         `&or=(to_number.eq.${enc(digits)},vendor_name.eq.${enc("+" + digits)})` +
         `&order=created_at.desc&limit=${limit}`
     )

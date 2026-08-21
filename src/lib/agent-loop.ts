@@ -113,6 +113,9 @@ interface ThreadMsg {
   body: string | null;
   raw: ThreadContext | null;
   received_at: string;
+  /** Provider id - present on inbound rows so a coalescing turn can CLAIM
+   *  the siblings it consumed (H1); older/outbound rows may lack it. */
+  wa_message_id?: string | null;
 }
 
 export type SendFn = (
@@ -352,13 +355,20 @@ export async function processVendorReply(opts: {
 
   if (opts.waMessageId) {
     const { sbInsertReturning } = await import("./runtime-config");
+    const { claimKey } = await import("./wa/inbound-claim");
+    // Receiver-scoped (H4): the bare provider id is not unique across
+    // RECEIVERS - a shop's broadcast delivers the same id to two travellers,
+    // and a global claim dropped the second one's copy as a duplicate.
+    // Legacy bare-id rows still count as claimed (the in.() check below).
+    const replyKey = claimKey(opts.senderEmail, opts.waMessageId);
     const claimed = await sbInsertReturning<{ wa_message_id: string }>("wa_processed", [
-      { wa_message_id: opts.waMessageId },
+      { wa_message_id: replyKey },
     ]);
     if (claimed.length === 0) {
+      const keys = replyKey === opts.waMessageId ? [replyKey] : [replyKey, opts.waMessageId];
       const existing = await sbSelect(
         "wa_processed",
-        `select=wa_message_id&wa_message_id=eq.${encodeURIComponent(opts.waMessageId)}&limit=1`
+        `select=wa_message_id&wa_message_id=in.(${keys.map((k) => `"${k}"`).join(",")})&limit=1`
       ).catch(() => []);
       if (existing.length > 0) return; // another delivery already owns it
       // wa_processed missing/unreachable -> legacy best-effort dedupe.
@@ -389,7 +399,7 @@ export async function processVendorReply(opts: {
       // back so the burst is answered once, as one coalesced turn.
       if (claimedReply && opts.waMessageId) {
         const { releaseReplyClaim } = await import("./wa/inbound-claim");
-        await releaseReplyClaim(opts.waMessageId);
+        await releaseReplyClaim(opts.waMessageId, opts.senderEmail);
       }
       void noteInboundDropped(opts.senderEmail, from, "turn-in-flight", {
         note: "another delivery is mid-turn for this thread; released for the winner to coalesce",
@@ -424,7 +434,7 @@ export async function processVendorReply(opts: {
     // back so a redelivery or the recovery sweep can answer it.
     if (claimedReply && !turnDelivered && opts.waMessageId) {
       const { releaseReplyClaim } = await import("./wa/inbound-claim");
-      await releaseReplyClaim(opts.waMessageId);
+      await releaseReplyClaim(opts.waMessageId, opts.senderEmail);
     }
   }
 
@@ -534,7 +544,7 @@ export async function processVendorReply(opts: {
       ),
       sbSelect<ThreadMsg>(
         "whatsapp_messages",
-        `select=direction,body,raw,received_at&direction=eq.inbound&raw->>receiver=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
+        `select=direction,body,raw,received_at,wa_message_id&direction=eq.inbound&raw->>receiver=eq.${encMe}${sinceBound}&order=received_at.desc&limit=24${numberFilter(
           "from_number",
           from
         )}`
@@ -2036,6 +2046,36 @@ export async function processVendorReply(opts: {
     // claim is what stops an endless redelivery loop; releasing it is only
     // for turns that never got this far.
     turnDelivered = true;
+    // ...AND SO ARE THE SIBLINGS IT COALESCED (H1). This turn read the WHOLE
+    // unread burst - "Good day!" / "We have Fazzio" / "400 per day" - and
+    // answered it as one message, but only the triggering frame's id was ever
+    // claimed. wa-sync then found the siblings unclaimed and re-answered a
+    // burst the shop had already had its reply to: duplicate turns, duplicate
+    // messages, on the anti-ban surface of all places. Claim what was
+    // consumed. sbInsertReturning is conflict-safe per id - a sibling another
+    // delivery claimed first simply stays theirs.
+    if (opts.waMessageId) {
+      const consumed = thread
+        .filter(
+          (m) =>
+            m.direction === "inbound" &&
+            (!priorAt || m.received_at > priorAt) &&
+            m.wa_message_id &&
+            m.wa_message_id !== opts.waMessageId
+        )
+        .map((m) => m.wa_message_id as string);
+      if (consumed.length) {
+        await finishBeforeResponse("claim-coalesced", async () => {
+          const { sbInsertReturning } = await import("./runtime-config");
+          const { claimKey } = await import("./wa/inbound-claim");
+          for (const id of consumed) {
+            await sbInsertReturning("wa_processed", [
+              { wa_message_id: claimKey(opts.senderEmail, id) },
+            ]).catch(() => {});
+          }
+        });
+      }
+    }
     return;
   }
 

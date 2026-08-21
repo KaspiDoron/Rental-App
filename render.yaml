@@ -76,6 +76,25 @@ services:
       - key: WD_PING_TOKEN
         sync: false
 
+  # EVOLUTION-POSTGRES RETENTION (owner report 6, J4) - OWNER-APPROVAL GATED.
+  # The Baileys store keeps every Message row forever while the recovery sweep
+  # reads only a 10-row tail, so the basic-256mb database fills unbounded.
+  # Uncomment to enable a monthly prune of rows older than 30 days (the script
+  # is defensive: missing tables degrade to a logged no-op).
+  #
+  # - type: cron
+  #   name: wd-evo-prune
+  #   runtime: docker
+  #   dockerfilePath: ./deploy/prune/Dockerfile
+  #   dockerContext: ./deploy/prune
+  #   schedule: "0 4 1 * *"
+  #   region: oregon
+  #   envVars:
+  #     - key: EVO_DATABASE_URL
+  #       fromDatabase:
+  #         name: wd-evo-db
+  #         property: connectionString
+
   - type: web
     name: wd-evolution
     runtime: docker
@@ -91,6 +110,15 @@ services:
         value: "8080"
       - key: SERVER_PORT
         value: "8080"
+      # SECRET LIVES IN THE DASHBOARD, NEVER IN GIT (owner report 6, J1).
+      # A literal here was committed once and is therefore burned - and worse,
+      # every Blueprint sync RE-ASSERTED the burned value over any rotation
+      # done in the dashboard, so dashboard-only rotation silently undid
+      # itself. sync:false makes the dashboard the single owner: rotate there,
+      # and the Blueprint stops fighting you. OWNER ACTION: set a fresh key in
+      # the Render dashboard (Environment -> AUTHENTICATION_API_KEY) and paste
+      # the same value in Admin -> Keys (EVOLUTION_API_KEY) so the app's
+      # calls keep authenticating.
       - key: AUTHENTICATION_API_KEY
         sync: false
       # Heap ceiling below the 512MB container limit so V8 collects hard instead

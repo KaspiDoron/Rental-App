@@ -2323,7 +2323,9 @@ export default function Home() {
     if (!pRes.ok) {
       lowerAmbient();
       setPhase("idle");
-      alert(pData.error ?? "Could not parse your request.");
+      // M5: alert() is the one surface in the app that looks like a browser
+      // crash - the same in-page channel every other failure uses.
+      setSourceError(pData.error ?? t("Could not parse your request - try rephrasing it."));
       return;
     }
     setRfq(pData.rfq);
@@ -2880,6 +2882,12 @@ export default function Home() {
         setMassNote(d.error ?? t("Could not start the mass bargain."));
         if (d.upgrade) setUpgradeOpen(true);
       }
+    } catch {
+      // M5: this had try/finally and NO catch - a dropped connection or a
+      // non-JSON 500 escaped as an unhandled rejection while the button sat
+      // on "contacting every shop". The traveller gets a sentence and a
+      // retry, not a console error they will never see.
+      setMassNote(t("Could not reach the server - nothing was sent. Check your connection and try again."));
     } finally {
       lowerAmbient();
       setMassState("done");
@@ -4460,11 +4468,35 @@ export default function Home() {
                 renderCard={renderVendorCard}
               />
             )}
-            {phase === "running" && filtered.length < vendors.length && (
-              <div className="surface flex justify-center rounded-blob p-4">
-                <LoadingDots label={t("More agents reporting in")} />
+            {/* YOUR FILTERS HID EVERYTHING (M2). With every shop filtered out
+                both the list and the map rendered blank - which reads as "no
+                shops exist", when 20 sit one tap away. Say it, and hand over
+                the tap. */}
+            {filtered.length === 0 && vendors.length > 0 && (
+              <div className="surface mt-3 rounded-blob p-4 text-center">
+                <p className="text-[13px] font-bold text-strong">
+                  {t("Your filters hide all")} {vendors.length} {t("shops")}
+                </p>
+                <button
+                  onClick={() =>
+                    setFilters({ ...DEFAULT_FILTERS, vehicleClass: filters.vehicleClass })
+                  }
+                  className="btn mt-2 rounded-2xl border-2 border-line px-4 py-2 text-[12px] font-extrabold text-brandblue"
+                >
+                  {t("Show them all")}
+                </button>
               </div>
             )}
+            {/* ...and the "more coming" spinner counts only the genuinely
+                pending (funnel stages that have not resolved), never the
+                shops a filter is hiding (M2): a filter tap used to spin this
+                forever over a finished hunt. */}
+            {phase === "running" &&
+              vendors.some((v) => v.stage === "queued" || v.stage === "locating-contact") && (
+                <div className="surface flex justify-center rounded-blob p-4">
+                  <LoadingDots label={t("More agents reporting in")} />
+                </div>
+              )}
           </div>
         )}
 
