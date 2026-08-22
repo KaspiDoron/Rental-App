@@ -2592,9 +2592,17 @@ export async function guardOutbound(rawOpts: {
     ).catch(() => ({ error: "unavailable" }) as const);
     if ("rows" in link && link.rows[0]?.status === "close") {
       if (opts.auto) {
+        // RESCHEDULED, because this is a wait we gave the row and not a bounce.
+        // Without the flag `firstDueAt` survives every 30-40 minute re-park and
+        // the 6h outbox freshness ceiling bins the whole queue about six hours
+        // into a disconnection - while the traveller is asleep and has not yet
+        // had a chance to re-pair. The comment below promised their messages
+        // were waiting for the link; this is what makes that true. The 24h
+        // absolute wall still bounds them.
         return await queue(
           jitteredHold(now, 30, 10),
-          "whatsapp link is disconnected - waiting for a re-pair (not sending, so the number is not struck again)"
+          "whatsapp link is disconnected - waiting for a re-pair (not sending, so the number is not struck again)",
+          true
         );
       }
       return {
@@ -4339,10 +4347,41 @@ export async function noteLinkedNumber(senderKey: string, phone: string | null |
     `select=phone_tail&sender_key=eq.${enc}&limit=1`
   ).catch(() => ({ error: "unavailable" }) as const);
   if ("error" in res) return "skipped"; // unreadable - never guess
-  const prior = res.rows[0]?.phone_tail ?? null;
+  // "NO ROW" AND "ROW WITH NO TAIL" ARE DIFFERENT FACTS, AND CONFLATING THEM
+  // DISABLED THE DETECTOR ON ITS FIRST RUN.
+  //
+  // This read `res.rows[0]?.phone_tail ?? null`, so an ABSENT ROW and a row
+  // whose tail we had simply never learned both arrived as `prior === null` and
+  // both took the stamp branch below - which is a PATCH. On a first link the
+  // reputation row does not exist yet (it is created lazily by getReputation on
+  // the first guarded send), so that PATCH matched zero rows and stored
+  // nothing, while returning "stamped" as though it had. The next link of a
+  // genuinely DIFFERENT number then saw `prior === null` all over again and
+  // took the no-reset branch: a burner inherits the previous number's age,
+  // trust and counters on its first day - precisely the failure this function
+  // was written to prevent.
+  const row = res.rows[0];
+  const prior = row?.phone_tail ?? null;
   if (prior === tail) return "unchanged";
+  if (!row) {
+    // No row at all. CREATE it carrying the tail, in the same shape
+    // getReputation would have created it, so the number is bound to a
+    // reputation from the moment it is linked rather than from its first send.
+    await sbInsert("whatsapp_number_reputation", [
+      {
+        sender_key: senderKey,
+        phone_tail: tail,
+        trust_score: 20,
+        sent_total: 0,
+        replies_total: 0,
+        last_send_at: null,
+        created_at: new Date().toISOString(),
+      },
+    ]).catch(() => {});
+    return "stamped";
+  }
   if (!prior) {
-    // First time we have learned the number for an existing row: stamp it
+    // The row exists and we are learning its number for the first time: stamp
     // WITHOUT resetting. The row's age belongs to this number - we simply did
     // not know which number it was until now.
     await sbUpdate("whatsapp_number_reputation", `sender_key=eq.${enc}`, {
@@ -4351,12 +4390,35 @@ export async function noteLinkedNumber(senderKey: string, phone: string | null |
     return "stamped";
   }
   // A genuinely different number. Restart the warm-up from zero.
+  //
+  // EVERY counter that describes the OLD number goes, not just two of them.
+  // Zeroing `sent_total` while leaving `delivered_total` and `reads_total`
+  // standing does not merely lose information, it corrupts the ratios built
+  // from them: computeRisk arms its read-rate test at `delivered_total >= 8`,
+  // so a fresh number could inherit an already-armed engagement test whose
+  // denominator describes a number it has never been. The same is true of
+  // fails/blocks feeding the risk score, and of the day's introduction count.
   await sbUpdate("whatsapp_number_reputation", `sender_key=eq.${enc}`, {
     phone_tail: tail,
     trust_score: 20,
     sent_total: 0,
     replies_total: 0,
+    delivered_total: 0,
+    reads_total: 0,
+    blocks_total: 0,
+    fails_total: 0,
+    invalid_numbers_total: 0,
+    new_contacts_today: 0,
+    new_contacts_date: null,
+    risk_score: 0,
     last_send_at: null,
+    last_reply_at: null,
+    last_delivery_receipt_at: null,
+    last_read_receipt_at: null,
+    // Holds belong to the number that earned them. A new number starts clean;
+    // if it misbehaves the guard will pause it again on its own evidence.
+    paused_until: null,
+    cold_hold_until: null,
     created_at: new Date().toISOString(),
   }).catch(() => {});
   return "reset";
