@@ -19,6 +19,7 @@ import { outboxToKeyPatch } from "@/lib/wa/outbox-columns";
 import { planCapacity, batchWindowMs, BATCH_WINDOW_MINUTES } from "@/lib/wa/capacity";
 import { promisedRfq } from "@/lib/wa/thread-context";
 import type { StructuredRFQ } from "@/lib/types";
+import type { IntroBudgetBind } from "@/lib/wa-guard";
 
 // Mass bargain (Pro/Ultra): fire the RFQ at several shops in one tap. The
 // anti-ban rate limiter still governs every single send - the batch simply
@@ -350,7 +351,7 @@ export async function POST(req: Request) {
   // remaining budget is computed UP FRONT: shops inside it start immediately
   // (first now, the rest 45-75s apart), shops beyond it get an HONEST
   // tomorrow-morning slot and the user is told so in the response.
-  const { newContactBudget, introHoldIso } = await import("@/lib/wa-guard");
+  const { newContactBudget, introHoldIso, introHoldReason } = await import("@/lib/wa-guard");
   // AN UNKNOWN BUDGET IS NOT AN UNLIMITED ONE.
   //
   // This used to fall back to `remaining: 99` - three to ten times any plan's
@@ -536,9 +537,14 @@ export async function POST(req: Request) {
       // traveller's usage; an unreadable meter is a fact about us, and telling
       // someone they have spent an allowance they have not spent is the kind of
       // small lie that makes the whole queue untrustworthy.
+      // ...and say WHICH ceiling. The four are minimised into one number, and
+      // for three of them "refreshes soon" is simply untrue: Meter A clears
+      // when a SHOP replies, not on any clock the traveller can wait out. That
+      // wording is what turned "5 of my 12 shops were messaged and the rest
+      // vanished" into a reasonable thing for a tester to believe.
       const holdReason = budgetUnreadable
         ? "checking your introductions allowance - retrying shortly"
-        : "introductions full - refreshes soon";
+        : introHoldReason((budget as { bind?: IntroBudgetBind }).bind);
       // Humanize at park: the drain delivers this row verbatim
       // (alreadyHumanized), so the anti-fingerprinting pass must run HERE.
       // Seeded, so a retry parks the identical body.
@@ -755,6 +761,11 @@ export async function POST(req: Request) {
       cap: budget.cap,
       windowHours: budget.windowHours,
       nextFreeAt: budget.nextFreeAt,
+      // The binding ceiling rides the response so the batch sheet can explain
+      // the wait in the same words the parked rows carry.
+      ...((budget as { bind?: IntroBudgetBind }).bind
+        ? { bind: (budget as { bind?: IntroBudgetBind }).bind }
+        : {}),
       // Carried through so the UI can say "checking" rather than "you have used
       // your allowance" - the same distinction IntroBudget's own docstring asks
       // callers to make, which this route was the only caller not making.

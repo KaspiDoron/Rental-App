@@ -1119,6 +1119,18 @@ export interface UnansweredMeters {
   monthlyToNonRepliers: number;
   /** True when either read failed - the caller must fail CLOSED. */
   unreadable: boolean;
+  /**
+   * `first_intro_at` of the OLDEST still-unanswered introduction in the window,
+   * or null when there is none / the read failed.
+   *
+   * This is the only honest anchor for a hold caused by Meter A. The
+   * introductions budget's own `nextFreeAt` is derived from when SENT
+   * introductions age out of the plan window - a different clock entirely. When
+   * Meter A is what is binding, that number is not merely imprecise, it is
+   * about the wrong thing, and it used to produce a wait of "about an hour"
+   * for a state that does not change for up to seven days.
+   */
+  oldestOpenAt: string | null;
 }
 
 /**
@@ -1138,10 +1150,11 @@ export async function unansweredMeters(senderKey: string): Promise<UnansweredMet
   const monthStart = new Date(new Date().toISOString().slice(0, 7) + "-01T00:00:00.000Z").toISOString();
 
   // METER A - open threads whose introduction is inside the window.
-  const openRead = await sbSelectStrict<{ id: number }>(
+  const openRead = await sbSelectStrict<{ id: number; first_intro_at: string | null }>(
     "wa_recipient_state",
-    `select=id&sender_key=eq.${sender}&first_reply_at=is.null` +
-      `&first_intro_at=gte.${encodeURIComponent(windowStart)}&limit=500`
+    `select=id,first_intro_at&sender_key=eq.${sender}&first_reply_at=is.null` +
+      `&first_intro_at=gte.${encodeURIComponent(windowStart)}` +
+      `&order=first_intro_at.asc&limit=500`
   );
 
   // METER B - this month's outbound to shops that have never written back.
@@ -1161,6 +1174,7 @@ export async function unansweredMeters(senderKey: string): Promise<UnansweredMet
     openInWindow: "rows" in openRead ? openRead.rows.length : 0,
     monthlyToNonRepliers: "rows" in monthRead ? monthRead.rows.length : 0,
     unreadable: openUnreadable || monthUnreadable,
+    oldestOpenAt: "rows" in openRead ? openRead.rows[0]?.first_intro_at ?? null : null,
   };
 }
 
@@ -1184,7 +1198,38 @@ export interface IntroBudget {
   openUnanswered?: number;
   /** Meter B: this month's messages to shops that never replied. */
   monthlyToNonRepliers?: number;
+  /**
+   * WHICH of the four ceilings is at zero, when `remaining` is 0.
+   *
+   * Admission is the minimum of four terms and until now the caller could not
+   * tell them apart, so every one of them was announced with the same sentence:
+   * "introductions full - refreshes soon". For the plan window that is true -
+   * capacity really does roll back in as sent introductions age out. For Meter
+   * A it is FALSE, and falsely reassuring: a free traveller with five shops
+   * that have not written back is not waiting on a clock, they are waiting on
+   * a shop, and nothing "refreshes" for up to seven days. They watched five of
+   * twelve shops get messaged, were told the rest were coming shortly, and the
+   * rest were binned six hours later by the outbox ceiling.
+   *
+   * Naming the binding meter is what lets every surface say the true sentence.
+   */
+  bind?: IntroBudgetBind;
 }
+
+/**
+ * The four ceilings, in the order `newContactBudget` minimises them.
+ *
+ * - `window`    the plan's rolling introductions budget (free 10/6h ...). Real
+ *               capacity, really refreshing - the only one "refreshes soon"
+ *               was ever true about.
+ * - `unanswered` Meter A: too many introductions still unanswered. Clears when
+ *               a shop REPLIES, or when the oldest leaves the 7-day window.
+ * - `monthly`   Meter B: this month's cumulative messages to shops that never
+ *               replied. Clears at the turn of the month.
+ * - `daily`     the owner's `max_new_contacts_per_day` ceiling. Clears as
+ *               24h-old introductions age out.
+ */
+export type IntroBudgetBind = "window" | "unanswered" | "monthly" | "daily";
 
 /**
  * How many NEW shops this sender can still introduce in the current ROLLING
@@ -1248,13 +1293,37 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
       !day || day.unreadable ? 0 : Math.max(0, dailyIntroCap - day.count);
   }
 
-  const remaining = Math.min(
-    Math.max(0, cap - count),
-    openHeadroom,
-    monthHeadroom,
-    dayHeadroom
-  );
+  const windowHeadroom = Math.max(0, cap - count);
+  const remaining = Math.min(windowHeadroom, openHeadroom, monthHeadroom, dayHeadroom);
+  // WHICH ceiling is at zero. Evaluated in the order the plan intends them to
+  // bite: the plan window is the ordinary, self-healing one, so it is claimed
+  // first when it is genuinely also zero - the traveller does not need to hear
+  // about a seven-day meter when their own batch refreshes in twenty minutes.
+  let bind: IntroBudgetBind | undefined;
+  if (remaining <= 0) {
+    bind =
+      windowHeadroom <= 0
+        ? "window"
+        : openHeadroom <= 0
+          ? "unanswered"
+          : monthHeadroom <= 0
+            ? "monthly"
+            : "daily";
+  }
   let nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
+  // METER A HAS ITS OWN CLOCK, so it must not borrow the plan window's.
+  //
+  // `nextIntroSlotIso` answers "when does a SENT introduction age out of the
+  // plan window", which for a Meter-A hold is an answer to a question nobody
+  // asked - and it is short, so the row re-parked roughly hourly and was binned
+  // by the 6h outbox ceiling while the app kept promising it was coming. The
+  // honest instant is when the oldest STILL-UNANSWERED introduction leaves the
+  // 7-day window; a reply arriving sooner is what usually clears it, and a
+  // reply kicks the queue on its own.
+  if (bind === "unanswered" && meters?.oldestOpenAt) {
+    const ages = Date.parse(meters.oldestOpenAt) + UNANSWERED_WINDOW_DAYS * 24 * 3600_000;
+    if (Number.isFinite(ages)) nextFreeAt = new Date(ages).toISOString();
+  }
   // Guard the fallback/edge case: budget spent but no window timestamps to
   // anchor to (the legacy-counter degrade path, or a count with no oldestAsc).
   // Without this, nextFreeAt is "now" while remaining is 0, so an over-budget
@@ -1277,7 +1346,31 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
     unreadable: unreadable || Boolean(meters?.unreadable),
     openUnanswered: meters?.openInWindow,
     monthlyToNonRepliers: meters?.monthlyToNonRepliers,
+    bind,
   };
+}
+
+/**
+ * The sentence that goes on the parked row, for whichever ceiling is binding.
+ *
+ * ONE function, because there are two places that park an over-budget
+ * introduction - the guard (the drain path) and /api/outreach/mass (click
+ * time) - and they must never disagree about why. `queue-reason.ts` classifies
+ * these strings for the UI, so the wording here is load-bearing.
+ */
+export function introHoldReason(bind: IntroBudgetBind | undefined): string {
+  switch (bind) {
+    case "unanswered":
+      // NOT "refreshes soon". This clears when a shop writes back - or, at the
+      // outside, when the oldest silent introduction is seven days old.
+      return "waiting on replies - a new shop opens as soon as one of the shops already messaged answers";
+    case "monthly":
+      return "monthly ceiling on shops that never replied - protecting your number";
+    case "daily":
+      return "daily new-shop ceiling reached - refreshes as today's introductions age out";
+    default:
+      return "introductions full - refreshes soon";
+  }
 }
 
 /**
@@ -1946,7 +2039,24 @@ export async function guardOutbound(rawOpts: {
     return new Date(Math.max(Math.min(at, batchDeadlineMs), floor)).toISOString();
   };
 
-  const queue = async (notBefore: string, reason: string): Promise<GuardVerdict> => {
+  /**
+   * @param rescheduled  This hold is a NEW deliberate schedule, not a bounce.
+   *   `firstDueAt` is the drain's "this row was due and did not go" stamp, and
+   *   the 6h freshness ceiling charges every later re-park against it. That is
+   *   right for a row losing claims in a loop. It is wrong for a row the guard
+   *   has just told to wait twelve hours for a shop to reply: the row is
+   *   serving a wait we gave it, and outbox-policy's own doctrine says such a
+   *   wait must not be charged - which is why a cold introduction parked at
+   *   22:00 for a 09:00 opening is not binned the second it becomes eligible.
+   *   Clearing the stamp restarts the freshness clock on the new schedule. The
+   *   absolute `created_at` wall still bounds it, so this can defer a row, never
+   *   immortalise one.
+   */
+  const queue = async (
+    notBefore: string,
+    reason: string,
+    rescheduled?: boolean
+  ): Promise<GuardVerdict> => {
     // THE DURABLE HOLD TRAIL (owner report 3, items 4+8): the reason used to
     // live only on the mutable outbox row - overwritten per re-park, deleted
     // on send. Append-only + throttled, so "why did this sit for six hours"
@@ -1974,6 +2084,7 @@ export async function guardOutbound(rawOpts: {
         const held = await releaseOutboxRow(opts.outboxRowId, notBefore, {
           ...(opts.meta ?? {}),
           reason,
+          ...(rescheduled ? { firstDueAt: null } : {}),
         });
         return held
           ? { allow: false, reason: `${reason} - queued`, queuedUntil: notBefore, text, outboxRowId: opts.outboxRowId }
@@ -2668,12 +2779,21 @@ export async function guardOutbound(rawOpts: {
     if (budget && budget.remaining <= 0) {
       // Bounded by the plan's own window - a budget wait is a pace, never a
       // wall (and the clamp stands down entirely under fast dispatch).
+      // The plan window bounds a PLAN-WINDOW hold. Meter A and Meter B do not
+      // clear on that clock at all, so bounding their hold by it is what
+      // produced the hourly re-park - and the 6h outbox ceiling then binned a
+      // shop the traveller had picked. Give the slow ceilings a slow recheck.
+      const holdHours = budget.bind === "window" || !budget.bind ? windowHours : 12;
       const until = boundHold(
         clampToBusinessHours(budget.nextFreeAt, opts.toDigits, p, region),
         now,
-        windowHours
+        holdHours
       );
-      return await queue(until, "introductions full - refreshes soon");
+      // A SLOW CEILING IS A SCHEDULE, NOT A BOUNCE. Meter A does not clear on
+      // any clock the row can wait out inside the 6h freshness ceiling, so
+      // charging the row for that wait binned shops the traveller had picked -
+      // silently, while the app was still telling them the shops were coming.
+      return await queue(until, introHoldReason(budget.bind), budget.bind !== "window");
     }
     // Reply-rate breaker: if enough recent history exists and almost nobody
     // engages, freeze cold outreach - that pattern is what actually trips
