@@ -1,0 +1,170 @@
+# ONE SELF-CONTAINED EVOLUTION LANE.
+#
+# Bring this up on each free host in the fleet (Oracle Always Free, Azure's
+# 12-month B1s, Northflank Sandbox, or anything else that runs Docker). Every
+# lane owns its OWN Postgres and Redis in this same compose file - nothing is
+# shared between hosts.
+#
+# WHY NOT ONE SHARED DATABASE. It is the obvious design and it does not survive
+# the free tiers (all three checked Aug 2026):
+#   - Neon free: 100 compute-hours/month and scale-to-zero after 5 min idle.
+#     Evolution is NEVER idle, so a continuously-active branch burns the monthly
+#     allowance in about half a month.
+#   - Supabase free: 500 MB total, max 2 active projects, auto-pause after 7
+#     days without requests. The app already owns one project, and that 500 MB
+#     is already the app's own scaling wall.
+#   - Upstash Redis free: 500k commands per MONTH. Evolution's caching across
+#     ~50 live sessions blows that in days.
+#
+# So: HOST AFFINITY, NOT CROSS-HOST FAILOVER. A user is pinned to a host at link
+# time (src/lib/wa/host-region.ts picks which one). If a host goes down, only
+# its cohort is affected and they re-link. That is honest and free, and it is
+# strictly better than one 512 MB box holding every number in the beta.
+#
+# GEO IS THE POINT. Deploy each lane in the region its numbers belong to and
+# declare it in EVOLUTION_HOSTS' third field:
+#
+#     https://sg.example.com|<AUTHENTICATION_API_KEY>|66,84,855,856,60,65
+#     https://eu.example.com|<AUTHENTICATION_API_KEY>|33,34,39,49,44
+#     https://spare.example.com|<AUTHENTICATION_API_KEY>
+#
+# A line with no third field is region-neutral and is used for anyone, which is
+# what every existing line already means.
+#
+# BEFORE YOU BRING IT UP, create a .env next to this file (never committed):
+#
+#     AUTHENTICATION_API_KEY=<a long random string, unique PER HOST>
+#     POSTGRES_PASSWORD=<a long random string, unique per host>
+#
+# A unique key per host limits the blast radius of any one leak to one cohort.
+#
+# ORACLE'S HOME REGION IS PERMANENT. Always Free runs only in the region chosen
+# at signup and it can never be changed - so create that account LAST, once the
+# majority tester country is known, or the free tier is stranded on the wrong
+# continent.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - evo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Never publish the database port. The only client is the container next to
+    # it on this compose network.
+    expose:
+      - "5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The cache is disposable by definition, so no persistence and a hard memory
+    # ceiling - a cache is never allowed to be the thing that OOMs the lane.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "6379"
+
+  evolution:
+    # Pinned, and the SAME tag the Render half runs. A fleet running two
+    # Evolution versions is a fleet presenting two dialects to Meta.
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # Bind to loopback: the public edge is the reverse proxy / tunnel in front
+      # of this, never the container itself.
+      - "127.0.0.1:8080:8080"
+    environment:
+      SERVER_PORT: "8080"
+      PORT: "8080"
+      AUTHENTICATION_API_KEY: ${AUTHENTICATION_API_KEY:?set AUTHENTICATION_API_KEY in .env}
+
+      # DEVICE FINGERPRINT - must match deploy/evolution/Dockerfile and
+      # render.yaml exactly. This is the label Meta sees for every linked
+      # companion device; two spellings across the fleet is two dialects, and
+      # the product name must never appear here (it would be a perfect
+      # clustering key across every user at once).
+      CONFIG_SESSION_PHONE_CLIENT: "Mac OS"
+      CONFIG_SESSION_PHONE_NAME: "Chrome"
+
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${POSTGRES_PASSWORD}@postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      # Nothing in this app reads Evolution's MessageUpdate table - delivery and
+      # read receipts arrive as webhook EVENTS, handled live. Persisting them is
+      # 2-3 rows per outbound message written only to be pruned later.
+      DATABASE_SAVE_DATA_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      # The documented Evolution crash class: the "is this number on WhatsApp"
+      # cache fell through to Prisma and took the process down.
+      DATABASE_SAVE_IS_ON_WHATSAPP: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      LOG_LEVEL: "ERROR"
+      LOG_BAILEYS: "error"
+      # We consume events over HTTP webhooks, so the websocket server is memory
+      # spent on nothing.
+      WEBSOCKET_ENABLED: "false"
+      EVENT_EMITTER_MAX_LISTENERS: "500"
+    volumes:
+      - evo_instances:/evolution/instances
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # RETENTION, ON EVERY LANE, FROM DAY ONE.
+  #
+  # Baileys persists every Message row forever while the app's recovery sweep
+  # reads only a 10-row tail per chat. On a small free box that is the disk
+  # filling in weeks - and a full Postgres is not a slow queue, it is failing
+  # Prisma writes, which is the crash that drops every linked socket at once.
+  # Seven days is far more than anything actually reads.
+  prune:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          sleep 86400
+          psql -h postgres -U evolution -d evolution -v ON_ERROR_STOP=0 -c \
+            "DELETE FROM \"Message\" WHERE \"messageTimestamp\" < EXTRACT(EPOCH FROM now() - interval '7 days');" \
+            || echo "prune: skipped (table missing or renamed) - not fatal"
+        done
+
+volumes:
+  evo_pg:
+  evo_instances:

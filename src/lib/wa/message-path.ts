@@ -44,6 +44,12 @@ export interface PathStep {
     | "media"
     | "localize"
     | "engine-turn"
+    // OR8 wave C: a number placed on a host that declares OTHER regions. Not a
+    // failure - a geo-mismatched link beats no link - but a scored WhatsApp
+    // signal, and one that is invisible from a host panel showing every box
+    // green. It belongs on the trail so "why did this number get restricted"
+    // has the placement in it.
+    | "transport"
     | "wakeup";
   detail: string;
   /** Structured leftovers for machines; the UI shows `detail`. */
@@ -86,6 +92,7 @@ const EVENT_STAGE: Record<string, PathStep["stage"]> = {
   "media-unreadable": "media",
   "localize-fallback": "localize",
   "engine-v3-turn": "engine-turn",
+  "host-geo-mismatch": "transport",
 };
 
 /** The agent_events kinds the trail fetches - derived from the map above so

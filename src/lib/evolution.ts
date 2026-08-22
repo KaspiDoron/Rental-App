@@ -24,6 +24,7 @@ import { isLinkedFromStatus } from "./wa/linked-status";
 import { routableOrigin } from "./request-origin";
 import { digitsOnly } from "./phone";
 import { boundedSet } from "./bounded-map";
+import { parseDialPrefixes, rankHostsForNumber, affinityFor, AFFINITY_MISMATCH } from "./wa/host-region";
 import { readOrientationFromBase64 } from "./media/orientation";
 import type { InboundImage } from "./media/orientation";
 
@@ -282,6 +283,14 @@ export function recordSend(email: string) {
 export interface Host {
   url: string;
   key: string;
+  /**
+   * Calling-code prefixes this host is geographically right for, parsed from
+   * the OPTIONAL third field of an EVOLUTION_HOSTS line
+   * (`https://sg.example.com|KEY|66,84,855`). Empty = region-neutral, which is
+   * what every existing one- or two-field line already means, so opting in is
+   * strictly additive. See `wa/host-region` for why geo matters here.
+   */
+  dialPrefixes: string[];
 }
 
 // Exported for `wa/fleet-truth`, which needs the same host list this module
@@ -295,8 +304,10 @@ export async function getHosts(): Promise<Host[]> {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((line) => {
-      const [url, key] = line.split("|").map((x) => x?.trim());
-      return url && key ? { url: url.replace(/\/$/, ""), key } : null;
+      const [url, key, regions] = line.split("|").map((x) => x?.trim());
+      return url && key
+        ? { url: url.replace(/\/$/, ""), key, dialPrefixes: parseDialPrefixes(regions) }
+        : null;
     })
     .filter((h): h is Host => h !== null);
   if (parsed.length) return parsed;
@@ -305,7 +316,8 @@ export async function getHosts(): Promise<Host[]> {
     getConfig("EVOLUTION_API_URL"),
     getConfig("EVOLUTION_API_KEY"),
   ]);
-  if (url && key) return [{ url: url.trim().replace(/\/$/, ""), key: key.trim() }];
+  if (url && key)
+    return [{ url: url.trim().replace(/\/$/, ""), key: key.trim(), dialPrefixes: [] }];
   return [];
 }
 
@@ -778,8 +790,59 @@ export async function hostCapacity(): Promise<{
  * sticks to their (healthy) host, and brand-new users are placed on the
  * LEAST-LOADED healthy host under the per-host cap - so load spreads evenly and
  * no user is left without a home.
+ *
+ * ...AND, since owner report 8, on a host that is geographically right for
+ * their NUMBER where one has capacity. A number transmitting from a datacenter
+ * on the wrong continent is a separately-scored ban signal, and correcting it
+ * costs nothing: it is only a question of which box a user lands on at link
+ * time. Load still breaks every tie, so an opted-in fleet spreads exactly as
+ * evenly as a neutral one - see `wa/host-region` for the tiers.
+ *
+ * @param phoneHint the number being linked, when the caller knows it (the
+ *   connect route does). Omitted elsewhere: placement happens once, at link
+ *   time, and every later call finds `host_url` already stored.
  */
-async function resolveHost(email: string): Promise<Host | null> {
+/**
+ * The number this account has linked, for a placement whose caller did not
+ * carry one (a re-placement after a host died, say). Best-effort: a miss just
+ * means the ranking treats every host as neutral, which is the pre-existing
+ * behaviour, so this must never throw into a link attempt.
+ */
+async function linkedNumberFor(email: string): Promise<string> {
+  const rows = await sbSelect<{ phone: string | null }>(
+    "app_users",
+    `select=phone&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+  ).catch(() => [] as { phone: string | null }[]);
+  return digitsOnly(rows[0]?.phone ?? "");
+}
+
+/**
+ * Record that a number was placed on a host that claims a different region.
+ * Fire-and-forget and failure-swallowing: this is a note about a decision that
+ * has already been made correctly, never a gate on it.
+ */
+async function noteHostGeoMismatch(email: string, hostUrl: string, digits: string): Promise<void> {
+  try {
+    await sbInsert("agent_events", [
+      {
+        kind: "host-geo-mismatch",
+        user_email: email,
+        to_number: digits,
+        vendor_id: "",
+        vendor_name: hostUrl,
+        detail:
+          `Linked +${digits.slice(0, 4)}... on ${hostUrl}, which declares other regions - ` +
+          `every host claiming this number's country was at capacity or unhealthy. ` +
+          `A number transmitting from the wrong region is a scored WhatsApp signal; ` +
+          `adding capacity in the right region clears it.`,
+      },
+    ]);
+  } catch {
+    /* a note about a placement must never be able to break the placement */
+  }
+}
+
+async function resolveHost(email: string, phoneHint?: string | null): Promise<Host | null> {
   const hosts = await getHosts();
   if (hosts.length === 0) return null;
   if (hosts.length === 1) return hosts[0];
@@ -818,13 +881,27 @@ async function resolveHost(email: string): Promise<Host | null> {
   // linked number down with it. The owner adds a host or raises the cap - both
   // deliberate acts, neither of which risks somebody's WhatsApp account.
   if (!underCap.length) return null;
-  const pool = underCap;
-  pool.sort(
-    (a, b) =>
-      (counts[a.url] ?? 0) - (counts[b.url] ?? 0) ||
-      hostPref(email, a.url) - hostPref(email, b.url)
+  // GEO FIRST, THEN LOAD. rankHostsForNumber puts hosts that claim this
+  // number's calling code ahead of region-neutral ones and both ahead of hosts
+  // that claim somewhere else, then falls through to exactly the least-loaded
+  // ordering this used to do alone. With no declared regions anywhere (every
+  // deployment before this change) all hosts are neutral and the ranking IS the
+  // old one, term for term.
+  const digits = digitsOnly(phoneHint ?? "") || (await linkedNumberFor(email));
+  const pool = rankHostsForNumber(
+    underCap,
+    digits,
+    (h) => counts[h.url] ?? 0,
+    (h) => hostPref(email, h.url)
   );
   const chosen = pool[0] ?? null;
+  // A MISMATCHED PLACEMENT IS A DECISION, SO IT LEAVES A RECORD. It is the
+  // right call - a scored signal beats a user who cannot link at all - but it
+  // is invisible from the host panel, which would otherwise show a fleet that
+  // is uniformly green while a real risk quietly accumulates on it.
+  if (chosen && digits && affinityFor(chosen, digits) === AFFINITY_MISMATCH) {
+    void noteHostGeoMismatch(email, chosen.url, digits);
+  }
   // Reserve a slot immediately so concurrent new users spread out instead of
   // stampeding onto the same emptiest host before the DB count catches up.
   if (chosen && chosen.url !== stored) bumpHostCount(chosen.url);
@@ -1384,7 +1461,11 @@ export async function connectInstance(
   error?: string;
 }> {
   const instance = instanceNameFor(email);
-  const host = await resolveHost(email);
+  // THE ONE CALLER THAT KNOWS THE NUMBER. Placement happens here and nowhere
+  // else in practice (every later call finds `host_url` stored), so this is
+  // the only site where passing the phone changes which box a user lands on -
+  // and therefore whether their number transmits from its own region.
+  const host = await resolveHost(email, phone);
   if (!host) return { ok: false, error: "The WhatsApp connector is not set up yet." };
 
   // HONESTY GATE (B1): with a single host there is no failover, and resolveHost
