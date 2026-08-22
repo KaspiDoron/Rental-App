@@ -69,7 +69,11 @@ describe("the warm-up ramp can actually bite", () => {
   it("the DAILY ceiling ramps too - it was the only thing left unscaled", () => {
     const guard = read("src/lib/wa-guard.ts");
     expect(guard).toMatch(/const warmDay = warmupNewContactFactor\(ageDaysOf\(rep\), p\.warmup_days, warmMeasuredRate\)/);
-    expect(guard).toMatch(/Math\.round\(p\.day_cap \* jitter \* warmDay\)/);
+    // The ramp still multiplies the daily ceiling. `warmDay` reaches it through
+    // Math.max against the ramp floor now (see the next test) - what this
+    // guards, that day_cap is scaled by warm-up age at all rather than being a
+    // flat number for a day-0 and a six-month-old link alike, is unchanged.
+    expect(guard).toMatch(/p\.day_cap \* jitter \* Math\.max\(warmDay, rampFloor\)/);
   });
 
   it("...but it can NEVER gag a reply - reciprocal traffic is protective", () => {
@@ -78,7 +82,16 @@ describe("the warm-up ramp can actually bite", () => {
     // AND damaging to the reply ratio that keeps the number safe.
     const guard = read("src/lib/wa-guard.ts");
     expect(guard).toMatch(/const WARMUP_DAY_FLOOR = 40;/);
-    expect(guard).toMatch(/WARMUP_DAY_FLOOR,\s*Math\.round\(p\.day_cap/);
+    // THE FLOOR IS ON THE RAMP, NOT ON THE OWNER'S NUMBER. Applying it to the
+    // whole ceiling raised any owner-set day_cap below 40 back up to 40 - so
+    // following the WA security panel's own advice and clamping to 30 while
+    // watching a wobbling number produced 40, HIGHER than what was typed. Since
+    // the ramped default never approaches the floor, that was the floor's only
+    // observable effect: neutralising the owner's clamp. Clamping the
+    // MULTIPLIER keeps a warmed-down number able to answer a full day of real
+    // conversation while leaving day_cap meaning what the owner set.
+    expect(guard).toMatch(/const rampFloor = p\.day_cap > 0 \? Math\.min\(1, WARMUP_DAY_FLOOR \/ p\.day_cap\) : 1;/);
+    expect(guard).not.toMatch(/Math\.max\(\s*WARMUP_DAY_FLOOR,\s*Math\.round\(p\.day_cap/);
   });
 });
 

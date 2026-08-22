@@ -169,3 +169,51 @@ describe("F1.4 a rejected move falls back to the SAME move", () => {
     expect(pass).not.toMatch(/leverageUsed: \[\],\s*\n\s*digestPatch: \[\],\s*\n\s*\};\s*\n\}/);
   });
 });
+
+describe("F3 the dials mean what they say", () => {
+  const guard = readCode("src/lib/wa-guard.ts");
+
+  it("F3.1 an owner-clamped day_cap is not raised back up by the warm-up floor", () => {
+    // Applying WARMUP_DAY_FLOOR to the whole ceiling meant Math.max(40, ...):
+    // an owner following the WA-security panel's own advice and setting
+    // day_cap = 30 got 40. Since the ramped default (220) never approaches the
+    // floor, neutralising the owner's clamp was the floor's ONLY observable
+    // effect. Reproduce the expression both ways at day 0 (warmDay = 0.5).
+    const jitter = 1;
+    const warmDay = 0.5;
+    const FLOOR = 40;
+    const oldWay = (cap: number) => Math.max(FLOOR, Math.round(cap * jitter * warmDay));
+    const newWay = (cap: number) => {
+      const rampFloor = cap > 0 ? Math.min(1, FLOOR / cap) : 1;
+      return Math.max(1, Math.round(cap * jitter * Math.max(warmDay, rampFloor)));
+    };
+    // The owner clamps to 30 during an incident.
+    expect(oldWay(30)).toBe(40); // ...and got MORE than they asked for
+    expect(newWay(30)).toBe(30); // ...now they get what they set
+    // A hard clamp to 10 was worst of all: 4x what was typed.
+    expect(oldWay(10)).toBe(40);
+    expect(newWay(10)).toBe(10);
+    // ...and the floor still does its real job on the DEFAULT ceiling: a day-0
+    // number keeps enough room to answer a full day of real conversation.
+    expect(newWay(220)).toBeGreaterThanOrEqual(FLOOR);
+    // ...while still being genuinely ramped down from the warm ceiling.
+    expect(newWay(220)).toBeLessThan(220);
+    // ANCHORED TO THE SOURCE, or the two helpers above are just arithmetic that
+    // agrees with itself no matter what the guard does - the exact way a test
+    // can pass while the code it names is wrong.
+    expect(guard).toMatch(/const rampFloor = p\.day_cap > 0 \? Math\.min\(1, WARMUP_DAY_FLOOR \/ p\.day_cap\) : 1;/);
+    expect(guard).toMatch(/Math\.max\(1, Math\.round\(p\.day_cap \* jitter \* Math\.max\(warmDay, rampFloor\)\)\)/);
+    expect(guard).not.toMatch(/Math\.max\(\s*WARMUP_DAY_FLOOR,\s*Math\.round\(p\.day_cap/);
+  });
+
+  it("F3.2 the slow ceilings hold for hours, not for the 1h fallback", () => {
+    // boundHold only CAPS a hold, and newContactBudget re-anchors nextFreeAt
+    // for the `unanswered` bind alone - so monthly and daily fell through to
+    // its now+1h fallback and kept re-parking hourly, ~24 full guard passes a
+    // day per row, against a state that does not move for weeks.
+    expect(guard).toMatch(/budget\.bind === "monthly" \|\| budget\.bind === "daily"/);
+    expect(guard).toMatch(/Date\.parse\(slowFloor\) > Date\.parse\(budget\.nextFreeAt\) \? slowFloor : budget\.nextFreeAt/);
+    // The window bind keeps its own anchor - it genuinely does refresh soon.
+    expect(guard).toMatch(/const holdHours = budget\.bind === "window" \|\| !budget\.bind \? windowHours : 12;/);
+  });
+});

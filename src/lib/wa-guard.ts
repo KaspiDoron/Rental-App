@@ -2908,8 +2908,22 @@ export async function guardOutbound(rawOpts: {
       // produced the hourly re-park - and the 6h outbox ceiling then binned a
       // shop the traveller had picked. Give the slow ceilings a slow recheck.
       const holdHours = budget.bind === "window" || !budget.bind ? windowHours : 12;
+      // ...AND A CEILING IS NOT A SCHEDULE. `boundHold` only ever caps a hold,
+      // and `newContactBudget` re-anchors `nextFreeAt` for the `unanswered`
+      // bind ALONE - the monthly and daily ceilings fall through to its
+      // now+1h fallback. So raising holdHours to 12 did nothing for them: they
+      // kept re-parking hourly, ~24 full guard passes a day per row, while
+      // `rescheduled` simultaneously stopped the 6h ceiling from ever clearing
+      // the queue. A slow ceiling has to be a FLOOR under the wait as well as a
+      // cap over it, or the row spins against a state that does not move.
+      const slowFloor =
+        budget.bind === "monthly" || budget.bind === "daily"
+          ? new Date(now + holdHours * 3600_000).toISOString()
+          : budget.nextFreeAt;
+      const anchor =
+        Date.parse(slowFloor) > Date.parse(budget.nextFreeAt) ? slowFloor : budget.nextFreeAt;
       const until = boundHold(
-        clampToBusinessHours(budget.nextFreeAt, opts.toDigits, p, region),
+        clampToBusinessHours(anchor, opts.toDigits, p, region),
         now,
         holdHours
       );
@@ -3007,10 +3021,22 @@ export async function guardOutbound(rawOpts: {
   const warmMeasuredRate =
     (rep.sent_total || 0) >= p.min_reply_samples ? replyRate(rep) : null;
   const warmDay = warmupNewContactFactor(ageDaysOf(rep), p.warmup_days, warmMeasuredRate);
-  const dayCap = Math.max(
-    WARMUP_DAY_FLOOR,
-    Math.round(p.day_cap * jitter * warmDay)
-  );
+  // THE FLOOR IS ON THE RAMP, NOT ON THE OWNER'S NUMBER.
+  //
+  // This was `Math.max(WARMUP_DAY_FLOOR, round(day_cap * jitter * warmDay))`,
+  // which raises ANY owner-set `day_cap` below 40 back up to 40. Since the
+  // ramped default (220) never approaches the floor anyway, the floor's only
+  // observable effect was to neutralise the owner's own clamp: follow the WA
+  // security panel's own advice, set day_cap to 30 while watching a wobbling
+  // number, and the effective ceiling is 40 - HIGHER than what was typed. A
+  // dial that saves and does nothing is exactly what wave D existed to stop.
+  //
+  // Clamping the MULTIPLIER instead keeps what the floor was for - a warmed-down
+  // number must still be able to answer a full day of real conversation, because
+  // reciprocal traffic is what protects it - while leaving `day_cap` meaning
+  // what the owner set. A number whose owner has clamped it to 10 gets 10.
+  const rampFloor = p.day_cap > 0 ? Math.min(1, WARMUP_DAY_FLOOR / p.day_cap) : 1;
+  const dayCap = Math.max(1, Math.round(p.day_cap * jitter * Math.max(warmDay, rampFloor)));
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
   // moment the DB blips - the exact outage-mode failure the guard exists for).
