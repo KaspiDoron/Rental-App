@@ -2288,6 +2288,60 @@ export async function guardOutbound(rawOpts: {
   //    pause had lifted. A genuine BAN-RECOVERY pause (many hours out) keeps
   //    holding replies at its own horizon until it enters its final stretch -
   //    that one is account-level and the recovery schedule IS the treatment.
+  // 0.a THE LINK IS DEAD - STOP TOUCHING THE TRANSPORT.
+  //
+  //     THE WORST DEFECT THIS FILE EVER HAD, and it lived in the gap between
+  //     two modules that were each individually correct.
+  //
+  //     When WhatsApp closes a session with 401 - which is the ordinary shape
+  //     of a restriction, and also of "log out from linked devices" - ingest
+  //     calls `markClosed` and writes `wa_sessions.status = "close"`. Good. But
+  //     NO send path ever read that column. So the guard kept allowing queued
+  //     rows, `sendFromUser` kept calling `ensureConnected`, and
+  //     `ensureConnected` fires `POST /instance/create` + `GET /instance/connect`
+  //     unconditionally - a FRESH DEVICE REGISTRATION against the number
+  //     WhatsApp had just severed. The drain classified the failure as
+  //     "reconnecting" (transient) and re-parked every 45-120s for 24 hours.
+  //
+  //     `ANTI-BAN.md`'s runbook opens with "do NOT send anything from the
+  //     restricted number during the countdown - every attempt during a
+  //     restriction is a fresh strike", and evolution.ts calls this exact loop
+  //     "a known restriction vector". The code did the opposite, automatically,
+  //     overnight, to a traveller's personal number.
+  //
+  //     WHY THE GATE IS HERE AND NOT A `banRisk` FLAG. The tempting fix is to
+  //     make a non-pairing 401 set `banRisk: true` and enter a 24h recovery.
+  //     That would be wrong: the identical code is what a user deliberately
+  //     unlinking produces, and punishing that with a day-long pause invents a
+  //     restriction that does not exist. The honest statement is narrower -
+  //     "there is no live link, so there is nothing to send through" - and it
+  //     is true for BOTH causes. A re-pair flips the row back to open and the
+  //     queue resumes by itself.
+  //
+  //     Parks rather than drops: the traveller's messages are not lost, they
+  //     wait for the link. Manual sends get a plain refusal to show.
+  //     Fails OPEN on an unreadable row - an outage must not freeze a healthy
+  //     number, and every other gate below still applies.
+  {
+    const link = await sbSelectStrict<{ status: string | null }>(
+      "wa_sessions",
+      `select=status&email=eq.${encodeURIComponent(opts.senderKey)}&limit=1`
+    ).catch(() => ({ error: "unavailable" }) as const);
+    if ("rows" in link && link.rows[0]?.status === "close") {
+      if (opts.auto) {
+        return await queue(
+          jitteredHold(now, 30, 10),
+          "whatsapp link is disconnected - waiting for a re-pair (not sending, so the number is not struck again)"
+        );
+      }
+      return {
+        allow: false,
+        reason: "Your WhatsApp link is disconnected - reconnect it and this will send.",
+        text,
+      };
+    }
+  }
+
   if (rep.paused_until && Date.parse(rep.paused_until) > now) {
     if (opts.auto) {
       const pauseLeftMs = Date.parse(rep.paused_until) - now;

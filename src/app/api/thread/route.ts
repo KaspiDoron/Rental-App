@@ -42,13 +42,23 @@ export async function GET(req: Request) {
   // reads as the answer for one; only the grouping differs.
   if (vendorIds) return batchPeek(session.email, vendorIds, since);
 
-  const outbound = await sbSelect<{ body: string; received_at: string; to_number: string; raw: { englishGloss?: string } | null }>(
+  // Same projection discipline as the batch path below - this one is limit=1 so
+  // the bytes barely matter, but two reads of the same table that disagree
+  // about what they need is how the expensive one drifts back.
+  const outbound = await sbSelect<{
+    body: string;
+    received_at: string;
+    to_number: string;
+    englishGloss?: string;
+  }>(
     "whatsapp_messages",
-    `select=body,received_at,to_number,raw&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
+    `select=body,received_at,to_number,raw->>englishGloss&direction=eq.outbound&raw->>sender=eq.${encodeURIComponent(
       session.email
     )}&raw->>vendorId=eq.${encodeURIComponent(vendorId)}${since}&order=received_at.desc&limit=1`
   );
-  const sent = outbound[0] ?? null;
+  const sent = outbound[0]
+    ? { ...outbound[0], raw: { englishGloss: outbound[0].englishGloss } }
+    : null;
 
   // FULL transcript mode (?full=1): every message both ways for this thread,
   // oldest first - powers the TranscriptSheet chat view. The default 2-message
@@ -260,20 +270,43 @@ async function batchPeek(email: string, raw: string, since: string) {
   const who = encodeURIComponent(email);
   const inList = `in.(${ids.map((id) => `"${id}"`).join(",")})`;
 
+  // PROJECT THE THREE JSONB KEYS WE ACTUALLY READ - NOT THE WHOLE BLOB.
+  //
+  // This poll runs every 10 seconds per open board and pulled `raw` in full on
+  // 600 rows a time. `raw` carries the entire provider payload: the message
+  // envelope, media descriptors, readings, glosses, transcripts - kilobytes per
+  // row - while `buildPeeks` reads exactly `raw.vendorId`, `raw.englishGloss`
+  // and `raw.english`. Measured across the three polls this route was the
+  // largest single contributor to ~2.6 MB/min of egress PER ACTIVE USER, which
+  // at 50 testers exhausts Supabase's free 5 GB monthly allowance in well under
+  // an hour - the first thing that would have broken on launch day, and the one
+  // whose failure mode is the whole app going dark.
+  //
+  // PostgREST names a `->>` projection after its last key, so these come back
+  // flat and are re-nested below into the shape peek-batch expects.
   const [outs, ins] = await Promise.all([
-    sbSelect<PeekOutRow>(
+    sbSelect<Omit<PeekOutRow, "raw"> & { vendorId?: string; englishGloss?: string }>(
       "whatsapp_messages",
-      `select=body,received_at,to_number,raw&direction=eq.outbound&raw->>sender=eq.${who}&raw->>vendorId=${encodeURIComponent(
+      `select=body,received_at,to_number,raw->>vendorId,raw->>englishGloss&direction=eq.outbound&raw->>sender=eq.${who}&raw->>vendorId=${encodeURIComponent(
         inList
       )}${since}&order=received_at.desc&limit=${PEEK_ROW_LIMIT}`
-    ).catch(() => [] as PeekOutRow[]),
+    )
+      .then((rows) =>
+        rows.map((r) => ({
+          ...r,
+          raw: { vendorId: r.vendorId, englishGloss: r.englishGloss },
+        })) as PeekOutRow[]
+      )
+      .catch(() => [] as PeekOutRow[]),
     // The inbound side cannot filter by vendorId (WhatsApp does not know our
     // ids), so it reads this traveller's recent replies and the join happens in
     // memory on the shop's LINE - see newestInboundByLine.
-    sbSelect<PeekInRow>(
+    sbSelect<Omit<PeekInRow, "raw"> & { english?: string }>(
       "whatsapp_messages",
-      `select=body,received_at,from_number,raw&direction=eq.inbound&raw->>receiver=eq.${who}${since}&order=received_at.desc&limit=${PEEK_ROW_LIMIT}`
-    ).catch(() => [] as PeekInRow[]),
+      `select=body,received_at,from_number,raw->>english&direction=eq.inbound&raw->>receiver=eq.${who}${since}&order=received_at.desc&limit=${PEEK_ROW_LIMIT}`
+    )
+      .then((rows) => rows.map((r) => ({ ...r, raw: { english: r.english } })) as PeekInRow[])
+      .catch(() => [] as PeekInRow[]),
   ]);
 
   // The queued read is SKIPPED entirely once every card has a delivered

@@ -67,14 +67,21 @@ servers (Admin -> Keys -> `EVOLUTION_HOSTS`, one `url|apikey` per line) and
 fails over automatically if one goes to sleep.
 
 ### What is the limit today
-- **40 paired users per host.** That is `EVOLUTION_MAX_PER_HOST`, and 40 is the
-  built-in default when it is unset. Above it, the app places new travellers on
-  the next host.
-- **Memory is the real ceiling.** One Node container holds roughly 50-100 live
-  WhatsApp sessions before memory becomes the failure. A 512 MB Render
-  `starter` - which is what `render.yaml` ships - holds roughly 30-50. So the
-  40 cap and the memory reality are in the same neighbourhood, which is the
-  only reason the default is safe.
+- **25 paired users per host.** That is `EVOLUTION_MAX_PER_HOST`, and 25 is the
+  built-in default when it is unset. **At capacity the app now REFUSES** - it
+  answers "we are at capacity" rather than placing the traveller anyway.
+  It used to do the latter (`underCap.length ? underCap : pickFrom`), which
+  meant the cap did nothing at the exact moment it mattered: with a single
+  configured host, every tester landed on one box regardless.
+- **Memory is the real ceiling, and 40 was over it.** Evolution's own
+  documented production floor is 2 vCPU / 2 GB. A 512 MB Render `starter` -
+  what `render.yaml` ships - holds roughly 30-50 sockets, and
+  PRODUCTION-READINESS puts safe occupancy at 25-30. The old default of 40 sat
+  at the top of that range with no margin. The failure mode is not a slow
+  queue: the container OOMs, every socket drops at once, and each of those is
+  a personal WhatsApp number reconnecting in a storm. Capacity added later
+  does not un-ban a traveller, so the default is deliberately conservative and
+  the owner raises it as a decision.
 - **Evolution has no queue and no rate limiting of its own.** It sends what you
   hand it, as fast as you hand it over. All pacing in this system is done by
   *your* app (`wa-guard.ts`, the outbox, the per-plan budgets).
@@ -528,7 +535,7 @@ quota, or restricted - including the no-key path a fresh deployment runs on.
 ### What breaks first
 | Simultaneous users | What happens |
 |---|---|
-| **100** | Fine. Results are cached for a day per query, so repeat searches in one town are free. |
+| **100** | Fine. Vendor-discovery results are cached for 6 hours per query (geocoding for a day), so repeat searches in one town are free. |
 | **300** | The Maps bill becomes a real line item. Restrict the key by referrer/IP so it cannot be scraped. |
 | **500** | If Google is misconfigured and you silently fall through to Nominatim, address search returns nothing and looks like a product bug. |
 

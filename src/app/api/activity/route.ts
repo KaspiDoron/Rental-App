@@ -199,7 +199,12 @@ export async function GET(req: Request) {
     await Promise.all([
     sbSelect<TraceRow>(
       "agent_traces",
-      `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=120`
+      // 40, not 120. This is a SIX-SECOND poll and the feed renders a 220-char
+      // slice of `reasoning` per row, so 120 rows of full trace text was ~3x
+      // the bytes for rows the surface never shows. `reasoning` itself has to
+      // stay in the select (the feed detail reads it) - the row count is the
+      // lever that does not cost anything visible.
+      `select=id,decision_id,vendor_id,vendor_name,stage,reasoning,output,created_at&user_email=eq.${enc}&created_at=gte.${pgTimestamp(sinceIso)}&order=created_at.desc&limit=40`
     ).catch(() => [] as TraceRow[]),
     sbSelect<{
       id: number;
@@ -396,12 +401,18 @@ export async function GET(req: Request) {
   // whole batch regardless of how chatty the newest threads are.
   const rfqRows = await sbSelect<{
     to_number: string;
-    raw: { vendorId?: string; kind?: string } | null;
+    // Flattened by the `raw->>vendorId` projection below, not nested.
+    vendorId?: string;
   }>(
     "whatsapp_messages",
-    `select=to_number,raw&direction=eq.outbound&raw->>sender=eq.${enc}&raw->>kind=eq.rfq&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=400`
+    // `raw->>vendorId` is the only key `bumpState` reads below - pulling the
+    // whole `raw` payload for 400 rows every six seconds was pure egress for
+    // one string per row. Row count is left alone deliberately: this read is
+    // what marks a shop "messaged", and truncating it would silently regress
+    // the progress bar (the 150-row truncation bug of owner report 6, L5).
+    `select=to_number,raw->>vendorId&direction=eq.outbound&raw->>sender=eq.${enc}&raw->>kind=eq.rfq&received_at=gte.${pgTimestamp(sinceIso)}&order=received_at.desc&limit=400`
   ).catch(() => []);
-  for (const m of rfqRows) bumpState(m.raw?.vendorId, "messaged");
+  for (const m of rfqRows) bumpState(m.vendorId, "messaged");
   for (const m of outbound) if (m.raw?.kind === "rfq") bumpState(m.raw?.vendorId, "messaged");
   // The agent is ACTIVELY working the thread (any engine trace) or the shop
   // has REPLIED - either way it is a live conversation, not a queued message.
@@ -412,8 +423,13 @@ export async function GET(req: Request) {
   // coexist with a reply already sitting in whatsapp_messages.
   const { digitsOnly } = await import("@/lib/phone");
   const vendorByDigits: Record<string, string> = {};
+  // Two shapes on purpose: `outbound` carries a nested `raw`, while `rfqRows`
+  // projects `raw->>vendorId` flat to keep that 400-row read cheap. Normalise
+  // here rather than re-inflating the payload just to share one loop.
+  const vendorIdOf = (m: { raw?: { vendorId?: string } | null; vendorId?: string }) =>
+    m.raw?.vendorId ?? m.vendorId;
   for (const m of [...outbound, ...rfqRows]) {
-    const id = m.raw?.vendorId;
+    const id = vendorIdOf(m);
     const digits = digitsOnly(m.to_number);
     if (id && digits && !vendorByDigits[digits]) vendorByDigits[digits] = id;
   }

@@ -1844,6 +1844,39 @@ export function liveGraphIO(send: LiveSend): GraphIO {
         shopOpenNow,
       });
       if (!verdict.allow) {
+        // A COMPOSED REPLY MUST NOT DIE HERE.
+        //
+        // The drain has always known this rule - `needsRepark` in
+        // wa/outbox-policy.ts says it in one line: "non-terminal reject that
+        // did not re-queue -> re-park or lose it". But this INLINE path (which
+        // is where replies actually go; parking is the exception) had no
+        // equivalent, so a non-terminal verdict that did not queue - an
+        // engagement-probe read that came back unavailable, a failed outbox
+        // insert - returned "held" and the reply was simply gone. Worse,
+        // agent-loop then settles the inbound claim, so the recovery sweep
+        // will not retry it either. The shop asked a question and got silence,
+        // permanently.
+        //
+        // PARK THE MESSAGE, KEEP THE CLAIM. Those are two different jobs and
+        // one bug conflated them: the claim stops the same INBOUND being
+        // reprocessed in a loop; the parked row is how the OUTBOUND still
+        // gets delivered. A terminal verdict (cancelled, opted-out, duplicate)
+        // is a deliberate drop and must NOT be resurrected.
+        const { needsRepark } = await import("../wa/outbox-policy");
+        if (needsRepark(verdict)) {
+          const { parkOutboxOnce } = await import("../wa/park");
+          await parkOutboxOnce({
+            senderKey,
+            toNumber,
+            body: verdict.text ?? text,
+            notBeforeMs: Date.now() + 60_000,
+            meta: {
+              ...(meta as Record<string, unknown>),
+              reason: verdict.reason ?? "re-parked after a non-terminal hold",
+            },
+            alreadyHumanized: true,
+          }).catch(() => {});
+        }
         return {
           delivered: verdict.queuedUntil ? "queued" : "held",
           detail: verdict.reason ?? "held by the anti-ban gate",

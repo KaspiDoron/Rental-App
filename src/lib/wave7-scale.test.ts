@@ -602,10 +602,14 @@ describe("SCALING.md does not drift from the code it describes", () => {
 
   it("quotes the real per-host cap default", () => {
     const evo = readCode("src/lib/evolution.ts");
-    // The default lives in maxPerHost(); the doc says 40 in several places.
-    expect(evo).toMatch(/Number\.isFinite\(v\) && v > 0 \? v : 40/);
-    expect(doc).toMatch(/40 paired users per host/);
+    // The default lives in maxPerHost(). Lowered 40 -> 25 for the beta: 40 sat
+    // at the top of a 512MB box's socket range with no margin, and the failure
+    // mode is a banned personal number, not a slow queue.
+    expect(evo).toMatch(/Number\.isFinite\(v\) && v > 0 \? v : 25/);
+    expect(doc).toMatch(/25 paired users per host/);
     expect(doc).toMatch(/EVOLUTION_MAX_PER_HOST/);
+    // ...and the doc must record that the cap REFUSES rather than overfilling.
+    expect(doc).toMatch(/at capacity the app now REFUSES/i);
   });
 
   it("quotes the real inbound concurrency gate", () => {
