@@ -1800,7 +1800,30 @@ export function liveGraphIO(send: LiveSend): GraphIO {
           }
         }
       }
-      return [...rows.values()].slice(0, 10);
+      // SORT BEFORE YOU TRUNCATE - the highest-value line in the leverage path.
+      //
+      // This was `[...rows.values()].slice(0, 10)` on a Map in INSERTION order
+      // (threads by updated_at desc, then offers-only vendors). So in any hunt
+      // with more than ten shops the cheapest quote could simply fall off the
+      // end before `validRivals` ever saw it - and the cheapest quote is the
+      // entire point of the leverage card. That is exactly the "the 300 shop
+      // never heard about the 200" failure, and it got quietly more likely the
+      // bigger the hunt got.
+      //
+      // Ranked cheapest-first, with priced rows ahead of priceless ones and
+      // THIS shop kept regardless (the caller needs its own row to compute
+      // quoteOnTable, and dropping it would break the comparison itself).
+      // The cap stays: it bounds the prompt, and the ten cheapest are the ten
+      // that can possibly matter.
+      const ranked = [...rows.values()].sort((a, b) => {
+        if (a.isThisShop !== b.isThisShop) return a.isThisShop ? -1 : 1;
+        const ap = typeof a.pricePerDay === "number" && a.pricePerDay > 0;
+        const bp = typeof b.pricePerDay === "number" && b.pricePerDay > 0;
+        if (ap !== bp) return ap ? -1 : 1;
+        if (ap && bp) return (a.pricePerDay as number) - (b.pricePerDay as number);
+        return 0;
+      });
+      return ranked.slice(0, 10);
     },
     async insertWakeup(row: WakeupRow) {
       // Stamp the owning user so purges match EXACTLY (user_email=eq.) instead

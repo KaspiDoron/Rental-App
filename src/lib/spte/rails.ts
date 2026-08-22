@@ -7,10 +7,11 @@
 // plus the never-finalize-a-time protocol rule (Step 5).
 
 import { checkOutboundNumbers, correctDuration, verbatimNumerals } from "../graph/guardrails";
-import { rivalIdentityTokens, namesRival } from "../negotiation/leverage";
+import { rivalIdentityTokens, namesRival, cheapestCheaperRival } from "../negotiation/leverage";
 import { citesAMatch } from "../negotiation/beat-rival";
 import { inventsADate } from "../negotiation/traveller-disclosure";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
+import { quoteOnTable } from "./policy";
 
 // A drafted message must never AGREE a concrete pickup/delivery time - the
 // traveller confirms that directly (Step 5 hard rule). These patterns catch an
@@ -450,6 +451,65 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
       }
     }
   }
+
+  // CITE THE RIVAL - A PROMPT IS ADVICE, A RAIL IS A GUARANTEE.
+  //
+  //     This file already says that sentence about beat-not-match, and acted on
+  //     it. The cheapest-rival cite - the owner's actual product requirement,
+  //     "another shop offered 200, can you do 180?" - had every control EXCEPT
+  //     a rail: leverage.ts tells the model it MUST name the figure, pass.ts
+  //     puts the rival block at the top of the prompt, ask-variant repeats it.
+  //     All advice. A model that ignored all of it produced "any chance of a
+  //     better daily rate?", which the send-worthiness gate happily passed
+  //     (it has a question mark), and the strongest card in the hand was never
+  //     played.
+  //
+  //     Runs AFTER send-worthiness on purpose: "thanks! 👍" is empty before it
+  //     is leverage-free, and naming the shallower defect first would hide the
+  //     real one behind a confusing reason.
+  //
+  //     Rejection re-composes through `templateFor('bargain')`, which cites the
+  //     rival price AND a strictly-below target deterministically - so the
+  //     failure mode of this rail is the message the owner asked for.
+  //
+  //     Only fires when there IS a cheaper rival to cite. No rival, no
+  //     obligation - and a draft that already names the number passes
+  //     untouched, whatever else it says.
+  if (artifact.move === "bargain") {
+    const rival = cheapestCheaperRival(ctx.session.rivals, quoteOnTable(ctx));
+    if (rival) {
+      const target = Math.round(rival.pricePerDay);
+      // ANY REAL RIVAL COUNTS, not only the cheapest one.
+      //
+      // Requiring the cheapest specifically would reject "another shop quoted
+      // me 280 - can you beat it?" on a board that also holds a 250, which is
+      // perfectly good leverage and already validated as real by
+      // checkOutboundNumbers below. The defect this rail exists for is a
+      // bargain that names NO rival at all.
+      const quotable = ctx.session.rivals
+        .map((r) => r.pricePerDay)
+        .filter((n): n is number => typeof n === "number" && n > 0)
+        .concat(target);
+      // Tolerant on purpose: the composer may round, localize digits, or write
+      // "200฿". Any numeral within 1 unit of a real rival counts as the cite.
+      const nums = (text.match(/\d[\d,.]*/g) ?? []).map((n) =>
+        Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."))
+      );
+      const cited = nums.some(
+        (n) => Number.isFinite(n) && quotable.some((q) => Math.abs(n - Math.round(q)) <= 1)
+      );
+      if (!cited) {
+        return {
+          ok: false,
+          rejected: {
+            rule: "cite-the-rival",
+            detail: `a cheaper rival is on the board at ${target} and the draft never named it - the deterministic bargain template does`,
+          },
+        };
+      }
+    }
+  }
+
 
   return { ok: true, finalText: text };
 }

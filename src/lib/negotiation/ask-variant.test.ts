@@ -4,7 +4,7 @@ import { join } from "path";
 
 vi.mock("server-only", () => ({}));
 
-import { askVariantFor, askVariantDirective, variantHonoured, ASK_VARIANTS } from "./ask-variant";
+import { askVariantFor, ASK_VARIANT_SPLIT, askVariantDirective, variantHonoured, ASK_VARIANTS } from "./ask-variant";
 import { compileAskVariantReport, type VariantTurn } from "../ops/ask-variant-stats";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
@@ -29,23 +29,31 @@ describe("assignment is per THREAD, and stable", () => {
     }
   });
 
-  it("one traveller's hunt runs BOTH arms - the cohort bug this avoids", () => {
-    // lib/cohort buckets per identity, which would put a traveller's whole
-    // twelve-shop hunt into one arm. The unit of a bargaining phrasing is the
-    // negotiation, so two shops in the same hunt must be able to differ.
+  it("THE BETA PIN: every thread gets the specific-number arm while the split is off", () => {
+    // The owner's launch requirement is a specific sentence ("...can you offer
+    // 180?"), and the open-ended arm forbids naming that figure - so a 50/50
+    // split would silence the product's strongest move on half of all threads,
+    // for a sample far too small to settle the question. The experiment is
+    // paused, not deleted.
+    expect(ASK_VARIANT_SPLIT).toBe(false);
     const arms = new Set(
       Array.from({ length: 40 }, (_, i) => askVariantFor(`traveller@example.com:6681234${1000 + i}`))
     );
-    expect(arms.size).toBe(2);
+    expect(arms).toEqual(new Set(["specific-number"]));
   });
 
-  it("splits roughly evenly across many threads", () => {
-    const counts = { "specific-number": 0, "open-ended-below": 0 } as Record<string, number>;
-    for (let i = 0; i < 1000; i++) counts[askVariantFor(`u${i}@x.com:669${i}`)]++;
-    for (const v of ASK_VARIANTS) {
-      expect(counts[v]).toBeGreaterThan(350);
-      expect(counts[v]).toBeLessThan(650);
-    }
+  it("...and the hashing that WILL split per thread is still intact underneath", () => {
+    // The cohort bug this design avoids: lib/cohort buckets per identity, which
+    // would put a traveller's whole twelve-shop hunt in one arm. The unit of a
+    // bargaining phrasing is the negotiation. Assert the hash still separates
+    // threads, so flipping the flag restores a real experiment.
+    const src = readFileSync(join(process.cwd(), "src/lib/negotiation/ask-variant.ts"), "utf8");
+    expect(src).toMatch(/hash\(key\) % 2 === 0 \? "specific-number" : "open-ended-below"/);
+    // The pin is ONE line above it and nothing else was removed - both arms and
+    // both directives survive, so the flag is a real switch, not a rewrite.
+    expect(src).toMatch(/if \(!ASK_VARIANT_SPLIT\) return "specific-number";/);
+    expect(ASK_VARIANTS).toContain("open-ended-below");
+    expect(askVariantDirective("open-ended-below", {})).toMatch(/do NOT name a counter-price/);
   });
 
   it("an unkeyed turn is not an experiment subject - it keeps the old behaviour", () => {
