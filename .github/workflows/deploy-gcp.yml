@@ -41,10 +41,18 @@ on:
     branches:
       - main
       - master
-      # The live production branch of this repo (legacy naming, kept).
-      - claude/rental-negotiation-app-pc33ux
       # The active development branch - runs `verify` on push, never `deploy`.
       - claude/rental-agents-legal-setup-o7rgcv
+      #
+      # `claude/rental-negotiation-app-pc33ux` used to be listed here and was
+      # described as "the live production branch". It has not existed on the
+      # remote for a long time - `git ls-remote --heads` returns only master and
+      # the two claude/* branches above - and master is what actually deploys.
+      # Keeping the dead name was not harmless: it is what pointed Render's
+      # blueprint at that branch, so every Manual Sync failed with
+      # "not found: file: .../render.yaml" - a real file, on a branch that is
+      # gone. A stale branch name in config is a live misconfiguration
+      # somewhere else.
   pull_request:
   workflow_dispatch: {}
 
@@ -188,8 +196,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' ||
-       github.ref == 'refs/heads/master' ||
-       github.ref == 'refs/heads/claude/rental-negotiation-app-pc33ux')
+       github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
