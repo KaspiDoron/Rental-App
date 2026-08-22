@@ -35,13 +35,24 @@ describe("every >2min hold a reply could hit is now lane-proportional", () => {
     );
   });
 
-  it("2. a risk-pause holds replies at a bounded recheck, ban-recovery holds all", () => {
-    // A 240min risk pause used to hold a composed reply for its full length.
-    // Replies now re-check in 10-15min; a genuine ban-recovery pause (many
-    // hours out) keeps holding everything - that one is account-level.
+  it("2. a paused number sends NOTHING - but a reply re-checks instead of sleeping", () => {
+    // A 240min risk pause used to hold a composed reply for its full length;
+    // replies re-check in 10-15min. Owner report 8 extends the same reasoning
+    // to a BAN-RECOVERY pause: it still binds every send (the recovery
+    // schedule is the treatment), but a reply stamped for the original 4h wall
+    // sat parked long after the risk engine had cleared the pause early - and
+    // a collapsing reply ratio is itself the signal that gets numbers
+    // restricted. Cold intros keep the full horizon; they are the vector under
+    // treatment.
     expect(guard).toMatch(/const banRecovery = pauseLeftMs > 4 \* 3600_000/);
+    // Cold intros: the untouched full-horizon hold.
+    expect(guard).toMatch(/: rep\.paused_until;/);
+    // Replies: bounded re-check on BOTH pause kinds, never the raw wall.
+    expect(guard).toMatch(/jitteredHold\(now, replyRecheck, 10\)/);
+    expect(guard).toMatch(/jitteredHold\(now, 10, 5\)/);
+    // ...and that re-check is genuinely bounded, not a disguised 4h.
     expect(guard).toMatch(
-      /!isNewContact && !banRecovery \? jitteredHold\(now, 10, 5\) : rep\.paused_until/
+      /Math\.min\(45, Math\.max\(20, Math\.round\(pauseLeftMs \/ 60_000 \/ 8\)\)\)/
     );
   });
 
