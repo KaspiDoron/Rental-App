@@ -29,8 +29,14 @@ describe("a disconnected link stops the send path dead", () => {
 
   it("an automated send PARKS - the traveller's message is not lost", () => {
     const gate = guard.slice(guard.indexOf("0.a THE LINK IS DEAD"));
-    expect(gate.slice(0, 2600)).toMatch(/whatsapp link is disconnected/);
-    expect(gate.slice(0, 2600)).toMatch(/jitteredHold\(now, 30, 10\)/);
+    expect(gate.slice(0, 3600)).toMatch(/whatsapp link is disconnected/);
+    expect(gate.slice(0, 3600)).toMatch(/jitteredHold\(now, 30, 10\)/);
+    // ...RESCHEDULED, so the 6h outbox freshness ceiling does not bin the whole
+    // queue about six hours into a disconnection - while the traveller is
+    // asleep and has not yet had a chance to re-pair. Without the flag the
+    // promise on the line above ("the traveller's message is not lost") is
+    // false for every message older than the ceiling.
+    expect(gate.slice(0, 3600)).toMatch(/"whatsapp link is disconnected[\s\S]{0,140}?,\s*true\s*\)/);
   });
 
   it("...and it never reaches the transport, which is the whole point", () => {

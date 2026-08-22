@@ -12,6 +12,7 @@ export type QueueReasonKind =
   | "sync"
   | "capacity"
   | "awaiting-replies"
+  | "disconnected"
   | "tomorrow"
   | "breaker"
   | "limit"
@@ -28,6 +29,15 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   // Transient infrastructure holds all resume on their own: fail-closed
   // sync retries, a reconnecting WhatsApp link, and per-recipient retries.
   if (/sync-retry|reconnecting|couldn't reach this shop/.test(r)) return "sync";
+  // THE LINK IS DOWN - the one hold the traveller must ACT on, and the one that
+  // rendered as the blank default. Owner report 8 wave A parks every automated
+  // send for 30-40 minutes when `wa_sessions.status` is "close", with a reason
+  // string that matched none of the twelve branches here, so the most
+  // action-requiring state in the guard read "Queued - sends automatically" with
+  // an ETA it could never keep: nothing sends until the user re-pairs, so the
+  // clock was a promise about an event no clock controls. Tested first because
+  // a dead link outranks every other explanation for a wait.
+  if (/link is disconnected|re-pair|reconnect it/.test(r)) return "disconnected";
   // WAITING ON A SHOP, NOT ON A CLOCK - and it must be tested BEFORE the
   // capacity branch, because it is a different promise. The introductions
   // budget is the minimum of four ceilings; only the plan window genuinely
@@ -36,7 +46,14 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   // oldest silent one turns seven days old). Announcing that as capacity is how
   // a traveller ends up believing the app is quietly working on shops it is
   // not.
-  if (/waiting on replies|shops already messaged answers/.test(r))
+  // ...and matched on the FULL introHoldReason wording, not a prefix. The loose
+  // /waiting on replies/ also captured the guard's cold-lane string "waiting on
+  // replies before opening more conversations" - a fixed six-hour freeze after a
+  // WhatsApp error ack, which no reply clears. That hold was rendering as "the
+  // next shop opens as soon as one answers" plus "every reply frees a slot
+  // immediately": a false, checkable promise, where before it had simply said
+  // nothing. Two different waits should never share a sentence.
+  if (/waiting on replies - a new shop opens|shops already messaged answers/.test(r))
     return "awaiting-replies";
   if (/ceiling on shops that never replied|new-shop ceiling/.test(r)) return "limit";
   // Rolling-window introductions budget: capacity refreshes continuously.
@@ -86,6 +103,15 @@ export function queueReasonWhy(raw?: string | null): string | null {
         "Your plan opens new shops in batches, so your number stays under " +
         "WhatsApp's radar. Shops already replying are unaffected."
       );
+    case "disconnected":
+      return (
+        "Your phone's WhatsApp link to this app has dropped - WhatsApp ends a "
+        + "linked session after a while, and it can also be ended from your "
+        + "phone. Nothing is lost: your messages are waiting, and they go out "
+        + "as soon as you reconnect. Your agent deliberately will not retry the "
+        + "connection on its own, because repeatedly re-registering a device is "
+        + "exactly what gets a number restricted."
+      );
     case "awaiting-replies":
       return (
         "Several shops you have already messaged have not written back yet. " +
@@ -118,6 +144,8 @@ export function queueReasonLabel(raw?: string | null): string {
       return "Queued - sending resumes automatically in a few minutes";
     case "capacity":
       return "You've reached your plan's batch of new shops - more open up shortly, automatically";
+    case "disconnected":
+      return "Your WhatsApp link dropped - reconnect it in Profile and these send automatically";
     case "awaiting-replies":
       return "Waiting on replies - the next shop opens as soon as one answers";
     case "tomorrow":
@@ -136,7 +164,15 @@ export function queueReasonLabel(raw?: string | null): string {
 /** "sends in ~3 min" / "sends in ~2 h" - honest ETA from not_before. A row that
  * is already due does NOT claim "any moment" (the drain still paces it): it says
  * so honestly. */
-export function queueEta(notBefore?: string | null): string {
+export function queueEta(notBefore?: string | null, reason?: string | null): string {
+  // AN ETA IS A PROMISE, AND ONE HOLD CANNOT KEEP IT. A disconnected link is
+  // parked 30-40 minutes at a time, but nothing sends at the end of that -
+  // it re-parks, indefinitely, until a HUMAN re-pairs. Rendering "sends in
+  // ~35 min" there is the app inventing a deadline for an event no clock
+  // controls, next to a label whose whole job is to say "you must act". The
+  // suppression lives here rather than in the card so every surface that
+  // learns to show an ETA inherits it.
+  if (reason !== undefined && classifyQueueReason(reason) === "disconnected") return "";
   if (!notBefore) return "";
   const ms = Date.parse(notBefore) - Date.now();
   if (!Number.isFinite(ms)) return "";

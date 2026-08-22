@@ -506,7 +506,9 @@ function VendorCardInner({
             <div className="mb-2 rounded-xl bg-brandyellow-soft p-2 text-[11px] font-bold text-warn">
               <div className="flex items-center gap-1.5">
                 🕘 {t(queueReasonLabel(vendor.queuedReason))}
-                {queueEta(vendor.queuedUntil) ? ` · ${t(queueEta(vendor.queuedUntil))}` : ""}
+                {queueEta(vendor.queuedUntil, vendor.queuedReason)
+                  ? ` · ${t(queueEta(vendor.queuedUntil, vendor.queuedReason))}`
+                  : ""}
               </div>
               {/* WHY, not just WHAT. Cold introductions now wait for the shop's
                   opening hours (FAST_DISPATCH off). Without the reason, a
