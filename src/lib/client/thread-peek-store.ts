@@ -25,7 +25,12 @@ import type { Peek, PeekMsg } from "@/lib/thread/peek-batch";
 export type { Peek, PeekMsg };
 
 /** Matches the old per-card cadence - the peek is a preview, not a transcript. */
-export const PEEK_POLL_MS = 10_000;
+// 30s, not 10s. Each tick is a two-query batch over the message table, and at
+// 50 concurrent boards a 10-second cadence was a third of the app's entire
+// Supabase egress for a panel that shows a one-line preview. A shop reply
+// still lands on the CARD within seconds via the replies poll; this is only
+// how fast the peek line under it catches up.
+export const PEEK_POLL_MS = 30_000;
 
 /**
  * How long to wait before the first request after a subscription arrives.

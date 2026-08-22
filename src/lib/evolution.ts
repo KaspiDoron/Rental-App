@@ -726,10 +726,21 @@ function bumpHostCount(url: string, by = 1) {
   }
 }
 
-/** Soft cap of paired users per host (owner-adjustable). */
+/**
+ * Cap of paired users per host (owner-adjustable).
+ *
+ * 25, not 40. Evolution's own documented production floor is 2 vCPU / 2 GB,
+ * a Render `starter` is 512 MB, and render.yaml itself estimates only
+ * "~30-50 live sockets" for that box while PRODUCTION-READINESS puts the safe
+ * occupancy at 25-30. The failure mode when this is wrong is not a slow queue:
+ * the container OOMs, every socket on it drops at once, and each of those
+ * numbers is then a personal WhatsApp account reconnecting in a storm. Adding
+ * capacity later does not un-ban a traveller's number, so the default sits at
+ * the conservative end and the owner raises it deliberately.
+ */
 export async function maxPerHost(): Promise<number> {
   const v = Number(await getConfig("EVOLUTION_MAX_PER_HOST"));
-  return Number.isFinite(v) && v > 0 ? v : 40;
+  return Number.isFinite(v) && v > 0 ? v : 25;
 }
 
 /**
@@ -795,7 +806,19 @@ async function resolveHost(email: string): Promise<Host | null> {
   const cap = await maxPerHost();
   const pickFrom = healthy.length ? healthy : hosts;
   const underCap = pickFrom.filter((h) => (counts[h.url] ?? 0) < cap);
-  const pool = underCap.length ? underCap : pickFrom;
+  // A CAP THAT PLACES THE USER ANYWAY IS NOT A CAP.
+  //
+  // This used to read `underCap.length ? underCap : pickFrom` - so once every
+  // host was full it silently put the next user on the fullest box regardless,
+  // which is exactly the moment the cap existed to prevent. With one host and
+  // 50 testers it meant all 50 sockets on a 512 MB container.
+  //
+  // Returning null makes `connectInstance` tell the truth ("we are at
+  // capacity") instead of overfilling a box until it OOMs and takes every
+  // linked number down with it. The owner adds a host or raises the cap - both
+  // deliberate acts, neither of which risks somebody's WhatsApp account.
+  if (!underCap.length) return null;
+  const pool = underCap;
   pool.sort(
     (a, b) =>
       (counts[a.url] ?? 0) - (counts[b.url] ?? 0) ||
@@ -2394,6 +2417,20 @@ export async function sendFromUser(
     // A session row means the user HAS linked - a failed resume is a transient
     // reconnect (Render waking), never a reason to make them re-link.
     const paired = await hasSessionRow(email);
+    // ...BUT THE RISK ENGINE HAS TO HEAR ABOUT IT.
+    //
+    // This return happens BEFORE `noteSendOutcome`/`recordSendFailure`, so a
+    // number whose link WhatsApp had severed produced a perfect silence in the
+    // telemetry: every attempt failed, nothing was counted, `computeRisk` never
+    // moved, and the 3-hard-fails-in-180s stop-loss could never fire. The one
+    // signal that a number is in trouble was the one signal we discarded.
+    // The guard now refuses to reach this path at all for a `close` session
+    // (see wa-guard 0.a); this records the residue so the breaker still has
+    // evidence when the failure is something else.
+    if (paired) {
+      const { noteSendOutcome } = await import("./wa-guard");
+      await noteSendOutcome(email, "hard").catch(() => {});
+    }
     return {
       ok: false,
       error: paired ? "reconnecting" : "not-connected",

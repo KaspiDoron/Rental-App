@@ -563,7 +563,24 @@ export async function findRealVendors(
     const { tagSponsored } = await import("./sponsored");
     await tagSponsored(list);
     const out = { vendors: list };
-    cacheSet(ck, out, 10 * 60_000);
+    // SIX HOURS, NOT TEN MINUTES - the one Places lever that costs nothing.
+    //
+    // This is Text Search (Enterprise + Atmosphere), Google's top SKU tier, and
+    // the audit put the worst case at ~22,500 calls/month across a 50-user
+    // beta - the only line item in the whole system with unbounded dollar
+    // downside. A ten-minute TTL meant a traveller reopening their hunt after
+    // lunch re-bought the entire shop list.
+    //
+    // Six hours is honest for what this actually is: the set of rental shops
+    // near a hotel does not change during a trip. (Note SCALING.md claimed
+    // "cached for a day" - that was only ever true of GEOCODING; this read was
+    // on ten minutes. The doc is corrected alongside this.)
+    //
+    // NOT DONE, deliberately: dropping `places.rating` / `userRatingCount` to
+    // fall two SKU tiers. Those fields are rendered on VendorCard,
+    // CompareSheet, MassBargainPreview and ReviewsSheet - removing them is a
+    // visible product regression, not a cost optimisation.
+    cacheSet(ck, out, 6 * 3600_000);
     return out;
   }
 

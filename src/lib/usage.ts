@@ -111,7 +111,13 @@ export async function monthlyUsage(): Promise<Record<string, number>> {
 // ---- per-user daily limits (owner-configurable) -----------------------------------
 
 export const LIMIT_DEFAULTS: Record<string, number> = {
-  LIMIT_SEARCHES_PER_DAY: 15, // vendor discovery (Places searches)
+  // 5 for the beta, down from 15. Each search is a top-tier Places call and
+  // 50 testers x 15 was a worst case of 22,500 calls/month - the only
+  // unbounded-$ exposure in the system. Five hunts a day is far past what a
+  // traveller planning one trip needs, and the owner can raise it per-user
+  // from the Key Vault without a redeploy.
+  LIMIT_SEARCHES_PER_DAY: 5,
+// vendor discovery (Places searches)
   // Address lookups: every debounced keystroke pause is one call, so 40/day
   // made the dropdown go silently empty mid-trip. Autocomplete + session
   // tokens are the cheap SKU - 300 keeps typing fluid while still bounded.
@@ -147,9 +153,35 @@ export const LIMIT_DEFAULTS: Record<string, number> = {
   LIMIT_WA_PER_DAY: 60,
 };
 
+/**
+ * THE LIMITS SCALE_MODE MUST NEVER TOUCH.
+ *
+ * SCALE_MODE means "the BACKEND plans were upgraded, let the app work harder".
+ * It is about our Supabase/Cloud Run headroom. It says nothing whatsoever
+ * about how much a traveller's personal WhatsApp number can safely send - that
+ * ceiling is set by Meta's anti-abuse systems, and no amount of database
+ * capacity moves it.
+ *
+ * The multiplier used to apply to EVERY name, including these four, so the one
+ * switch an owner reaches for under beta load quietly took cold introductions
+ * from 24/h to 72/h and 80/day to 240/day on every linked number. Both
+ * PRODUCTION-READINESS.md and CLAUDE.md promise the opposite ("number safety
+ * never scales down"), and evolution.ts labels these four "THE ANTI-BAN
+ * BUDGET". The docs were right and the code was wrong.
+ */
+const NEVER_SCALED: ReadonlySet<string> = new Set([
+  "LIMIT_WA_INTRO_PER_HOUR",
+  "LIMIT_WA_INTRO_PER_DAY",
+  "LIMIT_WA_REPLY_PER_HOUR",
+  "LIMIT_WA_REPLY_PER_DAY",
+]);
+
 export async function limitFor(name: keyof typeof LIMIT_DEFAULTS): Promise<number> {
   const v = Number(await getConfig(name));
   const base = Number.isFinite(v) && v > 0 ? v : LIMIT_DEFAULTS[name];
+  // An explicit owner override is still honoured for these - deliberately
+  // typing a number is a decision; flipping a scale switch is not.
+  if (NEVER_SCALED.has(name)) return base;
   // SCALE_MODE: one owner switch that triples every per-user budget when the
   // backend plans have been upgraded to carry the load. Explicit per-limit
   // overrides above still win (they are read first).
