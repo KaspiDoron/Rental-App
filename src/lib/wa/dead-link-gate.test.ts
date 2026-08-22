@@ -68,10 +68,17 @@ describe("a failed resume feeds the risk engine instead of vanishing", () => {
   it("THE SILENT TELEMETRY: a paired-but-unreachable send records a hard outcome", () => {
     const evo = read("src/lib/evolution.ts");
     const block = evo.slice(evo.indexOf("const conn = await ensureConnected(email, 6000)"));
-    expect(block.slice(0, 1800)).toMatch(/noteSendOutcome\(email, "hard"\)/);
+    expect(block.slice(0, 2400)).toMatch(/noteSendOutcome\(email, "hard"\)/);
     // ...and only when the user is actually paired - an unlinked user failing
     // to connect is not a risk signal.
-    expect(block.slice(0, 1800)).toMatch(/if \(paired\) \{/);
+    expect(block.slice(0, 2400)).toMatch(/paired/);
+    // ...NOR when the failure is our OWN refusal. Owner report 8.1 moved the
+    // dead-link gate into ensureConnected so the three callers that bypass the
+    // guard inherit it, which means this path now also sees a `close` verdict
+    // we produced ourselves. Counting that would feed the 3-hard-fails stop-loss
+    // with our own caution and pause the number for a restriction it had already
+    // detected - punishing the account twice for one event.
+    expect(block.slice(0, 2400)).toMatch(/conn\.state !== "close"/);
   });
 
   it("the stop-loss it feeds is the 3-hard-fails breaker", () => {

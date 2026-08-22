@@ -293,16 +293,48 @@ export interface Host {
   dialPrefixes: string[];
 }
 
+/**
+ * ONE HOST PER LINE - AND THE COMMA IS NOT ALWAYS A SEPARATOR.
+ *
+ * This used to be `multi.split(/[\n,]+/)`, which ran BEFORE a line was split on
+ * `|`. That was harmless while a host was two fields, and it silently destroyed
+ * the third the moment owner report 8 added one: the documented
+ *
+ *     https://sg.example.com|KEY|66,84,855,856,60,65
+ *
+ * became a host claiming only `66`, plus five keyless fragments ("84", "855",
+ * ...) that the `url && key` filter then dropped without a word. So geo-aware
+ * placement - the whole point of wave C - was inert for exactly the line every
+ * one of its own docs tells the owner to paste, and the fleet looked correctly
+ * configured while ranking every number as a region MISMATCH.
+ *
+ * Newlines are the real separator. The comma stays supported only in the legacy
+ * shape it was added for - `url1|key1,url2|key2` - which is recognisable
+ * because EVERY fragment carries its own `|`. A line whose fragments are not
+ * all hosts is one host, commas and all.
+ */
+export function splitHostLines(raw: string): string[] {
+  return raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      if (!line.includes(",")) return [line];
+      const parts = line.split(",").map((p) => p.trim()).filter(Boolean);
+      // Legacy comma-separated hosts: every part is itself `url|key`.
+      const everyPartIsAHost =
+        parts.length > 1 && parts.every((p) => p.split("|").filter(Boolean).length >= 2);
+      return everyPartIsAHost ? parts : [line];
+    });
+}
+
 // Exported for `wa/fleet-truth`, which needs the same host list this module
 // routes on. A second parser would be a second source of truth about which
 // hosts exist, which is exactly the class of drift the dual-socket detector is
 // there to catch.
 export async function getHosts(): Promise<Host[]> {
   const multi = (await getConfig("EVOLUTION_HOSTS")) ?? "";
-  const parsed = multi
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const parsed = splitHostLines(multi)
     .map((line) => {
       const [url, key, regions] = line.split("|").map((x) => x?.trim());
       return url && key
@@ -903,7 +935,23 @@ async function resolveHost(email: string, phoneHint?: string | null): Promise<Ho
   // capacity") instead of overfilling a box until it OOMs and takes every
   // linked number down with it. The owner adds a host or raises the cap - both
   // deliberate acts, neither of which risks somebody's WhatsApp account.
-  if (!underCap.length) return null;
+  if (!underCap.length) {
+    // AN OCCUPANT IS NOT AN APPLICANT. The single-host branch above exempts a
+    // user who is already placed; this branch did not, and the asymmetry is a
+    // real eviction: a stored user is kept above only while their host passes
+    // the health probe, so one transient probe failure on a fleet at cap sends
+    // a LINKED user down here and returns null - on the SEND path, because
+    // every send calls resolveHost. Their queued messages then fail as
+    // "reconnecting" for as long as the fleet stays full.
+    //
+    // The cap exists to stop a box being given MORE sockets than it can hold.
+    // Someone already on it consumes no new slot and creates no new device
+    // registration, so refusing them protects nothing and costs them their
+    // hunt. Hand back their own host and let the health probe above decide
+    // whether it is usable.
+    const home = stored ? hosts.find((h) => h.url === stored) : undefined;
+    return home ?? null;
+  }
   // GEO FIRST, THEN LOAD. rankHostsForNumber puts hosts that claim this
   // number's calling code ahead of region-neutral ones and both ahead of hosts
   // that claim somewhere else, then falls through to exactly the least-loaded
@@ -1375,6 +1423,28 @@ export async function ensureConnected(
   email: string,
   budgetMs = 6000
 ): Promise<{ ok: boolean; state: string | null }> {
+  // THE DEAD-LINK REFUSAL LIVES HERE, NOT ONLY IN THE GUARD.
+  //
+  // Owner report 8 wave A put a `wa_sessions.status === "close"` gate inside
+  // guardOutbound, because `ensureConnected` fires POST /instance/create + GET
+  // /instance/connect unconditionally - a fresh device registration against a
+  // number WhatsApp has just severed, which ANTI-BAN.md's first line calls a
+  // fresh strike. But the gate only covered the callers that go THROUGH the
+  // guard, and three do not: /api/outreach/mass hits this at the top of a batch
+  // (before its first guardOutbound, hundreds of lines later), the admin
+  // training import calls it bare, and sendFromUser calls it before its own
+  // checks. So tapping "bargain with all shops" on a severed number still
+  // registered a device against it, once per tap.
+  //
+  // Refusing HERE means the route, the drain and sendFromUser all inherit it
+  // and none of them has to remember. Fails OPEN by construction: storedStatus
+  // returns "unknown" when the read is unavailable and null when there is no
+  // row, and only the literal "close" refuses - a Supabase blip must never
+  // block a healthy re-pair.
+  if ((await storedStatus(email)) === "close") {
+    return { ok: false, state: "close" };
+  }
+
   const instance = instanceNameFor(email);
   const host = await resolveHost(email);
   if (!host) return { ok: false, state: null };
@@ -2546,7 +2616,13 @@ export async function sendFromUser(
     // The guard now refuses to reach this path at all for a `close` session
     // (see wa-guard 0.a); this records the residue so the breaker still has
     // evidence when the failure is something else.
-    if (paired) {
+    // ...EXCEPT WHEN THE FAILURE IS OUR OWN REFUSAL. `state === "close"` is
+    // ensureConnected declining to touch the transport for a severed link (see
+    // its head). That is a decision we made, not evidence WhatsApp gave us, and
+    // counting it would feed the 3-hard-fails-in-180s stop-loss with our own
+    // caution until it paused a number for a restriction it had already
+    // detected - punishing the account twice for one event.
+    if (paired && conn.state !== "close") {
       const { noteSendOutcome } = await import("./wa-guard");
       await noteSendOutcome(email, "hard").catch(() => {});
     }

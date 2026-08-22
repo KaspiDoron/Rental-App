@@ -14,7 +14,17 @@ describe("A2: the host cap actually refuses", () => {
     // `underCap.length ? underCap : pickFrom` meant the cap did nothing at the
     // exact moment it mattered - with one host, all 50 testers on one 512MB box.
     expect(evo).not.toMatch(/const pool = underCap\.length \? underCap : pickFrom;/);
-    expect(evo).toMatch(/if \(!underCap\.length\) return null;/);
+    // The refusal is now a branch, not a one-liner: owner report 8.1 found that
+    // it also refused users who were ALREADY on a host, on the send path, when
+    // a transient health-probe failure on a full fleet dropped them out of
+    // `healthy`. An occupant consumes no new slot, so they get their own host
+    // back; a genuinely NEW user - no stored host - is still refused, which is
+    // the whole point of the cap.
+    const at = evo.indexOf("if (!underCap.length) {");
+    expect(at).toBeGreaterThan(-1);
+    const branch = evo.slice(at, at + 1200);
+    expect(branch).toMatch(/const home = stored \? hosts\.find\(\(h\) => h\.url === stored\) : undefined;/);
+    expect(branch).toMatch(/return home \?\? null;/);
   });
 
   it("the default cap is the conservative 25, not 40", () => {
