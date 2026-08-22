@@ -21,7 +21,15 @@ describe("the cheapest rival survives truncation", () => {
     // point of the leverage card.
     expect(engine).not.toMatch(/return \[\.\.\.rows\.values\(\)\]\.slice\(0, 10\);/);
     expect(engine).toMatch(/const ranked = \[\.\.\.rows\.values\(\)\]\.sort/);
-    expect(engine).toMatch(/return ranked\.slice\(0, 10\);/);
+    // The truncation is no longer a bare `ranked.slice(0, 10)`. Owner report 9
+    // found that sorting cheapest-first fixed the leverage card and starved the
+    // sibling re-bargain in the same stroke - it reads this same list and sorts
+    // it DEAREST-first, so the slice was discarding exactly its targets. The
+    // cap is spent from both ends now. What this test guards - that the list is
+    // RANKED before it is cut, and that the cheapest survives - is unchanged,
+    // and the EXECUTED case below is what actually proves it.
+    expect(engine).toMatch(/const head = ranked\.slice\(0, SESSION_TABLE_CAP - REBARGAIN_TAIL\);/);
+    expect(engine).toMatch(/const tail = ranked\.slice\(-REBARGAIN_TAIL\);/);
   });
 
   it("this shop is kept regardless - the comparison needs its own row", () => {

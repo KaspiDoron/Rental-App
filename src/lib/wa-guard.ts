@@ -1516,7 +1516,26 @@ export async function effectiveHourlyCap(senderKey: string, plan?: string): Prom
   // batch must fit inside ONE window, never split an hour out (the "18:24 then
   // jumped to 19:20" bug). The budget is the intended first-session burst; the
   // min-gap + reply-rate breaker are what actually keep the send rate safe.
-  return Math.max(trimmed, planCapacity(resolvedPlan).newContacts);
+  // FLOORED AT THE RAMPED BUDGET, NOT THE RAW ONE.
+  //
+  // This floored at `planCapacity(plan).newContacts` - the plan's FULL budget,
+  // with no warm-up applied - while the cap the drain actually enforces goes
+  // through `dynamicHourCap` -> `effectiveHourCap`, which owner report 8 wave D
+  // made genuinely ramped. So the two disagreed on exactly the numbers a new
+  // link cares about: a day-0 ultra batch was staggered as though 24 sends an
+  // hour were available while the drain would honour about half that. The tail
+  // of the batch is then stamped for a slot that will be refused, re-parked,
+  // and stamped again - the "18:24 then jumped to 19:20" bouncing this
+  // function's own comment below says it exists to PREVENT. It was correct
+  // until the ramp underneath it started moving.
+  //
+  // Same ramp, same inputs, so the stagger and the drain now agree by
+  // construction rather than by coincidence.
+  const rampedBudget = Math.max(
+    1,
+    Math.round(planCapacity(resolvedPlan).newContacts * warmupMultiplier(rep, p))
+  );
+  return Math.max(trimmed, rampedBudget);
 }
 
 /**
