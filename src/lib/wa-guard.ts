@@ -702,11 +702,64 @@ async function blocksInWindow(senderKey: string, days = 7): Promise<number | nul
 }
 
 /** Persist reputation and recompute the ban-risk score (auto-pause on spike). */
+/** The counters `wa_rep_bump` knows how to increment atomically. */
+export type RepBumps = Partial<
+  Record<
+    | "sent_total"
+    | "replies_total"
+    | "blocks_total"
+    | "fails_total"
+    | "reads_total"
+    | "delivered_total"
+    | "invalid_numbers_total"
+    | "new_contacts_today",
+    number
+  >
+>;
+
+/**
+ * @param bumps  Counter DELTAS, applied in the database.
+ *
+ * THE GAUGE WAS READ-MODIFY-WRITE. Every safety counter used to be computed in
+ * the app - read `sent_total`, add one, PATCH the absolute value back - so two
+ * writers for the same sender both read N and both wrote N+1, and one increment
+ * vanished. An inbound reply landing while an outbound send completes is not an
+ * exotic race; it is what a 50-user beta produces continuously.
+ *
+ * These counters are the numerator and denominator of `computeRisk`, which
+ * auto-pauses a number at the risk threshold, and of the delivery-rate breaker.
+ * A gauge that silently under-counts is worse than no gauge, because it reads
+ * healthy.
+ *
+ * `patch` keeps its meaning for last-write-wins fields - timestamps, and
+ * `trust_score`, which is a smoothed score with its own decay rather than a
+ * count: a lost trust update shifts one window's cap slightly and the next
+ * event corrects it, where a lost COUNT is permanent.
+ */
 async function saveReputation(
   senderKey: string,
-  patch: Partial<Reputation>
+  patch: Partial<Reputation>,
+  bumps?: RepBumps
 ): Promise<void> {
-  const rep = { ...(await getReputation(senderKey)), ...patch };
+  const current = await getReputation(senderKey);
+  // The risk calculation must see where the counters are GOING, not where they
+  // were - otherwise the send that crosses the threshold is judged on the state
+  // before it happened, and the pause arrives one event late.
+  const projected: Reputation = { ...current, ...patch };
+  for (const [k, d] of Object.entries(bumps ?? {})) {
+    const key = k as keyof Reputation;
+    projected[key] = ((Number(current[key]) || 0) + Number(d)) as never;
+  }
+  // A day roll resets the introduction counter rather than accumulating onto
+  // yesterday's - the same rule wa_rep_bump applies server-side.
+  if (
+    bumps?.new_contacts_today !== undefined &&
+    patch.new_contacts_date !== undefined &&
+    patch.new_contacts_date !== current.new_contacts_date
+  ) {
+    projected.new_contacts_today = bumps.new_contacts_today;
+  }
+  const rep = projected;
   const p = await getPolicies();
   const risk = computeRisk(rep, p, { blocks7d: await blocksInWindow(senderKey) });
   const update: Record<string, unknown> = { ...patch, risk_score: risk.score };
@@ -729,6 +782,37 @@ async function saveReputation(
       }
     }
   }
+  if (bumps && Object.keys(bumps).length) {
+    const { sbRpc } = await import("./runtime-config");
+    const res = await sbRpc("wa_rep_bump", {
+      p_sender: senderKey,
+      p_bumps: bumps,
+      p_set: update,
+    });
+    if (res.ok) return;
+    // A 404 is a database where the owner has not re-run schema.sql yet. Fall
+    // through to the old absolute write so an un-migrated deployment keeps
+    // behaving exactly as it did - racy, but never silently dropping the
+    // count. Any other failure falls through too: one lost increment beats a
+    // write that does not happen at all.
+    const absolute: Record<string, unknown> = { ...update };
+    for (const [k, d] of Object.entries(bumps)) {
+      absolute[k] = (Number((await getReputation(senderKey))[k as keyof Reputation]) || 0) + Number(d);
+    }
+    if (
+      bumps.new_contacts_today !== undefined &&
+      patch.new_contacts_date !== undefined &&
+      patch.new_contacts_date !== current.new_contacts_date
+    ) {
+      absolute.new_contacts_today = bumps.new_contacts_today;
+    }
+    await sbUpdate(
+      "whatsapp_number_reputation",
+      `sender_key=eq.${encodeURIComponent(senderKey)}`,
+      absolute
+    );
+    return;
+  }
   await sbUpdate(
     "whatsapp_number_reputation",
     `sender_key=eq.${encodeURIComponent(senderKey)}`,
@@ -744,11 +828,14 @@ export async function recordInboundEngagement(
   try {
     const p = await getPolicies();
     const rep = await getReputation(senderKey);
-    await saveReputation(senderKey, {
-      trust_score: Math.min(100, rep.trust_score + p.trust_reply_gain),
-      replies_total: (rep.replies_total || 0) + 1,
-      last_reply_at: new Date().toISOString(),
-    });
+    await saveReputation(
+      senderKey,
+      {
+        trust_score: Math.min(100, rep.trust_score + p.trust_reply_gain),
+        last_reply_at: new Date().toISOString(),
+      },
+      { replies_total: 1 }
+    );
     if (fromNumber) {
       await upsertRecipient(senderKey, fromNumber, {
         last_reply_at: new Date().toISOString(),
@@ -794,10 +881,11 @@ export async function recordReadReceipt(
     // Deliveries are now only ever counted from real delivery events, and
     // last_read_receipt_at gives the dashboard a way to tell "no receipts
     // because idle" from "no receipts because the pipeline is dead".
-    await saveReputation(senderKey, {
-      reads_total: (rep.reads_total || 0) + 1,
-      last_read_receipt_at: new Date().toISOString(),
-    });
+    await saveReputation(
+      senderKey,
+      { last_read_receipt_at: new Date().toISOString() },
+      { reads_total: 1 }
+    );
     await upsertRecipient(senderKey, toNumber, {
       read: true,
       delivered: true,
@@ -816,10 +904,11 @@ export async function recordDelivery(
 ): Promise<void> {
   try {
     const rep = await getReputation(senderKey);
-    await saveReputation(senderKey, {
-      delivered_total: (rep.delivered_total || 0) + 1,
-      last_delivery_receipt_at: new Date().toISOString(),
-    });
+    await saveReputation(
+      senderKey,
+      { last_delivery_receipt_at: new Date().toISOString() },
+      { delivered_total: 1 }
+    );
     await upsertRecipient(senderKey, toNumber, { delivered: true });
     // Meter integrity. `delivered_total` is a scalar with NO timestamp, so a
     // zero conflates "the receipt webhook is dead" with "this account is idle" -
@@ -941,17 +1030,15 @@ export async function recordSendFailure(
       // A REAL block: a human decided they do not want to hear from this
       // traveller. This is the only failure that belongs in blocks_total,
       // because it is the only one that reflects on the sender.
-      await saveReputation(senderKey, { blocks_total: (rep.blocks_total || 0) + 1 });
+      await saveReputation(senderKey, {}, { blocks_total: 1 });
       await upsertRecipient(senderKey, toNumber, { blocked: true });
     } else if (kind === "invalid") {
       // The number is not on WhatsApp. That is a fact about a stale scraped
       // listing, not about the sender, and counting it as a block let three
       // dead numbers in one batch auto-pause a healthy account.
-      await saveReputation(senderKey, {
-        invalid_numbers_total: (rep.invalid_numbers_total || 0) + 1,
-      });
+      await saveReputation(senderKey, {}, { invalid_numbers_total: 1 });
     } else {
-      await saveReputation(senderKey, { fails_total: (rep.fails_total || 0) + 1 });
+      await saveReputation(senderKey, {}, { fails_total: 1 });
     }
     // Three separate kinds, matching the three separate meanings. Folding them
     // back into one is exactly the miscount this branch was split to fix.
@@ -970,7 +1057,6 @@ async function recordOutboundSend(senderKey: string, toNumber?: string): Promise
     const p = await getPolicies();
     const rep = await getReputation(senderKey);
     const today = new Date().toISOString().slice(0, 10);
-    const isNewDay = rep.new_contacts_date !== today;
     // Was this a brand-new cold contact (no prior recipient state)?
     let newContact = false;
     if (toNumber) {
@@ -993,13 +1079,23 @@ async function recordOutboundSend(senderKey: string, toNumber?: string): Promise
       // follow-ups happen later.
       if (newContact) await stampRecipientFirst(senderKey, toNumber, "first_intro_at");
     }
-    await saveReputation(senderKey, {
-      trust_score: Math.max(0, rep.trust_score - p.trust_send_decay),
-      sent_total: (rep.sent_total || 0) + 1,
-      last_send_at: new Date().toISOString(),
-      new_contacts_date: today,
-      new_contacts_today: (isNewDay ? 0 : rep.new_contacts_today || 0) + (newContact ? 1 : 0),
-    });
+    await saveReputation(
+      senderKey,
+      {
+        trust_score: Math.max(0, rep.trust_score - p.trust_send_decay),
+        last_send_at: new Date().toISOString(),
+        // Carried in the last-write-wins half BECAUSE the day roll is what
+        // tells the atomic bump to restart the introduction counter instead of
+        // adding to yesterday's. `isNewDay` is now derived from this
+        // comparison on both sides rather than computed once in the app.
+        new_contacts_date: today,
+      },
+      // ALWAYS PRESENT, even as a 0. The day-roll reset in wa_rep_bump keys on
+      // this column being bumped at all: with the key absent, a send on a new
+      // day would stamp today's DATE beside yesterday's COUNT, which reads as
+      // a full day's introductions already spent. Zero is a real delta here.
+      { sent_total: 1, new_contacts_today: newContact ? 1 : 0 }
+    );
     // Only a genuine first contact is an introduction. This is the numerator of
     // the quantity Meta actually meters, and until now it existed nowhere as
     // data - only as a re-derivation over an unindexed JSON convention that any

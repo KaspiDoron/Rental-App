@@ -815,6 +815,78 @@ returns jsonb language sql stable as $$
   );
 $$;
 
+-- ATOMIC REPUTATION COUNTERS (owner report 8, M3).
+--
+-- Every safety counter on whatsapp_number_reputation was written read-modify-
+-- write: the app read `sent_total`, added one, and PATCHed the absolute value
+-- back. Two writers for the same sender - an inbound reply landing while an
+-- outbound send completes, which is precisely what a 50-user beta produces -
+-- both read N and both write N+1. One increment is simply lost.
+--
+-- These counters are not decoration. They are the numerator and denominator of
+-- `computeRisk`, which auto-pauses a number at the risk threshold. A gauge that
+-- silently under-counts is worse than no gauge: it reads healthy while the
+-- thing it measures is not.
+--
+-- So the increments happen IN THE DATABASE, where `col = col + delta` is atomic
+-- under the row lock. `p_bumps` is a flat jsonb object of column -> integer
+-- delta; `p_set` is the ordinary last-write-wins fields (timestamps, scores)
+-- which have no accumulation semantics and are correct to overwrite.
+--
+-- The column allow-list is CLOSED and spelled out. This function is reachable
+-- over PostgREST, so a dynamic `format('%I', key)` would let any caller who can
+-- call it increment any integer column on the table. Naming the six is not
+-- verbosity, it is the security boundary.
+create or replace function public.wa_rep_bump(
+  p_sender text,
+  p_bumps  jsonb default '{}'::jsonb,
+  p_set    jsonb default '{}'::jsonb
+)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.whatsapp_number_reputation set
+    sent_total            = coalesce(sent_total, 0)            + coalesce((p_bumps->>'sent_total')::int, 0),
+    replies_total         = coalesce(replies_total, 0)         + coalesce((p_bumps->>'replies_total')::int, 0),
+    blocks_total          = coalesce(blocks_total, 0)          + coalesce((p_bumps->>'blocks_total')::int, 0),
+    fails_total           = coalesce(fails_total, 0)           + coalesce((p_bumps->>'fails_total')::int, 0),
+    reads_total           = coalesce(reads_total, 0)           + coalesce((p_bumps->>'reads_total')::int, 0),
+    delivered_total       = coalesce(delivered_total, 0)       + coalesce((p_bumps->>'delivered_total')::int, 0),
+    invalid_numbers_total = coalesce(invalid_numbers_total, 0) + coalesce((p_bumps->>'invalid_numbers_total')::int, 0),
+    -- NEW CONTACTS RESET WITH THE DAY, not by accumulating forever. The date is
+    -- carried in p_set; when it differs from the stored one the counter starts
+    -- from this bump instead of adding to yesterday's.
+    new_contacts_today =
+      case
+        when p_bumps ? 'new_contacts_today' and p_set ? 'new_contacts_date'
+             and coalesce(new_contacts_date, '') is distinct from (p_set->>'new_contacts_date')
+          then (p_bumps->>'new_contacts_today')::int
+        else coalesce(new_contacts_today, 0) + coalesce((p_bumps->>'new_contacts_today')::int, 0)
+      end,
+    -- Last-write-wins fields. `?` is jsonb key-existence, so an absent key
+    -- leaves the column untouched while an explicit JSON null clears it.
+    new_contacts_date         = case when p_set ? 'new_contacts_date'         then p_set->>'new_contacts_date'                 else new_contacts_date end,
+    trust_score               = case when p_set ? 'trust_score'               then (p_set->>'trust_score')::int                else trust_score end,
+    risk_score                = case when p_set ? 'risk_score'                then (p_set->>'risk_score')::int                 else risk_score end,
+    last_send_at              = case when p_set ? 'last_send_at'              then (p_set->>'last_send_at')::timestamptz       else last_send_at end,
+    last_reply_at             = case when p_set ? 'last_reply_at'             then (p_set->>'last_reply_at')::timestamptz      else last_reply_at end,
+    paused_until              = case when p_set ? 'paused_until'              then (p_set->>'paused_until')::timestamptz       else paused_until end,
+    cold_hold_until           = case when p_set ? 'cold_hold_until'           then (p_set->>'cold_hold_until')::timestamptz    else cold_hold_until end,
+    last_delivery_receipt_at  = case when p_set ? 'last_delivery_receipt_at'  then (p_set->>'last_delivery_receipt_at')::timestamptz else last_delivery_receipt_at end,
+    last_read_receipt_at      = case when p_set ? 'last_read_receipt_at'      then (p_set->>'last_read_receipt_at')::timestamptz     else last_read_receipt_at end,
+    phone_tail                = case when p_set ? 'phone_tail'                then p_set->>'phone_tail'                        else phone_tail end,
+    created_at                = case when p_set ? 'created_at'                then (p_set->>'created_at')::timestamptz         else created_at end
+  where sender_key = p_sender;
+end;
+$$;
+
+-- SECURITY DEFINER + PostgREST means "callable with the anon key" unless it is
+-- revoked, and this one writes the anti-ban gauge. Same treatment
+-- prune_old_rows gets below, for the same reason.
+revoke all on function public.wa_rep_bump(text, jsonb, jsonb) from public;
+revoke all on function public.wa_rep_bump(text, jsonb, jsonb) from anon;
+revoke all on function public.wa_rep_bump(text, jsonb, jsonb) from authenticated;
+grant execute on function public.wa_rep_bump(text, jsonb, jsonb) to service_role;
+
 -- SELF-IMPROVEMENT LOOP (the owner's "experience & continuous learning"): every
 -- successful deal and every grounded benchmark is banked here, so future
 -- sessions in the same region/vehicle start from a real prior instead of cold.
