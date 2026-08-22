@@ -3985,3 +3985,62 @@ export async function senderSafety(senderKey: string): Promise<SenderSafety> {
     signals: signals ?? undefined,
   };
 }
+
+/**
+ * THE WARM-UP HAS TO BE ABOUT THE NUMBER, NOT THE ACCOUNT.
+ *
+ * Every reputation fact - age, trust, send/reply counters, the risk score built
+ * on top of them - keys on `sender_key`, which is the user's EMAIL. And
+ * `created_at` is precisely what the new-contact ramp reads as "how old is this
+ * number". So the sequence a beta tester is most likely to perform -
+ *
+ *     link my personal number -> hunt for a week -> "I'll use a burner
+ *     instead" -> unlink -> link a brand-new number
+ *
+ * - handed the brand-new number a fully-warmed budget on its first day:
+ * age >= warmup_days, trust earned by a different SIM, and an unanswered
+ * meter already showing healthy. Nothing in the tree reset this row; I grepped
+ * for it. A fresh number blasting a full allowance at strangers on day one is
+ * the single most bannable pattern WhatsApp meters.
+ *
+ * Called at link time. Only the last four digits are stored - enough to detect
+ * a swap, not enough to be a second copy of someone's phone number.
+ *
+ * Deliberately conservative on the unknown paths: no tail (the pairing-code
+ * flow can run without one) or an unreadable row leaves the reputation alone.
+ * Wrongly resetting costs a tester some warm-up progress; wrongly KEEPING it
+ * costs them their WhatsApp account.
+ */
+export async function noteLinkedNumber(senderKey: string, phone: string | null | undefined): Promise<
+  "unchanged" | "reset" | "stamped" | "skipped"
+> {
+  const tail = String(phone ?? "").replace(/\D/g, "").slice(-4);
+  if (!senderKey || tail.length < 4) return "skipped";
+  const enc = encodeURIComponent(senderKey);
+  const res = await sbSelectStrict<{ phone_tail: string | null }>(
+    "whatsapp_number_reputation",
+    `select=phone_tail&sender_key=eq.${enc}&limit=1`
+  ).catch(() => ({ error: "unavailable" }) as const);
+  if ("error" in res) return "skipped"; // unreadable - never guess
+  const prior = res.rows[0]?.phone_tail ?? null;
+  if (prior === tail) return "unchanged";
+  if (!prior) {
+    // First time we have learned the number for an existing row: stamp it
+    // WITHOUT resetting. The row's age belongs to this number - we simply did
+    // not know which number it was until now.
+    await sbUpdate("whatsapp_number_reputation", `sender_key=eq.${enc}`, {
+      phone_tail: tail,
+    }).catch(() => {});
+    return "stamped";
+  }
+  // A genuinely different number. Restart the warm-up from zero.
+  await sbUpdate("whatsapp_number_reputation", `sender_key=eq.${enc}`, {
+    phone_tail: tail,
+    trust_score: 20,
+    sent_total: 0,
+    replies_total: 0,
+    last_send_at: null,
+    created_at: new Date().toISOString(),
+  }).catch(() => {});
+  return "reset";
+}

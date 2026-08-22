@@ -390,8 +390,18 @@ create table if not exists public.whatsapp_number_reputation (
   sent_total    int not null default 0,
   replies_total int not null default 0,
   last_send_at  timestamptz,
+  -- WHICH NUMBER THIS REPUTATION IS ABOUT.
+  -- Everything here keys on the EMAIL, and `created_at` is what the warm-up
+  -- ramp reads as "how old is this number". So a tester who linked number A,
+  -- sent for a week, unlinked and linked a brand-new burner B inherited A's
+  -- age (ramp factor 1.0), A's trust score and A's counters - the genuinely
+  -- cold number got a fully-warmed budget on its first day, which is the most
+  -- bannable pattern there is. Nothing anywhere reset this row. Storing the
+  -- last four digits lets a swap be detected and the warm-up restarted.
+  phone_tail    text,
   created_at    timestamptz not null default now()
 );
+alter table public.whatsapp_number_reputation add column if not exists phone_tail text;
 alter table public.whatsapp_number_reputation enable row level security;
 
 -- ---- WhatsApp security policies (owner control panel) -------------------------
