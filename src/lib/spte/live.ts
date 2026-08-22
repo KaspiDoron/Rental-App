@@ -24,6 +24,8 @@ import {
   readTurnComprehension,
   type TurnComprehension,
 } from "./comprehension";
+import { quoteOnTable } from "./policy";
+import { cheapestCheaperRival } from "../negotiation/leverage";
 import { deriveThreadFacts } from "./thread-facts";
 import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
 import { getGraphSpec } from "../graph/engine";
@@ -1393,7 +1395,28 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
         // model every turn and read by nobody, so "the agents never use the
         // other shop's price" could not be measured, only noticed.
         leverage: outcome.artifact.leverageUsed ?? [],
-        citedRival: Boolean(outcome.artifact.leverageUsed?.includes("rival")),
+        // MEASURED ON THE WIRE, NOT ON THE MODEL'S WORD.
+        //
+        // This used to be `leverageUsed.includes("rival")` - a field the model
+        // writes about itself, unvalidated. A draft could name 200 and report
+        // [], or report ["rival"] and name nothing. Worse, `fallbackArtifact`
+        // hard-codes `leverageUsed: []`, so the ONE path that cites the rival
+        // deterministically always recorded citedRival:false. The instrument
+        // that was supposed to answer "do the agents actually use the other
+        // shop's price?" was measuring a self-report and reading the
+        // best-behaved path as the worst.
+        //
+        // Now: did the text we actually SENT contain the cheapest rival's
+        // number? Same tolerance as the cite-the-rival rail.
+        citedRival: (() => {
+          const rival = cheapestCheaperRival(tc.session.rivals, quoteOnTable(tc));
+          if (!rival || !send) return false;
+          const target = Math.round(rival.pricePerDay);
+          return (send.match(/\d[\d,.]*/g) ?? []).some((n) => {
+            const v = Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."));
+            return Number.isFinite(v) && Math.abs(v - target) <= 1;
+          });
+        })(),
         // The shop's menu + what it sent, so the option and vision KPIs have a
         // source that is not a guess.
         // THE ROW THE A/B IS COMPUTED FROM (owner report 5 #2, second half).

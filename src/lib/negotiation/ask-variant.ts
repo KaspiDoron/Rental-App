@@ -69,12 +69,34 @@ function hash(key: string): number {
  * The key is the thread key (`user:vendor`), so two shops in the same hunt can
  * land in different arms and the same shop never changes arm between turns.
  */
+/**
+ * THE EXPERIMENT IS PAUSED FOR THE BETA - deliberately, and reversibly.
+ *
+ * The owner's stated launch requirement is a specific sentence: "we've received
+ * an offer of 200 from another rental shop - can you offer 180?". The
+ * `open-ended-below` arm instructs the composer to do the opposite ("do NOT
+ * name a counter-price of your own... naming any specific number breaks this
+ * instruction"), so a 50/50 split means half of all threads are contractually
+ * forbidden from sending the thing the product is supposed to do.
+ *
+ * That is a fine trade when you are measuring which ask converts better. It is
+ * a bad trade during a 50-user beta, where the sample is too small to settle
+ * the question anyway and the cost is half the negotiations losing their
+ * strongest move.
+ *
+ * The arm assignment, the directive text and `variantHonoured` all stay - flip
+ * `ASK_VARIANT_SPLIT` back to true (or set the `ASK_VARIANT_SPLIT` config) once
+ * there is enough traffic for the answer to mean something.
+ */
+export const ASK_VARIANT_SPLIT = false;
+
 export function askVariantFor(threadKey: string): AskVariant {
   const key = String(threadKey ?? "").trim().toLowerCase();
   // An unkeyed turn is not an experiment subject. The specific-number arm is
   // the app's historical behaviour, so an unlabelled turn behaves as it always
   // did rather than silently sampling the new phrasing.
   if (!key) return "specific-number";
+  if (!ASK_VARIANT_SPLIT) return "specific-number";
   return hash(key) % 2 === 0 ? "specific-number" : "open-ended-below";
 }
 

@@ -92,10 +92,30 @@ describe("a real BEAT still goes out unharmed", () => {
     expect(r.finalText).toContain("190");
   });
 
-  it("an open-ended 'below X' ask passes - that is the other A/B arm", () => {
+  it("an open-ended 'below X' ask is not a MATCH - beat-not-match leaves it alone", () => {
+    // This rail's job is to catch "can you do the same as them?". An
+    // open-ended "could you do better than that?" is the opposite and must
+    // never be rejected AS A MATCH.
+    //
+    // It IS now rejected by a different rail - cite-the-rival (owner report 8):
+    // with a cheaper rival on the board, a bargain that names no number gives
+    // the shop nothing to beat. That rejection re-composes through the
+    // deterministic template, which cites the rival. So the assertion here is
+    // about WHICH rule fires, not about the draft surviving.
     const r = runPostRails(
       ctx(),
       draft("bargain", "300 a day is a bit much for me - could you do better than that for the 3 days?")
+    );
+    expect(r.rejected?.rule ?? null).not.toBe("beat-not-match");
+  });
+
+  it("...and with the rival named, that same open-ended shape sails through", () => {
+    const r = runPostRails(
+      ctx(),
+      draft(
+        "bargain",
+        "Another shop offered me 200 a day - could you do better than that for the 3 days?"
+      )
     );
     expect(r.ok).toBe(true);
   });
