@@ -14,7 +14,7 @@ import type {
   VerifiedExtraction,
 } from "./types";
 import { confirmSubjectFor, legalMovesFor, reflexTurn, waitingOn } from "./policy";
-import { runSinglePass, fallbackArtifact } from "./pass";
+import { runSinglePass, fallbackArtifact, templateFor, fallbackLeverage } from "./pass";
 import { runPostRails } from "./rails";
 import { advanceConfirmState, mergeDigest } from "./digest";
 
@@ -83,15 +83,61 @@ export async function runTurn(ctx: TurnContext): Promise<TurnOutcome> {
   // safe templated move (never a broken send).
   const rail = runPostRails(ctx, artifact);
   if (!rail.ok) {
-    const fb = fallbackArtifact(ctx);
-    const fbRail = runPostRails(ctx, fb);
+    // A REJECTED MOVE FALLS BACK TO THE SAME MOVE, NOT TO THE TOP OF THE LADDER.
+    //
+    // `fallbackArtifact` walks `ctx.legalMoves` and takes the FIRST move that
+    // has a template. That is right when there is no usable model output at all
+    // - nothing has been decided yet, so the ladder decides. It is wrong here:
+    // the model DID pick a move, a rail rejected only how it was WORDED, and
+    // re-walking the ladder throws the decision away too.
+    //
+    // Owner report 8's cite-the-rival rail is where this bites. It rejects a
+    // bargain that fails to name the cheaper rival, and its whole justification
+    // was that the rejection falls through to a template which DOES name it
+    // (pass.ts templateFor "bargain"). But when `answer` is also legal - a shop
+    // that quotes a price and asks a question, the commonest reply there is -
+    // `answer` ranks first, so the shop received a confirm-the-details line and
+    // the leverage the owner explicitly asked for was silently dropped at the
+    // exact moment the rail fired to enforce it.
+    //
+    // Same move first, ladder only if that move has no template.
+    const sameMove = templateFor(ctx, artifact.move);
+    const fb: TurnArtifact = sameMove
+      ? {
+          read: { intent: "fallback" },
+          think: `rail rejected (${rail.rejected?.rule ?? "unknown"}) - deterministic ${artifact.move}`,
+          move: artifact.move,
+          message: sameMove,
+          leverageUsed: fallbackLeverage(ctx, artifact.move, sameMove),
+          digestPatch: [],
+        }
+      : fallbackArtifact(ctx);
+    let fbRail = runPostRails(ctx, fb);
     // The HONEST reason. "quota-overflow" was hard-coded here, so Ops could
     // not tell "providers down" from "the model misbehaved and a rail caught
     // it" - the same blindness route.error was added to fix, re-created one
     // layer up.
+    // A DOUBLE REJECTION MUST NOT BE A HALF-SENT TURN. `finalize` renders
+    // `text: move === "silent" ? undefined : finalText`, so a non-silent move
+    // whose text was rejected produces an outcome that claims to have acted and
+    // carries nothing to send. Give the ladder one more chance, and if that is
+    // also rejected say SILENT out loud, so the turn is coherent and the thread
+    // schedules a retry instead of believing it spoke.
+    let out = fb;
+    if (!fbRail.ok && sameMove) {
+      const ladder = fallbackArtifact(ctx);
+      const ladderRail = runPostRails(ctx, ladder);
+      if (ladderRail.ok) {
+        out = ladder;
+        fbRail = ladderRail;
+      }
+    }
+    if (!fbRail.ok) {
+      out = { ...out, move: "silent", message: undefined };
+    }
     return finalize(
       ctx,
-      fb,
+      out,
       { tier: "R", reason: `rail-rejected:${rail.rejected?.rule ?? "unknown"}` },
       fbRail.ok ? fbRail.finalText : undefined
     );

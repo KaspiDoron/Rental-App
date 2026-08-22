@@ -8,7 +8,7 @@
 // deterministic fallback artifact (never throws, never silent).
 
 import { chat, chatDetailed, extractJson } from "../ai";
-import type { MoveKind, ModelRoute, TurnArtifact, TurnContext } from "./types";
+import type { MoveKind, ModelRoute, TurnArtifact, TurnContext, LeverageKind } from "./types";
 import { coerceToLegal, passportCounterDue, atSessionLow, confirmSubjectFor, quoteOnTable } from "./policy";
 import { moveGlossary, normalizeMove } from "./moves";
 import { composePassportCounter } from "../negotiation/deposit-counter";
@@ -477,7 +477,7 @@ function vehicleLine(ctx: TurnContext): string {
 /** The safe templated message for a move, or undefined when a template would
  *  have to invent facts (present/closing need real data; pickup-location needs
  *  the consented stay resolver). */
-function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
+export function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
   const v = ctx.inbound.verified;
   const days = ctx.session.rfq.durationDays;
   switch (move) {
@@ -663,6 +663,34 @@ function templateFor(ctx: TurnContext, move: MoveKind): string | undefined {
  *  output is unusable. Walks the LEGAL ladder and takes the FIRST move that has
  *  a safe template - so a turn that owes the shop a reply never goes silent
  *  just because the top-priority move needed composed content. */
+/**
+ * Did this deterministic message actually play the rival card?
+ *
+ * `leverageUsed` was hard-coded to `[]` on every fallback, which made the one
+ * path that DETERMINISTICALLY cites a rival - the bargain template above -
+ * report that it had not. That is the half of owner report 8's B1 telemetry fix
+ * that never landed, and it biases the owner's leverage KPI downward exactly
+ * where the leverage is most reliable.
+ *
+ * Derived from the composed TEXT rather than asserted, for the same reason
+ * `citedRival` is derived from the wire: a self-report is not evidence.
+ */
+export function fallbackLeverage(
+  ctx: TurnContext,
+  move: MoveKind,
+  message: string | undefined
+): LeverageKind[] {
+  if (move !== "bargain" || !message) return [];
+  const rival = cheapestCheaperRival(ctx.session.rivals, quoteOnTable(ctx));
+  if (!rival) return [];
+  const target = Math.round(rival.pricePerDay);
+  const cited = (message.match(/\d[\d,.]*/g) ?? []).some((n) => {
+    const v = Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."));
+    return Number.isFinite(v) && Math.abs(v - target) <= 1;
+  });
+  return cited ? ["rival"] : [];
+}
+
 export function fallbackArtifact(ctx: TurnContext): TurnArtifact {
   let move: MoveKind = "silent";
   let message: string | undefined;
@@ -679,7 +707,7 @@ export function fallbackArtifact(ctx: TurnContext): TurnArtifact {
     think: "deterministic fallback (no usable LLM output)",
     move: message ? move : "silent",
     message,
-    leverageUsed: [],
+    leverageUsed: fallbackLeverage(ctx, move, message),
     digestPatch: [],
   };
 }

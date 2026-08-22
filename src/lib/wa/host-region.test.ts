@@ -139,9 +139,14 @@ describe("the fleet actually routes on it", () => {
   });
 
   it("placement ranks by region, and the cap still refuses first", () => {
-    const at = evo.indexOf("if (!underCap.length) return null;");
+    // Anchored on the refusal BRANCH rather than the old one-line `return
+    // null;` - owner report 8.1 gave that branch a body (an already-placed user
+    // is handed back their own host instead of being evicted from the send
+    // path). What this test guards, that ranking happens after the cap and
+    // still carries load + the hostPref tiebreak, is unchanged.
+    const at = evo.indexOf("if (!underCap.length) {");
     expect(at).toBeGreaterThan(-1);
-    const body = evo.slice(at, at + 1400);
+    const body = evo.slice(at, at + 2400);
     expect(body).toMatch(/rankHostsForNumber\(/);
     // Load and the existing hostPref tiebreak are still passed through - the
     // ranking ADDS a term, it does not replace the spreading.
