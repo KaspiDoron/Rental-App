@@ -25,6 +25,7 @@ import {
   type TurnComprehension,
 } from "./comprehension";
 import { quoteOnTable } from "./policy";
+import { normalizeDigits } from "../integrity/translation";
 import { cheapestCheaperRival } from "../negotiation/leverage";
 import { deriveThreadFacts } from "./thread-facts";
 import { getPolicyOverlay, DEFAULT_OVERLAY, type PolicyOverlay } from "../ops/overlay";
@@ -1412,7 +1413,15 @@ export async function runSpteLiveTurn(input: GraphTurnInput, io: GraphIO): Promi
           const rival = cheapestCheaperRival(tc.session.rivals, quoteOnTable(tc));
           if (!rival || !send) return false;
           const target = Math.round(rival.pricePerDay);
-          return (send.match(/\d[\d,.]*/g) ?? []).some((n) => {
+          // NORMALISED FIRST, because `send` is the LOCALIZED wire text. This
+          // app deliberately supports Thai, Lao, Khmer and Myanmar numerals
+          // (integrity/translation.ts folds all of them) precisely because a
+          // translator is free to render a price in local script - and those
+          // are the markets the local-language feature is SOLD for. A bare
+          // ASCII \d therefore reported citedRival:false on every Ultra
+          // local-language send: the owner's leverage KPI read zero exactly
+          // where the leverage was working.
+          return (normalizeDigits(send).match(/\d[\d,.]*/g) ?? []).some((n) => {
             const v = Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."));
             return Number.isFinite(v) && Math.abs(v - target) <= 1;
           });

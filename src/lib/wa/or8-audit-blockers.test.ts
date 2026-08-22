@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { splitHostLines } from "../evolution";
 import { parseDialPrefixes, affinityFor, AFFINITY_MATCH } from "./host-region";
+import { normalizeDigits } from "../integrity/translation";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 const readCode = (p: string) =>
@@ -215,5 +216,70 @@ describe("F3 the dials mean what they say", () => {
     expect(guard).toMatch(/Date\.parse\(slowFloor\) > Date\.parse\(budget\.nextFreeAt\) \? slowFloor : budget\.nextFreeAt/);
     // The window bind keeps its own anchor - it genuinely does refresh soon.
     expect(guard).toMatch(/const holdHours = budget\.bind === "window" \|\| !budget\.bind \? windowHours : 12;/);
+  });
+});
+
+describe("F4 the findings the audit fleet died before reviewing", () => {
+  it("the leverage KPI can read Thai numerals - the markets it is SOLD for", () => {
+    // integrity/translation.ts folds Thai, Lao, Khmer, Myanmar and six other
+    // digit scripts precisely because a translator is free to render a price in
+    // local script, and the number-integrity rail depends on that. citedRival
+    // and the cite-the-rival rail both matched a bare ASCII \d over the
+    // LOCALIZED wire text, so on every Ultra local-language send the owner's
+    // headline leverage KPI read false - zero exactly where the feature works -
+    // and the rail would reject a draft that cited the rival perfectly well.
+    const live = readCode("src/lib/spte/live.ts");
+    const rails = readCode("src/lib/spte/rails.ts");
+    const pass = readCode("src/lib/spte/pass.ts");
+    expect(live).toMatch(/normalizeDigits\(send\)\.match/);
+    expect(rails).toMatch(/normalizeDigits\(text\)\.match/);
+    expect(pass).toMatch(/normalizeDigits\(message\)\.match/);
+    for (const src of [live, rails, pass]) {
+      expect(src).toMatch(/from "\.\.\/integrity\/translation"/);
+    }
+  });
+
+  it("Thai numerals really do fold to the digits these matchers need", () => {
+    // Non-vacuous: prove the helper does what the three call sites assume,
+    // rather than only asserting that they call it.
+    expect(normalizeDigits("๒๐๐")).toBe("200");
+    expect(normalizeDigits("ราคา ๑๘๐ บาท")).toContain("180");
+    expect(normalizeDigits("200")).toBe("200");
+  });
+
+  it("a fractional trust score cannot abort the atomic counter update", () => {
+    // `'22.5'::int` does not truncate in Postgres - it raises and aborts the
+    // WHOLE update, taking every counter in the same call with it and silently
+    // dropping the app back to the racy path M3 replaced. Reachable because
+    // policy-values validates the trust gains as `number`, not integer.
+    const sql = read("supabase/schema.sql");
+    expect(sql).toMatch(/round\(\(p_set->>'trust_score'\)::numeric\)::int/);
+    expect(sql).toMatch(/round\(\(p_set->>'risk_score'\)::numeric\)::int/);
+    expect(sql).not.toMatch(/\(p_set->>'trust_score'\)::int\b/);
+    // ...and the owner really can type a fraction.
+    const pv = readCode("src/lib/wa/policy-values.ts");
+    expect(pv).toMatch(/trust_reply_gain: \{ kind: "number"/);
+  });
+
+  it("M3 left no dead reads on the highest-frequency events", () => {
+    // Each removed `const rep = await getReputation(senderKey)` was a Supabase
+    // SELECT plus a lazy INSERT on a miss, on every read receipt, delivery
+    // receipt and send failure - the three most frequent events in the system -
+    // for a value nothing referenced once the counters became deltas.
+    const guard = readCode("src/lib/wa-guard.ts");
+    const reads = guard.match(/const rep = await getReputation\(senderKey\);/g) ?? [];
+    // FOUR remain and all four are live - each one feeds arithmetic on the very
+    // next lines: the two trust_score clamps, the legacy day-counter degrade in
+    // newContactBudget, and dynamicHourCap in effectiveHourlyCap. The three
+    // removed ones referenced nothing at all once the counters became deltas.
+    expect(reads.length).toBe(4);
+    for (const marker of [
+      "trust_score: Math.min(100, rep.trust_score + p.trust_reply_gain)",
+      "trust_score: Math.max(0, rep.trust_score - p.trust_send_decay)",
+      "rep.new_contacts_date === today",
+      "dynamicHourCap(rep, p, resolvedPlan)",
+    ]) {
+      expect(guard).toContain(marker);
+    }
   });
 });

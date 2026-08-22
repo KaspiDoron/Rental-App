@@ -12,6 +12,7 @@ import { citesAMatch } from "../negotiation/beat-rival";
 import { inventsADate } from "../negotiation/traveller-disclosure";
 import type { RailResult, TurnArtifact, TurnContext } from "./types";
 import { quoteOnTable } from "./policy";
+import { normalizeDigits } from "../integrity/translation";
 
 // A drafted message must never AGREE a concrete pickup/delivery time - the
 // traveller confirms that directly (Step 5 hard rule). These patterns catch an
@@ -492,7 +493,12 @@ export function runPostRails(ctx: TurnContext, artifact: TurnArtifact): RailResu
         .concat(target);
       // Tolerant on purpose: the composer may round, localize digits, or write
       // "200฿". Any numeral within 1 unit of a real rival counts as the cite.
-      const nums = (text.match(/\d[\d,.]*/g) ?? []).map((n) =>
+      // Normalised, for the same reason citedRival is: this app supports Thai,
+      // Lao, Khmer and Myanmar numerals (integrity/translation.ts folds them
+      // all), and a rail that cannot read the digits in front of it would
+      // reject a draft that cites the rival perfectly well in local script -
+      // rejecting correct output is a downgrade, not a guarantee.
+      const nums = (normalizeDigits(text).match(/\d[\d,.]*/g) ?? []).map((n) =>
         Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."))
       );
       const cited = nums.some(
