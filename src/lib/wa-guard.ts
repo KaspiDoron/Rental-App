@@ -146,7 +146,27 @@ const DEFAULTS: SecurityPolicies = {
   presence_min_ms: 2500,
   presence_max_ms: 8000,
   idle_pause_hours: 6,
-  max_new_contacts_per_day: 15,
+  // OFF BY DEFAULT, AND THAT IS THE DESIGN, NOT AN OVERSIGHT.
+  //
+  // A fixed 15-a-day cold ceiling is the OLD capacity model. wa/capacity.ts
+  // opens by explaining why it was replaced: crushed by the warm-up ramp it
+  // gave a fresh number about two shops for a whole day and then parked
+  // everything "until tomorrow morning" - the "I can only message a few shops
+  // before it all postpones" report. The rolling per-plan window replaced it
+  // precisely so capacity refreshes continuously instead of hitting a daily
+  // wall.
+  //
+  // The knob was dead when that default was written, so 15 cost nothing. Wave
+  // D wired it up - correctly, a control rendered on a safety panel must do
+  // something - and in doing so silently reinstated the very model this
+  // codebase had already decided against, binding every plan above free to a
+  // ceiling far below its own window.
+  //
+  // 0 means "no extra ceiling": the plan window, the warm-up ramp and the two
+  // unanswered meters remain the operative limits, as designed. The knob stays
+  // live for an owner who wants to clamp the fleet during an incident, which is
+  // what an absolute daily ceiling is genuinely good for.
+  max_new_contacts_per_day: 0,
   min_reply_rate: 0.15,
   min_reply_samples: 8,
   risk_pause_threshold: 70,

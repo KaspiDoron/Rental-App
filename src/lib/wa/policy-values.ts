@@ -38,7 +38,9 @@ export const POLICY_SPEC: Record<string, PolicySpec> = {
   presence_min_ms: { kind: "number", min: 0, max: 60_000 },
   presence_max_ms: { kind: "number", min: 0, max: 120_000 },
   idle_pause_hours: { kind: "number", min: 0, max: 168 },
-  max_new_contacts_per_day: { kind: "number", min: 1, max: 10_000 },
+  // min 0, because 0 is the OFF value and the default - a validator that
+  // refused it would make the field unsettable back to its own default.
+  max_new_contacts_per_day: { kind: "number", min: 0, max: 10_000 },
   min_reply_rate: { kind: "number", min: 0, max: 1 },
   min_reply_samples: { kind: "number", min: 1, max: 1000 },
   risk_pause_threshold: { kind: "number", min: 1, max: 100 },

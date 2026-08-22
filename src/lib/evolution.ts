@@ -845,7 +845,35 @@ async function noteHostGeoMismatch(email: string, hostUrl: string, digits: strin
 async function resolveHost(email: string, phoneHint?: string | null): Promise<Host | null> {
   const hosts = await getHosts();
   if (hosts.length === 0) return null;
-  if (hosts.length === 1) return hosts[0];
+
+  // ALREADY PLACED USERS COME FIRST, AND THE CAP DOES NOT APPLY TO THEM.
+  //
+  // Read before anything else, because it is the answer on every call except a
+  // link: the cap governs PLACEMENT, and evicting a user who is already on a
+  // full host would break sends for someone who is not the problem.
+  const rows = await sbSelect<{ host_url: string | null }>(
+    "wa_sessions",
+    `select=host_url&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
+  );
+  const stored = rows[0]?.host_url;
+
+  // ONE HOST IS NOT AN EXEMPTION FROM THE CAP - IT IS THE CASE THE CAP IS FOR.
+  //
+  // This used to be `if (hosts.length === 1) return hosts[0];`, placed above
+  // everything, so the capacity refusal added in owner report 8 wave A never
+  // ran on a single-host deployment. That is precisely the deployment the
+  // refusal was written for: one Render box, 50 testers, every socket on 512 MB.
+  // The cap existed, the code that enforced it existed, and the one arrangement
+  // that could reach the failure skipped both.
+  //
+  // The health probe is still skipped here - with no second host there is
+  // nothing to fail over TO, and connectInstance probes this host directly a
+  // few lines later (the B1 honesty gate). Only the CAP is no longer skipped.
+  if (hosts.length === 1) {
+    if (stored === hosts[0].url) return hosts[0];
+    const only = await hostUserCounts();
+    return (only[hosts[0].url] ?? 0) < (await maxPerHost()) ? hosts[0] : null;
+  }
 
   // Probe all hosts at once.
   const health = await Promise.all(
@@ -854,11 +882,6 @@ async function resolveHost(email: string, phoneHint?: string | null): Promise<Ho
   const healthy = health.filter((x) => x.ok).map((x) => x.h);
 
   // Keep the user on their existing host while it is healthy.
-  const rows = await sbSelect<{ host_url: string | null }>(
-    "wa_sessions",
-    `select=host_url&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`
-  );
-  const stored = rows[0]?.host_url;
   if (stored) {
     const h = healthy.find((x) => x.url === stored);
     if (h) return h;
@@ -1466,7 +1489,22 @@ export async function connectInstance(
   // the only site where passing the phone changes which box a user lands on -
   // and therefore whether their number transmits from its own region.
   const host = await resolveHost(email, phone);
-  if (!host) return { ok: false, error: "The WhatsApp connector is not set up yet." };
+  if (!host) {
+    // TWO DIFFERENT FACTS, ONE SENTENCE. resolveHost returns null both when no
+    // Evolution host is configured AT ALL and when every configured host is at
+    // its per-number cap, and both used to be reported as "not set up yet" -
+    // which sends the owner to Admin -> Keys to fix a setting that is already
+    // correct, while the real answer is "add a host or raise the cap". The
+    // capacity case is also the one a TESTER can hit, so it has to say
+    // something a tester can act on.
+    const configured = await getHosts();
+    return {
+      ok: false,
+      error: configured.length
+        ? "WhatsApp linking is at capacity right now - every connection slot is in use. Try again shortly, or ask the owner to add a host."
+        : "The WhatsApp connector is not set up yet.",
+    };
+  }
 
   // HONESTY GATE (B1): with a single host there is no failover, and resolveHost
   // skips probing - so probe HERE. Pairing against a crash-looping server just
