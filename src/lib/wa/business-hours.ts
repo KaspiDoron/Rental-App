@@ -23,9 +23,15 @@ export interface HoursPolicy {
   fast_dispatch: boolean;
 }
 
-// Phone prefix -> representative UTC offset (hours). Longer prefixes first so
-// "972" (Israel) wins over "9", and "1" (US/CA) stays last.
-const PREFIX_UTC: [string, number][] = [
+// Phone prefix -> representative UTC offset (hours).
+//
+// ORDER IS ENFORCED, NOT ASSUMED. The comment here used to say "longer
+// prefixes first" while the list did not honour it ("86" sat above "852" and
+// "886"). Nothing broke, because all three share offset 8 - but the next
+// person to add a prefix inherits a trap. `PREFIX_UTC` is sorted
+// longest-first at module load below, so the list can be written in whatever
+// order reads well and the lookup is still correct by construction.
+const PREFIX_UTC_RAW: [string, number][] = [
   ["972", 2], // Israel
   ["351", 0], // Portugal
   ["66", 7], // Thailand
@@ -61,7 +67,26 @@ const PREFIX_UTC: [string, number][] = [
   ["34", 1], ["39", 1], ["33", 1], ["49", 1], ["30", 2], ["31", 1],
   ["48", 1], ["420", 1], ["36", 1], ["46", 1], ["47", 1], ["45", 1], ["7", 3],
   ["1", -5], // US/CA (east-coast bias)
+  // SOUTH-EAST ASIA'S MISSING FIVE (owner report 8).
+  //
+  // Cambodia, Laos, Myanmar, Bangladesh and the Maldives were absent from both
+  // this table AND the region regexes below - and `resolveOffset` returning
+  // `known: false` does not merely lose precision, it DISABLES the clock gate
+  // entirely (`if (known && ...)` in wa-guard). So a cold first contact to a
+  // rental shop in Siem Reap, Vientiane or Yangon could fire at 03:00 local:
+  // exactly the pattern this module exists to prevent, in core markets for a
+  // scooter-rental app.
+  ["855", 7], // Cambodia
+  ["856", 7], // Laos
+  ["95", 6.5], // Myanmar
+  ["880", 6], // Bangladesh
+  ["960", 5], // Maldives
 ];
+
+/** Longest prefix first, so "852" can never be shadowed by "86". */
+const PREFIX_UTC: [string, number][] = [...PREFIX_UTC_RAW].sort(
+  (a, b) => b[0].length - a[0].length
+);
 
 // Region-string -> UTC offset. More reliable than a bare local number, because
 // the geocoded region almost always ends in the country name.
@@ -73,6 +98,9 @@ const REGION_UTC: [RegExp, number][] = [
   [/\bturkey|\btürkiye/i, 3], [/\bemirates|\bdubai|\buae\b/i, 4], [/\bsaudi/i, 3],
   [/\begypt/i, 2], [/\bmorocco/i, 1], [/\bsouth africa/i, 2], [/\bkenya/i, 3],
   [/\bsri lanka/i, 5.5], [/\bnepal/i, 5.75], [/\bisrael/i, 2],
+  [/\bcambodia|\bsiem reap|\bphnom penh/i, 7], [/\blaos\b|\bvientiane|\bluang prabang/i, 7],
+  [/\bmyanmar|\bburma|\byangon/i, 6.5], [/\bbangladesh|\bdhaka/i, 6],
+  [/\bmaldives|\bmal\u00e9\b/i, 5],
   [/\bmexico/i, -6], [/\bbrazil|\bbrasil/i, -3], [/\bargentin/i, -3],
   [/\bcolombia/i, -5], [/\bperu/i, -5], [/\bchile/i, -4],
   [/\baustralia/i, 10], [/\bnew zealand/i, 12],

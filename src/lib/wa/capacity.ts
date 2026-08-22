@@ -168,7 +168,18 @@ export function effectiveHourCap(
 ): number {
   const cap = planCapacity(plan);
   const raw = Math.max(trustBaseHourCap, cap.hourCap) * warmupFactor(ageDays, warmupDays);
-  return Math.max(cap.newContacts, Math.round(raw));
+  // THE FLOOR IS THE RAMPED BUDGET, NOT THE RAW ONE.
+  //
+  // `hourCap === newContacts` for all three plans, and `warmupFactor` bottoms
+  // out at 0.85 - so `Math.max(cap.newContacts, ...)` swallowed the ramp
+  // entirely and this function returned the same number at every age and trust
+  // level for pro and ultra. The warm-up was arithmetic that could not
+  // possibly bite, while two docs described it as the protection for a new
+  // number. Flooring at the RAMPED budget keeps the original intent (a
+  // within-budget batch is never split across hour windows) and lets the ramp
+  // actually move the ceiling.
+  const floor = Math.max(1, Math.round(cap.newContacts * warmupFactor(ageDays, warmupDays)));
+  return Math.max(floor, Math.round(raw));
 }
 
 /**
