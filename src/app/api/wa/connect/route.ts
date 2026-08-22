@@ -46,6 +46,49 @@ export async function POST(req: Request) {
       acceptedTerms: true,
     }).catch(() => {});
   }
+  // ONE NUMBER, ONE ACCOUNT (owner report 8, A5).
+  //
+  // `wa_sessions` is keyed by EMAIL with no phone column and no uniqueness on
+  // the number, and `instanceNameFor` hashes the email - so two accounts
+  // entering the same +66... minted two Evolution instances against ONE
+  // WhatsApp identity. That is two companion-device registrations competing
+  // for the same slot (WhatsApp allows four, and evicts with 440
+  // connectionReplaced, which we classify as transient and retry), plus two
+  // independent full send budgets on a single number, since every cap keys on
+  // the email. In a 50-person beta the odds of a shared or mistyped number are
+  // not small, and the cost is that number's account.
+  if (phone) {
+    const { sbSelect } = await import("@/lib/runtime-config");
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length >= 8) {
+      const clash = await sbSelect<{ email: string }>(
+        "app_users",
+        `select=email&phone=eq.${encodeURIComponent(String(phone).trim())}&limit=5`
+      ).catch(() => [] as { email: string }[]);
+      const other = clash.find(
+        (r) => (r.email ?? "").toLowerCase() !== session.email.toLowerCase()
+      );
+      if (other) {
+        return NextResponse.json(
+          {
+            available: false,
+            error:
+              "That WhatsApp number is already linked to another WheelDeal account. Disconnect it there first - two accounts on one number gets the number restricted.",
+          },
+          { status: 409 }
+        );
+      }
+    }
+  }
+
+  // A SWAPPED NUMBER STARTS ITS WARM-UP AGAIN (A4). See noteLinkedNumber:
+  // reputation keys on the email, so a burner would otherwise inherit the
+  // previous number's age, trust and counters on its first day.
+  {
+    const { noteLinkedNumber } = await import("@/lib/wa-guard");
+    await noteLinkedNumber(session.email, phone).catch(() => {});
+  }
+
   // fresh=true is an EXPLICIT user "Try again / new code" tap. It is handed to
   // connectInstance as permission to rebuild, NOT executed here.
   //
