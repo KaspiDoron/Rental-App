@@ -349,3 +349,40 @@ describe("BOTH HALVES ARE WIRED - building it in one place is the failure mode",
     expect(wavesBlock).toMatch(/WAVE_BURST_FRACTION/);
   });
 });
+
+// OWNER REPORT 8.1 F3.3 - a clamp must never pull a re-park into the past.
+describe("the wave clamp stops clamping once its wave has closed", () => {
+  it("THE REGRESSION: a closed wave erased every drain-side backoff", () => {
+    // waveEndsAt is an ABSOLUTE instant stamped at enqueue. Once wall-clock
+    // passes it, Math.min(proposed, waveEndsAt) writes a not_before in the PAST,
+    // so the row is instantly due again and the backoff the drain just computed
+    // is discarded - including a rate-limit hold measured in hours. Every row
+    // outliving its own wave, which is every row the drain re-parks, span the
+    // limiter in a tight loop.
+    const now = Date.now();
+    const closed = now - 8 * 60_000; // the wave ended eight minutes ago
+    const backoff = now + 15 * 60_000; // the drain asked for fifteen minutes
+    expect(clampRestampToWave(backoff, closed)).toBe(backoff);
+  });
+
+  it("an OPEN wave still clamps, which is the whole point of the clamp", () => {
+    const now = Date.now();
+    const open = now + 4 * 60_000;
+    const beyond = now + 30 * 60_000;
+    expect(clampRestampToWave(beyond, open)).toBe(open);
+  });
+
+  it("and it never returns a time that has already happened", () => {
+    const now = Date.now();
+    const open = now + 5 * 60_000;
+    // A proposal already in the past is pulled up to now, not passed through.
+    expect(clampRestampToWave(now - 60_000, open)).toBeGreaterThanOrEqual(now);
+  });
+
+  it("no wave metadata is still a pass-through, as every legacy row expects", () => {
+    const t = Date.now() + 900_000;
+    expect(clampRestampToWave(t, null)).toBe(t);
+    expect(clampRestampToWave(t, undefined)).toBe(t);
+    expect(clampRestampToWave(t, NaN)).toBe(t);
+  });
+});

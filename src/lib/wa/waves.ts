@@ -174,7 +174,19 @@ export function clampRestampToWave(
   waveEndsAt: number | null | undefined
 ): number {
   if (!waveEndsAt || !Number.isFinite(waveEndsAt)) return proposedAt;
-  return Math.min(proposedAt, waveEndsAt);
+  // A CLOSED WAVE HAS NO BOUNDARY LEFT TO PROTECT.
+  //
+  // `waveEndsAt` is an ABSOLUTE instant stamped at enqueue. Once wall-clock
+  // passes it, `Math.min(proposed, waveEndsAt)` writes a `not_before` in the
+  // PAST - so the row is instantly due again and every backoff the drain just
+  // computed is discarded, including a rate-limit hold measured in hours. The
+  // clamp exists to stop a re-park bleeding a burst past its own silence; a
+  // wave that has already ended cannot be bled into.
+  const nowMs = Date.now();
+  if (waveEndsAt <= nowMs) return proposedAt;
+  // ...and never behind the clock regardless: a clamp may pull a re-park
+  // EARLIER, never into a time that has already happened.
+  return Math.max(nowMs, Math.min(proposedAt, waveEndsAt));
 }
 
 /**
