@@ -228,6 +228,37 @@ jobs:
             --project="${{ secrets.GCP_PROJECT_ID }}" \
             --description="WheelDeal container images"
 
+      # KEEP THE LAST FEW IMAGES, NOT ALL OF THEM.
+      #
+      # Every deploy pushes two tags (:$SHA and :latest) and nothing ever
+      # deleted one. A Next standalone node:20-slim image is ~300-500 MB and
+      # the Artifact Registry free tier is 0.5 GB, so this quietly grew into a
+      # small monthly bill that nobody would connect to deploying. Idempotent
+      # and best-effort: a policy failure must never fail a deploy, and rolling
+      # back is still possible within the retained window.
+      - name: Keep Artifact Registry bounded
+        continue-on-error: true
+        run: |
+          cat > /tmp/ar-cleanup.json <<'JSON'
+          [
+            {
+              "name": "keep-recent",
+              "action": {"type": "Keep"},
+              "mostRecentVersions": {"keepCount": 5}
+            },
+            {
+              "name": "delete-stale",
+              "action": {"type": "Delete"},
+              "condition": {"olderThan": "30d"}
+            }
+          ]
+          JSON
+          gcloud artifacts repositories set-cleanup-policies "$REPOSITORY" \
+            --location="$REGION" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --policy=/tmp/ar-cleanup.json \
+            --quiet || echo "cleanup policy not applied (non-fatal)"
+
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
@@ -375,6 +406,14 @@ jobs:
           DELAY=10
           for i in $(seq 1 "$ATTEMPTS"); do
             set +e
+            # --timeout 90, not 300 (owner report 8). `export const maxDuration`
+            # is a VERCEL-only hint and does nothing on a standalone Next
+            # server, so the comments in wa/tick and reply-tick claiming the
+            # routes "stay well inside maxDuration=60" describe a guard that
+            # does not exist. The real ceiling is this flag - and at 300 a
+            # single hung upstream (Evolution, a provider) holds a concurrency
+            # slot for five minutes. Nothing in-process exceeds ~45s.
+            #
             # SCALE SHAPE (owner report 4, scale #3). --concurrency 32 lets one
             # instance serve many simultaneous requests (the app is I/O-bound on
             # Supabase + Evolution, not CPU-bound); --min-instances 1 kills the
@@ -393,7 +432,7 @@ jobs:
               --concurrency 32 \
               --min-instances 1 \
               --max-instances 20 \
-              --timeout 300 \
+              --timeout 90 \
               --set-env-vars "^##^$ENV_VARS" 2>&1)"
             CODE=$?
             set -e
