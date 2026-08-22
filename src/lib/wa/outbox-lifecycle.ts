@@ -57,8 +57,15 @@ export interface OutboxMeta {
    * separates "deliberately scheduled for tomorrow morning" from "has been
    * bouncing around the queue all day" - `not_before` is rewritten by every
    * re-park and therefore cannot tell them apart (wa/outbox-policy).
+   *
+   * `null` CLEARS it, and is written only by the guard when it issues a hold
+   * that is a genuinely new schedule rather than another bounce (the slow
+   * introductions ceilings: waiting on replies, the monthly non-replier meter).
+   * Such a row is serving a wait we gave it, and outbox-policy's doctrine is
+   * explicit that a deliberate wait must not be charged as age. The absolute
+   * `created_at` wall in that module still bounds a cleared row.
    */
-  firstDueAt?: number;
+  firstDueAt?: number | null;
   /**
    * Epoch ms at which this row's WAVE closes (plan Part 11 F1).
    *

@@ -11,6 +11,7 @@ export type QueueReasonKind =
   | "batch"
   | "sync"
   | "capacity"
+  | "awaiting-replies"
   | "tomorrow"
   | "breaker"
   | "limit"
@@ -27,6 +28,17 @@ export function classifyQueueReason(raw?: string | null): QueueReasonKind {
   // Transient infrastructure holds all resume on their own: fail-closed
   // sync retries, a reconnecting WhatsApp link, and per-recipient retries.
   if (/sync-retry|reconnecting|couldn't reach this shop/.test(r)) return "sync";
+  // WAITING ON A SHOP, NOT ON A CLOCK - and it must be tested BEFORE the
+  // capacity branch, because it is a different promise. The introductions
+  // budget is the minimum of four ceilings; only the plan window genuinely
+  // "refreshes soon". When what is binding is the count of introductions that
+  // nobody has answered, nothing refreshes until a shop writes back (or the
+  // oldest silent one turns seven days old). Announcing that as capacity is how
+  // a traveller ends up believing the app is quietly working on shops it is
+  // not.
+  if (/waiting on replies|shops already messaged answers/.test(r))
+    return "awaiting-replies";
+  if (/ceiling on shops that never replied|new-shop ceiling/.test(r)) return "limit";
   // Rolling-window introductions budget: capacity refreshes continuously.
   if (/introductions full|refreshes soon|refreshes in/.test(r)) return "capacity";
   if (/daily introductions|resumes next morning/.test(r)) return "tomorrow";
@@ -74,6 +86,13 @@ export function queueReasonWhy(raw?: string | null): string | null {
         "Your plan opens new shops in batches, so your number stays under " +
         "WhatsApp's radar. Shops already replying are unaffected."
       );
+    case "awaiting-replies":
+      return (
+        "Several shops you have already messaged have not written back yet. " +
+        "A pile of unanswered first messages is the pattern WhatsApp restricts " +
+        "numbers for, so your agent waits for one of them to answer before " +
+        "opening another shop. Every reply frees a slot immediately."
+      );
     case "breaker":
       return (
         "WhatsApp pushed back on this number, so first messages pause while it " +
@@ -99,6 +118,8 @@ export function queueReasonLabel(raw?: string | null): string {
       return "Queued - sending resumes automatically in a few minutes";
     case "capacity":
       return "You've reached your plan's batch of new shops - more open up shortly, automatically";
+    case "awaiting-replies":
+      return "Waiting on replies - the next shop opens as soon as one answers";
     case "tomorrow":
       return "Today's introductions are done - this goes out tomorrow morning automatically";
     case "breaker":

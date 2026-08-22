@@ -130,6 +130,28 @@ export function compareOutboxRows(
  */
 export const OUTBOX_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * THE WALL THE BOUNCE CEILING NEVER HAD.
+ *
+ * Everything above measures a row against the moment it was first DUE, which is
+ * the right question for a row bouncing around the queue. It is not a question
+ * at all for a row that keeps being given a fresh, deliberate, long schedule
+ * before it ever becomes due: such a row never accrues age, so the 6h ceiling
+ * simply does not apply to it, and it can sit in the queue indefinitely.
+ *
+ * That hole widened the moment the introductions budget started issuing long
+ * holds for its slow ceilings (waiting on replies, the monthly non-replier
+ * meter) - holds which are genuinely correct, and which the row must not be
+ * charged for, but which are not a licence to message a shop about a rental
+ * whose dates have passed.
+ *
+ * So: one absolute wall, measured from `created_at`, which nothing re-stamps.
+ * A day is generous against a hunt for specific rental dates and is far above
+ * the 6h bounce ceiling, so it only ever catches rows the bounce ceiling
+ * structurally cannot see.
+ */
+export const OUTBOX_ABSOLUTE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export interface OutboxAge {
   /** wa_outbox.created_at, when the database has the column. */
   createdAt?: string | null;
@@ -139,7 +161,15 @@ export interface OutboxAge {
 }
 
 export function outboxExpired(row: OutboxAge, nowMs: number): boolean {
-  const firstDue = Number(row.firstDueAt);
+  // The absolute wall first: it is the one reading no re-park can move, so it
+  // must not be reachable only through a branch a re-stamp can steer around.
+  const composed = row.createdAt ? Date.parse(row.createdAt) : NaN;
+  if (Number.isFinite(composed) && nowMs - composed > OUTBOX_ABSOLUTE_MAX_AGE_MS) return true;
+  // `== null` on purpose: `Number(null)` is 0, not NaN, so a row whose stamp
+  // was deliberately CLEARED would otherwise be read as "first became due at
+  // the epoch" and binned instantly - the exact opposite of what clearing it
+  // means. Only an explicit number counts as a stamp.
+  const firstDue = row.firstDueAt == null ? NaN : Number(row.firstDueAt);
   if (!Number.isFinite(firstDue)) {
     // NEVER RE-PARKED. Either it is about to send, or it is serving the long
     // hold the guard deliberately gave it. Keep the pre-existing reading, which

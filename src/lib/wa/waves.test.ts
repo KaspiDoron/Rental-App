@@ -330,9 +330,13 @@ describe("BOTH HALVES ARE WIRED - building it in one place is the failure mode",
     // fail-closed sync retries, breakers - and pulling one of those back to a
     // wave boundary would release a paused account sooner. Exactly the wrong
     // direction, so the clamp is confined to the drain's pacing re-stamps.
-    const at = guard.indexOf("const queue = async (notBefore: string");
+    // Anchored on a REGEX, not on the exact one-line signature: the helper
+    // grew a third parameter (the slow-ceiling reschedule flag) and wrapped
+    // across lines, which broke a literal indexOf while changing nothing about
+    // what this test is here to protect.
+    const at = guard.search(/const queue = async \(\s*notBefore: string/);
     expect(at).toBeGreaterThan(-1);
-    const queueHelper = guard.slice(at, at + 2000);
+    const queueHelper = guard.slice(at, at + 2200);
     // Non-vacuous: the slice really is the helper's body.
     expect(queueHelper).toMatch(/releaseOutboxRow\(opts\.outboxRowId, notBefore/);
     expect(queueHelper).not.toMatch(/clampRestampToWave/);
