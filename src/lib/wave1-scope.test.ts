@@ -30,7 +30,17 @@ describe("the 8-second poll is scoped to the person who fired it", () => {
   });
 
   it("both drains are bounded, like the two sibling routes", () => {
-    expect(route).toMatch(/const DRAIN_BUDGET_MS = 8_000;/);
+    // The BUDGET NUMBER is not the pin - the bound is. Owner report 8 cut it
+    // from 8s to 3s: an 8s drain inside an 8s poll means the request can still
+    // be holding a Cloud Run concurrency slot when the client fires the next
+    // one, so at 50 users the slots fill with waiting rather than working. What
+    // must never regress is that the constant exists, that BOTH drains go
+    // through it, and that it can never outlive the poll that fired it.
+    const m = route.match(/const DRAIN_BUDGET_MS = (\d[\d_]*);/);
+    expect(m).toBeTruthy();
+    const budget = Number(m![1].replace(/_/g, ""));
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThanOrEqual(8_000);
     expect(route).toMatch(/Promise\.race\(\[p, new Promise\(\(r\) => setTimeout\(r, DRAIN_BUDGET_MS\)\)\]\)/);
     // Both calls go through it, not just the first.
     expect(route.match(/await bounded\(/g)?.length).toBe(2);

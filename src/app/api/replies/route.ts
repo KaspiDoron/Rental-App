@@ -84,7 +84,14 @@ export async function GET(req: Request) {
     if (claimDrainSlot(session.email)) {
       const { drainOutbox } = await import("@/lib/wa-guard");
       const { sendFromUser } = await import("@/lib/evolution");
-      const DRAIN_BUDGET_MS = 8_000;
+            // 3s, not 8s. This budget is applied TWICE per drain-owning poll (outbox
+      // then wakeups), so 8s meant one poll could hold a Cloud Run concurrency
+      // slot for 16 seconds. At 50 users x ~3 drain windows a minute that is
+      // ~40 slots held against a --concurrency of 32 - i.e. the polls alone
+      // force a second instance that does nothing but wait. The minute-cron and
+      // reply-tick already cover the queue; this budget is opportunistic help,
+      // not the delivery mechanism.
+      const DRAIN_BUDGET_MS = 3_000;
       const bounded = <T,>(p: Promise<T>) =>
         Promise.race([p, new Promise((r) => setTimeout(r, DRAIN_BUDGET_MS))]);
       await bounded(

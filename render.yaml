@@ -76,24 +76,39 @@ services:
       - key: WD_PING_TOKEN
         sync: false
 
-  # EVOLUTION-POSTGRES RETENTION (owner report 6, J4) - OWNER-APPROVAL GATED.
-  # The Baileys store keeps every Message row forever while the recovery sweep
-  # reads only a 10-row tail, so the basic-256mb database fills unbounded.
-  # Uncomment to enable a monthly prune of rows older than 30 days (the script
-  # is defensive: missing tables degrade to a logged no-op).
+  # EVOLUTION-POSTGRES RETENTION (owner report 6 J4; ENABLED in owner report 8).
   #
-  # - type: cron
-  #   name: wd-evo-prune
-  #   runtime: docker
-  #   dockerfilePath: ./deploy/prune/Dockerfile
-  #   dockerContext: ./deploy/prune
-  #   schedule: "0 4 1 * *"
-  #   region: oregon
-  #   envVars:
-  #     - key: EVO_DATABASE_URL
-  #       fromDatabase:
-  #         name: wd-evo-db
-  #         property: connectionString
+  # WHY THIS IS NO LONGER OPTIONAL. The Baileys store persists every Message
+  # AND MessageUpdate row forever (DATABASE_SAVE_DATA_NEW_MESSAGE and
+  # _MESSAGE_UPDATE are both true below) while the recovery sweep reads only a
+  # 10-row tail per chat. At a 50-user beta that is roughly 4,500 Message rows
+  # a day at 1-3 KB each - about 9-15 MB/day into a 256 MB database, i.e. FULL
+  # in 17-28 days. A full Postgres is not a slow queue: Prisma writes start
+  # failing and that is the documented Evolution crash class, which drops every
+  # linked socket at once.
+  #
+  # DAILY at 7 days, not monthly at 30. The old commented block would have
+  # fired for the first time AFTER the disk was already full, and 30 days of
+  # retention is itself about one full fill. Seven days is far more than the
+  # 10-row tail anything actually reads.
+  #
+  # OWNER: this is the one blueprint change that needs a Manual Sync to take
+  # effect. The script is defensive - every statement is IF-EXISTS guarded and
+  # a renamed table degrades to a logged no-op rather than a red cron.
+  - type: cron
+    name: wd-evo-prune
+    runtime: docker
+    dockerfilePath: ./deploy/prune/Dockerfile
+    dockerContext: ./deploy/prune
+    schedule: "0 4 * * *"
+    region: oregon
+    envVars:
+      - key: PRUNE_DAYS
+        value: "7"
+      - key: EVO_DATABASE_URL
+        fromDatabase:
+          name: wd-evo-db
+          property: connectionString
 
   - type: web
     name: wd-evolution
@@ -138,8 +153,12 @@ services:
         value: "true"
       - key: DATABASE_SAVE_DATA_NEW_MESSAGE
         value: "true"
+      # NOTHING IN src/ READS EVOLUTION'S MessageUpdate TABLE - delivery and
+      # read receipts reach us as webhook EVENTS, which ingest handles live.
+      # Persisting them was 2-3 extra rows per outbound message written purely
+      # to be pruned later, on the plan whose disk is the constraint.
       - key: DATABASE_SAVE_DATA_MESSAGE_UPDATE
-        value: "true"
+        value: "false"
       # Don't sync the full contact book (heavy); chats + messages are enough
       # for the funnel and for teaching from named numbers.
       - key: DATABASE_SAVE_DATA_CONTACTS

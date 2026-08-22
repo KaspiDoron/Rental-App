@@ -44,6 +44,23 @@ export async function GET(req: Request) {
   const ref = url.searchParams.get("ref") ?? "";
 
   if (!ref && !name) return fail(400, "no name or ref");
+
+  // AN UNMETERED, UNAUTHENTICATED PROXY IN FRONT OF A BILLED API.
+  //
+  // This route had no session check, no rate limit and - the part that made it
+  // invisible - no `recordApi("photo")`, so the `photo` quota in usage.ts could
+  // only ever read zero. Photo URLs are public and a results page renders
+  // 12-20 of them, and `rate-limit.ts` documents that there is no CDN in front
+  // of Cloud Run, so `s-maxage` buys nothing here either. Anyone with a URL
+  // could spend the Maps key.
+  //
+  // Kept unauthenticated on purpose: these images render on the public
+  // marketing surface too, and requiring a session would break that. An IP
+  // bucket is the right shape - generous enough that a real user scrolling a
+  // results page never notices, tight enough that a scraper does.
+  const { rateLimit, clientIp } = await import("@/lib/rate-limit");
+  const rl = await rateLimit("photo", clientIp(req), 300, 3600);
+  if (!rl.ok) return fail(429, "too many photo requests - slow down");
   if (name && !NAME_RX.test(name)) return fail(400, "malformed photo name");
   if (!name && ref && !REF_RX.test(ref)) return fail(400, "malformed photo ref");
 
@@ -108,6 +125,12 @@ export async function GET(req: Request) {
 
   const type = res.headers.get("Content-Type") ?? "image/jpeg";
   if (!type.startsWith("image/")) return fail(502, `upstream returned ${type}, not an image`);
+
+  // METER WHAT WE SPENT. The `photo` quota existed in usage.ts and nothing ever
+  // wrote to it, so the panel reporting Google spend read zero for this route
+  // forever. Counted on SUCCESS only - a 502 from Google is not a billed call.
+  const { recordApi } = await import("@/lib/usage");
+  void recordApi("photo");
 
   return new Response(res.body, {
     headers: {
