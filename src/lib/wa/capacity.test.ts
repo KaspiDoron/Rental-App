@@ -105,12 +105,28 @@ describe("gentle warm-up ramp (rate only, never below budget)", () => {
 });
 
 describe("effectiveHourCap - never below the conversation budget", () => {
-  it("floors at the plan's newContacts so a within-budget batch never splits hours", () => {
-    // Even a brand-new low-trust ultra number gets an hourly cap >= 40, so the
-    // 40-conversation burst is never stamped an hour apart.
-    expect(effectiveHourCap("ultra", 6, 0, 7)).toBe(24);
-    expect(effectiveHourCap("pro", 6, 0, 7)).toBe(20);
-    expect(effectiveHourCap("free", 6, 0, 7)).toBe(10);
+  it("floors at the RAMPED budget, so a warm number's batch never splits hours", () => {
+    // The floor keeps the original intent - a within-budget batch is stamped
+    // inside one hour - but it is now the warm-up-scaled budget rather than the
+    // raw one. Before this, `Math.max(cap.newContacts, ...)` swallowed the ramp
+    // whole and effectiveHourCap returned the SAME number at every age and
+    // trust level for pro and ultra: arithmetic that could not possibly bite,
+    // while two docs called it the protection for a new number.
+    const warmed = effectiveHourCap("ultra", 6, 7, 7); // fully warmed
+    expect(warmed).toBe(24);
+    expect(effectiveHourCap("pro", 6, 7, 7)).toBe(20);
+    expect(effectiveHourCap("free", 6, 7, 7)).toBe(10);
+  });
+
+  it("THE REGRESSION: a day-0 number now gets LESS than a warmed one", () => {
+    // warmupFactor floors at 0.85, so the ramp is gentle by design - but it
+    // must be visible, not zero.
+    for (const plan of ["ultra", "pro", "free"] as const) {
+      const day0 = effectiveHourCap(plan, 6, 0, 7);
+      const day7 = effectiveHourCap(plan, 6, 7, 7);
+      expect(day0, `${plan} day-0 must be below its warmed ceiling`).toBeLessThan(day7);
+      expect(day0, `${plan} day-0 must still be usable`).toBeGreaterThan(0);
+    }
   });
 
   it("a very high trust base can raise the ceiling above the budget", () => {

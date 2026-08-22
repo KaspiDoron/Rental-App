@@ -66,6 +66,7 @@ import { PACING_PRESETS, normalizePacingMode } from "./wa/pacing-mode";
 import {
   planCapacity,
   effectiveNewContactCap,
+  warmupNewContactFactor,
   effectiveHourCap,
   warmupFactor,
   nextIntroSlotIso,
@@ -471,6 +472,19 @@ function newContactCap(rep: Reputation, p: SecurityPolicies, plan?: string): num
     (rep.sent_total || 0) >= p.min_reply_samples ? replyRate(rep) : null;
   return effectiveNewContactCap(plan ?? "free", ageDaysOf(rep), p.warmup_days, measuredReplyRate);
 }
+
+/**
+ * The lowest the warm-up ramp may push the DAILY ceiling.
+ *
+ * The ramp exists to keep a day-0 number quiet, and the cold-intro budget is
+ * where that is actually enforced (5 new shops in a 6h window on free). This
+ * ceiling covers ALL sends including replies, so ramping it to zero would mean
+ * refusing to answer a shop that wrote to us - which looks broken to the
+ * traveller AND hurts the reply ratio that keeps the number safe. 40/day is far
+ * above the 10-20 a warm-up guide budgets for outbound, and far below the ~220
+ * an aged number gets.
+ */
+const WARMUP_DAY_FLOOR = 40;
 
 /** Lifetime reply rate (0..1) - the strongest health signal. */
 function replyRate(rep: Reputation): number {
@@ -1213,10 +1227,32 @@ export async function newContactBudget(senderKey: string, plan?: string): Promis
     ? Math.max(0, MONTHLY_NON_REPLIER_ALERT - meters.monthlyToNonRepliers)
     : Number.POSITIVE_INFINITY;
 
+  // ...AND A FOURTH THE OWNER CONTROLS DIRECTLY.
+  //
+  // `max_new_contacts_per_day` was declared on SecurityPolicies, defaulted,
+  // validated by policy-values and rendered in the WA-security admin panel -
+  // and read by NO send path. An owner watching a wobbling number during the
+  // beta would lower it, watch the field save, and change nothing. A dead
+  // control on a safety panel is worse than no control: it spends the one
+  // moment somebody is paying attention.
+  //
+  // 0 or unset means "no extra ceiling" so existing deployments are unchanged;
+  // any positive value binds against introductions sent in the last 24h.
+  const dailyIntroCap = Number(p.max_new_contacts_per_day) || 0;
+  let dayHeadroom = Number.POSITIVE_INFINITY;
+  if (dailyIntroCap > 0) {
+    const day = await introductionsInWindow(senderKey, 24).catch(() => null);
+    // Unreadable follows the same fail-CLOSED rule the rest of this budget
+    // uses: an unknown count is treated as spent, not as zero.
+    dayHeadroom =
+      !day || day.unreadable ? 0 : Math.max(0, dailyIntroCap - day.count);
+  }
+
   const remaining = Math.min(
     Math.max(0, cap - count),
     openHeadroom,
-    monthHeadroom
+    monthHeadroom,
+    dayHeadroom
   );
   let nextFreeAt = nextIntroSlotIso(oldestAsc, windowHours, cap, Date.now());
   // Guard the fallback/edge case: budget spent but no window timestamps to
@@ -2710,7 +2746,27 @@ export async function guardOutbound(rawOpts: {
     planCapacity(plan).newContacts,
     Math.round(dynamicHourCap(rep, p, plan) * jitter)
   );
-  const dayCap = Math.max(1, Math.round(p.day_cap * jitter));
+  // THE DAY CEILING RAMPS TOO - but it can never gag a reply.
+  //
+  // Only the INTRO budget was age-scaled, so a number linked this morning was
+  // allowed the same ~176-264 sends/day as a six-month-old one. The 2026
+  // warm-up consensus for a fresh number is 10-20 messages on day one, and the
+  // reply lane is exempt from the hourly cap entirely - so the daily ceiling
+  // was the only thing standing between a day-0 tester and a hundred messages.
+  //
+  // The ramp bites on the ceiling; the FLOOR keeps the lane that matters open.
+  // Reciprocal traffic is what WhatsApp rewards, and refusing to answer a shop
+  // that just wrote to us would both look broken and hurt the reply ratio that
+  // protects the number - so a warmed-down ceiling still leaves room for a
+  // full day of real conversation. Cold introductions are separately capped by
+  // `newContactBudget`, which is where the hard day-one limit actually lives.
+  const warmMeasuredRate =
+    (rep.sent_total || 0) >= p.min_reply_samples ? replyRate(rep) : null;
+  const warmDay = warmupNewContactFactor(ageDaysOf(rep), p.warmup_days, warmMeasuredRate);
+  const dayCap = Math.max(
+    WARMUP_DAY_FLOOR,
+    Math.round(p.day_cap * jitter * warmDay)
+  );
   // STRICT read: an unreadable send history must hold automated sends (fail
   // closed), never count as "0 sent today" (fail open = unlimited sends the
   // moment the DB blips - the exact outage-mode failure the guard exists for).
