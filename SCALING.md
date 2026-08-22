@@ -63,8 +63,18 @@ useless if the step above it is still broken.
 A server called Evolution API that speaks WhatsApp on your travellers' behalf.
 Each traveller who links their WhatsApp gets a "session" - a live connection -
 inside that server. Your app spreads travellers across a **pool** of these
-servers (Admin -> Keys -> `EVOLUTION_HOSTS`, one `url|apikey` per line) and
-fails over automatically if one goes to sleep.
+servers (Admin -> Keys -> `EVOLUTION_HOSTS`, one `url|apikey` per line - with
+an OPTIONAL third field of calling-code prefixes, `url|apikey|66,84,855`, that
+says which numbers that host is geographically right for) and fails over
+automatically if one goes to sleep.
+
+**Placement is geo-first, then least-loaded** - never round-robin. A number
+transmitting from a datacenter on the wrong continent is a separately scored
+WhatsApp signal, so a host that claims this number's country is preferred, then
+a host that claims nothing, then one that claims somewhere else (still used - a
+scored signal beats a user who cannot link at all, and it writes a
+`host-geo-mismatch` event so the shortage is visible). A line with no third
+field is region-neutral, which is what every line meant before this existed.
 
 ### What is the limit today
 - **25 paired users per host.** That is `EVOLUTION_MAX_PER_HOST`, and 25 is the
@@ -85,13 +95,17 @@ fails over automatically if one goes to sleep.
 - **Evolution has no queue and no rate limiting of its own.** It sends what you
   hand it, as fast as you hand it over. All pacing in this system is done by
   *your* app (`wa-guard.ts`, the outbox, the per-plan budgets).
-- **Today you run ONE Render `starter` web service** for this. One host. 40
-  users. That is the honest current ceiling of the whole product.
+- **Today you run ONE Render `starter` web service** for this. One host. 25
+  users. That is the honest current ceiling of the whole product - and the
+  refusal above applies to the single-host case too, so user 26 is told "at
+  capacity" rather than being placed on a full box. `deploy/fleet/` is the $0
+  way past it: Oracle Always Free, Azure's 12-month B1s and Northflank Sandbox
+  each run one self-contained lane, which also retires the $13/mo Render bill.
 
 ### What breaks first
 | Simultaneous users | What happens |
 |---|---|
-| **~40** | The pool is full. New travellers get placed on a host that is already at cap, which is where ban risk starts climbing. |
+| **~25** | The pool is full. New travellers are REFUSED with an honest "at capacity" message rather than placed on a full box. Nobody's number is at risk - but nobody new can link, either. |
 | **100** | One 512 MB container cannot hold the sessions. Sockets drop, pairing fails, "WhatsApp disconnected" appears for people who did nothing wrong. |
 | **300** | Without more hosts this simply cannot run. With hosts but no proxy spread, you look like a bot farm from one IP - the clustering failure, where one enforcement rule catches your whole fleet at once. |
 | **500** | Same as 300, plus Evolution's own event fan-out (every inbound message POSTed to your webhook) becomes the flood described in section 6. |
@@ -105,9 +119,15 @@ Add Render (or Koyeb, or Fly) services, each running
 (~$7/month on Render `starter`). Paste each one into `EVOLUTION_HOSTS` as
 `https://host-2.onrender.com|itsapikey`, one per line.
 
-- 100 users -> **3 hosts** (~$21/month)
-- 300 users -> **8 hosts** (~$56/month)
-- 500 users -> **13 hosts** (~$91/month)
+At the real 25/host default:
+
+- 100 users -> **4 hosts** (~$28/month on Render, or **$0** on the free fleet)
+- 300 users -> **12 hosts** (~$84/month)
+- 500 users -> **20 hosts** (~$140/month)
+
+`deploy/fleet/docker-compose.yml` runs the same pinned Evolution image with its
+own Postgres and Redis on any Docker host, which is how the first three or four
+of those become free.
 
 Why this shape wins: hosts fail independently, and different hosts can sit
 behind different residential exit IPs, which is the single most effective
@@ -125,8 +145,12 @@ but a single crash takes everyone down at once, and every session shares one IP.
    `socks5://USER:PASS_country-{country}_session-{session}@gateway:port`.
    Each traveller gets a stable exit IP in a plausible country.
    (`EVOLUTION_PROXY_POOL` is deprecated - editing the pool remaps everyone.)
-2. **Do not raise `EVOLUTION_MAX_PER_HOST` above 40** to "save money". The 40
-   is not a licence limit, it is a safety limit.
+2. **Do not raise `EVOLUTION_MAX_PER_HOST` above 25** on a 512 MB box to
+   "save money". It is not a licence limit, it is a safety limit: Evolution's
+   own stated production floor is 2 vCPU / 2 GB, and when a box OOMs every
+   socket on it drops at once and every one of those numbers starts
+   reconnecting together. A bigger host earns a bigger number; a bigger number
+   does not earn a bigger host.
 3. **Add hosts BEFORE the invites go out**, not after. Capacity added after a
    ban does not undo the ban.
 
@@ -287,7 +311,8 @@ busy. You pay for CPU and memory by the second while a request is being served.
 
 ### What is the limit today
 Your deploy is (from `.github/workflows/deploy-gcp.yml`):
-`--memory 1Gi --cpu 1 --concurrency 32 --min-instances 1 --max-instances 20`.
+`--memory 1Gi --cpu 1 --concurrency 32 --min-instances 1 --max-instances 20
+--timeout 90`.
 
 What those numbers actually mean:
 
@@ -298,7 +323,13 @@ What those numbers actually mean:
 - **Fleet ceiling = 20 x 32 = 640 concurrent requests.** That is your hard
   wall today, and it is comfortably above the WhatsApp wall in section 1.
 - Platform hard limits, for reference: 1,000 concurrency per instance, 100
-  max instances by default, 32 GiB memory, 60-minute request timeout.
+  max instances by default, 32 GiB memory, and a 60-minute request timeout
+  ceiling - but **your deploy sets `--timeout 90`, and 90 seconds is the number
+  that matters.** `export const maxDuration = 60` appears in 19 route files and
+  is INERT: it is a Vercel hint, and this app runs `node server.js` from a
+  standalone build. Before the flag was set, a hung upstream held a Cloud Run
+  concurrency slot for five minutes while the client that fired it had long
+  given up.
 - **Cost**: $0.00002400 per vCPU-second and $0.00000250 per GiB-second, with
   180,000 vCPU-seconds, 360,000 GiB-seconds and 2,000,000 requests free every
   month. A single warm `--min-instances 1` container costs roughly
@@ -730,7 +761,8 @@ document.
 2. **There is no error tracking.** Nothing in this codebase talks to Sentry or
    any equivalent. The three event kinds that `PRODUCTION-READINESS.md` says
    should page someone - `wa-send-dropped`, `wa-ban-risk`,
-   `media-fetch-failed` - are written faithfully to the database and read by
+   `wa-send-expired`, `host-geo-mismatch`, `media-fetch-failed` - are written
+   faithfully to the database and read by
    **nobody** unless a human opens the admin panel. Wave 7 puts their 24-hour
    counts and the age of the most recent one on the choke-point card, with an
    "email me this digest" button that uses your existing email provider. That

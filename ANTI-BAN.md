@@ -80,7 +80,23 @@ or near the number's home country:
 - Keep the SAME egress IP for a given number across reconnects where possible;
   hopping IPs every reconnect is its own flag.
 
-This is the single highest-leverage change for pairing survival on cloud hosting.
+This is the single highest-leverage change for pairing survival on cloud
+hosting - and it costs roughly $30-55/mo per port, which at 50 numbers is not a
+$0 answer. **The free half of it is geography.** The paragraph above notes that
+a +972 number connecting via a Singapore datacenter is itself suspicious; that
+mismatch is a separate signal from the datacenter range, and it is fixed by
+placing the number on a host in its own region rather than by buying anything.
+`EVOLUTION_HOSTS`' third field and `deploy/fleet/` exist for exactly that. It
+does not replace a residential proxy - the range is still a datacenter range -
+but it removes the half of the problem that is free to remove.
+
+> **Warm-up note (owner report 8).** The ramp no longer touches introductions
+> alone. `warmupNewContactFactor` now also scales the ALL-LANES daily ceiling
+> (`day_cap`), floored at 40, so a day-0 number sits near 110/day rather than
+> 220 and reaches the full ceiling only once it is warm. The REPLY lane is
+> deliberately left generous: reciprocal traffic is the protective signal, and
+> refusing to answer a shop that just wrote to us would raise ban risk, not
+> lower it.
 
 ## The defense stack already in the codebase (send + reputation layers)
 
@@ -98,13 +114,24 @@ all of it real:
   **Gaussian (bell-curve) jitter** on the cold lane (`gaussianUnit`) so inter-message
   gaps cluster like human timing instead of a flat uniform spread.
 - **Presence emulation** (`evolution.ts`): composing → paused → composing before a
-  queued send, and a **length-proportional typing delay** (~50 WPM, clamped 1.2-8s)
-  so a short "ok" and a long paragraph don't take the same time to "type".
+  queued send, and a **length-proportional typing delay** (18 ms/char on top of
+  a 1.2s floor, clamped **1.2-4.5s**) so a short "ok" and a long paragraph don't
+  take the same time to "type". The 4.5s ceiling is load-bearing, not taste:
+  Evolution honours this delay by holding the send request server-side and our
+  fetch aborts at 12s, so a longer "human" pause turns into a failed send.
 - **Lexical entropy** (`humanizeVariant`, `copy/` matrix compiler, `graph/uniqueness`):
   every outbound is structurally varied so no two shops (across all users) receive the
   same skeleton — zero identical payload hashes.
 - **Business-hours gate**: never message a shop at 3 AM local (coarse per-prefix UTC).
-- **Multi-host round-robin** (`EVOLUTION_HOSTS`): spreads numbers across hosts.
+- **Geo-aware host placement** (`EVOLUTION_HOSTS`, `wa/host-region.ts`): NOT
+  round-robin. A host may declare the calling codes it is right for
+  (`url|key|66,84,855`), and a new number prefers a host claiming its country,
+  then a region-neutral host, then a mismatched one - load breaking every tie.
+  This is the one network-level lever available without a proxy: IP-vs-number
+  geo mismatch is scored SEPARATELY from the datacenter-range signal below, so
+  a Thai number on a Thai-region box removes half the problem for free. A
+  mismatched placement writes `host-geo-mismatch`, which is how a capacity
+  shortage in the right region becomes visible instead of silent.
 - **Ban-recovery** (`enterBanRecovery`): a real WhatsApp logout/conflict/ban signal
   from the connection webhook pauses the number 24h and drops trust to 10.
 
@@ -216,6 +243,8 @@ pretending they are gone.
   duration, min-gap and cap is tunable from the DB with no redeploy.
 - `clearPause(senderKey)` / Admin lift-pause: manually resume a paused number once
   you've confirmed it's healthy.
-- `EVOLUTION_HOSTS`: comma-separated hosts for round-robin.
+- `EVOLUTION_HOSTS`: one `url|apikey` per line, plus an optional third field of
+  calling-code prefixes for geo-aware placement (`url|apikey|66,84,855`). No
+  third field = region-neutral. `deploy/fleet/` stands one up at $0.
 - Per-user proxy: set via the proxy fields; residential + geo-matched strongly
   recommended on cloud hosting.

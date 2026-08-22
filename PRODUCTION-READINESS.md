@@ -90,9 +90,13 @@ gate and the launch KPI card all landed.
 
 - **Outbound queue** (`wa_outbox`): rows are claimed with an atomic
   `DELETE ... RETURNING` - the DB row is the lock, so N concurrent instances
-  can never double-send. Failed sends re-queue with backoff (10min ×
-  attempts, max 5, then a durable `wa-send-dropped` event). Batch size: 5 per
-  drain call.
+  can never double-send. Failed sends re-queue with backoff, and the two
+  classes differ: a RECIPIENT failure backs off `min(attempts x 4, 20)` minutes
+  (4/8/12/16/20) for at most 5 attempts, then a durable `wa-send-dropped`
+  event; a TRANSIENT/infra failure retries in 45-120s for up to 60 attempts
+  across a 24h lifetime and burns no attempt cap. Selection per drain call is
+  24 reply candidates + 48 general, spending 2 cold intros per sender and a
+  reply budget of 6.
 - **Strategic waits** (`graph_wakeups`): identical atomic-claim pattern. Rows
   are stamped with `user_email` so owner-scoped purges are exact matches (the
   old `thread_key LIKE email:%` pattern treated `_` in emails as a wildcard).
@@ -120,17 +124,32 @@ gate and the launch KPI card all landed.
   rows overdue >5 min surface an in-app "sending fell behind - catching up"
   banner instead of silently creeping ETAs.
 - **New-contact budget is a PLAN-TIERED ROLLING WINDOW** (`src/lib/wa/
-  capacity.ts`): free 10 new shops/6h, pro 15/4h, ultra 40/3h. Capacity
+  capacity.ts`): free 10 new shops/6h, pro 20/4h, ultra 24/3h. Capacity
   refreshes CONTINUOUSLY as the oldest introduction ages out of the window -
   there is no hard "everything waits until tomorrow (UTC midnight)" wall any
   more. When the budget is spent, holds anchor to when the next slot frees
-  (`newContactBudget().nextFreeAt` = oldest intro + windowHours, clamped into
-  the shop's business hours) - at most windowHours away, never tomorrow. The
+  (`newContactBudget().nextFreeAt`, clamped into the shop's business hours).
+  Admission is the MINIMUM OF FOUR ceilings and the hold length follows
+  WHICHEVER is binding (`IntroBudgetBind`): the plan window is at most
+  windowHours away and never tomorrow, but Meter A - introductions nobody has
+  answered - clears when a SHOP REPLIES or when the oldest silent one turns
+  7 days old, so it anchors there and re-checks every 12h under honest
+  "waiting on replies" copy rather than promising capacity that is not coming.
+  A row held on a slow ceiling has its freshness stamp cleared so the 6h outbox
+  ceiling cannot bin it for serving a wait we gave it; the 24h absolute wall
+  still bounds it. The
   window is counted migration-free from timestamped outbound RFQ rows
-  (`whatsapp_messages.raw->>kind=rfq`), so no schema change is needed. Plans
+  (`whatsapp_messages.raw->>kind=rfq`), so no schema change is needed.
+  **`max_new_contacts_per_day` is a fifth, OWNER-SET ceiling and it is OFF
+  (0) by default.** A fixed daily cap is the model the rolling window
+  replaced - crushed by the warm-up ramp it gave a fresh number ~2 shops for a
+  whole day and parked the rest until tomorrow morning. It is wired and it
+  works, so an owner can clamp the whole fleet during an incident (10-15 holds
+  every number to the week-one warm-up band), but it must never be left on by
+  accident: at any positive value it silently overrides every plan's window. Plans
   are now REAL: `dynamicHourCap` and the new-contact cap both scale with the
-  plan (Ultra gets 18/h headroom vs free's 6/h), so `vip-concurrency` finally
-  does something. Warm-up is humane: the ramp floor is 45% (not the old ~14%
+  plan (Ultra gets 24/h headroom vs free's 10/h), so `vip-concurrency` finally
+  does something. Warm-up is humane: the ramp floor is 50% (not the old ~14%
   day-0 that let a fresh number reach only ~2 shops/day). Mass bargain
   computes the remaining budget AT CLICK TIME: in-budget shops start
   immediately (first now, 45-75s stagger), over-budget shops park on the
@@ -165,11 +184,15 @@ gate and the launch KPI card all landed.
 > gate goes red - this section drifted from the code once before and shipped
 > five stale numbers.
 
-Per user daily: 15 searches, 300 geocodes, 120 AI calls. WhatsApp sends run in
+Per user daily: 5 searches, 300 geocodes, 300 AI calls. WhatsApp sends run in
 two lanes: cold introductions 24/hour and 80/day, replies 40/hour and 200/day.
 Anti-ban per number: base 4/hour growing to 14/hour with trust, with the
 hourly velocity floor pinned to the plan budget (free 10/h, pro 20/h, ultra
-24/h) so a within-budget batch never splits across hours; 220/day hard ceiling
+24/h) so a within-budget batch never splits across hours; 220/day ceiling,
+WARM-UP RAMPED (owner report 8 wave D): the all-lanes daily cap is
+`day_cap x jitter x warmupNewContactFactor`, floored at 40, so a day-0 number
+sits near 110/day and reaches 220 only once it is warm. Warm-up therefore no
+longer ramps introductions ALONE - it moves the daily ceiling too. Ceiling
 (±20% jitter); 12-28s jittered gaps on the cold lane and ~5s per engaged shop
 on the reply lane; cold intros wait for the recipient's business hours 08-21
 (replies are exempt; `FAST_DISPATCH` lifts it); plan-tiered rolling
@@ -199,8 +222,11 @@ opted out permanently - the guard refuses every future send, manual included.
   are parked with cumulative 45-75s jittered `not_before` stamps
   (`batch-spacing` + batchId/batchIndex/batchSize meta for the progress UI).
   The drain re-runs the full guard per row at its own time.
-- Drain is capped at 2 sends per sender per invocation; excess DUE rows are
-  re-spaced forward with jitter (a stale backlog trickles out, never bursts).
+- The COLD lane is capped at 2 intros per sender per invocation; excess DUE
+  rows are re-spaced forward with jitter (a stale backlog trickles out, never
+  bursts). REPLIES drain concurrently on their own per-invocation budget of 6,
+  capped at one per recipient - reciprocal traffic is the safe lane and is
+  deliberately not held to the cold lane's pacing.
 - FAIL-CLOSED reads: the guard's reputation + 24h-history reads are strict -
   a transient Supabase failure holds automated sends (`sync-retry`) instead of
   reading as "fresh number, nothing sent today" (the old behavior disabled the
@@ -234,7 +260,7 @@ opted out permanently - the guard refuses every future send, manual included.
 | Area | TEST_MODE on (flagged tester) | Production |
 |---|---|---|
 | Plan | Ultra, free, instant | paid via PayPal |
-| Checkout | sandbox - `setPlan()` applied instantly, no charge | real checkout |
+| Checkout | sandbox - returns `{sandbox:true, applied:"ultra"}` and writes NOTHING; the entitlement comes from `getSession` deriving Ultra for a flagged tester, so a free grant cannot outlive the switch that granted it | real checkout |
 | Banner | global strip visible | none |
 | WhatsApp | **REAL** - messages go to real shops from the tester's number, real ban-risk budget | same |
 | Google Places/geocode spend | **REAL** | same |
@@ -247,9 +273,12 @@ daily limits are the cost guard in both modes.
 
 **Tester capacity**: the beta allowlist caps at 25 invited testers + owner
 (enforced on save; the env-var fallback list is uncapped). WhatsApp capacity
-is bounded separately by `EVOLUTION_MAX_PER_HOST` (default 40 linked numbers
-per Evolution host) - so 25 testers fit on one host; hundreds of users need
-`EVOLUTION_HOSTS` pool entries (~1 host per 40 users).
+is bounded separately by `EVOLUTION_MAX_PER_HOST` (default **25** linked
+numbers per Evolution host) - so 25 testers exactly fill one host; more than
+that needs `EVOLUTION_HOSTS` pool entries (~1 host per 25 users). At the cap
+the app REFUSES a new link rather than overfilling, on a single-host
+deployment as well as a pooled one, and says "at capacity" rather than
+blaming the configuration. `deploy/fleet/` is the $0 way to add hosts.
 
 ## Execution resilience (the "batch stopped after one send" fix)
 
@@ -272,6 +301,14 @@ survives that gracefully instead of stalling/losing the batch:
 **Adversarial-sweep hardening (this pass) - drain can no longer lose a queued
 message, and no external call can hang a handler:**
 
+- **Age is the one drop the user did not ask for.** A queued row older than
+  `OUTBOX_MAX_AGE_MS` (6h from when it first came due) or
+  `OUTBOX_ABSOLUTE_MAX_AGE_MS` (24h from when it was composed, which nothing
+  re-stamps) is binned with a `wa-send-expired` event - sending it would answer
+  a question the traveller has moved on from. It is not silent, but it IS the
+  only drop class that fires with no user action, so it belongs in any alert
+  set. A row serving a deliberate long hold has its stamp cleared and is not
+  charged for that wait.
 - **A claimed row is never silently dropped** (`src/lib/wa/outbox-policy.ts`
   `needsRepark`, pinned by `outbox-policy.test.ts`). `drainOutbox` claims a due
   row by DELETING it, then re-runs the guard. Previously the daily-cap and the
@@ -368,12 +405,15 @@ the code already writes and which nobody currently reads:
 |---|---|---|
 | `wa-send-dropped` | a message was composed and never delivered | page someone |
 | `wa-ban-risk` | the anti-ban guard saw a pattern that risks the number | page someone |
+| `wa-send-expired` | a queued message aged out and was binned undelivered | daily digest |
+| `host-geo-mismatch` | a number was linked on a host that declares other regions - a scored WhatsApp signal, meaning the right region is out of capacity | daily digest |
 | `media-fetch-failed` | a price-list image could not be fetched, so an offer was missed | daily digest |
 
 ```sql
 select kind, count(*) from agent_events
 where created_at > now() - interval '24 hours'
-  and kind in ('wa-send-dropped','wa-ban-risk','media-fetch-failed')
+  and kind in ('wa-send-dropped','wa-ban-risk','wa-send-expired',
+                'host-geo-mismatch','media-fetch-failed')
 group by kind;
 ```
 
@@ -398,7 +438,8 @@ signature verification and every subscription event is silently discarded.
 
 ### 5. Size the Evolution pool before the invites go out
 
-One host carries roughly **40 users**. Add hosts to the pool *before* invites
+One host carries **25 users** (`EVOLUTION_MAX_PER_HOST`, and at the cap the
+app refuses rather than overfilling). Add hosts to the pool *before* invites
 outgrow it, not after: the failure mode is not a queue, it is a banned personal
 WhatsApp number, and that is not reversible by adding capacity later.
 
@@ -703,9 +744,15 @@ One list, checked off as you go - everything below is a thing only you can do:
 3. **Re-run `supabase/retention.sql` once** (L6) - the englishGloss
    keep-forever exemption is gone, so pruning finally works in localized
    markets. (Replaces the stored function; same file, run again.)
-4. **Optionally enable the Evolution-Postgres prune cron** (J4): uncomment
-   the `wd-evo-prune` block in render.yaml (monthly, 30-day retention,
-   defensive no-op if Evolution's schema ever changes).
+4. **Manual-Sync the Render blueprint** so the `wd-evo-prune` cron takes
+   effect (owner report 8 wave E). It is no longer commented out or optional:
+   it runs DAILY at 04:00 with 7-day retention, because Baileys persists every
+   message row forever into a 256 MB database - roughly 9-15 MB/day at 50
+   users, i.e. full in 17-28 days - and a full Postgres is not a slow queue, it
+   is failing Prisma writes, which is the documented Evolution crash that drops
+   every linked socket at once. The old monthly/30-day block would have fired
+   for the first time after the disk was already full. The script is
+   IF-EXISTS guarded throughout, so a renamed table is a logged no-op.
 5. **wd-evolution sizing** (J2, unchanged decision): standard plan
    (~$25/mo) or cap occupancy at ~25-30 numbers per host.
 6. **Disable AdSense Auto ads** (G3, unchanged): manual slots stay; Auto

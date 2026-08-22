@@ -96,11 +96,19 @@ describe("only a real block reaches blocks_total", () => {
       guard.indexOf("export async function recordSendFailure") + 1400
     );
     const blockIdx = fn.indexOf('kind === "block"');
-    const blocksTotalIdx = fn.indexOf("blocks_total: (rep.blocks_total");
+    // The counter moved from a read-modify-write absolute value to an atomic
+    // delta (owner report 8 M3), so the anchor is the COLUMN NAME rather than
+    // the old `blocks_total: (rep.blocks_total ...)` arithmetic. What this test
+    // guards - that the block counter is only ever touched under the block
+    // branch, never under the invalid one - is unchanged.
+    const blocksTotalIdx = fn.indexOf("blocks_total:");
     const invalidIdx = fn.indexOf('kind === "invalid"');
     expect(blockIdx).toBeGreaterThan(-1);
     expect(blocksTotalIdx).toBeGreaterThan(blockIdx);
     expect(blocksTotalIdx).toBeLessThan(invalidIdx);
+    // ...and it is a DELTA now, so two concurrent failures cannot collapse
+    // into one recorded block.
+    expect(fn).toMatch(/\{ blocks_total: 1 \}/);
   });
 
   it("the send path passes three kinds, not two", () => {

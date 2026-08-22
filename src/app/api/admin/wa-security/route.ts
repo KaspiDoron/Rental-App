@@ -82,9 +82,14 @@ const POLICY_HELP: Record<string, { label: string; help: string; best: string }>
     best: "6. Keeps the linked device from appearing active 24/7 - a comfort + anti-flag win.",
   },
   max_new_contacts_per_day: {
-    label: "New shops / day (cold cap)",
-    help: "How many brand-new shops a number may first-contact in a day. THE most important limit.",
-    best: "10-15. Many first-time chats to strangers who never reply is the strongest ban signal.",
+    label: "New shops / day (absolute ceiling)",
+    help:
+      "An absolute 24-hour ceiling on brand-new shops per number, ON TOP of the plan's rolling window. " +
+      "0 = off (the default): the plan window, the warm-up ramp and the unanswered meters are the limits.",
+    best:
+      "0 unless you are clamping the fleet during an incident. A fixed daily cap was the old model and it " +
+      "made capacity vanish for the rest of the day instead of refreshing; the rolling window replaced it. " +
+      "Set 10-15 to hold every number to the week-one warm-up band deliberately.",
   },
   min_reply_rate: {
     label: "Min reply rate (breaker)",

@@ -681,6 +681,43 @@ export async function sbUpdateReturning<T = Record<string, unknown>>(
 }
 
 /** Patch rows matching a PostgREST filter with the given values. */
+/**
+ * Call a Postgres function through PostgREST.
+ *
+ * `false` on every failure, exactly like sbUpdate, so a caller that treats an
+ * RPC as best-effort keeps behaving that way - and a caller that must fail
+ * closed can see the false and say so.
+ *
+ * A MISSING FUNCTION IS DISTINGUISHABLE. PostgREST answers 404 for a function
+ * that has not been created yet, which is the state of any database where the
+ * owner has not re-run schema.sql. Reporting that separately lets a caller fall
+ * back to the old path instead of silently dropping the write - the difference
+ * between "not migrated yet" and "the database is down".
+ */
+export async function sbRpc(
+  fn: string,
+  args: Record<string, unknown>
+): Promise<{ ok: true } | { ok: false; missing: boolean }> {
+  const conn = supabase();
+  if (!conn) return { ok: false, missing: false };
+  try {
+    const res = await timedFetch(`${conn.url}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        apikey: conn.key,
+        Authorization: `Bearer ${conn.key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(args),
+    });
+    if (res.ok) return { ok: true };
+    return { ok: false, missing: res.status === 404 };
+  } catch {
+    return { ok: false, missing: false };
+  }
+}
+
 export async function sbUpdate(
   table: string,
   filter: string,
