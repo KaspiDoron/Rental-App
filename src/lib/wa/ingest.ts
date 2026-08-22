@@ -434,12 +434,24 @@ export async function processEvolutionWebhook(
     // Bounded, never SILENTLY truncated: the old slice(0, 3) discarded the
     // 4th+ frame of a batched upsert with no trace of any kind - a shop
     // sending four quick messages lost one invisibly.
-    const capped = items.slice(0, 10);
+    // 25, not 10 - and the overflow asks for a REDELIVERY rather than only
+    // leaving a note.
+    //
+    // The trace was already here, which is how we know this happens; what was
+    // missing is that a traced drop is still a drop. The tail of a truncated
+    // batch had exactly one recovery path - the wa-sync sweep, minutes away -
+    // and on the Cloud channel there is no sweep at all. Marking it retryable
+    // makes the webhook answer 503 so the provider redelivers the whole batch,
+    // which the per-message store claims then de-duplicate: the messages we
+    // already handled are skipped and only the tail does work.
+    const capped = items.slice(0, 25);
     if (items.length > capped.length) {
+      retryable = true;
       void noteInboundDropped(undefined, "batch", "batch-truncated", {
         via: "webhook",
         total: items.length,
         kept: capped.length,
+        redelivery: "requested",
       });
     }
     for (const data of capped) {

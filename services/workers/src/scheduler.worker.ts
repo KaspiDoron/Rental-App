@@ -14,6 +14,7 @@ import {
   recentActiveSenders,
   syncInboundReplies,
   pickSweepEmails,
+  sweepCapForFleet,
   setDrainArmer,
 } from "@wheeldeal/core";
 import { logger } from "@wheeldeal/shared";
@@ -32,7 +33,14 @@ const GC_EVERY_MS = 30 * 60_000; // 30m
 const DLQ_SWEEP_EVERY_MS = 15 * 60_000; // 15m
 const REARM_EVERY_MS = 30 * 60_000; // 30m - reassert webhooks (find+set, throttled ~1h/instance)
 const RECOVERY_EVERY_MS = 60_000; // 1m - app-closed inbound-recovery sweep (<=3 senders/tick)
-const RECOVERY_PER_TICK = 3;
+/**
+ * FLOOR, not the value. The per-tick sweep width is computed from the live
+ * fleet by `sweepCapForFleet` - which was written for exactly this and then
+ * used only on the Render half, while this worker kept a hardcoded 3. At a
+ * 50-user beta with ~20 shops each that is a ~68-minute worst case before a
+ * webhook a provider dropped gets noticed; proportional it is ~20.
+ */
+const RECOVERY_PER_TICK_MIN = 3;
 /** Only arm a precise drain for work due soon; the heartbeat covers the rest. */
 const ARM_HORIZON_MS = 10 * 60_000;
 
@@ -149,7 +157,8 @@ export function startSchedulerWorker(): Worker<SchedulerJob> {
         try {
           const senders = await recentActiveSenders();
           const minute = Math.floor(Date.now() / 60_000);
-          const picked = pickSweepEmails(senders, minute, RECOVERY_PER_TICK);
+          const width = Math.max(RECOVERY_PER_TICK_MIN, sweepCapForFleet(senders.length));
+          const picked = pickSweepEmails(senders, minute, width);
           let recovered = 0;
           for (const email of picked) {
             recovered += await syncInboundReplies(email).catch(() => 0);

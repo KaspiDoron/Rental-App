@@ -122,7 +122,15 @@ export const LIMIT_DEFAULTS: Record<string, number> = {
   // made the dropdown go silently empty mid-trip. Autocomplete + session
   // tokens are the cheap SKU - 300 keeps typing fluid while still bounded.
   LIMIT_GEOCODE_PER_DAY: 300,
-  LIMIT_AI_PER_DAY: 120, // AI calls (extraction, drafts, translate sweeps)
+  // 300, not 120. ONE shop-reply turn burns 2-6 model calls (extraction,
+  // gloss, safety, the engine pass, localization, the judge), so a 15-shop
+  // hunt at three rounds each is 200-350 - i.e. the old ceiling was about half
+  // of a single real hunt. Past it, `ai-budget` degrades every later reply to
+  // the deterministic composer, so the tester's experience was "the agent got
+  // stupid halfway through" with nothing on screen to explain it. This is a
+  // per-USER daily cap on a free-tier chain, so the real spend ceiling is the
+  // providers' own RPD, not this number.
+  LIMIT_AI_PER_DAY: 300, // AI calls (extraction, drafts, translate sweeps)
   LIMIT_TRANSLATE_PER_DAY: 60, // UI translate sweeps (cache means most are free)
   // TWO LANES, NOT ONE POOL.
   //

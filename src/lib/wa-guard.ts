@@ -2346,8 +2346,22 @@ export async function guardOutbound(rawOpts: {
     if (opts.auto) {
       const pauseLeftMs = Date.parse(rep.paused_until) - now;
       const banRecovery = pauseLeftMs > 4 * 3600_000;
-      const until =
-        !isNewContact && !banRecovery ? jitteredHold(now, 10, 5) : rep.paused_until;
+      // A BAN-RECOVERY PAUSE STILL BINDS REPLIES - but it re-checks, it does
+      // not sleep for four hours.
+      //
+      // The pause is account-level and the recovery schedule IS the treatment,
+      // so nothing goes out either way. What changed is the WAKE-UP: a reply
+      // stamped for the original 4h wall sat parked long after the risk engine
+      // had cleared the pause early, and reciprocal traffic is precisely the
+      // lane whose silence hurts the number (a collapsing reply ratio is the
+      // signal that gets accounts restricted in the first place). Cold intros
+      // keep the full horizon: those are the vector under treatment.
+      const replyRecheck = Math.min(45, Math.max(20, Math.round(pauseLeftMs / 60_000 / 8)));
+      const until = !isNewContact
+        ? banRecovery
+          ? jitteredHold(now, replyRecheck, 10)
+          : jitteredHold(now, 10, 5)
+        : rep.paused_until;
       return await queue(until, "number paused (ban-risk recovery)");
     }
     return { allow: false, reason: "This number is paused for safety recovery.", text };
@@ -2868,7 +2882,18 @@ export async function guardOutbound(rawOpts: {
     if (Number.isFinite(t)) lastSendRefMs = t;
   }
   if (lastSendRefMs > 0) {
-    const gapNeeded = (p.min_gap_seconds + Math.random() * p.gap_jitter_seconds) * 1000 * stealth;
+    // THE REPLY LANE PAYS THE REPLY GAP, NOT THE COLD ONE.
+    //
+    // `reply_gap_seconds` (5) exists, is configured, and is honoured by
+    // `claimForSend` further down - but this gate used the cold constant for
+    // every lane, so answering a shop we had messaged 20 seconds earlier could
+    // sit on a 12-28s hold for no anti-ban reason at all. Unsolicited first
+    // contact is the vector this gap defends against; a reply to a number that
+    // just wrote to us is the reciprocal traffic WhatsApp actually rewards, and
+    // making it slow hurts the reply ratio that protects the number.
+    const gapBase = isReply ? p.reply_gap_seconds : p.min_gap_seconds;
+    const gapJitter = isReply ? Math.min(p.gap_jitter_seconds, 4) : p.gap_jitter_seconds;
+    const gapNeeded = (gapBase + Math.random() * gapJitter) * 1000 * stealth;
     const since = now - lastSendRefMs;
     if (opts.auto && since < gapNeeded) {
       const reason = stealth > 1.3 ? "easing off to keep your number safe" : "human pacing gap";
