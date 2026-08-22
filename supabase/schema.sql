@@ -865,8 +865,16 @@ begin
     -- Last-write-wins fields. `?` is jsonb key-existence, so an absent key
     -- leaves the column untouched while an explicit JSON null clears it.
     new_contacts_date         = case when p_set ? 'new_contacts_date'         then p_set->>'new_contacts_date'                 else new_contacts_date end,
-    trust_score               = case when p_set ? 'trust_score'               then (p_set->>'trust_score')::int                else trust_score end,
-    risk_score                = case when p_set ? 'risk_score'                then (p_set->>'risk_score')::int                 else risk_score end,
+    -- ROUNDED, NOT CAST. `'22.5'::int` does not truncate in Postgres, it raises
+    -- "invalid input syntax for type integer" and aborts the WHOLE update - so
+    -- one fractional value would take every counter in the same call down with
+    -- it, and the app would silently fall back to the racy path this function
+    -- exists to replace. And fractional IS reachable: policy-values validates
+    -- trust_reply_gain / trust_send_decay as `number`, not integer, so an owner
+    -- typing 2.5 in the WA-security panel makes every subsequent trust write a
+    -- non-integer. Rounding through numeric accepts both shapes.
+    trust_score               = case when p_set ? 'trust_score'               then round((p_set->>'trust_score')::numeric)::int else trust_score end,
+    risk_score                = case when p_set ? 'risk_score'                then round((p_set->>'risk_score')::numeric)::int  else risk_score end,
     last_send_at              = case when p_set ? 'last_send_at'              then (p_set->>'last_send_at')::timestamptz       else last_send_at end,
     last_reply_at             = case when p_set ? 'last_reply_at'             then (p_set->>'last_reply_at')::timestamptz      else last_reply_at end,
     paused_until              = case when p_set ? 'paused_until'              then (p_set->>'paused_until')::timestamptz       else paused_until end,

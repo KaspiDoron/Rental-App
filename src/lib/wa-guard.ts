@@ -887,7 +887,9 @@ export async function recordReadReceipt(
   toNumber: string
 ): Promise<void> {
   try {
-    const rep = await getReputation(senderKey);
+    // (M3 removed the read-modify-write that used this row; the counter is a
+    // delta now, so the SELECT - and getReputation's lazy INSERT on a miss -
+    // were pure cost on the highest-frequency events in the system.)
     // NO SYNTHESIZED DELIVERIES.
     //
     // This used to raise delivered_total to `max(delivered, reads + 1)`, on the
@@ -923,7 +925,9 @@ export async function recordDelivery(
   toNumber: string
 ): Promise<void> {
   try {
-    const rep = await getReputation(senderKey);
+    // (M3 removed the read-modify-write that used this row; the counter is a
+    // delta now, so the SELECT - and getReputation's lazy INSERT on a miss -
+    // were pure cost on the highest-frequency events in the system.)
     await saveReputation(
       senderKey,
       { last_delivery_receipt_at: new Date().toISOString() },
@@ -1045,7 +1049,9 @@ export async function recordSendFailure(
   kind: "fail" | "block" | "invalid" = "fail"
 ): Promise<void> {
   try {
-    const rep = await getReputation(senderKey);
+    // (M3 removed the read-modify-write that used this row; the counter is a
+    // delta now, so the SELECT - and getReputation's lazy INSERT on a miss -
+    // were pure cost on the highest-frequency events in the system.)
     if (kind === "block") {
       // A REAL block: a human decided they do not want to hear from this
       // traveller. This is the only failure that belongs in blocks_total,

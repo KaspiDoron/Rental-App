@@ -16,6 +16,7 @@ import { isRepetitive } from "../wa/similarity";
 import { clampWaitMinutes } from "./wait";
 import { nextGap } from "../offer-options";
 import { planLeverage, leadCard, cheapestCheaperRival } from "../negotiation/leverage";
+import { normalizeDigits } from "../integrity/translation";
 import { beatRivalTarget } from "../negotiation/beat-rival";
 import { askVariantDirective, askVariantFor } from "../negotiation/ask-variant";
 import { disclosureBlock } from "../negotiation/traveller-disclosure";
@@ -684,7 +685,7 @@ export function fallbackLeverage(
   const rival = cheapestCheaperRival(ctx.session.rivals, quoteOnTable(ctx));
   if (!rival) return [];
   const target = Math.round(rival.pricePerDay);
-  const cited = (message.match(/\d[\d,.]*/g) ?? []).some((n) => {
+  const cited = (normalizeDigits(message).match(/\d[\d,.]*/g) ?? []).some((n) => {
     const v = Number(n.replace(/[,.](?=\d{3}\b)/g, "").replace(/,/g, "."));
     return Number.isFinite(v) && Math.abs(v - target) <= 1;
   });
