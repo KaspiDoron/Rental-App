@@ -1,5 +1,14 @@
 # WheelDeal WhatsApp backend on Render - SMALLEST PAID setup (robust, no sleep).
 #
+# THE BLUEPRINT MUST TRACK `master`. This file only takes effect when Render's
+# Blueprint reads it, and the Blueprint reads ONE branch - whichever is set in
+# Render -> Blueprints -> WhatsApp Evolution Server -> Settings -> Branch. It
+# was pinned to `claude/rental-negotiation-app-pc33ux`, a branch that no longer
+# exists, so every Manual Sync failed with "not found: file:
+# .../render.yaml" - reporting a real file as missing because the branch under
+# it was gone. Editing this file on a feature branch changes nothing until the
+# change reaches `master` and someone runs a Manual Sync.
+#
 # Render reads this Blueprint, builds the Evolution API image from
 # deploy/evolution/Dockerfile, provisions a Postgres database AND a free Redis
 # (Key Value) cache, and wires the connection strings automatically. After it

@@ -95,9 +95,27 @@ Bootstrap env vars in GCP Secret Manager: `SUPABASE_URL`,
 the primary target; `render.yaml` + `deploy/*` remain the live Render half
 and are NOT dead code.
 
-## Working branch
+## Working branch, and what deploys
 
-Develop on `claude/rental-negotiation-app-pc33ux`. Commit + push there.
+Develop on `claude/rental-agents-legal-setup-o7rgcv`. Commit + push there, then
+merge into `master` with `--no-ff`.
+
+**`master` is the only thing that deploys, and BOTH deploy paths read it:**
+
+| What | Reads | Triggered by |
+|---|---|---|
+| Cloud Run (the app) | `master` | push, via `.github/workflows/deploy-gcp.yml` |
+| Render (Evolution + crons) | `master` | the Blueprint, on Manual Sync |
+
+A change to `render.yaml` therefore does nothing until it reaches `master` AND
+the owner runs a Manual Sync - the Blueprint does not follow a feature branch.
+
+> This section previously named `claude/rental-negotiation-app-pc33ux`, which
+> stopped existing long ago. That was not a cosmetic staleness: Render's
+> blueprint had been pointed at it, so every Manual Sync failed with
+> "not found: file: .../render.yaml" - a file that exists, on a branch that does
+> not. If you rename or retire a branch, grep the repo for its name before you
+> delete it.
 
 ## MCP servers (tooling for AI-assisted development)
 

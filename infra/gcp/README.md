@@ -77,8 +77,10 @@ To rotate any secret later: `gcloud secrets versions add <name> --data-file=<fil
 ## Step 2 — provision (one command)
 
 ```bash
-git clone -b claude/rental-negotiation-app-pc33ux https://github.com/KaspiDoron/Rental-App.git
-cd Rental-App
+# master is the deployed branch; the repo was renamed to wheeldeal-pro
+# (the old URL still redirects, but clone the current name).
+git clone -b master https://github.com/KaspiDoron/wheeldeal-pro.git
+cd wheeldeal-pro
 
 PROJECT=<your-project-id> OWNER_EMAIL=you@example.com \
 ENV_SECRET=wheeldeal-env REPO_SECRET=wheeldeal-gh-token \
